@@ -151,9 +151,10 @@ void getIndexPage(resp_https_t response, req_https_t request) {
 
   print_req(request);
 
-  std::string header  = read_file(WEB_DIR "header.html");
-  std::string content = read_file(WEB_DIR "index.html");
-  response->write(header + content);
+  std::ifstream file(WEB_DIR "index.html");
+  std::string html((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+  response->write(SimpleWeb::StatusCode::success_ok, html, { { "Content-Type", "text/html" } });
 }
 
 void getPinPage(resp_https_t response, req_https_t request) {
@@ -239,6 +240,44 @@ void getFaviconImage(resp_https_t response, req_https_t request) {
   SimpleWeb::CaseInsensitiveMultimap headers;
   headers.emplace("Content-Type", "image/x-icon");
   response->write(SimpleWeb::StatusCode::success_ok, in, headers);
+}
+
+void getStaticFiles(resp_https_t response, req_https_t request) {
+  SimpleWeb::CaseInsensitiveMultimap headers;
+  // Extract the file path from the request URL
+  std::string file_path = request->path.substr(1);
+
+  // Get the file extension
+  std::string extension = fs::path(file_path).extension().string();
+
+  // Set the Content-Type header based on the file extension
+  if(extension == ".js") {
+    headers.emplace("Content-Type", "application/javascript");
+  }
+  else if(extension == ".css") {
+    headers.emplace("Content-Type", "text/css");
+  }
+  else if(extension == ".html") {
+    headers.emplace("Content-Type", "text/html");
+  }
+  else if(extension == ".png") {
+    headers.emplace("Content-Type", "image/png");
+  }
+  else if(extension == ".jpg" || extension == ".jpeg") {
+    headers.emplace("Content-Type", "image/jpeg");
+  }
+
+
+  // Read the file contents and write them to the response
+  std::ifstream file(WEB_DIR + file_path);
+  if(file.good()) {
+    std::string file_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    headers.emplace("Content-Length", std::to_string(file_contents.size()));
+    response->write(SimpleWeb::StatusCode::success_ok, file_contents, headers);
+  }
+  else {
+    response->write(SimpleWeb::StatusCode::client_error_not_found);
+  }
 }
 
 void getSunshineLogoImage(resp_https_t response, req_https_t request) {
@@ -730,6 +769,7 @@ void start() {
   server.resource["^/images/favicon.ico$"]["GET"]          = getFaviconImage;
   server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;
   server.resource["^/node_modules\\/.+$"]["GET"]           = getNodeModules;
+  server.resource["^/assets\\/.+$"]["GET"]                 = getStaticFiles;
   server.config.reuse_address                              = true;
   server.config.address                                    = "0.0.0.0"s;
   server.config.port                                       = port_https;
