@@ -1,0 +1,147 @@
+<template>
+    <div id="content" class="container">
+        <h1 class="my-4">Hello, Sunshine!</h1>
+        <p>Sunshine is a self-hosted game stream host for Moonlight.</p>
+        <!--Version-->
+        <div class="card p-2 my-4">
+            <div class="card-body" v-if="version">
+                <h2>Version {{ version }}</h2>
+                <br />
+                <div class="alert alert-success" v-if="version.indexOf('dirty') !== -1">
+                    Thank you for helping to make Sunshine a better software! 🌇
+                </div>
+                <div v-if="loading">
+                    Loading Latest Release...
+                </div>
+                <div v-else-if="!hasNewNightly && !hasNewStable">
+                    <div class="alert alert-success">
+                        You're running the latest version of Sunshine
+                    </div>
+                </div>
+                <div v-if="hasNewNightly">
+                    <div class="alert alert-warning">
+                        <div class="d-flex justify-content-between">
+                            <div class="my-2">A new <b>Nightly</b> Version is Available!</div>
+                            <a class="btn btn-success m-1" :href="state.nightlyData?.html_url" target="_blank">Download</a>
+                        </div>
+                        <pre><b>{{ nightlyData?.head_sha }}</b></pre>
+                        <pre>{{ nightlyData?.display_title }}</pre>
+                    </div>
+                </div>
+                <div v-if="hasNewStable">
+                    <div class="alert alert-warning">
+                        <div class="d-flex justify-content-between">
+                            <div class="my-2">A new <b>Stable</b> Version is Available!</div>
+                            <a class="btn btn-success m-1" :href="state.githubVersion?.html_url"
+                                target="_blank">Download</a>
+                        </div>
+                        <h3>{{ githubVersion?.name }}</h3>
+                        <pre>{{ githubVersion?.body }}</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!--Resources-->
+        <div class="card p-2 my-4">
+            <div class="card-body">
+                <h2>Resources</h2>
+                <br />
+                <p>
+                    Resources for Sunshine!
+                </p>
+                <div class="card-group p-4 align-items-center">
+                    <a class="btn btn-success m-1" href="https://app.lizardbyte.dev" target="_blank">LizardByte Website</a>
+                    <a class="btn btn-primary m-1" href="https://app.lizardbyte.dev/discord" target="_blank">
+                        <i class="fab fa-fw fa-discord"></i> Discord</a>
+                    <a class="btn btn-secondary m-1" href="https://github.com/LizardByte/Sunshine/discussions"
+                        target="_blank">
+                        <i class="fab fa-fw fa-github"></i> Github Discussions</a>
+                </div>
+            </div>
+        </div>
+        <!--Legal-->
+        <div class="card p-2 my-4">
+            <div class="card-body">
+                <h2>Legal</h2>
+                <br />
+                <p>
+                    By continuing to use this software you agree to the terms and conditions in the following documents.
+                </p>
+                <div class="card-group p-4 align-items-center">
+                    <a class="btn btn-danger m-1" href="https://github.com/LizardByte/Sunshine/blob/master/LICENSE"
+                        target="_blank">
+                        <i class="fas fa-fw fa-file-alt"></i> License</a>
+                    <a class="btn btn-danger m-1" href="https://github.com/LizardByte/Sunshine/blob/master/NOTICE"
+                        target="_blank">
+                        <i class="fas fa-fw fa-exclamation"></i> Third Party Notice</a>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</template>
+<script setup lang="ts">
+import type { Config } from '@/types/Config';
+import type { GitHubRelease } from '@/types/GitHubRelease';
+import type { WorkflowRun } from '@/types/GitHubWorkflow';
+import { reactive, onMounted, computed, toRefs } from 'vue';
+
+
+const state = reactive({
+    version: '',
+    githubVersion: null as null | GitHubRelease,
+    nightlyData: null as null | WorkflowRun,
+    loading: true,
+});
+
+const fetchVersionData = async () => {
+    try {
+        state.version = (await fetch("/api/config").then((r) => r.json() as unknown as Config)).version;
+        state.githubVersion = (await fetch("https://api.github.com/repos/LizardByte/Sunshine/releases/latest").then((r) => r.json() as unknown as GitHubRelease));
+        if (state.version.split("-g").length > 1) {
+            state.nightlyData = (await fetch("https://api.github.com/repos/LizardByte/Sunshine/actions/workflows/CI.yml/runs?branch=nightly&status=success&per_page=1").then((r) => r.json())).workflow_runs[0];
+        }
+    } catch (e) {
+    }
+    state.loading = false;
+};
+
+onMounted(fetchVersionData);
+
+const hasNewStable = computed(() => {
+    // If we can't get versions, return false
+    if (!state.githubVersion || !state.version) return false;
+    // If built with dirty git tree, return false
+    if (state.version.indexOf("dirty") !== -1) return false;
+    // Get the GitHub version tag
+    let v = state.githubVersion.name;
+    // If the version starts with a v, remove it
+    if (v.indexOf("v") === 0) v = v.substring(1);
+    // return true if the version is different, otherwise false
+    return v !== state.version.split(".")[0];
+});
+
+const hasNewNightly = computed(() => {
+    // If we're not on a nightly build, just return false
+    // If length of version split is 3, we're on a stable build
+    if (!state.version || !state.nightlyData || state.version.split(".").length === 3) return false;
+    // If built with dirty git tree, return false
+    if (state.version.indexOf("dirty") !== -1) return false;
+    // Get the commit hash
+    let commit = state.version.split(".")[-1];
+    // return true if the commit hash is different, otherwise false
+    return state.nightlyData.head_sha.indexOf(commit) !== 0;
+});
+
+const { githubVersion, loading, nightlyData, version } = toRefs(state);
+return {
+    githubVersion,
+    loading,
+    nightlyData,
+    version,
+    hasNewStable, hasNewNightly
+};
+</script> 
+<style scoped>
+/* Add any required styles */
+</style>

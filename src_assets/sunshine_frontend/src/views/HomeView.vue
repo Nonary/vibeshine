@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import TheWelcome from '../components/TheWelcome.vue'
-</script>
+import type IndexVue from './Index.vue';
 
+</script>
 <template>
   <main>
-    <TheWelcome />
+    <h1>HI</h1>
+    <IndexVue />
   </main>
 </template>

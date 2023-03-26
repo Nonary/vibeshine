@@ -1,21 +1,57 @@
-<script setup lang="ts">
-import { RouterLink, RouterView } from 'vue-router'
-import HelloWorld from './components/HelloWorld.vue'
-</script>
+
 
 <template>
-  <header>
-    <img alt="Vue logo" class="logo" src="@/assets/logo.svg" width="125" height="125" />
-
-    <div class="wrapper">
-      <HelloWorld msg="You did it!" />
-
-      <nav>
-        <RouterLink to="/">Home</RouterLink>
-        <RouterLink to="/about">About</RouterLink>
-      </nav>
+  <nav class="navbar navbar-expand-lg navbar-light bg-warning fixed-top">
+    <div class="container-fluid">
+      <a class="navbar-brand" href="/" title="Sunshine">
+        <img src="@/assets/images/logo-sunshine-45.png" height="45" alt="Sunshine">
+      </a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent"
+        aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="navbarSupportedContent">
+        <ul class="navbar-nav">
+          <li class="nav-item">
+            <router-link class="nav-link" to="/" active-class="active">
+              <font-awesome-icon :icon="['fas', 'home']" />
+              Home
+            </router-link>
+          </li>
+          <li class="nav-item">
+            <router-link class="nav-link" to="/pin" active-class="active">
+              <font-awesome-icon :icon="['fas', 'unlock']" />
+              PIN
+            </router-link>
+          </li>
+          <li class="nav-item">
+            <router-link class="nav-link" to="/apps" active-class="active">
+              <font-awesome-icon :icon="['fas', 'stream']" />
+              Applications
+            </router-link>
+          </li>
+          <li class="nav-item">
+            <router-link class="nav-link" to="/config" active-class="active">
+              <font-awesome-icon :icon="['fas', 'cog']" />
+              Configuration
+            </router-link>
+          </li>
+          <li class="nav-item">
+            <router-link class="nav-link" to="/password" active-class="active">
+              <font-awesome-icon :icon="['fas', 'user-shield']" />
+              Change Password
+            </router-link>
+          </li>
+          <li class="nav-item">
+            <router-link class="nav-link" to="/troubleshooting" active-class="active">
+              <font-awesome-icon :icon="['fas', 'info']" />
+              Troubleshooting
+            </router-link>
+          </li>
+        </ul>
+      </div>
     </div>
-  </header>
+  </nav>
 
   <RouterView />
 </template>
@@ -81,5 +117,31 @@ nav a:first-of-type {
     padding: 1rem 0;
     margin-top: 1rem;
   }
+}
+</style>
+<script lang="ts">
+
+
+
+import { RouterLink, RouterView } from 'vue-router'
+//@ts-ignore
+import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
+import { defineComponent } from 'vue';
+
+
+export default defineComponent({
+  components: {
+    FontAwesomeIcon
+  },
+  setup() {
+    // do nothing?
+  }
+});
+
+</script>
+
+<style>
+.nav-link.active {
+  font-weight: 500;
 }
 </style>
