@@ -1,7 +1,7 @@
 
 
 <template>
-  <nav class="navbar navbar-expand-lg navbar-light bg-warning fixed-top">
+  <nav class="navbar navbar-expand-lg navbar-light bg-warning">
     <div class="container-fluid">
       <a class="navbar-brand" href="/" title="Sunshine">
         <img src="@/assets/images/logo-sunshine-45.png" height="45" alt="Sunshine">
@@ -53,7 +53,9 @@
     </div>
   </nav>
 
-  <RouterView />
+  <div id="content" class="container">
+    <RouterView />
+  </div>
 </template>
 
 <style scoped>

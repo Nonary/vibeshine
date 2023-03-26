@@ -1,5 +1,4 @@
 <template>
-    <div id="content" class="container">
         <h1 class="my-4">Hello, Sunshine!</h1>
         <p>Sunshine is a self-hosted game stream host for Moonlight.</p>
         <!--Version-->
@@ -77,8 +76,6 @@
                 </div>
             </div>
         </div>
-
-    </div>
 </template>
 <script setup lang="ts">
 import type { Config } from '@/types/Config';
@@ -134,13 +131,7 @@ const hasNewNightly = computed(() => {
 });
 
 const { githubVersion, loading, nightlyData, version } = toRefs(state);
-return {
-    githubVersion,
-    loading,
-    nightlyData,
-    version,
-    hasNewStable, hasNewNightly
-};
+
 </script> 
 <style scoped>
 /* Add any required styles */
