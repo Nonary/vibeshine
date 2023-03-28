@@ -763,6 +763,10 @@ namespace video {
     });
 
     auto switch_display_event = mail::man->event<int>(mail::switch_display);
+    auto min_buffer_size = 2;
+    auto min_buffer_size_lock_start = std::chrono::steady_clock::now();
+    auto last_adjustment_time = std::chrono::steady_clock::now();
+    auto buffer_scale_counter = std::map<int, int>();
 
     // Get all the monitor names now, rather than at boot, to
     // get the most up-to-date list available monitors
@@ -791,10 +795,11 @@ namespace video {
     }
     display_wp = disp;
 
-    std::vector<std::shared_ptr<platf::img_t>> imgs(12);
+    std::vector<std::shared_ptr<platf::img_t>> imgs(min_buffer_size);
     auto round_robin = round_robin_util::make_round_robin<std::shared_ptr<platf::img_t>>(std::begin(imgs), std::end(imgs));
 
-    for (auto &img : imgs) {
+    for (auto it = std::rbegin(imgs); it != std::rend(imgs); ++it) {
+      auto &img = *it;
       img = disp->alloc_img();
       if (!img) {
         BOOST_LOG(error) << "Couldn't initialize an image"sv;
@@ -839,8 +844,64 @@ namespace video {
 
         auto &next_img = *round_robin++;
         while (next_img.use_count() > 1) {
+          auto now = std::chrono::steady_clock::now();
           // Sleep a bit to avoid starving the encoder threads
           std::this_thread::sleep_for(2ms);
+          bool allow_adjustment = (std::chrono::duration_cast<std::chrono::seconds>(now - last_adjustment_time).count() > 5);
+
+          if (allow_adjustment) {
+            if (imgs.size() < 12) {  // Check if the pool has not reached the maximum limit
+              BOOST_LOG(info) << "Detected potential starvation on image pool, increasing limit to " << imgs.size() + 1;
+              auto new_img = disp->alloc_img();
+              if (new_img) {
+                // The idea here is we don't want to be constantly scaling up and down
+                // So we will retain a map letting us know if we had scaled up to the same size at 3 or more times.
+                // Once we've hit this limit, we're going to adjust the minimum buffer size for at least 20 minutes.
+                buffer_scale_counter[imgs.size()]++;
+                last_adjustment_time = std::chrono::steady_clock::now();
+
+                if (buffer_scale_counter[imgs.size()] >= 3) {
+                  BOOST_LOG(info) << "We've had to scale to this size multiple times now, so we're going to prevent it from scaling down for 20 minutes now.";
+                  min_buffer_size = imgs.size();
+                  min_buffer_size_lock_start = std::chrono::steady_clock::now();
+                }
+
+                // Doesn't really matter that we add it to front or back here since it will be replaced in reverse order shortly anyway.
+                imgs.push_back(new_img);
+              }
+              else {
+                BOOST_LOG(error) << "Couldn't allocate a new image to the image buffer"sv;
+              }
+            }
+            else {
+              BOOST_LOG(error) << "Exceeded pool maximum of 12, the pool will no longer dynamically adjust."sv;
+            }
+
+            // Re-create the round-robin iterator to match the image buffer size
+            round_robin = round_robin_util::make_round_robin<std::shared_ptr<platf::img_t>>(std::begin(imgs), std::end(imgs));
+          }
+        }
+
+        // Check if 2 minutes have passed since the last buffer adjustment
+        if (std::chrono::duration_cast<std::chrono::minutes>(std::chrono::steady_clock::now() - last_adjustment_time).count() >= 2) {
+          // Check if the buffer can be scaled down
+          if (imgs.size() > min_buffer_size) {
+            if (buffer_scale_counter[imgs.size()] >= 3 && std::chrono::duration_cast<std::chrono::minutes>(std::chrono::steady_clock::now() - min_buffer_size_lock_start).count() >= 20) {
+              BOOST_LOG(info) << "Buffer lock has expired and will scale back down to 0";
+              // Reset buffer scale counter back to zero, since the grace peroid has expired.
+              buffer_scale_counter[imgs.size()] = 0;
+              imgs.pop_back();
+              min_buffer_size -= 1;
+            }
+            else {
+              BOOST_LOG(info) << "It's been about two minutes since we've scaled up an image, let's scale it down one to try to save some space.";
+              // It's been two minutes, we can probably free it now.
+              imgs.pop_back();
+            }
+
+            round_robin = round_robin_util::make_round_robin<std::shared_ptr<platf::img_t>>(std::begin(imgs), std::end(imgs));  // Re-create the round-robin iterator
+            last_adjustment_time = std::chrono::steady_clock::now();
+          }
         }
 
         return next_img;
