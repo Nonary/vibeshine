@@ -742,6 +742,38 @@ namespace video {
     }
   }
 
+  class non_null_iterator {
+    std::vector<std::shared_ptr<platf::img_t>>::iterator it;
+    std::vector<std::shared_ptr<platf::img_t>>::iterator end;
+    std::vector<std::shared_ptr<platf::img_t>> &imgs;
+
+  public:
+    non_null_iterator(std::vector<std::shared_ptr<platf::img_t>>::iterator it, std::vector<std::shared_ptr<platf::img_t>>::iterator end, std::vector<std::shared_ptr<platf::img_t>> &imgs):
+        it(it), end(end), imgs(imgs) {}
+
+    std::shared_ptr<platf::img_t> &
+    operator*() {
+      return *it;
+    }
+
+    non_null_iterator &
+    operator++() {
+      do {
+        ++it;
+        if (it == end) {
+          it = std::begin(imgs);
+        }
+      } while (*it == nullptr);
+      return *this;
+    }
+
+    non_null_iterator
+    operator++(int) {
+      non_null_iterator copy = *this;  // make a copy of the current iterator
+      ++(*this);  // increment the original iterator using the prefix ++ operator
+      return copy;  // return the copy
+    }
+  };
   void
   captureThread(
     std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue,
@@ -791,12 +823,12 @@ namespace video {
     }
     display_wp = disp;
 
-    std::vector<std::shared_ptr<platf::img_t>> imgs(12);
+    std::vector<std::shared_ptr<platf::img_t>> imgs(12, nullptr);
     auto round_robin = round_robin_util::make_round_robin<std::shared_ptr<platf::img_t>>(std::begin(imgs), std::end(imgs));
-
-    for (auto &img : imgs) {
-      img = disp->alloc_img();
-      if (!img) {
+    auto non_null_round_robin = non_null_iterator(std::begin(imgs), std::end(imgs), imgs);
+    for (int i = 0; i < 2; ++i) {
+      imgs[i] = disp->alloc_img();
+      if (!imgs[i]) {
         BOOST_LOG(error) << "Couldn't initialize an image"sv;
         return;
       }
@@ -837,15 +869,36 @@ namespace video {
           return nullptr;
         }
 
-        auto &next_img = *round_robin++;
-        while (next_img.use_count() > 1) {
+        auto &next_img = *non_null_round_robin++;
+        while (next_img.use_count() > 1 || rand() % 2 == 0) {
           // Sleep a bit to avoid starving the encoder threads
           std::this_thread::sleep_for(2ms);
+
+          // Find the first nullptr in the buffer
+          auto null_it = std::find(std::begin(imgs), std::end(imgs), nullptr);
+          if (null_it != std::end(imgs)) {
+            // There is a nullptr in the buffer, replace it with a new image
+            *null_it = disp->alloc_img();
+            if (!*null_it) {
+              BOOST_LOG(error) << "Couldn't initialize an image"sv;
+            }
+            else {
+              BOOST_LOG(info) << "Increased display frame buffer by one";
+            }
+          }
+          else {
+            // The buffer is full, clear the last image
+            BOOST_LOG(error) << "Image Buffer is full, clearing out last image."sv;
+            if (!imgs.empty()) {
+              // Check if the vector is not empty
+              imgs.back() = nullptr;  // Set the last image to nullptr
+            }
+          }
         }
 
         return next_img;
       },
-        *round_robin++, &display_cursor);
+        *non_null_round_robin++, &display_cursor);
 
       if (artificial_reinit && status != platf::capture_e::error) {
         status = platf::capture_e::reinit;
