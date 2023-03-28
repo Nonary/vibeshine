@@ -749,7 +749,16 @@ namespace video {
 
   public:
     non_null_iterator(std::vector<std::shared_ptr<platf::img_t>>::iterator it, std::vector<std::shared_ptr<platf::img_t>>::iterator end, std::vector<std::shared_ptr<platf::img_t>> &imgs):
-        it(it), end(end), imgs(imgs) {}
+        it(it), end(end), imgs(imgs) {
+      while (it != end && *it == nullptr) {
+        ++it;
+      }
+    }
+
+    bool
+    points_to_last(const std::vector<std::shared_ptr<platf::img_t>> &imgs) const {
+      return it == std::prev(imgs.end());
+    }
 
     std::shared_ptr<platf::img_t> &
     operator*() {
@@ -774,6 +783,20 @@ namespace video {
       return copy;  // return the copy
     }
   };
+
+  void
+  set_last_to_null_and_adjust_iterator(std::vector<std::shared_ptr<platf::img_t>> &imgs, non_null_iterator &it) {
+    if (!imgs.empty()) {
+      // Check if the vector is not empty
+      imgs.back() = nullptr;  // Set the last image to nullptr
+
+      // If the iterator is pointing to the last element, increment it to the next non-null element
+      if (it.points_to_last(imgs)) {
+        ++it;
+      }
+    }
+  }
+
   void
   captureThread(
     std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue,
@@ -781,6 +804,7 @@ namespace video {
     safe::signal_t &reinit_event,
     const encoder_t &encoder) {
     std::vector<capture_ctx_t> capture_ctxs;
+    std::chrono::steady_clock::time_point timer = std::chrono::steady_clock::now();
 
     auto fg = util::fail_guard([&]() {
       capture_ctx_queue->stop();
@@ -873,26 +897,26 @@ namespace video {
         while (next_img.use_count() > 1 || rand() % 2 == 0) {
           // Sleep a bit to avoid starving the encoder threads
           std::this_thread::sleep_for(2ms);
-
-          // Find the first nullptr in the buffer
-          auto null_it = std::find(std::begin(imgs), std::end(imgs), nullptr);
-          if (null_it != std::end(imgs)) {
-            // There is a nullptr in the buffer, replace it with a new image
-            *null_it = disp->alloc_img();
-            if (!*null_it) {
-              BOOST_LOG(error) << "Couldn't initialize an image"sv;
+          if ((std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - timer).count() >= 30)) {
+            // Find the first nullptr in the buffer
+            auto null_it = std::find(std::begin(imgs), std::end(imgs), nullptr);
+            if (null_it != std::end(imgs)) {
+              // There is a nullptr in the buffer, replace it with a new image
+              *null_it = disp->alloc_img();
+              if (!*null_it) {
+                BOOST_LOG(error) << "Couldn't initialize an image"sv;
+              }
+              else {
+                BOOST_LOG(info) << "Increased display frame buffer by one";
+              }
             }
             else {
-              BOOST_LOG(info) << "Increased display frame buffer by one";
+              // The buffer is full, clear the last image
+              BOOST_LOG(error) << "Image Buffer is full, clearing out last image."sv;
+              set_last_to_null_and_adjust_iterator(imgs, non_null_round_robin);
             }
-          }
-          else {
-            // The buffer is full, clear the last image
-            BOOST_LOG(error) << "Image Buffer is full, clearing out last image."sv;
-            if (!imgs.empty()) {
-              // Check if the vector is not empty
-              imgs.back() = nullptr;  // Set the last image to nullptr
-            }
+
+            timer = std::chrono::steady_clock::now();
           }
         }
 
