@@ -742,14 +742,14 @@ namespace video {
     }
   }
 
-  class round_robin_non_null_iterator {
+  class rotating_image_buffer {
     std::vector<std::shared_ptr<platf::img_t>>::iterator it;
     std::vector<std::shared_ptr<platf::img_t>>::iterator end;
     std::vector<std::shared_ptr<platf::img_t>> &imgs;
     std::vector<std::shared_ptr<platf::img_t>>::iterator start;
 
   public:
-    round_robin_non_null_iterator(std::vector<std::shared_ptr<platf::img_t>>::iterator it,
+    rotating_image_buffer(std::vector<std::shared_ptr<platf::img_t>>::iterator it,
       std::vector<std::shared_ptr<platf::img_t>>::iterator end,
       std::vector<std::shared_ptr<platf::img_t>> &imgs):
         it(it),
@@ -769,7 +769,7 @@ namespace video {
       return *it;
     }
 
-    round_robin_non_null_iterator &
+    rotating_image_buffer &
     operator++() {
       do {
         ++it;
@@ -780,16 +780,16 @@ namespace video {
       return *this;
     }
 
-    round_robin_non_null_iterator
+    rotating_image_buffer
     operator++(int) {
-      round_robin_non_null_iterator copy = *this;  // make a copy of the current iterator
+      rotating_image_buffer copy = *this;  // make a copy of the current iterator
       ++(*this);  // increment the original iterator using the prefix ++ operator
       return copy;  // return the copy
     }
   };
 
   void
-  set_last_to_null_and_adjust_iterator(std::vector<std::shared_ptr<platf::img_t>> &imgs, round_robin_non_null_iterator &it) {
+  set_last_to_null_and_adjust_iterator(std::vector<std::shared_ptr<platf::img_t>> &imgs, rotating_image_buffer &it) {
     if (!imgs.empty()) {
       // Check if the vector is not empty
       imgs.back() = nullptr;  // Set the last image to nullptr
@@ -851,7 +851,7 @@ namespace video {
     display_wp = disp;
 
     std::vector<std::shared_ptr<platf::img_t>> imgs(12, nullptr);
-    auto round_robin = round_robin_non_null_iterator(std::begin(imgs), std::end(imgs), imgs);
+    auto image_buffer = rotating_image_buffer(std::begin(imgs), std::end(imgs), imgs);
     for (int i = 1; i >= 0; --i) {
       imgs[i] = disp->alloc_img();
       if (!imgs[i]) {
@@ -895,7 +895,7 @@ namespace video {
           return nullptr;
         }
 
-        auto &next_img = *round_robin++;
+        auto &next_img = *image_buffer++;
         while (next_img.use_count() > 1) {
           // Sleep a bit to avoid starving the encoder threads
           std::this_thread::sleep_for(2ms);
@@ -915,13 +915,13 @@ namespace video {
             // The buffer is full, clear the last image
             // NOTE THIS IS PRONE TO ERRORS AND WILL BE RE-WORKED AT A LATER DATE
             BOOST_LOG(error) << "Image Buffer is full, clearing out last image."sv;
-            set_last_to_null_and_adjust_iterator(imgs, round_robin);
+            set_last_to_null_and_adjust_iterator(imgs, image_buffer);
           }
         }
 
         return next_img;
       },
-        *round_robin++, &display_cursor);
+        *image_buffer++, &display_cursor);
 
       if (artificial_reinit && status != platf::capture_e::error) {
         status = platf::capture_e::reinit;
