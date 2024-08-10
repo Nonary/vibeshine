@@ -68,6 +68,18 @@ syncThreadDesktop() {
 
   CloseDesktop(hDesk);
 }
+
+
+/**
+ * @brief Determines whether a given frame is entirely black by sampling pixels.
+ * 
+ * This function checks if the provided frame is predominantly black by sampling every 10th pixel in both the x and y dimensions. It inspects the RGB channels of each sampled pixel and compares them against a specified black threshold. If any sampled pixel's RGB values exceed this threshold, the frame is considered not black, and the function returns `false`. Otherwise, if all sampled pixels are below the threshold, the function returns `true`.
+ * 
+ * @param mappedResource A reference to a `D3D11_MAPPED_SUBRESOURCE` structure that contains the mapped subresource data of the frame to be analyzed.
+ * @param frameDesc A reference to a `D3D11_TEXTURE2D_DESC` structure that describes the texture properties, including width and height.
+ * @param blackThreshold A floating-point value representing the threshold above which a pixel's RGB channels are considered non-black. The value ranges from 0.0f to 1.0f, with a default value of 0.1f.
+ * @return bool Returns `true` if the frame is determined to be black, otherwise returns `false`.
+ */
 bool
 isFrameBlack(const D3D11_MAPPED_SUBRESOURCE &mappedResource, const D3D11_TEXTURE2D_DESC &frameDesc, float blackThreshold = 0.1f) {
   const uint8_t *pixels = static_cast<const uint8_t *>(mappedResource.pData);
@@ -92,8 +104,22 @@ isFrameBlack(const D3D11_MAPPED_SUBRESOURCE &mappedResource, const D3D11_TEXTURE
   return true;
 }
 
+/**
+ * @brief Attempts to capture and verify the contents of up to 10 consecutive frames from a DXGI output duplication.
+ *
+ * This function tries to acquire the next frame from a provided DXGI output duplication object (`dup`) and inspects its content to determine if the frame is not completely black. If a non-black frame is found within the 10 attempts, the function returns `S_OK`. If all 10 frames are black, it returns `S_FALSE`, indicating that the capture might not be functioning properly. In case of any failure during the process, the appropriate `HRESULT` error code is returned.
+ *
+ * @param dup A reference to the DXGI output duplication object (`dxgi::dup_t&`) used to acquire frames.
+ * @param device A pointer to the ID3D11Device interface that represents the device associated with the Direct3D context.
+ * @return HRESULT Returns `S_OK` if a non-black frame is captured successfully, `S_FALSE` if all frames are black, or an error code if a failure occurs during the process.
+ *
+ * Possible return values:
+ * - `S_OK`: A non-black frame was captured, indicating capture was successful.
+ * - `S_FALSE`: All 10 frames were black, indicating potential capture issues.
+ * - `E_FAIL`, `DXGI_ERROR_*`, or other DirectX HRESULT error codes in case of specific failures during frame capture, texture creation, or resource mapping.
+ */
 HRESULT
-test_frame_capture(dxgi::dup_t& dup, ID3D11Device* device) {
+test_frame_capture(dxgi::dup_t &dup, ID3D11Device *device) {
   for (int i = 0; i < 10; ++i) {
     std::cout << "Attempting to acquire the next frame (" << i + 1 << "/10)..." << std::endl;
     IDXGIResource *frameResource = nullptr;
@@ -107,7 +133,7 @@ test_frame_capture(dxgi::dup_t& dup, ID3D11Device* device) {
     std::cout << "Frame acquired successfully." << std::endl;
 
     ID3D11Texture2D *frameTexture = nullptr;
-    status = frameResource->QueryInterface(__uuidof(ID3D11Texture2D), (void **)&frameTexture);
+    status = frameResource->QueryInterface(__uuidof(ID3D11Texture2D), (void **) &frameTexture);
     frameResource->Release();
     if (FAILED(status)) {
       std::cout << "Failed to query texture interface from frame resource [0x" << std::hex << status << "]" << std::endl;
@@ -148,7 +174,8 @@ test_frame_capture(dxgi::dup_t& dup, ID3D11Device* device) {
         return S_OK;
       }
       context->Unmap(stagingTexture, 0);
-    } else {
+    }
+    else {
       std::cout << "Failed to map the staging texture for inspection [0x" << std::hex << status << "]" << std::endl;
       stagingTexture->Release();
       context->Release();
@@ -195,7 +222,7 @@ test_dxgi_duplication(dxgi::adapter_t &adapter, dxgi::output_t &output) {
   }
 
   dxgi::output1_t output1;
-  status = output->QueryInterface(IID_IDXGIOutput1, (void **)&output1);
+  status = output->QueryInterface(IID_IDXGIOutput1, (void **) &output1);
   if (FAILED(status)) {
     std::cout << "Failed to query IDXGIOutput1 from the output [0x" << std::hex << status << "]" << std::endl;
     return status;
@@ -213,11 +240,13 @@ test_dxgi_duplication(dxgi::adapter_t &adapter, dxgi::output_t &output) {
     HRESULT captureResult = test_frame_capture(dup, device.get());
     if (SUCCEEDED(captureResult)) {
       return S_OK;
-    } else {
+    }
+    else {
       std::cout << "Frame capture test failed [0x" << std::hex << captureResult << "]" << std::endl;
       return captureResult;
     }
-  } else {
+  }
+  else {
     std::cout << "Failed to duplicate output [0x" << std::hex << result << "]" << std::endl;
     return result;
   }
