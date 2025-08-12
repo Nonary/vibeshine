@@ -17,7 +17,7 @@ const config = ref(props.config)
 </script>
 
 <template>
-  <div id="audio-video" class="config-page">
+  <div id="av" class="config-page">
     <!-- Audio Sink -->
     <div class="mb-3">
       <label for="audio_sink" class="form-label">{{ $t('config.audio_sink') }}</label>

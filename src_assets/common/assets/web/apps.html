@@ -12,7 +12,7 @@
           font-family: monospace;
         }
 
-        .cover-finder {}
+  /* .cover-finder styles are defined by nested rules below */
 
         .cover-finder .cover-results {
           max-height: 400px;
@@ -543,21 +543,30 @@
       },
       useCover(cover) {
         this.coverFinderBusy = true;
-        fetch("./api/covers/upload", {
-          method: "POST",
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            key: cover.key,
-            url: cover.saveUrl,
+        const uuid = this.editForm && this.editForm.uuid;
+        const doClose = () => this.closeCoverFinder();
+        if (uuid) {
+          fetch(`./api/apps/${uuid}/cover`, {
+            method: "POST",
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: cover.saveUrl })
           })
-        }).then(r => {
-          if (!r.ok) throw new Error("Failed to download covers");
-          return r.json();
-        }).then(body => this.editForm["image-path"] = body.path)
-          .then(() => this.closeCoverFinder())
-          .finally(() => this.coverFinderBusy = false);
+            .then(r => { if (!r.ok) throw new Error("Failed to set cover"); return r.json(); })
+            .then(() => { /* no longer rely on image-path */ this.editForm["image-path"] = this.editForm["image-path"] || ""; })
+            .then(doClose)
+            .finally(() => this.coverFinderBusy = false);
+        } else {
+          // Legacy fallback: upload via old endpoint and set image-path
+          fetch("./api/covers/upload", {
+            method: "POST",
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: cover.key, url: cover.saveUrl })
+          })
+            .then(r => { if (!r.ok) throw new Error("Failed to download covers"); return r.json(); })
+            .then(body => this.editForm["image-path"] = body.path)
+            .then(doClose)
+            .finally(() => this.coverFinderBusy = false);
+        }
       },
       save() {
         this.editForm["image-path"] = this.editForm["image-path"].toString().replace(/"/g, '');

@@ -32,6 +32,9 @@
 #include "network.h"
 #include "nvhttp.h"
 #include "platform/common.h"
+#if defined(_WIN32)
+#include "platform/windows/misc.h"
+#endif
 #include "process.h"
 #include "utility.h"
 #include "uuid.h"
@@ -507,6 +510,184 @@ namespace confighttp {
   }
 
   /**
+   * @brief Serve cover images stored in the Sunshine appdata covers directory.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void getCovers(resp_https_t response, req_https_t request) {
+    print_req(request);
+
+    // Compute the covers directory under appdata
+    fs::path coversDirPath(platf::appdata().string());
+    coversDirPath /= "covers";
+
+    // Resolve requested file path relative to the covers directory
+    // .relative_path() sheds any leading slash that might exist
+    auto relReqPath = fs::path(request->path).relative_path();
+    // Strip leading "/covers" segment if present
+    if (!relReqPath.empty()) {
+      auto it = relReqPath.begin();
+      if (it != relReqPath.end() && (*it == fs::path("/") || *it == fs::path("covers") || it->string().find("covers") != std::string::npos)) {
+        // Build a new relative path without the first segment
+        fs::path tmp;
+        for (auto jt = ++it; jt != relReqPath.end(); ++jt) tmp /= *jt;
+        relReqPath = tmp;
+      }
+    }
+
+    auto filePath = fs::weakly_canonical(coversDirPath / relReqPath);
+
+    // Disallow paths outside the covers directory
+    if (!isChildPath(filePath, coversDirPath)) {
+      BOOST_LOG(warning) << "Attempt to request a file outside covers folder: " << filePath;
+      bad_request(response, request);
+      return;
+    }
+    if (!fs::exists(filePath)) {
+      // If not found in the covers directory, attempt to resolve from apps.json image-paths by filename
+      auto relName = relReqPath.filename().string();
+      std::string sourcePath;
+      // Optional disambiguation: accept ?i=<index> hint
+      int index_hint = -1;
+      try {
+        auto q = request->parse_query_string();
+        auto it = q.find("i");
+        if (it != q.end()) {
+          index_hint = std::stoi(it->second);
+        }
+      } catch (...) {
+        index_hint = -1;
+      }
+      try {
+        // Read apps.json from appdata
+        auto appsJson = platf::appdata().string() + "/apps.json";
+        std::ifstream appsIn(appsJson);
+        if (appsIn) {
+          nlohmann::json j;
+          appsIn >> j;
+          if (j.contains("apps") && j["apps"].is_array()) {
+            // If index hint is valid, try exact index first
+            if (index_hint >= 0 && index_hint < (int)j["apps"].size()) {
+              auto &app = j["apps"][index_hint];
+              if (app.contains("image-path") && app["image-path"].is_string()) {
+                auto p = app["image-path"].get<std::string>();
+                if (!p.empty()) {
+                  auto base = p; std::replace(base.begin(), base.end(), '\\', '/');
+                  auto pos = base.find_last_of('/'); if (pos != std::string::npos) base = base.substr(pos+1);
+                  if (boost::iequals(base, relName)) {
+                    sourcePath = p;
+                  }
+                }
+              }
+            }
+            // Fallback: first match by basename
+            if (sourcePath.empty()) {
+              for (auto &app : j["apps"]) {
+                if (!app.contains("image-path")) continue;
+                auto p = app["image-path"].get<std::string>();
+                if (p.empty()) continue;
+                auto base = p;
+                std::replace(base.begin(), base.end(), '\\', '/');
+                auto pos = base.find_last_of('/');
+                if (pos != std::string::npos) base = base.substr(pos+1);
+                if (boost::iequals(base, relName)) { sourcePath = p; break; }
+              }
+            }
+          }
+        }
+      } catch (...) {
+        // ignore errors; we'll 404 below if we can't serve
+      }
+
+      if (sourcePath.empty()) {
+        not_found(response, request);
+        return;
+      }
+
+      // Only serve common image types
+      auto extLower = fs::path(sourcePath).extension().string();
+      boost::algorithm::to_lower(extLower);
+      static const std::set<std::string> kAllowed{ ".png", ".jpg", ".jpeg", ".webp", ".bmp" };
+      if (!kAllowed.count(extLower)) {
+        bad_request(response, request, "Unsupported image type");
+        return;
+      }
+
+      // Load file contents (on Windows, impersonate the active user to access user profile paths)
+      std::string content;
+      auto read_file_to = [&](const std::string &path) -> bool {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return false;
+        in.seekg(0, std::ios::end);
+        auto size = in.tellg();
+        if (size <= 0 || size > (std::streamoff) (15 * 1024 * 1024)) { // 15MB cap
+          return false;
+        }
+        content.resize((size_t) size);
+        in.seekg(0, std::ios::beg);
+        in.read(content.data(), size);
+        return !!in;
+      };
+
+#if defined(_WIN32)
+      bool ok = false;
+      {
+        // Retrieve the active user's token (non-elevated)
+        HANDLE token = platf::retrieve_users_token(false);
+        if (token) {
+          auto token_close = util::fail_guard([token]() { CloseHandle(token); });
+          auto ec = platf::impersonate_current_user(token, [&]() {
+            ok = read_file_to(sourcePath);
+          });
+          (void) ec; // We only care if ok was set
+        }
+      }
+      if (!ok) {
+        // Fallback try without impersonation (may work if already running as user)
+        ok = read_file_to(sourcePath);
+      }
+      if (!ok) {
+        not_found(response, request);
+        return;
+      }
+#else
+      if (!read_file_to(sourcePath)) {
+        not_found(response, request);
+        return;
+      }
+#endif
+
+      // Determine content type from extension
+      auto mimeType = mime_types.find(extLower.substr(1));
+      if (mimeType == mime_types.end()) {
+        bad_request(response, request);
+        return;
+      }
+
+      SimpleWeb::CaseInsensitiveMultimap headers;
+      headers.emplace("Content-Type", mimeType->second);
+      headers.emplace("X-Frame-Options", "DENY");
+      headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+      response->write(SimpleWeb::StatusCode::success_ok, content, headers);
+      return;
+    }
+
+    // Determine content type from extension using existing mime_types map
+    auto mimeType = mime_types.find(filePath.extension().string().substr(1));
+    if (mimeType == mime_types.end()) {
+      bad_request(response, request);
+      return;
+    }
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", mimeType->second);
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    std::ifstream in(filePath.string(), std::ios::binary);
+    response->write(SimpleWeb::StatusCode::success_ok, in, headers);
+  }
+
+  /**
    * @brief Get the list of available applications.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -538,24 +719,42 @@ namespace confighttp {
         "exit-timeout"
       };
 
+      bool mutated = false;
       // Walk fileTree and convert true/false strings to boolean or integer values
       for (auto &app : file_tree["apps"]) {
         for (const auto &key : boolean_keys) {
           if (app.contains(key) && app[key].is_string()) {
             app[key] = app[key] == "true";
+            mutated = true;
           }
         }
         for (const auto &key : integer_keys) {
           if (app.contains(key) && app[key].is_string()) {
             app[key] = std::stoi(app[key].get<std::string>());
+            mutated = true;
           }
         }
         if (app.contains("prep-cmd")) {
           for (auto &prep : app["prep-cmd"]) {
             if (prep.contains("elevated") && prep["elevated"].is_string()) {
               prep["elevated"] = prep["elevated"] == "true";
+              mutated = true;
             }
           }
+        }
+        // Ensure each app has a UUID (auto-insert if missing/empty)
+        if (!app.contains("uuid") || app["uuid"].is_null() || (app["uuid"].is_string() && app["uuid"].get<std::string>().empty())) {
+          app["uuid"] = uuid_util::uuid_t::generate().string();
+          mutated = true;
+        }
+      }
+
+      // If any normalization occurred, persist back to disk
+      if (mutated) {
+        try {
+          file_handler::write_file(config::stream.file_apps.c_str(), file_tree.dump(4));
+        } catch (std::exception &e) {
+          BOOST_LOG(warning) << "GetApps persist normalization failed: "sv << e.what();
         }
       }
 
@@ -632,11 +831,22 @@ namespace confighttp {
       input_tree.erase("index");
 
       if (index == -1) {
+        // New app: generate a UUID if not provided
+        if (!input_tree.contains("uuid") || input_tree["uuid"].is_null() || (input_tree["uuid"].is_string() && input_tree["uuid"].get<std::string>().empty())) {
+          input_tree["uuid"] = uuid_util::uuid_t::generate().string();
+        }
         apps_node.push_back(input_tree);
       } else {
         nlohmann::json newApps = nlohmann::json::array();
         for (size_t i = 0; i < apps_node.size(); ++i) {
           if (i == index) {
+            // Preserve existing UUID if present
+            try {
+              if ((!input_tree.contains("uuid") || input_tree["uuid"].is_null() || (input_tree["uuid"].is_string() && input_tree["uuid"].get<std::string>().empty())) &&
+                  apps_node[i].contains("uuid") && apps_node[i]["uuid"].is_string()) {
+                input_tree["uuid"] = apps_node[i]["uuid"].get<std::string>();
+              }
+            } catch (...) {}
             newApps.push_back(input_tree);
           } else {
             newApps.push_back(apps_node[i]);
@@ -657,6 +867,129 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "SaveApp: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Serve a specific application's cover image by UUID.
+   *        Looks for files named <uuid> with a supported image extension in the covers directory.
+   * @api_examples{/api/apps/<uuid>/cover| GET| null}
+   */
+  void getAppCover(resp_https_t response, req_https_t request) {
+    print_req(request);
+
+    const std::string uuid = request->path_match[1]; // UUID route: hyphen does not need escaping inside the character class
+    if (uuid.empty()) {
+      bad_request(response, request, "Missing UUID");
+      return;
+    }
+
+    fs::path coversDirPath(platf::appdata().string());
+    coversDirPath /= "covers";
+
+    static const std::vector<std::pair<std::string, std::string>> kExtMime = {
+      {".png", "image/png"}, {".jpg", "image/jpeg"}, {".jpeg", "image/jpeg"}, {".webp", "image/webp"}, {".bmp", "image/bmp"}
+    };
+
+    fs::path found;
+    std::string foundMime;
+    for (const auto &em : kExtMime) {
+      auto p = fs::weakly_canonical(coversDirPath / (uuid + em.first));
+      if (fs::exists(p) && isChildPath(p, coversDirPath)) {
+        found = std::move(p);
+        foundMime = em.second;
+        break;
+      }
+    }
+    if (found.empty()) {
+      not_found(response, request);
+      return;
+    }
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", foundMime);
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    std::ifstream in(found.string(), std::ios::binary);
+    response->write(SimpleWeb::StatusCode::success_ok, in, headers);
+  }
+
+  /**
+   * @brief Upload or set a specific application's cover image by UUID.
+   *        Accepts either a JSON body with {"url": "..."} (restricted to images.igdb.com) or {"data": base64}.
+   *        Saves to appdata/covers/<uuid>.<ext> where ext is derived from URL or defaults to .png for data.
+   * @api_examples{/api/apps/<uuid>/cover| POST| {"url":"https://images.igdb.com/.../abc.png"}}
+   */
+  void uploadAppCover(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    const std::string uuid = request->path_match[1]; // UUID route: hyphen does not need escaping inside the character class
+    if (uuid.empty()) {
+      bad_request(response, request, "Missing UUID");
+      return;
+    }
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      nlohmann::json output_tree;
+      nlohmann::json input_tree = nlohmann::json::parse(ss);
+
+      const std::string coverdir = platf::appdata().string() + "/covers/";
+      file_handler::make_directory(coverdir);
+
+      std::string url = input_tree.value("url", "");
+      std::string data_b64 = input_tree.value("data", "");
+
+      auto choose_ext = [&](const std::string &u) -> std::string {
+        auto lo = boost::algorithm::to_lower_copy(u);
+        if (lo.size() >= 5 && lo.rfind(".jpeg") == lo.size() - 5) return ".jpeg";
+        if (lo.size() >= 4 && lo.rfind(".jpg") == lo.size() - 4) return ".jpg";
+        if (lo.size() >= 5 && lo.rfind(".webp") == lo.size() - 5) return ".webp";
+        if (lo.size() >= 4 && lo.rfind(".bmp") == lo.size() - 4) return ".bmp";
+        return ".png"; // default
+      };
+
+      std::string ext = ".png";
+      if (!url.empty()) {
+        if (http::url_get_host(url) != "images.igdb.com") {
+          bad_request(response, request, "Only images.igdb.com is allowed");
+          return;
+        }
+        ext = choose_ext(url);
+        const std::string path = coverdir + uuid + ext;
+        if (!http::download_file(url, path)) {
+          bad_request(response, request, "Failed to download cover");
+          return;
+        }
+        output_tree["path"] = path;
+      } else if (!data_b64.empty()) {
+        const std::string path = coverdir + uuid + ext;
+        auto data = SimpleWeb::Crypto::Base64::decode(data_b64);
+        std::ofstream imgfile(path, std::ios::binary);
+        imgfile.write(data.data(), static_cast<std::streamsize>(data.size()));
+        if (!imgfile) {
+          bad_request(response, request, "Failed to write cover data");
+          return;
+        }
+        output_tree["path"] = path;
+      } else {
+        bad_request(response, request, "Either 'url' or 'data' is required");
+        return;
+      }
+
+      output_tree["status"] = true;
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "uploadAppCover: "sv << e.what();
       bad_request(response, request, e.what());
     }
   }
@@ -1215,8 +1548,12 @@ namespace confighttp {
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/apps/close$"]["POST"] = closeApp;
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
+  // New UUID-based cover endpoints
+  server.resource["^/api/apps/([0-9a-fA-F-]+)/cover$"]["GET"] = getAppCover;
+  server.resource["^/api/apps/([0-9a-fA-F-]+)/cover$"]["POST"] = uploadAppCover;
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;
+  server.resource["^/covers\\/.+$"]["GET"] = getCovers;
     server.resource["^/assets\\/.+$"]["GET"] = getNodeModules;
     server.config.reuse_address = true;
     server.config.address = net::af_to_any_address_string(address_family);

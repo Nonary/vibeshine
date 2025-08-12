@@ -6,6 +6,7 @@
 
 // standard includes
 #include <chrono>
+#include <functional>
 #include <string_view>
 
 // platform includes
@@ -33,4 +34,9 @@ namespace platf {
    * @return The converted UTF-8 string.
    */
   std::string to_utf8(const std::wstring &string);
+
+  // Additional helpers used by configuration HTTP to safely access user resources
+  bool is_running_as_system();
+  HANDLE retrieve_users_token(bool elevated);
+  std::error_code impersonate_current_user(HANDLE user_token, std::function<void()> callback);
 }  // namespace platf

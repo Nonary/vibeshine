@@ -10,12 +10,15 @@
   "dependencies": {
     "@lizardbyte/shared-web": "2025.626.181239",
     "vue": "3.5.18",
-    "vue-i18n": "11.1.11"
+    "vue-i18n": "11.1.11",
+    "vue-router": "4.4.5"
   },
   "devDependencies": {
     "@codecov/vite-plugin": "1.9.1",
     "@vitejs/plugin-vue": "4.6.2",
+    "autoprefixer": "^10.4.20",
     "serve": "14.2.4",
+    "tailwindcss": "^3.4.10",
     "vite": "4.5.14",
     "vite-plugin-ejs": "1.6.4"
   }
