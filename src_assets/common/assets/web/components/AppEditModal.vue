@@ -8,19 +8,26 @@
 			</div>
 			<div class="p-6 space-y-6 text-xs overflow-y-auto max-h-[70vh]">
 				<div class="grid gap-4 sm:grid-cols-2">
-					<div class="space-y-1 col-span-2 sm:col-span-1">
+					<div class="space-y-1 col-span-2">
 						<label class="font-medium">Name</label>
 						<input v-model="form.name" class="app-input" placeholder="Game or App Name" />
 					</div>
-						<div class="space-y-1 col-span-2 sm:col-span-1">
+						<div class="space-y-1 col-span-2 flex flex-col">
 							<label class="font-medium">Image Path</label>
-							<input v-model="form['image-path']" class="app-input font-mono" placeholder="/path/to/image.png" />
+							<div class="flex items-start gap-3">
+								<input v-model="form['image-path']" class="app-input font-mono flex-1" placeholder="/path/to/image.png" />
+								<div class="w-24 h-32 bg-black/5 dark:bg-white/5 rounded overflow-hidden flex items-center justify-center">
+									<img v-if="previewSrc" :src="previewSrc" class="max-w-full max-h-full object-contain" loading="lazy" />
+									<div v-else class="text-2xl font-bold text-solar-primary/40 dark:text-lunar-primary/40">{{ form.name?.substring(0,1)||'?' }}</div>
+								</div>
+							</div>
+							<p class="text-[11px] text-black/60 dark:text-white/40 mt-1">Paste a URL or local image filename here. Save to persist.</p>
 						</div>
-					<div class="space-y-1 col-span-2">
-						<label class="font-medium">Command (array or single)</label>
-						<textarea v-model="cmdText" class="app-input font-mono h-20" placeholder="Executable or JSON array"></textarea>
-						<p class="text-black/60 dark:text-white/50">Single command line or JSON array of segments.</p>
-					</div>
+									<div class="space-y-1 col-span-2">
+										<label class="font-medium">Command (single)</label>
+										<textarea v-model="cmdText" class="app-input font-mono h-20" placeholder="Executable command line"></textarea>
+										<p class="text-black/60 dark:text-white/50">Enter the full command line to run (single string).</p>
+									</div>
 					<div class="space-y-1 col-span-2">
 						<label class="font-medium">Working Directory</label>
 						<input v-model="form['working-dir']" class="app-input font-mono" placeholder="C:/Games/App" />
@@ -82,14 +89,39 @@ import { reactive, watch, computed } from 'vue'
 const props = defineProps({ modelValue:Boolean, platform:String, app:Object, index:{type:Number,default:-1} })
 const emit = defineEmits(['update:modelValue','saved','deleted'])
 const open = computed(()=>props.modelValue)
-function fresh(){ return { name:'', output:'', cmd:[], index:-1, 'exclude-global-prep-cmd':false, elevated:false, 'auto-detach':true, 'wait-all':true, 'exit-timeout':5, 'prep-cmd':[], detached:[], 'image-path':'', 'working-dir':'' } }
+function fresh(){ return { name:'', output:'', cmd:'', index:-1, 'exclude-global-prep-cmd':false, elevated:false, 'auto-detach':true, 'wait-all':true, 'exit-timeout':5, 'prep-cmd':[], detached:[], 'image-path':'', 'working-dir':'' } }
 const form = reactive(fresh())
-const cmdText = computed({ get(){ return Array.isArray(form.cmd)? JSON.stringify(form.cmd): (form.cmd||'') }, set(v){ v=v.trim(); if(v.startsWith('[')){ try{ form.cmd = JSON.parse(v) }catch{ form.cmd=v } } else form.cmd=v } })
-watch(()=>props.app,(val)=>{ if(!open.value) return; Object.assign(form,fresh(), JSON.parse(JSON.stringify(val||{}))); form.index = props.index??-1 },{ immediate:true })
-watch(open,o=>{ if(o){ Object.assign(form,fresh(), JSON.parse(JSON.stringify(props.app||{}))); form.index = props.index??-1 } })
+// Normalize cmd to single string; if older data has array, join with spaces
+watch(()=>props.app,(val)=>{ if(!open.value) return; const copy = JSON.parse(JSON.stringify(val||{})); if(Array.isArray(copy.cmd)) copy.cmd = copy.cmd.join(' '); Object.assign(form,fresh(), copy); form.index = props.index??-1 },{ immediate:true })
+const cmdText = computed({ get(){ return (form.cmd||'') }, set(v){ form.cmd = v } })
+watch(open,o=>{ if(o){ const copy = JSON.parse(JSON.stringify(props.app||{})); if(Array.isArray(copy.cmd)) copy.cmd = copy.cmd.join(' '); Object.assign(form,fresh(), copy); form.index = props.index??-1 } })
 function close(){ emit('update:modelValue', false) }
 function addPrep(){ form['prep-cmd'].push({ do:'', undo:'', ...(props.platform==='windows'? { elevated:false }: {}) }) }
 const saving = reactive({ v:false })
+
+function simpleHash(str){
+	let h = 2166136261 >>> 0
+	for(let i=0;i<str.length;i++){ h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0 }
+	return (h >>> 0).toString(36)
+}
+function coverSrc(app, index){
+	if(app?.uuid){ const cb = simpleHash(`${app.uuid}|${index ?? ''}`); return `./api/apps/${encodeURIComponent(app.uuid)}/cover?cb=${cb}` }
+	const path = (app?.['image-path']||'').toString().trim()
+	if(!path) return ''
+	if(/^https?:\/\//i.test(path)) return path
+	if(!path.includes('/') && !path.includes('\\')){ return `./assets/${path}` }
+	const file = path.replace(/\\/g,'/').split('/').pop()
+	if(file){ const cb = simpleHash(`${path}|${index ?? ''}`); const iParam = (typeof index === 'number') ? `&i=${index}` : ''; return `./covers/${file}?cb=${cb}${iParam}` }
+	return path
+}
+
+const previewSrc = computed(()=>{
+	// prefer uuid cover if present, otherwise use image-path
+	const a = form || {}
+	if(a.uuid) return coverSrc(a, a.index)
+	if(a['image-path']) return coverSrc(a, a.index)
+	return ''
+})
 async function save(){ saving.v=true; const payload = JSON.parse(JSON.stringify(form)); try{ await fetch('./api/apps',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) }); emit('saved'); close() } finally { saving.v=false } }
 async function del(){ if(!confirm('Delete this application?')) return; saving.v=true; try { await fetch(`./api/apps/${form.index}`,{ method:'DELETE' }); emit('deleted'); close() } finally { saving.v=false } }
 </script>
