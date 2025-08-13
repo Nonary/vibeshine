@@ -7,15 +7,21 @@
 #define BOOST_BIND_GLOBAL_PLACEHOLDERS
 
 // standard includes
+#include <boost/regex.hpp>
+#include <chrono>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <mutex>
 #include <set>
+#include <thread>
+#include <unordered_map>
 
 // lib includes
 #include <boost/algorithm/string.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/property_tree/json_parser.hpp>
 #include <nlohmann/json.hpp>
 #include <Simple-Web-Server/crypto.hpp>
 #include <Simple-Web-Server/server_https.hpp>
@@ -27,23 +33,27 @@
 #include "display_device.h"
 #include "file_handler.h"
 #include "globals.h"
+#include "http_auth.h"
 #include "httpcommon.h"
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
 #include "platform/common.h"
 #if defined(_WIN32)
-#include "platform/windows/misc.h"
-#include <windows.h>
+  #include "platform/windows/misc.h"
+
+  #include <windows.h>
 #endif
 #include "process.h"
 #include "utility.h"
 #include "uuid.h"
 
 using namespace std::literals;
+namespace pt = boost::property_tree;
 
 namespace confighttp {
   namespace fs = std::filesystem;
+  using enum confighttp::StatusCode;
 
   using https_server_t = SimpleWeb::Server<SimpleWeb::HTTPS>;
 
@@ -78,12 +88,141 @@ namespace confighttp {
   }
 
   /**
+   * @brief Get the CORS origin for localhost (no wildcard).
+   * @return The CORS origin string.
+   */
+  static std::string get_cors_origin() {
+    std::uint16_t https_port = net::map_port(PORT_HTTPS);
+    return std::format("https://localhost:{}", https_port);
+  }
+
+  /**
+   * @brief Helper to add CORS headers for API responses.
+   * @param headers The headers to add CORS to.
+   */
+  void add_cors_headers(SimpleWeb::CaseInsensitiveMultimap &headers) {
+    headers.emplace("Access-Control-Allow-Origin", get_cors_origin());
+    headers.emplace("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    headers.emplace("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  }
+
+  /**
+   * @brief Send a response.
+   * @param response The HTTP response object.
+   * @param output_tree The JSON tree to send.
+   */
+  void send_response(resp_https_t response, const nlohmann::json &output_tree) {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json; charset=utf-8");
+    add_cors_headers(headers);
+    response->write(success_ok, output_tree.dump(), headers);
+  }
+
+  /**
+   * @brief Write an APIResponse to an HTTP response object.
+   * @param response The HTTP response object.
+   * @param api_response The APIResponse containing the structured response data.
+   */
+  void write_api_response(resp_https_t response, const APIResponse &api_response) {
+    SimpleWeb::CaseInsensitiveMultimap headers = api_response.headers;
+    headers.emplace("Content-Type", "application/json");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    add_cors_headers(headers);
+    response->write(api_response.status_code, api_response.body, headers);
+  }
+
+  /**
+   * @brief Send a 401 Unauthorized response.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void send_unauthorized(resp_https_t response, req_https_t request) {
+    auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    BOOST_LOG(info) << "Web UI: ["sv << address << "] -- not authorized"sv;
+
+    constexpr auto code = client_error_unauthorized;
+
+    nlohmann::json tree;
+    tree["status_code"] = code;
+    tree["status"] = false;
+    tree["error"] = "Unauthorized";
+
+    const SimpleWeb::CaseInsensitiveMultimap headers {
+      {"Content-Type", "application/json"},
+      {"WWW-Authenticate", R"(Basic realm="Sunshine Gamestream Host", charset="UTF-8")"},
+      {"X-Frame-Options", "DENY"},
+      {"Content-Security-Policy", "frame-ancestors 'none';"},
+      {"Access-Control-Allow-Origin", get_cors_origin()}
+    };
+
+    response->write(code, tree.dump(), headers);
+  }
+
+  /**
+   * @brief Send a redirect response.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @param path The path to redirect to.
+   */
+  void send_redirect(resp_https_t response, req_https_t request, const char *path) {
+    auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    BOOST_LOG(info) << "Web UI: ["sv << address << "] -- not authorized"sv;
+    const SimpleWeb::CaseInsensitiveMultimap headers {
+      {"Location", path},
+      {"X-Frame-Options", "DENY"},
+      {"Content-Security-Policy", "frame-ancestors 'none';"}
+    };
+    response->write(redirection_temporary_redirect, headers);
+  }
+
+  /**
+   * @brief Check authentication and authorization for an HTTP request.
+   * @param request The HTTP request object.
+   * @return AuthResult with outcome and response details if not authorized.
+   */
+  AuthResult check_auth(const req_https_t &request) {
+    auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    std::string auth_header;
+    // Try Authorization header
+    if (auto auth_it = request->header.find("authorization"); auth_it != request->header.end()) {
+      auth_header = auth_it->second;
+    } else {
+      std::string token = extract_session_token_from_cookie(request->header);
+      if (!token.empty()) {
+        auth_header = "Session " + token;
+      }
+    }
+    return check_auth(address, auth_header, request->path, request->method);
+  }
+
+  /**
+   * @brief Authenticate the user or API token for a specific path/method.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @return True if authenticated and authorized, false otherwise.
+   */
+  bool authenticate(resp_https_t response, req_https_t request) {
+    if (auto result = check_auth(request); !result.ok) {
+      if (result.code == StatusCode::redirection_temporary_redirect) {
+        response->write(result.code, result.headers);
+      } else if (!result.body.empty()) {
+        response->write(result.code, result.body, result.headers);
+      } else {
+        response->write(result.code);
+      }
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * @brief Send a 404 Not Found response.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    */
   void not_found(resp_https_t response, [[maybe_unused]] req_https_t request) {
-    constexpr SimpleWeb::StatusCode code = SimpleWeb::StatusCode::client_error_not_found;
+    constexpr auto code = client_error_not_found;
 
     nlohmann::json tree;
     tree["status_code"] = code;
@@ -91,6 +230,7 @@ namespace confighttp {
 
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "application/json");
+    headers.emplace("Access-Control-Allow-Origin", get_cors_origin());
     headers.emplace("X-Frame-Options", "DENY");
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
 
@@ -104,19 +244,13 @@ namespace confighttp {
    * @param error_message The error message to include in the response.
    */
   void bad_request(resp_https_t response, [[maybe_unused]] req_https_t request, const std::string &error_message = "Bad Request") {
-    constexpr SimpleWeb::StatusCode code = SimpleWeb::StatusCode::client_error_bad_request;
-
-    nlohmann::json tree;
-    tree["status_code"] = code;
-    tree["status"] = false;
-    tree["error"] = error_message;
-
     SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "application/json");
+    headers.emplace("Content-Type", "application/json; charset=utf-8");
     headers.emplace("X-Frame-Options", "DENY");
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-
-    response->write(code, tree.dump(), headers);
+    add_cors_headers(headers);
+    nlohmann::json error = {{"error", error_message}};
+    response->write(client_error_bad_request, error.dump(), headers);
   }
 
   /**
@@ -152,16 +286,7 @@ namespace confighttp {
     return true;
   }
 
-  /**
-   * @brief Send a JSON response with standard security headers.
-   */
-  void send_response(resp_https_t response, const nlohmann::json &tree) {
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "application/json");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(SimpleWeb::StatusCode::success_ok, tree.dump(), headers);
-  }
+
 
   /**
    * @brief Send an HTTP redirect.
@@ -170,68 +295,6 @@ namespace confighttp {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Location", location);
     response->write(SimpleWeb::StatusCode::redirection_found, std::string(), headers);
-  }
-
-  /**
-   * @brief Simple authentication check using Basic auth against stored credentials.
-   * Returns true when authentication passed or when no credentials are configured.
-   */
-  bool authenticate(resp_https_t response, req_https_t request) {
-    using namespace std::literals;
-    // If no username configured, allow access
-    if (config::sunshine.username.empty()) return true;
-
-    auto it = request->header.find("authorization");
-    if (it == request->header.end()) {
-      SimpleWeb::CaseInsensitiveMultimap headers;
-      headers.emplace("WWW-Authenticate", "Basic realm=\"Sunshine\"");
-      nlohmann::json tree;
-      tree["status_code"] = SimpleWeb::StatusCode::client_error_unauthorized;
-      tree["error"] = "Unauthorized";
-      response->write(SimpleWeb::StatusCode::client_error_unauthorized, tree.dump(), headers);
-      return false;
-    }
-
-    std::string auth = it->second;
-    const std::string prefix = "Basic ";
-    if (auth.rfind(prefix, 0) != 0) {
-      nlohmann::json tree;
-      tree["status_code"] = SimpleWeb::StatusCode::client_error_unauthorized;
-      tree["error"] = "Unauthorized";
-      response->write(SimpleWeb::StatusCode::client_error_unauthorized, tree.dump());
-      return false;
-    }
-    std::string creds_b64 = auth.substr(prefix.size());
-    std::string creds = SimpleWeb::Crypto::Base64::decode(creds_b64);
-    auto pos = creds.find(':');
-    if (pos == std::string::npos) {
-      nlohmann::json tree;
-      tree["status_code"] = SimpleWeb::StatusCode::client_error_unauthorized;
-      tree["error"] = "Unauthorized";
-      response->write(SimpleWeb::StatusCode::client_error_unauthorized, tree.dump());
-      return false;
-    }
-    std::string user = creds.substr(0, pos);
-    std::string pass = creds.substr(pos + 1);
-
-    if (!boost::iequals(user, config::sunshine.username)) {
-      nlohmann::json tree;
-      tree["status_code"] = SimpleWeb::StatusCode::client_error_unauthorized;
-      tree["error"] = "Unauthorized";
-      response->write(SimpleWeb::StatusCode::client_error_unauthorized, tree.dump());
-      return false;
-    }
-
-    try {
-      auto hashed = util::hex(crypto::hash(pass + config::sunshine.salt)).to_string();
-      if (hashed == config::sunshine.password) return true;
-    } catch (...) {}
-
-    nlohmann::json tree;
-    tree["status_code"] = SimpleWeb::StatusCode::client_error_unauthorized;
-    tree["error"] = "Unauthorized";
-    response->write(SimpleWeb::StatusCode::client_error_unauthorized, tree.dump());
-    return false;
   }
 
   /**
@@ -376,6 +439,20 @@ namespace confighttp {
   }
 
   /**
+   * @brief Get the login page.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void getLoginPage(resp_https_t response, req_https_t request) {
+    print_req(request);
+
+    std::string content = file_handler::read_file(WEB_DIR "login.html");
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "text/html; charset=utf-8");
+    response->write(content, headers);
+  }
+
+  /**
    * @brief Get the troubleshooting page.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -410,7 +487,7 @@ namespace confighttp {
     headers.emplace("Content-Type", "image/x-icon");
     headers.emplace("X-Frame-Options", "DENY");
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(SimpleWeb::StatusCode::success_ok, in, headers);
+    response->write(success_ok, in, headers);
   }
 
   /**
@@ -428,7 +505,7 @@ namespace confighttp {
     headers.emplace("Content-Type", "image/png");
     headers.emplace("X-Frame-Options", "DENY");
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(SimpleWeb::StatusCode::success_ok, in, headers);
+    response->write(success_ok, in, headers);
   }
 
   /**
@@ -482,7 +559,7 @@ namespace confighttp {
     headers.emplace("X-Frame-Options", "DENY");
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     std::ifstream in(filePath.string(), std::ios::binary);
-    response->write(SimpleWeb::StatusCode::success_ok, in, headers);
+    response->write(success_ok, in, headers);
   }
 
   /**
@@ -506,7 +583,9 @@ namespace confighttp {
       if (it != relReqPath.end() && (*it == fs::path("/") || *it == fs::path("covers") || it->string().find("covers") != std::string::npos)) {
         // Build a new relative path without the first segment
         fs::path tmp;
-        for (auto jt = ++it; jt != relReqPath.end(); ++jt) tmp /= *jt;
+        for (auto jt = ++it; jt != relReqPath.end(); ++jt) {
+          tmp /= *jt;
+        }
         relReqPath = tmp;
       }
     }
@@ -543,13 +622,17 @@ namespace confighttp {
           appsIn >> j;
           if (j.contains("apps") && j["apps"].is_array()) {
             // If index hint is valid, try exact index first
-            if (index_hint >= 0 && index_hint < (int)j["apps"].size()) {
+            if (index_hint >= 0 && index_hint < (int) j["apps"].size()) {
               auto &app = j["apps"][index_hint];
               if (app.contains("image-path") && app["image-path"].is_string()) {
                 auto p = app["image-path"].get<std::string>();
                 if (!p.empty()) {
-                  auto base = p; std::replace(base.begin(), base.end(), '\\', '/');
-                  auto pos = base.find_last_of('/'); if (pos != std::string::npos) base = base.substr(pos+1);
+                  auto base = p;
+                  std::replace(base.begin(), base.end(), '\\', '/');
+                  auto pos = base.find_last_of('/');
+                  if (pos != std::string::npos) {
+                    base = base.substr(pos + 1);
+                  }
                   if (boost::iequals(base, relName)) {
                     sourcePath = p;
                   }
@@ -559,14 +642,23 @@ namespace confighttp {
             // Fallback: first match by basename
             if (sourcePath.empty()) {
               for (auto &app : j["apps"]) {
-                if (!app.contains("image-path")) continue;
+                if (!app.contains("image-path")) {
+                  continue;
+                }
                 auto p = app["image-path"].get<std::string>();
-                if (p.empty()) continue;
+                if (p.empty()) {
+                  continue;
+                }
                 auto base = p;
                 std::replace(base.begin(), base.end(), '\\', '/');
                 auto pos = base.find_last_of('/');
-                if (pos != std::string::npos) base = base.substr(pos+1);
-                if (boost::iequals(base, relName)) { sourcePath = p; break; }
+                if (pos != std::string::npos) {
+                  base = base.substr(pos + 1);
+                }
+                if (boost::iequals(base, relName)) {
+                  sourcePath = p;
+                  break;
+                }
               }
             }
           }
@@ -583,7 +675,7 @@ namespace confighttp {
       // Only serve common image types
       auto extLower = fs::path(sourcePath).extension().string();
       boost::algorithm::to_lower(extLower);
-      static const std::set<std::string> kAllowed{ ".png", ".jpg", ".jpeg", ".webp", ".bmp" };
+      static const std::set<std::string> kAllowed {".png", ".jpg", ".jpeg", ".webp", ".bmp"};
       if (!kAllowed.count(extLower)) {
         bad_request(response, request, "Unsupported image type");
         return;
@@ -591,26 +683,27 @@ namespace confighttp {
 
       // Load file contents (on Windows, impersonate the active user to access user profile paths)
       std::string content;
-    // read_file_to lambda removed (unused after refactor)
+      // read_file_to lambda removed (unused after refactor)
 
 #if defined(_WIN32)
       // On Windows: open file handle while impersonated, get final path by handle,
       // verify final path is under allowed roots, then revert impersonation and
       // read/stream the file.
-  // removed unused variable ok
+      // removed unused variable ok
       std::uintmax_t candidate_size = 0;
       fs::path final_path;
 
       {
         HANDLE token = platf::retrieve_users_token(false);
         if (token) {
-          auto token_close = util::fail_guard([token]() { CloseHandle(token); });
+          auto token_close = util::fail_guard([token]() {
+            CloseHandle(token);
+          });
           // Impersonate for the minimal duration needed to open and query the file handle
           auto ec = platf::impersonate_current_user(token, [&]() {
             // Use wide path for Win32 API
             std::wstring wpath = fs::path(sourcePath).wstring();
-            HANDLE fh = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            HANDLE fh = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (fh != INVALID_HANDLE_VALUE) {
               // Query final path
               DWORD needed = GetFinalPathNameByHandleW(fh, nullptr, 0, FILE_NAME_NORMALIZED);
@@ -622,14 +715,18 @@ namespace confighttp {
                   buf.resize(ret);
                   // Strip any Windows device prefix "\\?\"
                   const std::wstring prefix = L"\\\\?\\";
-                  if (buf.rfind(prefix, 0) == 0) buf = buf.substr(prefix.size());
+                  if (buf.rfind(prefix, 0) == 0) {
+                    buf = buf.substr(prefix.size());
+                  }
                   final_path = fs::path(buf);
                 }
               }
 
               // Get file size while still impersonated
-              LARGE_INTEGER size_li{};
-              if (GetFileSizeEx(fh, &size_li)) candidate_size = static_cast<std::uintmax_t>(size_li.QuadPart);
+              LARGE_INTEGER size_li {};
+              if (GetFileSizeEx(fh, &size_li)) {
+                candidate_size = static_cast<std::uintmax_t>(size_li.QuadPart);
+              }
 
               CloseHandle(fh);
             }
@@ -660,7 +757,11 @@ namespace confighttp {
         appdataRoot = fs::weakly_canonical(appdataRoot);
       } catch (...) {}
       fs::path candidate_canon;
-      try { candidate_canon = fs::weakly_canonical(final_path); } catch (...) { candidate_canon = final_path; }
+      try {
+        candidate_canon = fs::weakly_canonical(final_path);
+      } catch (...) {
+        candidate_canon = final_path;
+      }
 
       if (!(isChildPath(webRoot, candidate_canon) || isChildPath(appdataRoot, candidate_canon) || candidate_canon == webRoot || candidate_canon == appdataRoot)) {
         BOOST_LOG(warning) << "Attempt to request a file outside allowed roots";
@@ -672,7 +773,9 @@ namespace confighttp {
       const std::uintmax_t max_size = static_cast<std::uintmax_t>(15ull * 1024ull * 1024ull);
       if (candidate_size == 0) {
         // If we weren't able to obtain the size via handle, try filesystem query
-        std::error_code ec; candidate_size = fs::file_size(candidate_canon, ec); (void) ec;
+        std::error_code ec;
+        candidate_size = fs::file_size(candidate_canon, ec);
+        (void) ec;
       }
       if (candidate_size == 0 || candidate_size > max_size) {
         bad_request(response, request, "Unsupported image size");
@@ -917,7 +1020,7 @@ namespace confighttp {
   void getAppCover(resp_https_t response, req_https_t request) {
     print_req(request);
 
-    const std::string uuid = request->path_match[1]; // UUID route: hyphen does not need escaping inside the character class
+    const std::string uuid = request->path_match[1];  // UUID route: hyphen does not need escaping inside the character class
     if (uuid.empty()) {
       bad_request(response, request, "Missing UUID");
       return;
@@ -927,7 +1030,11 @@ namespace confighttp {
     coversDirPath /= "covers";
 
     static const std::vector<std::pair<std::string, std::string>> kExtMime = {
-      {".png", "image/png"}, {".jpg", "image/jpeg"}, {".jpeg", "image/jpeg"}, {".webp", "image/webp"}, {".bmp", "image/bmp"}
+      {".png", "image/png"},
+      {".jpg", "image/jpeg"},
+      {".jpeg", "image/jpeg"},
+      {".webp", "image/webp"},
+      {".bmp", "image/bmp"}
     };
 
     fs::path found;
@@ -957,7 +1064,7 @@ namespace confighttp {
                     // Determine extension and validate
                     auto extLower = candidate.extension().string();
                     boost::algorithm::to_lower(extLower);
-                    static const std::set<std::string> kAllowed{ ".png", ".jpg", ".jpeg", ".webp", ".bmp" };
+                    static const std::set<std::string> kAllowed {".png", ".jpg", ".jpeg", ".webp", ".bmp"};
                     if (!kAllowed.count(extLower)) {
                       bad_request(response, request, "Unsupported image type");
                       return;
@@ -970,21 +1077,30 @@ namespace confighttp {
                     {
                       HANDLE token = platf::retrieve_users_token(false);
                       if (token) {
-                        auto token_close = util::fail_guard([token]() { CloseHandle(token); });
+                        auto token_close = util::fail_guard([token]() {
+                          CloseHandle(token);
+                        });
                         auto ec_imp = platf::impersonate_current_user(token, [&]() {
                           std::wstring wpath = candidate.wstring();
-                          HANDLE fh = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                          HANDLE fh = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
                           if (fh != INVALID_HANDLE_VALUE) {
-                            auto fh_close = util::fail_guard([fh]() { CloseHandle(fh); });
-                            LARGE_INTEGER sz; if (GetFileSizeEx(fh, &sz)) { candidate_size = (std::uintmax_t) sz.QuadPart; }
+                            auto fh_close = util::fail_guard([fh]() {
+                              CloseHandle(fh);
+                            });
+                            LARGE_INTEGER sz;
+                            if (GetFileSizeEx(fh, &sz)) {
+                              candidate_size = (std::uintmax_t) sz.QuadPart;
+                            }
                             // Query final path
-                            std::wstring buf; buf.resize(32768);
+                            std::wstring buf;
+                            buf.resize(32768);
                             DWORD ret = GetFinalPathNameByHandleW(fh, buf.data(), (DWORD) buf.size(), FILE_NAME_NORMALIZED);
                             if (ret && ret < buf.size()) {
                               buf.resize(ret);
-                              std::wstring nt_prefix = L"\\\\?\\"; // strip if present
-                              if (buf.rfind(nt_prefix, 0) == 0) { buf.erase(0, nt_prefix.size()); }
+                              std::wstring nt_prefix = L"\\\\?\\";  // strip if present
+                              if (buf.rfind(nt_prefix, 0) == 0) {
+                                buf.erase(0, nt_prefix.size());
+                              }
                               final_path = fs::path(buf);
                             }
                           }
@@ -993,7 +1109,11 @@ namespace confighttp {
                       }
                     }
                     if (final_path.empty()) {
-                      try { final_path = fs::weakly_canonical(candidate); } catch (...) { final_path = candidate; }
+                      try {
+                        final_path = fs::weakly_canonical(candidate);
+                      } catch (...) {
+                        final_path = candidate;
+                      }
                     }
                     if (final_path.empty()) {
                       not_found(response, request);
@@ -1002,24 +1122,43 @@ namespace confighttp {
                     // Allowed roots: web assets directory and appdata covers directory
                     fs::path webRoot(WEB_DIR);
                     fs::path appdataRoot(platf::appdata());
-                    try { webRoot = fs::weakly_canonical(webRoot); } catch (...) {}
-                    try { appdataRoot = fs::weakly_canonical(appdataRoot); } catch (...) {}
-                    fs::path candidate_canon; try { candidate_canon = fs::weakly_canonical(final_path); } catch (...) { candidate_canon = final_path; }
+                    try {
+                      webRoot = fs::weakly_canonical(webRoot);
+                    } catch (...) {}
+                    try {
+                      appdataRoot = fs::weakly_canonical(appdataRoot);
+                    } catch (...) {}
+                    fs::path candidate_canon;
+                    try {
+                      candidate_canon = fs::weakly_canonical(final_path);
+                    } catch (...) {
+                      candidate_canon = final_path;
+                    }
                     if (!(isChildPath(candidate_canon, webRoot) || isChildPath(candidate_canon, appdataRoot) || candidate_canon == webRoot || candidate_canon == appdataRoot)) {
                       BOOST_LOG(warning) << "Attempt to request a file outside allowed roots (fallback cover)";
                       bad_request(response, request);
                       return;
                     }
                     const std::uintmax_t max_size = static_cast<std::uintmax_t>(15ull * 1024ull * 1024ull);
-                    if (candidate_size == 0) { std::error_code ec_sz; candidate_size = fs::file_size(candidate_canon, ec_sz); (void) ec_sz; }
+                    if (candidate_size == 0) {
+                      std::error_code ec_sz;
+                      candidate_size = fs::file_size(candidate_canon, ec_sz);
+                      (void) ec_sz;
+                    }
                     if (candidate_size == 0 || candidate_size > max_size) {
                       bad_request(response, request, "Unsupported image size");
                       return;
                     }
                     std::ifstream in(candidate_canon.string(), std::ios::binary);
-                    if (!in) { not_found(response, request); return; }
+                    if (!in) {
+                      not_found(response, request);
+                      return;
+                    }
                     auto mimeType = mime_types.find(extLower.substr(1));
-                    if (mimeType == mime_types.end()) { bad_request(response, request); return; }
+                    if (mimeType == mime_types.end()) {
+                      bad_request(response, request);
+                      return;
+                    }
                     SimpleWeb::CaseInsensitiveMultimap headers;
                     headers.emplace("Content-Type", mimeType->second);
                     headers.emplace("X-Frame-Options", "DENY");
@@ -1030,16 +1169,27 @@ namespace confighttp {
                     // Non-Windows: just attempt to open and stream if inside acceptable roots
                     fs::path webRoot(WEB_DIR);
                     fs::path appdataRoot(platf::appdata());
-                    fs::path candidate_canon; try { candidate_canon = fs::weakly_canonical(candidate); } catch (...) { candidate_canon = candidate; }
+                    fs::path candidate_canon;
+                    try {
+                      candidate_canon = fs::weakly_canonical(candidate);
+                    } catch (...) {
+                      candidate_canon = candidate;
+                    }
                     if (!(isChildPath(candidate_canon, webRoot) || isChildPath(candidate_canon, appdataRoot) || candidate_canon == webRoot || candidate_canon == appdataRoot)) {
                       BOOST_LOG(warning) << "Attempt to request a file outside allowed roots (fallback cover)";
                       bad_request(response, request);
                       return;
                     }
                     auto mimeType = mime_types.find(extLower.substr(1));
-                    if (mimeType == mime_types.end()) { bad_request(response, request); return; }
+                    if (mimeType == mime_types.end()) {
+                      bad_request(response, request);
+                      return;
+                    }
                     std::ifstream in(candidate_canon.string(), std::ios::binary);
-                    if (!in) { not_found(response, request); return; }
+                    if (!in) {
+                      not_found(response, request);
+                      return;
+                    }
                     SimpleWeb::CaseInsensitiveMultimap headers;
                     headers.emplace("Content-Type", mimeType->second);
                     headers.emplace("X-Frame-Options", "DENY");
@@ -1049,7 +1199,8 @@ namespace confighttp {
 #endif
                   }
                 }
-              } catch (...) { /* ignore malformed app entries */ }
+              } catch (...) { /* ignore malformed app entries */
+              }
             }
           }
         }
@@ -1084,7 +1235,7 @@ namespace confighttp {
 
     print_req(request);
 
-    const std::string uuid = request->path_match[1]; // UUID route: hyphen does not need escaping inside the character class
+    const std::string uuid = request->path_match[1];  // UUID route: hyphen does not need escaping inside the character class
     if (uuid.empty()) {
       bad_request(response, request, "Missing UUID");
       return;
@@ -1104,11 +1255,19 @@ namespace confighttp {
 
       auto choose_ext = [&](const std::string &u) -> std::string {
         auto lo = boost::algorithm::to_lower_copy(u);
-        if (lo.size() >= 5 && lo.rfind(".jpeg") == lo.size() - 5) return ".jpeg";
-        if (lo.size() >= 4 && lo.rfind(".jpg") == lo.size() - 4) return ".jpg";
-        if (lo.size() >= 5 && lo.rfind(".webp") == lo.size() - 5) return ".webp";
-        if (lo.size() >= 4 && lo.rfind(".bmp") == lo.size() - 4) return ".bmp";
-        return ".png"; // default
+        if (lo.size() >= 5 && lo.rfind(".jpeg") == lo.size() - 5) {
+          return ".jpeg";
+        }
+        if (lo.size() >= 4 && lo.rfind(".jpg") == lo.size() - 4) {
+          return ".jpg";
+        }
+        if (lo.size() >= 5 && lo.rfind(".webp") == lo.size() - 5) {
+          return ".webp";
+        }
+        if (lo.size() >= 4 && lo.rfind(".bmp") == lo.size() - 4) {
+          return ".bmp";
+        }
+        return ".png";  // default
       };
 
       std::string ext = ".png";
@@ -1489,7 +1648,7 @@ namespace confighttp {
     headers.emplace("Content-Type", "text/plain");
     headers.emplace("X-Frame-Options", "DENY");
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(SimpleWeb::StatusCode::success_ok, content, headers);
+    response->write(success_ok, content, headers);
   }
 
   /**
@@ -1657,13 +1816,104 @@ namespace confighttp {
     platf::restart();
   }
 
+  /**
+   * @brief Generate a new API token with specified scopes.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/token| POST| {"scopes":[{"path":"/api/apps","methods":["GET"]}]}}}
+   *
+   * Request body example:
+   * {
+   *   "scopes": [
+   *     { "path": "/api/apps", "methods": ["GET", "POST"] }
+   *   ]
+   * }
+   *
+   * Response example:
+   * { "token": "..." }
+   */
+  void generateApiToken(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    const std::string request_body = ss.str();
+    auto token_opt = api_token_manager.generate_api_token(request_body, config::sunshine.username);
+    nlohmann::json output_tree;
+    if (!token_opt) {
+      output_tree["error"] = "Invalid token request";
+      send_response(response, output_tree);
+      return;
+    }
+    output_tree["token"] = *token_opt;
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief List all active API tokens and their scopes.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/tokens| GET| null}
+   *
+   * Response example:
+   * [
+   *   {
+   *     "hash": "...",
+   *     "username": "admin",
+   *     "created_at": 1719000000,
+   *     "scopes": [
+   *       { "path": "/api/apps", "methods": ["GET"] }
+   *     ]
+   *   }
+   * ]
+   */
+  void listApiTokens(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    nlohmann::json output_tree = nlohmann::json::parse(api_token_manager.list_api_tokens_json());
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Revoke (delete) an API token by its hash.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/token/abcdef1234567890| DELETE| null}
+   *
+   * Response example:
+   * { "status": true }
+   */
+  void revokeApiToken(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    std::string hash;
+    if (request->path_match.size() > 1) {
+      hash = request->path_match[1];
+    }
+    bool result = api_token_manager.revoke_api_token_by_hash(hash);
+    nlohmann::json output_tree;
+    if (result) {
+      output_tree["status"] = true;
+    } else {
+      output_tree["error"] = "Internal server error";
+    }
+    send_response(response, output_tree);
+  }
+
   void start() {
     auto shutdown_event = mail::man->event<bool>(mail::shutdown);
 
     auto port_https = net::map_port(PORT_HTTPS);
     auto address_family = net::af_from_enum_string(config::sunshine.address_family);
 
-    https_server_t server {config::nvhttp.cert, config::nvhttp.pkey};
+    https_server_t server(config::nvhttp.cert, config::nvhttp.pkey);
     server.default_resource["DELETE"] = [](resp_https_t response, req_https_t request) {
       bad_request(response, request);
     };
@@ -1684,6 +1934,7 @@ namespace confighttp {
     server.resource["^/config/?$"]["GET"] = getConfigPage;
     server.resource["^/password/?$"]["GET"] = getPasswordPage;
     server.resource["^/welcome/?$"]["GET"] = getWelcomePage;
+    server.resource["^/login/?$"]["GET"] = getLoginPage;
     server.resource["^/troubleshooting/?$"]["GET"] = getTroubleshootingPage;
     server.resource["^/api/pin$"]["POST"] = savePin;
     server.resource["^/api/apps$"]["GET"] = getApps;
@@ -1701,13 +1952,19 @@ namespace confighttp {
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/apps/close$"]["POST"] = closeApp;
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
-  // New UUID-based cover endpoints
-  server.resource["^/api/apps/([0-9a-fA-F-]+)/cover$"]["GET"] = getAppCover;
-  server.resource["^/api/apps/([0-9a-fA-F-]+)/cover$"]["POST"] = uploadAppCover;
+    // New UUID-based cover endpoints
+    server.resource["^/api/apps/([0-9a-fA-F-]+)/cover$"]["GET"] = getAppCover;
+    server.resource["^/api/apps/([0-9a-fA-F-]+)/cover$"]["POST"] = uploadAppCover;
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;
-  server.resource["^/covers\\/.+$"]["GET"] = getCovers;
+    server.resource["^/covers\\/.+$"]["GET"] = getCovers;
     server.resource["^/assets\\/.+$"]["GET"] = getNodeModules;
+    server.resource["^/api/token$"]["POST"] = generateApiToken;
+    server.resource["^/api/tokens$"]["GET"] = listApiTokens;
+    server.resource["^/api/token/([a-fA-F0-9]+)$"]["DELETE"] = revokeApiToken;
+    server.resource["^/api-tokens/?$"]["GET"] = getTokenPage;
+    server.resource["^/api/auth/login$"]["POST"] = loginUser;
+    server.resource["^/api/auth/logout$"]["POST"] = logoutUser;
     server.config.reuse_address = true;
     server.config.address = net::af_to_any_address_string(address_family);
     server.config.port = port_https;
@@ -1722,7 +1979,6 @@ namespace confighttp {
         if (shutdown_event->peek()) {
           return;
         }
-
         BOOST_LOG(fatal) << "Couldn't start Configuration HTTPS server on port ["sv << port_https << "]: "sv << err.what();
         shutdown_event->raise(true);
         return;
@@ -1730,11 +1986,145 @@ namespace confighttp {
     };
     std::thread tcp {accept_and_run, &server};
 
+    api_token_manager.load_api_tokens();
+
+    // Start a background task to clean up expired session tokens every hour
+    std::jthread cleanup_thread([shutdown_event]() {
+      while (!shutdown_event->peek()) {
+        std::this_thread::sleep_for(std::chrono::hours(1));
+        session_token_manager.cleanup_expired_session_tokens();
+      }
+    });
+
     // Wait for any event
     shutdown_event->view();
 
     server.stop();
 
     tcp.join();
+    // std::jthread (cleanup_thread) auto-joins on destruction, no need for joinable/join
+  }
+
+  /**
+   * @brief Handles the HTTP request to serve the API token management page.
+   *
+   * This function authenticates the incoming request and, if successful,
+   * reads the "api-tokens.html" file from the web directory and sends its
+   * contents as an HTTP response with the appropriate content type.
+   *
+   * @param response The HTTP response object used to send data back to the client.
+   * @param request The HTTP request object containing client request data.
+   */
+  void getTokenPage(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+    std::string content = file_handler::read_file(WEB_DIR "api-tokens.html");
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "text/html; charset=utf-8");
+    response->write(content, headers);
+  }
+
+  /**
+   * @brief Converts a string representation of a token scope to its corresponding TokenScope enum value.
+   *
+   * This function takes a string view and returns the matching TokenScope enum value.
+   * Supported string values are "Read", "read", "Write", and "write".
+   * If the input string does not match any known scope, an std::invalid_argument exception is thrown.
+   *
+   * @param s The string view representing the token scope.
+   * @return TokenScope The corresponding TokenScope enum value.
+   * @throws std::invalid_argument If the input string does not match any known scope.
+   */
+  TokenScope scope_from_string(std::string_view s) {
+    if (s == "Read" || s == "read") {
+      return TokenScope::Read;
+    }
+    if (s == "Write" || s == "write") {
+      return TokenScope::Write;
+    }
+    throw std::invalid_argument("Unknown TokenScope: " + std::string(s));
+  }
+
+  /**
+   * @brief Converts a TokenScope enum value to its string representation.
+   * @param scope The TokenScope enum value to convert.
+   * @return The string representation of the scope.
+   */
+  std::string scope_to_string(TokenScope scope) {
+    switch (scope) {
+      case TokenScope::Read:
+        return "Read";
+      case TokenScope::Write:
+        return "Write";
+      default:
+        throw std::invalid_argument("Unknown TokenScope enum value");
+    }
+  }
+
+  /**
+   * @brief User login endpoint to generate session tokens.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * Expects JSON body:
+   * {
+   *   "username": "string",
+   *   "password": "string"
+   * }
+   *
+   * Returns:
+   * {
+   *   "status": true,
+   *   "token": "session_token_string",
+   *   "expires_in": 86400
+   * }
+   *
+   * @api_examples{/api/auth/login| POST| {"username": "admin", "password": "password"}}
+   */
+  void loginUser(resp_https_t response, req_https_t request) {
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      nlohmann::json input_tree = nlohmann::json::parse(ss);
+      if (!input_tree.contains("username") || !input_tree.contains("password")) {
+        bad_request(response, request, "Missing username or password");
+        return;
+      }
+
+      std::string username = input_tree["username"].get<std::string>();
+      std::string password = input_tree["password"].get<std::string>();
+      std::string redirect_url = input_tree.value("redirect", "/");
+
+      APIResponse api_response = session_token_api.login(username, password, redirect_url);
+      write_api_response(response, api_response);
+
+    } catch (const nlohmann::json::exception &e) {
+      BOOST_LOG(warning) << "Login JSON error:"sv << e.what();
+      bad_request(response, request, "Invalid JSON format");
+    }
+  }
+
+  /**
+   * @brief User logout endpoint to revoke session tokens.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/auth/logout| POST| null}
+   */
+  void logoutUser(resp_https_t response, req_https_t request) {
+    print_req(request);
+
+    std::string session_token;
+    if (auto auth = request->header.find("authorization");
+        auth != request->header.end() && auth->second.rfind("Session ", 0) == 0) {
+      session_token = auth->second.substr(8);
+    }
+
+    APIResponse api_response = session_token_api.logout(session_token);
+    write_api_response(response, api_response);
   }
 }  // namespace confighttp
