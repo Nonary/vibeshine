@@ -71,20 +71,20 @@ function hasCover(app){
 function coverSrc(app, index){
 	if(app?.uuid){
 		const cb = simpleHash(`${app.uuid}|${index ?? ''}`)
-		return `/api/apps/${encodeURIComponent(app.uuid)}/cover?cb=${cb}`
+		return `./api/apps/${encodeURIComponent(app.uuid)}/cover?cb=${cb}`
 	}
 	const path = app?.['image-path']
 	if(!path) return ''
 	const p = path.toString().trim()
 	if(/^https?:\/\//i.test(p)) return p
 	if(!p.includes('/') && !p.includes('\\')){
-		return `/assets/${p}`
+		return `./assets/${p}`
 	}
 	const file = p.replace(/\\/g,'/').split('/').pop()
 	if(file){
 		const cb = simpleHash(`${p}|${index ?? ''}`)
 		const iParam = (typeof index === 'number') ? `&i=${index}` : ''
-		return `/covers/${file}?cb=${cb}${iParam}`
+		return `./covers/${file}?cb=${cb}${iParam}`
 	}
 	return p
 }

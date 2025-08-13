@@ -34,6 +34,7 @@
 #include "platform/common.h"
 #if defined(_WIN32)
 #include "platform/windows/misc.h"
+#include <windows.h>
 #endif
 #include "process.h"
 #include "utility.h"
@@ -74,113 +75,6 @@ namespace confighttp {
     }
 
     BOOST_LOG(debug) << " [--] "sv;
-  }
-
-  /**
-   * @brief Send a response.
-   * @param response The HTTP response object.
-   * @param output_tree The JSON tree to send.
-   */
-  void send_response(resp_https_t response, const nlohmann::json &output_tree) {
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "application/json");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(output_tree.dump(), headers);
-  }
-
-  /**
-   * @brief Send a 401 Unauthorized response.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   */
-  void send_unauthorized(resp_https_t response, req_https_t request) {
-    auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
-    BOOST_LOG(info) << "Web UI: ["sv << address << "] -- not authorized"sv;
-
-    constexpr SimpleWeb::StatusCode code = SimpleWeb::StatusCode::client_error_unauthorized;
-
-    nlohmann::json tree;
-    tree["status_code"] = code;
-    tree["status"] = false;
-    tree["error"] = "Unauthorized";
-
-    const SimpleWeb::CaseInsensitiveMultimap headers {
-      {"Content-Type", "application/json"},
-      {"WWW-Authenticate", R"(Basic realm="Sunshine Gamestream Host", charset="UTF-8")"},
-      {"X-Frame-Options", "DENY"},
-      {"Content-Security-Policy", "frame-ancestors 'none';"}
-    };
-
-    response->write(code, tree.dump(), headers);
-  }
-
-  /**
-   * @brief Send a redirect response.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   * @param path The path to redirect to.
-   */
-  void send_redirect(resp_https_t response, req_https_t request, const char *path) {
-    auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
-    BOOST_LOG(info) << "Web UI: ["sv << address << "] -- not authorized"sv;
-    const SimpleWeb::CaseInsensitiveMultimap headers {
-      {"Location", path},
-      {"X-Frame-Options", "DENY"},
-      {"Content-Security-Policy", "frame-ancestors 'none';"}
-    };
-    response->write(SimpleWeb::StatusCode::redirection_temporary_redirect, headers);
-  }
-
-  /**
-   * @brief Authenticate the user.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   * @return True if the user is authenticated, false otherwise.
-   */
-  bool authenticate(resp_https_t response, req_https_t request) {
-    auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
-    auto ip_type = net::from_address(address);
-
-    if (ip_type > http::origin_web_ui_allowed) {
-      BOOST_LOG(info) << "Web UI: ["sv << address << "] -- denied"sv;
-      response->write(SimpleWeb::StatusCode::client_error_forbidden);
-      return false;
-    }
-
-    // If credentials are shown, redirect the user to a /welcome page
-    if (config::sunshine.username.empty()) {
-      send_redirect(response, request, "/welcome");
-      return false;
-    }
-
-    auto fg = util::fail_guard([&]() {
-      send_unauthorized(response, request);
-    });
-
-    auto auth = request->header.find("authorization");
-    if (auth == request->header.end()) {
-      return false;
-    }
-
-    auto &rawAuth = auth->second;
-    auto authData = SimpleWeb::Crypto::Base64::decode(rawAuth.substr("Basic "sv.length()));
-
-    int index = authData.find(':');
-    if (index >= authData.size() - 1) {
-      return false;
-    }
-
-    auto username = authData.substr(0, index);
-    auto password = authData.substr(index + 1);
-    auto hash = util::hex(crypto::hash(password + config::sunshine.salt)).to_string();
-
-    if (!boost::iequals(username, config::sunshine.username) || hash != config::sunshine.password) {
-      return false;
-    }
-
-    fg.disable();
-    return true;
   }
 
   /**
@@ -256,6 +150,88 @@ namespace confighttp {
       return false;
     }
     return true;
+  }
+
+  /**
+   * @brief Send a JSON response with standard security headers.
+   */
+  void send_response(resp_https_t response, const nlohmann::json &tree) {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    response->write(SimpleWeb::StatusCode::success_ok, tree.dump(), headers);
+  }
+
+  /**
+   * @brief Send an HTTP redirect.
+   */
+  void send_redirect(resp_https_t response, [[maybe_unused]] req_https_t request, const std::string &location) {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Location", location);
+    response->write(SimpleWeb::StatusCode::redirection_found, std::string(), headers);
+  }
+
+  /**
+   * @brief Simple authentication check using Basic auth against stored credentials.
+   * Returns true when authentication passed or when no credentials are configured.
+   */
+  bool authenticate(resp_https_t response, req_https_t request) {
+    using namespace std::literals;
+    // If no username configured, allow access
+    if (config::sunshine.username.empty()) return true;
+
+    auto it = request->header.find("authorization");
+    if (it == request->header.end()) {
+      SimpleWeb::CaseInsensitiveMultimap headers;
+      headers.emplace("WWW-Authenticate", "Basic realm=\"Sunshine\"");
+      nlohmann::json tree;
+      tree["status_code"] = SimpleWeb::StatusCode::client_error_unauthorized;
+      tree["error"] = "Unauthorized";
+      response->write(SimpleWeb::StatusCode::client_error_unauthorized, tree.dump(), headers);
+      return false;
+    }
+
+    std::string auth = it->second;
+    const std::string prefix = "Basic ";
+    if (auth.rfind(prefix, 0) != 0) {
+      nlohmann::json tree;
+      tree["status_code"] = SimpleWeb::StatusCode::client_error_unauthorized;
+      tree["error"] = "Unauthorized";
+      response->write(SimpleWeb::StatusCode::client_error_unauthorized, tree.dump());
+      return false;
+    }
+    std::string creds_b64 = auth.substr(prefix.size());
+    std::string creds = SimpleWeb::Crypto::Base64::decode(creds_b64);
+    auto pos = creds.find(':');
+    if (pos == std::string::npos) {
+      nlohmann::json tree;
+      tree["status_code"] = SimpleWeb::StatusCode::client_error_unauthorized;
+      tree["error"] = "Unauthorized";
+      response->write(SimpleWeb::StatusCode::client_error_unauthorized, tree.dump());
+      return false;
+    }
+    std::string user = creds.substr(0, pos);
+    std::string pass = creds.substr(pos + 1);
+
+    if (!boost::iequals(user, config::sunshine.username)) {
+      nlohmann::json tree;
+      tree["status_code"] = SimpleWeb::StatusCode::client_error_unauthorized;
+      tree["error"] = "Unauthorized";
+      response->write(SimpleWeb::StatusCode::client_error_unauthorized, tree.dump());
+      return false;
+    }
+
+    try {
+      auto hashed = util::hex(crypto::hash(pass + config::sunshine.salt)).to_string();
+      if (hashed == config::sunshine.password) return true;
+    } catch (...) {}
+
+    nlohmann::json tree;
+    tree["status_code"] = SimpleWeb::StatusCode::client_error_unauthorized;
+    tree["error"] = "Unauthorized";
+    response->write(SimpleWeb::StatusCode::client_error_unauthorized, tree.dump());
+    return false;
   }
 
   /**
@@ -615,46 +591,108 @@ namespace confighttp {
 
       // Load file contents (on Windows, impersonate the active user to access user profile paths)
       std::string content;
-      auto read_file_to = [&](const std::string &path) -> bool {
-        std::ifstream in(path, std::ios::binary);
-        if (!in) return false;
-        in.seekg(0, std::ios::end);
-        auto size = in.tellg();
-        if (size <= 0 || size > (std::streamoff) (15 * 1024 * 1024)) { // 15MB cap
-          return false;
-        }
-        content.resize((size_t) size);
-        in.seekg(0, std::ios::beg);
-        in.read(content.data(), size);
-        return !!in;
-      };
+    // read_file_to lambda removed (unused after refactor)
 
 #if defined(_WIN32)
-      bool ok = false;
+      // On Windows: open file handle while impersonated, get final path by handle,
+      // verify final path is under allowed roots, then revert impersonation and
+      // read/stream the file.
+  // removed unused variable ok
+      std::uintmax_t candidate_size = 0;
+      fs::path final_path;
+
       {
-        // Retrieve the active user's token (non-elevated)
         HANDLE token = platf::retrieve_users_token(false);
         if (token) {
           auto token_close = util::fail_guard([token]() { CloseHandle(token); });
+          // Impersonate for the minimal duration needed to open and query the file handle
           auto ec = platf::impersonate_current_user(token, [&]() {
-            ok = read_file_to(sourcePath);
+            // Use wide path for Win32 API
+            std::wstring wpath = fs::path(sourcePath).wstring();
+            HANDLE fh = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (fh != INVALID_HANDLE_VALUE) {
+              // Query final path
+              DWORD needed = GetFinalPathNameByHandleW(fh, nullptr, 0, FILE_NAME_NORMALIZED);
+              if (needed > 0) {
+                std::wstring buf;
+                buf.resize(needed);
+                DWORD ret = GetFinalPathNameByHandleW(fh, buf.data(), needed, FILE_NAME_NORMALIZED);
+                if (ret > 0 && ret <= needed) {
+                  buf.resize(ret);
+                  // Strip any Windows device prefix "\\?\"
+                  const std::wstring prefix = L"\\\\?\\";
+                  if (buf.rfind(prefix, 0) == 0) buf = buf.substr(prefix.size());
+                  final_path = fs::path(buf);
+                }
+              }
+
+              // Get file size while still impersonated
+              LARGE_INTEGER size_li{};
+              if (GetFileSizeEx(fh, &size_li)) candidate_size = static_cast<std::uintmax_t>(size_li.QuadPart);
+
+              CloseHandle(fh);
+            }
           });
-          (void) ec; // We only care if ok was set
+          (void) ec;
         }
       }
-      if (!ok) {
-        // Fallback try without impersonation (may work if already running as user)
-        ok = read_file_to(sourcePath);
+
+      if (final_path.empty()) {
+        // Fallback: try to weakly canonicalize the original path without impersonation
+        try {
+          final_path = fs::weakly_canonical(fs::path(sourcePath));
+        } catch (...) {}
       }
-      if (!ok) {
+
+      if (final_path.empty()) {
         not_found(response, request);
         return;
       }
+
+      // Allowed roots: web assets directory and appdata covers directory
+      fs::path webRoot(WEB_DIR);
+      fs::path appdataRoot(platf::appdata());
+      try {
+        webRoot = fs::weakly_canonical(webRoot);
+      } catch (...) {}
+      try {
+        appdataRoot = fs::weakly_canonical(appdataRoot);
+      } catch (...) {}
+      fs::path candidate_canon;
+      try { candidate_canon = fs::weakly_canonical(final_path); } catch (...) { candidate_canon = final_path; }
+
+      if (!(isChildPath(webRoot, candidate_canon) || isChildPath(appdataRoot, candidate_canon) || candidate_canon == webRoot || candidate_canon == appdataRoot)) {
+        BOOST_LOG(warning) << "Attempt to request a file outside allowed roots";
+        bad_request(response, request);
+        return;
+      }
+
+      // Enforce size cap (we tried to measure size while impersonated)
+      const std::uintmax_t max_size = static_cast<std::uintmax_t>(15ull * 1024ull * 1024ull);
+      if (candidate_size == 0) {
+        // If we weren't able to obtain the size via handle, try filesystem query
+        std::error_code ec; candidate_size = fs::file_size(candidate_canon, ec); (void) ec;
+      }
+      if (candidate_size == 0 || candidate_size > max_size) {
+        bad_request(response, request, "Unsupported image size");
+        return;
+      }
+
+      // Now that final path is verified, read the file after we are no longer impersonating
+      std::ifstream in(candidate_canon.string(), std::ios::binary);
+      if (!in) {
+        not_found(response, request);
+        return;
+      }
+      // stream response directly
+      SimpleWeb::CaseInsensitiveMultimap headers_read;
+      headers_read.emplace("Content-Type", mime_types.find(extLower.substr(1))->second);
+      headers_read.emplace("X-Frame-Options", "DENY");
+      headers_read.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+      response->write(SimpleWeb::StatusCode::success_ok, in, headers_read);
+      return;
 #else
-      if (!read_file_to(sourcePath)) {
-        not_found(response, request);
-        return;
-      }
 #endif
 
       // Determine content type from extension
@@ -903,6 +941,121 @@ namespace confighttp {
       }
     }
     if (found.empty()) {
+      // Fallback: attempt to locate existing image-path from apps.json for this UUID
+      try {
+        auto appsJsonPath = platf::appdata().string() + "/apps.json";
+        std::ifstream appsIn(appsJsonPath);
+        if (appsIn) {
+          nlohmann::json file_tree = nlohmann::json::parse(appsIn, nullptr, true, true);
+          if (file_tree.contains("apps") && file_tree["apps"].is_array()) {
+            for (auto &app : file_tree["apps"]) {
+              try {
+                if (app.contains("uuid") && app["uuid"].is_string() && boost::iequals(app["uuid"].get<std::string>(), uuid)) {
+                  std::string img_path = app.value("image-path", "");
+                  if (!img_path.empty()) {
+                    fs::path candidate = fs::path(img_path);
+                    // Determine extension and validate
+                    auto extLower = candidate.extension().string();
+                    boost::algorithm::to_lower(extLower);
+                    static const std::set<std::string> kAllowed{ ".png", ".jpg", ".jpeg", ".webp", ".bmp" };
+                    if (!kAllowed.count(extLower)) {
+                      bad_request(response, request, "Unsupported image type");
+                      return;
+                    }
+                    // On Windows, use impersonation & safety checks similar to getCovers
+#if defined(_WIN32)
+                    // removed unused variable ok
+                    std::uintmax_t candidate_size = 0;
+                    fs::path final_path;
+                    {
+                      HANDLE token = platf::retrieve_users_token(false);
+                      if (token) {
+                        auto token_close = util::fail_guard([token]() { CloseHandle(token); });
+                        auto ec_imp = platf::impersonate_current_user(token, [&]() {
+                          std::wstring wpath = candidate.wstring();
+                          HANDLE fh = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                          if (fh != INVALID_HANDLE_VALUE) {
+                            auto fh_close = util::fail_guard([fh]() { CloseHandle(fh); });
+                            LARGE_INTEGER sz; if (GetFileSizeEx(fh, &sz)) { candidate_size = (std::uintmax_t) sz.QuadPart; }
+                            // Query final path
+                            std::wstring buf; buf.resize(32768);
+                            DWORD ret = GetFinalPathNameByHandleW(fh, buf.data(), (DWORD) buf.size(), FILE_NAME_NORMALIZED);
+                            if (ret && ret < buf.size()) {
+                              buf.resize(ret);
+                              std::wstring nt_prefix = L"\\\\?\\"; // strip if present
+                              if (buf.rfind(nt_prefix, 0) == 0) { buf.erase(0, nt_prefix.size()); }
+                              final_path = fs::path(buf);
+                            }
+                          }
+                        });
+                        (void) ec_imp;
+                      }
+                    }
+                    if (final_path.empty()) {
+                      try { final_path = fs::weakly_canonical(candidate); } catch (...) { final_path = candidate; }
+                    }
+                    if (final_path.empty()) {
+                      not_found(response, request);
+                      return;
+                    }
+                    // Allowed roots: web assets directory and appdata covers directory
+                    fs::path webRoot(WEB_DIR);
+                    fs::path appdataRoot(platf::appdata());
+                    try { webRoot = fs::weakly_canonical(webRoot); } catch (...) {}
+                    try { appdataRoot = fs::weakly_canonical(appdataRoot); } catch (...) {}
+                    fs::path candidate_canon; try { candidate_canon = fs::weakly_canonical(final_path); } catch (...) { candidate_canon = final_path; }
+                    if (!(isChildPath(candidate_canon, webRoot) || isChildPath(candidate_canon, appdataRoot) || candidate_canon == webRoot || candidate_canon == appdataRoot)) {
+                      BOOST_LOG(warning) << "Attempt to request a file outside allowed roots (fallback cover)";
+                      bad_request(response, request);
+                      return;
+                    }
+                    const std::uintmax_t max_size = static_cast<std::uintmax_t>(15ull * 1024ull * 1024ull);
+                    if (candidate_size == 0) { std::error_code ec_sz; candidate_size = fs::file_size(candidate_canon, ec_sz); (void) ec_sz; }
+                    if (candidate_size == 0 || candidate_size > max_size) {
+                      bad_request(response, request, "Unsupported image size");
+                      return;
+                    }
+                    std::ifstream in(candidate_canon.string(), std::ios::binary);
+                    if (!in) { not_found(response, request); return; }
+                    auto mimeType = mime_types.find(extLower.substr(1));
+                    if (mimeType == mime_types.end()) { bad_request(response, request); return; }
+                    SimpleWeb::CaseInsensitiveMultimap headers;
+                    headers.emplace("Content-Type", mimeType->second);
+                    headers.emplace("X-Frame-Options", "DENY");
+                    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+                    response->write(SimpleWeb::StatusCode::success_ok, in, headers);
+                    return;
+#else
+                    // Non-Windows: just attempt to open and stream if inside acceptable roots
+                    fs::path webRoot(WEB_DIR);
+                    fs::path appdataRoot(platf::appdata());
+                    fs::path candidate_canon; try { candidate_canon = fs::weakly_canonical(candidate); } catch (...) { candidate_canon = candidate; }
+                    if (!(isChildPath(candidate_canon, webRoot) || isChildPath(candidate_canon, appdataRoot) || candidate_canon == webRoot || candidate_canon == appdataRoot)) {
+                      BOOST_LOG(warning) << "Attempt to request a file outside allowed roots (fallback cover)";
+                      bad_request(response, request);
+                      return;
+                    }
+                    auto mimeType = mime_types.find(extLower.substr(1));
+                    if (mimeType == mime_types.end()) { bad_request(response, request); return; }
+                    std::ifstream in(candidate_canon.string(), std::ios::binary);
+                    if (!in) { not_found(response, request); return; }
+                    SimpleWeb::CaseInsensitiveMultimap headers;
+                    headers.emplace("Content-Type", mimeType->second);
+                    headers.emplace("X-Frame-Options", "DENY");
+                    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+                    response->write(SimpleWeb::StatusCode::success_ok, in, headers);
+                    return;
+#endif
+                  }
+                }
+              } catch (...) { /* ignore malformed app entries */ }
+            }
+          }
+        }
+      } catch (...) {
+        // swallow and proceed to 404
+      }
       not_found(response, request);
       return;
     }

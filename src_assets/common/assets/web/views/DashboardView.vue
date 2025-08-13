@@ -127,21 +127,23 @@ function coverSrc(app, index){
   // Prefer UUID-based cover
   if(app?.uuid){
     const cb = simpleHash(`${app.uuid}|${index ?? ''}`)
-    return `/api/apps/${encodeURIComponent(app.uuid)}/cover?cb=${cb}`
+    // Use a relative path so the UI works when served from a subpath or behind a proxy
+    return `./api/apps/${encodeURIComponent(app.uuid)}/cover?cb=${cb}`
   }
   // Fallback to legacy image-path handling
   const path = app?.['image-path']
   if(!path) return ''
   const p = path.toString().trim()
   if(/^https?:\/\//i.test(p)) return p
-  if(!p.includes('/') && !p.includes('\\')){
-    return `/assets/${p}`
+    if(!p.includes('/') && !p.includes('\\')){
+    return `./assets/${p}`
   }
   const file = p.replace(/\\/g,'/').split('/').pop()
-  if(file){
+    if(file){
     const cb = simpleHash(`${p}|${index ?? ''}`)
     const iParam = (typeof index === 'number') ? `&i=${index}` : ''
-    return `/covers/${file}?cb=${cb}${iParam}`
+    // Use a relative path to match the server's routing and avoid absolute-root issues
+    return `./covers/${file}?cb=${cb}${iParam}`
   }
   return p
 }
