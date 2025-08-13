@@ -1937,9 +1937,12 @@ namespace stream {
         }
 
         platf::streaming_will_stop();
+
+        // No active sessions now; apply any deferred config updates
+        config::maybe_apply_deferred();
       }
 
-      BOOST_LOG(debug) << "Session ended"sv;
+      BOOST_LOG(info) << "Session ended"sv;
     }
 
     int start(session_t &session, const std::string &addr_string) {

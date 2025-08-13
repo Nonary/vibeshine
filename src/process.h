@@ -11,6 +11,7 @@
 // standard includes
 #include <optional>
 #include <unordered_map>
+#include <mutex>
 
 // lib includes
 #include <boost/process/v1.hpp>
@@ -69,7 +70,9 @@ namespace proc {
 
   class proc_t {
   public:
-    KITTY_DEFAULT_CONSTR_MOVE_THROW(proc_t)
+  proc_t() = default;
+  proc_t(proc_t &&other) noexcept;
+  proc_t &operator=(proc_t &&other) noexcept;
 
     proc_t(
       boost::process::v1::environment &&env,
@@ -89,11 +92,18 @@ namespace proc {
 
     ~proc_t();
 
-    const std::vector<ctx_t> &get_apps() const;
-    std::vector<ctx_t> &get_apps();
+  // Return a snapshot copy to avoid concurrent access races
+  std::vector<ctx_t> get_apps() const;
     std::string get_app_image(int app_id);
     std::string get_last_run_app_name();
     void terminate();
+
+  // Hot-update app list and environment without disrupting a running app
+  void update_apps(std::vector<ctx_t> &&apps, boost::process::v1::environment &&env);
+
+  // Helpers for parse/refresh to extract newly parsed state without exposing internals
+  std::vector<ctx_t> release_apps();
+  boost::process::v1::environment release_env();
 
   private:
     int _app_id;
@@ -102,6 +112,8 @@ namespace proc {
     std::vector<ctx_t> _apps;
     ctx_t _app;
     std::chrono::steady_clock::time_point _app_launch_time;
+
+  mutable std::mutex _apps_mutex;
 
     // If no command associated with _app_id, yet it's still running
     bool placebo {};

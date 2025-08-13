@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <shared_mutex>
 
 // local includes
 #include "nvenc/nvenc_config.h"
@@ -267,4 +268,12 @@ namespace config {
 
   int parse(int argc, char *argv[]);
   std::unordered_map<std::string, std::string> parse_config(const std::string_view &file_content);
+
+  // Hot-reload helpers
+  void apply_config_now();
+  void mark_deferred_reload();
+  void maybe_apply_deferred();
+
+  // Gate helpers so session start/resume can hold a shared lock while apply holds a unique lock.
+  std::shared_lock<std::shared_mutex> acquire_apply_read_gate();
 }  // namespace config

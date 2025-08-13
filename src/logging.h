@@ -68,6 +68,9 @@ namespace logging {
    */
   void setup_libdisplaydevice_logging(int min_log_level);
 
+  // Reapply log filters and subsystem logging based on a new minimum level.
+  void reconfigure_min_log_level(int min_log_level);
+
   /**
    * @brief Flush the log.
    * @examples

@@ -838,7 +838,7 @@ namespace nvhttp {
       return;
     }
 
-    auto appid = util::from_view(get_arg(args, "appid"));
+  auto appid = util::from_view(get_arg(args, "appid"));
 
     auto current_appid = proc::proc.running();
     if (current_appid > 0) {
@@ -849,11 +849,13 @@ namespace nvhttp {
       return;
     }
 
-    host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
-    auto launch_session = make_launch_session(host_audio, args);
+  host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
+  // Prevent interleaving with hot-apply while we prep/start a session
+  auto _hot_apply_gate = config::acquire_apply_read_gate();
+  auto launch_session = make_launch_session(host_audio, args);
 
-    if (rtsp_stream::session_count() == 0) {
-      // The display should be restored in case something fails as there are no other sessions.
+  // The display should be restored in case something fails as there are no other sessions.
+  if (rtsp_stream::session_count() == 0) {
       revert_display_configuration = true;
 
       // We want to prepare display only if there are no active sessions at
@@ -950,10 +952,12 @@ namespace nvhttp {
     // Newer Moonlight clients send localAudioPlayMode on /resume too,
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
-    const bool no_active_sessions {rtsp_stream::session_count() == 0};
+  const bool no_active_sessions {rtsp_stream::session_count() == 0};
     if (no_active_sessions && args.find("localAudioPlayMode"s) != std::end(args)) {
       host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     }
+    // Prevent interleaving with hot-apply while we prep/resume a session
+    auto _hot_apply_gate = config::acquire_apply_read_gate();
     const auto launch_session = make_launch_session(host_audio, args);
 
     if (no_active_sessions) {

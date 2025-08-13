@@ -1454,4 +1454,48 @@ namespace config {
 
     return 0;
   }
+
+  // Hot-reload manager
+  namespace {
+    std::atomic<bool> g_deferred_reload {false};
+    std::mutex g_apply_mutex;            // serialize apply_config_now()
+    std::shared_mutex g_apply_gate;      // writers=apply; readers=session start/resume
+  }
+
+  // Acquire a shared lock while preparing/starting sessions.
+  std::shared_lock<std::shared_mutex> acquire_apply_read_gate() {
+    return std::shared_lock<std::shared_mutex>(g_apply_gate);
+  }
+
+  void apply_config_now() {
+    // Ensure only one apply runs at a time and block session start/resume while applying.
+    std::unique_lock<std::shared_mutex> write_gate(g_apply_gate);
+    std::unique_lock<std::mutex>        apply_once(g_apply_mutex);
+    try {
+      auto vars = parse_config(file_handler::read_file(sunshine.config_file.c_str()));
+      // Track old logging params to adjust sinks if needed
+      const int old_min_level = sunshine.min_log_level;
+      const std::string old_log_file = sunshine.log_file;
+
+      apply_config(std::move(vars));
+
+      // If only the log level changed, we can reconfigure sinks in place.
+      if (sunshine.min_log_level != old_min_level && sunshine.log_file == old_log_file) {
+        logging::reconfigure_min_log_level(sunshine.min_log_level);
+      }
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Hot apply_config_now failed: "sv << e.what();
+    }
+  }
+
+  void mark_deferred_reload() {
+    g_deferred_reload.store(true, std::memory_order_release);
+  }
+
+  void maybe_apply_deferred() {
+    // Single-shot winner clears the flag and applies atomically.
+    if (rtsp_stream::session_count() == 0 && g_deferred_reload.exchange(false, std::memory_order_acq_rel)) {
+      apply_config_now();
+    }
+  }
 }  // namespace config

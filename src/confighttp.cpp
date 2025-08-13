@@ -899,7 +899,7 @@ namespace confighttp {
     std::stringstream ss;
     ss << request->content.rdbuf();
     try {
-      // TODO: Input Validation
+  // TODO: Input Validation
       std::stringstream config_stream;
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
@@ -913,12 +913,59 @@ namespace confighttp {
         config_stream << k << " = " << (v.is_string() ? v.get<std::string>() : v.dump()) << std::endl;
       }
       file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
+
+      // Detect restart-required keys
+      static const std::set<std::string> restart_required_keys = {
+        "port", "address_family", "upnp", "pkey", "cert"
+      };
+      bool restart_required = false;
+      for (const auto &[k, _] : input_tree.items()) {
+        if (restart_required_keys.count(k)) {
+          restart_required = true;
+          break;
+        }
+      }
+
+      bool applied_now = false;
+      bool deferred = false;
+
+      if (!restart_required) {
+        if (rtsp_stream::session_count() == 0) {
+          // Apply immediately
+          config::apply_config_now();
+          applied_now = true;
+        } else {
+          config::mark_deferred_reload();
+          deferred = true;
+        }
+      }
+
       output_tree["status"] = true;
+      output_tree["appliedNow"] = applied_now;
+      output_tree["deferred"] = deferred;
+      output_tree["restartRequired"] = restart_required;
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "SaveConfig: "sv << e.what();
       bad_request(response, request, e.what());
     }
+  }
+
+  // Lightweight session status for UI messaging
+  void getSessionStatus(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+
+    nlohmann::json output_tree;
+    const int active = rtsp_stream::session_count();
+    const bool app_running = proc::proc.running() > 0;
+    output_tree["activeSessions"] = active;
+    output_tree["appRunning"] = app_running;
+    output_tree["paused"] = app_running && active == 0;
+    output_tree["status"] = true;
+    send_response(response, output_tree);
   }
 
   /**
@@ -1214,7 +1261,8 @@ namespace confighttp {
     server.resource["^/api/clients/list$"]["GET"] = getClients;
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/apps/close$"]["POST"] = closeApp;
-    server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
+  server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
+  server.resource["^/api/session/status$"]["GET"] = getSessionStatus;
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;
     server.resource["^/assets\\/.+$"]["GET"] = getNodeModules;
