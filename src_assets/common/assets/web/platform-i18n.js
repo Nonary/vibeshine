@@ -54,12 +54,19 @@ class PlatformMessageI18n {
  * @return {PlatformMessageI18n} instance
  */
 export function usePlatformI18n(platform) {
+    // Resolve platform from injected ref if not explicitly passed.
     if (!platform) {
-        platform = inject('platform').value
+        const injected = inject('platform', null)
+        if (injected) {
+            // Support either a ref or plain value
+            platform = typeof injected === 'object' && 'value' in injected ? injected.value : injected
+        }
     }
 
+    // Fallback defensively instead of throwing to avoid hard render errors
     if (!platform) {
-        throw 'platform argument missing'
+        // Default to "windows" (platform with no unix fallback) to keep behavior predictable.
+        platform = 'windows'
     }
 
     return inject(
@@ -75,6 +82,11 @@ export function usePlatformI18n(platform) {
  * @return {string} translated message or defaultMsg if provided
  */
 export function $tp(key, defaultMsg) {
-    const pm = usePlatformI18n()
-    return pm.getMessageUsingPlatform(key, defaultMsg)
+    try {
+        const pm = usePlatformI18n()
+        // Guard i18n injection absence (early render before init) inside message getter
+        return pm.getMessageUsingPlatform(key, defaultMsg)
+    } catch (e) {
+        return defaultMsg || key
+    }
 }

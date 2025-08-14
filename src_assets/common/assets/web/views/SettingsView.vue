@@ -76,7 +76,7 @@
   
 </template>
 <script setup>
-import { ref, reactive, onMounted, watch, nextTick, computed } from 'vue'
+import { ref, reactive, onMounted, watch, nextTick, computed, markRaw } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import General from '../configs/tabs/General.vue'
 import Inputs from '../configs/tabs/Inputs.vue'
@@ -105,15 +105,15 @@ const searchIndex = ref([]) // { sectionId, label, path, el }
 const mainEl = ref(null)
 
 // Sections definition (reusing existing components)
-const tabs = reactive([
-	{ id:'general', name:'General', component: General },
-	{ id:'input', name:'Input', component: Inputs },
-	{ id:'av', name:'Audio / Video', component: AudioVideo },
-	{ id:'encoders', name:'Encoders', component: ContainerEncoders },
-	{ id:'network', name:'Network', component: Network },
-	{ id:'files', name:'Files', component: Files },
-	{ id:'advanced', name:'Advanced', component: Advanced }
-])
+const tabs = [
+	{ id:'general', name:'General', component: markRaw(General) },
+	{ id:'input', name:'Input', component: markRaw(Inputs) },
+	{ id:'av', name:'Audio / Video', component: markRaw(AudioVideo) },
+	{ id:'encoders', name:'Encoders', component: markRaw(ContainerEncoders) },
+	{ id:'network', name:'Network', component: markRaw(Network) },
+	{ id:'files', name:'Files', component: markRaw(Files) },
+	{ id:'advanced', name:'Advanced', component: markRaw(Advanced) }
+]
 
 // Collapsible sections state: only General open initially
 const openSections = ref(new Set(['general']))

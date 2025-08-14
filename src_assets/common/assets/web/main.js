@@ -1,4 +1,4 @@
-import { createApp } from 'vue'
+import { createApp, ref, watch } from 'vue'
 import { createPinia } from 'pinia'
 import { initApp } from './init'
 import { router } from './router'
@@ -11,6 +11,15 @@ const app = createApp(Shell)
 const pinia = createPinia()
 app.use(pinia)
 app.use(router)
+
+// Provide a reactive platform ref early so feature/platform specific
+// rendering & i18n (see platform-i18n.js) can safely inject it without
+// crashing even before config has finished loading. We update it once
+// the config store is populated. Components using inject('platform')
+// will now always receive a ref (possibly empty string) eliminating
+// previous 'injection "platform" not found' errors during early mount.
+const platformRef = ref('')
+app.provide('platform', platformRef)
 
 // Provide an early config loader so runtime config is fetched and applied
 // before the app mounts. This prevents components from rendering then
@@ -26,6 +35,11 @@ initApp(app, async (appInstance) => {
 		const auth = useAuthStore()
 		// init lightweight auth detection polling
 		auth.init()
+
+		// Keep provided platform ref in sync with store once config arrives
+		watch(() => store.config.value && store.config.value.platform, (val) => {
+			platformRef.value = val || ''
+		}, { immediate: true })
 
 		// if already loaded (e.g., HMR) skip
 		if (store.config && store.config.value) return
