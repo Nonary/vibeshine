@@ -1,55 +1,35 @@
 <template>
   <div class="min-h-screen flex flex-col bg-solar-light dark:bg-lunar-dark text-solar-dark dark:text-lunar-light">
-    <!-- App Bar -->
-    <header
-      class="h-14 flex items-center gap-4 px-4 border-b border-solar-dark/10 dark:border-lunar-light/10 bg-solar-light/70 dark:bg-lunar-dark/60 backdrop-blur supports-[backdrop-filter]:bg-solar-light/40 supports-[backdrop-filter]:dark:bg-lunar-dark/40"
-    >
+    <!-- App Bar (hidden on login or when route requests no header) -->
+    <header v-if="!hideHeader"
+      class="h-14 flex items-center gap-4 px-4 border-b border-solar-dark/10 dark:border-lunar-light/10 bg-solar-light/70 dark:bg-lunar-dark/60 backdrop-blur supports-[backdrop-filter]:bg-solar-light/40 supports-[backdrop-filter]:dark:bg-lunar-dark/40">
       <div class="flex items-center gap-3 min-w-0">
-        <img
-          src="/images/logo-sunshine-45.png"
-          alt="Sunshine"
-          class="h-8 w-8"
-        >
+        <img src="/images/logo-sunshine-45.png" alt="Sunshine" class="h-8 w-8">
         <h1 class="text-base md:text-lg font-semibold tracking-tight truncate">
           {{ displayTitle }}
         </h1>
       </div>
       <nav class="hidden md:flex items-center gap-1 text-sm font-medium ml-2">
-        <RouterLink
-          to="/"
-          :class="linkClass('/')"
-        >
+        <RouterLink to="/" :class="linkClass('/')">
           <i class="fas fa-gauge" /><span>Dashboard</span>
         </RouterLink>
-        <RouterLink
-          to="/applications"
-          :class="linkClass('/applications')"
-        >
+        <RouterLink to="/applications" :class="linkClass('/applications')">
           <i class="fas fa-grid-2" /><span>Applications</span>
         </RouterLink>
-        <RouterLink
-          to="/sessions"
-          :class="linkClass('/sessions')"
-        >
+        <RouterLink to="/clients" :class="linkClass('/clients')">
+          <i class="fas fa-users-cog" /><span>{{ $t('clients.nav') }}</span>
+        </RouterLink>
+        <RouterLink to="/sessions" :class="linkClass('/sessions')">
           <i class="fas fa-signal-stream" /><span>Sessions</span>
         </RouterLink>
-        <RouterLink
-          to="/settings"
-          :class="linkClass('/settings')"
-        >
+        <RouterLink to="/settings" :class="linkClass('/settings')">
           <i class="fas fa-sliders" /><span>Settings</span>
         </RouterLink>
-        <RouterLink
-          to="/troubleshooting"
-          :class="linkClass('/troubleshooting')"
-        >
+        <RouterLink to="/troubleshooting" :class="linkClass('/troubleshooting')">
           <i class="fas fa-bug" /><span>{{
             $t('navbar.troubleshoot') }}</span>
         </RouterLink>
-        <RouterLink
-          to="/resources"
-          :class="linkClass('/resources')"
-        >
+        <RouterLink to="/resources" :class="linkClass('/resources')">
           <i class="fas fa-circle-info" /><span>Resources</span>
         </RouterLink>
       </nav>
@@ -66,13 +46,15 @@
   </div>
 </template>
 <script setup>
-import { ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, watch, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import ThemeToggle from '../ThemeToggle.vue'
 import StreamingStatus from '../components/StreamingStatus.vue'
-import { computed } from 'vue'
 
 const route = useRoute()
+const hideHeader = computed(() => {
+  return (route.meta && route.meta.hideHeader) || route.path.startsWith('/login')
+});
 
 const linkClass = (path) => {
   const base = 'inline-flex items-center gap-2 px-3 py-1 rounded-md text-solar-secondary dark:text-lunar-onSecondary'
@@ -96,6 +78,7 @@ watch(() => route.path, (p) => {
     '/settings': 'Settings',
     '/logs': 'navbar.troubleshoot',
     '/troubleshooting': 'navbar.troubleshoot',
+    '/clients': 'clients.nav',
     '/resources': 'Resources'
   }
   const v = map[p] || 'Sunshine'

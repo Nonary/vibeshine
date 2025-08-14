@@ -111,7 +111,6 @@ namespace confighttp {
      * @param token_hash Hash identifying the token.
      * @return Username owning the revoked token, or `std::nullopt` if not found.
      */
-    std::optional<std::string> revoke_api_token(const std::string &token_hash) const;
     /**
      * @brief Authenticate using a raw token (not hash) for path & method.
      * @param token The un-hashed provided token.
@@ -337,20 +336,13 @@ namespace confighttp {
   };
 
   /**
-   * @brief Validate basic auth header credentials.
-   * @param raw_auth Raw Authorization header value.
-   * @return `true` if credentials are valid.
-   */
-  bool authenticate_basic(const std::string_view raw_auth);
-  /**
-   * @brief Construct an AuthResult representing an authentication error.
+   * @brief Construct an AuthResult representing an authentication error (no Basic auth support).
    * @param code HTTP status to return.
    * @param error Message body.
-   * @param add_www_auth Whether to add WWW-Authenticate header.
    * @param location Optional redirect location.
    * @return Structured AuthResult.
    */
-  AuthResult make_auth_error(StatusCode code, const std::string &error, bool add_www_auth = false, const std::string &location = {});
+  AuthResult make_auth_error(StatusCode code, const std::string &error, const std::string &location = {});
   /**
    * @brief Check a Bearer token Authorization header.
    * @param raw_auth Header value.
@@ -359,12 +351,6 @@ namespace confighttp {
    * @return AuthResult with authorization outcome.
    */
   AuthResult check_bearer_auth(const std::string &raw_auth, const std::string &path, const std::string &method);
-  /**
-   * @brief Check a Basic auth header.
-   * @param raw_auth Header value.
-   * @return AuthResult with outcome.
-   */
-  AuthResult check_basic_auth(const std::string &raw_auth);
   /**
    * @brief Check session cookie / header authentication.
    * @param raw_auth Raw header or cookie string.

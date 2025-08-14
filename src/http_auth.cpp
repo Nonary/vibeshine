@@ -257,25 +257,25 @@ namespace confighttp {
       return;
     }
     pt::ptree root;
-    _dependencies.read_json(config::nvhttp.file_state, root);
-    if (auto api_tokens_node = root.get_child_optional("root.api_tokens")) {
-      for (const auto &[_, token_tree] : *api_tokens_node) {
-        const std::string hash = token_tree.get<std::string>("hash", "");
-        if (hash.empty()) {
+    try {
+      _dependencies.read_json(config::nvhttp.file_state, root);
+    } catch (...) {
+      return;  // unable to load tokens; ignore
+    }
+    if (auto tokens_node = root.get_child_optional("root.api_tokens")) {
+      for (const auto &[_, token_tree] : *tokens_node) {
+        ApiTokenInfo info;
+        info.hash = token_tree.get<std::string>("hash", "");
+        if (info.hash.empty()) {
           continue;
         }
-        ApiTokenInfo info {
-          hash,
-          {},
-          token_tree.get<std::string>("username", ""),
-          std::chrono::system_clock::time_point {
-            std::chrono::seconds(token_tree.get<std::int64_t>("created_at", 0))
-          }
-        };
+        info.username = token_tree.get<std::string>("username", "");
+        std::int64_t created_secs = token_tree.get<std::int64_t>("created_at", 0);
+        info.created_at = std::chrono::system_clock::time_point(std::chrono::seconds(created_secs));
         if (auto scopes_node = token_tree.get_child_optional("scopes")) {
           info.path_methods = build_scope_map(*scopes_node);
         }
-        _api_tokens.try_emplace(hash, std::move(info));
+        _api_tokens.try_emplace(info.hash, std::move(info));
       }
     }
   }
@@ -495,38 +495,27 @@ namespace confighttp {
     return APIResponse(status_code, response_body.dump(), headers);
   }
 
-  bool authenticate_basic(const std::string_view raw_auth) {
-    auto base64 = std::string(raw_auth.substr(6));
-    auto authData = SimpleWeb::Crypto::Base64::decode(base64);
-    std::string::size_type index = authData.find(':');
-    if (index == std::string::npos || index >= authData.size() - 1) {
-      return false;
-    }
-    auto username = authData.substr(0, index);
-    auto password = authData.substr(index + 1);
-    if (auto hash = util::hex(crypto::hash(password + config::sunshine.salt)).to_string();
-        !boost::iequals(username, config::sunshine.username) || hash != config::sunshine.password) {
-      return false;
-    }
-    return true;
-  }
+  // Basic authentication removed (authenticate_basic deleted)
 
-  AuthResult make_auth_error(StatusCode code, const std::string &error, bool add_www_auth, const std::string &location) {
+  // Updated make_auth_error signature already defined earlier; remove legacy implementation
+
+  AuthResult make_auth_error(StatusCode code, const std::string &error, const std::string &location) {
     AuthResult result {false, code, {}, {}};
     if (!location.empty()) {
       result.headers.emplace("Location", location);
-      result.headers.emplace("Access-Control-Allow-Origin", get_cors_origin());
-      return result;
     }
-    nlohmann::json tree;
-    tree["status_code"] = static_cast<std::underlying_type_t<StatusCode>>(code);
-    tree["status"] = false;
-    tree["error"] = error;
-    result.body = tree.dump();
-    result.headers.emplace("Content-Type", "application/json");
-    result.headers.emplace("Access-Control-Allow-Origin", get_cors_origin());
-    if (add_www_auth) {
-      result.headers.emplace("WWW-Authenticate", R"(Basic realm="Sunshine Gamestream Host", charset="UTF-8")");
+    // Always add CORS origin header for auth errors (and redirects) to satisfy UI expectations
+    {
+      std::uint16_t https_port = net::map_port(confighttp::PORT_HTTPS);
+      std::string cors_origin = std::format("https://localhost:{}", https_port);
+      result.headers.emplace("Access-Control-Allow-Origin", cors_origin);
+    }
+    if (!error.empty()) {
+      nlohmann::json j;
+      j["status"] = false;
+      j["error"] = error;
+      result.body = j.dump();
+      result.headers.emplace("Content-Type", "application/json");
     }
     return result;
   }
@@ -538,16 +527,9 @@ namespace confighttp {
     return {true, StatusCode::success_ok, {}, {}};
   }
 
-  AuthResult check_basic_auth(const std::string &raw_auth) {
-    if (!authenticate_basic(raw_auth)) {
-      return make_auth_error(StatusCode::client_error_unauthorized, "Unauthorized", true);
-    }
-    return {true, StatusCode::success_ok, {}, {}};
-  }
-
   AuthResult check_session_auth(const std::string &raw_auth) {
     if (raw_auth.rfind("Session ", 0) != 0) {
-      return make_auth_error(StatusCode::client_error_unauthorized, "Invalid session token format", true);
+      return make_auth_error(StatusCode::client_error_unauthorized, "Invalid session token format", "");
     }
 
     std::string token = raw_auth.substr(8);
@@ -556,7 +538,7 @@ namespace confighttp {
       return {true, StatusCode::success_ok, {}, {}};
     }
 
-    return make_auth_error(StatusCode::client_error_unauthorized, "Invalid or expired session token", true);
+    return make_auth_error(StatusCode::client_error_unauthorized, "Invalid or expired session token", "");
   }
 
   bool is_html_request(const std::string &path) {
@@ -598,11 +580,11 @@ namespace confighttp {
 
     if (auto ip_type = net::from_address(remote_address); ip_type > http::origin_web_ui_allowed) {
       BOOST_LOG(info) << "Web UI: ["sv << remote_address << "] -- denied"sv;
-      return make_auth_error(StatusCode::client_error_forbidden, "Forbidden");
+      return make_auth_error(StatusCode::client_error_forbidden, "Forbidden", "");
     }
 
     if (config::sunshine.username.empty()) {
-      return make_auth_error(StatusCode::redirection_temporary_redirect, {}, false, "/welcome");
+      return make_auth_error(StatusCode::redirection_temporary_redirect, "", "/welcome");
     }
 
     // For login page, don't require authentication (match path without query)
@@ -614,18 +596,14 @@ namespace confighttp {
       // For HTML page requests, redirect to login instead of showing 401 (use base_path)
       if (is_html_request(base_path)) {
         std::string login_url = std::format("/login?redirect={}", path);
-        return make_auth_error(StatusCode::redirection_temporary_redirect, {}, false, login_url);
+        return make_auth_error(StatusCode::redirection_temporary_redirect, "", login_url);
       }
-      // For API requests, send 401 with WWW-Authenticate header for basic auth
-      return make_auth_error(StatusCode::client_error_unauthorized, "Unauthorized", true);
+      // For API requests, send 401 JSON WITHOUT WWW-Authenticate to avoid browser basic-auth prompt spam
+      return make_auth_error(StatusCode::client_error_unauthorized, "Unauthorized", "");
     }
 
     if (auth_header.rfind("Bearer ", 0) == 0) {
       return check_bearer_auth(auth_header, path, method);
-    }
-
-    if (auth_header.rfind("Basic ", 0) == 0) {
-      return check_basic_auth(auth_header);
     }
 
     if (auth_header.rfind("Session ", 0) == 0) {
@@ -633,7 +611,7 @@ namespace confighttp {
         auto session_res = check_session_auth(auth_header);
         if (!session_res.ok) {
           std::string login_url = "/login?redirect=" + path;
-          return make_auth_error(StatusCode::redirection_temporary_redirect, {}, false, login_url);
+          return make_auth_error(StatusCode::redirection_temporary_redirect, "", login_url);
         }
         return session_res;
       }
@@ -642,10 +620,11 @@ namespace confighttp {
     // For HTML page requests, redirect to login instead of showing 401 (use base_path)
     if (is_html_request(base_path)) {
       std::string login_url = "/login?redirect=" + path;
-      return make_auth_error(StatusCode::redirection_temporary_redirect, {}, false, login_url);
+      return make_auth_error(StatusCode::redirection_temporary_redirect, "", login_url);
     }
 
-    return make_auth_error(StatusCode::client_error_unauthorized, "Unauthorized", true);
+    // Default: unauthorized without Basic challenge to preserve SPA UX
+    return make_auth_error(StatusCode::client_error_unauthorized, "Unauthorized", "");
   }
 
   std::string extract_session_token_from_cookie(const SimpleWeb::CaseInsensitiveMultimap &headers) {

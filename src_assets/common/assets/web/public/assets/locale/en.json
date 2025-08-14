@@ -400,6 +400,14 @@
     "logout": "Logout",
     "api_tokens": "API Tokens"
   },
+  "clients": {
+    "nav": "Clients",
+    "title": "Client Management",
+    "pair_title": "Pair Client",
+    "pair_desc": "Enter the 4-digit PIN shown in Moonlight along with a friendly device name to pair this client.",
+    "existing_title": "Paired Clients",
+    "pairing": "Pairing..."
+  },
   "password": {
     "confirm_password": "Confirm Password",
     "current_creds": "Current Credentials",

@@ -150,7 +150,6 @@ namespace confighttp {
 
     const SimpleWeb::CaseInsensitiveMultimap headers {
       {"Content-Type", "application/json"},
-      {"WWW-Authenticate", R"(Basic realm="Sunshine Gamestream Host", charset="UTF-8")"},
       {"X-Frame-Options", "DENY"},
       {"Content-Security-Policy", "frame-ancestors 'none';"},
       {"Access-Control-Allow-Origin", get_cors_origin()}
@@ -285,8 +284,6 @@ namespace confighttp {
     }
     return true;
   }
-
-
 
   /**
    * @brief Send an HTTP redirect.
@@ -453,7 +450,7 @@ namespace confighttp {
   void getWelcomePage(resp_https_t response, req_https_t request) {
     print_req(request);
     if (!config::sunshine.username.empty()) {
-  send_redirect(response, request, "/");
+      send_redirect(response, request, "/");
       return;
     }
     std::string content = file_handler::read_file(WEB_DIR "welcome.html");
@@ -1952,20 +1949,20 @@ namespace confighttp {
     server.default_resource["PUT"] = [](resp_https_t response, req_https_t request) {
       bad_request(response, request);
     };
-  // Serve the SPA shell for any unmatched GET route. Explicit static and API
-  // routes are registered below; UI page routes are deprecated server-side
-  // and are handled by the SPA entry responder so frontend can manage
-  // authentication and routing.
-  server.default_resource["GET"] = getSpaEntry;
-  server.resource["^/$"]["GET"] = getSpaEntry;
-  server.resource["^/pin/?$"]["GET"] = getSpaEntry;
-  server.resource["^/apps/?$"]["GET"] = getSpaEntry;
-  server.resource["^/clients/?$"]["GET"] = getSpaEntry;
-  server.resource["^/config/?$"]["GET"] = getSpaEntry;
-  server.resource["^/password/?$"]["GET"] = getSpaEntry;
-  server.resource["^/welcome/?$"]["GET"] = getSpaEntry;
-  server.resource["^/login/?$"]["GET"] = getSpaEntry;
-  server.resource["^/troubleshooting/?$"]["GET"] = getSpaEntry;
+    // Serve the SPA shell for any unmatched GET route. Explicit static and API
+    // routes are registered below; UI page routes are deprecated server-side
+    // and are handled by the SPA entry responder so frontend can manage
+    // authentication and routing.
+    server.default_resource["GET"] = getSpaEntry;
+    server.resource["^/$"]["GET"] = getSpaEntry;
+    server.resource["^/pin/?$"]["GET"] = getSpaEntry;
+    server.resource["^/apps/?$"]["GET"] = getSpaEntry;
+    server.resource["^/clients/?$"]["GET"] = getSpaEntry;
+    server.resource["^/config/?$"]["GET"] = getSpaEntry;
+    server.resource["^/password/?$"]["GET"] = getSpaEntry;
+    server.resource["^/welcome/?$"]["GET"] = getSpaEntry;
+    server.resource["^/login/?$"]["GET"] = getSpaEntry;
+    server.resource["^/troubleshooting/?$"]["GET"] = getSpaEntry;
     server.resource["^/api/pin$"]["POST"] = savePin;
     server.resource["^/api/apps$"]["GET"] = getApps;
     server.resource["^/api/logs$"]["GET"] = getLogs;

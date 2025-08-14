@@ -11,13 +11,6 @@
         >
           <i class="fas fa-plus" /> Add
         </button>
-        <button
-          class="ghost-btn"
-          @click="openPlayniteImport"
-        >
-          <i class="fas fa-download" /> Import from
-          Playnite
-        </button>
       </div>
     </div>
     <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
@@ -82,22 +75,17 @@
       @saved="reload"
       @deleted="reload"
     />
-    <PlayniteImportModal
-      v-model="showPlaynite"
-      @imported="onPlayniteImported"
-    />
+  <!-- Playnite integration removed for now -->
   </div>
 </template>
 <script setup>
 import { ref, onMounted } from 'vue'
 import AppEditModal from '../components/AppEditModal.vue'
-import PlayniteImportModal from '../components/PlayniteImportModal.vue'
 import { useAppsStore } from '../stores/apps.js'
 const appsStore = useAppsStore()
 const apps = ref([])
 const platform = ref('')
 const showModal = ref(false)
-const showPlaynite = ref(false)
 const currentApp = ref(null)
 const currentIndex = ref(-1)
 async function reload() {
@@ -109,12 +97,7 @@ async function reload() {
 onMounted(reload)
 function openAdd() { currentApp.value = null; currentIndex.value = -1; showModal.value = true }
 function openEdit(app, i) { currentApp.value = app; currentIndex.value = i; showModal.value = true }
-function openPlayniteImport() { showPlaynite.value = true }
-function onPlayniteImported(payload) {
-	// placeholder: reload apps after an import action
-	reload()
-	showPlaynite.value = false
-}
+// Playnite integration removed
 function appKey(app, index) {
 	const p = (app && app['image-path']) ? app['image-path'].toString() : ''
 	const id = app?.uuid || ''

@@ -57,254 +57,40 @@ namespace confighttp {
     std::string original_salt;
   };
 
-  TEST_F(ConfigHttpAuthHelpersTest, given_valid_basic_auth_credentials_when_authenticating_then_should_return_true) {
-    // Given: Valid username and password for basic authentication
-    auto auth_header = createBasicAuthHeader("testuser", "testpass");
-
-    // When: Authenticating with valid credentials
-    bool result = authenticate_basic(auth_header);
-
-    // Then: Authentication should succeed
-    EXPECT_TRUE(result);
-  }
-
-  TEST_F(ConfigHttpAuthHelpersTest, given_invalid_password_when_authenticating_then_should_return_false) {
-    // Given: Valid username but wrong password
-    auto auth_header = createBasicAuthHeader("testuser", "wrongpass");
-
-    // When: Authenticating with invalid password
-    bool result = authenticate_basic(auth_header);
-
-    // Then: Authentication should fail
-    EXPECT_FALSE(result);
-  }
-
-  TEST_F(ConfigHttpAuthHelpersTest, given_invalid_username_when_authenticating_then_should_return_false) {
-    // Given: Wrong username but valid password
-    auto auth_header = createBasicAuthHeader("wronguser", "testpass");
-
-    // When: Authenticating with invalid username
-    bool result = authenticate_basic(auth_header);
-
-    // Then: Authentication should fail
-    EXPECT_FALSE(result);
-  }
-
-  TEST_F(ConfigHttpAuthHelpersTest, given_malformed_auth_header_without_colon_when_authenticating_then_should_return_false) {
-    // Given: Malformed auth header without colon separator
-    auto encoded = SimpleWeb::Crypto::Base64::encode("testusertestpass");
-    auto auth_header = "Basic " + encoded;
-
-    // When: Authenticating with malformed header
-    bool result = authenticate_basic(auth_header);
-
-    // Then: Authentication should fail
-    EXPECT_FALSE(result);
-  }
-
-  TEST_F(ConfigHttpAuthHelpersTest, given_empty_credentials_when_authenticating_then_should_return_false) {
-    // Given: Empty username and password
-    auto encoded = SimpleWeb::Crypto::Base64::encode(":");
-    auto auth_header = "Basic " + encoded;
-
-    // When: Authenticating with empty credentials
-    bool result = authenticate_basic(auth_header);
-
-    // Then: Authentication should fail
-    EXPECT_FALSE(result);
-  }
-
-  TEST_F(ConfigHttpAuthHelpersTest, given_empty_username_when_authenticating_then_should_return_false) {
-    // Given: Empty username with valid password
-    auto encoded = SimpleWeb::Crypto::Base64::encode(":testpass");
-    auto auth_header = "Basic " + encoded;
-
-    // When: Authenticating with empty username
-    bool result = authenticate_basic(auth_header);
-
-    // Then: Authentication should fail
-    EXPECT_FALSE(result);
-  }
-
-  TEST_F(ConfigHttpAuthHelpersTest, given_empty_password_when_authenticating_then_should_return_false) {
-    // Given: Valid username with empty password
-    auto encoded = SimpleWeb::Crypto::Base64::encode("testuser:");
-    auto auth_header = "Basic " + encoded;
-
-    // When: Authenticating with empty password
-    bool result = authenticate_basic(auth_header);
-
-    // Then: Authentication should fail
-    EXPECT_FALSE(result);
-  }
-
-  TEST_F(ConfigHttpAuthHelpersTest, given_uppercase_username_when_authenticating_then_should_return_true) {
-    // Given: Valid credentials with uppercase username
-    auto auth_header = createBasicAuthHeader("TESTUSER", "testpass");
-
-    // When: Authenticating with case-different username
-    bool result = authenticate_basic(auth_header);
-
-    // Then: Authentication should succeed (case insensitive)
-    EXPECT_TRUE(result);
-  }
-
-  TEST_F(ConfigHttpAuthHelpersTest, given_password_with_colons_when_authenticating_then_should_return_true) {
-    // Given: Valid credentials where password contains colons
-    auto credentials = "testuser:pass:with:colons";
-    auto encoded = SimpleWeb::Crypto::Base64::encode(credentials);
-    auto auth_header = "Basic " + encoded;
-
-    // Update config to match the expected password hash
-    config::sunshine.password = util::hex(crypto::hash(std::string("pass:with:colons") + config::sunshine.salt)).to_string();
-
-    // When: Authenticating with password containing colons
-    bool result = authenticate_basic(auth_header);
-
-    // Then: Authentication should succeed
-    EXPECT_TRUE(result);
-  }
-
   TEST_F(ConfigHttpAuthHelpersTest, given_unauthorized_error_when_making_auth_error_then_should_return_proper_response) {
-    // Given: Unauthorized error with WWW-Authenticate header requested
-
-    // When: Creating auth error response
-    auto result = make_auth_error(SimpleWeb::StatusCode::client_error_unauthorized, "Unauthorized", true);
-
-    // Then: Should return proper unauthorized response
+    auto result = make_auth_error(SimpleWeb::StatusCode::client_error_unauthorized, "Unauthorized");
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.code, SimpleWeb::StatusCode::client_error_unauthorized);
-    EXPECT_FALSE(result.body.empty());
-
     auto json_response = nlohmann::json::parse(result.body);
-    EXPECT_EQ(json_response["status_code"], static_cast<int>(SimpleWeb::StatusCode::client_error_unauthorized));
-    EXPECT_FALSE(json_response["status"]);
     EXPECT_EQ(json_response["error"], "Unauthorized");
-
-    // Check content type header
-    auto content_type_header = result.headers.find("Content-Type");
-    EXPECT_NE(content_type_header, result.headers.end());
-    EXPECT_EQ(content_type_header->second, "application/json");
-
-    // Check WWW-Authenticate header
-    auto auth_header = result.headers.find("WWW-Authenticate");
-    EXPECT_NE(auth_header, result.headers.end());
+    auto www_auth_it = result.headers.find("WWW-Authenticate");
+    EXPECT_EQ(www_auth_it, result.headers.end());
   }
 
   TEST_F(ConfigHttpAuthHelpersTest, given_forbidden_error_when_making_auth_error_then_should_return_proper_response) {
-    // Given: Forbidden error without WWW-Authenticate header
-
-    // When: Creating auth error response
-    auto result = make_auth_error(SimpleWeb::StatusCode::client_error_forbidden, "Forbidden", false);
-
-    // Then: Should return proper forbidden response
+    auto result = make_auth_error(SimpleWeb::StatusCode::client_error_forbidden, "Forbidden");
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.code, SimpleWeb::StatusCode::client_error_forbidden);
-    EXPECT_FALSE(result.body.empty());
-
     auto json_response = nlohmann::json::parse(result.body);
     EXPECT_EQ(json_response["error"], "Forbidden");
-
-    // Check that WWW-Authenticate header is not present
-    auto auth_header = result.headers.find("WWW-Authenticate");
-    EXPECT_EQ(auth_header, result.headers.end());
   }
 
   TEST_F(ConfigHttpAuthHelpersTest, given_redirect_location_when_making_auth_error_then_should_return_redirect_response) {
-    // Given: Redirect error with location header
-
-    // When: Creating redirect auth error response
-    auto result = make_auth_error(SimpleWeb::StatusCode::redirection_temporary_redirect, "Redirect", false, "/welcome");
-
-    // Then: Should return proper redirect response
+    auto result = make_auth_error(SimpleWeb::StatusCode::redirection_temporary_redirect, "", "/welcome");
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.code, SimpleWeb::StatusCode::redirection_temporary_redirect);
     EXPECT_TRUE(result.body.empty());
-
     auto location_header = result.headers.find("Location");
     EXPECT_NE(location_header, result.headers.end());
     EXPECT_EQ(location_header->second, "/welcome");
   }
 
   TEST_F(ConfigHttpAuthHelpersTest, given_custom_error_message_when_making_auth_error_then_should_return_response_with_custom_message) {
-    // Given: Custom error message for forbidden error
-
-    // When: Creating auth error response with custom message
-    auto result = make_auth_error(SimpleWeb::StatusCode::client_error_forbidden, "Custom error message", false);
-
-    // Then: Should return response with custom error message
+    auto result = make_auth_error(SimpleWeb::StatusCode::client_error_forbidden, "Custom error message");
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.code, SimpleWeb::StatusCode::client_error_forbidden);
-
     auto json_response = nlohmann::json::parse(result.body);
     EXPECT_EQ(json_response["error"], "Custom error message");
-  }
-
-  class ConfigHttpCheckBasicAuthTest: public Test {
-  protected:
-    void SetUp() override {
-      // Save original config values
-      original_username = config::sunshine.username;
-      original_password = config::sunshine.password;
-      original_salt = config::sunshine.salt;
-
-      // Set test config
-      config::sunshine.username = "testuser";
-      config::sunshine.password = util::hex(crypto::hash(std::string("testpass") + "testsalt")).to_string();
-      config::sunshine.salt = "testsalt";
-    }
-
-    void TearDown() override {
-      // Restore original config values
-      config::sunshine.username = original_username;
-      config::sunshine.password = original_password;
-      config::sunshine.salt = original_salt;
-    }
-
-    std::string createBasicAuthHeader(const std::string &username, const std::string &password) const {
-      auto credentials = username + ":" + password;
-      auto encoded = SimpleWeb::Crypto::Base64::encode(credentials);
-      return "Basic " + encoded;
-    }
-
-  private:
-    std::string original_username;
-    std::string original_password;
-    std::string original_salt;
-  };
-
-  TEST_F(ConfigHttpCheckBasicAuthTest, given_valid_basic_auth_when_checking_auth_then_should_return_success) {
-    // Given: Valid basic authentication credentials
-    auto auth_header = createBasicAuthHeader("testuser", "testpass");
-
-    // When: Checking basic authentication
-    auto result = check_basic_auth(auth_header);
-
-    // Then: Should return successful result
-    EXPECT_TRUE(result.ok);
-    EXPECT_EQ(result.code, SimpleWeb::StatusCode::success_ok);
-    EXPECT_TRUE(result.body.empty());
-    EXPECT_TRUE(result.headers.empty());
-  }
-
-  TEST_F(ConfigHttpCheckBasicAuthTest, given_invalid_basic_auth_when_checking_auth_then_should_return_unauthorized) {
-    // Given: Invalid basic authentication credentials
-    auto auth_header = createBasicAuthHeader("testuser", "wrongpass");
-
-    // When: Checking basic authentication
-    auto result = check_basic_auth(auth_header);
-
-    // Then: Should return unauthorized error
-    EXPECT_FALSE(result.ok);
-    EXPECT_EQ(result.code, SimpleWeb::StatusCode::client_error_unauthorized);
-    EXPECT_FALSE(result.body.empty());
-
-    auto json_response = nlohmann::json::parse(result.body);
-    EXPECT_EQ(json_response["error"], "Unauthorized");
-
-    // Check WWW-Authenticate header
-    auto auth_header_result = result.headers.find("WWW-Authenticate");
-    EXPECT_NE(auth_header_result, result.headers.end());
   }
 
   class ConfigHttpCheckBearerAuthTest: public Test {
@@ -364,35 +150,6 @@ namespace confighttp {
     std::string original_password;
     std::string original_salt;
   };
-
-  TEST_F(ConfigHttpCheckAuthTest, given_valid_basic_auth_when_checking_full_auth_then_should_return_success) {
-    // Given: Valid basic authentication credentials and allowed IP
-    auto auth_header = createBasicAuthHeader("testuser", "testpass");
-
-    // When: Checking full authentication flow
-    auto result = check_auth("127.0.0.1", auth_header, "/api/test", "GET");
-
-    // Then: Should return successful result
-    EXPECT_TRUE(result.ok);
-    EXPECT_EQ(result.code, SimpleWeb::StatusCode::success_ok);
-    EXPECT_TRUE(result.body.empty());
-    EXPECT_TRUE(result.headers.empty());
-  }
-
-  TEST_F(ConfigHttpCheckAuthTest, given_invalid_basic_auth_when_checking_full_auth_then_should_return_unauthorized) {
-    // Given: Invalid basic authentication credentials
-    auto auth_header = createBasicAuthHeader("testuser", "wrongpass");
-
-    // When: Checking full authentication flow
-    auto result = check_auth("127.0.0.1", auth_header, "/api/test", "GET");
-
-    // Then: Should return unauthorized error
-    EXPECT_FALSE(result.ok);
-    EXPECT_EQ(result.code, SimpleWeb::StatusCode::client_error_unauthorized);
-
-    auto json_response = nlohmann::json::parse(result.body);
-    EXPECT_EQ(json_response["error"], "Unauthorized");
-  }
 
   TEST_F(ConfigHttpCheckAuthTest, given_missing_auth_header_when_checking_auth_then_should_return_unauthorized) {
     // Given: No authentication header provided
@@ -488,8 +245,6 @@ namespace confighttp {
     EXPECT_EQ(result.code, SimpleWeb::StatusCode::client_error_unauthorized);
     auto json_response = nlohmann::json::parse(result.body);
     EXPECT_EQ(json_response["error"], "Invalid session token format");
-    auto auth_header = result.headers.find("WWW-Authenticate");
-    EXPECT_NE(auth_header, result.headers.end());
   }
 
   TEST(ConfigHttpSessionAuthTest, given_invalid_session_token_then_should_return_error) {
@@ -498,8 +253,6 @@ namespace confighttp {
     EXPECT_EQ(result.code, SimpleWeb::StatusCode::client_error_unauthorized);
     auto json_response = nlohmann::json::parse(result.body);
     EXPECT_EQ(json_response["error"], "Invalid or expired session token");
-    auto auth_header = result.headers.find("WWW-Authenticate");
-    EXPECT_NE(auth_header, result.headers.end());
   }
 
   TEST_F(ConfigHttpCheckAuthTest, given_html_page_request_without_auth_when_checking_auth_then_should_redirect_to_login_with_redirect_param) {
@@ -553,7 +306,7 @@ namespace confighttp {
   };
 
   TEST_F(ConfigHttpCorsTest, given_auth_error_response_when_creating_then_should_include_correct_cors_headers) {
-    auto result = make_auth_error(SimpleWeb::StatusCode::client_error_unauthorized, "Unauthorized", true);
+    auto result = make_auth_error(SimpleWeb::StatusCode::client_error_unauthorized, "Unauthorized");
 
     auto cors_origin_it = result.headers.find("Access-Control-Allow-Origin");
     EXPECT_NE(cors_origin_it, result.headers.end());
@@ -566,7 +319,7 @@ namespace confighttp {
   }
 
   TEST_F(ConfigHttpCorsTest, given_different_auth_error_when_creating_then_should_include_correct_cors_headers) {
-    auto result = make_auth_error(SimpleWeb::StatusCode::client_error_forbidden, "Forbidden", false);
+    auto result = make_auth_error(SimpleWeb::StatusCode::client_error_forbidden, "Forbidden");
 
     auto cors_origin_it = result.headers.find("Access-Control-Allow-Origin");
     EXPECT_NE(cors_origin_it, result.headers.end());

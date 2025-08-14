@@ -18,13 +18,36 @@ function initAuthHandling() {
   authInitialized = true
   const auth = useAuthStore()
 
+  function sanitizePath(path) {
+    try {
+      if (typeof path !== 'string') return '/'
+      if (!path.startsWith('/')) return '/'
+      if (path.startsWith('//')) return '/'
+      if (path.includes('://')) return '/'
+      if (path.length > 512) return '/'
+      if (path.startsWith('/login')) return '/'
+      return path
+    } catch { return '/' }
+  }
+
+  function redirectToLogin() {
+    if (typeof window === 'undefined') return
+    try {
+      if (window.location.pathname === '/login') return
+      if (window.__redirectingToLogin) return
+      window.__redirectingToLogin = true
+      const current = sanitizePath(window.location.pathname + window.location.search + window.location.hash)
+      window.location.replace('/login?redirect=' + encodeURIComponent(current))
+    } catch { /* noop */ }
+  }
+
   // Response interceptor to detect auth changes
   http.interceptors.response.use(
     async (response) => {
       if (response?.status === 401) {
         // Update store state if we thought we were authenticated
         if (auth.isAuthenticated) auth.setAuthenticated(false)
-        // Let existing fetch-based redirect (init.js) handle navigation, or we could replicate here
+        redirectToLogin()
       } else if (response?.config && !auth.isAuthenticated) {
         // For any successful API response, we can optimistically set auth true
         // But only after we validated once via /api/auth/validate during init
@@ -35,6 +58,7 @@ function initAuthHandling() {
     async (error) => {
       if (error?.response?.status === 401) {
         if (auth.isAuthenticated) auth.setAuthenticated(false)
+        redirectToLogin()
       }
       return Promise.reject(error)
     }
