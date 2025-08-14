@@ -1,3 +1,37 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Legacy class shims (Bootstrap -> Tailwind) for incremental migration */
+@layer components {
+	.btn { @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium bg-solar-primary text-solar-onPrimary shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed hover:bg-solar-primary/90 dark:bg-lunar-primary dark:text-lunar-onPrimary dark:hover:bg-lunar-primary/90; }
+	.btn-primary { @apply bg-solar-primary text-solar-onPrimary hover:bg-solar-primary/90 dark:bg-lunar-primary dark:text-lunar-onPrimary dark:hover:bg-lunar-primary/90; }
+	.btn-secondary { @apply bg-solar-secondary text-solar-onSecondary hover:bg-solar-secondary/90; }
+	.btn-success { @apply bg-solar-success text-white hover:bg-solar-success/90; }
+	.btn-danger { @apply bg-solar-danger text-white hover:bg-solar-danger/90; }
+	.btn-warning { @apply bg-solar-warning text-solar-onPrimary hover:bg-solar-warning/90; }
+	.btn-info { @apply bg-solar-info text-white hover:bg-solar-info/90; }
+	.btn.ghost, .btn-ghost { @apply bg-transparent shadow-none text-solar-secondary hover:bg-solar-secondary/10 dark:text-lunar-primary dark:hover:bg-lunar-primary/15; }
+	.btn.apply { @apply btn-primary; }
+
+	.form-control { @apply w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 text-solar-dark dark:text-lunar-light placeholder-black/40 dark:placeholder-lunar-light/40 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40; }
+	.form-control.monospace { @apply font-mono; }
+	.form-label { @apply block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light; }
+	.form-text { @apply text-[11px] opacity-60 mt-1; }
+	.form-select { @apply form-control; }
+	.table { @apply w-full text-sm border-collapse; }
+	.table th { @apply text-left font-semibold pr-3 pb-2; }
+	.table td { @apply pr-3 py-2 align-top; }
+	.align-middle { vertical-align: middle; }
+
+	/* Alerts (bootstrap-like) */
+	.alert { @apply rounded-md px-3 py-2 my-2; }
+	.alert-danger { @apply bg-red-50 text-red-800 border border-red-100; }
+	.alert-success { @apply bg-green-50 text-green-800 border border-green-100; }
+	.alert-warning { @apply bg-yellow-50 text-yellow-800 border border-yellow-100; }
+	.alert-primary { @apply bg-sky-50 text-sky-800 border border-sky-100; }
+
+	/* spacing utilities like mb-3/mb-2 should use Tailwind classes directly in templates; do not @apply them here */
+
+		/* Removed .w-100 and .ms-auto alias shims; use w-full and ml-auto directly in templates */
+}

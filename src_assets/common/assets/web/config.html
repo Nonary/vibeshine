@@ -96,6 +96,7 @@
 
 <script type="module">
   import { computed, createApp } from 'vue'
+  import { createPinia } from 'pinia'
   import { initApp } from './init'
   import Navbar from './Navbar.vue'
   import General from './configs/tabs/General.vue'
@@ -106,6 +107,8 @@
   import AudioVideo from './configs/tabs/AudioVideo.vue'
   import ContainerEncoders from './configs/tabs/ContainerEncoders.vue'
   import {$tp, usePlatformI18n} from './platform-i18n'
+
+  const pinia = createPinia()
 
   const app = createApp({
     components: {
@@ -126,163 +129,7 @@
         restarted: false,
         config: null,
         currentTab: "general",
-        tabs: [ // TODO: Move the options to each Component instead, encapsulate.
-          {
-            id: "general",
-            name: "General",
-            options: {
-              "locale": "en",
-              "sunshine_name": "",
-              "min_log_level": 2,
-              "global_prep_cmd": [],
-              "notify_pre_releases": "disabled",
-              "session_token_ttl_seconds": 86400,
-            },
-          },
-          {
-            id: "input",
-            name: "Input",
-            options: {
-              "controller": "enabled",
-              "gamepad": "auto",
-              "ds4_back_as_touchpad_click": "enabled",
-              "motion_as_ds4": "enabled",
-              "touchpad_as_ds4": "enabled",
-              "back_button_timeout": -1,
-              "keyboard": "enabled",
-              "key_repeat_delay": 500,
-              "key_repeat_frequency": 24.9,
-              "always_send_scancodes": "enabled",
-              "key_rightalt_to_key_win": "disabled",
-              "mouse": "enabled",
-              "high_resolution_scrolling": "enabled",
-              "native_pen_touch": "enabled",
-              "keybindings": "[0x10,0xA0,0x11,0xA2,0x12,0xA4]",  // todo: add this to UI
-            },
-          },
-          {
-            id: "av",
-            name: "Audio/Video",
-            options: {
-              "audio_sink": "",
-              "virtual_sink": "",
-              "install_steam_audio_drivers": "enabled",
-              "adapter_name": "",
-              "output_name": "",
-              "dd_configuration_option": "disabled",
-              "dd_resolution_option": "auto",
-              "dd_manual_resolution": "",
-              "dd_refresh_rate_option": "auto",
-              "dd_manual_refresh_rate": "",
-              "dd_hdr_option": "auto",
-              "dd_config_revert_delay": 3000,
-              "dd_config_revert_on_disconnect": "disabled",
-              "dd_mode_remapping": {"mixed": [], "resolution_only": [], "refresh_rate_only": []},
-              "dd_wa_hdr_toggle_delay": 0,
-              "max_bitrate": 0,
-              "minimum_fps_target": 0
-            },
-          },
-          {
-            id: "network",
-            name: "Network",
-            options: {
-              "upnp": "disabled",
-              "address_family": "ipv4",
-              "port": 47989,
-              "origin_web_ui_allowed": "lan",
-              "external_ip": "",
-              "lan_encryption_mode": 0,
-              "wan_encryption_mode": 1,
-              "ping_timeout": 10000,
-            },
-          },
-          {
-            id: "files",
-            name: "Config Files",
-            options: {
-              "file_apps": "",
-              "credentials_file": "",
-              "log_path": "",
-              "pkey": "",
-              "cert": "",
-              "file_state": "",
-            },
-          },
-          {
-            id: "advanced",
-            name: "Advanced",
-            options: {
-              "fec_percentage": 20,
-              "qp": 28,
-              "min_threads": 2,
-              "hevc_mode": 0,
-              "av1_mode": 0,
-              "capture": "",
-              "encoder": "",
-            },
-          },
-          {
-            id: "nv",
-            name: "NVIDIA NVENC Encoder",
-            options: {
-              "nvenc_preset": 1,
-              "nvenc_twopass": "quarter_res",
-              "nvenc_spatial_aq": "disabled",
-              "nvenc_vbv_increase": 0,
-              "nvenc_realtime_hags": "enabled",
-              "nvenc_latency_over_power": "enabled",
-              "nvenc_opengl_vulkan_on_dxgi": "enabled",
-              "nvenc_h264_cavlc": "disabled",
-            },
-          },
-          {
-            id: "qsv",
-            name: "Intel QuickSync Encoder",
-            options: {
-              "qsv_preset": "medium",
-              "qsv_coder": "auto",
-              "qsv_slow_hevc": "disabled",
-            },
-          },
-          {
-            id: "amd",
-            name: "AMD AMF Encoder",
-            options: {
-              "amd_usage": "ultralowlatency",
-              "amd_rc": "vbr_latency",
-              "amd_enforce_hrd": "disabled",
-              "amd_quality": "balanced",
-              "amd_preanalysis": "disabled",
-              "amd_vbaq": "enabled",
-              "amd_coder": "auto",
-            },
-          },
-          {
-            id: "vt",
-            name: "VideoToolbox Encoder",
-            options: {
-              "vt_coder": "auto",
-              "vt_software": "auto",
-              "vt_realtime": "enabled",
-            },
-          },
-          {
-            id: "vaapi",
-            name: "VA-API Encoder",
-            options: {
-              "vaapi_strict_rc_buffer": "disabled",
-            },
-          },
-          {
-            id: "sw",
-            name: "Software Encoder",
-            options: {
-              "sw_preset": "superfast",
-              "sw_tune": "zerolatency",
-            },
-          },
-        ],
+        tabs: [],
       };
     },
     provide() {
@@ -291,70 +138,60 @@
        }
     },
     created() {
-      fetch("./api/config")
-        .then((r) => r.json())
-        .then((r) => {
-          this.config = r;
-          this.platform = this.config.platform;
+      // install pinia on the app before mounting
+      app.use(pinia)
 
-          var app = document.getElementById("app");
-          if (this.platform === "windows") {
-            this.tabs = this.tabs.filter((el) => {
-              return el.id !== "vt" && el.id !== "vaapi";
-            });
-          }
-          if (this.platform === "linux") {
-            this.tabs = this.tabs.filter((el) => {
-              return el.id !== "amd" && el.id !== "qsv" && el.id !== "vt";
-            });
-          }
-          if (this.platform === "macos") {
-            this.tabs = this.tabs.filter((el) => {
-              return el.id !== "amd" && el.id !== "nv" && el.id !== "qsv" && el.id !== "vaapi";
-            });
-          }
+      // dynamically import the store module then load server config
+      import('./stores/config.js').then((m) => {
+        const { useConfigStore } = m
+        const store = useConfigStore()
+        // expose store to component instance for serialize()
+        this.$configStore = store
 
-          // remove values we don't want in the config file
-          delete this.config.platform;
-          delete this.config.status;
-          delete this.config.version;
+        fetch("./api/config")
+          .then((r) => r.json())
+          .then((r) => {
+            store.setConfig(r)
+            this.config = store.config
+            this.tabs = store.tabs
+            this.platform = r.platform || ''
 
-          // TODO: let each tab's Component handle it's own data instead of doing it here
-
-          // Parse the special options before population if available
-          const specialOptions = ["dd_mode_remapping", "global_prep_cmd"]
-          for (const optionKey of specialOptions) {
-            if (this.config.hasOwnProperty(optionKey)) {
-              this.config[optionKey] = JSON.parse(this.config[optionKey]);
+            if (this.platform === "windows") {
+              this.tabs = this.tabs.filter((el) => {
+                return el.id !== "vt" && el.id !== "vaapi";
+              });
             }
-          }
-
-          // Populate default values from tabs options
-          this.tabs.forEach(tab => {
-            Object.keys(tab.options).forEach(optionKey => {
-              if (this.config[optionKey] === undefined) {
-                // Make sure to copy by value
-                this.config[optionKey] = JSON.parse(JSON.stringify(tab.options[optionKey]));
-              }
-            });
+            if (this.platform === "linux") {
+              this.tabs = this.tabs.filter((el) => {
+                return el.id !== "amd" && el.id !== "qsv" && el.id !== "vt";
+              });
+            }
+            if (this.platform === "macos") {
+              this.tabs = this.tabs.filter((el) => {
+                return el.id !== "amd" && el.id !== "nv" && el.id !== "qsv" && el.id !== "vaapi";
+              });
+            }
           });
-        });
+      })
     },
     methods: {
       forceUpdate() {
         this.$forceUpdate()
       },
       serialize() {
+        // prefer store serialization when available
+        if (this.$configStore && this.$configStore.serialize) {
+          return this.$configStore.serialize()
+        }
         return JSON.parse(JSON.stringify(this.config));
       },
       save() {
         this.saved = false;
         this.restarted = false;
+        // use store to get serialized config
+        let config = this.serialize()
 
-        // create a temp copy of this.config to use for the post request
-        let config = this.serialize();
-
-        // delete default values from this.config
+        // delete default values from this.config (based on store tabs)
         this.tabs.forEach(tab => {
           Object.keys(tab.options).forEach(optionKey => {
             let delete_value = false
@@ -386,7 +223,7 @@
           }
         });
       },
-      apply() {
+  apply() {
         this.saved = this.restarted = false;
         let saved = this.save();
 

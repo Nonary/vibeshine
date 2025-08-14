@@ -9,38 +9,61 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="dropdown bd-mode-toggle">
-    <a class="nav-link dropdown-toggle align-items-center"
-            id="bd-theme"
-            type="button"
-            aria-expanded="false"
-            data-bs-toggle="dropdown"
-            aria-label="{{ $t('navbar.toggle_theme') }} ({{ $t('navbar.theme_auto') }})">
-      <span class="bi my-1 theme-icon-active"><i class="fa-solid fa-circle-half-stroke"></i></span>
+  <div class="relative inline-block text-left">
+    <button id="bd-theme" aria-haspopup="true" :aria-expanded="open" @click="open = !open" class="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5">
+      <span class="theme-icon-active"><i :class="activeIcon"></i></span>
       <span id="bd-theme-text">{{ $t('navbar.toggle_theme') }}</span>
-    </a>
-    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="bd-theme-text">
-      <li>
-        <button type="button" class="dropdown-item d-flex align-items-center" data-bs-theme-value="light" aria-pressed="false">
-          <i class="bi me-2 theme-icon fas fa-fw fa-solid fa-sun"></i>
-          {{ $t('navbar.theme_light') }}
+    </button>
+
+    <div v-if="open" class="origin-top-right absolute right-0 mt-2 w-44 rounded-md shadow-lg bg-white dark:bg-lunar-surface/90 ring-1 ring-black/5 dark:ring-white/5">
+      <div class="py-1">
+        <button v-for="opt in options" :key="opt.value" @click="select(opt.value)" :class="['w-full text-left px-3 py-2 flex items-center gap-2', opt.value === current ? 'bg-black/5 dark:bg-white/5' : '']">
+          <i :class="opt.icon"></i>
+          <span>{{ opt.label }}</span>
         </button>
-      </li>
-      <li>
-        <button type="button" class="dropdown-item d-flex align-items-center" data-bs-theme-value="dark" aria-pressed="false">
-          <i class="bi me-2 theme-icon fas fa-fw fa-solid fa-moon"></i>
-          {{ $t('navbar.theme_dark') }}
-        </button>
-      </li>
-      <li>
-        <button type="button" class="dropdown-item d-flex align-items-center active" data-bs-theme-value="auto" aria-pressed="true">
-          <i class="bi me-2 theme-icon fas fa-fw fa-solid fa-circle-half-stroke"></i>
-          {{ $t('navbar.theme_auto') }}
-        </button>
-      </li>
-    </ul>
+      </div>
+    </div>
   </div>
 </template>
+
+<script>
+export default {
+  data() {
+    return {
+      open: false,
+      current: null,
+      options: [
+        { value: 'light', label: this.$t('navbar.theme_light'), icon: 'fa-solid fa-sun' },
+        { value: 'dark', label: this.$t('navbar.theme_dark'), icon: 'fa-solid fa-moon' },
+        { value: 'auto', label: this.$t('navbar.theme_auto'), icon: 'fa-solid fa-circle-half-stroke' }
+      ]
+    }
+  },
+  computed: {
+    activeIcon() {
+      const opt = this.options.find(o => o.value === this.current) || this.options[2]
+      return opt.icon
+    }
+  },
+  mounted() {
+    // initialize current theme
+    import('./theme').then(mod => {
+      this.current = mod.getPreferredTheme()
+    })
+  },
+  methods: {
+    select(v) {
+      import('./theme').then(mod => {
+        // Use exported helpers from theme.js
+        mod.setStoredTheme(v)
+        mod.setTheme(v)
+        this.current = v
+        this.open = false
+      })
+    }
+  }
+}
+</script>
 
 <style scoped>
 </style>

@@ -51,7 +51,7 @@
 					</button>
 					<transition name="fade">
 						<div v-show="isOpen(tab.id)" class="mt-2 bg-white/80 dark:bg-lunar-surface/70 backdrop-blur-sm border border-black/5 dark:border-white/10 rounded-xl shadow-sm p-6 space-y-6">
-							<component :is="tab.component" :config="config" :platform="platform" />
+							<component :is="tab.component" />
 						</div>
 					</transition>
 				</section>
@@ -76,7 +76,7 @@
   
 </template>
 <script setup>
-import { ref, reactive, onMounted, watch, nextTick } from 'vue'
+import { ref, reactive, onMounted, watch, nextTick, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import General from '../configs/tabs/General.vue'
 import Inputs from '../configs/tabs/Inputs.vue'
@@ -86,9 +86,12 @@ import Advanced from '../configs/tabs/Advanced.vue'
 import AudioVideo from '../configs/tabs/AudioVideo.vue'
 import ContainerEncoders from '../configs/tabs/ContainerEncoders.vue'
 
+import { useConfigStore } from '../stores/config.js'
+
 // Core reactive state
-const platform = ref('')
-const config = ref(null)
+const store = useConfigStore()
+const config = store.config
+const platform = computed(() => config.value?.platform || '')
 const saved = ref(false)
 const restarted = ref(false)
 const saving = ref(false)
@@ -123,13 +126,17 @@ function toggle(id){
 
 function pruneDefaults(c){ return JSON.parse(JSON.stringify(c)) }
 async function load(){
-	const r = await fetch('./api/config').then(r=>r.json())
-	platform.value = r.platform
-	delete r.platform; delete r.status; delete r.version
-	const specials = ['dd_mode_remapping','global_prep_cmd']
-	specials.forEach(k=>{ if(r[k]) try{ r[k]=JSON.parse(r[k]) }catch{} })
-	config.value = r
-	// Build index after DOM updates
+	// If the store already has config (loaded at init) skip the fetch
+	if (store.config && store.config.value) {
+		platform.value = store.config.value.platform || ''
+		await nextTick()
+		requestAnimationFrame(buildSearchIndex)
+		return
+	}
+
+	// Use the store fetch helper to centralize loading logic
+	const res = await store.fetchConfig()
+	platform.value = res?.platform || ''
 	await nextTick()
 	requestAnimationFrame(buildSearchIndex)
 }
@@ -137,8 +144,11 @@ onMounted(load)
 
 // Auto-save watcher
 let saveTimer
-watch(config, () => {
-	if(!config.value) return
+
+// Watch the store config safely using optional chaining so we don't try to read
+// `.value` of a null/undefined `config` if the store isn't ready yet.
+watch(() => config?.value, (newVal) => {
+	if(!newVal) return
 	dirty.value = true
 	if(autoSave.value){
 		clearTimeout(saveTimer)
@@ -147,11 +157,25 @@ watch(config, () => {
 },{ deep:true })
 
 async function save(){
-	if(!config.value) return
+	// If the store or config value isn't available yet, bail out early.
+	if(!(config && config.value)) return
 	saving.value = true
 	saved.value = false
 	restarted.value = false
-	const body = pruneDefaults(config.value)
+
+	// use store.serialize() when available
+	let body = store.serialize ? store.serialize() : JSON.parse(JSON.stringify(config?.value))
+
+	// delete default values based on store.tabs
+	const defaults = store.tabs || []
+	defaults.forEach(tab => {
+		Object.keys(tab.options || {}).forEach(optionKey => {
+			let delete_value = false
+			if(JSON.stringify(body[optionKey]) === JSON.stringify(tab.options[optionKey])) delete_value = true
+			if(delete_value) delete body[optionKey]
+		})
+	})
+
 	const res = await fetch('./api/config',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
 	if(res.ok){ saved.value = true; dirty.value = false }
 	saving.value = false

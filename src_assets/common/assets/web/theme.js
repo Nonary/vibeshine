@@ -10,14 +10,29 @@ export const getPreferredTheme = () => {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
+// Set theme in a Tailwind-friendly way by toggling the `dark` class on <html>.
 const setTheme = theme => {
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+
     if (theme === 'auto') {
-        document.documentElement.setAttribute(
-            'data-bs-theme',
-            (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-        )
+        if (prefersDark) {
+            document.documentElement.classList.add('dark')
+        } else {
+            document.documentElement.classList.remove('dark')
+        }
+        // When theme is 'auto' we still need to set a concrete data-bs-theme
+        // value so Bootstrap selectors like [data-bs-theme="dark"] match.
+        const resolved = prefersDark ? 'dark' : 'light'
+        document.documentElement.setAttribute('data-bs-theme', resolved)
+        document.documentElement.setAttribute('data-theme', 'auto')
+    } else if (theme === 'dark') {
+        document.documentElement.classList.add('dark')
+    document.documentElement.setAttribute('data-bs-theme', 'dark')
+    document.documentElement.setAttribute('data-theme', 'dark')
     } else {
-        document.documentElement.setAttribute('data-bs-theme', theme)
+        document.documentElement.classList.remove('dark')
+    document.documentElement.setAttribute('data-bs-theme', 'light')
+    document.documentElement.setAttribute('data-theme', 'light')
     }
 }
 
@@ -30,20 +45,41 @@ export const showActiveTheme = (theme, focus = false) => {
 
     const themeSwitcherText = document.querySelector('#bd-theme-text')
     const activeThemeIcon = document.querySelector('.theme-icon-active i')
+
+    // Friendly icon map if the DOM buttons are not present
+    const iconMap = {
+        light: 'fa-solid fa-sun',
+        dark: 'fa-solid fa-moon',
+        auto: 'fa-solid fa-circle-half-stroke'
+    }
+
+    // Update any existing buttons that use data-bs-theme-value (legacy)
     const btnToActive = document.querySelector(`[data-bs-theme-value="${theme}"]`)
-    const classListOfActiveBtn = btnToActive.querySelector('i').classList
+    if (btnToActive) {
+        document.querySelectorAll('[data-bs-theme-value]').forEach(element => {
+            element.classList.remove('active')
+            element.setAttribute('aria-pressed', 'false')
+        })
 
-    document.querySelectorAll('[data-bs-theme-value]').forEach(element => {
-        element.classList.remove('active')
-        element.setAttribute('aria-pressed', 'false')
-    })
+        btnToActive.classList.add('active')
+        btnToActive.setAttribute('aria-pressed', 'true')
 
-    btnToActive.classList.add('active')
-    btnToActive.setAttribute('aria-pressed', 'true')
-    activeThemeIcon.classList.remove(...activeThemeIcon.classList.values())
-    activeThemeIcon.classList.add(...classListOfActiveBtn)
-    const themeSwitcherLabel = `${themeSwitcherText.textContent} (${btnToActive.textContent.trim()})`
-    themeSwitcher.setAttribute('aria-label', themeSwitcherLabel)
+        const iconInside = btnToActive.querySelector('i')
+        if (activeThemeIcon && iconInside) {
+            activeThemeIcon.className = iconInside.className
+        }
+    } else {
+        // Fallback: set a sensible icon based on theme
+        if (activeThemeIcon) {
+            activeThemeIcon.className = iconMap[theme] || iconMap.auto
+        }
+    }
+
+    if (themeSwitcherText) {
+        const pretty = btnToActive ? btnToActive.textContent.trim() : theme
+        const themeSwitcherLabel = `${themeSwitcherText.textContent} (${pretty})`
+        themeSwitcher.setAttribute('aria-label', themeSwitcherLabel)
+    }
 
     if (focus) {
         themeSwitcher.focus()
@@ -68,7 +104,7 @@ export function loadAutoTheme() {
     (() => {
         'use strict'
 
-        setTheme(getPreferredTheme())
+    setTheme(getPreferredTheme())
 
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
             const storedTheme = getStoredTheme()
@@ -82,3 +118,6 @@ export function loadAutoTheme() {
         })
     })()
 }
+
+// Expose setters so components can call them directly
+export { setStoredTheme, setTheme }

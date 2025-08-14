@@ -1,21 +1,21 @@
 <template>
-  <div class="container py-3 token-page">
-    <h1 class="h3 mb-4">{{ $t('auth.title') }}</h1>
+  <div class="max-w-5xl mx-auto px-4 py-6 token-page">
+    <h1 class="text-2xl font-semibold mb-4">{{ $t('auth.title') }}</h1>
 
     <!-- Generate token -->
-    <div id="generate-token-section" class="card mb-4">
-      <div class="card-header d-flex align-items-center">
-        <h2 class="h5 mb-0">{{ $t('auth.generate_new_token') }}</h2>
+    <section id="generate-token-section" class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent">
+      <div class="px-4 py-3 border-b border-black/5 dark:border-white/10 flex items-center">
+        <h2 class="text-lg font-medium m-0">{{ $t('auth.generate_new_token') }}</h2>
       </div>
-      <div class="card-body">
-        <p v-if="$te('auth.generate_token_help')" class="form-text mb-3">{{ $t('auth.generate_token_help') }}</p>
+      <div class="p-4">
+        <p v-if="$te('auth.generate_token_help')" class="text-[11px] opacity-60 mb-3">{{ $t('auth.generate_token_help') }}</p>
 
         <form @submit.prevent="generateToken" novalidate>
-          <div class="vstack gap-3">
-            <div v-for="(scope, idx) in scopes" :key="scope.id ?? idx" class="row g-3 align-items-end">
-              <div class="col-12 col-md-5">
-                <label :for="'scope-path-' + idx" class="form-label">{{ $t('auth.select_api_path') }}</label>
-                <select :id="'scope-path-' + idx" class="form-select" v-model="scope.path"
+          <div class="flex flex-col space-y-3">
+            <div v-for="(scope, idx) in scopes" :key="scope.id ?? idx" class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+              <div class="col-span-12 md:col-span-5">
+                <label :for="'scope-path-' + idx" class="block text-sm font-medium mb-1">{{ $t('auth.select_api_path') }}</label>
+                <select :id="'scope-path-' + idx" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70" v-model="scope.path"
                   @change="onScopePathChange(scope)">
                   <option value="" disabled>{{ $t('auth.select_api_path') }}</option>
                   <option v-for="route in apiRoutes.filter(r => r.selectable !== false)" :key="route.path"
@@ -25,54 +25,58 @@
                 </select>
               </div>
 
-              <div class="col-12 col-md-5">
-                <label :for="'scope-methods-' + idx" class="form-label">{{ $t('auth.scopes') }}</label>
-                <select :id="'scope-methods-' + idx" class="form-select" v-model="scope.methods" multiple size="4"
+              <div class="col-span-12 md:col-span-5">
+                <label :for="'scope-methods-' + idx" class="block text-sm font-medium mb-1">{{ $t('auth.scopes') }}</label>
+                <select :id="'scope-methods-' + idx" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70" v-model="scope.methods" multiple size="4"
                   :disabled="!scope.path">
                   <option v-for="m in getMethodsForPath(scope.path)" :key="m" :value="m">{{ m }}</option>
                 </select>
               </div>
 
-              <div class="col-12 col-md-2 d-grid">
-                <button type="button" class="btn btn-danger" :aria-label="$t('auth.remove')"
+              <div class="col-span-12 md:col-span-2 flex">
+                <button type="button" class="w-full inline-flex items-center justify-center px-3 py-2 rounded-md bg-red-600 text-white text-sm hover:bg-red-700" :aria-label="$t('auth.remove')"
                   @click="removeScope(idx)" :disabled="scopes.length === 1 && !scope.path && !scope.methods?.length">
                   {{ $t('auth.remove') }}
                 </button>
               </div>
             </div>
 
-            <div class="d-flex align-items-center gap-2">
-              <button type="button" class="btn btn-primary" @click="addScope">
+            <div class="flex items-center gap-2">
+              <button type="button" class="inline-flex items-center px-3 py-2 rounded-md bg-sky-600 text-white text-sm hover:bg-sky-700" @click="addScope">
                 {{ $t('auth.add_scope') }}
               </button>
-              <span class="text-body-secondary small" v-if="isGenerateDisabled">
+              <span class="text-[13px] text-muted" v-if="isGenerateDisabled">
                 {{ $t('auth.generate_disabled_hint') }}
               </span>
             </div>
 
             <div v-if="validScopes.length" class="mt-1">
-              <strong class="me-2">{{ $t('auth.selected_scopes') }}:</strong>
-              <span v-for="(s, i) in validScopes" :key="i" class="d-inline-block me-2 mb-2">
-                <span class="badge text-bg-secondary me-1">{{ s.path }}</span>
-                <span v-for="m in s.methods" :key="m" class="badge text-bg-info text-uppercase me-1">{{ m }}</span>
-              </span>
+              <strong class="mr-2">{{ $t('auth.selected_scopes') }}:</strong>
+              <div class="flex flex-wrap items-center gap-2 mt-2">
+                <template v-for="(s, i) in validScopes" :key="i">
+                  <span class="inline-flex items-center bg-gray-100 dark:bg-gray-800 text-sm rounded px-2 py-0.5">
+                    <span class="font-semibold mr-2">{{ s.path }}</span>
+                    <span v-for="m in s.methods" :key="m" class="ml-1 inline-flex items-center bg-sky-500 text-white text-xs uppercase rounded px-2 py-0.5">{{ m }}</span>
+                  </span>
+                </template>
+              </div>
             </div>
 
-            <div class="d-flex gap-2">
-              <button type="submit" class="btn btn-primary" :disabled="isGenerateDisabled || isGenerating">
+            <div class="flex gap-2">
+              <button type="submit" class="inline-flex items-center px-4 py-2 rounded-md bg-sky-600 text-white text-sm hover:bg-sky-700" :disabled="isGenerateDisabled || isGenerating">
                 <span v-if="!isGenerating">{{ $t('auth.generate_token') }}</span>
                 <span v-else>{{ $t('auth.loading') }}</span>
               </button>
-              <button type="button" class="btn btn-secondary" @click="resetForm" :disabled="isGenerating">
+              <button type="button" class="inline-flex items-center px-4 py-2 rounded-md bg-gray-200 dark:bg-gray-700 text-sm" @click="resetForm" :disabled="isGenerating">
                 {{ $t('_common.cancel') }}
               </button>
             </div>
 
-            <div v-if="displayedToken" class="alert alert-success mt-2" role="status" aria-live="polite">
-              <div class="mb-2 fw-medium">{{ $t('auth.token_success') }}</div>
-              <div class="input-group">
-                <input type="text" class="form-control" :value="displayedToken" readonly />
-                <button type="button" class="btn btn-success" @click="copyToken" :disabled="tokenCopied"
+            <div v-if="displayedToken" class="mt-2 bg-green-50 border border-green-200 rounded p-3" role="status" aria-live="polite">
+              <div class="mb-2 font-medium">{{ $t('auth.token_success') }}</div>
+              <div class="flex gap-2">
+                <input type="text" class="flex-1 px-3 py-2 rounded-md border border-black/10 dark:border-white/15" :value="displayedToken" readonly />
+                <button type="button" class="inline-flex items-center px-3 py-2 rounded-md bg-green-600 text-white text-sm hover:bg-green-700" @click="copyToken" :disabled="tokenCopied"
                   :title="$t('auth.copy_token')">
                   {{ tokenCopied ? $t('auth.token_copied') : $t('auth.copy_token') }}
                 </button>
@@ -81,52 +85,52 @@
           </div>
         </form>
       </div>
-    </div>
+    </section>
 
     <!-- Active tokens -->
-    <div id="active-tokens-section" class="card mb-4">
-      <div class="card-header d-flex align-items-center">
-        <h2 class="h5 mb-0">{{ $t('auth.active_tokens') }}</h2>
-        <button type="button" class="btn btn-secondary ms-auto" @click="loadTokens" :disabled="isLoadingTokens">
+    <section id="active-tokens-section" class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent">
+      <div class="px-4 py-3 border-b border-black/5 dark:border-white/10 flex items-center">
+        <h2 class="text-lg font-medium m-0">{{ $t('auth.active_tokens') }}</h2>
+        <button type="button" class="ml-auto inline-flex items-center px-3 py-1 rounded-md bg-gray-200 dark:bg-gray-700 text-sm" @click="loadTokens" :disabled="isLoadingTokens">
           {{ $t('auth.refresh') }}
         </button>
       </div>
-      <div class="card-body">
-        <div class="row g-3 align-items-end mb-3">
-          <div class="col-12 col-md-6">
-            <label class="form-label">{{ $t('auth.search_tokens') }}</label>
-            <input type="text" class="form-control" v-model="tokenFilter" :placeholder="$t('auth.search_tokens')"
+      <div class="p-4">
+        <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end mb-3">
+          <div class="col-span-1 md:col-span-6">
+            <label class="block text-sm font-medium">{{ $t('auth.search_tokens') }}</label>
+            <input type="text" class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15" v-model="tokenFilter" :placeholder="$t('auth.search_tokens')"
               autocomplete="off" @input="onFilterInput" />
           </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">{{ $t('auth.sort_field') }}</label>
-            <select class="form-select" v-model="sortField">
+          <div class="col-span-1 md:col-span-3">
+            <label class="block text-sm font-medium">{{ $t('auth.sort_field') }}</label>
+            <select class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15" v-model="sortField">
               <option value="created_at">{{ $t('auth.created') }}</option>
               <option value="username">{{ $t('auth.username') }}</option>
               <option value="hash">{{ $t('auth.hash') }}</option>
             </select>
           </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">{{ $t('auth.sort_direction') }}</label>
-            <select class="form-select" v-model="sortDir">
+          <div class="col-span-1 md:col-span-3">
+            <label class="block text-sm font-medium">{{ $t('auth.sort_direction') }}</label>
+            <select class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15" v-model="sortDir">
               <option value="desc">{{ $t('auth.desc') }}</option>
               <option value="asc">{{ $t('auth.asc') }}</option>
             </select>
           </div>
         </div>
 
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm align-middle">
+            <thead class="text-left">
               <tr>
                 <th>{{ $t('auth.hash') }}</th>
                 <th>{{ $t('auth.username') }}</th>
                 <th>{{ $t('auth.created') }}</th>
                 <th>{{ $t('auth.scopes') }}</th>
-                <th class="text-end"></th>
+                <th class="text-right"></th>
               </tr>
             </thead>
-            <tbody>
+            <tbody class="divide-y">
               <tr v-if="isLoadingTokens">
                 <td colspan="5" class="text-center">{{ $t('auth.loading') }}</td>
               </tr>
@@ -136,28 +140,27 @@
                 </td>
               </tr>
               <tr v-for="t in sortedTokens" :key="t.hash">
-                <td class="text-truncate" style="max-width: 160px;">
-                  <div class="d-flex align-items-center gap-2">
-                    <code class="text-truncate" :title="t.hash">{{ t.hash }}</code>
-                    <button type="button" class="btn btn-secondary btn-sm" @click.prevent="copyHash(t.hash)"
+                <td class="truncate" style="max-width: 160px;">
+                  <div class="flex items-center gap-2">
+                    <code class="truncate" :title="t.hash">{{ t.hash }}</code>
+                    <button type="button" class="inline-flex items-center px-2 py-1 rounded-md bg-gray-200 dark:bg-gray-700 text-sm" @click.prevent="copyHash(t.hash)"
                       :disabled="copiedHash === t.hash">
                       {{ copiedHash === t.hash ? $t('auth.hash_copied') : $t('auth.copy_hash') }}
                     </button>
                   </div>
                 </td>
-                <td class="text-truncate" style="max-width: 160px;">{{ t.username }}</td>
+                <td class="truncate" style="max-width: 160px;">{{ t.username }}</td>
                 <td :title="formatFullDate(t.created_at)">{{ formatDate(t.created_at) }}</td>
                 <td>
-                  <div class="d-flex flex-wrap gap-1">
-                    <span v-for="(s, i) in t.scopes" :key="i" class="d-inline-flex align-items-center">
-                      <span class="badge text-bg-secondary me-1">{{ s.path }}</span>
-                      <span class="badge text-bg-info text-uppercase me-1" v-for="m in s.methods" :key="m">{{ m
-                        }}</span>
+                  <div class="flex flex-wrap gap-1">
+                    <span v-for="(s, i) in t.scopes" :key="i" class="inline-flex items-center">
+                      <span class="inline-flex items-center bg-gray-100 dark:bg-gray-800 text-sm rounded px-2 py-0.5 mr-1">{{ s.path }}</span>
+                      <span class="inline-flex items-center bg-sky-500 text-white text-xs uppercase rounded px-2 py-0.5 mr-1" v-for="m in s.methods" :key="m">{{ m }}</span>
                     </span>
                   </div>
                 </td>
-                <td class="text-end">
-                  <button class="btn btn-danger btn-sm" @click="revokeToken(t.hash)"
+                <td class="text-right">
+                  <button class="inline-flex items-center px-3 py-1 rounded-md bg-red-600 text-white text-sm" @click="revokeToken(t.hash)"
                     :disabled="revoking === t.hash">
                     {{ $t('auth.revoke') }}
                   </button>
@@ -167,19 +170,19 @@
           </table>
         </div>
       </div>
-    </div>
+    </section>
 
     <!-- Test token -->
-    <div id="test-token-section" class="card mb-4">
-      <div class="card-header">
-        <h2 class="h5 mb-0">{{ $t('auth.test_api_token') }}</h2>
+    <section id="test-token-section" class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent">
+      <div class="px-4 py-3 border-b border-black/5 dark:border-white/10">
+        <h2 class="text-lg font-medium m-0">{{ $t('auth.test_api_token') }}</h2>
       </div>
-      <div class="card-body">
-        <p v-if="$te('auth.testing_help')" class="form-text">{{ $t('auth.testing_help') }}</p>
-        <form @submit.prevent="testToken" class="row g-3">
-          <div class="col-12 col-md-6">
-            <label for="testPath" class="form-label">{{ $t('auth.api_path_get_only') }}</label>
-            <select id="testPath" class="form-select" v-model="testPath" required>
+      <div class="p-4">
+        <p v-if="$te('auth.testing_help')" class="text-[11px] opacity-60">{{ $t('auth.testing_help') }}</p>
+        <form @submit.prevent="testToken" class="grid grid-cols-1 md:grid-cols-12 gap-3">
+          <div class="col-span-1 md:col-span-6">
+            <label for="testPath" class="block text-sm font-medium">{{ $t('auth.api_path_get_only') }}</label>
+            <select id="testPath" class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15" v-model="testPath" required>
               <option value="" disabled>{{ $t('auth.select_api_path_to_test') }}</option>
               <option v-for="route in apiRoutes.filter(r => (r.selectable !== false) && r.methods.includes('GET'))"
                 :key="route.path" :value="route.path">
@@ -187,13 +190,13 @@
               </option>
             </select>
           </div>
-          <div class="col-12 col-md-6">
-            <label for="testTokenInput" class="form-label">{{ $t('auth.token') }}</label>
-            <input id="testTokenInput" v-model="testTokenInput" type="password" class="form-control" autocomplete="off"
+          <div class="col-span-1 md:col-span-6">
+            <label for="testTokenInput" class="block text-sm font-medium">{{ $t('auth.token') }}</label>
+            <input id="testTokenInput" v-model="testTokenInput" type="password" class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15" autocomplete="off"
               :placeholder="$t('auth.paste_token_here')" required />
           </div>
-          <div class="col-12">
-            <button type="submit" class="btn btn-primary" :disabled="isTesting || !testPath || !testTokenInput">
+          <div class="col-span-1">
+            <button type="submit" class="inline-flex items-center px-4 py-2 rounded-md bg-sky-600 text-white text-sm" :disabled="isTesting || !testPath || !testTokenInput">
               <span v-if="!isTesting">{{ $t('auth.test_token') }}</span>
               <span v-else>{{ $t('auth.loading') }}</span>
             </button>
@@ -201,12 +204,12 @@
         </form>
 
         <div v-if="testResult || testError" class="mt-3">
-          <div class="fw-semibold mb-2">{{ $t('auth.result') }}</div>
-          <div v-if="testError" class="alert alert-danger">{{ testError }}</div>
-          <pre v-if="testResult" class="bg-body-tertiary p-2 rounded small mb-0">{{ testResult }}</pre>
+          <div class="font-semibold mb-2">{{ $t('auth.result') }}</div>
+          <div v-if="testError" class="bg-red-50 border border-red-200 rounded p-2 text-sm">{{ testError }}</div>
+          <pre v-if="testResult" class="bg-gray-50 dark:bg-gray-900 p-2 rounded text-sm mb-0">{{ testResult }}</pre>
         </div>
       </div>
-    </div>
+    </section>
   </div>
 </template>
 

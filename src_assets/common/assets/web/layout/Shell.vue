@@ -8,15 +8,15 @@
         <h1 class="text-base md:text-lg font-semibold tracking-tight truncate">{{ displayTitle }}</h1>
       </div>
       <nav class="hidden md:flex items-center gap-1 text-sm font-medium ml-2">
-        <RouterLink to="/" class="appbar-link"><i class="fas fa-gauge"></i><span>Dashboard</span></RouterLink>
-        <RouterLink to="/applications" class="appbar-link"><i class="fas fa-grid-2"></i><span>Applications</span>
+        <RouterLink to="/" :class="linkClass('/')"><i class="fas fa-gauge"></i><span>Dashboard</span></RouterLink>
+        <RouterLink to="/applications" :class="linkClass('/applications')"><i class="fas fa-grid-2"></i><span>Applications</span>
         </RouterLink>
-        <RouterLink to="/sessions" class="appbar-link"><i class="fas fa-signal-stream"></i><span>Sessions</span>
+        <RouterLink to="/sessions" :class="linkClass('/sessions')"><i class="fas fa-signal-stream"></i><span>Sessions</span>
         </RouterLink>
-        <RouterLink to="/settings" class="appbar-link"><i class="fas fa-sliders"></i><span>Settings</span></RouterLink>
-        <RouterLink to="/troubleshooting" class="appbar-link"><i class="fas fa-bug"></i><span>{{
+        <RouterLink to="/settings" :class="linkClass('/settings')"><i class="fas fa-sliders"></i><span>Settings</span></RouterLink>
+        <RouterLink to="/troubleshooting" :class="linkClass('/troubleshooting')"><i class="fas fa-bug"></i><span>{{
           $t('navbar.troubleshoot') }}</span></RouterLink>
-        <RouterLink to="/resources" class="appbar-link"><i class="fas fa-circle-info"></i><span>Resources</span>
+        <RouterLink to="/resources" :class="linkClass('/resources')"><i class="fas fa-circle-info"></i><span>Resources</span>
         </RouterLink>
       </nav>
       <div class="ml-auto flex items-center gap-3 text-xs">
@@ -36,9 +36,16 @@ import { ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import ThemeToggle from '../ThemeToggle.vue'
 import StreamingStatus from '../components/StreamingStatus.vue'
+import { computed } from 'vue'
 
 const route = useRoute()
-import { computed } from 'vue'
+
+const linkClass = (path) => {
+  const base = 'inline-flex items-center gap-2 px-3 py-1 rounded-md text-solar-secondary dark:text-lunar-onSecondary'
+  const active = route.path === path
+  if (active) return base + ' font-semibold bg-solar-primary/20 dark:bg-lunar-primary/20 text-solar-secondary dark:text-lunar-onSecondary'
+  return base + ' hover:bg-solar-primary/10 dark:hover:bg-lunar-primary/10'
+}
 const pageTitle = ref('Dashboard')
 const displayTitle = computed(() => {
   // If pageTitle is an i18n key like 'navbar.troubleshoot', call $t from template via global $t
@@ -67,40 +74,5 @@ watch(() => route.path, (p) => {
   }
 }, { immediate: true })
 </script>
-<style scoped>
-/* Top app bar link styles */
-.appbar-link {
-  display: inline-flex;
-  align-items: center;
-  gap: .5rem;
-  padding: .375rem .625rem;
-  border-radius: .5rem;
-  color: rgba(0, 0, 0, .75);
-}
 
-.dark .appbar-link {
-  color: rgba(245, 249, 255, .75);
-}
-
-.appbar-link:hover {
-  background: rgba(253, 184, 19, .15);
-  color: #0D3B66;
-}
-
-.dark .appbar-link:hover {
-  background: rgba(77, 163, 255, .18);
-  color: #F5F9FF;
-}
-
-.appbar-link.router-link-active {
-  background: rgba(253, 184, 19, .22);
-  color: #0D3B66;
-  font-weight: 600
-}
-
-.dark .appbar-link.router-link-active {
-  background: rgba(77, 163, 255, .22);
-  color: #F5F9FF;
-  font-weight: 600
-}
-</style>
+<!-- Styling replaced with Tailwind + extended palette. Old Bootstrap vars removed. -->

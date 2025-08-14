@@ -53,7 +53,9 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useAuthStore } from './stores/auth.js'
 
+const auth = useAuthStore()
 const credentials = ref({ username: '', password: '' })
 const loading = ref(false)
 const error = ref('')
@@ -77,16 +79,10 @@ function sanitizeRedirect(raw) {
     return raw
   } catch { return '/' }
 }
-
-function hasSessionCookie() {
-  return document.cookie.split(';').some(c => c.trim().startsWith('session_token='))
-}
-
 function redirectNowIfAuthenticated() {
-  if (hasSessionCookie()) {
-    // Use any pending redirect or default to root
+  // Rely on shared Pinia auth state (initialized during app startup)
+  if (auth.isAuthenticated) {
     const target = sanitizeRedirect(sessionStorage.getItem('pending_redirect') || safeRedirect.value || '/')
-    // Replace to avoid leaving /login in history so back button won't return here
     window.location.replace(target)
   }
 }
@@ -105,8 +101,11 @@ onMounted(() => {
   requestedRedirect.value = sessionStorage.getItem('pending_redirect') || '/'
   safeRedirect.value = sanitizeRedirect(requestedRedirect.value)
 
-  // If already authenticated (user pressed back into login or bookmarked it), redirect immediately
+  // The auth store is initialized during app init; just perform redirect check and listen for login events
   redirectNowIfAuthenticated()
+  auth.onLogin(() => {
+    redirectNowIfAuthenticated()
+  })
 })
 
 /**
@@ -129,10 +128,12 @@ async function login() {
     })
     const data = await response.json().catch(() => ({}))
     if (response.ok && data.status) {
-      isLoggedIn.value = true
-      safeRedirect.value = sanitizeRedirect(data.redirect) || '/'
-      sessionStorage.removeItem('pending_redirect')
-      setTimeout(() => { redirectToApp() }, 500)
+  // Login endpoint created the session cookie; rely on shared auth detection for global state
+  isLoggedIn.value = true
+  safeRedirect.value = sanitizeRedirect(data.redirect) || '/'
+  sessionStorage.removeItem('pending_redirect')
+  // Attempt immediate redirect; auth store will also detect the cookie and notify listeners
+  setTimeout(() => { redirectToApp() }, 250)
     } else {
       error.value = data.error || t('auth.login_failed')
     }

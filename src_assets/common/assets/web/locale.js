@@ -12,7 +12,7 @@ export default async function() {
     };
     try {
         if (locale !== 'en') {
-            let r = await (await fetch(`./assets/locale/${locale}.json`)).json();
+            let r = await (await fetch(`/assets/locale/${locale}.json`)).json();
             messages[locale] = r;
         }
     } catch (e) {

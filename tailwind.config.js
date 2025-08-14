@@ -46,9 +46,9 @@ module.exports = {
       },
     },
   },
-  // Avoid conflicting with Bootstrap resets
+  // Enable Tailwind preflight now that Bootstrap is removed. Keep visibility disabled if not needed.
   corePlugins: {
-    preflight: false,
+    preflight: true,
     visibility: false,
   },
   plugins: [],

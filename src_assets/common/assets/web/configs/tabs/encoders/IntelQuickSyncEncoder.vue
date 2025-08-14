@@ -1,21 +1,18 @@
 <script setup>
 import { ref } from 'vue'
 import Checkbox from "../../../Checkbox.vue";
+import { useConfigStore } from '../../../stores/config.js'
 
-const props = defineProps([
-  'platform',
-  'config',
-])
-
-const config = ref(props.config)
+const store = useConfigStore()
+const config = store.config
 </script>
 
 <template>
   <div id="intel-quicksync-encoder" class="config-page">
     <!-- QuickSync Preset -->
-    <div class="mb-3">
-      <label for="qsv_preset" class="form-label">{{ $t('config.qsv_preset') }}</label>
-      <select id="qsv_preset" class="form-select" v-model="config.qsv_preset">
+    <div class="mb-4">
+      <label for="qsv_preset" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.qsv_preset') }}</label>
+      <select id="qsv_preset" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40" v-model="config.qsv_preset">
         <option value="veryfast">{{ $t('config.qsv_preset_veryfast') }}</option>
         <option value="faster">{{ $t('config.qsv_preset_faster') }}</option>
         <option value="fast">{{ $t('config.qsv_preset_fast') }}</option>
@@ -27,9 +24,9 @@ const config = ref(props.config)
     </div>
 
     <!-- QuickSync Coder (H264) -->
-    <div class="mb-3">
-      <label for="qsv_coder" class="form-label">{{ $t('config.qsv_coder') }}</label>
-      <select id="qsv_coder" class="form-select" v-model="config.qsv_coder">
+    <div class="mb-4">
+      <label for="qsv_coder" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.qsv_coder') }}</label>
+      <select id="qsv_coder" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40" v-model="config.qsv_coder">
         <option value="auto">{{ $t('config.ffmpeg_auto') }}</option>
         <option value="cabac">{{ $t('config.coder_cabac') }}</option>
         <option value="cavlc">{{ $t('config.coder_cavlc') }}</option>

@@ -3,22 +3,21 @@ import { ref } from 'vue'
 import { $tp } from '../../../platform-i18n'
 import PlatformLayout from '../../../PlatformLayout.vue'
 
-const props = defineProps([
-  'platform',
-  'config'
-])
-
-const config = ref(props.config)
+import { useConfigStore } from '../../../stores/config.js'
+import { computed } from 'vue'
+const store = useConfigStore()
+const config = store.config
+const platform = computed(() => config.value?.platform || '')
 </script>
 
 <template>
-  <div class="mb-3" v-if="platform !== 'macos'">
-    <label for="adapter_name" class="form-label">{{ $t('config.adapter_name') }}</label>
-    <input type="text" class="form-control" id="adapter_name"
+  <div class="mb-4" v-if="platform !== 'macos'">
+    <label for="adapter_name" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.adapter_name') }}</label>
+    <input type="text" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15" id="adapter_name"
            :placeholder="$tp('config.adapter_name_placeholder', '/dev/dri/renderD128')"
            v-model="config.adapter_name" />
-    <div class="form-text">
-      <PlatformLayout :platform="platform">
+    <div class="text-[11px] opacity-60">
+  <PlatformLayout>
         <template #windows>
           {{ $t('config.adapter_name_desc_windows') }}<br>
           <pre>tools\dxgi-info.exe</pre>

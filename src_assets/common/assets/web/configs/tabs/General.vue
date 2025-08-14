@@ -1,36 +1,34 @@
 <script setup>
 import Checkbox from '../../Checkbox.vue'
 import { ref } from 'vue'
+import { useConfigStore } from '../../stores/config.js'
 
-const props = defineProps({
-  platform: String,
-  config: Object
-})
-const config = ref(props.config)
+const store = useConfigStore()
+const config = store.config
+import { computed } from 'vue'
+const platform = computed(() => config.value?.platform || '')
 
 function addCmd() {
-  let template = {
-    do: "",
-    undo: "",
-  };
-
-  if (props.platform === 'windows') {
-    template = { ...template, elevated: false };
+  let template = { do: "", undo: "" }
+  if (store) {
+    if (store.config && store.config.platform === 'windows') template = { ...template, elevated: false }
+    // ensure array
+    if (!config.value.global_prep_cmd) config.value.global_prep_cmd = []
+    config.value.global_prep_cmd.push(template)
   }
-  config.value.global_prep_cmd.push(template);
 }
 
 function removeCmd(index) {
-  config.value.global_prep_cmd.splice(index,1)
+  if (config.value && config.value.global_prep_cmd) config.value.global_prep_cmd.splice(index,1)
 }
 </script>
 
 <template>
   <div id="general" class="config-page">
     <!-- Locale -->
-    <div class="mb-3">
-      <label for="locale" class="form-label">{{ $t('config.locale') }}</label>
-      <select id="locale" class="form-select" v-model="config.locale">
+    <div class="mb-6">
+      <label for="locale" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.locale') }}</label>
+      <select id="locale" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 text-solar-dark dark:text-lunar-light placeholder-black/40 dark:placeholder-lunar-light/40 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40" v-model="config.locale">
         <option value="bg">Български (Bulgarian)</option>
         <option value="cs">Čeština (Czech)</option>
         <option value="de">Deutsch (German)</option>
@@ -52,21 +50,21 @@ function removeCmd(index) {
         <option value="zh">简体中文 (Chinese Simplified)</option>
         <option value="zh_TW">繁體中文 (Chinese Traditional)</option>
       </select>
-      <div class="form-text">{{ $t('config.locale_desc') }}</div>
+      <div class="text-[11px] opacity-60 mt-1">{{ $t('config.locale_desc') }}</div>
     </div>
 
     <!-- Sunshine Name -->
-    <div class="mb-3">
-      <label for="sunshine_name" class="form-label">{{ $t('config.sunshine_name') }}</label>
-      <input type="text" class="form-control" id="sunshine_name" placeholder="Sunshine"
+    <div class="mb-6">
+      <label for="sunshine_name" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.sunshine_name') }}</label>
+      <input type="text" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 text-solar-dark dark:text-lunar-light focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40" id="sunshine_name" placeholder="Sunshine"
              v-model="config.sunshine_name" />
-      <div class="form-text">{{ $t('config.sunshine_name_desc') }}</div>
+      <div class="text-[11px] opacity-60 mt-1">{{ $t('config.sunshine_name_desc') }}</div>
     </div>
 
     <!-- Log Level -->
-    <div class="mb-3">
-      <label for="min_log_level" class="form-label">{{ $t('config.log_level') }}</label>
-      <select id="min_log_level" class="form-select" v-model="config.min_log_level">
+    <div class="mb-6">
+      <label for="min_log_level" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.log_level') }}</label>
+      <select id="min_log_level" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 text-solar-dark dark:text-lunar-light focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40" v-model="config.min_log_level">
         <option value="0">{{ $t('config.log_level_0') }}</option>
         <option value="1">{{ $t('config.log_level_1') }}</option>
         <option value="2">{{ $t('config.log_level_2') }}</option>
@@ -75,61 +73,51 @@ function removeCmd(index) {
         <option value="5">{{ $t('config.log_level_5') }}</option>
         <option value="6">{{ $t('config.log_level_6') }}</option>
       </select>
-      <div class="form-text">{{ $t('config.log_level_desc') }}</div>
+      <div class="text-[11px] opacity-60 mt-1">{{ $t('config.log_level_desc') }}</div>
     </div>
 
     <!-- Global Prep Commands -->
-    <div id="global_prep_cmd" class="mb-3 d-flex flex-column">
-      <label class="form-label">{{ $t('config.global_prep_cmd') }}</label>
-      <div class="form-text">{{ $t('config.global_prep_cmd_desc') }}</div>
-      <table class="table" v-if="config.global_prep_cmd.length > 0">
-        <thead>
-        <tr>
-          <th scope="col"><i class="fas fa-play"></i> {{ $t('_common.do_cmd') }}</th>
-          <th scope="col"><i class="fas fa-undo"></i> {{ $t('_common.undo_cmd') }}</th>
-          <th scope="col" v-if="platform === 'windows'">
-            <i class="fas fa-shield-alt"></i> {{ $t('_common.run_as') }}
-          </th>
-          <th scope="col"></th>
-        </tr>
-        </thead>
-        <tbody>
-        <tr v-for="(c, i) in config.global_prep_cmd">
-          <td>
-            <input type="text" class="form-control monospace" v-model="c.do" />
-          </td>
-          <td>
-            <input type="text" class="form-control monospace" v-model="c.undo" />
-          </td>
-          <td v-if="platform === 'windows'" class="align-middle">
+    <div id="global_prep_cmd" class="mb-6 flex flex-col">
+      <label class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.global_prep_cmd') }}</label>
+      <div class="text-[11px] opacity-60 mt-1">{{ $t('config.global_prep_cmd_desc') }}</div>
+      <div v-if="config.global_prep_cmd.length > 0" class="mt-3 space-y-3">
+        <div v-for="(c, i) in config.global_prep_cmd" :key="i" class="grid grid-cols-12 gap-2 items-start">
+          <div class="col-span-5">
+            <input type="text" class="w-full font-mono px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70" v-model="c.do" />
+          </div>
+          <div class="col-span-5">
+            <input type="text" class="w-full font-mono px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70" v-model="c.undo" />
+          </div>
+          <div v-if="platform === 'windows'" class="col-span-1">
             <Checkbox :id="'prep-cmd-admin-' + i"
                       label="_common.elevated"
                       desc=""
                       v-model="c.elevated"
             ></Checkbox>
-          </td>
-          <td>
-            <button class="btn btn-danger" @click="removeCmd(i)">
+          </div>
+          <div class="col-span-1 flex gap-2">
+            <button class="inline-flex items-center px-3 py-1.5 rounded-md bg-solar-danger text-white" @click="removeCmd(i)">
               <i class="fas fa-trash"></i>
             </button>
-            <button class="btn btn-success" @click="addCmd">
+            <button class="inline-flex items-center px-3 py-1.5 rounded-md bg-solar-success text-white" @click="addCmd">
               <i class="fas fa-plus"></i>
             </button>
-          </td>
-        </tr>
-        </tbody>
-      </table>
-      <button class="ms-0 mt-2 btn btn-success" style="margin: 0 auto" @click="addCmd">
-        &plus; {{ $t('config.add') }}
-      </button>
+          </div>
+        </div>
+      </div>
+      <div class="mt-4">
+        <button class="mx-auto block inline-flex items-center px-3 py-1.5 rounded-md bg-solar-success text-white" @click="addCmd">
+          &plus; {{ $t('config.add') }}
+        </button>
+      </div>
     </div>
 
     <!-- Session Token TTL -->
-    <div class="mb-3">
-      <label for="session_token_ttl_seconds" class="form-label">{{ $t('config.session_token_ttl_seconds') }}</label>
-      <input type="number" min="60" step="60" class="form-control" id="session_token_ttl_seconds"
+    <div class="mb-6">
+      <label for="session_token_ttl_seconds" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.session_token_ttl_seconds') }}</label>
+      <input type="number" min="60" step="60" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70" id="session_token_ttl_seconds"
              v-model.number="config.session_token_ttl_seconds" />
-      <div class="form-text">{{ $t('config.session_token_ttl_seconds_desc') }}</div>
+      <div class="text-[11px] opacity-60 mt-1">{{ $t('config.session_token_ttl_seconds_desc') }}</div>
     </div>
 
     <!-- Notify Pre-Releases -->

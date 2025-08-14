@@ -66,7 +66,7 @@
       </UiCard>
     </div>
   </div>
-  <AppEditModal v-model="showModal" :platform="platform" :app="currentApp" :index="currentIndex" @saved="reloadApps" @deleted="reloadApps" />
+  <AppEditModal v-model="showModal" :app="currentApp" :index="currentIndex" @saved="reloadApps" @deleted="reloadApps" />
 </template>
 <script setup>
 import { ref, onMounted, computed } from 'vue'
@@ -75,8 +75,10 @@ import UiAlert from '../components/UiAlert.vue'
 import UiCard from '../components/UiCard.vue'
 import ProfileSelector from '../components/ProfileSelector.vue'
 import AppEditModal from '../components/AppEditModal.vue'
+import { useAppsStore } from '../stores/apps.js'
 
 const apps = ref([])
+const appsStore = useAppsStore()
 const logs = ref('')
 const profileSelections = ref({})
 const platform = ref('')
@@ -85,12 +87,12 @@ const showModal = ref(false)
 const currentApp = ref(null)
 const currentIndex = ref(-1)
 async function load(){
-  try { const r = await fetch('./api/apps').then(r=>r.json()); apps.value = r.apps||[] } catch(e){ console.error(e) }
-  if(!platform.value){ try { platform.value = await fetch('./api/config').then(r=>r.json()).then(r=>r.platform) } catch(e){} }
+  try { await appsStore.loadApps(); apps.value = appsStore.apps } catch(e){ console.error(e) }
+  if(!platform.value){ try { const { useConfigStore } = await import('../stores/config.js'); const store = useConfigStore(); await store.fetchConfig(); platform.value = store.config.value?.platform || '' } catch(e){} }
   try { logs.value = await fetch('./api/logs').then(r => r.text()) } catch(e) {}
 }
 onMounted(load)
-function reloadApps(){ load() }
+function reloadApps(){ appsStore.loadApps(true).then(()=>{ apps.value = appsStore.apps }) }
 
 const fatalLogs = computed(() => {
   if(!logs.value) return []
@@ -136,7 +138,7 @@ function coverSrc(app, index){
   const p = path.toString().trim()
   if(/^https?:\/\//i.test(p)) return p
     if(!p.includes('/') && !p.includes('\\')){
-    return `./assets/${p}`
+  return `/assets/${p}`
   }
   const file = p.replace(/\\/g,'/').split('/').pop()
     if(file){

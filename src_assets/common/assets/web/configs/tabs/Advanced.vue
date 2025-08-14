@@ -1,43 +1,41 @@
 <script setup>
 import { ref } from 'vue'
 import PlatformLayout from '../../PlatformLayout.vue'
+import { useConfigStore } from '../../stores/config.js'
+import { computed } from 'vue'
 
-const props = defineProps([
-  'platform',
-  'config',
-  'global_prep_cmd'
-])
-
-const config = ref(props.config)
+const store = useConfigStore()
+const config = store.config
+const platform = computed(() => config.value?.platform || '')
 </script>
 
 <template>
   <div class="config-page">
     <!-- FEC Percentage -->
-    <div class="mb-3">
-      <label for="fec_percentage" class="form-label">{{ $t('config.fec_percentage') }}</label>
-      <input type="text" class="form-control" id="fec_percentage" placeholder="20" v-model="config.fec_percentage" />
-      <div class="form-text">{{ $t('config.fec_percentage_desc') }}</div>
+    <div class="mb-6">
+      <label for="fec_percentage" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.fec_percentage') }}</label>
+      <input type="text" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70" id="fec_percentage" placeholder="20" v-model="config.fec_percentage" />
+      <div class="text-[11px] opacity-60 mt-1">{{ $t('config.fec_percentage_desc') }}</div>
     </div>
 
     <!-- Quantization Parameter -->
-    <div class="mb-3">
-      <label for="qp" class="form-label">{{ $t('config.qp') }}</label>
-      <input type="number" class="form-control" id="qp" placeholder="28" v-model="config.qp" />
-      <div class="form-text">{{ $t('config.qp_desc') }}</div>
+    <div class="mb-6">
+      <label for="qp" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.qp') }}</label>
+      <input type="number" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70" id="qp" placeholder="28" v-model="config.qp" />
+      <div class="text-[11px] opacity-60 mt-1">{{ $t('config.qp_desc') }}</div>
     </div>
 
     <!-- Min Threads -->
-    <div class="mb-3">
-      <label for="min_threads" class="form-label">{{ $t('config.min_threads') }}</label>
-      <input type="number" class="form-control" id="min_threads" placeholder="2" min="1" v-model="config.min_threads" />
-      <div class="form-text">{{ $t('config.min_threads_desc') }}</div>
+    <div class="mb-6">
+      <label for="min_threads" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.min_threads') }}</label>
+      <input type="number" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70" id="min_threads" placeholder="2" min="1" v-model="config.min_threads" />
+      <div class="text-[11px] opacity-60 mt-1">{{ $t('config.min_threads_desc') }}</div>
     </div>
 
     <!-- HEVC Support -->
-    <div class="mb-3">
-      <label for="hevc_mode" class="form-label">{{ $t('config.hevc_mode') }}</label>
-      <select id="hevc_mode" class="form-select" v-model="config.hevc_mode">
+    <div class="mb-6">
+      <label for="hevc_mode" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.hevc_mode') }}</label>
+      <select id="hevc_mode" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40" v-model="config.hevc_mode">
         <option value="0">{{ $t('config.hevc_mode_0') }}</option>
         <option value="1">{{ $t('config.hevc_mode_1') }}</option>
         <option value="2">{{ $t('config.hevc_mode_2') }}</option>
@@ -47,9 +45,9 @@ const config = ref(props.config)
     </div>
 
     <!-- AV1 Support -->
-    <div class="mb-3">
-      <label for="av1_mode" class="form-label">{{ $t('config.av1_mode') }}</label>
-      <select id="av1_mode" class="form-select" v-model="config.av1_mode">
+    <div class="mb-6">
+      <label for="av1_mode" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.av1_mode') }}</label>
+      <select id="av1_mode" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40" v-model="config.av1_mode">
         <option value="0">{{ $t('config.av1_mode_0') }}</option>
         <option value="1">{{ $t('config.av1_mode_1') }}</option>
         <option value="2">{{ $t('config.av1_mode_2') }}</option>
@@ -59,11 +57,11 @@ const config = ref(props.config)
     </div>
 
     <!-- Capture -->
-    <div class="mb-3" v-if="platform !== 'macos'">
-      <label for="capture" class="form-label">{{ $t('config.capture') }}</label>
-      <select id="capture" class="form-select" v-model="config.capture">
+    <div class="mb-6" v-if="platform !== 'macos'">
+      <label for="capture" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.capture') }}</label>
+      <select id="capture" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40" v-model="config.capture">
         <option value="">{{ $t('_common.autodetect') }}</option>
-        <PlatformLayout :platform="platform">
+  <PlatformLayout>
           <template #linux>
             <option value="nvfbc">NvFBC</option>
             <option value="wlr">wlroots</option>
@@ -80,11 +78,11 @@ const config = ref(props.config)
     </div>
 
     <!-- Encoder -->
-    <div class="mb-3">
-      <label for="encoder" class="form-label">{{ $t('config.encoder') }}</label>
-      <select id="encoder" class="form-select" v-model="config.encoder">
+    <div class="mb-6">
+      <label for="encoder" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.encoder') }}</label>
+      <select id="encoder" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40" v-model="config.encoder">
         <option value="">{{ $t('_common.autodetect') }}</option>
-        <PlatformLayout :platform="platform">
+  <PlatformLayout>
           <template #windows>
             <option value="nvenc">NVIDIA NVENC</option>
             <option value="quicksync">Intel QuickSync</option>
@@ -100,7 +98,7 @@ const config = ref(props.config)
         </PlatformLayout>
         <option value="software">{{ $t('config.encoder_software') }}</option>
       </select>
-      <div class="form-text">{{ $t('config.encoder_desc') }}</div>
+      <div class="text-[11px] opacity-60 mt-1">{{ $t('config.encoder_desc') }}</div>
     </div>
 
   </div>

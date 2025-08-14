@@ -1,13 +1,10 @@
 <script setup>
 import { ref } from 'vue'
 import Checkbox from "../../../Checkbox.vue";
+import { useConfigStore } from '../../../stores/config.js'
 
-const props = defineProps([
-  'platform',
-  'config',
-])
-
-const config = ref(props.config)
+const store = useConfigStore()
+const config = store.config
 </script>
 
 <template>

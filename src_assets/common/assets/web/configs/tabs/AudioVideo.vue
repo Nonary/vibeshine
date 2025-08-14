@@ -7,26 +7,25 @@ import DisplayOutputSelector from './audiovideo/DisplayOutputSelector.vue'
 import DisplayDeviceOptions from "./audiovideo/DisplayDeviceOptions.vue";
 import DisplayModesSettings from "./audiovideo/DisplayModesSettings.vue";
 import Checkbox from "../../Checkbox.vue";
+import { useConfigStore } from '../../stores/config.js'
+import { computed } from 'vue'
 
-const props = defineProps([
-  'platform',
-  'config',
-])
-
-const config = ref(props.config)
+const store = useConfigStore()
+const config = store.config
+const platform = computed(() => config.value?.platform || '')
 </script>
 
 <template>
   <div id="av" class="config-page">
     <!-- Audio Sink -->
-    <div class="mb-3">
-      <label for="audio_sink" class="form-label">{{ $t('config.audio_sink') }}</label>
-      <input type="text" class="form-control" id="audio_sink"
+    <div class="mb-6">
+      <label for="audio_sink" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.audio_sink') }}</label>
+      <input type="text" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70" id="audio_sink"
              :placeholder="$tp('config.audio_sink_placeholder', 'alsa_output.pci-0000_09_00.3.analog-stereo')"
              v-model="config.audio_sink" />
-      <div class="form-text">
+      <div class="text-[11px] opacity-60 mt-1">
         {{ $tp('config.audio_sink_desc') }}<br>
-        <PlatformLayout :platform="platform">
+  <PlatformLayout>
           <template #windows>
             <pre>tools\audio-info.exe</pre>
           </template>
@@ -43,14 +42,14 @@ const config = ref(props.config)
     </div>
 
 
-    <PlatformLayout :platform="platform">
+  <PlatformLayout>
       <template #windows>
         <!-- Virtual Sink -->
-        <div class="mb-3">
-          <label for="virtual_sink" class="form-label">{{ $t('config.virtual_sink') }}</label>
-          <input type="text" class="form-control" id="virtual_sink" :placeholder="$t('config.virtual_sink_placeholder')"
+        <div class="mb-6">
+          <label for="virtual_sink" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.virtual_sink') }}</label>
+          <input type="text" class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70" id="virtual_sink" :placeholder="$t('config.virtual_sink_placeholder')"
                  v-model="config.virtual_sink" />
-          <div class="form-text">{{ $t('config.virtual_sink_desc') }}</div>
+          <div class="text-[11px] opacity-60 mt-1">{{ $t('config.virtual_sink_desc') }}</div>
         </div>
 
         <!-- Install Steam Audio Drivers -->
@@ -71,26 +70,14 @@ const config = ref(props.config)
               default="true"
     ></Checkbox>
 
-    <AdapterNameSelector
-        :platform="platform"
-        :config="config"
-    />
+  <AdapterNameSelector />
 
-    <DisplayOutputSelector
-      :platform="platform"
-      :config="config"
-    />
+  <DisplayOutputSelector />
 
-    <DisplayDeviceOptions
-      :platform="platform"
-      :config="config"
-    />
+  <DisplayDeviceOptions />
 
-    <!-- Display Modes -->
-    <DisplayModesSettings
-        :platform="platform"
-        :config="config"
-    />
+  <!-- Display Modes -->
+  <DisplayModesSettings />
 
   </div>
 </template>

@@ -9,6 +9,7 @@
 </template>
 <script setup>
 import { ref, onMounted, watch } from 'vue'
+import { useConfigStore } from '../stores/config.js'
 const props = defineProps({
   modelValue: { type: String, default: '__default' },
   label: { type: String, default: '' }
@@ -16,9 +17,12 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue'])
 const model = ref(props.modelValue)
 const clients = ref([])
+const configStore = useConfigStore()
 
 onMounted(async () => {
   try {
+    // ensure config available (some environments expect platform to be present)
+    if (!configStore.config.value) await configStore.fetchConfig().catch(()=>{})
     const r = await fetch('./api/clients/list').then(r=>r.json())
     if(r && Array.isArray(r.named_certs)) {
       clients.value = r.named_certs.map(c => ({ id: c.uuid, name: c.name || c.uuid.substring(0,8) }))

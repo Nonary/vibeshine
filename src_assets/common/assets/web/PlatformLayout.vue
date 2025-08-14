@@ -1,10 +1,10 @@
 <script setup>
-const props = defineProps({
-  platform: {
-    type: String,
-    required: true
-  }
-})
+import { computed } from 'vue'
+import { useConfigStore } from './stores/config.js'
+
+// Read platform from centralized config store
+const store = useConfigStore()
+const platform = computed(() => store.config.value?.platform || '')
 </script>
 
 <template>

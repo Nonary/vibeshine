@@ -109,155 +109,111 @@
   </div>
 </template>
 
-<script>
-export default {
-  name: 'Troubleshooting',
-  data() {
-    return {
-      clients: [],
-      closeAppPressed: false,
-      closeAppStatus: null,
-      ddResetPressed: false,
-      ddResetStatus: null,
-      logs: 'Loading...',
-      logFilter: null,
-      logInterval: null,
-      restartPressed: false,
-      showApplyMessage: false,
-      platform: "",
-      unpairAllPressed: false,
-      unpairAllStatus: null,
-    };
-  },
-  computed: {
-    actualLogs() {
-      if (!this.logFilter) return this.logs;
-      let lines = this.logs.split("\n");
-      lines = lines.filter(x => x.indexOf(this.logFilter) !== -1);
-      return lines.join("\n");
-    }
-  },
-  created() {
-    fetch("/api/config")
-      .then((r) => r.json())
-      .then((r) => {
-        this.platform = r.platform;
-      });
+<script setup>
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useConfigStore } from './stores/config.js'
 
-    this.logInterval = setInterval(() => {
-      this.refreshLogs();
-    }, 5000);
-    this.refreshLogs();
-    this.refreshClients();
-  },
-  beforeUnmount() {
-    clearInterval(this.logInterval);
-  },
-  methods: {
-    refreshLogs() {
-      fetch("./api/logs",)
-        .then((r) => r.text())
-        .then((r) => {
-          this.logs = r;
-        });
-    },
-    closeApp() {
-      this.closeAppPressed = true;
-      fetch("./api/apps/close", { 
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json"
-        } })
-        .then((r) => r.json())
-        .then((r) => {
-          this.closeAppPressed = false;
-          this.closeAppStatus = r.status;
-          setTimeout(() => {
-            this.closeAppStatus = null;
-          }, 5000);
-        });
-    },
-    unpairAll() {
-      this.unpairAllPressed = true;
-      fetch("./api/clients/unpair-all", { 
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json"
-        }
-       })
-        .then((r) => r.json())
-        .then((r) => {
-          this.unpairAllPressed = false;
-          this.unpairAllStatus = r.status;
-          setTimeout(() => {
-            this.unpairAllStatus = null;
-          }, 5000);
-          this.refreshClients();
-        });
-    },
-    unpairSingle(uuid) {
-      fetch("./api/clients/unpair", { 
-        method: "POST", 
-        headers: {
-          'Content-Type': 'application/json'
-        }, 
-        body: JSON.stringify({ uuid }) 
-      }).then(() => {
-        this.showApplyMessage = true;
-        this.refreshClients();
-      });
-    },
-    refreshClients() {
-      fetch("./api/clients/list")
-        .then((response) => response.json())
-        .then((response) => {
-          const clientList = document.querySelector("#client-list");
-          if (response.status === true && response.named_certs && response.named_certs.length) {
-            this.clients = response.named_certs.sort((a, b) => {
-              return (a.name.toLowerCase() > b.name.toLowerCase() || a.name === "" ? 1 : -1)
-            });
-          } else {
-            this.clients = [];
-          }
-        });
-    },
-    clickedApplyBanner() {
-      this.showApplyMessage = false;
-    },
-    copyLogs() {
-      navigator.clipboard.writeText(this.actualLogs);
-    },
-    restart() {
-      this.restartPressed = true;
-      setTimeout(() => {
-        this.restartPressed = false;
-      }, 5000);
-      fetch("./api/restart", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json"
-        }
-      });
-    },
-    ddResetPersistence() {
-      this.ddResetPressed = true;
-      fetch("/api/reset-display-device-persistence", { 
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json" 
-        } 
-      })
-        .then((r) => r.json())
-        .then((r) => {
-          this.ddResetPressed = false;
-          this.ddResetStatus = r.status;
-          setTimeout(() => {
-            this.ddResetStatus = null;
-          }, 5000);
-        });
-    },
-  },
-};
+const store = useConfigStore()
+const platform = computed(() => store.config.value?.platform || '')
+
+const clients = ref([])
+const closeAppPressed = ref(false)
+const closeAppStatus = ref(null)
+const ddResetPressed = ref(false)
+const ddResetStatus = ref(null)
+const logs = ref('Loading...')
+const logFilter = ref(null)
+let logInterval = null
+const restartPressed = ref(false)
+const showApplyMessage = ref(false)
+const unpairAllPressed = ref(false)
+const unpairAllStatus = ref(null)
+
+const actualLogs = computed(() => {
+  if (!logFilter.value) return logs.value
+  let lines = logs.value.split('\n')
+  lines = lines.filter(x => x.indexOf(logFilter.value) !== -1)
+  return lines.join('\n')
+})
+
+function refreshLogs(){
+  fetch('./api/logs')
+    .then(r => r.text())
+    .then(r => { logs.value = r })
+}
+
+function closeApp(){
+  closeAppPressed.value = true
+  fetch('./api/apps/close',{ method:'POST', headers:{ 'Content-Type':'application/json' } })
+    .then(r => r.json())
+    .then(r => {
+      closeAppPressed.value = false
+      closeAppStatus.value = r.status
+      setTimeout(()=>{ closeAppStatus.value = null }, 5000)
+    })
+}
+
+function unpairAll(){
+  unpairAllPressed.value = true
+  fetch('./api/clients/unpair-all',{ method:'POST', headers:{ 'Content-Type':'application/json' } })
+    .then(r => r.json())
+    .then(r => {
+      unpairAllPressed.value = false
+      unpairAllStatus.value = r.status
+      setTimeout(()=>{ unpairAllStatus.value = null }, 5000)
+      refreshClients()
+    })
+}
+
+function unpairSingle(uuid){
+  fetch('./api/clients/unpair',{ method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ uuid }) })
+    .then(()=>{ showApplyMessage.value = true; refreshClients() })
+}
+
+function refreshClients(){
+  fetch('./api/clients/list')
+    .then(r => r.json())
+    .then(response => {
+      if (response.status === true && response.named_certs && response.named_certs.length){
+        clients.value = response.named_certs.sort((a,b)=> (a.name.toLowerCase() > b.name.toLowerCase() || a.name === '' ? 1 : -1))
+      } else {
+        clients.value = []
+      }
+    })
+}
+
+function clickedApplyBanner(){ showApplyMessage.value = false }
+
+function copyLogs(){ navigator.clipboard.writeText(actualLogs.value) }
+
+function restart(){
+  restartPressed.value = true
+  setTimeout(()=>{ restartPressed.value = false }, 5000)
+  fetch('./api/restart',{ method:'POST', headers:{ 'Content-Type':'application/json' } })
+}
+
+function ddResetPersistence(){
+  ddResetPressed.value = true
+  fetch('/api/reset-display-device-persistence',{ method:'POST', headers:{ 'Content-Type':'application/json' } })
+    .then(r => r.json())
+    .then(r => {
+      ddResetPressed.value = false
+      ddResetStatus.value = r.status
+      setTimeout(()=>{ ddResetStatus.value = null }, 5000)
+    })
+}
+
+onMounted(()=>{
+  // If store has no config yet, use the store helper to fetch it so platform is available
+  if(!store.config.value){
+    store.fetchConfig().catch(()=>{})
+  }
+  logInterval = setInterval(()=> refreshLogs(), 5000)
+  refreshLogs()
+  refreshClients()
+})
+
+onBeforeUnmount(()=>{ if(logInterval) clearInterval(logInterval) })
 </script>
 
 <style scoped>

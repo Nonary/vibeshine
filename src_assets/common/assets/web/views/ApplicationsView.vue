@@ -36,7 +36,7 @@
 				<span class="text-xs font-medium">Add Application</span>
 			</button>
 		</div>
-		<AppEditModal v-model="showModal" :platform="platform" :app="currentApp" :index="currentIndex" @saved="reload"
+		<AppEditModal v-model="showModal" :app="currentApp" :index="currentIndex" @saved="reload"
 			@deleted="reload" />
 		<PlayniteImportModal v-model="showPlaynite" @imported="onPlayniteImported" />
 	</div>
@@ -45,6 +45,8 @@
 import { ref, onMounted } from 'vue'
 import AppEditModal from '../components/AppEditModal.vue'
 import PlayniteImportModal from '../components/PlayniteImportModal.vue'
+import { useAppsStore } from '../stores/apps.js'
+const appsStore = useAppsStore()
 const apps = ref([])
 const platform = ref('')
 const showModal = ref(false)
@@ -52,9 +54,10 @@ const showPlaynite = ref(false)
 const currentApp = ref(null)
 const currentIndex = ref(-1)
 async function reload() {
-	const r = await fetch('./api/apps').then(r => r.json()).catch(() => ({ apps: [] }))
-	apps.value = r.apps || []
-	if (!platform.value) { try { platform.value = await fetch('./api/config').then(r => r.json()).then(r => r.platform) } catch { } }
+	await appsStore.loadApps(true)
+	apps.value = appsStore.apps
+	// ensure platform is present via config store if needed
+	if (!platform.value) { try { const { useConfigStore } = await import('../stores/config.js'); const store = useConfigStore(); await store.fetchConfig(); platform.value = store.config.value?.platform || '' } catch {} }
 }
 onMounted(reload)
 function openAdd() { currentApp.value = null; currentIndex.value = -1; showModal.value = true }
@@ -92,7 +95,7 @@ function coverSrc(app, index) {
 	const p = path.toString().trim()
 	if (/^https?:\/\//i.test(p)) return p
 	if (!p.includes('/') && !p.includes('\\')) {
-		return `./assets/${p}`
+		return `/assets/${p}`
 	}
 	const file = p.replace(/\\/g, '/').split('/').pop()
 	if (file) {

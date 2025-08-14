@@ -8,12 +8,12 @@ import SoftwareEncoder from './encoders/SoftwareEncoder.vue'
 import VAAPIEncoder from './encoders/VAAPIEncoder.vue'
 
 const props = defineProps({
-    platform: String,
-    config: Object,
-    currentTab: { type: String, default: '' }
+  currentTab: { type: String, default: '' }
 })
 
-const config = ref(props.config)
+import { useConfigStore } from '../../stores/config.js'
+const store = useConfigStore()
+const config = store.config
 // Fallback: if no currentTab provided, show all stacked (modern single page mode)
 const showAll = () => !props.currentTab
 </script>
@@ -21,46 +21,22 @@ const showAll = () => !props.currentTab
 <template>
 
   <!-- NVIDIA NVENC Encoder Tab -->
-    <NvidiaNvencEncoder
-            v-if="showAll() || currentTab === 'nv'"
-      :platform="platform"
-      :config="config"
-  />
+    <NvidiaNvencEncoder v-if="showAll() || currentTab === 'nv'" />
 
   <!-- Intel QuickSync Encoder Tab -->
-    <IntelQuickSyncEncoder
-            v-if="showAll() || currentTab === 'qsv'"
-      :platform="platform"
-      :config="config"
-  />
+    <IntelQuickSyncEncoder v-if="showAll() || currentTab === 'qsv'" />
 
   <!-- AMD AMF Encoder Tab -->
-    <AmdAmfEncoder
-            v-if="showAll() || currentTab === 'amd'"
-      :platform="platform"
-      :config="config"
-  />
+    <AmdAmfEncoder v-if="showAll() || currentTab === 'amd'" />
 
   <!-- VideoToolbox Encoder Tab -->
-    <VideotoolboxEncoder
-            v-if="showAll() || currentTab === 'vt'"
-      :platform="platform"
-      :config="config"
-  />
+    <VideotoolboxEncoder v-if="showAll() || currentTab === 'vt'" />
 
   <!-- VAAPI Encoder Tab -->
-    <VAAPIEncoder
-            v-if="showAll() || currentTab === 'vaapi'"
-      :platform="platform"
-      :config="config"
-  />
+    <VAAPIEncoder v-if="showAll() || currentTab === 'vaapi'" />
 
   <!-- Software Encoder Tab -->
-    <SoftwareEncoder
-            v-if="showAll() || currentTab === 'sw'"
-      :platform="platform"
-      :config="config"
-  />
+    <SoftwareEncoder v-if="showAll() || currentTab === 'sw'" />
 
 </template>
 

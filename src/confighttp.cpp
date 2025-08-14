@@ -291,11 +291,7 @@ namespace confighttp {
   /**
    * @brief Send an HTTP redirect.
    */
-  void send_redirect(resp_https_t response, [[maybe_unused]] req_https_t request, const std::string &location) {
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Location", location);
-    response->write(SimpleWeb::StatusCode::redirection_found, std::string(), headers);
-  }
+  // Consolidated redirect helper: use the const char* variant below.
 
   /**
    * @brief Get the index page.
@@ -304,12 +300,42 @@ namespace confighttp {
    * @todo combine these functions into a single function that accepts the page, i.e "index", "pin", "apps"
    */
   void getIndexPage(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
-
+    // Legacy index page handler kept for compatibility but now delegates to
+    // the SPA entry responder which does not force server-side authentication.
+    // Frontend is expected to manage auth routes and flows.
     print_req(request);
 
+    std::string content = file_handler::read_file(WEB_DIR "index.html");
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "text/html; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    response->write(content, headers);
+  }
+
+  /**
+   * @brief SPA entry responder - serves the single-page app shell (index.html)
+   * for any non-API and non-static-asset GET requests. Allows unauthenticated
+   * access so the frontend can render login/first-run flows. Static and API
+   * routes are expected to be registered explicitly; this function returns
+   * a 404 for reserved prefixes to avoid accidentally exposing files.
+   */
+  void getSpaEntry(resp_https_t response, req_https_t request) {
+    print_req(request);
+
+    const std::string &p = request->path;
+    // Reserved prefixes that should not be handled by the SPA entry
+    static const std::vector<std::string> reserved = {"/api", "/assets", "/covers", "/images", "/images/"};
+    for (const auto &r : reserved) {
+      if (p.rfind(r, 0) == 0) {
+        // Let explicit handlers or default not_found handle these
+        not_found(response, request);
+        return;
+      }
+    }
+
+    // Serve the SPA shell (index.html) without server-side auth so frontend
+    // can manage routing and authentication flows.
     std::string content = file_handler::read_file(WEB_DIR "index.html");
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "text/html; charset=utf-8");
@@ -427,7 +453,7 @@ namespace confighttp {
   void getWelcomePage(resp_https_t response, req_https_t request) {
     print_req(request);
     if (!config::sunshine.username.empty()) {
-      send_redirect(response, request, "/");
+  send_redirect(response, request, "/");
       return;
     }
     std::string content = file_handler::read_file(WEB_DIR "welcome.html");
@@ -1926,16 +1952,20 @@ namespace confighttp {
     server.default_resource["PUT"] = [](resp_https_t response, req_https_t request) {
       bad_request(response, request);
     };
-    server.default_resource["GET"] = not_found;
-    server.resource["^/$"]["GET"] = getIndexPage;
-    server.resource["^/pin/?$"]["GET"] = getPinPage;
-    server.resource["^/apps/?$"]["GET"] = getAppsPage;
-    server.resource["^/clients/?$"]["GET"] = getClientsPage;
-    server.resource["^/config/?$"]["GET"] = getConfigPage;
-    server.resource["^/password/?$"]["GET"] = getPasswordPage;
-    server.resource["^/welcome/?$"]["GET"] = getWelcomePage;
-    server.resource["^/login/?$"]["GET"] = getLoginPage;
-    server.resource["^/troubleshooting/?$"]["GET"] = getTroubleshootingPage;
+  // Serve the SPA shell for any unmatched GET route. Explicit static and API
+  // routes are registered below; UI page routes are deprecated server-side
+  // and are handled by the SPA entry responder so frontend can manage
+  // authentication and routing.
+  server.default_resource["GET"] = getSpaEntry;
+  server.resource["^/$"]["GET"] = getSpaEntry;
+  server.resource["^/pin/?$"]["GET"] = getSpaEntry;
+  server.resource["^/apps/?$"]["GET"] = getSpaEntry;
+  server.resource["^/clients/?$"]["GET"] = getSpaEntry;
+  server.resource["^/config/?$"]["GET"] = getSpaEntry;
+  server.resource["^/password/?$"]["GET"] = getSpaEntry;
+  server.resource["^/welcome/?$"]["GET"] = getSpaEntry;
+  server.resource["^/login/?$"]["GET"] = getSpaEntry;
+  server.resource["^/troubleshooting/?$"]["GET"] = getSpaEntry;
     server.resource["^/api/pin$"]["POST"] = savePin;
     server.resource["^/api/apps$"]["GET"] = getApps;
     server.resource["^/api/logs$"]["GET"] = getLogs;
@@ -1962,6 +1992,23 @@ namespace confighttp {
     server.resource["^/api/token$"]["POST"] = generateApiToken;
     server.resource["^/api/tokens$"]["GET"] = listApiTokens;
     server.resource["^/api/token/([a-fA-F0-9]+)$"]["DELETE"] = revokeApiToken;
+    // Session validation endpoint used by the web UI to detect HttpOnly session cookies
+    server.resource["^/api/auth/validate$"]["GET"] = [](resp_https_t response, req_https_t request) {
+      print_req(request);
+      // Extract session token from Cookie header and validate via SessionTokenAPI
+      std::string token = extract_session_token_from_cookie(request->header);
+      APIResponse api_response = session_token_api.validate_session(token);
+      if (api_response.status_code == SimpleWeb::StatusCode::success_ok) {
+        // Return minimal success JSON and CORS headers
+        SimpleWeb::CaseInsensitiveMultimap headers;
+        headers.emplace("Content-Type", "application/json");
+        headers.emplace("Access-Control-Allow-Origin", get_cors_origin());
+        response->write(SimpleWeb::StatusCode::success_ok, "{\"status\":true}", headers);
+      } else {
+        // Propagate unauthorized status
+        write_api_response(response, api_response);
+      }
+    };
     server.resource["^/api-tokens/?$"]["GET"] = getTokenPage;
     server.resource["^/api/auth/login$"]["POST"] = loginUser;
     server.resource["^/api/auth/logout$"]["POST"] = logoutUser;

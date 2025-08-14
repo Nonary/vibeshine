@@ -46,6 +46,7 @@ namespace confighttp {
   void loginUser(resp_https_t response, req_https_t request);
   void logoutUser(resp_https_t response, req_https_t request);
   void getLoginPage(resp_https_t response, req_https_t request);
+  void getSpaEntry(resp_https_t response, req_https_t request);
 
 }  // namespace confighttp
 
@@ -66,4 +67,5 @@ const std::map<std::string, std::string> mime_types = {
   {"txt", "text/plain"},
   {"woff2", "font/woff2"},
   {"xml", "text/xml"},
+  {"webmanifest", "application/manifest+json"},
 };
