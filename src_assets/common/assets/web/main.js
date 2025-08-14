@@ -4,6 +4,7 @@ import { initApp } from './init'
 import { router } from './router'
 import Shell from './layout/Shell.vue'
 import './styles/tailwind.css'
+import { initHttpLayer, http } from './http.js'
 // Import Font Awesome locally (added dependency @fortawesome/fontawesome-free)
 import '@fortawesome/fontawesome-free/css/all.min.css'
 
@@ -33,7 +34,8 @@ initApp(app, async (appInstance) => {
 		])
 		const store = useConfigStore()
 		const auth = useAuthStore()
-		// init lightweight auth detection polling
+		// Initialize axios/http layer & perform a single auth validate
+		await initHttpLayer()
 		auth.init()
 
 		// Keep provided platform ref in sync with store once config arrives
@@ -47,10 +49,9 @@ initApp(app, async (appInstance) => {
 		// If already authenticated, fetch immediately. Otherwise wait for login event once.
 		const doFetch = async () => {
 			try {
-				const res = await fetch('/api/config')
-				if (!res.ok) return
-				const json = await res.json()
-				store.setConfig(json)
+				const res = await http.get('/api/config')
+				if (res.status !== 200) return
+				store.setConfig(res.data)
 			} catch (e) {
 				console.error('early config fetch failed', e)
 			}

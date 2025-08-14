@@ -2,21 +2,55 @@
   <div class="min-h-screen flex flex-col bg-solar-light dark:bg-lunar-dark text-solar-dark dark:text-lunar-light">
     <!-- App Bar -->
     <header
-      class="h-14 flex items-center gap-4 px-4 border-b border-solar-dark/10 dark:border-lunar-light/10 bg-solar-light/70 dark:bg-lunar-dark/60 backdrop-blur supports-[backdrop-filter]:bg-solar-light/40 supports-[backdrop-filter]:dark:bg-lunar-dark/40">
+      class="h-14 flex items-center gap-4 px-4 border-b border-solar-dark/10 dark:border-lunar-light/10 bg-solar-light/70 dark:bg-lunar-dark/60 backdrop-blur supports-[backdrop-filter]:bg-solar-light/40 supports-[backdrop-filter]:dark:bg-lunar-dark/40"
+    >
       <div class="flex items-center gap-3 min-w-0">
-        <img src="/images/logo-sunshine-45.png" alt="Sunshine" class="h-8 w-8" />
-        <h1 class="text-base md:text-lg font-semibold tracking-tight truncate">{{ displayTitle }}</h1>
+        <img
+          src="/images/logo-sunshine-45.png"
+          alt="Sunshine"
+          class="h-8 w-8"
+        >
+        <h1 class="text-base md:text-lg font-semibold tracking-tight truncate">
+          {{ displayTitle }}
+        </h1>
       </div>
       <nav class="hidden md:flex items-center gap-1 text-sm font-medium ml-2">
-        <RouterLink to="/" :class="linkClass('/')"><i class="fas fa-gauge"></i><span>Dashboard</span></RouterLink>
-        <RouterLink to="/applications" :class="linkClass('/applications')"><i class="fas fa-grid-2"></i><span>Applications</span>
+        <RouterLink
+          to="/"
+          :class="linkClass('/')"
+        >
+          <i class="fas fa-gauge" /><span>Dashboard</span>
         </RouterLink>
-        <RouterLink to="/sessions" :class="linkClass('/sessions')"><i class="fas fa-signal-stream"></i><span>Sessions</span>
+        <RouterLink
+          to="/applications"
+          :class="linkClass('/applications')"
+        >
+          <i class="fas fa-grid-2" /><span>Applications</span>
         </RouterLink>
-        <RouterLink to="/settings" :class="linkClass('/settings')"><i class="fas fa-sliders"></i><span>Settings</span></RouterLink>
-        <RouterLink to="/troubleshooting" :class="linkClass('/troubleshooting')"><i class="fas fa-bug"></i><span>{{
-          $t('navbar.troubleshoot') }}</span></RouterLink>
-        <RouterLink to="/resources" :class="linkClass('/resources')"><i class="fas fa-circle-info"></i><span>Resources</span>
+        <RouterLink
+          to="/sessions"
+          :class="linkClass('/sessions')"
+        >
+          <i class="fas fa-signal-stream" /><span>Sessions</span>
+        </RouterLink>
+        <RouterLink
+          to="/settings"
+          :class="linkClass('/settings')"
+        >
+          <i class="fas fa-sliders" /><span>Settings</span>
+        </RouterLink>
+        <RouterLink
+          to="/troubleshooting"
+          :class="linkClass('/troubleshooting')"
+        >
+          <i class="fas fa-bug" /><span>{{
+            $t('navbar.troubleshoot') }}</span>
+        </RouterLink>
+        <RouterLink
+          to="/resources"
+          :class="linkClass('/resources')"
+        >
+          <i class="fas fa-circle-info" /><span>Resources</span>
         </RouterLink>
       </nav>
       <div class="ml-auto flex items-center gap-3 text-xs">

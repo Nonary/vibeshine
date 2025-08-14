@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { http } from '../http.js'
 
 // Centralized store for configuration defaults and runtime config
 export const useConfigStore = defineStore('config', () => {
@@ -213,10 +214,9 @@ export const useConfigStore = defineStore('config', () => {
   async function fetchConfig(force = false) {
     if (config.value && !force) return config.value
     try {
-      const r = await fetch('./api/config')
-      if (!r.ok) return null
-      const json = await r.json()
-      setConfig(json)
+      const r = await http.get('./api/config')
+      if (r.status !== 200) return null
+      setConfig(r.data)
       return config.value
     } catch (e) {
       console.error('fetchConfig failed', e)

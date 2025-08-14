@@ -8,14 +8,18 @@ const config = store.config
 </script>
 
 <template>
-  <div id="vaapi-encoder" class="config-page">
+  <div
+    id="vaapi-encoder"
+    class="config-page"
+  >
     <!-- Strict RC Buffer -->
-    <Checkbox class="mb-3"
-              id="vaapi_strict_rc_buffer"
-              locale-prefix="config"
-              v-model="config.vaapi_strict_rc_buffer"
-              default="false"
-    ></Checkbox>
+    <Checkbox
+      id="vaapi_strict_rc_buffer"
+      v-model="config.vaapi_strict_rc_buffer"
+      class="mb-3"
+      locale-prefix="config"
+      default="false"
+    />
   </div>
 </template>
 

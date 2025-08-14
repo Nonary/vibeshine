@@ -1,91 +1,243 @@
 <template>
-	<div v-if="open" class="fixed inset-0 z-50 flex items-start justify-center p-6 overflow-y-auto">
-		<div class="fixed inset-0 bg-black/50 backdrop-blur-sm" @click="close"></div>
-		<div class="relative w-full max-w-3xl mx-auto bg-white dark:bg-lunar-surface rounded-xl shadow-xl flex flex-col border border-black/10 dark:border-white/10">
-			<div class="flex items-center justify-between px-6 py-4 border-b border-black/5 dark:border-white/10">
-				<h2 class="font-semibold text-sm">{{ form.index === -1 ? 'Add Application' : 'Edit Application' }}</h2>
-				<button @click="close" class="text-black/50 dark:text-white/50 hover:text-red-600"><i class="fas fa-times"></i></button>
-			</div>
-			<div class="p-6 space-y-6 text-xs overflow-y-auto max-h-[70vh]">
-				<div class="grid gap-4 sm:grid-cols-2">
-					<div class="space-y-1 col-span-2">
-						<label class="font-medium">Name</label>
-						<input v-model="form.name" class="app-input" placeholder="Game or App Name" />
-					</div>
-						<div class="space-y-1 col-span-2 flex flex-col">
-							<label class="font-medium">Image Path</label>
-							<div class="flex items-start gap-3">
-								<input v-model="form['image-path']" class="app-input font-mono flex-1" placeholder="/path/to/image.png" />
-								<div class="w-24 h-32 bg-black/5 dark:bg-white/5 rounded overflow-hidden flex items-center justify-center">
-									<img v-if="previewSrc" :src="previewSrc" class="max-w-full max-h-full object-contain" loading="lazy" />
-									<div v-else class="text-2xl font-bold text-solar-primary/40 dark:text-lunar-primary/40">{{ form.name?.substring(0,1)||'?' }}</div>
-								</div>
-							</div>
-							<p class="text-[11px] text-black/60 dark:text-white/40 mt-1">Paste a URL or local image filename here. Save to persist.</p>
-						</div>
-									<div class="space-y-1 col-span-2">
-										<label class="font-medium">Command (single)</label>
-										<textarea v-model="cmdText" class="app-input font-mono h-20" placeholder="Executable command line"></textarea>
-										<p class="text-black/60 dark:text-white/50">Enter the full command line to run (single string).</p>
-									</div>
-					<div class="space-y-1 col-span-2">
-						<label class="font-medium">Working Directory</label>
-						<input v-model="form['working-dir']" class="app-input font-mono" placeholder="C:/Games/App" />
-					</div>
-					<div class="space-y-1 col-span-2 grid grid-cols-2 gap-4">
-						<label class="inline-flex items-center gap-2 text-[11px]"><input type="checkbox" v-model="form['exclude-global-prep-cmd']" class="app-checkbox"> Exclude Global Prep</label>
-						<label class="inline-flex items-center gap-2 text-[11px]"><input type="checkbox" v-model="form['auto-detach']" class="app-checkbox"> Auto Detach</label>
-						<label class="inline-flex items-center gap-2 text-[11px]"><input type="checkbox" v-model="form['wait-all']" class="app-checkbox"> Wait All</label>
-						<label v-if="platform==='windows'" class="inline-flex items-center gap-2 text-[11px]"><input type="checkbox" v-model="form.elevated" class="app-checkbox"> Elevated</label>
-					</div>
-					<div class="space-y-1 col-span-2 sm:col-span-1">
-						<label class="font-medium">Exit Timeout (s)</label>
-						<input type="number" min="0" v-model.number="form['exit-timeout']" class="app-input w-32" />
-					</div>
-				</div>
-				<div>
-					<div class="flex items-center justify-between mb-2">
-						<h3 class="font-semibold text-xs uppercase tracking-wider">Prep Commands</h3>
-						<button class="mini-btn" @click="addPrep"><i class="fas fa-plus"></i> Add</button>
-					</div>
-					<div v-if="form['prep-cmd'].length===0" class="text-[11px] text-black/60 dark:text-white/40">None</div>
-					<div v-else class="space-y-3">
-						<div v-for="(p,i) in form['prep-cmd']" :key="i" class="grid gap-2 md:grid-cols-5 items-start">
-							<input v-model="p.do" placeholder="do" class="app-input font-mono md:col-span-2" />
-							<input v-model="p.undo" placeholder="undo" class="app-input font-mono md:col-span-2" />
-							<div class="flex items-center gap-2 md:col-span-1">
-								<label v-if="platform==='windows'" class="inline-flex items-center gap-1 text-[11px]"><input type="checkbox" v-model="p.elevated" class="app-checkbox"> Elev</label>
-								<button class="mini-btn danger" @click="form['prep-cmd'].splice(i,1)"><i class="fas fa-trash"></i></button>
-							</div>
-						</div>
-					</div>
-				</div>
-				<div>
-					<div class="flex items-center justify-between mb-2">
-						<h3 class="font-semibold text-xs uppercase tracking-wider">Detached Commands</h3>
-						<button class="mini-btn" @click="form.detached.push('')"><i class="fas fa-plus"></i> Add</button>
-					</div>
-					<div v-if="form.detached.length===0" class="text-[11px] text-black/60 dark:text-white/40">None</div>
-					<div v-else class="space-y-2">
-						<div v-for="(d,i) in form.detached" :key="i" class="flex gap-2 items-start">
-							<input v-model="form.detached[i]" class="app-input font-mono flex-1" />
-							<button class="mini-btn danger" @click="form.detached.splice(i,1)"><i class="fas fa-times"></i></button>
-						</div>
-					</div>
-				</div>
-			</div>
-			<div class="flex items-center justify-between px-6 py-4 border-t border-black/5 dark:border-white/10 gap-3">
-				<div class="flex gap-2">
-					<button class="main-btn" @click="save" :disabled="saving.v"><i class="fas fa-save"></i> <span class="hidden sm:inline">Save</span></button>
-					<button class="ghost-btn" @click="close">Cancel</button>
-				</div>
-				<button v-if="form.index!==-1" class="danger-btn" @click="del" :disabled="saving.v"><i class="fas fa-trash"></i></button>
-			</div>
-		</div>
-	</div>
+  <div
+    v-if="open"
+    class="fixed inset-0 z-50 flex items-start justify-center p-6 overflow-y-auto"
+  >
+    <div
+      class="fixed inset-0 bg-black/50 backdrop-blur-sm"
+      @click="close"
+    />
+    <div class="relative w-full max-w-3xl mx-auto bg-white dark:bg-lunar-surface rounded-xl shadow-xl flex flex-col border border-black/10 dark:border-white/10">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-black/5 dark:border-white/10">
+        <h2 class="font-semibold text-sm">
+          {{ form.index === -1 ? 'Add Application' : 'Edit Application' }}
+        </h2>
+        <button
+          class="text-black/50 dark:text-white/50 hover:text-red-600"
+          @click="close"
+        >
+          <i class="fas fa-times" />
+        </button>
+      </div>
+      <div class="p-6 space-y-6 text-xs overflow-y-auto max-h-[70vh]">
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div class="space-y-1 col-span-2">
+            <label class="font-medium">Name</label>
+            <input
+              v-model="form.name"
+              class="app-input"
+              placeholder="Game or App Name"
+            >
+          </div>
+          <div class="space-y-1 col-span-2 flex flex-col">
+            <label class="font-medium">Image Path</label>
+            <div class="flex items-start gap-3">
+              <input
+                v-model="form['image-path']"
+                class="app-input font-mono flex-1"
+                placeholder="/path/to/image.png"
+              >
+              <div class="w-24 h-32 bg-black/5 dark:bg-white/5 rounded overflow-hidden flex items-center justify-center">
+                <img
+                  v-if="previewSrc"
+                  :src="previewSrc"
+                  class="max-w-full max-h-full object-contain"
+                  loading="lazy"
+                >
+                <div
+                  v-else
+                  class="text-2xl font-bold text-solar-primary/40 dark:text-lunar-primary/40"
+                >
+                  {{ form.name?.substring(0,1)||'?' }}
+                </div>
+              </div>
+            </div>
+            <p class="text-[11px] text-black/60 dark:text-white/40 mt-1">
+              Paste a URL or local image filename here. Save to persist.
+            </p>
+          </div>
+          <div class="space-y-1 col-span-2">
+            <label class="font-medium">Command (single)</label>
+            <textarea
+              v-model="cmdText"
+              class="app-input font-mono h-20"
+              placeholder="Executable command line"
+            />
+            <p class="text-black/60 dark:text-white/50">
+              Enter the full command line to run (single string).
+            </p>
+          </div>
+          <div class="space-y-1 col-span-2">
+            <label class="font-medium">Working Directory</label>
+            <input
+              v-model="form['working-dir']"
+              class="app-input font-mono"
+              placeholder="C:/Games/App"
+            >
+          </div>
+          <div class="space-y-1 col-span-2 grid grid-cols-2 gap-4">
+            <label class="inline-flex items-center gap-2 text-[11px]"><input
+              v-model="form['exclude-global-prep-cmd']"
+              type="checkbox"
+              class="app-checkbox"
+            > Exclude Global Prep</label>
+            <label class="inline-flex items-center gap-2 text-[11px]"><input
+              v-model="form['auto-detach']"
+              type="checkbox"
+              class="app-checkbox"
+            > Auto Detach</label>
+            <label class="inline-flex items-center gap-2 text-[11px]"><input
+              v-model="form['wait-all']"
+              type="checkbox"
+              class="app-checkbox"
+            > Wait All</label>
+            <label
+              v-if="platform==='windows'"
+              class="inline-flex items-center gap-2 text-[11px]"
+            ><input
+              v-model="form.elevated"
+              type="checkbox"
+              class="app-checkbox"
+            > Elevated</label>
+          </div>
+          <div class="space-y-1 col-span-2 sm:col-span-1">
+            <label class="font-medium">Exit Timeout (s)</label>
+            <input
+              v-model.number="form['exit-timeout']"
+              type="number"
+              min="0"
+              class="app-input w-32"
+            >
+          </div>
+        </div>
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="font-semibold text-xs uppercase tracking-wider">
+              Prep Commands
+            </h3>
+            <button
+              class="mini-btn"
+              @click="addPrep"
+            >
+              <i class="fas fa-plus" /> Add
+            </button>
+          </div>
+          <div
+            v-if="form['prep-cmd'].length===0"
+            class="text-[11px] text-black/60 dark:text-white/40"
+          >
+            None
+          </div>
+          <div
+            v-else
+            class="space-y-3"
+          >
+            <div
+              v-for="(p,i) in form['prep-cmd']"
+              :key="i"
+              class="grid gap-2 md:grid-cols-5 items-start"
+            >
+              <input
+                v-model="p.do"
+                placeholder="do"
+                class="app-input font-mono md:col-span-2"
+              >
+              <input
+                v-model="p.undo"
+                placeholder="undo"
+                class="app-input font-mono md:col-span-2"
+              >
+              <div class="flex items-center gap-2 md:col-span-1">
+                <label
+                  v-if="platform==='windows'"
+                  class="inline-flex items-center gap-1 text-[11px]"
+                ><input
+                  v-model="p.elevated"
+                  type="checkbox"
+                  class="app-checkbox"
+                > Elev</label>
+                <button
+                  class="mini-btn danger"
+                  @click="form['prep-cmd'].splice(i,1)"
+                >
+                  <i class="fas fa-trash" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="font-semibold text-xs uppercase tracking-wider">
+              Detached Commands
+            </h3>
+            <button
+              class="mini-btn"
+              @click="form.detached.push('')"
+            >
+              <i class="fas fa-plus" /> Add
+            </button>
+          </div>
+          <div
+            v-if="form.detached.length===0"
+            class="text-[11px] text-black/60 dark:text-white/40"
+          >
+            None
+          </div>
+          <div
+            v-else
+            class="space-y-2"
+          >
+            <div
+              v-for="(d,i) in form.detached"
+              :key="i"
+              class="flex gap-2 items-start"
+            >
+              <input
+                v-model="form.detached[i]"
+                class="app-input font-mono flex-1"
+              >
+              <button
+                class="mini-btn danger"
+                @click="form.detached.splice(i,1)"
+              >
+                <i class="fas fa-times" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="flex items-center justify-between px-6 py-4 border-t border-black/5 dark:border-white/10 gap-3">
+        <div class="flex gap-2">
+          <button
+            class="main-btn"
+            :disabled="saving.v"
+            @click="save"
+          >
+            <i class="fas fa-save" /> <span class="hidden sm:inline">Save</span>
+          </button>
+          <button
+            class="ghost-btn"
+            @click="close"
+          >
+            Cancel
+          </button>
+        </div>
+        <button
+          v-if="form.index!==-1"
+          class="danger-btn"
+          :disabled="saving.v"
+          @click="del"
+        >
+          <i class="fas fa-trash" />
+        </button>
+      </div>
+    </div>
+  </div>
 </template>
 <script setup>
 import { reactive, watch, computed } from 'vue'
+import { http } from '../http.js'
 const props = defineProps({ modelValue:Boolean, platform:String, app:Object, index:{type:Number,default:-1} })
 const emit = defineEmits(['update:modelValue','saved','deleted'])
 const open = computed(()=>props.modelValue)
@@ -122,8 +274,8 @@ const previewSrc = computed(()=>{
 	if(a['image-path']) return coverSrc(a, a.index)
 	return ''
 })
-async function save(){ saving.v=true; const payload = JSON.parse(JSON.stringify(form)); try{ await fetch('./api/apps',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) }); emit('saved'); close() } finally { saving.v=false } }
-async function del(){ if(!confirm('Delete this application?')) return; saving.v=true; try { await fetch(`./api/apps/${form.index}`,{ method:'DELETE' }); emit('deleted'); close() } finally { saving.v=false } }
+async function save(){ saving.v=true; const payload = JSON.parse(JSON.stringify(form)); try{ await http.post('./api/apps', payload, { headers:{'Content-Type':'application/json'}, validateStatus: () => true }); emit('saved'); close() } finally { saving.v=false } }
+async function del(){ if(!confirm('Delete this application?')) return; saving.v=true; try { await http.delete(`./api/apps/${form.index}`, { validateStatus: () => true }); emit('deleted'); close() } finally { saving.v=false } }
 </script>
 <style scoped>
 .app-input{ width:100%; border:1px solid rgba(0,0,0,.12); background:rgba(255,255,255,.7); padding:4px 8px; border-radius:6px; font-size:11px; line-height:1.2; }

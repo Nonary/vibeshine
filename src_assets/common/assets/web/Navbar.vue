@@ -1,41 +1,84 @@
 <template>
   <nav class="navbar navbar-light navbar-expand-lg navbar-background header">
     <div class="container-fluid">
-      <a class="navbar-brand" href="./" title="Sunshine">
-        <img src="/images/logo-sunshine-45.png" height="45" alt="Sunshine">
+      <a
+        class="navbar-brand"
+        href="./"
+        title="Sunshine"
+      >
+        <img
+          src="/images/logo-sunshine-45.png"
+          height="45"
+          alt="Sunshine"
+        >
       </a>
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent"
-              aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
-        <span class="navbar-toggler-icon"></span>
+      <button
+        class="navbar-toggler"
+        type="button"
+        data-bs-toggle="collapse"
+        data-bs-target="#navbarSupportedContent"
+        aria-controls="navbarSupportedContent"
+        aria-expanded="false"
+        aria-label="Toggle navigation"
+      >
+        <span class="navbar-toggler-icon" />
       </button>
-      <div class="collapse navbar-collapse" id="navbarSupportedContent">
+      <div
+        id="navbarSupportedContent"
+        class="collapse navbar-collapse"
+      >
         <ul class="navbar-nav me-auto mb-2 mb-lg-0">
           <li class="nav-item">
-            <a class="nav-link" href="./"><i class="fas fa-fw fa-home"></i> {{ $t('navbar.home') }}</a>
+            <a
+              class="nav-link"
+              href="./"
+            ><i class="fas fa-fw fa-home" /> {{ $t('navbar.home') }}</a>
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="./pin"><i class="fas fa-fw fa-unlock"></i> {{ $t('navbar.pin') }}</a>
+            <a
+              class="nav-link"
+              href="./pin"
+            ><i class="fas fa-fw fa-unlock" /> {{ $t('navbar.pin') }}</a>
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="./apps"><i class="fas fa-fw fa-stream"></i> {{ $t('navbar.applications') }}</a>
+            <a
+              class="nav-link"
+              href="./apps"
+            ><i class="fas fa-fw fa-stream" /> {{ $t('navbar.applications') }}</a>
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="./config"><i class="fas fa-fw fa-cog"></i> {{ $t('navbar.configuration') }}</a>
+            <a
+              class="nav-link"
+              href="./config"
+            ><i class="fas fa-fw fa-cog" /> {{ $t('navbar.configuration') }}</a>
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="./password"><i class="fas fa-fw fa-user-shield"></i> {{ $t('navbar.password') }}</a>
+            <a
+              class="nav-link"
+              href="./password"
+            ><i class="fas fa-fw fa-user-shield" /> {{ $t('navbar.password') }}</a>
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="./troubleshooting"><i class="fas fa-fw fa-info"></i> {{ $t('navbar.troubleshoot') }}</a>
+            <a
+              class="nav-link"
+              href="./troubleshooting"
+            ><i class="fas fa-fw fa-info" /> {{ $t('navbar.troubleshoot') }}</a>
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="./api-tokens"><i class="fas fa-fw fa-key"></i>{{ $t('navbar.api_tokens') }}</a>
+            <a
+              class="nav-link"
+              href="./api-tokens"
+            ><i class="fas fa-fw fa-key" />{{ $t('navbar.api_tokens') }}</a>
           </li>
           <li class="nav-item">
-            <ThemeToggle/>
+            <ThemeToggle />
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="#" @click.prevent="logout"><i class="fas fa-fw fa-sign-out-alt"></i> {{ $t('navbar.logout') }}</a>
+            <a
+              class="nav-link"
+              href="#"
+              @click.prevent="logout"
+            ><i class="fas fa-fw fa-sign-out-alt" /> {{ $t('navbar.logout') }}</a>
           </li>
         </ul>
       </div>
@@ -46,6 +89,7 @@
 <script>
 import ThemeToggle from './ThemeToggle.vue'
 import { initDiscord } from '@lizardbyte/shared-web/src/js/discord.js'
+import { http } from './http.js'
 
 export default {
   components: { ThemeToggle },
@@ -60,7 +104,7 @@ export default {
   methods: {
     async logout() {
       try {
-        await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+  await http.post('/api/auth/logout', {}, { validateStatus: () => true });
       } catch (e) {
         // Log the error to the console for debugging purposes
         console.error('Logout failed:', e);

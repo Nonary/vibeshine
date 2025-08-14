@@ -9,15 +9,15 @@ const platform = computed(() => store.config.value?.platform || '')
 
 <template>
   <template v-if="$slots.windows && platform === 'windows'">
-    <slot name="windows"></slot>
+    <slot name="windows" />
   </template>
 
   <template v-if="$slots.linux && platform === 'linux'">
-    <slot name="linux"></slot>
+    <slot name="linux" />
   </template>
 
   <template v-if="$slots.macos && platform === 'macos'">
-    <slot name="macos"></slot>
+    <slot name="macos" />
   </template>
 </template>
 

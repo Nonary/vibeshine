@@ -1,20 +1,34 @@
 <template>
   <div class="container">
-    <h1 class="my-4">{{ $t('troubleshooting.troubleshooting') }}</h1>
+    <h1 class="my-4">
+      {{ $t('troubleshooting.troubleshooting') }}
+    </h1>
     <!-- Force Close App -->
     <div class="card p-2 my-4">
       <div class="card-body">
-        <h2 id="close_apps">{{ $t('troubleshooting.force_close') }}</h2>
+        <h2 id="close_apps">
+          {{ $t('troubleshooting.force_close') }}
+        </h2>
         <br>
         <p>{{ $t('troubleshooting.force_close_desc') }}</p>
-        <div class="alert alert-success" v-if="closeAppStatus === true">
+        <div
+          v-if="closeAppStatus === true"
+          class="alert alert-success"
+        >
           {{ $t('troubleshooting.force_close_success') }}
         </div>
-        <div class="alert alert-danger" v-if="closeAppStatus === false">
+        <div
+          v-if="closeAppStatus === false"
+          class="alert alert-danger"
+        >
           {{ $t('troubleshooting.force_close_error') }}
         </div>
         <div>
-          <button class="btn btn-warning" :disabled="closeAppPressed" @click="closeApp">
+          <button
+            class="btn btn-warning"
+            :disabled="closeAppPressed"
+            @click="closeApp"
+          >
             {{ $t('troubleshooting.force_close') }}
           </button>
         </div>
@@ -23,33 +37,59 @@
     <!-- Restart Sunshine -->
     <div class="card p-2 my-4">
       <div class="card-body">
-        <h2 id="restart">{{ $t('troubleshooting.restart_sunshine') }}</h2>
+        <h2 id="restart">
+          {{ $t('troubleshooting.restart_sunshine') }}
+        </h2>
         <br>
         <p>{{ $t('troubleshooting.restart_sunshine_desc') }}</p>
-        <div class="alert alert-success" v-if="restartPressed === true">
+        <div
+          v-if="restartPressed === true"
+          class="alert alert-success"
+        >
           {{ $t('troubleshooting.restart_sunshine_success') }}
         </div>
         <div>
-          <button class="btn btn-warning" :disabled="restartPressed" @click="restart">
+          <button
+            class="btn btn-warning"
+            :disabled="restartPressed"
+            @click="restart"
+          >
             {{ $t('troubleshooting.restart_sunshine') }}
           </button>
         </div>
       </div>
     </div>
     <!-- Reset persistent display device settings -->
-    <div class="card p-2 my-4" v-if="platform === 'windows'">
+    <div
+      v-if="platform === 'windows'"
+      class="card p-2 my-4"
+    >
       <div class="card-body">
-        <h2 id="dd_reset">{{ $t('troubleshooting.dd_reset') }}</h2>
+        <h2 id="dd_reset">
+          {{ $t('troubleshooting.dd_reset') }}
+        </h2>
         <br>
-        <p style="white-space: pre-line">{{ $t('troubleshooting.dd_reset_desc') }}</p>
-        <div class="alert alert-success" v-if="ddResetStatus === true">
+        <p style="white-space: pre-line">
+          {{ $t('troubleshooting.dd_reset_desc') }}
+        </p>
+        <div
+          v-if="ddResetStatus === true"
+          class="alert alert-success"
+        >
           {{ $t('troubleshooting.dd_reset_success') }}
         </div>
-        <div class="alert alert-danger" v-if="ddResetStatus === false">
+        <div
+          v-if="ddResetStatus === false"
+          class="alert alert-danger"
+        >
           {{ $t('troubleshooting.dd_reset_error') }}
         </div>
         <div>
-          <button class="btn btn-warning" :disabled="ddResetPressed" @click="ddResetPersistence">
+          <button
+            class="btn btn-warning"
+            :disabled="ddResetPressed"
+            @click="ddResetPersistence"
+          >
             {{ $t('troubleshooting.dd_reset') }}
           </button>
         </div>
@@ -60,48 +100,108 @@
       <div class="card-body">
         <div class="p-2">
           <div class="d-flex justify-content-end align-items-center">
-            <h2 id="unpair" class="text-center me-auto">{{ $t('troubleshooting.unpair_title') }}</h2>
-            <button class="btn btn-danger" :disabled="unpairAllPressed" @click="unpairAll">
+            <h2
+              id="unpair"
+              class="text-center me-auto"
+            >
+              {{ $t('troubleshooting.unpair_title') }}
+            </h2>
+            <button
+              class="btn btn-danger"
+              :disabled="unpairAllPressed"
+              @click="unpairAll"
+            >
               {{ $t('troubleshooting.unpair_all') }}
             </button>
           </div>
-          <br />
-          <p class="mb-0">{{ $t('troubleshooting.unpair_desc') }}</p>
-          <div id="apply-alert" class="alert alert-success d-flex align-items-center mt-3" :style="{ 'display': (showApplyMessage ? 'flex !important': 'none !important') }">
-            <div class="me-2"><b>{{ $t('_common.success') }}</b> {{ $t('troubleshooting.unpair_single_success') }}</div>
-            <button class="btn btn-success ms-auto apply" @click="clickedApplyBanner">{{ $t('_common.dismiss') }}</button>
+          <br>
+          <p class="mb-0">
+            {{ $t('troubleshooting.unpair_desc') }}
+          </p>
+          <div
+            id="apply-alert"
+            class="alert alert-success d-flex align-items-center mt-3"
+            :style="{ 'display': (showApplyMessage ? 'flex !important': 'none !important') }"
+          >
+            <div class="me-2">
+              <b>{{ $t('_common.success') }}</b> {{ $t('troubleshooting.unpair_single_success') }}
+            </div>
+            <button
+              class="btn btn-success ms-auto apply"
+              @click="clickedApplyBanner"
+            >
+              {{ $t('_common.dismiss') }}
+            </button>
           </div>
-          <div class="alert alert-success mt-3" v-if="unpairAllStatus === true">
+          <div
+            v-if="unpairAllStatus === true"
+            class="alert alert-success mt-3"
+          >
             {{ $t('troubleshooting.unpair_all_success') }}
           </div>
-          <div class="alert alert-danger mt-3" v-if="unpairAllStatus === false">
+          <div
+            v-if="unpairAllStatus === false"
+            class="alert alert-danger mt-3"
+          >
             {{ $t('troubleshooting.unpair_all_error') }}
           </div>
         </div>
       </div>
-      <ul id="client-list" class="list-group list-group-flush list-group-item-light" v-if="clients && clients.length > 0">
-        <div v-for="client in clients" :key="client.uuid" class="list-group-item d-flex">
-          <div class="p-2 flex-grow-1">{{ client.name !== "" ? client.name : $t('troubleshooting.unpair_single_unknown') }}</div>
-          <div class="me-2 ms-auto btn btn-danger" @click="unpairSingle(client.uuid)"><i class="fas fa-trash"></i></div>
+      <ul
+        v-if="clients && clients.length > 0"
+        id="client-list"
+        class="list-group list-group-flush list-group-item-light"
+      >
+        <div
+          v-for="client in clients"
+          :key="client.uuid"
+          class="list-group-item d-flex"
+        >
+          <div class="p-2 flex-grow-1">
+            {{ client.name !== "" ? client.name : $t('troubleshooting.unpair_single_unknown') }}
+          </div>
+          <div
+            class="me-2 ms-auto btn btn-danger"
+            @click="unpairSingle(client.uuid)"
+          >
+            <i class="fas fa-trash" />
+          </div>
         </div>
       </ul>
-      <ul v-else class="list-group list-group-flush list-group-item-light">
-        <div class="list-group-item p-3 text-center"><em>{{ $t('troubleshooting.unpair_single_no_devices') }}</em></div>
+      <ul
+        v-else
+        class="list-group list-group-flush list-group-item-light"
+      >
+        <div class="list-group-item p-3 text-center">
+          <em>{{ $t('troubleshooting.unpair_single_no_devices') }}</em>
+        </div>
       </ul>
-
     </div>
     <!-- Logs -->
     <div class="card p-2 my-4">
       <div class="card-body">
-        <h2 id="logs">{{ $t('troubleshooting.logs') }}</h2>
+        <h2 id="logs">
+          {{ $t('troubleshooting.logs') }}
+        </h2>
         <br>
         <div class="d-flex justify-content-between align-items-baseline py-2">
           <p>{{ $t('troubleshooting.logs_desc') }}</p>
-          <input type="text" class="form-control" v-model="logFilter" :placeholder="$t('troubleshooting.logs_find')" style="width: 300px">
+          <input
+            v-model="logFilter"
+            type="text"
+            class="form-control"
+            :placeholder="$t('troubleshooting.logs_find')"
+            style="width: 300px"
+          >
         </div>
         <div>
           <div class="troubleshooting-logs">
-            <button class="copy-icon"><i class="fas fa-copy " @click="copyLogs"></i></button>{{actualLogs}}
+            <button class="copy-icon">
+              <i
+                class="fas fa-copy "
+                @click="copyLogs"
+              />
+            </button>{{ actualLogs }}
           </div>
         </div>
       </div>
@@ -112,6 +212,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useConfigStore } from './stores/config.js'
+import { http } from './http.js'
 
 const store = useConfigStore()
 const platform = computed(() => store.config.value?.platform || '')
@@ -136,50 +237,51 @@ const actualLogs = computed(() => {
   return lines.join('\n')
 })
 
-function refreshLogs(){
-  fetch('./api/logs')
-    .then(r => r.text())
-    .then(r => { logs.value = r })
+async function refreshLogs(){
+  try {
+    const r = await http.get('./api/logs', { responseType: 'text', transformResponse: [v=>v] , validateStatus: () => true })
+    if (typeof r.data === 'string') logs.value = r.data
+  } catch { /* ignore errors */ }
 }
 
-function closeApp(){
+async function closeApp(){
   closeAppPressed.value = true
-  fetch('./api/apps/close',{ method:'POST', headers:{ 'Content-Type':'application/json' } })
-    .then(r => r.json())
-    .then(r => {
-      closeAppPressed.value = false
-      closeAppStatus.value = r.status
-      setTimeout(()=>{ closeAppStatus.value = null }, 5000)
-    })
+  try {
+    const r = await http.post('./api/apps/close', {}, { validateStatus: () => true })
+    closeAppStatus.value = r.data?.status === true
+  } catch { closeAppStatus.value = false }
+  finally {
+    closeAppPressed.value = false
+    setTimeout(()=>{ closeAppStatus.value = null }, 5000)
+  }
 }
 
-function unpairAll(){
+async function unpairAll(){
   unpairAllPressed.value = true
-  fetch('./api/clients/unpair-all',{ method:'POST', headers:{ 'Content-Type':'application/json' } })
-    .then(r => r.json())
-    .then(r => {
-      unpairAllPressed.value = false
-      unpairAllStatus.value = r.status
-      setTimeout(()=>{ unpairAllStatus.value = null }, 5000)
-      refreshClients()
-    })
+  try {
+    const r = await http.post('./api/clients/unpair-all', {}, { validateStatus: () => true })
+    unpairAllStatus.value = r.data?.status === true
+  } catch { unpairAllStatus.value = false }
+  finally {
+    unpairAllPressed.value = false
+    setTimeout(()=>{ unpairAllStatus.value = null }, 5000)
+    refreshClients()
+  }
 }
 
-function unpairSingle(uuid){
-  fetch('./api/clients/unpair',{ method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ uuid }) })
-    .then(()=>{ showApplyMessage.value = true; refreshClients() })
+async function unpairSingle(uuid){
+  try { await http.post('./api/clients/unpair', { uuid }, { validateStatus: () => true }) } catch {}
+  showApplyMessage.value = true; refreshClients()
 }
 
-function refreshClients(){
-  fetch('./api/clients/list')
-    .then(r => r.json())
-    .then(response => {
-      if (response.status === true && response.named_certs && response.named_certs.length){
-        clients.value = response.named_certs.sort((a,b)=> (a.name.toLowerCase() > b.name.toLowerCase() || a.name === '' ? 1 : -1))
-      } else {
-        clients.value = []
-      }
-    })
+async function refreshClients(){
+  try {
+    const r = await http.get('./api/clients/list', { validateStatus: () => true })
+    const response = r.data || {}
+    if (response.status === true && response.named_certs && response.named_certs.length){
+      clients.value = response.named_certs.sort((a,b)=> (a.name.toLowerCase() > b.name.toLowerCase() || a.name === '' ? 1 : -1))
+    } else { clients.value = [] }
+  } catch { clients.value = [] }
 }
 
 function clickedApplyBanner(){ showApplyMessage.value = false }
@@ -189,24 +291,25 @@ function copyLogs(){ navigator.clipboard.writeText(actualLogs.value) }
 function restart(){
   restartPressed.value = true
   setTimeout(()=>{ restartPressed.value = false }, 5000)
-  fetch('./api/restart',{ method:'POST', headers:{ 'Content-Type':'application/json' } })
+  http.post('./api/restart', {}, { validateStatus: () => true })
 }
 
-function ddResetPersistence(){
+async function ddResetPersistence(){
   ddResetPressed.value = true
-  fetch('/api/reset-display-device-persistence',{ method:'POST', headers:{ 'Content-Type':'application/json' } })
-    .then(r => r.json())
-    .then(r => {
-      ddResetPressed.value = false
-      ddResetStatus.value = r.status
-      setTimeout(()=>{ ddResetStatus.value = null }, 5000)
-    })
+  try {
+    const r = await http.post('/api/reset-display-device-persistence', {}, { validateStatus: () => true })
+    ddResetStatus.value = r.data?.status === true
+  } catch { ddResetStatus.value = false }
+  finally {
+    ddResetPressed.value = false
+    setTimeout(()=>{ ddResetStatus.value = null }, 5000)
+  }
 }
 
 onMounted(()=>{
   // If store has no config yet, use the store helper to fetch it so platform is available
   if(!store.config.value){
-    store.fetchConfig().catch(()=>{})
+    store.fetchConfig().catch(() => { /* ignore errors */ })
   }
   logInterval = setInterval(()=> refreshLogs(), 5000)
   refreshLogs()

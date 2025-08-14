@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { http } from '../http.js'
 
 // Centralized store for applications list
 export const useAppsStore = defineStore('apps', () => {
@@ -13,10 +14,9 @@ export const useAppsStore = defineStore('apps', () => {
   async function loadApps(force = false) {
     if (apps.value && apps.value.length > 0 && !force) return apps.value
     try {
-      const r = await fetch('./api/apps')
-      if (!r.ok) { setApps([]); return apps.value }
-      const json = await r.json()
-      setApps(json.apps || [])
+      const r = await http.get('./api/apps')
+      if (r.status !== 200) { setApps([]); return apps.value }
+      setApps((r.data && r.data.apps) || [])
     } catch (e) {
       setApps([])
     }

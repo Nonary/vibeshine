@@ -2,48 +2,77 @@
   <div class="login-container">
     <div class="login-form">
       <div class="text-center mb-4">
-        <img src="/images/logo-sunshine-45.png" height="45" alt="Sunshine">
-        <h1 class="h3 mb-3 fw-normal">{{ $t('auth.login_title') }}</h1>
+        <img
+          src="/images/logo-sunshine-45.png"
+          height="45"
+          alt="Sunshine"
+        >
+        <h1 class="h3 mb-3 fw-normal">
+          {{ $t('auth.login_title') }}
+        </h1>
       </div>
-      <form @submit.prevent="login" v-if="!isLoggedIn" autocomplete="on">
+      <form
+        v-if="!isLoggedIn"
+        autocomplete="on"
+        @submit.prevent="login"
+      >
         <div class="mb-3">
-          <label for="username" class="form-label">{{ $t('_common.username') }}</label>
+          <label
+            for="username"
+            class="form-label"
+          >{{ $t('_common.username') }}</label>
           <input 
+            id="username" 
+            v-model="credentials.username" 
             type="text" 
             class="form-control" 
-            id="username" 
             name="username" 
-            v-model="credentials.username" 
             required
             autocomplete="username"
           >
         </div>
         <div class="mb-3">
-          <label for="password" class="form-label">{{ $t('_common.password') }}</label>
+          <label
+            for="password"
+            class="form-label"
+          >{{ $t('_common.password') }}</label>
           <input 
+            id="password" 
+            v-model="credentials.password" 
             type="password" 
             class="form-control" 
-            id="password" 
             name="password" 
-            v-model="credentials.password" 
             required
             autocomplete="current-password"
           >
         </div>
-        <button type="submit" class="btn btn-primary w-100" :disabled="loading">
-          <span v-if="loading" class="spinner-border spinner-border-sm me-2"></span>
+        <button
+          type="submit"
+          class="btn btn-primary w-100"
+          :disabled="loading"
+        >
+          <span
+            v-if="loading"
+            class="spinner-border spinner-border-sm me-2"
+          />
           {{ $t('auth.login_sign_in') }}
         </button>
-        <div v-if="error" class="alert alert-danger mt-3">
+        <div
+          v-if="error"
+          class="alert alert-danger mt-3"
+        >
           {{ error }}
         </div>
       </form>
-      <div v-else class="text-center">
+      <div
+        v-else
+        class="text-center"
+      >
         <div class="alert alert-success">
           {{ $t('auth.login_success') }}
         </div>
         <output class="spinner-border">
-          <span class="visually-hidden">{{$t('auth.login_loading')}}</span>
+          <span class="visually-hidden">{{ $t('auth.login_loading') }}</span>
         </output>
       </div>
     </div>
@@ -54,6 +83,7 @@
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from './stores/auth.js'
+import { http } from './http.js'
 
 const auth = useAuthStore()
 const credentials = ref({ username: '', password: '' })
@@ -116,18 +146,13 @@ async function login() {
   loading.value = true
   error.value = ''
   try {
-    const response = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        username: credentials.value.username,
-        password: credentials.value.password,
-        // Send raw (already sanitized) path, do NOT encode again to avoid server rejecting it
-        redirect: requestedRedirect.value
-      })
-    })
-    const data = await response.json().catch(() => ({}))
-    if (response.ok && data.status) {
+  const response = await http.post('/api/auth/login', {
+    username: credentials.value.username,
+    password: credentials.value.password,
+    redirect: requestedRedirect.value
+  }, { validateStatus: () => true })
+  const data = response.data || {}
+  if (response.status === 200 && data.status) {
   // Login endpoint created the session cookie; rely on shared auth detection for global state
   isLoggedIn.value = true
   safeRedirect.value = sanitizeRedirect(data.redirect) || '/'

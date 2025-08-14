@@ -1,0 +1,8 @@
+node_modules/
+build/
+dist/
+.cpack_artifacts/
+.vscode/
+public/
+src_assets/types/
+.d.ts

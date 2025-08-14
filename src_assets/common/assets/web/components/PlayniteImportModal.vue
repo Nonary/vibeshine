@@ -1,123 +1,279 @@
 <template>
-	<div v-if="open" class="fixed inset-0 z-50 flex items-start justify-center p-6 overflow-y-auto">
-		<div class="fixed inset-0 bg-black/50 backdrop-blur-sm" @click="close"></div>
-		<div class="relative w-full max-w-2xl mx-auto bg-white dark:bg-lunar-surface rounded-xl shadow-xl flex flex-col border border-black/10 dark:border-white/10">
-			<div class="flex items-center justify-between px-6 py-4 border-b border-black/5 dark:border-white/10">
-				<h2 class="font-semibold text-sm">Import from Playnite</h2>
-				<button @click="close" class="text-black/50 dark:text-white/50 hover:text-red-600"><i class="fas fa-times"></i></button>
-			</div>
-			<div class="p-6 space-y-4 text-xs">
-				<!-- Playnite configuration (collapsible) -->
-				<div>
-					<div class="flex items-center justify-between">
-						<h3 class="font-semibold text-sm">Playnite</h3>
-						<button class="mini-btn" @click="playniteOpen = !playniteOpen"><i :class="playniteOpen ? 'fas fa-chevron-up' : 'fas fa-chevron-down'"></i></button>
-					</div>
-					<div v-show="playniteOpen" class="mt-3 space-y-3">
-						<div class="grid gap-2 sm:grid-cols-3 items-center">
-							<div class="col-span-2">
-								<label class="font-medium">Playnite Install Path</label>
-								<input v-model="playnitePath" class="app-input font-mono" placeholder="C:\\Program Files\\Playnite" />
-							</div>
-							<div class="flex items-center gap-2">
-								<div class="flex items-center gap-2">
-									<span :class="['w-3 h-3 rounded-full', pluginInstalled ? 'bg-green-500' : 'bg-red-500']" aria-hidden="true"></span>
-									<span class="text-[11px] text-black/60 dark:text-white/40">{{ pluginInstalled ? 'Sunshine plugin installed' : 'Plugin not detected' }}</span>
-								</div>
-							</div>
-						</div>
-						<div class="flex items-center gap-2">
-							<button class="main-btn" @click="installPlugin" :disabled="installing">{{ pluginInstalled ? 'Reinstall Plugin' : 'Install Plugin' }}</button>
-							<button class="ghost-btn" @click="detectPlugin">Detect</button>
-							<span v-if="installing" class="text-[11px] text-black/60 dark:text-white/40">Installing...</span>
-						</div>
-					</div>
-				</div>
+  <div
+    v-if="open"
+    class="fixed inset-0 z-50 flex items-start justify-center p-6 overflow-y-auto"
+  >
+    <div
+      class="fixed inset-0 bg-black/50 backdrop-blur-sm"
+      @click="close"
+    />
+    <div class="relative w-full max-w-2xl mx-auto bg-white dark:bg-lunar-surface rounded-xl shadow-xl flex flex-col border border-black/10 dark:border-white/10">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-black/5 dark:border-white/10">
+        <h2 class="font-semibold text-sm">
+          Import from Playnite
+        </h2>
+        <button
+          class="text-black/50 dark:text-white/50 hover:text-red-600"
+          @click="close"
+        >
+          <i class="fas fa-times" />
+        </button>
+      </div>
+      <div class="p-6 space-y-4 text-xs">
+        <!-- Playnite configuration (collapsible) -->
+        <div>
+          <div class="flex items-center justify-between">
+            <h3 class="font-semibold text-sm">
+              Playnite
+            </h3>
+            <button
+              class="mini-btn"
+              @click="playniteOpen = !playniteOpen"
+            >
+              <i :class="playniteOpen ? 'fas fa-chevron-up' : 'fas fa-chevron-down'" />
+            </button>
+          </div>
+          <div
+            v-show="playniteOpen"
+            class="mt-3 space-y-3"
+          >
+            <div class="grid gap-2 sm:grid-cols-3 items-center">
+              <div class="col-span-2">
+                <label class="font-medium">Playnite Install Path</label>
+                <input
+                  v-model="playnitePath"
+                  class="app-input font-mono"
+                  placeholder="C:\\Program Files\\Playnite"
+                >
+              </div>
+              <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2">
+                  <span
+                    :class="['w-3 h-3 rounded-full', pluginInstalled ? 'bg-green-500' : 'bg-red-500']"
+                    aria-hidden="true"
+                  />
+                  <span class="text-[11px] text-black/60 dark:text-white/40">{{ pluginInstalled ? 'Sunshine plugin installed' : 'Plugin not detected' }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                class="main-btn"
+                :disabled="installing"
+                @click="installPlugin"
+              >
+                {{ pluginInstalled ? 'Reinstall Plugin' : 'Install Plugin' }}
+              </button>
+              <button
+                class="ghost-btn"
+                @click="detectPlugin"
+              >
+                Detect
+              </button>
+              <span
+                v-if="installing"
+                class="text-[11px] text-black/60 dark:text-white/40"
+              >Installing...</span>
+            </div>
+          </div>
+        </div>
 
-				<!-- Manual add section -->
-				<div>
-					<div class="flex items-center justify-between">
-						<h3 class="font-semibold text-sm">Add to Sunshine (Manual)</h3>
-						<div class="flex items-center gap-2">
-							<label class="inline-flex items-center gap-2 text-[12px]"><input type="checkbox" v-model="autoSync" class="app-checkbox"> Auto-sync categories</label>
-						</div>
-					</div>
-					<div class="mt-2">
-						<label class="font-medium">Search Playnite Games</label>
-						<div class="flex gap-2 mt-1">
-							<input v-model="manualQuery" @input="onManualSearch" placeholder="Search games to add..." class="app-input flex-1" />
-							<div class="relative">
-								<button class="mini-btn" @click="onManualSearch"><i class="fas fa-search"></i></button>
-								<div v-if="manualResults.length" class="absolute right-0 mt-2 w-72 bg-white dark:bg-lunar-surface border rounded shadow max-h-48 overflow-y-auto z-50">
-									<ul>
-										<li v-for="(m,mi) in manualResults" :key="mi" class="p-2 hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer flex items-center gap-2" @click="selectManual(m)">
-											<div class="w-8 h-10 bg-black/5 dark:bg-white/5 rounded overflow-hidden flex items-center justify-center">
-												<img v-if="m.cover" :src="m.cover" class="max-w-full max-h-full object-contain" />
-												<div v-else class="text-lg font-bold text-solar-primary/40 dark:text-lunar-primary/40">{{ m.name?.substring(0,1) }}</div>
-											</div>
-											<div class="flex-1 text-sm">{{ m.name }}</div>
-										</li>
-									</ul>
-								</div>
-							</div>
-						</div>
-						<div v-if="selectedManual" class="mt-3 border p-3 rounded">
-							<div class="flex items-start gap-3">
-								<div class="w-14 h-20 bg-black/5 dark:bg-white/5 rounded overflow-hidden flex items-center justify-center">
-									<img v-if="selectedManual.cover" :src="selectedManual.cover" class="max-w-full max-h-full object-contain" />
-									<div v-else class="text-3xl font-bold text-solar-primary/40 dark:text-lunar-primary/40">{{ selectedManual.name?.substring(0,1) }}</div>
-								</div>
-								<div class="flex-1">
-									<div class="font-medium">{{ selectedManual.name }}</div>
-									<div class="text-[11px] text-black/60 dark:text-white/40">Platform: {{ selectedManual.platform }}</div>
-									<div class="mt-2 flex flex-wrap gap-2">
-										<span v-for="c in selectedManual.categories" :key="c" class="px-2 py-0.5 rounded-full text-[11px] bg-black/5 dark:bg-white/5">{{ c }}</span>
-									</div>
-									<div class="mt-3 flex gap-2">
-										<button class="main-btn" @click="addToSunshine(selectedManual)"><i class="fas fa-plus"></i> Add to Sunshine</button>
-										<button class="ghost-btn" @click="selectedManual = null">Clear</button>
-									</div>
-								</div>
-							</div>
-						</div>
-					</div>
-				</div>
-				<div>
-					<label class="font-medium">Search Playnite Games</label>
-					<div class="flex gap-2 mt-1">
-						<input v-model="query" @input="onSearch" placeholder="Search games by name..." class="app-input flex-1" />
-						<button class="mini-btn" @click="onSearch"><i class="fas fa-search"></i></button>
-					</div>
-					<div class="mt-3">
-							<div v-if="results.length===0" class="text-[11px] text-black/60 dark:text-white/40">No results (placeholder). Connect to Playnite to enable live search.</div>
-							<div class="mt-2 flex flex-wrap gap-2">
-								<span v-for="c in allCategories" :key="c" @click="toggleCategory(c)" :class="['px-2 py-0.5 rounded-full text-[11px] cursor-pointer', selectedCategory===c ? 'bg-solar-primary text-white' : 'bg-black/5 dark:bg-white/5 text-black/70 dark:text-white/60']">{{ c }}</span>
-							</div>
-						<ul class="space-y-2 mt-2">
-							<li v-for="(r,i) in results" :key="i" class="flex items-center justify-between border p-2 rounded">
-								<div class="flex items-center gap-3">
-									<div class="w-10 h-12 bg-black/5 dark:bg-white/5 rounded overflow-hidden flex items-center justify-center">
-										<img v-if="r.cover" :src="r.cover" class="max-w-full max-h-full object-contain" />
-										<div v-else class="text-lg font-bold text-solar-primary/40 dark:text-lunar-primary/40">{{ r.name?.substring(0,1) }}</div>
-									</div>
-									<div>
-										<div class="font-medium text-sm">{{ r.name }}</div>
-										<div class="text-[11px] text-black/60 dark:text-white/40">{{ r.platform || 'Platform' }}</div>
-									</div>
-								</div>
-								<div>
-									<button class="main-btn" @click="importGame(r)"><i class="fas fa-plus"></i> Import</button>
-								</div>
-							</li>
-						</ul>
-					</div>
-				</div>
-			</div>
-			<div class="flex items-center justify-between px-6 py-3 border-t border-black/5 dark:border-white/10">
-				<button class="ghost-btn" @click="close">Close</button>
-			</div>
-		</div>
-	</div>
+        <!-- Manual add section -->
+        <div>
+          <div class="flex items-center justify-between">
+            <h3 class="font-semibold text-sm">
+              Add to Sunshine (Manual)
+            </h3>
+            <div class="flex items-center gap-2">
+              <label class="inline-flex items-center gap-2 text-[12px]"><input
+                v-model="autoSync"
+                type="checkbox"
+                class="app-checkbox"
+              > Auto-sync categories</label>
+            </div>
+          </div>
+          <div class="mt-2">
+            <label class="font-medium">Search Playnite Games</label>
+            <div class="flex gap-2 mt-1">
+              <input
+                v-model="manualQuery"
+                placeholder="Search games to add..."
+                class="app-input flex-1"
+                @input="onManualSearch"
+              >
+              <div class="relative">
+                <button
+                  class="mini-btn"
+                  @click="onManualSearch"
+                >
+                  <i class="fas fa-search" />
+                </button>
+                <div
+                  v-if="manualResults.length"
+                  class="absolute right-0 mt-2 w-72 bg-white dark:bg-lunar-surface border rounded shadow max-h-48 overflow-y-auto z-50"
+                >
+                  <ul>
+                    <li
+                      v-for="(m,mi) in manualResults"
+                      :key="mi"
+                      class="p-2 hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer flex items-center gap-2"
+                      @click="selectManual(m)"
+                    >
+                      <div class="w-8 h-10 bg-black/5 dark:bg-white/5 rounded overflow-hidden flex items-center justify-center">
+                        <img
+                          v-if="m.cover"
+                          :src="m.cover"
+                          class="max-w-full max-h-full object-contain"
+                        >
+                        <div
+                          v-else
+                          class="text-lg font-bold text-solar-primary/40 dark:text-lunar-primary/40"
+                        >
+                          {{ m.name?.substring(0,1) }}
+                        </div>
+                      </div>
+                      <div class="flex-1 text-sm">
+                        {{ m.name }}
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+            <div
+              v-if="selectedManual"
+              class="mt-3 border p-3 rounded"
+            >
+              <div class="flex items-start gap-3">
+                <div class="w-14 h-20 bg-black/5 dark:bg-white/5 rounded overflow-hidden flex items-center justify-center">
+                  <img
+                    v-if="selectedManual.cover"
+                    :src="selectedManual.cover"
+                    class="max-w-full max-h-full object-contain"
+                  >
+                  <div
+                    v-else
+                    class="text-3xl font-bold text-solar-primary/40 dark:text-lunar-primary/40"
+                  >
+                    {{ selectedManual.name?.substring(0,1) }}
+                  </div>
+                </div>
+                <div class="flex-1">
+                  <div class="font-medium">
+                    {{ selectedManual.name }}
+                  </div>
+                  <div class="text-[11px] text-black/60 dark:text-white/40">
+                    Platform: {{ selectedManual.platform }}
+                  </div>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <span
+                      v-for="c in selectedManual.categories"
+                      :key="c"
+                      class="px-2 py-0.5 rounded-full text-[11px] bg-black/5 dark:bg-white/5"
+                    >{{ c }}</span>
+                  </div>
+                  <div class="mt-3 flex gap-2">
+                    <button
+                      class="main-btn"
+                      @click="addToSunshine(selectedManual)"
+                    >
+                      <i class="fas fa-plus" /> Add to Sunshine
+                    </button>
+                    <button
+                      class="ghost-btn"
+                      @click="selectedManual = null"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <label class="font-medium">Search Playnite Games</label>
+          <div class="flex gap-2 mt-1">
+            <input
+              v-model="query"
+              placeholder="Search games by name..."
+              class="app-input flex-1"
+              @input="onSearch"
+            >
+            <button
+              class="mini-btn"
+              @click="onSearch"
+            >
+              <i class="fas fa-search" />
+            </button>
+          </div>
+          <div class="mt-3">
+            <div
+              v-if="results.length===0"
+              class="text-[11px] text-black/60 dark:text-white/40"
+            >
+              No results (placeholder). Connect to Playnite to enable live search.
+            </div>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <span
+                v-for="c in allCategories"
+                :key="c"
+                :class="['px-2 py-0.5 rounded-full text-[11px] cursor-pointer', selectedCategory===c ? 'bg-solar-primary text-white' : 'bg-black/5 dark:bg-white/5 text-black/70 dark:text-white/60']"
+                @click="toggleCategory(c)"
+              >{{ c }}</span>
+            </div>
+            <ul class="space-y-2 mt-2">
+              <li
+                v-for="(r,i) in results"
+                :key="i"
+                class="flex items-center justify-between border p-2 rounded"
+              >
+                <div class="flex items-center gap-3">
+                  <div class="w-10 h-12 bg-black/5 dark:bg-white/5 rounded overflow-hidden flex items-center justify-center">
+                    <img
+                      v-if="r.cover"
+                      :src="r.cover"
+                      class="max-w-full max-h-full object-contain"
+                    >
+                    <div
+                      v-else
+                      class="text-lg font-bold text-solar-primary/40 dark:text-lunar-primary/40"
+                    >
+                      {{ r.name?.substring(0,1) }}
+                    </div>
+                  </div>
+                  <div>
+                    <div class="font-medium text-sm">
+                      {{ r.name }}
+                    </div>
+                    <div class="text-[11px] text-black/60 dark:text-white/40">
+                      {{ r.platform || 'Platform' }}
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <button
+                    class="main-btn"
+                    @click="importGame(r)"
+                  >
+                    <i class="fas fa-plus" /> Import
+                  </button>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="flex items-center justify-between px-6 py-3 border-t border-black/5 dark:border-white/10">
+        <button
+          class="ghost-btn"
+          @click="close"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup>

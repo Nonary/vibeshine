@@ -9,8 +9,14 @@
       isActive ? activeClasses : hoverClasses
     ]"
   >
-    <i v-if="!sub" :class="['fas text-sm w-4 text-center', 'fa-fw', icon]"></i>
-    <span v-if="!collapsed" class="tracking-wide whitespace-nowrap"> <slot /> </span>
+    <i
+      v-if="!sub"
+      :class="['fas text-sm w-4 text-center', 'fa-fw', icon]"
+    />
+    <span
+      v-if="!collapsed"
+      class="tracking-wide whitespace-nowrap"
+    > <slot /> </span>
   </RouterLink>
 </template>
 <script setup>

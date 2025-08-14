@@ -1,12 +1,30 @@
 <template>
   <div :class="outer">
-    <div v-if="title || $slots.title" class="mb-3 flex items-center gap-2">
-      <h2 class="text-lg font-semibold tracking-tight" v-if="title">{{ title }}</h2>
+    <div
+      v-if="title || $slots.title"
+      class="mb-3 flex items-center gap-2"
+    >
+      <h2
+        v-if="title"
+        class="text-lg font-semibold tracking-tight"
+      >
+        {{ title }}
+      </h2>
       <slot name="title" />
-      <div class="ml-auto" v-if="$slots.actions"><slot name="actions" /></div>
+      <div
+        v-if="$slots.actions"
+        class="ml-auto"
+      >
+        <slot name="actions" />
+      </div>
     </div>
     <slot />
-    <div v-if="$slots.footer" class="mt-4 pt-3 border-t border-solar-dark/10 dark:border-lunar-light/10"><slot name="footer" /></div>
+    <div
+      v-if="$slots.footer"
+      class="mt-4 pt-3 border-t border-solar-dark/10 dark:border-lunar-light/10"
+    >
+      <slot name="footer" />
+    </div>
   </div>
 </template>
 <script setup>

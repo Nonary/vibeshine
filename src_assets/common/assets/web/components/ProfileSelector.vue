@@ -1,15 +1,30 @@
 <template>
   <div class="flex items-center gap-2">
-    <label v-if="label" class="text-[11px] font-medium uppercase tracking-wider opacity-60">{{ label }}</label>
-    <select v-model="model" class="text-xs bg-transparent border rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40 border-solar-dark/20 dark:border-lunar-light/10">
-      <option value="__default">Default</option>
-      <option v-for="c in clients" :key="c.id" :value="c.id">{{ c.name }}</option>
+    <label
+      v-if="label"
+      class="text-[11px] font-medium uppercase tracking-wider opacity-60"
+    >{{ label }}</label>
+    <select
+      v-model="model"
+      class="text-xs bg-transparent border rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40 border-solar-dark/20 dark:border-lunar-light/10"
+    >
+      <option value="__default">
+        Default
+      </option>
+      <option
+        v-for="c in clients"
+        :key="c.id"
+        :value="c.id"
+      >
+        {{ c.name }}
+      </option>
     </select>
   </div>
 </template>
 <script setup>
 import { ref, onMounted, watch } from 'vue'
 import { useConfigStore } from '../stores/config.js'
+import { http } from '../http.js'
 const props = defineProps({
   modelValue: { type: String, default: '__default' },
   label: { type: String, default: '' }
@@ -22,8 +37,8 @@ const configStore = useConfigStore()
 onMounted(async () => {
   try {
     // ensure config available (some environments expect platform to be present)
-    if (!configStore.config.value) await configStore.fetchConfig().catch(()=>{})
-    const r = await fetch('./api/clients/list').then(r=>r.json())
+    if (!configStore.config.value) await configStore.fetchConfig().catch(() => { /* ignore */ })
+    const r = await http.get('./api/clients/list', { validateStatus: () => true }).then(r=> r.data || {})
     if(r && Array.isArray(r.named_certs)) {
       clients.value = r.named_certs.map(c => ({ id: c.uuid, name: c.name || c.uuid.substring(0,8) }))
     }

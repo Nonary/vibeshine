@@ -2,9 +2,10 @@ import {createI18n} from "vue-i18n";
 
 // Import only the fallback language files
 import en from './public/assets/locale/en.json'
+import { http } from './http.js'
 
 export default async function() {
-    let r = await (await fetch("./api/configLocale")).json();
+    let r = await http.get("./api/configLocale", { validateStatus: () => true }).then(r=>r.status===200?r.data:{}).catch(()=>({}))
     let locale = r.locale ?? "en";
     document.querySelector('html').setAttribute('lang', locale);
     let messages = {
@@ -12,8 +13,8 @@ export default async function() {
     };
     try {
         if (locale !== 'en') {
-            let r = await (await fetch(`/assets/locale/${locale}.json`)).json();
-            messages[locale] = r;
+            let r = await http.get(`/assets/locale/${locale}.json`, { validateStatus: () => true }).then(r=>r.status===200?r.data:null)
+            if(r) messages[locale] = r;
         }
     } catch (e) {
         console.error("Failed to download translations", e);

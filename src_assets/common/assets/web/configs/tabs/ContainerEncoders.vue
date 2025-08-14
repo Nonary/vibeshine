@@ -19,25 +19,23 @@ const showAll = () => !props.currentTab
 </script>
 
 <template>
-
   <!-- NVIDIA NVENC Encoder Tab -->
-    <NvidiaNvencEncoder v-if="showAll() || currentTab === 'nv'" />
+  <NvidiaNvencEncoder v-if="showAll() || currentTab === 'nv'" />
 
   <!-- Intel QuickSync Encoder Tab -->
-    <IntelQuickSyncEncoder v-if="showAll() || currentTab === 'qsv'" />
+  <IntelQuickSyncEncoder v-if="showAll() || currentTab === 'qsv'" />
 
   <!-- AMD AMF Encoder Tab -->
-    <AmdAmfEncoder v-if="showAll() || currentTab === 'amd'" />
+  <AmdAmfEncoder v-if="showAll() || currentTab === 'amd'" />
 
   <!-- VideoToolbox Encoder Tab -->
-    <VideotoolboxEncoder v-if="showAll() || currentTab === 'vt'" />
+  <VideotoolboxEncoder v-if="showAll() || currentTab === 'vt'" />
 
   <!-- VAAPI Encoder Tab -->
-    <VAAPIEncoder v-if="showAll() || currentTab === 'vaapi'" />
+  <VAAPIEncoder v-if="showAll() || currentTab === 'vaapi'" />
 
   <!-- Software Encoder Tab -->
-    <SoftwareEncoder v-if="showAll() || currentTab === 'sw'" />
-
+  <SoftwareEncoder v-if="showAll() || currentTab === 'sw'" />
 </template>
 
 <style scoped>

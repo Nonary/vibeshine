@@ -1,11 +1,22 @@
 <template>
   <div :class="wrapper">
     <div class="flex items-start gap-3">
-      <div v-if="icon" class="text-xl leading-none pt-0.5"><slot name="icon">{{ icon }}</slot></div>
+      <div
+        v-if="icon"
+        class="text-xl leading-none pt-0.5"
+      >
+        <slot name="icon">
+          {{ icon }}
+        </slot>
+      </div>
       <div class="flex-1">
         <slot />
       </div>
-      <button v-if="dismissible" @click="$emit('close')" class="ml-2 text-solar-dark dark:text-lunar-light hover:opacity-70">
+      <button
+        v-if="dismissible"
+        class="ml-2 text-solar-dark dark:text-lunar-light hover:opacity-70"
+        @click="$emit('close')"
+      >
         &times;
       </button>
     </div>

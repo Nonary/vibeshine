@@ -1,45 +1,92 @@
 <template>
-	<div class="space-y-6">
-		<div class="flex items-center justify-between">
-			<h2 class="text-sm font-semibold uppercase tracking-wider">Applications</h2>
-			<div class="flex items-center gap-2">
-				<button class="main-btn" @click="openAdd"><i class="fas fa-plus"></i> Add</button>
-				<button class="ghost-btn" @click="openPlayniteImport"><i class="fas fa-download"></i> Import from
-					Playnite</button>
-			</div>
-		</div>
-		<div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
-			<div v-for="(app, i) in apps" :key="appKey(app, i)"
-				class="group relative rounded-xl overflow-hidden border border-black/10 dark:border-white/10 bg-white/60 dark:bg-lunar-surface/60 shadow hover:shadow-lg transition flex flex-col"
-				@click="openEdit(app, i)" role="button" tabindex="0">
-				<div
-					class="aspect-[3/4] w-full bg-black/10 dark:bg-white/5 relative flex items-center justify-center p-3">
-					<img v-if="hasCover(app)" :src="coverSrc(app, i)" :key="appKey(app, i)" @error="onImgError($event)"
-						class="max-w-full max-h-full object-contain rounded" loading="lazy" />
-					<div v-else
-						class="flex items-center justify-center text-4xl font-bold text-solar-primary/40 dark:text-lunar-primary/40">
-						{{ app.name?.substring(0, 1) || '?' }}</div>
-					<div class="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition">
-						<button class="mini-btn" @click.stop="openEdit(app, i)"><i class="fas fa-cog"></i></button>
-					</div>
-				</div>
-				<div class="p-3 flex flex-col flex-1 min-h-[110px]">
-					<h3 class="text-sm font-semibold truncate">{{ app.name }}</h3>
-					<div class="mt-auto flex items-center justify-end text-[10px]">
-						<span v-if="app['prep-cmd']?.length" class="opacity-60">{{ app['prep-cmd'].length }} prep</span>
-					</div>
-				</div>
-			</div>
-			<button @click="openAdd"
-				class="aspect-[3/4] rounded-xl border border-dashed border-black/20 dark:border-white/15 flex flex-col items-center justify-center text-black/40 dark:text-white/30 hover:text-solar-primary dark:hover:text-lunar-primary hover:border-solar-primary/50 dark:hover:border-lunar-primary/50 transition">
-				<i class="fas fa-plus text-3xl mb-2"></i>
-				<span class="text-xs font-medium">Add Application</span>
-			</button>
-		</div>
-		<AppEditModal v-model="showModal" :app="currentApp" :index="currentIndex" @saved="reload"
-			@deleted="reload" />
-		<PlayniteImportModal v-model="showPlaynite" @imported="onPlayniteImported" />
-	</div>
+  <div class="space-y-6">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-semibold uppercase tracking-wider">
+        Applications
+      </h2>
+      <div class="flex items-center gap-2">
+        <button
+          class="main-btn"
+          @click="openAdd"
+        >
+          <i class="fas fa-plus" /> Add
+        </button>
+        <button
+          class="ghost-btn"
+          @click="openPlayniteImport"
+        >
+          <i class="fas fa-download" /> Import from
+          Playnite
+        </button>
+      </div>
+    </div>
+    <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
+      <div
+        v-for="(app, i) in apps"
+        :key="appKey(app, i)"
+        class="group relative rounded-xl overflow-hidden border border-black/10 dark:border-white/10 bg-white/60 dark:bg-lunar-surface/60 shadow hover:shadow-lg transition flex flex-col"
+        role="button"
+        tabindex="0"
+        @click="openEdit(app, i)"
+      >
+        <div
+          class="aspect-[3/4] w-full bg-black/10 dark:bg-white/5 relative flex items-center justify-center p-3"
+        >
+          <img
+            v-if="hasCover(app)"
+            :key="appKey(app, i)"
+            :src="coverSrc(app, i)"
+            class="max-w-full max-h-full object-contain rounded"
+            loading="lazy"
+            @error="onImgError($event)"
+          >
+          <div
+            v-else
+            class="flex items-center justify-center text-4xl font-bold text-solar-primary/40 dark:text-lunar-primary/40"
+          >
+            {{ app.name?.substring(0, 1) || '?' }}
+          </div>
+          <div class="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition">
+            <button
+              class="mini-btn"
+              @click.stop="openEdit(app, i)"
+            >
+              <i class="fas fa-cog" />
+            </button>
+          </div>
+        </div>
+        <div class="p-3 flex flex-col flex-1 min-h-[110px]">
+          <h3 class="text-sm font-semibold truncate">
+            {{ app.name }}
+          </h3>
+          <div class="mt-auto flex items-center justify-end text-[10px]">
+            <span
+              v-if="app['prep-cmd']?.length"
+              class="opacity-60"
+            >{{ app['prep-cmd'].length }} prep</span>
+          </div>
+        </div>
+      </div>
+      <button
+        class="aspect-[3/4] rounded-xl border border-dashed border-black/20 dark:border-white/15 flex flex-col items-center justify-center text-black/40 dark:text-white/30 hover:text-solar-primary dark:hover:text-lunar-primary hover:border-solar-primary/50 dark:hover:border-lunar-primary/50 transition"
+        @click="openAdd"
+      >
+        <i class="fas fa-plus text-3xl mb-2" />
+        <span class="text-xs font-medium">Add Application</span>
+      </button>
+    </div>
+    <AppEditModal
+      v-model="showModal"
+      :app="currentApp"
+      :index="currentIndex"
+      @saved="reload"
+      @deleted="reload"
+    />
+    <PlayniteImportModal
+      v-model="showPlaynite"
+      @imported="onPlayniteImported"
+    />
+  </div>
 </template>
 <script setup>
 import { ref, onMounted } from 'vue'

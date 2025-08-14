@@ -106,21 +106,32 @@ const defValue = parsedDefaultPropValue ? "_common.enabled_def_cbox" : "_common.
 
 <template>
   <div :class="extendedClassStr">
-    <label :for="props.id" :class="`form-check-label${showDesc ? ' mb-2' : ''}`">
+    <label
+      :for="props.id"
+      :class="`form-check-label${showDesc ? ' mb-2' : ''}`"
+    >
       {{ $t(labelField) }}
-      <div class="mt-0 form-text" v-if="showDefValue">
+      <div
+        v-if="showDefValue"
+        class="mt-0 form-text"
+      >
         {{ $t(defValue) }}
       </div>
     </label>
-    <input type="checkbox"
-           class="form-check-input"
-           :id="props.id"
-           v-model="model"
-           :true-value="checkboxValues.truthy"
-           :false-value="checkboxValues.falsy" />
-    <div class="form-text" v-if="showDesc">
+    <input
+      :id="props.id"
+      v-model="model"
+      type="checkbox"
+      class="form-check-input"
+      :true-value="checkboxValues.truthy"
+      :false-value="checkboxValues.falsy"
+    >
+    <div
+      v-if="showDesc"
+      class="form-text"
+    >
       {{ $t(descField) }}
-      <slot></slot>
+      <slot />
     </div>
   </div>
 </template>

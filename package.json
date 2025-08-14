@@ -2,27 +2,37 @@
   "name": "sunshine",
   "version": "0.0.0",
   "scripts": {
-  "build": "vite build --debug",
-  "build:debug": "vite build --mode development --debug",
+    "build": "vite build --debug",
+    "build:debug": "vite build --mode development --debug",
     "build-clean": "vite build --debug --emptyOutDir",
     "dev": "vite build --watch",
-    "serve": "serve ./tests/fixtures/http --no-port-switching"
+    "serve": "serve ./tests/fixtures/http --no-port-switching",
+  "lint": "eslint --ext .js,.ts,.vue src_assets/common/assets/web src_assets --max-warnings 0",
+  "lint:fix": "eslint --ext .js,.ts,.vue src_assets/common/assets/web src_assets --fix",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@lizardbyte/shared-web": "2025.626.181239",
     "@fortawesome/fontawesome-free": "6.5.2",
-  "pinia": "^2.1.8",
+    "@lizardbyte/shared-web": "2025.626.181239",
+    "axios": "1.7.7",
+    "pinia": "^2.1.8",
     "vue": "3.5.18",
     "vue-i18n": "11.1.11",
     "vue-router": "4.4.5"
   },
   "devDependencies": {
     "@codecov/vite-plugin": "1.9.1",
+    "@typescript-eslint/eslint-plugin": "^5.57.0",
+    "@typescript-eslint/parser": "^5.57.0",
     "@vitejs/plugin-vue": "4.6.2",
     "autoprefixer": "^10.4.20",
+    "eslint": "^8.57.1",
+    "eslint-plugin-vue": "^9.12.0",
     "serve": "14.2.4",
     "tailwindcss": "^3.4.10",
+    "typescript": "^5.9.2",
     "vite": "4.5.14",
-    "vite-plugin-ejs": "1.6.4"
+    "vite-plugin-ejs": "1.6.4",
+    "vue-eslint-parser": "^10.2.0"
   }
 }

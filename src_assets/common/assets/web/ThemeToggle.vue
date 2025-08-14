@@ -10,15 +10,29 @@ onMounted(() => {
 
 <template>
   <div class="relative inline-block text-left">
-    <button id="bd-theme" aria-haspopup="true" :aria-expanded="open" @click="open = !open" class="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5">
-      <span class="theme-icon-active"><i :class="activeIcon"></i></span>
+    <button
+      id="bd-theme"
+      aria-haspopup="true"
+      :aria-expanded="open"
+      class="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5"
+      @click="open = !open"
+    >
+      <span class="theme-icon-active"><i :class="activeIcon" /></span>
       <span id="bd-theme-text">{{ $t('navbar.toggle_theme') }}</span>
     </button>
 
-    <div v-if="open" class="origin-top-right absolute right-0 mt-2 w-44 rounded-md shadow-lg bg-white dark:bg-lunar-surface/90 ring-1 ring-black/5 dark:ring-white/5">
+    <div
+      v-if="open"
+      class="origin-top-right absolute right-0 mt-2 w-44 rounded-md shadow-lg bg-white dark:bg-lunar-surface/90 ring-1 ring-black/5 dark:ring-white/5"
+    >
       <div class="py-1">
-        <button v-for="opt in options" :key="opt.value" @click="select(opt.value)" :class="['w-full text-left px-3 py-2 flex items-center gap-2', opt.value === current ? 'bg-black/5 dark:bg-white/5' : '']">
-          <i :class="opt.icon"></i>
+        <button
+          v-for="opt in options"
+          :key="opt.value"
+          :class="['w-full text-left px-3 py-2 flex items-center gap-2', opt.value === current ? 'bg-black/5 dark:bg-white/5' : '']"
+          @click="select(opt.value)"
+        >
+          <i :class="opt.icon" />
           <span>{{ opt.label }}</span>
         </button>
       </div>
