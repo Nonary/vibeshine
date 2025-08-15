@@ -1,20 +1,11 @@
 <template>
   <div :class="outer">
-    <div
-      v-if="title || $slots.title"
-      class="mb-3 flex items-center gap-2"
-    >
-      <h2
-        v-if="title"
-        class="text-lg font-semibold tracking-tight"
-      >
+    <div v-if="title || $slots.title" class="mb-3 flex items-center gap-2">
+      <h2 v-if="title" class="text-lg font-semibold tracking-tight">
         {{ title }}
       </h2>
       <slot name="title" />
-      <div
-        v-if="$slots.actions"
-        class="ml-auto"
-      >
+      <div v-if="$slots.actions" class="ml-auto">
         <slot name="actions" />
       </div>
     </div>
@@ -28,16 +19,18 @@
   </div>
 </template>
 <script setup>
-import { computed } from 'vue'
+import { computed } from 'vue';
 const props = defineProps({
   elevated: { type: Boolean, default: true },
   padded: { type: Boolean, default: true },
-  title: { type: String, default: '' }
-})
-const outer = computed(() => [
-  'rounded-xl bg-solar-light dark:bg-lunar-surface text-solar-dark dark:text-lunar-light border border-solar-dark/10 dark:border-lunar-light/10',
-  props.elevated ? 'shadow-sm shadow-solar-dark/10 dark:shadow-lunar-dark/20' : '',
-  props.padded ? 'p-5' : ''
-].join(' '))
+  title: { type: String, default: '' },
+});
+const outer = computed(() =>
+  [
+    'rounded-xl bg-solar-light dark:bg-lunar-surface text-solar-dark dark:text-lunar-light border border-solar-dark/10 dark:border-lunar-light/10',
+    props.elevated ? 'shadow-sm shadow-solar-dark/10 dark:shadow-lunar-dark/20' : '',
+    props.padded ? 'p-5' : '',
+  ].join(' '),
+);
 </script>
 <style scoped></style>

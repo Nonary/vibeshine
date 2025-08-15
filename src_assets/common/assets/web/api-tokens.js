@@ -10,8 +10,8 @@ import ApiTokenManager from '@/ApiTokenManager.vue';
 const app = createApp({
   components: {
     Navbar,
-    ApiTokenManager
-  }
+    ApiTokenManager,
+  },
 });
 
 initApp(app);

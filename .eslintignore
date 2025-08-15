@@ -6,3 +6,5 @@ dist/
 public/
 src_assets/types/
 .d.ts
+third-party/
+coverage/

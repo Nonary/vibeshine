@@ -1,9 +1,12 @@
 <template>
-  <div class="min-h-screen flex flex-col bg-solar-light dark:bg-lunar-dark text-solar-dark dark:text-lunar-light">
+  <div
+    class="min-h-screen flex flex-col bg-solar-light dark:bg-lunar-dark text-solar-dark dark:text-lunar-light"
+  >
     <header
-      class="h-14 flex items-center gap-4 px-4 border-b border-solar-dark/10 dark:border-lunar-light/10 bg-solar-light/70 dark:bg-lunar-dark/60 backdrop-blur supports-[backdrop-filter]:bg-solar-light/40 supports-[backdrop-filter]:dark:bg-lunar-dark/40">
+      class="h-14 flex items-center gap-4 px-4 border-b border-solar-dark/10 dark:border-lunar-light/10 bg-solar-light/70 dark:bg-lunar-dark/60 backdrop-blur supports-[backdrop-filter]:bg-solar-light/40 supports-[backdrop-filter]:dark:bg-lunar-dark/40"
+    >
       <div class="flex items-center gap-3 min-w-0">
-        <img src="/images/logo-sunshine-45.png" alt="Sunshine" class="h-8 w-8">
+        <img src="/images/logo-sunshine-45.png" alt="Sunshine" class="h-8 w-8" />
         <h1 class="text-base md:text-lg font-semibold tracking-tight truncate">
           {{ displayTitle }}
         </h1>
@@ -24,7 +27,7 @@
         <RouterLink to="/troubleshooting" :class="linkClass('/troubleshooting')">
           <i class="fas fa-bug" /><span>{{ $t('navbar.troubleshoot') }}</span>
         </RouterLink>
-        <a href="#" @click.prevent="logout" :class="linkClass('/logout')">
+        <a href="#" :class="linkClass('/logout')" @click.prevent="logout">
           <i class="fas fa-sign-out-alt" /><span>{{ $t('navbar.logout') }}</span>
         </a>
       </nav>
@@ -41,18 +44,26 @@
     <LoginModal />
     <transition name="fade-fast">
       <div v-if="loggedOut" class="fixed inset-0 z-[120] flex flex-col">
-        <div class="absolute inset-0 bg-gradient-to-br from-black/70 via-black/60 to-black/70 backdrop-blur-md"></div>
+        <div
+          class="absolute inset-0 bg-gradient-to-br from-black/70 via-black/60 to-black/70 backdrop-blur-md"
+        ></div>
         <div class="relative flex-1 flex flex-col items-center justify-center p-6 overflow-y-auto">
           <div class="w-full max-w-md mx-auto text-center space-y-6">
-            <img src="/images/logo-sunshine-45.png" alt="Sunshine" class="h-24 w-24 opacity-80 mx-auto select-none">
+            <img
+              src="/images/logo-sunshine-45.png"
+              alt="Sunshine"
+              class="h-24 w-24 opacity-80 mx-auto select-none"
+            />
             <div class="space-y-2">
               <h2 class="text-2xl font-semibold tracking-tight">{{ $t('auth.logout_success') }}</h2>
               <p class="text-sm opacity-80 leading-relaxed">{{ $t('auth.logout_refresh_hint') }}</p>
             </div>
             <div class="flex items-center justify-center pt-2">
-              <button type="button"
+              <button
+                type="button"
                 class="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold tracking-wide bg-solar-primary/80 dark:bg-lunar-primary/80 text-solar-onPrimary dark:text-lunar-onPrimary shadow hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-solar-primary/60 dark:focus-visible:ring-lunar-primary/60 transition disabled:opacity-50"
-                @click="refreshPage">
+                @click="refreshPage"
+              >
                 {{ $t('auth.logout_refresh_button') }}
                 <i class="fas fa-rotate" />
               </button>
@@ -65,61 +76,70 @@
   </div>
 </template>
 <script setup>
-import { ref, watch, computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import ThemeToggle from '@/ThemeToggle.vue'
-import StreamingStatus from '@/components/StreamingStatus.vue'
-import LoginModal from '@/components/LoginModal.vue'
-import { http } from '@/http.js'
+import { ref, watch, computed } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import ThemeToggle from '@/ThemeToggle.vue';
+import StreamingStatus from '@/components/StreamingStatus.vue';
+import LoginModal from '@/components/LoginModal.vue';
+import { http } from '@/http.js';
 
-const route = useRoute()
+const route = useRoute();
 
 const linkClass = (path) => {
-  const base = 'inline-flex items-center gap-2 px-3 py-1 rounded-md text-solar-secondary dark:text-lunar-onSecondary'
-  const active = route.path === path
-  if (active) return base + ' font-semibold bg-solar-primary/20 dark:bg-lunar-primary/20 text-solar-secondary dark:text-lunar-onSecondary'
-  return base + ' hover:bg-solar-primary/10 dark:hover:bg-lunar-primary/10'
-}
-const pageTitle = ref('Dashboard')
+  const base =
+    'inline-flex items-center gap-2 px-3 py-1 rounded-md text-solar-secondary dark:text-lunar-onSecondary';
+  const active = route.path === path;
+  if (active)
+    return (
+      base +
+      ' font-semibold bg-solar-primary/20 dark:bg-lunar-primary/20 text-solar-secondary dark:text-lunar-onSecondary'
+    );
+  return base + ' hover:bg-solar-primary/10 dark:hover:bg-lunar-primary/10';
+};
+const pageTitle = ref('Dashboard');
 const displayTitle = computed(() => {
   // If pageTitle is an i18n key like 'navbar.troubleshoot', call $t from template via global $t
   // We return the key here; template will call $t when necessary using a heuristic there.
-  return pageTitle.value
-})
+  return pageTitle.value;
+});
 // app bar only; sidebar removed
 
-watch(() => route.path, (p) => {
-  const map = {
-    '/': 'Dashboard',
-    '/applications': 'Applications',
-    '/settings': 'Settings',
-    '/logs': 'navbar.troubleshoot',
-    '/troubleshooting': 'navbar.troubleshoot',
-    '/clients': 'clients.nav'
-  }
-  const v = map[p] || 'Sunshine'
-  // If the map value is an i18n key (contains a dot), try to translate it
-  if (typeof v === 'string' && v.indexOf('.') !== -1 && typeof useI18n !== 'undefined') {
-    // useI18n is not available in this scope, so rely on $t in template — store the key
-    pageTitle.value = v
-  } else {
-    pageTitle.value = v
-  }
-}, { immediate: true })
+watch(
+  () => route.path,
+  (p) => {
+    const map = {
+      '/': 'Dashboard',
+      '/applications': 'Applications',
+      '/settings': 'Settings',
+      '/logs': 'navbar.troubleshoot',
+      '/troubleshooting': 'navbar.troubleshoot',
+      '/clients': 'clients.nav',
+    };
+    const v = map[p] || 'Sunshine';
+    // If the map value is an i18n key (contains a dot), try to translate it
+    if (typeof v === 'string' && v.indexOf('.') !== -1 && typeof useI18n !== 'undefined') {
+      // useI18n is not available in this scope, so rely on $t in template — store the key
+      pageTitle.value = v;
+    } else {
+      pageTitle.value = v;
+    }
+  },
+  { immediate: true },
+);
 
-const loggedOut = ref(false)
+const loggedOut = ref(false);
 
 async function logout() {
   try {
-    await http.post('/api/auth/logout', {}, { validateStatus: () => true })
+    await http.post('/api/auth/logout', {}, { validateStatus: () => true });
   } catch (e) {
-    console.error('Logout failed:', e)
+    console.error('Logout failed:', e);
   }
-  loggedOut.value = true
+  loggedOut.value = true;
 }
 
 function refreshPage() {
-  window.location.reload()
+  window.location.reload();
 }
 
 // Removed close tab functionality per requirements

@@ -5,8 +5,10 @@
     </h1>
 
     <!-- Generate token -->
-    <section id="generate-token-section"
-      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent">
+    <section
+      id="generate-token-section"
+      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent"
+    >
       <div class="px-4 py-3 border-b border-black/5 dark:border-white/10 flex items-center">
         <h2 class="text-lg font-medium m-0">
           {{ $t('auth.generate_new_token') }}
@@ -19,30 +21,46 @@
 
         <form novalidate @submit.prevent="generateToken">
           <div class="flex flex-col space-y-3">
-            <div v-for="(scope, idx) in scopes" :key="scope.id ?? idx"
-              class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+            <div
+              v-for="(scope, idx) in scopes"
+              :key="scope.id ?? idx"
+              class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end"
+            >
               <div class="col-span-12 md:col-span-5">
-                <label :for="'scope-path-' + idx" class="block text-sm font-medium mb-1">{{ $t('auth.select_api_path')
-                  }}</label>
-                <select :id="'scope-path-' + idx" v-model="scope.path"
+                <label :for="'scope-path-' + idx" class="block text-sm font-medium mb-1">{{
+                  $t('auth.select_api_path')
+                }}</label>
+                <select
+                  :id="'scope-path-' + idx"
+                  v-model="scope.path"
                   class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70"
-                  @change="onScopePathChange(scope)">
+                  @change="onScopePathChange(scope)"
+                >
                   <option value="" disabled>
                     {{ $t('auth.select_api_path') }}
                   </option>
-                  <option v-for="route in apiRoutes.filter(r => r.selectable !== false)" :key="route.path"
-                    :value="route.path">
+                  <option
+                    v-for="route in apiRoutes.filter((r) => r.selectable !== false)"
+                    :key="route.path"
+                    :value="route.path"
+                  >
                     {{ route.path }}
                   </option>
                 </select>
               </div>
 
               <div class="col-span-12 md:col-span-5">
-                <label :for="'scope-methods-' + idx" class="block text-sm font-medium mb-1">{{ $t('auth.scopes')
-                  }}</label>
-                <select :id="'scope-methods-' + idx" v-model="scope.methods"
+                <label :for="'scope-methods-' + idx" class="block text-sm font-medium mb-1">{{
+                  $t('auth.scopes')
+                }}</label>
+                <select
+                  :id="'scope-methods-' + idx"
+                  v-model="scope.methods"
                   class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70"
-                  multiple size="4" :disabled="!scope.path">
+                  multiple
+                  size="4"
+                  :disabled="!scope.path"
+                >
                   <option v-for="m in getMethodsForPath(scope.path)" :key="m" :value="m">
                     {{ m }}
                   </option>
@@ -50,19 +68,24 @@
               </div>
 
               <div class="col-span-12 md:col-span-2 flex">
-                <button type="button"
+                <button
+                  type="button"
                   class="w-full inline-flex items-center justify-center px-3 py-2 rounded-md bg-red-600 text-white text-sm hover:bg-red-700"
                   :aria-label="$t('auth.remove')"
-                  :disabled="scopes.length === 1 && !scope.path && !scope.methods?.length" @click="removeScope(idx)">
+                  :disabled="scopes.length === 1 && !scope.path && !scope.methods?.length"
+                  @click="removeScope(idx)"
+                >
                   {{ $t('auth.remove') }}
                 </button>
               </div>
             </div>
 
             <div class="flex items-center gap-2">
-              <button type="button"
+              <button
+                type="button"
                 class="inline-flex items-center px-3 py-2 rounded-md bg-sky-600 text-white text-sm hover:bg-sky-700"
-                @click="addScope">
+                @click="addScope"
+              >
                 {{ $t('auth.add_scope') }}
               </button>
               <span v-if="isGenerateDisabled" class="text-[13px] text-muted">
@@ -74,41 +97,63 @@
               <strong class="mr-2">{{ $t('auth.selected_scopes') }}:</strong>
               <div class="flex flex-wrap items-center gap-2 mt-2">
                 <template v-for="(s, i) in validScopes" :key="i">
-                  <span class="inline-flex items-center bg-gray-100 dark:bg-gray-800 text-sm rounded px-2 py-0.5">
+                  <span
+                    class="inline-flex items-center bg-gray-100 dark:bg-gray-800 text-sm rounded px-2 py-0.5"
+                  >
                     <span class="font-semibold mr-2">{{ s.path }}</span>
-                    <span v-for="m in s.methods" :key="m"
-                      class="ml-1 inline-flex items-center bg-sky-500 text-white text-xs uppercase rounded px-2 py-0.5">{{
-                      m }}</span>
+                    <span
+                      v-for="m in s.methods"
+                      :key="m"
+                      class="ml-1 inline-flex items-center bg-sky-500 text-white text-xs uppercase rounded px-2 py-0.5"
+                      >{{ m }}</span
+                    >
                   </span>
                 </template>
               </div>
             </div>
 
             <div class="flex gap-2">
-              <button type="submit"
+              <button
+                type="submit"
                 class="inline-flex items-center px-4 py-2 rounded-md bg-sky-600 text-white text-sm hover:bg-sky-700"
-                :disabled="isGenerateDisabled || isGenerating">
+                :disabled="isGenerateDisabled || isGenerating"
+              >
                 <span v-if="!isGenerating">{{ $t('auth.generate_token') }}</span>
                 <span v-else>{{ $t('auth.loading') }}</span>
               </button>
-              <button type="button"
+              <button
+                type="button"
                 class="inline-flex items-center px-4 py-2 rounded-md bg-gray-200 dark:bg-gray-700 text-sm"
-                :disabled="isGenerating" @click="resetForm">
+                :disabled="isGenerating"
+                @click="resetForm"
+              >
                 {{ $t('_common.cancel') }}
               </button>
             </div>
 
-            <div v-if="displayedToken" class="mt-2 bg-green-50 border border-green-200 rounded p-3" role="status"
-              aria-live="polite">
+            <div
+              v-if="displayedToken"
+              class="mt-2 bg-green-50 border border-green-200 rounded p-3"
+              role="status"
+              aria-live="polite"
+            >
               <div class="mb-2 font-medium">
                 {{ $t('auth.token_success') }}
               </div>
               <div class="flex gap-2">
-                <input type="text" class="flex-1 px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-                  :value="displayedToken" readonly>
-                <button type="button"
+                <input
+                  type="text"
+                  class="flex-1 px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
+                  :value="displayedToken"
+                  readonly
+                />
+                <button
+                  type="button"
                   class="inline-flex items-center px-3 py-2 rounded-md bg-green-600 text-white text-sm hover:bg-green-700"
-                  :disabled="tokenCopied" :title="$t('auth.copy_token')" @click="copyToken">
+                  :disabled="tokenCopied"
+                  :title="$t('auth.copy_token')"
+                  @click="copyToken"
+                >
                   {{ tokenCopied ? $t('auth.token_copied') : $t('auth.copy_token') }}
                 </button>
               </div>
@@ -119,15 +164,20 @@
     </section>
 
     <!-- Active tokens -->
-    <section id="active-tokens-section"
-      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent">
+    <section
+      id="active-tokens-section"
+      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent"
+    >
       <div class="px-4 py-3 border-b border-black/5 dark:border-white/10 flex items-center">
         <h2 class="text-lg font-medium m-0">
           {{ $t('auth.active_tokens') }}
         </h2>
-        <button type="button"
+        <button
+          type="button"
           class="ml-auto inline-flex items-center px-3 py-1 rounded-md bg-gray-200 dark:bg-gray-700 text-sm"
-          :disabled="isLoadingTokens" @click="loadTokens">
+          :disabled="isLoadingTokens"
+          @click="loadTokens"
+        >
           {{ $t('auth.refresh') }}
         </button>
       </div>
@@ -135,13 +185,21 @@
         <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end mb-3">
           <div class="col-span-1 md:col-span-6">
             <label class="block text-sm font-medium">{{ $t('auth.search_tokens') }}</label>
-            <input v-model="tokenFilter" type="text"
+            <input
+              v-model="tokenFilter"
+              type="text"
               class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-              :placeholder="$t('auth.search_tokens')" autocomplete="off" @input="onFilterInput">
+              :placeholder="$t('auth.search_tokens')"
+              autocomplete="off"
+              @input="onFilterInput"
+            />
           </div>
           <div class="col-span-1 md:col-span-3">
             <label class="block text-sm font-medium">{{ $t('auth.sort_field') }}</label>
-            <select v-model="sortField" class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15">
+            <select
+              v-model="sortField"
+              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
+            >
               <option value="created_at">
                 {{ $t('auth.created') }}
               </option>
@@ -155,7 +213,10 @@
           </div>
           <div class="col-span-1 md:col-span-3">
             <label class="block text-sm font-medium">{{ $t('auth.sort_direction') }}</label>
-            <select v-model="sortDir" class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15">
+            <select
+              v-model="sortDir"
+              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
+            >
               <option value="desc">
                 {{ $t('auth.desc') }}
               </option>
@@ -189,17 +250,20 @@
                 </td>
               </tr>
               <tr v-for="t in sortedTokens" :key="t.hash">
-                <td class="truncate" style="max-width: 160px;">
+                <td class="truncate" style="max-width: 160px">
                   <div class="flex items-center gap-2">
                     <code class="truncate" :title="t.hash">{{ t.hash }}</code>
-                    <button type="button"
+                    <button
+                      type="button"
                       class="inline-flex items-center px-2 py-1 rounded-md bg-gray-200 dark:bg-gray-700 text-sm"
-                      :disabled="copiedHash === t.hash" @click.prevent="copyHash(t.hash)">
+                      :disabled="copiedHash === t.hash"
+                      @click.prevent="copyHash(t.hash)"
+                    >
                       {{ copiedHash === t.hash ? $t('auth.hash_copied') : $t('auth.copy_hash') }}
                     </button>
                   </div>
                 </td>
-                <td class="truncate" style="max-width: 160px;">
+                <td class="truncate" style="max-width: 160px">
                   {{ t.username }}
                 </td>
                 <td :title="formatFullDate(t.created_at)">
@@ -209,17 +273,24 @@
                   <div class="flex flex-wrap gap-1">
                     <span v-for="(s, i) in t.scopes" :key="i" class="inline-flex items-center">
                       <span
-                        class="inline-flex items-center bg-gray-100 dark:bg-gray-800 text-sm rounded px-2 py-0.5 mr-1">{{
-                        s.path }}</span>
-                      <span v-for="m in s.methods" :key="m"
-                        class="inline-flex items-center bg-sky-500 text-white text-xs uppercase rounded px-2 py-0.5 mr-1">{{
-                        m }}</span>
+                        class="inline-flex items-center bg-gray-100 dark:bg-gray-800 text-sm rounded px-2 py-0.5 mr-1"
+                        >{{ s.path }}</span
+                      >
+                      <span
+                        v-for="m in s.methods"
+                        :key="m"
+                        class="inline-flex items-center bg-sky-500 text-white text-xs uppercase rounded px-2 py-0.5 mr-1"
+                        >{{ m }}</span
+                      >
                     </span>
                   </div>
                 </td>
                 <td class="text-right">
-                  <button class="inline-flex items-center px-3 py-1 rounded-md bg-red-600 text-white text-sm"
-                    :disabled="revoking === t.hash" @click="revokeToken(t.hash)">
+                  <button
+                    class="inline-flex items-center px-3 py-1 rounded-md bg-red-600 text-white text-sm"
+                    :disabled="revoking === t.hash"
+                    @click="revokeToken(t.hash)"
+                  >
                     {{ $t('auth.revoke') }}
                   </button>
                 </td>
@@ -231,8 +302,10 @@
     </section>
 
     <!-- Test token -->
-    <section id="test-token-section"
-      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent">
+    <section
+      id="test-token-section"
+      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent"
+    >
       <div class="px-4 py-3 border-b border-black/5 dark:border-white/10">
         <h2 class="text-lg font-medium m-0">
           {{ $t('auth.test_api_token') }}
@@ -244,27 +317,49 @@
         </p>
         <form class="grid grid-cols-1 md:grid-cols-12 gap-3" @submit.prevent="testToken">
           <div class="col-span-1 md:col-span-6">
-            <label for="testPath" class="block text-sm font-medium">{{ $t('auth.api_path_get_only') }}</label>
-            <select id="testPath" v-model="testPath"
-              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15" required>
+            <label for="testPath" class="block text-sm font-medium">{{
+              $t('auth.api_path_get_only')
+            }}</label>
+            <select
+              id="testPath"
+              v-model="testPath"
+              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
+              required
+            >
               <option value="" disabled>
                 {{ $t('auth.select_api_path_to_test') }}
               </option>
-              <option v-for="route in apiRoutes.filter(r => (r.selectable !== false) && r.methods.includes('GET'))"
-                :key="route.path" :value="route.path">
+              <option
+                v-for="route in apiRoutes.filter(
+                  (r) => r.selectable !== false && r.methods.includes('GET'),
+                )"
+                :key="route.path"
+                :value="route.path"
+              >
                 {{ route.path }}
               </option>
             </select>
           </div>
           <div class="col-span-1 md:col-span-6">
-            <label for="testTokenInput" class="block text-sm font-medium">{{ $t('auth.token') }}</label>
-            <input id="testTokenInput" v-model="testTokenInput" type="password"
-              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15" autocomplete="off"
-              :placeholder="$t('auth.paste_token_here')" required>
+            <label for="testTokenInput" class="block text-sm font-medium">{{
+              $t('auth.token')
+            }}</label>
+            <input
+              id="testTokenInput"
+              v-model="testTokenInput"
+              type="password"
+              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
+              autocomplete="off"
+              :placeholder="$t('auth.paste_token_here')"
+              required
+            />
           </div>
           <div class="col-span-1">
-            <button type="submit" class="inline-flex items-center px-4 py-2 rounded-md bg-sky-600 text-white text-sm"
-              :disabled="isTesting || !testPath || !testTokenInput">
+            <button
+              type="submit"
+              class="inline-flex items-center px-4 py-2 rounded-md bg-sky-600 text-white text-sm"
+              :disabled="isTesting || !testPath || !testTokenInput"
+            >
               <span v-if="!isTesting">{{ $t('auth.test_token') }}</span>
               <span v-else>{{ $t('auth.loading') }}</span>
             </button>
@@ -278,7 +373,9 @@
           <div v-if="testError" class="bg-red-50 border border-red-200 rounded p-2 text-sm">
             {{ testError }}
           </div>
-          <pre v-if="testResult" class="bg-gray-50 dark:bg-gray-900 p-2 rounded text-sm mb-0">{{ testResult }}</pre>
+          <pre v-if="testResult" class="bg-gray-50 dark:bg-gray-900 p-2 rounded text-sm mb-0">{{
+            testResult
+          }}</pre>
         </div>
       </div>
     </section>
@@ -286,32 +383,32 @@
 </template>
 
 <script>
-import { defineComponent } from 'vue'
-import { http } from '@/http.js'
+import { defineComponent } from 'vue';
+import { http } from '@/http.js';
 
 /**
  * List of available API routes and their supported methods
  * @type {Array<{path: string, methods: string[]}>}
  */
 const API_ROUTES = [
-  { path: "/api/pin", methods: ["POST"] },
-  { path: "/api/apps", methods: ["GET", "POST"] },
-  { path: "/api/logs", methods: ["GET"] },
-  { path: "/api/config", methods: ["GET", "POST"] },
-  { path: "/api/configLocale", methods: ["GET"] },
-  { path: "/api/restart", methods: ["POST"] },
-  { path: "/api/reset-display-device-persistence", methods: ["POST"] },
-  { path: "/api/password", methods: ["POST"] },
-  { path: "/api/apps/([0-9]+)", methods: ["DELETE"] },
-  { path: "/api/clients/unpair-all", methods: ["POST"] },
-  { path: "/api/clients/list", methods: ["GET"] },
-  { path: "/api/clients/unpair", methods: ["POST"] },
-  { path: "/api/apps/close", methods: ["POST"] },
-  { path: "/api/covers/upload", methods: ["POST"] },
-  { path: "/api/token", methods: ["POST"] },
-  { path: "/api/tokens", methods: ["GET"] },
-  { path: "/api/token/([a-fA-F0-9]+)", methods: ["DELETE"] }
-]
+  { path: '/api/pin', methods: ['POST'] },
+  { path: '/api/apps', methods: ['GET', 'POST'] },
+  { path: '/api/logs', methods: ['GET'] },
+  { path: '/api/config', methods: ['GET', 'POST'] },
+  { path: '/api/configLocale', methods: ['GET'] },
+  { path: '/api/restart', methods: ['POST'] },
+  { path: '/api/reset-display-device-persistence', methods: ['POST'] },
+  { path: '/api/password', methods: ['POST'] },
+  { path: '/api/apps/([0-9]+)', methods: ['DELETE'] },
+  { path: '/api/clients/unpair-all', methods: ['POST'] },
+  { path: '/api/clients/list', methods: ['GET'] },
+  { path: '/api/clients/unpair', methods: ['POST'] },
+  { path: '/api/apps/close', methods: ['POST'] },
+  { path: '/api/covers/upload', methods: ['POST'] },
+  { path: '/api/token', methods: ['POST'] },
+  { path: '/api/tokens', methods: ['GET'] },
+  { path: '/api/token/([a-fA-F0-9]+)', methods: ['DELETE'] },
+];
 
 export default defineComponent({
   name: 'ApiTokenManager',
@@ -336,45 +433,66 @@ export default defineComponent({
       testTokenInput: '',
       testResult: '',
       testError: '',
-      isTesting: false
-    }
+      isTesting: false,
+    };
   },
   computed: {
     validScopes() {
-      const filtered = this.scopes.filter(s => s.path && s.methods && Array.isArray(s.methods) && s.methods.length > 0)
-      return filtered
+      const filtered = this.scopes.filter(
+        (s) => s.path && s.methods && Array.isArray(s.methods) && s.methods.length > 0,
+      );
+      return filtered;
     },
-    isGenerateDisabled() { return !this.validScopes.length || this.isGenerating },
+    isGenerateDisabled() {
+      return !this.validScopes.length || this.isGenerating;
+    },
     filteredTokens() {
-      const filter = (this.debouncedFilter || '').trim().toLowerCase()
-      if (!filter) return this.tokens
-      return this.tokens.filter(t =>
-        t.username.toLowerCase().includes(filter) ||
-        t.hash.toLowerCase().includes(filter) ||
-        (t.scopes || []).some(s => s.path.toLowerCase().includes(filter))
-      )
+      const filter = (this.debouncedFilter || '').trim().toLowerCase();
+      if (!filter) return this.tokens;
+      return this.tokens.filter(
+        (t) =>
+          t.username.toLowerCase().includes(filter) ||
+          t.hash.toLowerCase().includes(filter) ||
+          (t.scopes || []).some((s) => s.path.toLowerCase().includes(filter)),
+      );
     },
     sortedTokens() {
-      const arr = [...this.filteredTokens]
+      const arr = [...this.filteredTokens];
       arr.sort((a, b) => {
-        let av, bv
-        if (this.sortField === 'created_at') { av = a.created_at; bv = b.created_at }
-        else if (this.sortField === 'username') { av = a.username.toLowerCase(); bv = b.username.toLowerCase() }
-        else { av = a.hash.toLowerCase(); bv = b.hash.toLowerCase() }
-        if (av < bv) return this.sortDir === 'asc' ? -1 : 1
-        if (av > bv) return this.sortDir === 'asc' ? 1 : -1
-        return 0
-      })
-      return arr
-    }
+        let av, bv;
+        if (this.sortField === 'created_at') {
+          av = a.created_at;
+          bv = b.created_at;
+        } else if (this.sortField === 'username') {
+          av = a.username.toLowerCase();
+          bv = b.username.toLowerCase();
+        } else {
+          av = a.hash.toLowerCase();
+          bv = b.hash.toLowerCase();
+        }
+        if (av < bv) return this.sortDir === 'asc' ? -1 : 1;
+        if (av > bv) return this.sortDir === 'asc' ? 1 : -1;
+        return 0;
+      });
+      return arr;
+    },
   },
   mounted() {
-    this.loadTokens()
-    if (this.$t) { document.title = this.$t('auth.title') }
+    this.loadTokens();
+    if (this.$t) {
+      document.title = this.$t('auth.title');
+    }
     if (this.$i18n && this.$i18n.watchLocale) {
-      this.$i18n.watchLocale(() => { document.title = this.$t('auth.title') })
+      this.$i18n.watchLocale(() => {
+        document.title = this.$t('auth.title');
+      });
     } else if (this.$i18n && this.$i18n.locale) {
-      this.$watch(() => this.$i18n.locale, () => { document.title = this.$t('auth.title') })
+      this.$watch(
+        () => this.$i18n.locale,
+        () => {
+          document.title = this.$t('auth.title');
+        },
+      );
     }
   },
   methods: {
@@ -383,10 +501,10 @@ export default defineComponent({
      * @returns {void}
      */
     addScope() {
-      this.scopes.push({ path: '', methods: [] })
+      this.scopes.push({ path: '', methods: [] });
     },
     onScopePathChange(scope) {
-      scope.methods = []
+      scope.methods = [];
     },
     /**
      * Remove a scope from the scopes list
@@ -395,10 +513,10 @@ export default defineComponent({
      */
     removeScope(idx) {
       if (this.scopes.length > 1) {
-        this.scopes.splice(idx, 1)
+        this.scopes.splice(idx, 1);
       } else {
         // Clear instead of removing the last row entirely for better UX
-        this.scopes[0] = { path: '', methods: [] }
+        this.scopes[0] = { path: '', methods: [] };
       }
     },
 
@@ -408,8 +526,8 @@ export default defineComponent({
      * @returns {string[]} Array of HTTP methods
      */
     getMethodsForPath(path) {
-      const found = this.apiRoutes.find(r => r.path === path)
-      return found ? found.methods : ["GET", "POST", "DELETE", "PATCH", "PUT"]
+      const found = this.apiRoutes.find((r) => r.path === path);
+      return found ? found.methods : ['GET', 'POST', 'DELETE', 'PATCH', 'PUT'];
     },
 
     /**
@@ -417,10 +535,10 @@ export default defineComponent({
      * @returns {void}
      */
     resetForm() {
-      this.scopes = [{ path: '', methods: [] }]
-      this.tokenResult = ''
-      this.displayedToken = ''
-      this.tokenCopied = false
+      this.scopes = [{ path: '', methods: [] }];
+      this.tokenResult = '';
+      this.displayedToken = '';
+      this.tokenCopied = false;
     },
 
     /**
@@ -428,23 +546,33 @@ export default defineComponent({
      * @returns {Promise<void>}
      */
     async generateToken() {
-      const filtered = this.validScopes
+      const filtered = this.validScopes;
       if (!filtered.length) {
-        alert(this.$t('auth.please_specify_scope'))
-        return
+        alert(this.$t('auth.please_specify_scope'));
+        return;
       }
-      this.isGenerating = true
-      this.tokenCopied = false
+      this.isGenerating = true;
+      this.tokenCopied = false;
       try {
-        const res = await http.post('/api/token', { scopes: filtered }, { validateStatus: () => true })
-        const data = res.data || {}
-        if (res.status === 200 && data.token) { this.tokenResult = data.token; this.displayedToken = data.token; await this.loadTokens() }
-        else { this.tokenResult = `Error: ${data.error || this.$t('auth.failed_to_generate_token')}`; this.displayedToken = '' }
+        const res = await http.post(
+          '/api/token',
+          { scopes: filtered },
+          { validateStatus: () => true },
+        );
+        const data = res.data || {};
+        if (res.status === 200 && data.token) {
+          this.tokenResult = data.token;
+          this.displayedToken = data.token;
+          await this.loadTokens();
+        } else {
+          this.tokenResult = `Error: ${data.error || this.$t('auth.failed_to_generate_token')}`;
+          this.displayedToken = '';
+        }
       } catch (e) {
-        this.tokenResult = `${this.$t('auth.request_failed')}: ${e.message}`
-        this.displayedToken = ''
+        this.tokenResult = `${this.$t('auth.request_failed')}: ${e.message}`;
+        this.displayedToken = '';
       } finally {
-        this.isGenerating = false
+        this.isGenerating = false;
       }
     },
 
@@ -453,16 +581,20 @@ export default defineComponent({
      * @returns {Promise<void>}
      */
     async loadTokens() {
-      this.isLoadingTokens = true
+      this.isLoadingTokens = true;
       try {
-        const res = await http.get('/api/tokens', { validateStatus: () => true })
-        if (res.status === 200) { this.tokens = res.data || [] }
-        else { console.error('Failed to load tokens'); this.tokens = [] }
+        const res = await http.get('/api/tokens', { validateStatus: () => true });
+        if (res.status === 200) {
+          this.tokens = res.data || [];
+        } else {
+          console.error('Failed to load tokens');
+          this.tokens = [];
+        }
       } catch (e) {
-        console.error('Error fetching tokens:', e)
-        this.tokens = []
+        console.error('Error fetching tokens:', e);
+        this.tokens = [];
       } finally {
-        this.isLoadingTokens = false
+        this.isLoadingTokens = false;
       }
     },
 
@@ -472,16 +604,19 @@ export default defineComponent({
      * @returns {Promise<void>}
      */
     async revokeToken(hash) {
-      if (!confirm(this.$t('auth.confirm_revoke'))) return
-      this.revoking = hash
+      if (!confirm(this.$t('auth.confirm_revoke'))) return;
+      this.revoking = hash;
       try {
-        const res = await http.delete(`/api/token/${hash}`, { validateStatus: () => true })
-        if (res.status === 200) { await this.loadTokens() }
-        else { alert(this.$t('auth.failed_to_revoke_token')) }
+        const res = await http.delete(`/api/token/${hash}`, { validateStatus: () => true });
+        if (res.status === 200) {
+          await this.loadTokens();
+        } else {
+          alert(this.$t('auth.failed_to_revoke_token'));
+        }
       } catch (e) {
-        alert(`${this.$t('auth.error_revoking_token')}: ${e.message}`)
+        alert(`${this.$t('auth.error_revoking_token')}: ${e.message}`);
       } finally {
-        this.revoking = ''
+        this.revoking = '';
       }
     },
 
@@ -491,8 +626,12 @@ export default defineComponent({
      * @returns {string} Formatted date string
      */
     formatDate(ts) {
-      const d = new Date(ts * 1000)
-      return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      const d = new Date(ts * 1000);
+      return (
+        d.toLocaleDateString() +
+        ' ' +
+        d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      );
     },
 
     /**
@@ -501,7 +640,7 @@ export default defineComponent({
      * @returns {string} Full formatted date string
      */
     formatFullDate(ts) {
-      return new Date(ts * 1000).toLocaleString()
+      return new Date(ts * 1000).toLocaleString();
     },
 
     /**
@@ -509,46 +648,70 @@ export default defineComponent({
      * @returns {Promise<void>}
      */
     async testToken() {
-      this.testResult = ''
-      this.testError = ''
+      this.testResult = '';
+      this.testError = '';
       if (!this.testPath || !this.testTokenInput) {
-        this.testError = this.$t('auth.select_api_path_and_token')
-        return
+        this.testError = this.$t('auth.select_api_path_and_token');
+        return;
       }
-      this.isTesting = true
+      this.isTesting = true;
       try {
-        const res = await http.get(this.testPath, { headers: { 'Authorization': 'Bearer ' + this.testTokenInput }, validateStatus: () => true, responseType: 'text', transformResponse: [v => v] })
-        const contentType = res.headers ? (res.headers['content-type'] || res.headers['Content-Type']) : ''
-        let bodyText = res.data
-        let isJson = contentType && contentType.indexOf('application/json') !== -1 && bodyText
-        if (isJson) { try { this.testResult = JSON.stringify(JSON.parse(bodyText), null, 2) } catch { this.testResult = bodyText } }
-        else { this.testResult = bodyText }
-        if (res.status < 200 || res.status >= 300) { this.testError = `HTTP ${res.status}` } else { this.testError = '' }
+        const res = await http.get(this.testPath, {
+          headers: { Authorization: 'Bearer ' + this.testTokenInput },
+          validateStatus: () => true,
+          responseType: 'text',
+          transformResponse: [(v) => v],
+        });
+        const contentType = res.headers
+          ? res.headers['content-type'] || res.headers['Content-Type']
+          : '';
+        let bodyText = res.data;
+        let isJson = contentType && contentType.indexOf('application/json') !== -1 && bodyText;
+        if (isJson) {
+          try {
+            this.testResult = JSON.stringify(JSON.parse(bodyText), null, 2);
+          } catch {
+            this.testResult = bodyText;
+          }
+        } else {
+          this.testResult = bodyText;
+        }
+        if (res.status < 200 || res.status >= 300) {
+          this.testError = `HTTP ${res.status}`;
+        } else {
+          this.testError = '';
+        }
       } catch (e) {
-        this.testError = `${this.$t('auth.request_failed')}: ${e.message}`
+        this.testError = `${this.$t('auth.request_failed')}: ${e.message}`;
       } finally {
-        this.isTesting = false
+        this.isTesting = false;
       }
     },
     copyToken() {
-      if (!this.displayedToken) return
+      if (!this.displayedToken) return;
       navigator.clipboard?.writeText(this.displayedToken).then(() => {
-        this.tokenCopied = true
-        setTimeout(() => { this.tokenCopied = false }, 3000)
-      })
+        this.tokenCopied = true;
+        setTimeout(() => {
+          this.tokenCopied = false;
+        }, 3000);
+      });
     },
     onFilterInput() {
-      clearTimeout(this._filterTimer)
-      this._filterTimer = setTimeout(() => { this.debouncedFilter = this.tokenFilter }, 180)
+      clearTimeout(this._filterTimer);
+      this._filterTimer = setTimeout(() => {
+        this.debouncedFilter = this.tokenFilter;
+      }, 180);
     },
     copyHash(hash) {
       navigator.clipboard?.writeText(hash).then(() => {
-        this.copiedHash = hash
-        setTimeout(() => { if (this.copiedHash === hash) this.copiedHash = '' }, 2000)
-      })
-    }
-  }
-})
+        this.copiedHash = hash;
+        setTimeout(() => {
+          if (this.copiedHash === hash) this.copiedHash = '';
+        }, 2000);
+      });
+    },
+  },
+});
 </script>
 
 <style scoped>
@@ -578,8 +741,8 @@ export default defineComponent({
 .scope-label {
   font-size: 0.75rem;
   text-transform: uppercase;
-  letter-spacing: .05em;
-  opacity: .7;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
   margin-bottom: 0.15rem;
 }
 
@@ -602,8 +765,8 @@ export default defineComponent({
 
 .method-chip-group {
   display: inline-block;
-  margin-right: .5rem;
-  margin-top: .25rem;
+  margin-right: 0.5rem;
+  margin-top: 0.25rem;
 }
 
 .path-chip {
@@ -638,7 +801,7 @@ export default defineComponent({
 .token-actions {
   display: flex;
   align-items: center;
-  gap: .75rem;
+  gap: 0.75rem;
 }
 
 .copy-feedback {
@@ -654,22 +817,22 @@ export default defineComponent({
 .filter-row {
   display: flex;
   flex-wrap: wrap;
-  gap: .75rem;
+  gap: 0.75rem;
   align-items: flex-end;
 }
 
 .sort-controls {
   display: flex;
-  gap: .5rem;
+  gap: 0.5rem;
 }
 
 .sort-controls label {
   display: flex;
   flex-direction: column;
-  font-size: .65rem;
+  font-size: 0.65rem;
   text-transform: uppercase;
-  letter-spacing: .05em;
-  opacity: .75;
+  letter-spacing: 0.05em;
+  opacity: 0.75;
 }
 
 .hash-wrapper {
@@ -684,15 +847,15 @@ export default defineComponent({
 }
 
 .mini-btn {
-  font-size: .6rem;
-  margin-left: .25rem;
+  font-size: 0.6rem;
+  margin-left: 0.25rem;
   padding: 2px 4px;
 }
 
 .scope-cell {
   display: flex;
   flex-wrap: wrap;
-  gap: .4rem;
+  gap: 0.4rem;
 }
 
 .scope-pill {
@@ -703,7 +866,7 @@ export default defineComponent({
   border-radius: 4px;
 }
 
-.scope-pill+.scope-pill {
+.scope-pill + .scope-pill {
   margin-top: 3px;
 }
 
@@ -730,7 +893,7 @@ export default defineComponent({
 .flex-row {
   display: flex;
   align-items: center;
-  gap: .75rem;
+  gap: 0.75rem;
 }
 
 .ml-auto {
@@ -738,15 +901,15 @@ export default defineComponent({
 }
 
 .ml-2 {
-  margin-left: .5rem;
+  margin-left: 0.5rem;
 }
 
 .mt-2 {
-  margin-top: .5rem;
+  margin-top: 0.5rem;
 }
 
 .mt-3 {
-  margin-top: .75rem;
+  margin-top: 0.75rem;
 }
 
 .mt-4 {
@@ -754,7 +917,7 @@ export default defineComponent({
 }
 
 .text-muted {
-  opacity: .6;
+  opacity: 0.6;
   font-size: 0.75rem;
 }
 

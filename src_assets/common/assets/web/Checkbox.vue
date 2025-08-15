@@ -4,23 +4,23 @@ const slots = defineSlots();
 const props = defineProps({
   class: {
     type: String,
-    default: ""
+    default: '',
   },
   desc: {
     type: String,
-    default: null
+    default: null,
   },
   id: {
     type: String,
-    required: true
+    required: true,
   },
   label: {
     type: String,
-    default: null
+    default: null,
   },
   localePrefix: {
     type: String,
-    default: "missing-prefix"
+    default: 'missing-prefix',
   },
   inverseValues: {
     type: Boolean,
@@ -29,16 +29,16 @@ const props = defineProps({
   default: {
     type: undefined,
     default: null,
-  }
+  },
 });
 
 // Add the mandatory class values
 const extendedClassStr = (() => {
-  let values = props.class.split(" ");
-  if (!values.includes("form-check")) {
-    values.push("form-check");
+  let values = props.class.split(' ');
+  if (!values.includes('form-check')) {
+    values.push('form-check');
   }
-  return values.join(" ");
+  return values.join(' ');
 })();
 
 // Map the value to boolean representation if possible, otherwise return null.
@@ -52,12 +52,12 @@ const mapToBoolRepresentation = (value) => {
   }
 
   const stringPairs = [
-    ["true", "false"],
-    ["1", "0"],
-    ["enabled", "disabled"],
-    ["enable", "disable"],
-    ["yes", "no"],
-    ["on", "off"]
+    ['true', 'false'],
+    ['1', '0'],
+    ['enabled', 'disabled'],
+    ['enable', 'disable'],
+    ['yes', 'no'],
+    ['on', 'off'],
   ];
 
   value = `${value}`.toLowerCase().trim();
@@ -68,7 +68,7 @@ const mapToBoolRepresentation = (value) => {
   }
 
   return null;
-}
+};
 
 // Determine the true/false values for the checkbox
 const checkboxValues = (() => {
@@ -80,7 +80,7 @@ const checkboxValues = (() => {
 
     // Return fallback if nothing matches
     console.error(`Checkbox value ${model.value} did not match any acceptable pattern!`);
-    return ["true", "false"];
+    return ['true', 'false'];
   })();
 
   const truthyIndex = props.inverseValues ? 1 : 0;
@@ -99,22 +99,16 @@ const parsedDefaultPropValue = (() => {
 
 const labelField = props.label ?? `${props.localePrefix}.${props.id}`;
 const descField = props.desc ?? `${props.localePrefix}.${props.id}_desc`;
-const showDesc = props.desc !== "" || Object.entries(slots).length > 0;
+const showDesc = props.desc !== '' || Object.entries(slots).length > 0;
 const showDefValue = parsedDefaultPropValue !== null;
-const defValue = parsedDefaultPropValue ? "_common.enabled_def_cbox" : "_common.disabled_def_cbox";
+const defValue = parsedDefaultPropValue ? '_common.enabled_def_cbox' : '_common.disabled_def_cbox';
 </script>
 
 <template>
   <div :class="extendedClassStr">
-    <label
-      :for="props.id"
-      :class="`form-check-label${showDesc ? ' mb-2' : ''}`"
-    >
+    <label :for="props.id" :class="`form-check-label${showDesc ? ' mb-2' : ''}`">
       {{ $t(labelField) }}
-      <div
-        v-if="showDefValue"
-        class="mt-0 form-text"
-      >
+      <div v-if="showDefValue" class="mt-0 form-text">
         {{ $t(defValue) }}
       </div>
     </label>
@@ -125,11 +119,8 @@ const defValue = parsedDefaultPropValue ? "_common.enabled_def_cbox" : "_common.
       class="form-check-input"
       :true-value="checkboxValues.truthy"
       :false-value="checkboxValues.falsy"
-    >
-    <div
-      v-if="showDesc"
-      class="form-text"
-    >
+    />
+    <div v-if="showDesc" class="form-text">
       {{ $t(descField) }}
       <slot />
     </div>

@@ -1,0 +1,8 @@
+build/
+node_modules/
+third-party/
+docs/
+packaging/
+**/dist/
+coverage/
+.cpack_artifacts/

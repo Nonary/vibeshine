@@ -1,43 +1,35 @@
 <script setup>
-import { ref } from 'vue'
-import Checkbox from '@/Checkbox.vue'
-import { useConfigStore } from '@/stores/config.js'
-import { computed } from 'vue'
+import { ref } from 'vue';
+import Checkbox from '@/Checkbox.vue';
+import { useConfigStore } from '@/stores/config.js';
+import { computed } from 'vue';
 
-const store = useConfigStore()
-const config = store.config
-const platform = computed(() => config.value?.platform || '')
+const store = useConfigStore();
+const config = store.config;
+const platform = computed(() => config.value?.platform || '');
 </script>
 
 <template>
   <div id="nvidia-nvenc-encoder" class="config-page">
     <!-- Performance preset -->
     <div class="mb-4">
-      <label for="nvenc_preset" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{
-        $t('config.nvenc_preset') }}</label>
-      <select id="nvenc_preset" v-model="config.nvenc_preset"
-        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40">
-        <option value="1">
-          P1 {{ $t('config.nvenc_preset_1') }}
-        </option>
-        <option value="2">
-          P2
-        </option>
-        <option value="3">
-          P3
-        </option>
-        <option value="4">
-          P4
-        </option>
-        <option value="5">
-          P5
-        </option>
-        <option value="6">
-          P6
-        </option>
-        <option value="7">
-          P7 {{ $t('config.nvenc_preset_7') }}
-        </option>
+      <label
+        for="nvenc_preset"
+        class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
+        >{{ $t('config.nvenc_preset') }}</label
+      >
+      <select
+        id="nvenc_preset"
+        v-model="config.nvenc_preset"
+        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40"
+      >
+        <option value="1">P1 {{ $t('config.nvenc_preset_1') }}</option>
+        <option value="2">P2</option>
+        <option value="3">P3</option>
+        <option value="4">P4</option>
+        <option value="5">P5</option>
+        <option value="6">P6</option>
+        <option value="7">P7 {{ $t('config.nvenc_preset_7') }}</option>
       </select>
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.nvenc_preset_desc') }}
@@ -46,10 +38,16 @@ const platform = computed(() => config.value?.platform || '')
 
     <!-- Two-pass mode -->
     <div class="mb-4">
-      <label for="nvenc_twopass" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{
-        $t('config.nvenc_twopass') }}</label>
-      <select id="nvenc_twopass" v-model="config.nvenc_twopass"
-        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40">
+      <label
+        for="nvenc_twopass"
+        class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
+        >{{ $t('config.nvenc_twopass') }}</label
+      >
+      <select
+        id="nvenc_twopass"
+        v-model="config.nvenc_twopass"
+        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40"
+      >
         <option value="disabled">
           {{ $t('config.nvenc_twopass_disabled') }}
         </option>
@@ -66,18 +64,33 @@ const platform = computed(() => config.value?.platform || '')
     </div>
 
     <!-- Spatial AQ -->
-    <Checkbox id="nvenc_spatial_aq" v-model="config.nvenc_spatial_aq" class="mb-3" locale-prefix="config"
-      default="false" />
+    <Checkbox
+      id="nvenc_spatial_aq"
+      v-model="config.nvenc_spatial_aq"
+      class="mb-3"
+      locale-prefix="config"
+      default="false"
+    />
 
     <!-- Single-frame VBV/HRD percentage increase -->
     <div class="mb-4">
-      <label for="nvenc_vbv_increase" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{
-        $t('config.nvenc_vbv_increase') }}</label>
-      <input id="nvenc_vbv_increase" v-model="config.nvenc_vbv_increase" type="number" min="0" max="400"
-        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15" placeholder="0">
+      <label
+        for="nvenc_vbv_increase"
+        class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
+        >{{ $t('config.nvenc_vbv_increase') }}</label
+      >
+      <input
+        id="nvenc_vbv_increase"
+        v-model="config.nvenc_vbv_increase"
+        type="number"
+        min="0"
+        max="400"
+        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15"
+        placeholder="0"
+      />
       <p class="text-[11px] opacity-60 mt-1">
-        {{ $t('config.nvenc_vbv_increase_desc') }}<br>
-        <br>
+        {{ $t('config.nvenc_vbv_increase_desc') }}<br />
+        <br />
         <a href="https://en.wikipedia.org/wiki/Video_buffering_verifier">VBV/HRD</a>
       </p>
     </div>
@@ -91,24 +104,49 @@ const platform = computed(() => config.value?.platform || '')
       </div>
       <div class="p-4">
         <!-- NVENC Realtime HAGS priority -->
-        <Checkbox v-if="platform === 'windows'" id="nvenc_realtime_hags" v-model="config.nvenc_realtime_hags"
-          class="mb-3" locale-prefix="config" default="true">
-          <br>
-          <br>
-          <a href="https://devblogs.microsoft.com/directx/hardware-accelerated-gpu-scheduling/">HAGS</a>
+        <Checkbox
+          v-if="platform === 'windows'"
+          id="nvenc_realtime_hags"
+          v-model="config.nvenc_realtime_hags"
+          class="mb-3"
+          locale-prefix="config"
+          default="true"
+        >
+          <br />
+          <br />
+          <a href="https://devblogs.microsoft.com/directx/hardware-accelerated-gpu-scheduling/"
+            >HAGS</a
+          >
         </Checkbox>
 
         <!-- Prefer lower encoding latency over power savings -->
-        <Checkbox v-if="platform === 'windows'" id="nvenc_latency_over_power" v-model="config.nvenc_latency_over_power"
-          class="mb-3" locale-prefix="config" default="true" />
+        <Checkbox
+          v-if="platform === 'windows'"
+          id="nvenc_latency_over_power"
+          v-model="config.nvenc_latency_over_power"
+          class="mb-3"
+          locale-prefix="config"
+          default="true"
+        />
 
         <!-- Present OpenGL/Vulkan on top of DXGI -->
-        <Checkbox v-if="platform === 'windows'" id="nvenc_opengl_vulkan_on_dxgi"
-          v-model="config.nvenc_opengl_vulkan_on_dxgi" class="mb-3" locale-prefix="config" default="true" />
+        <Checkbox
+          v-if="platform === 'windows'"
+          id="nvenc_opengl_vulkan_on_dxgi"
+          v-model="config.nvenc_opengl_vulkan_on_dxgi"
+          class="mb-3"
+          locale-prefix="config"
+          default="true"
+        />
 
         <!-- NVENC H264 CAVLC -->
-        <Checkbox id="nvenc_h264_cavlc" v-model="config.nvenc_h264_cavlc" class="mb-3" locale-prefix="config"
-          default="false" />
+        <Checkbox
+          id="nvenc_h264_cavlc"
+          v-model="config.nvenc_h264_cavlc"
+          class="mb-3"
+          locale-prefix="config"
+          default="false"
+        />
       </div>
     </div>
   </div>

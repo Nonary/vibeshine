@@ -1,10 +1,10 @@
 <script setup>
-import { computed } from 'vue'
-import { useConfigStore } from '@/stores/config.js'
+import { computed } from 'vue';
+import { useConfigStore } from '@/stores/config.js';
 
 // Read platform from centralized config store
-const store = useConfigStore()
-const platform = computed(() => store.config.value?.platform || '')
+const store = useConfigStore();
+const platform = computed(() => store.config.value?.platform || '');
 </script>
 
 <template>
@@ -20,6 +20,5 @@ const platform = computed(() => store.config.value?.platform || '')
     <slot name="macos" />
   </template>
 </template>
-
 
 <style scoped></style>

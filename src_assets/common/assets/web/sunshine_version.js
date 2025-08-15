@@ -24,7 +24,7 @@ class SunshineVersion {
       return null;
     }
     let v = version;
-    if (v.indexOf("v") === 0) {
+    if (v.indexOf('v') === 0) {
       v = v.substring(1);
     }
     return v.split('.').map(Number);
@@ -37,7 +37,9 @@ class SunshineVersion {
     } else if (typeof otherVersion === 'string') {
       otherVersionParts = this.parseVersion(otherVersion);
     } else {
-      throw new Error('Invalid argument: otherVersion must be a SunshineVersion object or a version string');
+      throw new Error(
+        'Invalid argument: otherVersion must be a SunshineVersion object or a version string',
+      );
     }
 
     if (!this.versionParts || !otherVersionParts) {

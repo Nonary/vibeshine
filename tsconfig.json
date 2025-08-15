@@ -1,10 +1,5 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": [
-    "src_assets/**/*",
-    "src/**/*",
-    "tests/**/*",
-    "*.ts"
-  ],
+  "include": ["src_assets/**/*", "src/**/*", "tests/**/*", "*.ts"],
   "exclude": ["node_modules", "dist", "build"]
 }
