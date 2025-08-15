@@ -1,4 +1,3 @@
-import { fileURLToPath, URL } from 'node:url'
 import fs from 'fs';
 import { resolve } from 'path'
 import { defineConfig } from 'vite'
@@ -41,19 +40,21 @@ else {
 }
 
 let header = fs.readFileSync(resolve(assetsSrcPath, "template_header.html"))
+// Ensure we have an absolute, symlink-resolved source path for aliasing (Windows friendly)
+const assetsSrcAbs = resolve(assetsSrcPath);
 
 // https://vitejs.dev/config/
 export default defineConfig({
     resolve: {
         alias: {
-            vue: 'vue/dist/vue.esm-bundler.js'
+            vue: 'vue/dist/vue.esm-bundler.js',
+            '@': assetsSrcAbs,
         }
     },
     base: './',
     plugins: [
         vue(),
         ViteEjsPlugin({ header }),
-        // The Codecov vite plugin should be after all other plugins
         codecovVitePlugin({
             enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
             bundleName: "sunshine",
@@ -64,15 +65,7 @@ export default defineConfig({
     build: {
         outDir: resolve(assetsDstPath),
         rollupOptions: {
-            input: {
-                apps: resolve(assetsSrcPath, 'apps.html'),
-                config: resolve(assetsSrcPath, 'config.html'),
-                index: resolve(assetsSrcPath, 'index.html'),
-                password: resolve(assetsSrcPath, 'password.html'),
-                pin: resolve(assetsSrcPath, 'pin.html'),
-                troubleshooting: resolve(assetsSrcPath, 'troubleshooting.html'),
-                welcome: resolve(assetsSrcPath, 'welcome.html'),
-            },
+            input: resolve(assetsSrcPath, 'index.html'),
         },
     },
 })

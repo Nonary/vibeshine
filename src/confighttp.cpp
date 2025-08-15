@@ -277,26 +277,6 @@ namespace confighttp {
   }
 
   /**
-   * @brief Get the PIN page.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   */
-  void getPinPage(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
-
-    print_req(request);
-
-    std::string content = file_handler::read_file(WEB_DIR "pin.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(content, headers);
-  }
-
-  /**
    * @brief Get the apps page.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -314,105 +294,6 @@ namespace confighttp {
     headers.emplace("X-Frame-Options", "DENY");
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     headers.emplace("Access-Control-Allow-Origin", "https://images.igdb.com/");
-    response->write(content, headers);
-  }
-
-  /**
-   * @brief Get the clients page.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   */
-  void getClientsPage(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
-
-    print_req(request);
-
-    std::string content = file_handler::read_file(WEB_DIR "clients.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(content, headers);
-  }
-
-  /**
-   * @brief Get the configuration page.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   */
-  void getConfigPage(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
-
-    print_req(request);
-
-    std::string content = file_handler::read_file(WEB_DIR "config.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(content, headers);
-  }
-
-  /**
-   * @brief Get the password page.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   */
-  void getPasswordPage(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
-
-    print_req(request);
-
-    std::string content = file_handler::read_file(WEB_DIR "password.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(content, headers);
-  }
-
-  /**
-   * @brief Get the welcome page.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   */
-  void getWelcomePage(resp_https_t response, req_https_t request) {
-    print_req(request);
-    if (!config::sunshine.username.empty()) {
-      send_redirect(response, request, "/");
-      return;
-    }
-    std::string content = file_handler::read_file(WEB_DIR "welcome.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(content, headers);
-  }
-
-  /**
-   * @brief Get the troubleshooting page.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   */
-  void getTroubleshootingPage(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
-
-    print_req(request);
-
-    std::string content = file_handler::read_file(WEB_DIR "troubleshooting.html");
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/html; charset=utf-8");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     response->write(content, headers);
   }
 
@@ -1190,15 +1071,7 @@ namespace confighttp {
     server.default_resource["PUT"] = [](resp_https_t response, req_https_t request) {
       bad_request(response, request);
     };
-    server.default_resource["GET"] = not_found;
-    server.resource["^/$"]["GET"] = getIndexPage;
-    server.resource["^/pin/?$"]["GET"] = getPinPage;
-    server.resource["^/apps/?$"]["GET"] = getAppsPage;
-    server.resource["^/clients/?$"]["GET"] = getClientsPage;
-    server.resource["^/config/?$"]["GET"] = getConfigPage;
-    server.resource["^/password/?$"]["GET"] = getPasswordPage;
-    server.resource["^/welcome/?$"]["GET"] = getWelcomePage;
-    server.resource["^/troubleshooting/?$"]["GET"] = getTroubleshootingPage;
+    server.default_resource["GET"] = getIndexPage;
     server.resource["^/api/pin$"]["POST"] = savePin;
     server.resource["^/api/apps$"]["GET"] = getApps;
     server.resource["^/api/logs$"]["GET"] = getLogs;

@@ -23,31 +23,19 @@ const setTheme = theme => {
 
 export const showActiveTheme = (theme, focus = false) => {
     const themeSwitcher = document.querySelector('#bd-theme')
-
-    if (!themeSwitcher) {
-        return
-    }
-
-    const themeSwitcherText = document.querySelector('#bd-theme-text')
-    const activeThemeIcon = document.querySelector('.theme-icon-active i')
-    const btnToActive = document.querySelector(`[data-bs-theme-value="${theme}"]`)
-    const classListOfActiveBtn = btnToActive.querySelector('i').classList
-
+    if (!themeSwitcher) return
     document.querySelectorAll('[data-bs-theme-value]').forEach(element => {
         element.classList.remove('active')
         element.setAttribute('aria-pressed', 'false')
     })
-
-    btnToActive.classList.add('active')
-    btnToActive.setAttribute('aria-pressed', 'true')
-    activeThemeIcon.classList.remove(...activeThemeIcon.classList.values())
-    activeThemeIcon.classList.add(...classListOfActiveBtn)
-    const themeSwitcherLabel = `${themeSwitcherText.textContent} (${btnToActive.textContent.trim()})`
-    themeSwitcher.setAttribute('aria-label', themeSwitcherLabel)
-
-    if (focus) {
-        themeSwitcher.focus()
+    const btnToActive = document.querySelector(`[data-bs-theme-value="${theme}"]`)
+    if (btnToActive) {
+        btnToActive.classList.add('active')
+        btnToActive.setAttribute('aria-pressed', 'true')
     }
+    // Dispatch event so Vue components can reactively update icon
+    window.dispatchEvent(new CustomEvent('sunshine-theme-change', { detail: { theme } }))
+    if (focus) themeSwitcher.focus()
 }
 
 export function setupThemeToggleListener() {

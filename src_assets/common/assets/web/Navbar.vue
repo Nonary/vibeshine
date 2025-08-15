@@ -1,35 +1,64 @@
 <template>
   <nav class="navbar navbar-light navbar-expand-lg navbar-background header">
     <div class="container-fluid">
-      <a class="navbar-brand" href="./" title="Sunshine">
-        <img src="/images/logo-sunshine-45.png" height="45" alt="Sunshine">
-      </a>
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent"
-              aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
+      <router-link class="navbar-brand" to="/" title="Sunshine">
+        <img src="/images/logo-sunshine-45.png" height="45" alt="Sunshine" />
+      </router-link>
+      <button
+        class="navbar-toggler"
+        type="button"
+        data-bs-toggle="collapse"
+        data-bs-target="#navbarSupportedContent"
+        aria-controls="navbarSupportedContent"
+        aria-expanded="false"
+        aria-label="Toggle navigation"
+      >
         <span class="navbar-toggler-icon"></span>
       </button>
       <div class="collapse navbar-collapse" id="navbarSupportedContent">
         <ul class="navbar-nav me-auto mb-2 mb-lg-0">
           <li class="nav-item">
-            <a class="nav-link" href="./"><i class="fas fa-fw fa-home"></i> {{ $t('navbar.home') }}</a>
+            <router-link class="nav-link" to="/" active-class="active">
+              <font-awesome-icon icon="home" class="fa-fw" />
+              {{ $t("navbar.home") }}
+            </router-link>
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="./pin"><i class="fas fa-fw fa-unlock"></i> {{ $t('navbar.pin') }}</a>
+            <router-link class="nav-link" to="/pin" active-class="active">
+              <font-awesome-icon icon="unlock" class="fa-fw" />
+              {{ $t("navbar.pin") }}
+            </router-link>
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="./apps"><i class="fas fa-fw fa-stream"></i> {{ $t('navbar.applications') }}</a>
+            <router-link class="nav-link" to="/apps" active-class="active">
+              <font-awesome-icon icon="stream" class="fa-fw" />
+              {{ $t("navbar.applications") }}
+            </router-link>
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="./config"><i class="fas fa-fw fa-cog"></i> {{ $t('navbar.configuration') }}</a>
+            <router-link class="nav-link" to="/config" active-class="active">
+              <font-awesome-icon icon="cog" class="fa-fw" />
+              {{ $t("navbar.configuration") }}
+            </router-link>
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="./password"><i class="fas fa-fw fa-user-shield"></i> {{ $t('navbar.password') }}</a>
+            <router-link class="nav-link" to="/password" active-class="active">
+              <font-awesome-icon icon="user-shield" class="fa-fw" />
+              {{ $t("navbar.password") }}
+            </router-link>
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="./troubleshooting"><i class="fas fa-fw fa-info"></i> {{ $t('navbar.troubleshoot') }}</a>
+            <router-link
+              class="nav-link"
+              to="/troubleshooting"
+              active-class="active"
+            >
+              <font-awesome-icon icon="info" class="fa-fw" />
+              {{ $t("navbar.troubleshoot") }}
+            </router-link>
           </li>
           <li class="nav-item">
-            <ThemeToggle/>
+            <ThemeToggle />
           </li>
         </ul>
       </div>
@@ -38,29 +67,31 @@
 </template>
 
 <script>
-import ThemeToggle from './ThemeToggle.vue'
-import { initDiscord } from '@lizardbyte/shared-web/src/js/discord.js'
+import ThemeToggle from "./ThemeToggle.vue";
+import { initDiscord } from "@lizardbyte/shared-web/src/js/discord.js";
 
 export default {
   components: { ThemeToggle },
   created() {
-    console.log("Header mounted!")
+    console.log("Header mounted!");
   },
   mounted() {
-    let el = document.querySelector("a[href='" + document.location.pathname + "']");
-    if (el) el.classList.add("active")
+    let el = document.querySelector(
+      "a[href='" + document.location.pathname + "']"
+    );
+    if (el) el.classList.add("active");
     initDiscord();
-  }
-}
+  },
+};
 </script>
 
 <style>
 .navbar-background {
-  background-color: #ffc400
+  background-color: #ffc400;
 }
 
 .header .nav-link {
-  color: rgba(0, 0, 0, .65) !important;
+  color: rgba(0, 0, 0, 0.65) !important;
 }
 
 .header .nav-link.active {
@@ -74,7 +105,7 @@ export default {
 }
 
 .header .navbar-toggler {
-  color: rgba(var(--bs-dark-rgb), .65) !important;
+  color: rgba(var(--bs-dark-rgb), 0.65) !important;
   border: var(--bs-border-width) solid rgba(var(--bs-dark-rgb), 0.15) !important;
 }
 

@@ -25,6 +25,10 @@
     "username": "Username",
     "warning": "Warning!"
   },
+  "errors": {
+    "404": "The page you are looking for doesn't exist.",
+    "backHome": "Back to Home"
+  },
   "apps": {
     "actions": "Actions",
     "add_cmds": "Add Commands",
