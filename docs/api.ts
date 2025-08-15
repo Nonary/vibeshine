@@ -1,9 +1,17 @@
-function generateExamples(endpoint, method, body = null) {
-  let curlBodyString = '';
-  let psBodyString = '';
+interface Examples {
+  [key: string]: string;
+}
+
+interface ApiBody {
+  [key: string]: any;
+}
+
+function generateExamples(endpoint: string, method: string, body: ApiBody | null = null): Examples {
+  let curlBodyString: string = '';
+  let psBodyString: string = '';
 
   if (body) {
-    const curlJsonString = JSON.stringify(body).replace(/"/g, '\\"');
+    const curlJsonString: string = JSON.stringify(body).replace(/"/g, '\\"');
     curlBodyString = ` -d "${curlJsonString}"`;
     psBodyString = `-Body (ConvertTo-Json ${JSON.stringify(body)})`;
   }
@@ -37,23 +45,23 @@ requests.${method.trim().toLowerCase()}(
   };
 }
 
-function hashString(str) {
-  let hash = 0;
+function hashString(str: string): number {
+  let hash: number = 0;
   for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
+    const char: number = str.charCodeAt(i);
     hash = (hash << 5) - hash + char;
     hash |= 0; // Convert to 32bit integer
   }
   return hash;
 }
 
-function createTabs(examples) {
-  const languages = Object.keys(examples);
-  let tabs = '<div class="tabs-overview-container"><div class="tabs-overview">';
-  let content = '<div class="tab-content">';
+function createTabs(examples: Examples): string {
+  const languages: string[] = Object.keys(examples);
+  let tabs: string = '<div class="tabs-overview-container"><div class="tabs-overview">';
+  let content: string = '<div class="tab-content">';
 
   languages.forEach((lang, index) => {
-    const hash = hashString(examples[lang]);
+    const hash: number = hashString(examples[lang]);
     tabs += `<button class="tab-button ${index === 0 ? 'active' : ''}" onclick="openTab(event, '${lang}')"><b class="tab-title" title=" ${lang} "> ${lang} </b></button>`;
     content += `<div id="${lang}" class="tabcontent" style="display: ${index === 0 ? 'block' : 'none'};">
                   <div class="doxygen-awesome-fragment-wrapper">
@@ -74,25 +82,27 @@ function createTabs(examples) {
   content += '</div>';
 
   setTimeout(() => {
-    languages.forEach((lang, index) => {
-      const hash = hashString(examples[lang]);
-      const copyButton = document.getElementById(`copy-button-${lang}-${hash}`);
-      copyButton.addEventListener('click', copyContent);
+    languages.forEach((lang) => {
+      const hash: number = hashString(examples[lang]);
+      const copyButton: HTMLElement | null = document.getElementById(`copy-button-${lang}-${hash}`);
+      if (copyButton) {
+        copyButton.addEventListener('click', copyContent);
+      }
     });
   }, 0);
 
   return tabs + content;
 }
 
-function copyContent() {
-  const content = this.previousElementSibling.cloneNode(true);
+function copyContent(this: HTMLElement): void {
+  const content: Node = this.previousElementSibling!.cloneNode(true);
   if (content instanceof Element) {
     // filter out line number from file listings
     content.querySelectorAll(".lineno, .ttc").forEach((node) => {
       node.remove();
     });
-    let textContent = Array.from(content.querySelectorAll('.line'))
-      .map(line => line.innerText)
+    const textContent: string = Array.from(content.querySelectorAll('.line'))
+      .map((line: Element) => (line as HTMLElement).innerText)
       .join('\n')
       .trim(); // Join lines with newline characters and trim leading/trailing whitespace
     navigator.clipboard.writeText(textContent);
@@ -107,23 +117,23 @@ function copyContent() {
   }
 }
 
-function openTab(evt, lang) {
-  const tabcontent = document.getElementsByClassName("tabcontent");
+function openTab(_evt: Event, lang: string): void {
+  const tabcontent: HTMLCollectionOf<Element> = document.getElementsByClassName("tabcontent");
   for (const content of tabcontent) {
-    content.style.display = "none";
+    (content as HTMLElement).style.display = "none";
   }
 
-  const tablinks = document.getElementsByClassName("tab-button");
+  const tablinks: HTMLCollectionOf<Element> = document.getElementsByClassName("tab-button");
   for (const link of tablinks) {
     link.className = link.className.replace(" active", "");
   }
 
-  const selectedTabs = document.querySelectorAll(`#${lang}`);
+  const selectedTabs: NodeListOf<Element> = document.querySelectorAll(`#${lang}`);
   for (const tab of selectedTabs) {
-    tab.style.display = "block";
+    (tab as HTMLElement).style.display = "block";
   }
 
-  const selectedButtons = document.querySelectorAll(`.tab-button[onclick*="${lang}"]`);
+  const selectedButtons: NodeListOf<Element> = document.querySelectorAll(`.tab-button[onclick*="${lang}"]`);
   for (const button of selectedButtons) {
     button.className += " active";
   }
