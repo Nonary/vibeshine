@@ -3,7 +3,7 @@
 </template>
 
 <script>
-import Troubleshooting from '../Troubleshooting.vue'
+import Troubleshooting from '@/Troubleshooting.vue'
 
 export default {
   name: 'TroubleshootingView',

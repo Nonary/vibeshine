@@ -1,4 +1,4 @@
-import i18n from './locale'
+import i18n from '@/locale'
 
 // must import even if not implicitly using here
 // https://github.com/aurelia/skeleton-navigation/issues/894

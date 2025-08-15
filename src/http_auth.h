@@ -342,7 +342,7 @@ namespace confighttp {
    * @param location Optional redirect location.
    * @return Structured AuthResult.
    */
-  AuthResult make_auth_error(StatusCode code, const std::string &error, const std::string &location = {});
+  AuthResult make_auth_error(StatusCode code, const std::string &error);
   /**
    * @brief Check a Bearer token Authorization header.
    * @param raw_auth Header value.

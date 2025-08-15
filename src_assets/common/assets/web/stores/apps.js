@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { http } from '../http.js'
+import { http } from '@/http.js'
 
 // Centralized store for applications list
 export const useAppsStore = defineStore('apps', () => {

@@ -5,176 +5,110 @@
     </h1>
 
     <!-- Generate token -->
-    <section
-      id="generate-token-section"
-      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent"
-    >
+    <section id="generate-token-section"
+      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent">
       <div class="px-4 py-3 border-b border-black/5 dark:border-white/10 flex items-center">
         <h2 class="text-lg font-medium m-0">
           {{ $t('auth.generate_new_token') }}
         </h2>
       </div>
       <div class="p-4">
-        <p
-          v-if="$te('auth.generate_token_help')"
-          class="text-[11px] opacity-60 mb-3"
-        >
+        <p v-if="$te('auth.generate_token_help')" class="text-[11px] opacity-60 mb-3">
           {{ $t('auth.generate_token_help') }}
         </p>
 
-        <form
-          novalidate
-          @submit.prevent="generateToken"
-        >
+        <form novalidate @submit.prevent="generateToken">
           <div class="flex flex-col space-y-3">
-            <div
-              v-for="(scope, idx) in scopes"
-              :key="scope.id ?? idx"
-              class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end"
-            >
+            <div v-for="(scope, idx) in scopes" :key="scope.id ?? idx"
+              class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
               <div class="col-span-12 md:col-span-5">
-                <label
-                  :for="'scope-path-' + idx"
-                  class="block text-sm font-medium mb-1"
-                >{{ $t('auth.select_api_path') }}</label>
-                <select
-                  :id="'scope-path-' + idx"
-                  v-model="scope.path"
+                <label :for="'scope-path-' + idx" class="block text-sm font-medium mb-1">{{ $t('auth.select_api_path')
+                  }}</label>
+                <select :id="'scope-path-' + idx" v-model="scope.path"
                   class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70"
-                  @change="onScopePathChange(scope)"
-                >
-                  <option
-                    value=""
-                    disabled
-                  >
+                  @change="onScopePathChange(scope)">
+                  <option value="" disabled>
                     {{ $t('auth.select_api_path') }}
                   </option>
-                  <option
-                    v-for="route in apiRoutes.filter(r => r.selectable !== false)"
-                    :key="route.path"
-                    :value="route.path"
-                  >
+                  <option v-for="route in apiRoutes.filter(r => r.selectable !== false)" :key="route.path"
+                    :value="route.path">
                     {{ route.path }}
                   </option>
                 </select>
               </div>
 
               <div class="col-span-12 md:col-span-5">
-                <label
-                  :for="'scope-methods-' + idx"
-                  class="block text-sm font-medium mb-1"
-                >{{ $t('auth.scopes') }}</label>
-                <select
-                  :id="'scope-methods-' + idx"
-                  v-model="scope.methods"
+                <label :for="'scope-methods-' + idx" class="block text-sm font-medium mb-1">{{ $t('auth.scopes')
+                  }}</label>
+                <select :id="'scope-methods-' + idx" v-model="scope.methods"
                   class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70"
-                  multiple
-                  size="4"
-                  :disabled="!scope.path"
-                >
-                  <option
-                    v-for="m in getMethodsForPath(scope.path)"
-                    :key="m"
-                    :value="m"
-                  >
+                  multiple size="4" :disabled="!scope.path">
+                  <option v-for="m in getMethodsForPath(scope.path)" :key="m" :value="m">
                     {{ m }}
                   </option>
                 </select>
               </div>
 
               <div class="col-span-12 md:col-span-2 flex">
-                <button
-                  type="button"
+                <button type="button"
                   class="w-full inline-flex items-center justify-center px-3 py-2 rounded-md bg-red-600 text-white text-sm hover:bg-red-700"
                   :aria-label="$t('auth.remove')"
-                  :disabled="scopes.length === 1 && !scope.path && !scope.methods?.length"
-                  @click="removeScope(idx)"
-                >
+                  :disabled="scopes.length === 1 && !scope.path && !scope.methods?.length" @click="removeScope(idx)">
                   {{ $t('auth.remove') }}
                 </button>
               </div>
             </div>
 
             <div class="flex items-center gap-2">
-              <button
-                type="button"
+              <button type="button"
                 class="inline-flex items-center px-3 py-2 rounded-md bg-sky-600 text-white text-sm hover:bg-sky-700"
-                @click="addScope"
-              >
+                @click="addScope">
                 {{ $t('auth.add_scope') }}
               </button>
-              <span
-                v-if="isGenerateDisabled"
-                class="text-[13px] text-muted"
-              >
+              <span v-if="isGenerateDisabled" class="text-[13px] text-muted">
                 {{ $t('auth.generate_disabled_hint') }}
               </span>
             </div>
 
-            <div
-              v-if="validScopes.length"
-              class="mt-1"
-            >
+            <div v-if="validScopes.length" class="mt-1">
               <strong class="mr-2">{{ $t('auth.selected_scopes') }}:</strong>
               <div class="flex flex-wrap items-center gap-2 mt-2">
-                <template
-                  v-for="(s, i) in validScopes"
-                  :key="i"
-                >
+                <template v-for="(s, i) in validScopes" :key="i">
                   <span class="inline-flex items-center bg-gray-100 dark:bg-gray-800 text-sm rounded px-2 py-0.5">
                     <span class="font-semibold mr-2">{{ s.path }}</span>
-                    <span
-                      v-for="m in s.methods"
-                      :key="m"
-                      class="ml-1 inline-flex items-center bg-sky-500 text-white text-xs uppercase rounded px-2 py-0.5"
-                    >{{ m }}</span>
+                    <span v-for="m in s.methods" :key="m"
+                      class="ml-1 inline-flex items-center bg-sky-500 text-white text-xs uppercase rounded px-2 py-0.5">{{
+                      m }}</span>
                   </span>
                 </template>
               </div>
             </div>
 
             <div class="flex gap-2">
-              <button
-                type="submit"
+              <button type="submit"
                 class="inline-flex items-center px-4 py-2 rounded-md bg-sky-600 text-white text-sm hover:bg-sky-700"
-                :disabled="isGenerateDisabled || isGenerating"
-              >
+                :disabled="isGenerateDisabled || isGenerating">
                 <span v-if="!isGenerating">{{ $t('auth.generate_token') }}</span>
                 <span v-else>{{ $t('auth.loading') }}</span>
               </button>
-              <button
-                type="button"
+              <button type="button"
                 class="inline-flex items-center px-4 py-2 rounded-md bg-gray-200 dark:bg-gray-700 text-sm"
-                :disabled="isGenerating"
-                @click="resetForm"
-              >
+                :disabled="isGenerating" @click="resetForm">
                 {{ $t('_common.cancel') }}
               </button>
             </div>
 
-            <div
-              v-if="displayedToken"
-              class="mt-2 bg-green-50 border border-green-200 rounded p-3"
-              role="status"
-              aria-live="polite"
-            >
+            <div v-if="displayedToken" class="mt-2 bg-green-50 border border-green-200 rounded p-3" role="status"
+              aria-live="polite">
               <div class="mb-2 font-medium">
                 {{ $t('auth.token_success') }}
               </div>
               <div class="flex gap-2">
-                <input
-                  type="text"
-                  class="flex-1 px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-                  :value="displayedToken"
-                  readonly
-                >
-                <button
-                  type="button"
+                <input type="text" class="flex-1 px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
+                  :value="displayedToken" readonly>
+                <button type="button"
                   class="inline-flex items-center px-3 py-2 rounded-md bg-green-600 text-white text-sm hover:bg-green-700"
-                  :disabled="tokenCopied"
-                  :title="$t('auth.copy_token')"
-                  @click="copyToken"
-                >
+                  :disabled="tokenCopied" :title="$t('auth.copy_token')" @click="copyToken">
                   {{ tokenCopied ? $t('auth.token_copied') : $t('auth.copy_token') }}
                 </button>
               </div>
@@ -185,20 +119,15 @@
     </section>
 
     <!-- Active tokens -->
-    <section
-      id="active-tokens-section"
-      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent"
-    >
+    <section id="active-tokens-section"
+      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent">
       <div class="px-4 py-3 border-b border-black/5 dark:border-white/10 flex items-center">
         <h2 class="text-lg font-medium m-0">
           {{ $t('auth.active_tokens') }}
         </h2>
-        <button
-          type="button"
+        <button type="button"
           class="ml-auto inline-flex items-center px-3 py-1 rounded-md bg-gray-200 dark:bg-gray-700 text-sm"
-          :disabled="isLoadingTokens"
-          @click="loadTokens"
-        >
+          :disabled="isLoadingTokens" @click="loadTokens">
           {{ $t('auth.refresh') }}
         </button>
       </div>
@@ -206,21 +135,13 @@
         <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end mb-3">
           <div class="col-span-1 md:col-span-6">
             <label class="block text-sm font-medium">{{ $t('auth.search_tokens') }}</label>
-            <input
-              v-model="tokenFilter"
-              type="text"
+            <input v-model="tokenFilter" type="text"
               class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-              :placeholder="$t('auth.search_tokens')"
-              autocomplete="off"
-              @input="onFilterInput"
-            >
+              :placeholder="$t('auth.search_tokens')" autocomplete="off" @input="onFilterInput">
           </div>
           <div class="col-span-1 md:col-span-3">
             <label class="block text-sm font-medium">{{ $t('auth.sort_field') }}</label>
-            <select
-              v-model="sortField"
-              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-            >
+            <select v-model="sortField" class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15">
               <option value="created_at">
                 {{ $t('auth.created') }}
               </option>
@@ -234,10 +155,7 @@
           </div>
           <div class="col-span-1 md:col-span-3">
             <label class="block text-sm font-medium">{{ $t('auth.sort_direction') }}</label>
-            <select
-              v-model="sortDir"
-              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-            >
+            <select v-model="sortDir" class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15">
               <option value="desc">
                 {{ $t('auth.desc') }}
               </option>
@@ -261,48 +179,27 @@
             </thead>
             <tbody class="divide-y">
               <tr v-if="isLoadingTokens">
-                <td
-                  colspan="5"
-                  class="text-center"
-                >
+                <td colspan="5" class="text-center">
                   {{ $t('auth.loading') }}
                 </td>
               </tr>
               <tr v-else-if="!sortedTokens.length">
-                <td
-                  colspan="5"
-                  class="text-center"
-                >
+                <td colspan="5" class="text-center">
                   {{ tokens.length ? $t('auth.no_matching_tokens') : $t('auth.no_active_tokens') }}
                 </td>
               </tr>
-              <tr
-                v-for="t in sortedTokens"
-                :key="t.hash"
-              >
-                <td
-                  class="truncate"
-                  style="max-width: 160px;"
-                >
+              <tr v-for="t in sortedTokens" :key="t.hash">
+                <td class="truncate" style="max-width: 160px;">
                   <div class="flex items-center gap-2">
-                    <code
-                      class="truncate"
-                      :title="t.hash"
-                    >{{ t.hash }}</code>
-                    <button
-                      type="button"
+                    <code class="truncate" :title="t.hash">{{ t.hash }}</code>
+                    <button type="button"
                       class="inline-flex items-center px-2 py-1 rounded-md bg-gray-200 dark:bg-gray-700 text-sm"
-                      :disabled="copiedHash === t.hash"
-                      @click.prevent="copyHash(t.hash)"
-                    >
+                      :disabled="copiedHash === t.hash" @click.prevent="copyHash(t.hash)">
                       {{ copiedHash === t.hash ? $t('auth.hash_copied') : $t('auth.copy_hash') }}
                     </button>
                   </div>
                 </td>
-                <td
-                  class="truncate"
-                  style="max-width: 160px;"
-                >
+                <td class="truncate" style="max-width: 160px;">
                   {{ t.username }}
                 </td>
                 <td :title="formatFullDate(t.created_at)">
@@ -310,26 +207,19 @@
                 </td>
                 <td>
                   <div class="flex flex-wrap gap-1">
-                    <span
-                      v-for="(s, i) in t.scopes"
-                      :key="i"
-                      class="inline-flex items-center"
-                    >
-                      <span class="inline-flex items-center bg-gray-100 dark:bg-gray-800 text-sm rounded px-2 py-0.5 mr-1">{{ s.path }}</span>
+                    <span v-for="(s, i) in t.scopes" :key="i" class="inline-flex items-center">
                       <span
-                        v-for="m in s.methods"
-                        :key="m"
-                        class="inline-flex items-center bg-sky-500 text-white text-xs uppercase rounded px-2 py-0.5 mr-1"
-                      >{{ m }}</span>
+                        class="inline-flex items-center bg-gray-100 dark:bg-gray-800 text-sm rounded px-2 py-0.5 mr-1">{{
+                        s.path }}</span>
+                      <span v-for="m in s.methods" :key="m"
+                        class="inline-flex items-center bg-sky-500 text-white text-xs uppercase rounded px-2 py-0.5 mr-1">{{
+                        m }}</span>
                     </span>
                   </div>
                 </td>
                 <td class="text-right">
-                  <button
-                    class="inline-flex items-center px-3 py-1 rounded-md bg-red-600 text-white text-sm"
-                    :disabled="revoking === t.hash"
-                    @click="revokeToken(t.hash)"
-                  >
+                  <button class="inline-flex items-center px-3 py-1 rounded-md bg-red-600 text-white text-sm"
+                    :disabled="revoking === t.hash" @click="revokeToken(t.hash)">
                     {{ $t('auth.revoke') }}
                   </button>
                 </td>
@@ -341,96 +231,54 @@
     </section>
 
     <!-- Test token -->
-    <section
-      id="test-token-section"
-      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent"
-    >
+    <section id="test-token-section"
+      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent">
       <div class="px-4 py-3 border-b border-black/5 dark:border-white/10">
         <h2 class="text-lg font-medium m-0">
           {{ $t('auth.test_api_token') }}
         </h2>
       </div>
       <div class="p-4">
-        <p
-          v-if="$te('auth.testing_help')"
-          class="text-[11px] opacity-60"
-        >
+        <p v-if="$te('auth.testing_help')" class="text-[11px] opacity-60">
           {{ $t('auth.testing_help') }}
         </p>
-        <form
-          class="grid grid-cols-1 md:grid-cols-12 gap-3"
-          @submit.prevent="testToken"
-        >
+        <form class="grid grid-cols-1 md:grid-cols-12 gap-3" @submit.prevent="testToken">
           <div class="col-span-1 md:col-span-6">
-            <label
-              for="testPath"
-              class="block text-sm font-medium"
-            >{{ $t('auth.api_path_get_only') }}</label>
-            <select
-              id="testPath"
-              v-model="testPath"
-              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-              required
-            >
-              <option
-                value=""
-                disabled
-              >
+            <label for="testPath" class="block text-sm font-medium">{{ $t('auth.api_path_get_only') }}</label>
+            <select id="testPath" v-model="testPath"
+              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15" required>
+              <option value="" disabled>
                 {{ $t('auth.select_api_path_to_test') }}
               </option>
-              <option
-                v-for="route in apiRoutes.filter(r => (r.selectable !== false) && r.methods.includes('GET'))"
-                :key="route.path"
-                :value="route.path"
-              >
+              <option v-for="route in apiRoutes.filter(r => (r.selectable !== false) && r.methods.includes('GET'))"
+                :key="route.path" :value="route.path">
                 {{ route.path }}
               </option>
             </select>
           </div>
           <div class="col-span-1 md:col-span-6">
-            <label
-              for="testTokenInput"
-              class="block text-sm font-medium"
-            >{{ $t('auth.token') }}</label>
-            <input
-              id="testTokenInput"
-              v-model="testTokenInput"
-              type="password"
-              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-              autocomplete="off"
-              :placeholder="$t('auth.paste_token_here')"
-              required
-            >
+            <label for="testTokenInput" class="block text-sm font-medium">{{ $t('auth.token') }}</label>
+            <input id="testTokenInput" v-model="testTokenInput" type="password"
+              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15" autocomplete="off"
+              :placeholder="$t('auth.paste_token_here')" required>
           </div>
           <div class="col-span-1">
-            <button
-              type="submit"
-              class="inline-flex items-center px-4 py-2 rounded-md bg-sky-600 text-white text-sm"
-              :disabled="isTesting || !testPath || !testTokenInput"
-            >
+            <button type="submit" class="inline-flex items-center px-4 py-2 rounded-md bg-sky-600 text-white text-sm"
+              :disabled="isTesting || !testPath || !testTokenInput">
               <span v-if="!isTesting">{{ $t('auth.test_token') }}</span>
               <span v-else>{{ $t('auth.loading') }}</span>
             </button>
           </div>
         </form>
 
-        <div
-          v-if="testResult || testError"
-          class="mt-3"
-        >
+        <div v-if="testResult || testError" class="mt-3">
           <div class="font-semibold mb-2">
             {{ $t('auth.result') }}
           </div>
-          <div
-            v-if="testError"
-            class="bg-red-50 border border-red-200 rounded p-2 text-sm"
-          >
+          <div v-if="testError" class="bg-red-50 border border-red-200 rounded p-2 text-sm">
             {{ testError }}
           </div>
-          <pre
-            v-if="testResult"
-            class="bg-gray-50 dark:bg-gray-900 p-2 rounded text-sm mb-0"
-          >{{ testResult }}</pre>
+          <pre v-if="testResult" class="bg-gray-50 dark:bg-gray-900 p-2 rounded text-sm mb-0">{{ testResult }}</pre>
         </div>
       </div>
     </section>
@@ -439,7 +287,7 @@
 
 <script>
 import { defineComponent } from 'vue'
-import { http } from './http.js'
+import { http } from '@/http.js'
 
 /**
  * List of available API routes and their supported methods
@@ -492,7 +340,7 @@ export default defineComponent({
     }
   },
   computed: {
-    validScopes() { 
+    validScopes() {
       const filtered = this.scopes.filter(s => s.path && s.methods && Array.isArray(s.methods) && s.methods.length > 0)
       return filtered
     },
@@ -588,10 +436,10 @@ export default defineComponent({
       this.isGenerating = true
       this.tokenCopied = false
       try {
-  const res = await http.post('/api/token', { scopes: filtered }, { validateStatus: () => true })
-  const data = res.data || {}
-  if (res.status === 200 && data.token) { this.tokenResult = data.token; this.displayedToken = data.token; await this.loadTokens() }
-  else { this.tokenResult = `Error: ${data.error || this.$t('auth.failed_to_generate_token')}`; this.displayedToken = '' }
+        const res = await http.post('/api/token', { scopes: filtered }, { validateStatus: () => true })
+        const data = res.data || {}
+        if (res.status === 200 && data.token) { this.tokenResult = data.token; this.displayedToken = data.token; await this.loadTokens() }
+        else { this.tokenResult = `Error: ${data.error || this.$t('auth.failed_to_generate_token')}`; this.displayedToken = '' }
       } catch (e) {
         this.tokenResult = `${this.$t('auth.request_failed')}: ${e.message}`
         this.displayedToken = ''
@@ -607,9 +455,9 @@ export default defineComponent({
     async loadTokens() {
       this.isLoadingTokens = true
       try {
-  const res = await http.get('/api/tokens', { validateStatus: () => true })
-  if (res.status === 200) { this.tokens = res.data || [] }
-  else { console.error('Failed to load tokens'); this.tokens = [] }
+        const res = await http.get('/api/tokens', { validateStatus: () => true })
+        if (res.status === 200) { this.tokens = res.data || [] }
+        else { console.error('Failed to load tokens'); this.tokens = [] }
       } catch (e) {
         console.error('Error fetching tokens:', e)
         this.tokens = []
@@ -627,9 +475,9 @@ export default defineComponent({
       if (!confirm(this.$t('auth.confirm_revoke'))) return
       this.revoking = hash
       try {
-  const res = await http.delete(`/api/token/${hash}`, { validateStatus: () => true })
-  if (res.status === 200) { await this.loadTokens() }
-  else { alert(this.$t('auth.failed_to_revoke_token')) }
+        const res = await http.delete(`/api/token/${hash}`, { validateStatus: () => true })
+        if (res.status === 200) { await this.loadTokens() }
+        else { alert(this.$t('auth.failed_to_revoke_token')) }
       } catch (e) {
         alert(`${this.$t('auth.error_revoking_token')}: ${e.message}`)
       } finally {
@@ -669,13 +517,13 @@ export default defineComponent({
       }
       this.isTesting = true
       try {
-  const res = await http.get(this.testPath, { headers:{ 'Authorization': 'Bearer ' + this.testTokenInput }, validateStatus: () => true, responseType:'text', transformResponse:[v=>v] })
-  const contentType = res.headers ? (res.headers['content-type'] || res.headers['Content-Type']) : ''
-  let bodyText = res.data
-  let isJson = contentType && contentType.indexOf('application/json') !== -1 && bodyText
-  if (isJson) { try { this.testResult = JSON.stringify(JSON.parse(bodyText), null, 2) } catch { this.testResult = bodyText } }
-  else { this.testResult = bodyText }
-  if (res.status < 200 || res.status >= 300) { this.testError = `HTTP ${res.status}` } else { this.testError = '' }
+        const res = await http.get(this.testPath, { headers: { 'Authorization': 'Bearer ' + this.testTokenInput }, validateStatus: () => true, responseType: 'text', transformResponse: [v => v] })
+        const contentType = res.headers ? (res.headers['content-type'] || res.headers['Content-Type']) : ''
+        let bodyText = res.data
+        let isJson = contentType && contentType.indexOf('application/json') !== -1 && bodyText
+        if (isJson) { try { this.testResult = JSON.stringify(JSON.parse(bodyText), null, 2) } catch { this.testResult = bodyText } }
+        else { this.testResult = bodyText }
+        if (res.status < 200 || res.status >= 300) { this.testError = `HTTP ${res.status}` } else { this.testError = '' }
       } catch (e) {
         this.testError = `${this.$t('auth.request_failed')}: ${e.message}`
       } finally {

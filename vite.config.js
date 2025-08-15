@@ -51,6 +51,7 @@ const isDev = process.env.npm_lifecycle_event === 'build:debug' || process.env.N
 export default defineConfig({
     resolve: {
         alias: {
+            '@': resolve(assetsSrcPath),
             vue: 'vue/dist/vue.esm-bundler.js'
         }
     },
@@ -121,9 +122,9 @@ export default defineConfig({
     root: resolve(assetsSrcPath),
     build: {
         outDir: resolve(assetsDstPath),
-    // full inline source maps in debug so original .vue/.ts sources are embedded
-    // and visible directly in browser devtools. Otherwise use default (hidden) source maps.
-    sourcemap: isDev ? 'inline' : false,
+        // full inline source maps in debug so original .vue/.ts sources are embedded
+        // and visible directly in browser devtools. Otherwise use default (hidden) source maps.
+        sourcemap: isDev ? 'inline' : false,
         // avoid minification in debug so code is readable in browser devtools
         minify: isDev ? false : 'esbuild',
         rollupOptions: {

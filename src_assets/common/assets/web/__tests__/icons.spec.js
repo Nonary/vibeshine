@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { createApp } from 'vue'
-import Shell from '../layout/Shell.vue'
-import '../main.js'
+import Shell from '@/layout/Shell.vue'
+import '@/main.js'
 
 // Smoke test ensuring Font Awesome CSS (and thus icon classes) are present after bundling.
 // JSDOM cannot verify font network requests, but class names should render.

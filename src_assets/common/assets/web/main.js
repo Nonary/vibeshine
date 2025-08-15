@@ -1,14 +1,14 @@
 import { createApp, ref, watch } from 'vue'
 import { createPinia } from 'pinia'
-import { initApp } from './init'
-import { router } from './router'
-import Shell from './layout/Shell.vue'
+import { initApp } from '@/init'
+import { router } from '@/router'
+import App from '@/App.vue';
 import './styles/tailwind.css'
-import { initHttpLayer, http } from './http.js'
+import { initHttpLayer, http } from '@/http.js'
 // Import Font Awesome locally (added dependency @fortawesome/fontawesome-free)
 import '@fortawesome/fontawesome-free/css/all.min.css'
 
-const app = createApp(Shell)
+const app = createApp(App)
 const pinia = createPinia()
 app.use(pinia)
 app.use(router)
@@ -29,8 +29,8 @@ initApp(app, async (appInstance) => {
 	try {
 		// dynamic import to avoid circular load order issues in tests/build
 		const [{ useConfigStore }, { useAuthStore }] = await Promise.all([
-			import('./stores/config.js'),
-			import('./stores/auth.js')
+			import('@/stores/config.js'),
+			import('@/stores/auth.js')
 		])
 		const store = useConfigStore()
 		const auth = useAuthStore()

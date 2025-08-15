@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from 'vue'
-import PlatformLayout from '../../PlatformLayout.vue'
-import { useConfigStore } from '../../stores/config.js'
+import PlatformLayout from '@/PlatformLayout.vue'
+import { useConfigStore } from '@/stores/config.js'
 import { computed } from 'vue'
 
 const store = useConfigStore()
@@ -13,17 +13,11 @@ const platform = computed(() => config.value?.platform || '')
   <div class="config-page">
     <!-- FEC Percentage -->
     <div class="mb-6">
-      <label
-        for="fec_percentage"
-        class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-      >{{ $t('config.fec_percentage') }}</label>
-      <input
-        id="fec_percentage"
-        v-model="config.fec_percentage"
-        type="text"
+      <label for="fec_percentage" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{
+        $t('config.fec_percentage') }}</label>
+      <input id="fec_percentage" v-model="config.fec_percentage" type="text"
         class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70"
-        placeholder="20"
-      >
+        placeholder="20">
       <div class="text-[11px] opacity-60 mt-1">
         {{ $t('config.fec_percentage_desc') }}
       </div>
@@ -31,17 +25,11 @@ const platform = computed(() => config.value?.platform || '')
 
     <!-- Quantization Parameter -->
     <div class="mb-6">
-      <label
-        for="qp"
-        class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-      >{{ $t('config.qp') }}</label>
-      <input
-        id="qp"
-        v-model="config.qp"
-        type="number"
+      <label for="qp" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{ $t('config.qp')
+        }}</label>
+      <input id="qp" v-model="config.qp" type="number"
         class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70"
-        placeholder="28"
-      >
+        placeholder="28">
       <div class="text-[11px] opacity-60 mt-1">
         {{ $t('config.qp_desc') }}
       </div>
@@ -49,18 +37,11 @@ const platform = computed(() => config.value?.platform || '')
 
     <!-- Min Threads -->
     <div class="mb-6">
-      <label
-        for="min_threads"
-        class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-      >{{ $t('config.min_threads') }}</label>
-      <input
-        id="min_threads"
-        v-model="config.min_threads"
-        type="number"
+      <label for="min_threads" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{
+        $t('config.min_threads') }}</label>
+      <input id="min_threads" v-model="config.min_threads" type="number"
         class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70"
-        placeholder="2"
-        min="1"
-      >
+        placeholder="2" min="1">
       <div class="text-[11px] opacity-60 mt-1">
         {{ $t('config.min_threads_desc') }}
       </div>
@@ -68,15 +49,10 @@ const platform = computed(() => config.value?.platform || '')
 
     <!-- HEVC Support -->
     <div class="mb-6">
-      <label
-        for="hevc_mode"
-        class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-      >{{ $t('config.hevc_mode') }}</label>
-      <select
-        id="hevc_mode"
-        v-model="config.hevc_mode"
-        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40"
-      >
+      <label for="hevc_mode" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{
+        $t('config.hevc_mode') }}</label>
+      <select id="hevc_mode" v-model="config.hevc_mode"
+        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40">
         <option value="0">
           {{ $t('config.hevc_mode_0') }}
         </option>
@@ -97,15 +73,10 @@ const platform = computed(() => config.value?.platform || '')
 
     <!-- AV1 Support -->
     <div class="mb-6">
-      <label
-        for="av1_mode"
-        class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-      >{{ $t('config.av1_mode') }}</label>
-      <select
-        id="av1_mode"
-        v-model="config.av1_mode"
-        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40"
-      >
+      <label for="av1_mode" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{
+        $t('config.av1_mode') }}</label>
+      <select id="av1_mode" v-model="config.av1_mode"
+        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40">
         <option value="0">
           {{ $t('config.av1_mode_0') }}
         </option>
@@ -125,19 +96,11 @@ const platform = computed(() => config.value?.platform || '')
     </div>
 
     <!-- Capture -->
-    <div
-      v-if="platform !== 'macos'"
-      class="mb-6"
-    >
-      <label
-        for="capture"
-        class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-      >{{ $t('config.capture') }}</label>
-      <select
-        id="capture"
-        v-model="config.capture"
-        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40"
-      >
+    <div v-if="platform !== 'macos'" class="mb-6">
+      <label for="capture" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{
+        $t('config.capture') }}</label>
+      <select id="capture" v-model="config.capture"
+        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40">
         <option value="">
           {{ $t('_common.autodetect') }}
         </option>
@@ -173,15 +136,10 @@ const platform = computed(() => config.value?.platform || '')
 
     <!-- Encoder -->
     <div class="mb-6">
-      <label
-        for="encoder"
-        class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-      >{{ $t('config.encoder') }}</label>
-      <select
-        id="encoder"
-        v-model="config.encoder"
-        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40"
-      >
+      <label for="encoder" class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light">{{
+        $t('config.encoder') }}</label>
+      <select id="encoder" v-model="config.encoder"
+        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40">
         <option value="">
           {{ $t('_common.autodetect') }}
         </option>
@@ -222,6 +180,4 @@ const platform = computed(() => config.value?.platform || '')
   </div>
 </template>
 
-<style scoped>
-
-</style>
+<style scoped></style>

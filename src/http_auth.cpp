@@ -495,15 +495,8 @@ namespace confighttp {
     return APIResponse(status_code, response_body.dump(), headers);
   }
 
-  // Basic authentication removed (authenticate_basic deleted)
-
-  // Updated make_auth_error signature already defined earlier; remove legacy implementation
-
-  AuthResult make_auth_error(StatusCode code, const std::string &error, const std::string &location) {
+  AuthResult make_auth_error(StatusCode code, const std::string &error) {
     AuthResult result {false, code, {}, {}};
-    if (!location.empty()) {
-      result.headers.emplace("Location", location);
-    }
     // Always add CORS origin header for auth errors (and redirects) to satisfy UI expectations
     {
       std::uint16_t https_port = net::map_port(confighttp::PORT_HTTPS);
@@ -529,7 +522,7 @@ namespace confighttp {
 
   AuthResult check_session_auth(const std::string &raw_auth) {
     if (raw_auth.rfind("Session ", 0) != 0) {
-      return make_auth_error(StatusCode::client_error_unauthorized, "Invalid session token format", "");
+      return make_auth_error(StatusCode::client_error_unauthorized, "Invalid session token format");
     }
 
     std::string token = raw_auth.substr(8);
@@ -538,7 +531,7 @@ namespace confighttp {
       return {true, StatusCode::success_ok, {}, {}};
     }
 
-    return make_auth_error(StatusCode::client_error_unauthorized, "Invalid or expired session token", "");
+    return make_auth_error(StatusCode::client_error_unauthorized, "Invalid or expired session token");
   }
 
   bool is_html_request(const std::string &path) {
@@ -580,26 +573,29 @@ namespace confighttp {
 
     if (auto ip_type = net::from_address(remote_address); ip_type > http::origin_web_ui_allowed) {
       BOOST_LOG(info) << "Web UI: ["sv << remote_address << "] -- denied"sv;
-      return make_auth_error(StatusCode::client_error_forbidden, "Forbidden", "");
+      return make_auth_error(StatusCode::client_error_forbidden, "Forbidden");
     }
 
-    if (config::sunshine.username.empty()) {
-      return make_auth_error(StatusCode::redirection_temporary_redirect, "", "/welcome");
+    // If no username configured yet, allow unauthenticated access so SPA can drive setup (except protected APIs later)
+    bool credentials_configured = !config::sunshine.username.empty();
+
+    // Only protect /api/ endpoints (except auth endpoints) for SPA model; all other paths (HTML shell, assets) are always allowed
+    bool is_api = base_path.rfind("/api/", 0) == 0;
+    bool is_auth_api = (base_path == "/api/auth/login" || base_path == "/api/auth/logout");
+    if (!is_api) {
+      return {true, StatusCode::success_ok, {}, {}};  // public content served; SPA handles routing and will trigger API calls
+    }
+    if (is_auth_api) {
+      return {true, StatusCode::success_ok, {}, {}};  // login/logout endpoints public (logout will no-op if no token)
     }
 
-    // For login page, don't require authentication (match path without query)
-    if (base_path == "/login" || base_path == "/login/") {
-      return {true, StatusCode::success_ok, {}, {}};
+    // From here on: /api/ (non-auth) endpoints must have credentials configured and valid session or bearer token
+    if (!credentials_configured) {
+      return make_auth_error(StatusCode::client_error_unauthorized, "Credentials not configured");
     }
 
     if (auth_header.empty()) {
-      // For HTML page requests, redirect to login instead of showing 401 (use base_path)
-      if (is_html_request(base_path)) {
-        std::string login_url = std::format("/login?redirect={}", path);
-        return make_auth_error(StatusCode::redirection_temporary_redirect, "", login_url);
-      }
-      // For API requests, send 401 JSON WITHOUT WWW-Authenticate to avoid browser basic-auth prompt spam
-      return make_auth_error(StatusCode::client_error_unauthorized, "Unauthorized", "");
+      return make_auth_error(StatusCode::client_error_unauthorized, "Unauthorized");
     }
 
     if (auth_header.rfind("Bearer ", 0) == 0) {
@@ -610,21 +606,14 @@ namespace confighttp {
       {
         auto session_res = check_session_auth(auth_header);
         if (!session_res.ok) {
-          std::string login_url = "/login?redirect=" + path;
-          return make_auth_error(StatusCode::redirection_temporary_redirect, "", login_url);
+          return make_auth_error(StatusCode::client_error_unauthorized, "Invalid or expired session token");
         }
         return session_res;
       }
     }
 
-    // For HTML page requests, redirect to login instead of showing 401 (use base_path)
-    if (is_html_request(base_path)) {
-      std::string login_url = "/login?redirect=" + path;
-      return make_auth_error(StatusCode::redirection_temporary_redirect, "", login_url);
-    }
-
-    // Default: unauthorized without Basic challenge to preserve SPA UX
-    return make_auth_error(StatusCode::client_error_unauthorized, "Unauthorized", "");
+    // Default: unauthorized
+    return make_auth_error(StatusCode::client_error_unauthorized, "Unauthorized");
   }
 
   std::string extract_session_token_from_cookie(const SimpleWeb::CaseInsensitiveMultimap &headers) {

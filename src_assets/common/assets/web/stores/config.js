@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { http } from '../http.js'
+import { http } from '@/http.js'
 
 // Centralized store for configuration defaults and runtime config
 export const useConfigStore = defineStore('config', () => {
@@ -56,7 +56,7 @@ export const useConfigStore = defineStore('config', () => {
         "dd_hdr_option": "auto",
         "dd_config_revert_delay": 3000,
         "dd_config_revert_on_disconnect": "disabled",
-        "dd_mode_remapping": {"mixed": [], "resolution_only": [], "refresh_rate_only": []},
+        "dd_mode_remapping": { "mixed": [], "resolution_only": [], "refresh_rate_only": [] },
         "dd_wa_hdr_toggle_delay": 0,
         "max_bitrate": 0,
         "minimum_fps_target": 0
@@ -182,8 +182,8 @@ export const useConfigStore = defineStore('config', () => {
       }
     }
 
-  // Keep server-only keys like platform/status/version in the store for UI use.
-  // They will be removed when serializing for POST.
+    // Keep server-only keys like platform/status/version in the store for UI use.
+    // They will be removed when serializing for POST.
 
     // populate defaults
     tabs.value.forEach(tab => {
@@ -201,20 +201,20 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   function serialize() {
-  // Return a deep clone without server-only keys
-  const out = JSON.parse(JSON.stringify(config.value))
-  if (!out) return out
-  delete out.platform
-  delete out.status
-  delete out.version
-  return out
+    // Return a deep clone without server-only keys
+    const out = JSON.parse(JSON.stringify(config.value))
+    if (!out) return out
+    delete out.platform
+    delete out.status
+    delete out.version
+    return out
   }
 
   // Fetch runtime config from the server and apply via setConfig
   async function fetchConfig(force = false) {
     if (config.value && !force) return config.value
     try {
-      const r = await http.get('./api/config')
+      const r = await http.get('/api/config')
       if (r.status !== 200) return null
       setConfig(r.data)
       return config.value
@@ -230,6 +230,6 @@ export const useConfigStore = defineStore('config', () => {
     setConfig,
     updateOption,
     serialize,
-  fetchConfig,
+    fetchConfig,
   }
 })

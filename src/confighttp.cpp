@@ -1990,25 +1990,10 @@ namespace confighttp {
     server.resource["^/api/tokens$"]["GET"] = listApiTokens;
     server.resource["^/api/token/([a-fA-F0-9]+)$"]["DELETE"] = revokeApiToken;
     // Session validation endpoint used by the web UI to detect HttpOnly session cookies
-    server.resource["^/api/auth/validate$"]["GET"] = [](resp_https_t response, req_https_t request) {
-      print_req(request);
-      // Extract session token from Cookie header and validate via SessionTokenAPI
-      std::string token = extract_session_token_from_cookie(request->header);
-      APIResponse api_response = session_token_api.validate_session(token);
-      if (api_response.status_code == SimpleWeb::StatusCode::success_ok) {
-        // Return minimal success JSON and CORS headers
-        SimpleWeb::CaseInsensitiveMultimap headers;
-        headers.emplace("Content-Type", "application/json");
-        headers.emplace("Access-Control-Allow-Origin", get_cors_origin());
-        response->write(SimpleWeb::StatusCode::success_ok, "{\"status\":true}", headers);
-      } else {
-        // Propagate unauthorized status
-        write_api_response(response, api_response);
-      }
-    };
     server.resource["^/api-tokens/?$"]["GET"] = getTokenPage;
     server.resource["^/api/auth/login$"]["POST"] = loginUser;
     server.resource["^/api/auth/logout$"]["POST"] = logoutUser;
+    server.resource["^/api/auth/status$"]["GET"] = authStatus;
     server.config.reuse_address = true;
     server.config.address = net::af_to_any_address_string(address_family);
     server.config.port = port_https;
@@ -2170,5 +2155,64 @@ namespace confighttp {
 
     APIResponse api_response = session_token_api.logout(session_token);
     write_api_response(response, api_response);
+  }
+
+  /**
+   * @brief Authentication status endpoint.
+   * Returns whether credentials are configured and if authentication is required for protected API calls.
+   * This allows the frontend to avoid showing a login modal when not necessary.
+   *
+   * Response JSON shape:
+   * {
+   *   "credentials_configured": true|false,
+   *   "login_required": true|false,
+   *   "authenticated": true|false
+   * }
+   *
+   * login_required becomes true only when credentials are configured and the supplied
+   * request lacks valid authentication (session token or bearer token) for protected APIs.
+   */
+  void authStatus(resp_https_t response, req_https_t request) {
+    print_req(request);
+
+    bool credentials_configured = !config::sunshine.username.empty();
+
+    // Determine if current request has valid auth (session or bearer) using existing check_auth
+    bool authenticated = false;
+    if (credentials_configured) {
+      if (auto result = check_auth(request); result.ok) {
+        authenticated = true;  // check_auth returns ok for public routes; refine below
+        // We only consider it authenticated if an auth header or cookie was present and validated.
+        std::string auth_header;
+        if (auto auth_it = request->header.find("authorization"); auth_it != request->header.end()) {
+          auth_header = auth_it->second;
+        } else {
+          std::string token = extract_session_token_from_cookie(request->header);
+          if (!token.empty()) {
+            auth_header = "Session " + token;
+          }
+        }
+        if (auth_header.empty()) {
+          authenticated = false;  // public access granted but no credentials supplied
+        } else {
+          // Re-run only auth layer for supplied header specifically to ensure validity
+          auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+          auto header_check = check_auth(address, auth_header, "/api/config", "GET");  // use protected path for validation
+          authenticated = header_check.ok;
+        }
+      }
+    }
+
+    bool login_required = credentials_configured && !authenticated;
+
+    nlohmann::json tree;
+    tree["credentials_configured"] = credentials_configured;
+    tree["login_required"] = login_required;
+    tree["authenticated"] = authenticated;
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json; charset=utf-8");
+    add_cors_headers(headers);
+    response->write(SimpleWeb::StatusCode::success_ok, tree.dump(), headers);
   }
 }  // namespace confighttp

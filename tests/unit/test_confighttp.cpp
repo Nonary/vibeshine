@@ -76,7 +76,7 @@ namespace confighttp {
   }
 
   TEST_F(ConfigHttpAuthHelpersTest, given_redirect_location_when_making_auth_error_then_should_return_redirect_response) {
-    auto result = make_auth_error(SimpleWeb::StatusCode::redirection_temporary_redirect, "", "/welcome");
+    auto result = make_auth_error(SimpleWeb::StatusCode::redirection_temporary_redirect, "");
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.code, SimpleWeb::StatusCode::redirection_temporary_redirect);
     EXPECT_TRUE(result.body.empty());

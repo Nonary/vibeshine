@@ -2,72 +2,31 @@
   <div class="login-container">
     <div class="login-form">
       <div class="text-center mb-4">
-        <img
-          src="/images/logo-sunshine-45.png"
-          height="45"
-          alt="Sunshine"
-        >
+        <img src="/images/logo-sunshine-45.png" height="45" alt="Sunshine">
         <h1 class="h3 mb-3 fw-normal">
           {{ $t('auth.login_title') }}
         </h1>
       </div>
-      <form
-        v-if="!isLoggedIn"
-        autocomplete="on"
-        @submit.prevent="login"
-      >
+      <form v-if="!isLoggedIn" autocomplete="on" @submit.prevent="login">
         <div class="mb-3">
-          <label
-            for="username"
-            class="form-label"
-          >{{ $t('_common.username') }}</label>
-          <input 
-            id="username" 
-            v-model="credentials.username" 
-            type="text" 
-            class="form-control" 
-            name="username" 
-            required
-            autocomplete="username"
-          >
+          <label for="username" class="form-label">{{ $t('_common.username') }}</label>
+          <input id="username" v-model="credentials.username" type="text" class="form-control" name="username" required
+            autocomplete="username">
         </div>
         <div class="mb-3">
-          <label
-            for="password"
-            class="form-label"
-          >{{ $t('_common.password') }}</label>
-          <input 
-            id="password" 
-            v-model="credentials.password" 
-            type="password" 
-            class="form-control" 
-            name="password" 
-            required
-            autocomplete="current-password"
-          >
+          <label for="password" class="form-label">{{ $t('_common.password') }}</label>
+          <input id="password" v-model="credentials.password" type="password" class="form-control" name="password"
+            required autocomplete="current-password">
         </div>
-        <button
-          type="submit"
-          class="btn btn-primary w-100"
-          :disabled="loading"
-        >
-          <span
-            v-if="loading"
-            class="spinner-border spinner-border-sm me-2"
-          />
+        <button type="submit" class="btn btn-primary w-100" :disabled="loading">
+          <span v-if="loading" class="spinner-border spinner-border-sm me-2" />
           {{ $t('auth.login_sign_in') }}
         </button>
-        <div
-          v-if="error"
-          class="alert alert-danger mt-3"
-        >
+        <div v-if="error" class="alert alert-danger mt-3">
           {{ error }}
         </div>
       </form>
-      <div
-        v-else
-        class="text-center"
-      >
+      <div v-else class="text-center">
         <div class="alert alert-success">
           {{ $t('auth.login_success') }}
         </div>
@@ -82,8 +41,8 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useAuthStore } from './stores/auth.js'
-import { http } from './http.js'
+import { useAuthStore } from '@/stores/auth.js'
+import { http } from '@/http.js'
 
 const auth = useAuthStore()
 const credentials = ref({ username: '', password: '' })
@@ -146,19 +105,19 @@ async function login() {
   loading.value = true
   error.value = ''
   try {
-  const response = await http.post('/api/auth/login', {
-    username: credentials.value.username,
-    password: credentials.value.password,
-    redirect: requestedRedirect.value
-  }, { validateStatus: () => true })
-  const data = response.data || {}
-  if (response.status === 200 && data.status) {
-  // Login endpoint created the session cookie; rely on shared auth detection for global state
-  isLoggedIn.value = true
-  safeRedirect.value = sanitizeRedirect(data.redirect) || '/'
-  sessionStorage.removeItem('pending_redirect')
-  // Attempt immediate redirect; auth store will also detect the cookie and notify listeners
-  setTimeout(() => { redirectToApp() }, 250)
+    const response = await http.post('/api/auth/login', {
+      username: credentials.value.username,
+      password: credentials.value.password,
+      redirect: requestedRedirect.value
+    }, { validateStatus: () => true })
+    const data = response.data || {}
+    if (response.status === 200 && data.status) {
+      // Login endpoint created the session cookie; rely on shared auth detection for global state
+      isLoggedIn.value = true
+      safeRedirect.value = sanitizeRedirect(data.redirect) || '/'
+      sessionStorage.removeItem('pending_redirect')
+      // Attempt immediate redirect; auth store will also detect the cookie and notify listeners
+      setTimeout(() => { redirectToApp() }, 250)
     } else {
       error.value = data.error || t('auth.login_failed')
     }
@@ -185,6 +144,7 @@ function redirectToApp() {
   margin: 2rem auto;
   padding: 2rem;
 }
+
 .login-form {
   background: var(--bs-body-bg);
   border: 1px solid var(--bs-border-color);
