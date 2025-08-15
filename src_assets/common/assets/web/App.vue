@@ -1,10 +1,7 @@
 <template>
-  <div
-    class="min-h-screen flex flex-col bg-solar-light dark:bg-lunar-dark text-solar-dark dark:text-lunar-light"
-  >
+  <div class="min-h-screen flex flex-col bg-solar-light dark:bg-lunar-dark text-solar-dark dark:text-lunar-light">
     <header
-      class="h-14 flex items-center gap-4 px-4 border-b border-solar-dark/10 dark:border-lunar-light/10 bg-solar-light/70 dark:bg-lunar-dark/60 backdrop-blur supports-[backdrop-filter]:bg-solar-light/40 supports-[backdrop-filter]:dark:bg-lunar-dark/40"
-    >
+      class="h-14 flex items-center gap-4 px-4 border-b border-solar-dark/10 dark:border-lunar-light/10 bg-solar-light/70 dark:bg-lunar-dark/60 backdrop-blur supports-[backdrop-filter]:bg-solar-light/40 supports-[backdrop-filter]:dark:bg-lunar-dark/40">
       <div class="flex items-center gap-3 min-w-0">
         <img src="/images/logo-sunshine-45.png" alt="Sunshine" class="h-8 w-8" />
         <h1 class="text-base md:text-lg font-semibold tracking-tight truncate">
@@ -44,26 +41,18 @@
     <LoginModal />
     <transition name="fade-fast">
       <div v-if="loggedOut" class="fixed inset-0 z-[120] flex flex-col">
-        <div
-          class="absolute inset-0 bg-gradient-to-br from-black/70 via-black/60 to-black/70 backdrop-blur-md"
-        ></div>
+        <div class="absolute inset-0 bg-gradient-to-br from-black/70 via-black/60 to-black/70 backdrop-blur-md"></div>
         <div class="relative flex-1 flex flex-col items-center justify-center p-6 overflow-y-auto">
           <div class="w-full max-w-md mx-auto text-center space-y-6">
-            <img
-              src="/images/logo-sunshine-45.png"
-              alt="Sunshine"
-              class="h-24 w-24 opacity-80 mx-auto select-none"
-            />
+            <img src="/images/logo-sunshine-45.png" alt="Sunshine" class="h-24 w-24 opacity-80 mx-auto select-none" />
             <div class="space-y-2">
               <h2 class="text-2xl font-semibold tracking-tight">{{ $t('auth.logout_success') }}</h2>
               <p class="text-sm opacity-80 leading-relaxed">{{ $t('auth.logout_refresh_hint') }}</p>
             </div>
             <div class="flex items-center justify-center pt-2">
-              <button
-                type="button"
+              <button type="button"
                 class="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold tracking-wide bg-solar-primary/80 dark:bg-lunar-primary/80 text-solar-onPrimary dark:text-lunar-onPrimary shadow hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-solar-primary/60 dark:focus-visible:ring-lunar-primary/60 transition disabled:opacity-50"
-                @click="refreshPage"
-              >
+                @click="refreshPage">
                 {{ $t('auth.logout_refresh_button') }}
                 <i class="fas fa-rotate" />
               </button>
@@ -142,7 +131,4 @@ function refreshPage() {
   window.location.reload();
 }
 
-// Removed close tab functionality per requirements
 </script>
-
-<!-- Styling replaced with Tailwind + extended palette. Old Bootstrap vars removed. -->

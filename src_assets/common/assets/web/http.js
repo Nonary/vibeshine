@@ -49,10 +49,6 @@ function initAuthHandling() {
       if (response?.status === 401) {
         if (auth.isAuthenticated) auth.setAuthenticated(false);
         triggerLoginModal();
-      } else if (response?.status === 200 && response?.config) {
-        // Mark authed only for protected API calls (/api/...) to avoid false positives from public assets
-        const url = response.config.url || '';
-        if (url.startsWith('/api/')) auth.setAuthenticated(true);
       }
       return response;
     },

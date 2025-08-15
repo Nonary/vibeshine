@@ -4,76 +4,69 @@ import { initApp } from '@/init';
 import { router } from '@/router';
 import App from '@/App.vue';
 import './styles/tailwind.css';
-import { initHttpLayer, http } from '@/http.js';
-// Import Font Awesome locally (added dependency @fortawesome/fontawesome-free)
+import { initHttpLayer } from '@/http.js';
 import '@fortawesome/fontawesome-free/css/all.min.css';
 
+// Core application instance & stores
 const app = createApp(App);
 const pinia = createPinia();
 app.use(pinia);
 app.use(router);
 
-// Provide a reactive platform ref early so feature/platform specific
-// rendering & i18n (see platform-i18n.js) can safely inject it without
-// crashing even before config has finished loading. We update it once
-// the config store is populated. Components using inject('platform')
-// will now always receive a ref (possibly empty string) eliminating
-// previous 'injection "platform" not found' errors during early mount.
+// Expose platform ref early (updated after config load)
 const platformRef = ref('');
 app.provide('platform', platformRef);
 
-// Provide an early config loader so runtime config is fetched and applied
-// before the app mounts. This prevents components from rendering then
-// immediately fetching config (which caused null deref race conditions).
-initApp(app, async (appInstance) => {
-  try {
-    // dynamic import to avoid circular load order issues in tests/build
-    const [{ useConfigStore }, { useAuthStore }] = await Promise.all([
-      import('@/stores/config.js'),
-      import('@/stores/auth.js'),
-    ]);
-    const store = useConfigStore();
-    const auth = useAuthStore();
-    // Initialize axios/http layer & perform a single auth validate
-    await initHttpLayer();
-    auth.init();
+// Central bootstrap: initialize i18n + auth status, then when authenticated load
+// config & apps exactly once. Subsequent logouts (401) will re-trigger login modal
+// and a later successful login will re-load fresh data.
+initApp(app, async () => {
+  await initHttpLayer();
 
-    // Keep provided platform ref in sync with store once config arrives
-    watch(
-      () => store.config.value && store.config.value.platform,
-      (val) => {
-        platformRef.value = val || '';
-      },
-      { immediate: true },
-    );
+  const [{ useAuthStore }, { useConfigStore }, { useAppsStore }] = await Promise.all([
+    import('@/stores/auth.js'),
+    import('@/stores/config.js'),
+    import('@/stores/apps.js'),
+  ]);
 
-    // if already loaded (e.g., HMR) skip
-    if (store.config && store.config.value) return;
+  const auth = useAuthStore();
+  const configStore = useConfigStore();
+  const appsStore = useAppsStore();
 
-    // If already authenticated, fetch immediately. Otherwise wait for login event once.
-    const doFetch = async () => {
-      try {
-        const res = await http.get('/api/config');
-        if (res.status !== 200) return;
-        store.setConfig(res.data);
-      } catch (e) {
-        console.error('early config fetch failed', e);
+  let dataLoadGeneration = 0; // increment each auth cycle
+
+  async function loadPostAuthData(gen) {
+    try {
+      await Promise.all([
+        configStore.fetchConfig(true),
+        appsStore.loadApps(true),
+      ]);
+      // Only update platform if still same auth generation (user hasn't logged out/in again mid-load)
+      if (gen === dataLoadGeneration) {
+        platformRef.value = (configStore.config?.value?.platform) || '';
       }
-    };
-
-    if (auth.isAuthenticated) {
-      await doFetch();
-    } else {
-      // wait for first login event, but do not block forever — also allow immediate return
-      let unsub = auth.onLogin(async () => {
-        await doFetch();
-        if (unsub) unsub();
-      });
-      // no further action here; mount will proceed, components remain defensive
+    } catch (e) {
+      console.error('post-auth data load failed', e);
     }
-  } catch (e) {
-    // don't block the app on config failures
-    // components should still defensively handle missing config
-    console.error('early config load failed', e);
   }
+
+  // Initialize auth status from server
+  await auth.init();
+
+  if (auth.isAuthenticated) {
+    dataLoadGeneration += 1;
+    loadPostAuthData(dataLoadGeneration);
+  }
+
+  // Watch for future successful logins
+  watch(
+    () => auth.isAuthenticated,
+    (v) => {
+      if (v) {
+        dataLoadGeneration += 1;
+        loadPostAuthData(dataLoadGeneration);
+      }
+    },
+    { immediate: false },
+  );
 });

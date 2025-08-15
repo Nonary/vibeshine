@@ -1,9 +1,5 @@
 import i18n from '@/locale';
 
-// must import even if not implicitly using here
-// https://github.com/aurelia/skeleton-navigation/issues/894
-// https://discourse.aurelia.io/t/bootstrap-import-bootstrap-breaks-dropdown-menu-in-navbar/641/9
-import 'bootstrap/dist/js/bootstrap';
 
 export function initApp(app, config) {
   // Wait for locale initialization, then run optional app-level setup (like loading config)

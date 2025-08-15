@@ -206,13 +206,8 @@ async function submit() {
     if (loginRes.status === 200 && loginRes.data && loginRes.data.status) {
       auth.setAuthenticated(true);
       success.value = t('auth.login_success');
-      const target = auth.pendingRedirect || '/';
       setTimeout(() => {
         auth.hideLogin();
-        // Navigate via location to ensure full state consistent if needed
-        if (target && typeof target === 'string') {
-          window.history.replaceState({}, '', target);
-        }
       }, 400);
     } else {
       error.value =
