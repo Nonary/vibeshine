@@ -547,18 +547,32 @@ namespace rtsp_stream {
      * @examples_end
      */
     void clear(bool all = true) {
-      auto lg = _session_slots.lock();
+      // Collect sessions to stop/join first while holding the set lock,
+      // but perform the potentially blocking join() outside of the lock to
+      // avoid deadlocks (join() may indirectly query session_count()).
+      std::vector<std::shared_ptr<stream::session_t>> to_cleanup;
 
-      for (auto i = _session_slots->begin(); i != _session_slots->end();) {
-        auto &slot = *(*i);
-        if (all || stream::session::state(slot) == stream::session::state_e::STOPPING) {
-          stream::session::stop(slot);
-          stream::session::join(slot);
+      {
+        auto lg = _session_slots.lock();
 
-          i = _session_slots->erase(i);
-        } else {
-          i++;
+        for (auto i = _session_slots->begin(); i != _session_slots->end();) {
+          auto &slot = *(*i);
+          if (all || stream::session::state(slot) == stream::session::state_e::STOPPING) {
+            // Make a copy to operate on after releasing the lock
+            to_cleanup.emplace_back(*i);
+
+            // Remove from the active set now so counts reflect pending removal
+            i = _session_slots->erase(i);
+          } else {
+            ++i;
+          }
         }
+      }
+
+      // Stop and join outside the lock
+      for (auto &slot : to_cleanup) {
+        stream::session::stop(*slot);
+        stream::session::join(*slot);
       }
     }
 
@@ -1080,6 +1094,9 @@ namespace rtsp_stream {
       respond(sock, session, &option, 403, "Forbidden", req->sequenceNumber, {});
       return;
     }
+
+    // Prevent interleaving with hot-apply while we allocate/start a session from RTSP
+    auto _hot_apply_gate = config::acquire_apply_read_gate();
 
     auto stream_session = stream::session::alloc(config, session);
     server->insert(stream_session);

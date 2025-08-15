@@ -46,6 +46,39 @@ namespace proc {
 
   proc_t proc;
 
+  // Custom move operations to allow global proc replacement if ever needed
+  proc_t::proc_t(proc_t &&other) noexcept:
+      _app_id(other._app_id),
+      _env(std::move(other._env)),
+      _apps(std::move(other._apps)),
+      _app(std::move(other._app)),
+      _app_launch_time(other._app_launch_time),
+      placebo(other.placebo),
+      _process(std::move(other._process)),
+      _process_group(std::move(other._process_group)),
+      _pipe(std::move(other._pipe)),
+      _app_prep_it(other._app_prep_it),
+      _app_prep_begin(other._app_prep_begin) {
+  }
+
+  proc_t &proc_t::operator=(proc_t &&other) noexcept {
+    if (this != &other) {
+      std::scoped_lock lk(_apps_mutex, other._apps_mutex);
+      _app_id = other._app_id;
+      _env = std::move(other._env);
+      _apps = std::move(other._apps);
+      _app = std::move(other._app);
+      _app_launch_time = other._app_launch_time;
+      placebo = other.placebo;
+      _process = std::move(other._process);
+      _process_group = std::move(other._process_group);
+      _pipe = std::move(other._pipe);
+      _app_prep_it = other._app_prep_it;
+      _app_prep_begin = other._app_prep_begin;
+    }
+    return *this;
+  }
+
   class deinit_t: public platf::deinit_t {
   public:
     ~deinit_t() {
@@ -289,7 +322,7 @@ namespace proc {
 
     // Perform cleanup actions now if needed
     if (_process) {
-      BOOST_LOG(info) << "App exited with code ["sv << _process.native_exit_code() << ']';
+      BOOST_LOG(info) << "[running] _process.running() is false; calling terminate(). App exited with code ["sv << _process.native_exit_code() << "] for app '" << _app.name << "' (id=" << _app_id << ")";
       terminate();
     }
 
@@ -299,6 +332,7 @@ namespace proc {
   void proc_t::terminate() {
     std::error_code ec;
     placebo = false;
+    BOOST_LOG(info) << "[terminate] Resetting _app_id for app '" << _app.name << "' (id=" << _app_id << ")";
     terminate_process_group(_process, _process_group, _app.exit_timeout);
     _process = boost::process::v1::child();
     _process_group = boost::process::v1::group();
@@ -345,11 +379,8 @@ namespace proc {
     _app_id = -1;
   }
 
-  const std::vector<ctx_t> &proc_t::get_apps() const {
-    return _apps;
-  }
-
-  std::vector<ctx_t> &proc_t::get_apps() {
+  std::vector<ctx_t> proc_t::get_apps() const {
+    std::scoped_lock lk(_apps_mutex);
     return _apps;
   }
 
@@ -358,7 +389,8 @@ namespace proc {
   // Returns default image if image configuration is not set.
   // Returns http content-type header compatible image type.
   std::string proc_t::get_app_image(int app_id) {
-    auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto app) {
+  std::scoped_lock lk(_apps_mutex);
+  auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto app) {
       return app.id == std::to_string(app_id);
     });
     auto app_image_path = iter == _apps.end() ? std::string() : iter->image_path;
@@ -683,10 +715,10 @@ namespace proc {
         apps.emplace_back(std::move(ctx));
       }
 
-      return proc::proc_t {
+      return std::optional<proc::proc_t>(std::in_place,
         std::move(this_env),
         std::move(apps)
-      };
+      );
     } catch (std::exception &e) {
       BOOST_LOG(error) << e.what();
     }
@@ -698,7 +730,25 @@ namespace proc {
     auto proc_opt = proc::parse(file_name);
 
     if (proc_opt) {
-      proc = std::move(*proc_opt);
+      // Update apps/env atomically to avoid disrupting running process
+      proc.update_apps(proc_opt->release_apps(), proc_opt->release_env());
     }
+  }
+
+  void proc_t::update_apps(std::vector<ctx_t> &&apps, boost::process::v1::environment &&env) {
+    // Replace app list and environment while keeping current running app intact
+    {
+      std::scoped_lock lk(_apps_mutex);
+      _apps = std::move(apps);
+      _env = std::move(env);
+    }
+  }
+
+  std::vector<ctx_t> proc_t::release_apps() {
+    return std::move(_apps);
+  }
+
+  boost::process::v1::environment proc_t::release_env() {
+    return std::move(_env);
   }
 }  // namespace proc

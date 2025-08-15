@@ -247,6 +247,17 @@ namespace logging {
     }
   }
 
+  void reconfigure_min_log_level(int min_log_level) {
+    if (!sink) {
+      return;
+    }
+#ifndef __ANDROID__
+    setup_av_logging(min_log_level);
+    setup_libdisplaydevice_logging(min_log_level);
+#endif
+    sink->set_filter(severity >= min_log_level);
+  }
+
   void print_help(const char *name) {
     std::cout
       << "Usage: "sv << name << " [options] [/path/to/configuration_file] [--cmd]"sv << std::endl
