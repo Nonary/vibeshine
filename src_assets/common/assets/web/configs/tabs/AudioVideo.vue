@@ -19,20 +19,9 @@ const platform = computed(() => config.value?.platform || '');
   <div id="av" class="config-page">
     <!-- Audio Sink -->
     <div class="mb-6">
-      <label
-        for="audio_sink"
-        class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-        >{{ $t('config.audio_sink') }}</label
-      >
-      <input
-        id="audio_sink"
-        v-model="config.audio_sink"
-        type="text"
-        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70"
-        :placeholder="
-          $tp('config.audio_sink_placeholder', 'alsa_output.pci-0000_09_00.3.analog-stereo')
-        "
-      />
+      <label for="audio_sink" class="form-label">{{ $t('config.audio_sink') }}</label>
+      <input id="audio_sink" v-model="config.audio_sink" type="text" class="form-control"
+        :placeholder="$tp('config.audio_sink_placeholder', 'alsa_output.pci-0000_09_00.3.analog-stereo')" />
       <div class="text-[11px] opacity-60 mt-1">
         {{ $tp('config.audio_sink_desc') }}<br />
         <PlatformLayout>
@@ -44,8 +33,7 @@ const platform = computed(() => config.value?.platform || '');
             <pre>pactl info | grep Source</pre>
           </template>
           <template #macos>
-            <a href="https://github.com/mattingalls/Soundflower" target="_blank">Soundflower</a
-            ><br />
+            <a href="https://github.com/mattingalls/Soundflower" target="_blank">Soundflower</a><br />
             <a href="https://github.com/ExistentialAudio/BlackHole" target="_blank">BlackHole</a>.
           </template>
         </PlatformLayout>
@@ -56,42 +44,22 @@ const platform = computed(() => config.value?.platform || '');
       <template #windows>
         <!-- Virtual Sink -->
         <div class="mb-6">
-          <label
-            for="virtual_sink"
-            class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-            >{{ $t('config.virtual_sink') }}</label
-          >
-          <input
-            id="virtual_sink"
-            v-model="config.virtual_sink"
-            type="text"
-            class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70"
-            :placeholder="$t('config.virtual_sink_placeholder')"
-          />
+          <label for="virtual_sink" class="form-label">{{ $t('config.virtual_sink') }}</label>
+          <input id="virtual_sink" v-model="config.virtual_sink" type="text" class="form-control"
+            :placeholder="$t('config.virtual_sink_placeholder')" />
           <div class="text-[11px] opacity-60 mt-1">
             {{ $t('config.virtual_sink_desc') }}
           </div>
         </div>
 
         <!-- Install Steam Audio Drivers -->
-        <Checkbox
-          id="install_steam_audio_drivers"
-          v-model="config.install_steam_audio_drivers"
-          class="mb-3"
-          locale-prefix="config"
-          default="true"
-        />
+        <Checkbox id="install_steam_audio_drivers" v-model="config.install_steam_audio_drivers" class="mb-3"
+          locale-prefix="config" default="true" />
       </template>
     </PlatformLayout>
 
     <!-- Disable Audio -->
-    <Checkbox
-      id="stream_audio"
-      v-model="config.stream_audio"
-      class="mb-3"
-      locale-prefix="config"
-      default="true"
-    />
+    <Checkbox id="stream_audio" v-model="config.stream_audio" class="mb-3" locale-prefix="config" default="true" />
 
     <AdapterNameSelector />
 

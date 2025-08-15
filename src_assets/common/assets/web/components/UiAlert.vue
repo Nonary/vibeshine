@@ -9,11 +9,7 @@
       <div class="flex-1">
         <slot />
       </div>
-      <button
-        v-if="dismissible"
-        class="ml-2 text-solar-dark dark:text-lunar-light hover:opacity-70"
-        @click="$emit('close')"
-      >
+      <button v-if="dismissible" class="ml-2 text-dark hover:opacity-70" @click="$emit('close')">
         &times;
       </button>
     </div>
@@ -30,17 +26,12 @@ const props = defineProps({
 
 const base = 'rounded-md px-4 py-3 text-sm shadow-sm border';
 const variants = {
-  danger:
-    'bg-solar-danger/10 border-solar-danger/30 text-solar-danger dark:bg-lunar-danger/15 dark:border-lunar-danger/40 dark:text-lunar-danger',
-  success:
-    'bg-solar-success/10 border-solar-success/30 text-solar-success dark:bg-lunar-success/15 dark:border-lunar-success/40 dark:text-lunar-success',
-  warning:
-    'bg-solar-warning/10 border-solar-warning/30 text-solar-warning dark:bg-lunar-warning/15 dark:border-lunar-warning/40 dark:text-lunar-warning',
-  info: 'bg-solar-info/10 border-solar-info/30 text-solar-info dark:bg-lunar-info/15 dark:border-lunar-info/40 dark:text-lunar-info',
-  primary:
-    'bg-solar-primary/10 border-solar-primary/30 text-solar-primary dark:bg-lunar-primary/15 dark:border-lunar-primary/40 dark:text-lunar-primary',
-  neutral:
-    'bg-solar-surface border-solar-dark/10 text-solar-dark dark:bg-lunar-surface dark:border-lunar-light/10 dark:text-lunar-light',
+  danger: 'bg-danger/10 border-danger/30 text-danger',
+  success: 'bg-success/10 border-success/30 text-success',
+  warning: 'bg-warning/10 border-warning/30 text-warning',
+  info: 'bg-info/10 border-info/30 text-info',
+  primary: 'bg-primary/10 border-primary/30 text-primary',
+  neutral: 'bg-surface border-dark/10 text-dark',
 };
 const wrapper = computed(() => `${base} ${variants[props.variant] || variants.info}`);
 </script>

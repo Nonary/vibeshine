@@ -1,7 +1,7 @@
 <template>
   <main ref="mainEl" class="flex-1 px-0 md:px-2 xl:px-6 py-2 md:py-6 space-y-6 overflow-x-hidden">
     <header
-      class="sticky top-0 z-20 -mx-0 md:-mx-2 xl:-mx-6 px-0 md:px-2 xl:px-6 py-3 bg-solar-light/70 dark:bg-lunar-dark/60 backdrop-blur supports-[backdrop-filter]:bg-solar-light/50 supports-[backdrop-filter]:dark:bg-lunar-dark/40 border-b border-solar-dark/10 dark:border-lunar-light/10">
+      class="sticky top-0 z-20 -mx-0 md:-mx-2 xl:-mx-6 px-0 md:px-2 xl:px-6 py-3 bg-light/70 dark:bg-dark/60 backdrop-blur supports-[backdrop-filter]:bg-light/50 supports-[backdrop-filter]:dark:bg-dark/40 border-b border-dark/10 dark:border-light/10">
       <div class="flex items-center justify-between gap-4 flex-wrap">
         <div class="min-w-0">
           <h2 class="text-sm font-semibold uppercase tracking-wider">Settings</h2>
@@ -11,19 +11,19 @@
         <!-- In-page search -->
         <div class="relative flex-1 max-w-2xl min-w-[260px]">
           <input v-model="searchQuery" type="text" placeholder="Search settings... (Enter to jump)"
-            class="w-full px-3 py-2 text-sm rounded-md bg-black/5 dark:bg-white/10 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40"
+            class="w-full px-3 py-2 text-sm rounded-md bg-black/5 dark:bg-white/10 text-dark dark:text-light placeholder-black/40 dark:placeholder-light/50 focus:outline-none focus:ring-2 focus:ring-primary/40"
             @focus="searchOpen = searchQuery.length > 0" @blur="() => setTimeout(() => (searchOpen = false), 120)"
             @keydown.enter.prevent="jumpFirstResult" />
           <i class="fas fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-[12px] opacity-60" />
           <transition name="fade">
             <div v-if="searchOpen"
-              class="absolute mt-2 w-full z-20 bg-white/95 dark:bg-lunar-surface/95 backdrop-blur rounded-md shadow-lg border border-black/5 dark:border-white/10 max-h-80 overflow-auto">
+              class="absolute mt-2 w-full z-20 bg-white/95 dark:bg-surface/95 backdrop-blur rounded-md shadow-lg border border-black/5 dark:border-white/10 max-h-80 overflow-auto">
               <div v-if="searchResults.length === 0" class="px-3 py-2 text-[12px] opacity-60">No results</div>
               <button v-for="(r, idx) in searchResults" :key="idx"
                 class="w-full text-left px-3 py-2 hover:bg-black/5 dark:hover:bg-white/10 text-[13px] flex items-start gap-2"
                 @click="goTo(r)">
                 <span class="shrink-0 mt-0.5">
-                  <i class="fas fa-compass text-solar-primary dark:text-lunar-primary text-[11px]" />
+                  <i class="fas fa-compass text-primary text-[11px]" />
                 </span>
                 <span class="min-w-0">
                   <span class="block font-medium truncate">{{ r.label }}</span>
@@ -60,7 +60,7 @@
         </button>
         <transition name="fade">
           <div v-show="isOpen(tab.id)"
-            class="mt-2 bg-white/80 dark:bg-lunar-surface/70 backdrop-blur-sm border border-black/5 dark:border-white/10 rounded-xl shadow-sm p-6 space-y-6">
+            class="mt-2 bg-white/80 dark:bg-surface/70 backdrop-blur-sm border border-black/5 dark:border-white/10 rounded-xl shadow-sm p-6 space-y-6">
             <component :is="tab.component" />
           </div>
         </transition>
@@ -94,7 +94,7 @@
   <transition name="slide-fade">
     <div v-if="dirty && !autoSave" class="fixed bottom-4 right-6 z-30">
       <div
-        class="bg-white/90 dark:bg-lunar-surface/90 backdrop-blur rounded-lg shadow border border-black/5 dark:border-white/10 px-4 py-2 flex items-center gap-3">
+        class="bg-white/90 dark:bg-surface/90 backdrop-blur rounded-lg shadow border border-black/5 dark:border-white/10 px-4 py-2 flex items-center gap-3">
         <span class="text-[11px] font-medium">Unsaved changes</span>
         <button class="btn" :disabled="saveState === 'saving'" @click="save">Save</button>
       </div>
@@ -163,8 +163,9 @@ onMounted(async () => {
 });
 
 function pruneDefaults(body) {
-  if (store.serialize) return store.serialize();
-  const pruned = JSON.parse(JSON.stringify(body));
+  // Prefer store.serialize() when available (it removes server-only keys),
+  // but always continue to prune out options that are identical to tab defaults.
+  const pruned = store.serialize ? store.serialize() : JSON.parse(JSON.stringify(body));
   const tabsMeta = store.tabs || [];
   for (const tab of tabsMeta) {
     for (const k of Object.keys(tab.options || {})) {
@@ -302,51 +303,6 @@ function flash(el) {
 </script>
 
 <style scoped>
-/* (same styles you had; unchanged) */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: .5rem;
-  border-radius: .375rem;
-  background: rgba(253, 184, 19, .9);
-  color: #212121;
-  padding: .375rem .75rem;
-  font-size: .75rem;
-  font-weight: 500;
-  line-height: 1;
-  transition: background .15s
-}
-
-.dark .btn {
-  background: rgba(77, 163, 255, .8);
-  color: #f5f9ff
-}
-
-.btn:hover {
-  background: #fdb813
-}
-
-.dark .btn:hover {
-  background: #4da3ff
-}
-
-.btn.ghost {
-  background: transparent;
-  color: #0d3b66
-}
-
-.dark .btn.ghost {
-  color: #f5f9ff
-}
-
-.btn.ghost:hover {
-  background: rgba(13, 59, 102, .1)
-}
-
-.dark .btn.ghost:hover {
-  background: rgba(245, 249, 255, .1)
-}
-
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity .25s
@@ -380,7 +336,6 @@ function flash(el) {
 }
 
 .no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none
+  -ms-overflow-style: none;scrollbar-width: none
 }
 </style>

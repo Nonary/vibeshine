@@ -2,45 +2,91 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Theme CSS variables (semantic tokens) */
+@layer base {
+  :root {
+    /* Light (former solar) */
+    --color-primary: 253 184 19;
+    --color-secondary: 13 59 102;
+    --color-success: 76 175 80;
+    --color-warning: 245 124 0;
+    --color-danger: 211 47 47;
+    --color-info: 2 136 209;
+    --color-light: 255 253 248;
+    --color-dark: 33 33 33;
+    --color-surface: 255 243 224;
+    --color-accent: 239 108 0;
+    --color-on-primary: 33 33 33;
+    --color-on-secondary: 255 255 255;
+    --color-on-accent: 255 255 255;
+    --color-on-light: 33 33 33;
+    --color-on-dark: 255 255 255;
+    /* Brand (nav text) mixed solar-secondary / lunar-onSecondary */
+    --color-brand: 13 59 102;
+  }
+  .dark {
+    /* Dark (former lunar) */
+    --color-primary: 77 163 255;
+    --color-secondary: 18 34 77; /* Keep structural secondary */
+    --color-success: 129 199 132;
+    --color-warning: 255 183 77;
+    --color-danger: 229 115 115;
+    --color-info: 140 203 255;
+    --color-light: 245 249 255;
+    --color-dark: 5 11 30;
+    --color-surface: 11 20 50;
+    --color-accent: 140 203 255;
+    --color-on-primary: 5 11 30;
+    --color-on-secondary: 245 249 255;
+    --color-on-accent: 5 11 30;
+    --color-on-light: 5 11 30;
+    --color-on-dark: 245 249 255;
+    --color-brand: 245 249 255; /* brand token switches for readability */
+  }
+  body {
+    @apply text-dark dark:text-light bg-light dark:bg-dark antialiased;
+  }
+}
+
 /* Legacy class shims (Bootstrap -> Tailwind) for incremental migration */
 @layer components {
   .btn {
-    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium bg-solar-primary text-solar-onPrimary shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed hover:bg-solar-primary/90 dark:bg-lunar-primary dark:text-lunar-onPrimary dark:hover:bg-lunar-primary/90;
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium bg-primary text-onPrimary shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90;
   }
   .btn-primary {
-    @apply bg-solar-primary text-solar-onPrimary hover:bg-solar-primary/90 dark:bg-lunar-primary dark:text-lunar-onPrimary dark:hover:bg-lunar-primary/90;
+    @apply bg-primary text-onPrimary hover:bg-primary/90;
   }
   .btn-secondary {
-    @apply bg-solar-secondary text-solar-onSecondary hover:bg-solar-secondary/90;
+    @apply bg-secondary text-onSecondary hover:bg-secondary/90;
   }
   .btn-success {
-    @apply bg-solar-success text-white hover:bg-solar-success/90;
+    @apply bg-success text-onLight hover:bg-success/90;
   }
   .btn-danger {
-    @apply bg-solar-danger text-white hover:bg-solar-danger/90;
+    @apply bg-danger text-onLight hover:bg-danger/90;
   }
   .btn-warning {
-    @apply bg-solar-warning text-solar-onPrimary hover:bg-solar-warning/90;
+    @apply bg-warning text-onPrimary hover:bg-warning/90;
   }
   .btn-info {
-    @apply bg-solar-info text-white hover:bg-solar-info/90;
+    @apply bg-info text-onLight hover:bg-info/90;
   }
   .btn.ghost,
   .btn-ghost {
-    @apply bg-transparent shadow-none text-solar-secondary hover:bg-solar-secondary/10 dark:text-lunar-primary dark:hover:bg-lunar-primary/15;
+    @apply bg-transparent shadow-none text-brand hover:bg-brand/10;
   }
   .btn.apply {
     @apply btn-primary;
   }
 
   .form-control {
-    @apply w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 text-solar-dark dark:text-lunar-light placeholder-black/40 dark:placeholder-lunar-light/40 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40;
+    @apply w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-surface/70 text-dark dark:text-light placeholder-black/40 dark:placeholder-light/40 focus:outline-none focus:ring-2 focus:ring-primary/40;
   }
   .form-control.monospace {
     @apply font-mono;
   }
   .form-label {
-    @apply block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light;
+    @apply block text-sm font-medium mb-1 text-dark dark:text-light;
   }
   .form-text {
     @apply text-[11px] opacity-60 mt-1;

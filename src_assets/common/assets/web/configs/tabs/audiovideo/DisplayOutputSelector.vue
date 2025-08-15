@@ -14,18 +14,9 @@ const outputNamePlaceholder = computed(() =>
 
 <template>
   <div class="mb-4">
-    <label
-      for="output_name"
-      class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-      >{{ $tp('config.output_name') }}</label
-    >
-    <input
-      id="output_name"
-      v-model="config.output_name"
-      type="text"
-      class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15"
-      :placeholder="outputNamePlaceholder"
-    />
+    <label for="output_name" class="form-label">{{ $tp('config.output_name') }}</label>
+    <input id="output_name" v-model="config.output_name" type="text" class="form-control"
+      :placeholder="outputNamePlaceholder" />
     <div class="text-[11px] opacity-60">
       {{ $tp('config.output_name_desc') }}<br />
       <PlatformLayout>

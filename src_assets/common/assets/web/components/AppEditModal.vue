@@ -2,11 +2,8 @@
   <div v-if="open" class="fixed inset-0 z-50 flex items-start justify-center p-6 overflow-y-auto">
     <div class="fixed inset-0 bg-black/50 backdrop-blur-sm" @click="close" />
     <div
-      class="relative w-full max-w-3xl mx-auto bg-white dark:bg-lunar-surface rounded-xl shadow-xl flex flex-col border border-black/10 dark:border-white/10"
-    >
-      <div
-        class="flex items-center justify-between px-6 py-4 border-b border-black/5 dark:border-white/10"
-      >
+      class="relative w-full max-w-3xl mx-auto bg-white dark:bg-surface rounded-xl shadow-xl flex flex-col border border-black/10 dark:border-white/10">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-black/5 dark:border-white/10">
         <h2 class="font-semibold text-sm">
           {{ form.index === -1 ? 'Add Application' : 'Edit Application' }}
         </h2>
@@ -23,24 +20,11 @@
           <div class="space-y-1 col-span-2 flex flex-col">
             <label class="font-medium">Image Path</label>
             <div class="flex items-start gap-3">
-              <input
-                v-model="form['image-path']"
-                class="app-input font-mono flex-1"
-                placeholder="/path/to/image.png"
-              />
+              <input v-model="form['image-path']" class="app-input font-mono flex-1" placeholder="/path/to/image.png" />
               <div
-                class="w-24 h-32 bg-black/5 dark:bg-white/5 rounded overflow-hidden flex items-center justify-center"
-              >
-                <img
-                  v-if="previewSrc"
-                  :src="previewSrc"
-                  class="max-w-full max-h-full object-contain"
-                  loading="lazy"
-                />
-                <div
-                  v-else
-                  class="text-2xl font-bold text-solar-primary/40 dark:text-lunar-primary/40"
-                >
+                class="w-24 h-32 bg-black/5 dark:bg-white/5 rounded overflow-hidden flex items-center justify-center">
+                <img v-if="previewSrc" :src="previewSrc" class="max-w-full max-h-full object-contain" loading="lazy" />
+                <div v-else class="text-2xl font-bold text-primary/40">
                   {{ form.name?.substring(0, 1) || '?' }}
                 </div>
               </div>
@@ -51,53 +35,32 @@
           </div>
           <div class="space-y-1 col-span-2">
             <label class="font-medium">Command (single)</label>
-            <textarea
-              v-model="cmdText"
-              class="app-input font-mono h-20"
-              placeholder="Executable command line"
-            />
+            <textarea v-model="cmdText" class="app-input font-mono h-20" placeholder="Executable command line" />
             <p class="text-black/60 dark:text-white/50">
               Enter the full command line to run (single string).
             </p>
           </div>
           <div class="space-y-1 col-span-2">
             <label class="font-medium">Working Directory</label>
-            <input
-              v-model="form['working-dir']"
-              class="app-input font-mono"
-              placeholder="C:/Games/App"
-            />
+            <input v-model="form['working-dir']" class="app-input font-mono" placeholder="C:/Games/App" />
           </div>
           <div class="space-y-1 col-span-2 grid grid-cols-2 gap-4">
-            <label class="inline-flex items-center gap-2 text-[11px]"
-              ><input
-                v-model="form['exclude-global-prep-cmd']"
-                type="checkbox"
-                class="app-checkbox"
-              />
-              Exclude Global Prep</label
-            >
-            <label class="inline-flex items-center gap-2 text-[11px]"
-              ><input v-model="form['auto-detach']" type="checkbox" class="app-checkbox" /> Auto
-              Detach</label
-            >
-            <label class="inline-flex items-center gap-2 text-[11px]"
-              ><input v-model="form['wait-all']" type="checkbox" class="app-checkbox" /> Wait
-              All</label
-            >
-            <label v-if="platform === 'windows'" class="inline-flex items-center gap-2 text-[11px]"
-              ><input v-model="form.elevated" type="checkbox" class="app-checkbox" />
-              Elevated</label
-            >
+            <label class="inline-flex items-center gap-2 text-[11px]"><input v-model="form['exclude-global-prep-cmd']"
+                type="checkbox" class="app-checkbox" />
+              Exclude Global Prep</label>
+            <label class="inline-flex items-center gap-2 text-[11px]"><input v-model="form['auto-detach']"
+                type="checkbox" class="app-checkbox" /> Auto
+              Detach</label>
+            <label class="inline-flex items-center gap-2 text-[11px]"><input v-model="form['wait-all']" type="checkbox"
+                class="app-checkbox" /> Wait
+              All</label>
+            <label v-if="platform === 'windows'" class="inline-flex items-center gap-2 text-[11px]"><input
+                v-model="form.elevated" type="checkbox" class="app-checkbox" />
+              Elevated</label>
           </div>
           <div class="space-y-1 col-span-2 sm:col-span-1">
             <label class="font-medium">Exit Timeout (s)</label>
-            <input
-              v-model.number="form['exit-timeout']"
-              type="number"
-              min="0"
-              class="app-input w-32"
-            />
+            <input v-model.number="form['exit-timeout']" type="number" min="0" class="app-input w-32" />
           </div>
         </div>
         <div>
@@ -105,30 +68,16 @@
             <h3 class="font-semibold text-xs uppercase tracking-wider">Prep Commands</h3>
             <button class="mini-btn" @click="addPrep"><i class="fas fa-plus" /> Add</button>
           </div>
-          <div
-            v-if="form['prep-cmd'].length === 0"
-            class="text-[11px] text-black/60 dark:text-white/40"
-          >
+          <div v-if="form['prep-cmd'].length === 0" class="text-[11px] text-black/60 dark:text-white/40">
             None
           </div>
           <div v-else class="space-y-3">
-            <div
-              v-for="(p, i) in form['prep-cmd']"
-              :key="i"
-              class="grid gap-2 md:grid-cols-5 items-start"
-            >
+            <div v-for="(p, i) in form['prep-cmd']" :key="i" class="grid gap-2 md:grid-cols-5 items-start">
               <input v-model="p.do" placeholder="do" class="app-input font-mono md:col-span-2" />
-              <input
-                v-model="p.undo"
-                placeholder="undo"
-                class="app-input font-mono md:col-span-2"
-              />
+              <input v-model="p.undo" placeholder="undo" class="app-input font-mono md:col-span-2" />
               <div class="flex items-center gap-2 md:col-span-1">
-                <label
-                  v-if="platform === 'windows'"
-                  class="inline-flex items-center gap-1 text-[11px]"
-                  ><input v-model="p.elevated" type="checkbox" class="app-checkbox" /> Elev</label
-                >
+                <label v-if="platform === 'windows'" class="inline-flex items-center gap-1 text-[11px]"><input
+                    v-model="p.elevated" type="checkbox" class="app-checkbox" /> Elev</label>
                 <button class="mini-btn danger" @click="form['prep-cmd'].splice(i, 1)">
                   <i class="fas fa-trash" />
                 </button>
@@ -143,10 +92,7 @@
               <i class="fas fa-plus" /> Add
             </button>
           </div>
-          <div
-            v-if="form.detached.length === 0"
-            class="text-[11px] text-black/60 dark:text-white/40"
-          >
+          <div v-if="form.detached.length === 0" class="text-[11px] text-black/60 dark:text-white/40">
             None
           </div>
           <div v-else class="space-y-2">
@@ -159,9 +105,7 @@
           </div>
         </div>
       </div>
-      <div
-        class="flex items-center justify-between px-6 py-4 border-t border-black/5 dark:border-white/10 gap-3"
-      >
+      <div class="flex items-center justify-between px-6 py-4 border-t border-black/5 dark:border-white/10 gap-3">
         <div class="flex gap-2">
           <button class="main-btn" :disabled="saving.v" @click="save">
             <i class="fas fa-save" /> <span class="hidden sm:inline">Save</span>

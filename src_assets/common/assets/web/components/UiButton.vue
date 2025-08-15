@@ -1,14 +1,7 @@
 <template>
-  <component
-    :is="asTag"
-    :type="asTag === 'button' ? type : undefined"
-    :href="asTag !== 'button' ? href : undefined"
-    :target="target"
-    :rel="rel"
-    :class="computedClasses"
-    v-bind="$attrs"
-    :disabled="asTag === 'button' ? disabled || loading : undefined"
-  >
+  <component :is="asTag" :type="asTag === 'button' ? type : undefined" :href="asTag !== 'button' ? href : undefined"
+    :target="target" :rel="rel" :class="computedClasses" v-bind="$attrs"
+    :disabled="asTag === 'button' ? disabled || loading : undefined">
     <slot />
   </component>
 </template>
@@ -36,45 +29,33 @@ const base =
   'relative inline-flex items-center justify-center font-medium rounded-md transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
 
 const variantMap = {
-  primary: 'bg-solar-primary text-solar-onPrimary dark:bg-lunar-primary dark:text-lunar-onPrimary',
-  success: 'bg-solar-success text-solar-onPrimary dark:bg-lunar-success dark:text-lunar-onPrimary',
-  danger: 'bg-solar-danger text-solar-onPrimary dark:bg-lunar-danger dark:text-lunar-onPrimary',
-  warning: 'bg-solar-warning text-solar-onPrimary dark:bg-lunar-warning dark:text-lunar-onPrimary',
-  secondary:
-    'bg-solar-secondary text-solar-onSecondary dark:bg-lunar-secondary dark:text-lunar-onSecondary',
-  info: 'bg-solar-info text-solar-onPrimary dark:bg-lunar-info dark:text-lunar-onPrimary',
-  neutral: 'bg-solar-surface text-solar-onLight dark:bg-lunar-surface dark:text-lunar-onLight',
+  primary: 'bg-primary text-onPrimary',
+  success: 'bg-success text-onPrimary',
+  danger: 'bg-danger text-onPrimary',
+  warning: 'bg-warning text-onPrimary',
+  secondary: 'bg-secondary text-onSecondary',
+  info: 'bg-info text-onPrimary',
+  neutral: 'bg-surface text-onLight',
 };
 
 const outlineMap = {
-  primary:
-    'border border-solar-primary text-solar-primary dark:border-lunar-primary dark:text-lunar-primary',
-  success:
-    'border border-solar-success text-solar-success dark:border-lunar-success dark:text-lunar-success',
-  danger:
-    'border border-solar-danger text-solar-danger dark:border-lunar-danger dark:text-lunar-danger',
-  warning:
-    'border border-solar-warning text-solar-warning dark:border-lunar-warning dark:text-lunar-warning',
-  secondary:
-    'border border-solar-secondary text-solar-secondary dark:border-lunar-secondary dark:text-lunar-secondary',
-  info: 'border border-solar-info text-solar-info dark:border-lunar-info dark:text-lunar-info',
-  neutral: 'border border-solar-dark text-solar-dark dark:border-lunar-light dark:text-lunar-light',
+  primary: 'border border-primary text-primary',
+  success: 'border border-success text-success',
+  danger: 'border border-danger text-danger',
+  warning: 'border border-warning text-warning',
+  secondary: 'border border-secondary text-secondary',
+  info: 'border border-info text-info',
+  neutral: 'border border-dark text-dark',
 };
 
 const ghostMap = {
-  primary:
-    'text-solar-primary dark:text-lunar-primary hover:bg-solar-primary/10 dark:hover:bg-lunar-primary/10',
-  success:
-    'text-solar-success dark:text-lunar-success hover:bg-solar-success/10 dark:hover:bg-lunar-success/10',
-  danger:
-    'text-solar-danger dark:text-lunar-danger hover:bg-solar-danger/10 dark:hover:bg-lunar-danger/10',
-  warning:
-    'text-solar-warning dark:text-lunar-warning hover:bg-solar-warning/10 dark:hover:bg-lunar-warning/10',
-  secondary:
-    'text-solar-secondary dark:text-lunar-secondary hover:bg-solar-secondary/10 dark:hover:bg-lunar-secondary/10',
-  info: 'text-solar-info dark:text-lunar-info hover:bg-solar-info/10 dark:hover:bg-lunar-info/10',
-  neutral:
-    'text-solar-dark dark:text-lunar-light hover:bg-solar-dark/5 dark:hover:bg-lunar-light/5',
+  primary: 'text-primary hover:bg-primary/10',
+  success: 'text-success hover:bg-success/10',
+  danger: 'text-danger hover:bg-danger/10',
+  warning: 'text-warning hover:bg-warning/10',
+  secondary: 'text-secondary hover:bg-secondary/10',
+  info: 'text-info hover:bg-info/10',
+  neutral: 'text-dark hover:bg-dark/5',
 };
 
 const sizeMap = {
@@ -89,9 +70,7 @@ const computedClasses = computed(() => {
   const toneHover =
     props.tone === 'solid'
       ? 'hover:brightness-[1.08] active:brightness-95'
-      : props.tone === 'outline'
-        ? 'hover:bg-solar-primary/5 dark:hover:bg-lunar-primary/5'
-        : '';
+      : props.tone === 'outline' ? 'hover:bg-primary/5' : '';
   return [
     base,
     sizeMap[props.size],

@@ -1,7 +1,7 @@
 <template>
-  <div class="min-h-screen flex flex-col bg-solar-light dark:bg-lunar-dark text-solar-dark dark:text-lunar-light">
+  <div class="min-h-screen flex flex-col bg-light dark:bg-dark text-dark dark:text-light">
     <header
-      class="h-14 flex items-center gap-4 px-4 border-b border-solar-dark/10 dark:border-lunar-light/10 bg-solar-light/70 dark:bg-lunar-dark/60 backdrop-blur supports-[backdrop-filter]:bg-solar-light/40 supports-[backdrop-filter]:dark:bg-lunar-dark/40">
+      class="h-14 flex items-center gap-4 px-4 border-b border-dark/10 dark:border-light/10 bg-light/70 dark:bg-dark/60 backdrop-blur supports-[backdrop-filter]:bg-light/40 supports-[backdrop-filter]:dark:bg-dark/40">
       <div class="flex items-center gap-3 min-w-0">
         <img src="/images/logo-sunshine-45.png" alt="Sunshine" class="h-8 w-8" />
         <h1 class="text-base md:text-lg font-semibold tracking-tight truncate">
@@ -51,7 +51,7 @@
             </div>
             <div class="flex items-center justify-center pt-2">
               <button type="button"
-                class="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold tracking-wide bg-solar-primary/80 dark:bg-lunar-primary/80 text-solar-onPrimary dark:text-lunar-onPrimary shadow hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-solar-primary/60 dark:focus-visible:ring-lunar-primary/60 transition disabled:opacity-50"
+                class="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold tracking-wide bg-primary/80 text-onPrimary shadow hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary/60 transition disabled:opacity-50"
                 @click="refreshPage">
                 {{ $t('auth.logout_refresh_button') }}
                 <i class="fas fa-rotate" />
@@ -75,15 +75,10 @@ import { http } from '@/http.js';
 const route = useRoute();
 
 const linkClass = (path) => {
-  const base =
-    'inline-flex items-center gap-2 px-3 py-1 rounded-md text-solar-secondary dark:text-lunar-onSecondary';
+  const base = 'inline-flex items-center gap-2 px-3 py-1 rounded-md text-brand';
   const active = route.path === path;
-  if (active)
-    return (
-      base +
-      ' font-semibold bg-solar-primary/20 dark:bg-lunar-primary/20 text-solar-secondary dark:text-lunar-onSecondary'
-    );
-  return base + ' hover:bg-solar-primary/10 dark:hover:bg-lunar-primary/10';
+  if (active) return base + ' font-semibold bg-primary/20 text-brand';
+  return base + ' hover:bg-primary/10';
 };
 const pageTitle = ref('Dashboard');
 const displayTitle = computed(() => {

@@ -1,16 +1,14 @@
 <template>
-  <RouterLink
-    :to="to"
-    class="group flex items-center gap-3 rounded-md mx-2 transition"
-    :class="[
-      collapsed ? 'justify-center px-0 py-2.5' : 'px-4 py-2.5',
-      sub ? (collapsed ? 'text-[0]' : 'pl-8 pr-3 py-2 text-[12px]') : 'text-[13px]',
-      baseClasses,
-      isActive ? activeClasses : hoverClasses,
-    ]"
-  >
+  <RouterLink :to="to" class="group flex items-center gap-3 rounded-md mx-2 transition" :class="[
+    collapsed ? 'justify-center px-0 py-2.5' : 'px-4 py-2.5',
+    sub ? (collapsed ? 'text-[0]' : 'pl-8 pr-3 py-2 text-[12px]') : 'text-[13px]',
+    baseClasses,
+    isActive ? activeClasses : hoverClasses,
+  ]">
     <i v-if="!sub" :class="['fas text-sm w-4 text-center', 'fa-fw', icon]" />
-    <span v-if="!collapsed" class="tracking-wide whitespace-nowrap"> <slot /> </span>
+    <span v-if="!collapsed" class="tracking-wide whitespace-nowrap">
+      <slot />
+    </span>
   </RouterLink>
 </template>
 <script setup>
@@ -35,10 +33,10 @@ const isActive = computed(() => {
   }
   return false;
 });
-const baseClasses = 'text-solar-dark/80 dark:text-lunar-light/70';
+const baseClasses = 'text-dark/80';
 const hoverClasses =
-  'hover:text-solar-dark dark:hover:text-lunar-light hover:bg-solar-primary/10 dark:hover:bg-lunar-primary/10';
+  'hover:text-dark hover:bg-primary/10';
 const activeClasses =
-  'bg-solar-primary/15 dark:bg-lunar-primary/15 text-solar-dark dark:text-lunar-light font-medium';
+  'bg-primary/15 text-dark font-medium';
 </script>
 <style scoped></style>

@@ -2,11 +2,9 @@
   <div class="flex items-center gap-2">
     <label v-if="label" class="text-[11px] font-medium uppercase tracking-wider opacity-60">{{
       label
-    }}</label>
-    <select
-      v-model="model"
-      class="text-xs bg-transparent border rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40 border-solar-dark/20 dark:border-lunar-light/10"
-    >
+      }}</label>
+    <select v-model="model"
+      class="text-xs bg-transparent border rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-primary/40 border-dark/20">
       <option value="__default">Default</option>
       <option v-for="c in clients" :key="c.id" :value="c.id">
         {{ c.name }}

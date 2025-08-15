@@ -11,16 +11,8 @@ const config = store.config;
   <div id="amd-amf-encoder" class="config-page">
     <!-- AMF Usage -->
     <div class="mb-4">
-      <label
-        for="amf_quality"
-        class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-        >{{ $t('config.amf.quality') }}</label
-      >
-      <select
-        id="amf_quality"
-        v-model="config.profile"
-        class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40"
-      >
+      <label for="amf_quality" class="form-label">{{ $t('config.amf.quality') }}</label>
+      <select id="amf_quality" v-model="config.profile" class="form-control">
         <option value="transcoding">
           {{ $t('config.amd_usage_transcoding') }}
         </option>
@@ -44,7 +36,7 @@ const config = store.config;
 
     <!-- AMD Rate Control group options -->
     <div class="mb-4 rounded-md overflow-hidden border border-black/5 dark:border-white/10">
-      <div class="bg-solar-surface/40 dark:bg-lunar-surface/30 px-4 py-3">
+      <div class="bg-surface/40 dark:bg-surface/30 px-4 py-3">
         <h3 class="text-sm font-medium">
           {{ $t('config.amd_rc_group') }}
         </h3>
@@ -52,16 +44,8 @@ const config = store.config;
       <div class="p-4">
         <!-- AMF Rate Control -->
         <div class="mb-4">
-          <label
-            for="amf_rate_control"
-            class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-            >{{ $t('config.amf.rate_control') }}</label
-          >
-          <select
-            id="amf_rate_control"
-            v-model="config.rate_control"
-            class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40"
-          >
+          <label for="amf_rate_control" class="form-label">{{ $t('config.amf.rate_control') }}</label>
+          <select id="amf_rate_control" v-model="config.rate_control" class="form-control">
             <option value="cbr">
               {{ $t('config.amd_rc_cbr') }}
             </option>
@@ -81,19 +65,14 @@ const config = store.config;
         </div>
 
         <!-- AMF HRD Enforcement -->
-        <Checkbox
-          id="amd_enforce_hrd"
-          v-model="config.amd_enforce_hrd"
-          class="mb-3"
-          locale-prefix="config"
-          default="false"
-        />
+        <Checkbox id="amd_enforce_hrd" v-model="config.amd_enforce_hrd" class="mb-3" locale-prefix="config"
+          default="false" />
       </div>
     </div>
 
     <!-- AMF Quality group options -->
     <div class="mb-4 rounded-md overflow-hidden border border-black/5 dark:border-white/10">
-      <div class="bg-solar-surface/40 dark:bg-lunar-surface/30 px-4 py-3">
+      <div class="bg-surface/40 dark:bg-surface/30 px-4 py-3">
         <h3 class="text-sm font-medium">
           {{ $t('config.amd_quality_group') }}
         </h3>
@@ -101,16 +80,8 @@ const config = store.config;
       <div class="p-4">
         <!-- AMF Quality -->
         <div class="mb-6">
-          <label
-            for="amd_quality"
-            class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-            >{{ $t('config.amd_quality') }}</label
-          >
-          <select
-            id="amd_quality"
-            v-model="config.amd_quality"
-            class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40"
-          >
+          <label for="amd_quality" class="form-label">{{ $t('config.amd_quality') }}</label>
+          <select id="amd_quality" v-model="config.amd_quality" class="form-control">
             <option value="speed">
               {{ $t('config.amd_quality_speed') }}
             </option>
@@ -127,35 +98,16 @@ const config = store.config;
         </div>
 
         <!-- AMD Preanalysis -->
-        <Checkbox
-          id="amd_preanalysis"
-          v-model="config.amd_preanalysis"
-          class="mb-3"
-          locale-prefix="config"
-          default="false"
-        />
+        <Checkbox id="amd_preanalysis" v-model="config.amd_preanalysis" class="mb-3" locale-prefix="config"
+          default="false" />
 
         <!-- AMD VBAQ -->
-        <Checkbox
-          id="amd_vbaq"
-          v-model="config.amd_vbaq"
-          class="mb-3"
-          locale-prefix="config"
-          default="true"
-        />
+        <Checkbox id="amd_vbaq" v-model="config.amd_vbaq" class="mb-3" locale-prefix="config" default="true" />
 
         <!-- AMF Coder (H264) -->
         <div class="mb-6">
-          <label
-            for="amd_coder"
-            class="block text-sm font-medium mb-1 text-solar-dark dark:text-lunar-light"
-            >{{ $t('config.amd_coder') }}</label
-          >
-          <select
-            id="amd_coder"
-            v-model="config.amd_coder"
-            class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-lunar-surface/70 focus:outline-none focus:ring-2 focus:ring-solar-primary/40 dark:focus:ring-lunar-primary/40"
-          >
+          <label for="amd_coder" class="form-label">{{ $t('config.amd_coder') }}</label>
+          <select id="amd_coder" v-model="config.amd_coder" class="form-control">
             <option value="auto">
               {{ $t('config.ffmpeg_auto') }}
             </option>
