@@ -46,7 +46,8 @@ let header = fs.readFileSync(resolve(assetsSrcPath, "template_header.html"))
 export default defineConfig({
     resolve: {
         alias: {
-            vue: 'vue/dist/vue.esm-bundler.js'
+            vue: 'vue/dist/vue.esm-bundler.js',
+            '@': resolve(assetsSrcPath)
         }
     },
     base: './',
