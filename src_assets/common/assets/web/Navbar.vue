@@ -28,6 +28,12 @@
           <li class="nav-item">
             <a class="nav-link" href="./troubleshooting"><i class="fas fa-fw fa-info"></i> {{ $t('navbar.troubleshoot') }}</a>
           </li>
+          <li class="nav-item" v-if="showAutosaveStatus">
+            <span class="navbar-text autosave-status" :class="autosaveStatusClass">
+              <i :class="autosaveStatusIcon"></i>
+              {{ autosaveStatusText }}
+            </span>
+          </li>
           <li class="nav-item">
             <ThemeToggle/>
           </li>
@@ -43,6 +49,42 @@ import { initDiscord } from '@lizardbyte/shared-web/src/js/discord.js'
 
 export default {
   components: { ThemeToggle },
+  data() {
+    return {
+      autosaveStatus: 0, // 0=idle, 1=saving, 2=recently_applied, 3=pending_session_end, 4=pending_restart_approval
+      showAutosaveStatus: false,
+      statusCheckInterval: null
+    }
+  },
+  computed: {
+    autosaveStatusClass() {
+      switch (this.autosaveStatus) {
+        case 1: return 'status-saving'
+        case 2: return 'status-applied'
+        case 3: return 'status-pending-session'
+        case 4: return 'status-pending-restart'
+        default: return 'status-idle'
+      }
+    },
+    autosaveStatusIcon() {
+      switch (this.autosaveStatus) {
+        case 1: return 'fas fa-spinner fa-spin'
+        case 2: return 'fas fa-check'
+        case 3: return 'fas fa-clock'
+        case 4: return 'fas fa-exclamation-triangle'
+        default: return ''
+      }
+    },
+    autosaveStatusText() {
+      switch (this.autosaveStatus) {
+        case 1: return this.$t ? this.$t('autosave.saving') : 'Saving...'
+        case 2: return this.$t ? this.$t('autosave.applied') : 'Applied'
+        case 3: return this.$t ? this.$t('autosave.pending_session') : 'Pending session end'
+        case 4: return this.$t ? this.$t('autosave.pending_restart') : 'Restart required'
+        default: return ''
+      }
+    }
+  },
   created() {
     console.log("Header mounted!")
   },
@@ -50,6 +92,42 @@ export default {
     let el = document.querySelector("a[href='" + document.location.pathname + "']");
     if (el) el.classList.add("active")
     initDiscord();
+    
+    // Only show autosave status on config page
+    if (window.location.pathname.includes('/config')) {
+      this.startStatusPolling();
+    }
+  },
+  beforeUnmount() {
+    this.stopStatusPolling();
+  },
+  methods: {
+    startStatusPolling() {
+      this.checkAutosaveStatus();
+      this.statusCheckInterval = setInterval(() => {
+        this.checkAutosaveStatus();
+      }, 2000); // Check every 2 seconds
+    },
+    
+    stopStatusPolling() {
+      if (this.statusCheckInterval) {
+        clearInterval(this.statusCheckInterval);
+        this.statusCheckInterval = null;
+      }
+    },
+    
+    async checkAutosaveStatus() {
+      try {
+        const response = await fetch('./api/config/status');
+        if (response.ok) {
+          const data = await response.json();
+          this.autosaveStatus = data.status;
+          this.showAutosaveStatus = this.autosaveStatus !== 0; // Show if not idle
+        }
+      } catch (error) {
+        console.warn('Failed to check autosave status:', error);
+      }
+    }
   }
 }
 </script>
@@ -84,5 +162,37 @@ export default {
 
 .form-control::placeholder {
   opacity: 0.5;
+}
+
+/* Autosave status indicator styles */
+.autosave-status {
+  font-size: 0.875rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 0.375rem;
+  margin: 0 0.5rem;
+}
+
+.status-saving {
+  background-color: #0dcaf0;
+  color: #000;
+}
+
+.status-applied {
+  background-color: #198754;
+  color: #fff;
+}
+
+.status-pending-session {
+  background-color: #fd7e14;
+  color: #000;
+}
+
+.status-pending-restart {
+  background-color: #dc3545;
+  color: #fff;
+}
+
+.status-idle {
+  display: none;
 }
 </style>
