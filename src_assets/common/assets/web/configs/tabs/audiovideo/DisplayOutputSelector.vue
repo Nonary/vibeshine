@@ -3,7 +3,7 @@ import { ref } from 'vue';
 import { $tp } from '@/platform-i18n';
 import PlatformLayout from '@/PlatformLayout.vue';
 
-import { useConfigStore } from '@/stores/config.js';
+import { useConfigStore } from '@/stores/config';
 import { computed } from 'vue';
 const store = useConfigStore();
 const config = store.config;

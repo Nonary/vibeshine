@@ -69,7 +69,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import AppEditModal from '@/components/AppEditModal.vue';
-import { useAppsStore } from '@/stores/apps.js';
+import { useAppsStore } from '@/stores/apps';
 import { storeToRefs } from 'pinia';
 const appsStore = useAppsStore();
 const { apps } = storeToRefs(appsStore);

@@ -2,7 +2,7 @@
 import { ref } from 'vue';
 import PlatformLayout from '@/PlatformLayout.vue';
 import Checkbox from '@/Checkbox.vue';
-import { useConfigStore } from '@/stores/config.js';
+import { useConfigStore } from '@/stores/config';
 
 // Use centralized store for config and platform
 const store = useConfigStore();

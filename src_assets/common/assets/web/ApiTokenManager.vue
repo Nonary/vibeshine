@@ -384,7 +384,7 @@
 
 <script>
 import { defineComponent } from 'vue';
-import { http } from '@/http.js';
+import { http } from '@/http';
 
 /**
  * List of available API routes and their supported methods

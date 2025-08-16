@@ -7,7 +7,7 @@ import DisplayOutputSelector from '@/configs/tabs/audiovideo/DisplayOutputSelect
 import DisplayDeviceOptions from '@/configs/tabs/audiovideo/DisplayDeviceOptions.vue';
 import DisplayModesSettings from '@/configs/tabs/audiovideo/DisplayModesSettings.vue';
 import Checkbox from '@/Checkbox.vue';
-import { useConfigStore } from '@/stores/config.js';
+import { useConfigStore } from '@/stores/config';
 import { computed } from 'vue';
 
 const store = useConfigStore();

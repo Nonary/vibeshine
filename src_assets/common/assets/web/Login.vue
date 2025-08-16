@@ -55,8 +55,8 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { useAuthStore } from '@/stores/auth.js';
-import { http } from '@/http.js';
+import { useAuthStore } from '@/stores/auth';
+import { http } from '@/http';
 
 const auth = useAuthStore();
 const credentials = ref({ username: '', password: '' });

@@ -79,7 +79,7 @@ import { useRoute, useRouter } from 'vue-router';
 import ThemeToggle from '@/ThemeToggle.vue';
 import StreamingStatus from '@/components/StreamingStatus.vue';
 import LoginModal from '@/components/LoginModal.vue';
-import { http } from '@/http.js';
+import { http } from '@/http';
 
 const route = useRoute();
 

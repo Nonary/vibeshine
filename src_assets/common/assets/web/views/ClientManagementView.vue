@@ -451,7 +451,7 @@
 
 <script setup>
 import { ref, onMounted, computed } from 'vue';
-import { http } from '@/http.js';
+import { http } from '@/http';
 import UiButton from '@/components/UiButton.vue';
 import UiAlert from '@/components/UiAlert.vue';
 

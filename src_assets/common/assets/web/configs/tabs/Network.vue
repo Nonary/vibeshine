@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue';
 import Checkbox from '@/Checkbox.vue';
-import { useConfigStore } from '@/stores/config.js';
+import { useConfigStore } from '@/stores/config';
 
 const store = useConfigStore();
 const defaultMoonlightPort = 47989;

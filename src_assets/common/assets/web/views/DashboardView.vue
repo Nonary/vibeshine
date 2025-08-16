@@ -143,9 +143,9 @@ import { ref, onMounted, computed } from 'vue';
 import UiAlert from '@/components/UiAlert.vue';
 import UiCard from '@/components/UiCard.vue';
 import ResourceCard from '@/ResourceCard.vue';
-import SunshineVersion from '@/sunshine_version.js';
-import { useConfigStore } from '@/stores/config.js';
-import { useAuthStore } from '@/stores/auth.js';
+import SunshineVersion from '@/sunshine_version';
+import { useConfigStore } from '@/stores/config';
+import { useAuthStore } from '@/stores/auth';
 
 const version = ref(null);
 const githubVersion = ref(null);

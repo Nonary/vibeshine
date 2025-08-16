@@ -199,8 +199,8 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
-import { useConfigStore } from '@/stores/config.js';
-import { http } from '@/http.js';
+import { useConfigStore } from '@/stores/config';
+import { http } from '@/http';
 
 const store = useConfigStore();
 const platform = computed(

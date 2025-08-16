@@ -11,7 +11,7 @@ const props = defineProps({
   currentTab: { type: String, default: '' },
 });
 
-import { useConfigStore } from '@/stores/config.js';
+import { useConfigStore } from '@/stores/config';
 const store = useConfigStore();
 const config = store.config;
 // Fallback: if no currentTab provided, show all stacked (modern single page mode)

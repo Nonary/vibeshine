@@ -1,7 +1,7 @@
 <script setup>
 import Checkbox from '@/Checkbox.vue';
 import { ref } from 'vue';
-import { useConfigStore } from '@/stores/config.js';
+import { useConfigStore } from '@/stores/config';
 
 const store = useConfigStore();
 const config = store.config;

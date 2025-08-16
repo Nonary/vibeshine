@@ -120,8 +120,8 @@
 </template>
 <script setup>
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
-import { useAuthStore } from '@/stores/auth.js';
-import { http } from '@/http.js';
+import { useAuthStore } from '@/stores/auth';
+import { http } from '@/http';
 import { useI18n } from 'vue-i18n';
 
 const auth = useAuthStore();

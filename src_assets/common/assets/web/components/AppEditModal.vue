@@ -174,7 +174,7 @@
 </template>
 <script setup>
 import { reactive, watch, computed } from 'vue';
-import { http } from '@/http.js';
+import { http } from '@/http';
 const props = defineProps({
   modelValue: Boolean,
   platform: String,

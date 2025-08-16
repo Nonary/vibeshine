@@ -149,8 +149,8 @@ import Files from '@/configs/tabs/Files.vue';
 import Advanced from '@/configs/tabs/Advanced.vue';
 import AudioVideo from '@/configs/tabs/AudioVideo.vue';
 import ContainerEncoders from '@/configs/tabs/ContainerEncoders.vue';
-import { useConfigStore } from '@/stores/config.js';
-import { http } from '@/http.js';
+import { useConfigStore } from '@/stores/config';
+import { http } from '@/http';
 import { storeToRefs } from 'pinia';
 
 const store = useConfigStore();

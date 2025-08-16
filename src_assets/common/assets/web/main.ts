@@ -1,4 +1,4 @@
-import { createApp, ref, watch } from 'vue';
+import { createApp, ref, watch, App as VueApp } from 'vue';
 import { createPinia } from 'pinia';
 import { initApp } from '@/init';
 import { router } from '@/router';
@@ -8,7 +8,7 @@ import { initHttpLayer } from '@/http';
 import '@fortawesome/fontawesome-free/css/all.min.css';
 
 // Core application instance & stores
-const app = createApp(App);
+const app: VueApp<Element> = createApp(App);
 const pinia = createPinia();
 app.use(pinia);
 app.use(router);
@@ -35,12 +35,12 @@ initApp(app, async () => {
 
   let dataLoadGeneration = 0; // increment each auth cycle
 
-  async function loadPostAuthData(gen) {
+  async function loadPostAuthData(gen: number): Promise<void> {
     try {
       await Promise.all([configStore.fetchConfig(true), appsStore.loadApps(true)]);
       // Only update platform if still same auth generation (user hasn't logged out/in again mid-load)
       if (gen === dataLoadGeneration) {
-        platformRef.value = configStore.config?.value?.platform || '';
+        platformRef.value = (configStore.config as any)?.value?.platform || '';
       }
     } catch (e) {
       console.error('post-auth data load failed', e);
@@ -58,7 +58,7 @@ initApp(app, async () => {
   // Watch for future successful logins
   watch(
     () => auth.isAuthenticated,
-    (v) => {
+    (v: boolean) => {
       if (v) {
         dataLoadGeneration += 1;
         loadPostAuthData(dataLoadGeneration);

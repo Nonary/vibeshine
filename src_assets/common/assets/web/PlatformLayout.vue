@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue';
-import { useConfigStore } from '@/stores/config.js';
+import { useConfigStore } from '@/stores/config';
 
 // Read platform from centralized config store
 const store = useConfigStore();

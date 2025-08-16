@@ -16,8 +16,8 @@
 </template>
 <script setup>
 import { ref, onMounted, watch } from 'vue';
-import { useConfigStore } from '@/stores/config.js';
-import { http } from '@/http.js';
+import { useConfigStore } from '@/stores/config';
+import { http } from '@/http';
 const props = defineProps({
   modelValue: { type: String, default: '__default' },
   label: { type: String, default: '' },
