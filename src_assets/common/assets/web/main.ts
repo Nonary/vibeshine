@@ -30,7 +30,7 @@ const lazy = (loader: AsyncComponentLoader): Component =>
     loader,
     delay: 120,
     timeout: 20000,
-    onError(err: Error, retry: () => void, fail: () => void, attempts: number) {
+    onError(_err: Error, retry: () => void, fail: () => void, attempts: number) {
       if (attempts <= 2) retry(); else fail();
     }
   } as LazyComponentOptions);
