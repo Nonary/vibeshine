@@ -43,7 +43,7 @@
     <transition name="fade-fast">
       <div v-if="loggedOut" class="fixed inset-0 z-[120] flex flex-col">
         <div
-          class="absolute inset-0 bg-gradient-to-br from-black/70 via-black/60 to-black/70 backdrop-blur-md"
+          class="absolute inset-0 bg-gradient-to-br from-white/70 via-white/60 to-white/70 dark:from-black/70 dark:via-black/60 dark:to-black/70 backdrop-blur-md"
         ></div>
         <div class="relative flex-1 flex flex-col items-center justify-center p-6 overflow-y-auto">
           <div class="w-full max-w-md mx-auto text-center space-y-6">
@@ -73,17 +73,20 @@
     </transition>
   </div>
 </template>
-<script setup>
+<script setup lang="ts">
 import { ref, watch, computed } from 'vue';
+// `useI18n` may be available at runtime in some setups; declare it for TS to avoid errors
+declare const useI18n: any;
 import { useRoute, useRouter } from 'vue-router';
 import ThemeToggle from '@/ThemeToggle.vue';
 import StreamingStatus from '@/components/StreamingStatus.vue';
 import LoginModal from '@/components/LoginModal.vue';
 import { http } from '@/http';
+import { useAuthStore } from './stores/auth';
 
 const route = useRoute();
 
-const linkClass = (path) => {
+const linkClass = (path: string) => {
   const base = 'inline-flex items-center gap-2 px-3 py-1 rounded-md text-brand';
   const active = route.path === path;
   if (active) return base + ' font-semibold bg-primary/20 text-brand';
@@ -100,7 +103,7 @@ const displayTitle = computed(() => {
 watch(
   () => route.path,
   (p) => {
-    const map = {
+    const map: Record<string, string> = {
       '/': 'Dashboard',
       '/applications': 'Applications',
       '/settings': 'Settings',
@@ -123,11 +126,13 @@ watch(
 const loggedOut = ref(false);
 
 async function logout() {
+  const authStore = useAuthStore();
   try {
     await http.post('/api/auth/logout', {}, { validateStatus: () => true });
   } catch (e) {
     console.error('Logout failed:', e);
   }
+  authStore.isAuthenticated = false;
   loggedOut.value = true;
 }
 
