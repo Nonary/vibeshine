@@ -1,8 +1,7 @@
 <template>
   <main ref="mainEl" class="flex-1 px-0 md:px-2 xl:px-6 py-2 md:py-6 space-y-6 overflow-x-hidden">
     <header
-      class="sticky top-0 z-20 -mx-0 md:-mx-2 xl:-mx-6 px-0 md:px-2 xl:px-6 py-3 bg-light/70 dark:bg-dark/60 backdrop-blur supports-[backdrop-filter]:bg-light/50 supports-[backdrop-filter]:dark:bg-dark/40 border-b border-dark/10 dark:border-light/10"
-    >
+      class="sticky top-0 z-20 -mx-0 md:-mx-2 xl:-mx-6 px-0 md:px-2 xl:px-6 py-3 bg-light/70 dark:bg-dark/60 backdrop-blur supports-[backdrop-filter]:bg-light/50 supports-[backdrop-filter]:dark:bg-dark/40 border-b border-dark/10 dark:border-light/10">
       <div class="flex items-center justify-between gap-4 flex-wrap">
         <div class="min-w-0">
           <h2 class="text-sm font-semibold uppercase tracking-wider">Settings</h2>
@@ -13,32 +12,20 @@
 
         <!-- In-page search -->
         <div class="relative flex-1 max-w-2xl min-w-[260px]">
-          <input
-            v-model="searchQuery"
-            type="text"
-            placeholder="Search settings... (Enter to jump)"
+          <input v-model="searchQuery" type="text" placeholder="Search settings... (Enter to jump)"
             class="w-full px-3 py-2 text-sm rounded-md bg-black/5 dark:bg-white/10 text-dark dark:text-light placeholder-black/40 dark:placeholder-light/50 focus:outline-none focus:ring-2 focus:ring-primary/40"
-            @focus="searchOpen = searchQuery.length > 0"
-            @blur="() => setTimeout(() => (searchOpen = false), 120)"
-            @keydown.enter.prevent="jumpFirstResult"
-          />
-          <i
-            class="fas fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-[12px] opacity-60"
-          />
+            @focus="searchOpen = searchQuery.length > 0" @blur="() => setTimeout(() => (searchOpen = false), 120)"
+            @keydown.enter.prevent="jumpFirstResult" />
+          <i class="fas fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-[12px] opacity-60" />
           <transition name="fade">
-            <div
-              v-if="searchOpen"
-              class="absolute mt-2 w-full z-20 bg-white/95 dark:bg-surface/95 backdrop-blur rounded-md shadow-lg border border-black/5 dark:border-white/10 max-h-80 overflow-auto"
-            >
+            <div v-if="searchOpen"
+              class="absolute mt-2 w-full z-20 bg-white/95 dark:bg-surface/95 backdrop-blur rounded-md shadow-lg border border-black/5 dark:border-white/10 max-h-80 overflow-auto">
               <div v-if="searchResults.length === 0" class="px-3 py-2 text-[12px] opacity-60">
                 No results
               </div>
-              <button
-                v-for="(r, idx) in searchResults"
-                :key="idx"
+              <button v-for="(r, idx) in searchResults" :key="idx"
                 class="w-full text-left px-3 py-2 hover:bg-black/5 dark:hover:bg-white/10 text-[13px] flex items-start gap-2"
-                @click="goTo(r)"
-              >
+                @click="goTo(r)">
                 <span class="shrink-0 mt-0.5">
                   <i class="fas fa-compass text-primary text-[11px]" />
                 </span>
@@ -61,9 +48,7 @@
         <div v-else class="text-[11px] font-medium min-h-[1rem] flex items-center gap-2">
           <transition name="fade"><span v-if="saveState === 'saving'">Saving…</span></transition>
           <transition name="fade">
-            <span v-if="saveState === 'saved'" class="text-green-600 dark:text-green-400"
-              >Saved</span
-            >
+            <span v-if="saveState === 'saved'" class="text-green-600 dark:text-green-400">Saved</span>
           </transition>
         </div>
       </div>
@@ -71,31 +56,20 @@
 
     <!-- Body -->
     <div v-if="isReady" class="space-y-4">
-      <section
-        v-for="tab in tabs"
-        :id="tab.id"
-        :key="tab.id"
-        :ref="(el) => sectionRefs.set(tab.id, el)"
-        class="scroll-mt-24"
-      >
-        <button
-          type="button"
+      <section v-for="tab in tabs" :id="tab.id" :key="tab.id" :ref="(el) => sectionRefs.set(tab.id, el)"
+        class="scroll-mt-24">
+        <button type="button"
           class="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 transition text-left"
-          @click="toggle(tab.id)"
-        >
+          @click="toggle(tab.id)">
           <span class="font-semibold">{{ tab.name }}</span>
-          <i
-            :class="[
-              'fas text-xs transition-transform',
-              isOpen(tab.id) ? 'fa-chevron-up' : 'fa-chevron-down',
-            ]"
-          />
+          <i :class="[
+            'fas text-xs transition-transform',
+            isOpen(tab.id) ? 'fa-chevron-up' : 'fa-chevron-down',
+          ]" />
         </button>
         <transition name="fade">
-          <div
-            v-show="isOpen(tab.id)"
-            class="mt-2 bg-white/80 dark:bg-surface/70 backdrop-blur-sm border border-black/5 dark:border-white/10 rounded-xl shadow-sm p-6 space-y-6"
-          >
+          <div v-show="isOpen(tab.id)"
+            class="mt-2 bg-white/80 dark:bg-surface/70 backdrop-blur-sm border border-black/5 dark:border-white/10 rounded-xl shadow-sm p-6 space-y-6">
             <component :is="tab.component" />
           </div>
         </transition>
@@ -113,10 +87,7 @@
 
     <div class="text-[11px]">
       <transition name="fade">
-        <div
-          v-if="saveState === 'saved' && !restarted && !autoSave"
-          class="text-green-600 dark:text-green-400"
-        >
+        <div v-if="saveState === 'saved' && !restarted && !autoSave" class="text-green-600 dark:text-green-400">
           Saved. Click Apply to restart.
         </div>
       </transition>
@@ -130,8 +101,7 @@
   <transition name="slide-fade">
     <div v-if="dirty && !autoSave" class="fixed bottom-4 right-6 z-30">
       <div
-        class="bg-white/90 dark:bg-surface/90 backdrop-blur rounded-lg shadow border border-black/5 dark:border-white/10 px-4 py-2 flex items-center gap-3"
-      >
+        class="bg-white/90 dark:bg-surface/90 backdrop-blur rounded-lg shadow border border-black/5 dark:border-white/10 px-4 py-2 flex items-center gap-3">
         <span class="text-[11px] font-medium">Unsaved changes</span>
         <button class="btn" :disabled="saveState === 'saving'" @click="save">Save</button>
       </div>
@@ -195,29 +165,15 @@ const toggle = (id) => {
 
 onMounted(async () => {
   // Let the store handle auth/retries; ensure config is fetched and then build index
-  await store.fetchConfig?.(true);
+  await store.fetchConfig();
   if (config.value) queueBuildIndex();
 });
-
-function pruneDefaults(body) {
-  // Prefer store.serialize() when available (it removes server-only keys),
-  // but always continue to prune out options that are identical to tab defaults.
-  const pruned = store.serialize ? store.serialize() : JSON.parse(JSON.stringify(body));
-  const tabsMeta = store.tabs || [];
-  for (const tab of tabsMeta) {
-    for (const k of Object.keys(tab.options || {})) {
-      if (JSON.stringify(pruned[k]) === JSON.stringify(tab.options[k])) delete pruned[k];
-    }
-  }
-  return pruned;
-}
 
 async function save() {
   if (!config.value) return;
   saveState.value = 'saving';
   restarted.value = false;
-
-  const body = pruneDefaults(config.value);
+  const body = store.serialize ? store.serialize() : {};
   const res = await http.post('/api/config', body, {
     headers: { 'Content-Type': 'application/json' },
     validateStatus: () => true,
@@ -253,15 +209,14 @@ function debounceSave() {
   t = setTimeout(save, 800);
 }
 
-// Only mark dirty / autosave when we're actually ready and after first load
+// Mark dirty / autosave when version increments (user changed something)
 watch(
-  () => config.value,
-  (val, oldVal) => {
-    if (!isReady.value || !oldVal) return; // ignore first hydration
+  () => store.version,
+  (v, oldV) => {
+    if (!isReady.value || oldV === undefined) return; // ignore before ready
     dirty.value = true;
     debounceSave();
-  },
-  { deep: true },
+  }
 );
 
 const route = useRoute();
@@ -302,7 +257,7 @@ function buildSearchIndex() {
       if (forId) {
         try {
           target = sec.querySelector('#' + CSS.escape(forId));
-        } catch {}
+        } catch { }
       }
       if (!target)
         target = lbl.closest('div')?.querySelector('input,select,textarea,.form-control');
@@ -328,8 +283,8 @@ watch(searchQuery, (q) => {
   searchOpen.value = v.length > 0;
   searchResults.value = v
     ? searchIndex.value
-        .filter((it) => it.label.toLowerCase().includes(v) || it.path.toLowerCase().includes(v))
-        .slice(0, 15)
+      .filter((it) => it.label.toLowerCase().includes(v) || it.path.toLowerCase().includes(v))
+      .slice(0, 15)
     : [];
 });
 function jumpFirstResult() {
@@ -342,7 +297,7 @@ function goTo(item) {
     try {
       item.el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       flash(item.el);
-    } catch {}
+    } catch { }
   }, 250);
 }
 function flash(el) {
