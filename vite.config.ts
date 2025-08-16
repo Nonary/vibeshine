@@ -139,6 +139,9 @@ export default defineConfig({
     rollupOptions: {
       input: {
         index: resolve(assetsSrcPath, 'index.html'),
+        config: resolve(assetsSrcPath, 'config.html'),
+        password: resolve(assetsSrcPath, 'password.html'),
+        'api-tokens': resolve(assetsSrcPath, 'api-tokens.html'),
       },
     },
   },
