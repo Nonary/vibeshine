@@ -1,6 +1,6 @@
 /**
  * @file src/config.cpp
- * @brief Definitions for the configuration of Sunshine.
+ * @brief Definitions for the configuration of Vibeshine.
  */
 // standard includes
 #include <algorithm>
@@ -532,7 +532,7 @@ namespace config {
     PRIVATE_KEY_FILE,
     CERTIFICATE_FILE,
 
-    platf::get_host_name(),  // sunshine_name,
+    platf::get_host_name(),  // vibeshine_name,
     "sunshine_state.json"s,  // file_state
     {},  // external_ip
   };
@@ -563,7 +563,7 @@ namespace config {
     true,  // native pen/touch support
   };
 
-  sunshine_t sunshine {
+  vibeshine_t sunshine {
     "en",  // locale
     2,  // min_log_level
     0,  // flags
@@ -1152,7 +1152,7 @@ namespace config {
 
     path_f(vars, "pkey", nvhttp.pkey);
     path_f(vars, "cert", nvhttp.cert);
-    string_f(vars, "sunshine_name", nvhttp.sunshine_name);
+    string_f(vars, "vibeshine_name", nvhttp.vibeshine_name);
     path_f(vars, "log_path", config::sunshine.log_file);
     path_f(vars, "file_state", nvhttp.file_state);
 

@@ -4,7 +4,7 @@ interface GitHubRelease {
   tag_tag?: string; // Note: This appears to be a typo in the original code
 }
 
-export default class SunshineVersion {
+export default class VibeshineVersion {
   public release: GitHubRelease | null;
   public version: string;
   public versionName: string | null;
@@ -45,15 +45,15 @@ export default class SunshineVersion {
     return v.split('.').map(Number);
   }
 
-  isGreater(otherVersion: SunshineVersion | string): boolean {
+  isGreater(otherVersion: VibeshineVersion | string): boolean {
     let otherVersionParts: number[] | null;
-    if (otherVersion instanceof SunshineVersion) {
+    if (otherVersion instanceof VibeshineVersion) {
       otherVersionParts = otherVersion.versionParts;
     } else if (typeof otherVersion === 'string') {
       otherVersionParts = this.parseVersion(otherVersion);
     } else {
       throw new Error(
-        'Invalid argument: otherVersion must be a SunshineVersion object or a version string',
+        'Invalid argument: otherVersion must be a VibeshineVersion object or a version string',
       );
     }
 

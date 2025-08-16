@@ -176,7 +176,7 @@ namespace config {
     std::string pkey;
     std::string cert;
 
-    std::string sunshine_name;
+    std::string vibeshine_name;
 
     std::string file_state;
 
@@ -233,7 +233,7 @@ namespace config {
     bool elevated;
   };
 
-  struct sunshine_t {
+  struct vibeshine_t {
     std::string locale;
     int min_log_level;
     std::bitset<flag::FLAG_SIZE> flags;
@@ -265,7 +265,7 @@ namespace config {
   extern stream_t stream;
   extern nvhttp_t nvhttp;
   extern input_t input;
-  extern sunshine_t sunshine;
+  extern vibeshine_t sunshine;
 
   int parse(int argc, char *argv[]);
   std::unordered_map<std::string, std::string> parse_config(const std::string_view &file_content);

@@ -143,7 +143,7 @@ import { ref, onMounted, computed } from 'vue';
 import UiAlert from '@/components/UiAlert.vue';
 import UiCard from '@/components/UiCard.vue';
 import ResourceCard from '@/ResourceCard.vue';
-import SunshineVersion from '@/sunshine_version';
+import VibeshineVersion from '@/vibeshine_version';
 import { useConfigStore } from '@/stores/config';
 import { useAuthStore } from '@/stores/auth';
 
@@ -177,13 +177,13 @@ async function runVersionChecks() {
     // Normalize notify pre-release flag to boolean
     notifyPreReleases.value =
       cfg.notify_pre_releases === true || cfg.notify_pre_releases === 'enabled';
-    version.value = new SunshineVersion(null, cfg.version);
+    version.value = new VibeshineVersion(null, cfg.version);
     branch.value = cfg.branch || '';
     commit.value = cfg.commit || '';
 
     // Remote release checks (GitHub)
     try {
-      githubVersion.value = new SunshineVersion(
+      githubVersion.value = new VibeshineVersion(
         await fetch('https://api.github.com/repos/LizardByte/Sunshine/releases/latest').then((r) =>
           r.json(),
         ),
@@ -198,7 +198,7 @@ async function runVersionChecks() {
         'https://api.github.com/repos/LizardByte/Sunshine/releases',
       ).then((r) => r.json());
       const pre = Array.isArray(releases) ? releases.find((r) => r.prerelease) : null;
-      if (pre) preReleaseVersion.value = new SunshineVersion(pre, null);
+      if (pre) preReleaseVersion.value = new VibeshineVersion(pre, null);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn('[Dashboard] releases list fetch failed', e);

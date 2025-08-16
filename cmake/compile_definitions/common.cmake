@@ -1,7 +1,7 @@
 # common compile definitions
 # this file will also load platform specific definitions
 
-list(APPEND SUNSHINE_COMPILE_OPTIONS -Wall -Wno-sign-compare)
+list(APPEND VIBESHINE_COMPILE_OPTIONS -Wall -Wno-sign-compare)
 # Wall - enable all warnings
 # Werror - treat warnings as errors
 # Wno-maybe-uninitialized/Wno-uninitialized - disable warnings for maybe uninitialized variables
@@ -12,27 +12,27 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 
     # GCC 12 and higher will complain about maybe-uninitialized
     if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)
-        list(APPEND SUNSHINE_COMPILE_OPTIONS -Wno-maybe-uninitialized)
+        list(APPEND VIBESHINE_COMPILE_OPTIONS -Wno-maybe-uninitialized)
 
         # Disable the bogus warning that may prevent compilation (only for GCC 12).
         # See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105651.
         if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13)
-            list(APPEND SUNSHINE_COMPILE_OPTIONS -Wno-restrict)
+            list(APPEND VIBESHINE_COMPILE_OPTIONS -Wno-restrict)
         endif()
     endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     # Clang specific compile options
 
     # Clang doesn't actually complain about this this, so disabling for now
-    # list(APPEND SUNSHINE_COMPILE_OPTIONS -Wno-uninitialized)
+    # list(APPEND VIBESHINE_COMPILE_OPTIONS -Wno-uninitialized)
 endif()
 if(BUILD_WERROR)
-    list(APPEND SUNSHINE_COMPILE_OPTIONS -Werror)
+    list(APPEND VIBESHINE_COMPILE_OPTIONS -Werror)
 endif()
 
 # setup assets directory
-if(NOT SUNSHINE_ASSETS_DIR)
-    set(SUNSHINE_ASSETS_DIR "assets")
+if(NOT VIBESHINE_ASSETS_DIR)
+    set(VIBESHINE_ASSETS_DIR "assets")
 endif()
 
 # platform specific compile definitions
@@ -52,7 +52,7 @@ include_directories(BEFORE SYSTEM "${CMAKE_SOURCE_DIR}/third-party/nv-codec-head
 file(GLOB NVENC_SOURCES CONFIGURE_DEPENDS "src/nvenc/*.cpp" "src/nvenc/*.h")
 list(APPEND PLATFORM_TARGET_FILES ${NVENC_SOURCES})
 
-set(SUNSHINE_TARGET_FILES
+set(VIBESHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Input.h"
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Rtsp.h"
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/RtspParser.c"
@@ -117,17 +117,17 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/http_auth.cpp"
         ${PLATFORM_TARGET_FILES})
 
-if(NOT SUNSHINE_ASSETS_DIR_DEF)
-    set(SUNSHINE_ASSETS_DIR_DEF "${SUNSHINE_ASSETS_DIR}")
+if(NOT VIBESHINE_ASSETS_DIR_DEF)
+    set(VIBESHINE_ASSETS_DIR_DEF "${VIBESHINE_ASSETS_DIR}")
 endif()
-list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_ASSETS_DIR="${SUNSHINE_ASSETS_DIR_DEF}")
+list(APPEND VIBESHINE_DEFINITIONS VIBESHINE_ASSETS_DIR="${VIBESHINE_ASSETS_DIR_DEF}")
 
-list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_TRAY=${SUNSHINE_TRAY})
+list(APPEND VIBESHINE_DEFINITIONS VIBESHINE_TRAY=${VIBESHINE_TRAY})
 
 # Publisher metadata
-list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_PUBLISHER_NAME="${SUNSHINE_PUBLISHER_NAME}")
-list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_PUBLISHER_WEBSITE="${SUNSHINE_PUBLISHER_WEBSITE}")
-list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_PUBLISHER_ISSUE_URL="${SUNSHINE_PUBLISHER_ISSUE_URL}")
+list(APPEND VIBESHINE_DEFINITIONS VIBESHINE_PUBLISHER_NAME="${VIBESHINE_PUBLISHER_NAME}")
+list(APPEND VIBESHINE_DEFINITIONS VIBESHINE_PUBLISHER_WEBSITE="${VIBESHINE_PUBLISHER_WEBSITE}")
+list(APPEND VIBESHINE_DEFINITIONS VIBESHINE_PUBLISHER_ISSUE_URL="${VIBESHINE_PUBLISHER_ISSUE_URL}")
 
 include_directories(BEFORE "${CMAKE_SOURCE_DIR}")
 
@@ -142,7 +142,7 @@ include_directories(
         ${Boost_INCLUDE_DIRS}  # has to be the last, or we get runtime error on macOS ffmpeg encoder
 )
 
-list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
+list(APPEND VIBESHINE_EXTERNAL_LIBRARIES
         ${MINIUPNP_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
         enet
