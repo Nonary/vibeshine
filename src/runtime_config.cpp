@@ -10,6 +10,7 @@
 #include "config.h"
 #include "file_handler.h"
 #include "logging.h"
+#include "rtsp.h"
 #include "stream.h"
 
 using namespace std::literals;
@@ -174,10 +175,7 @@ namespace runtime_config {
   }
 
   bool autosave_state_t::has_active_sessions() const {
-    // This is a placeholder - in a real implementation, this would check
-    // the actual streaming session count from the stream module
-    // For now, we'll assume no active sessions for testing
-    return false;  // TODO: Implement actual session counting
+    return rtsp_stream::session_count() > 0;
   }
 
   void autosave_state_t::set_status(autosave_status_e status) {

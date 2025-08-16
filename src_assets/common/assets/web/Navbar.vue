@@ -77,10 +77,10 @@ export default {
     },
     autosaveStatusText() {
       switch (this.autosaveStatus) {
-        case 1: return this.$t ? this.$t('autosave.saving') : 'Saving...'
-        case 2: return this.$t ? this.$t('autosave.applied') : 'Applied'
-        case 3: return this.$t ? this.$t('autosave.pending_session') : 'Pending session end'
-        case 4: return this.$t ? this.$t('autosave.pending_restart') : 'Restart required'
+        case 1: return this.$t('autosave.saving')
+        case 2: return this.$t('autosave.applied')
+        case 3: return this.$t('autosave.pending_session')
+        case 4: return this.$t('autosave.pending_restart')
         default: return ''
       }
     }
