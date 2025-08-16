@@ -16,11 +16,16 @@ function addCmd() {
     // ensure array
     if (!config.value.global_prep_cmd) config.value.global_prep_cmd = [];
     config.value.global_prep_cmd.push(template);
+    // reassign to trigger store setter/version bump
+    store.updateOption('global_prep_cmd', [...config.value.global_prep_cmd]);
   }
 }
 
 function removeCmd(index) {
-  if (config.value && config.value.global_prep_cmd) config.value.global_prep_cmd.splice(index, 1);
+  if (config.value && config.value.global_prep_cmd) {
+    config.value.global_prep_cmd.splice(index, 1);
+    store.updateOption('global_prep_cmd', [...config.value.global_prep_cmd]);
+  }
 }
 </script>
 
