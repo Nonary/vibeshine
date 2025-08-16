@@ -11,18 +11,18 @@ interface LocaleResponse {
 type MessageSchema = typeof en;
 
 export default async function (): Promise<any> {
-  let r: LocaleResponse = await http
+  const r: LocaleResponse = await http
     .get('./api/configLocale', { validateStatus: () => true })
     .then((r) => (r.status === 200 ? r.data : {}))
     .catch(() => ({}));
-  let locale = r.locale ?? 'en';
+  const locale = r.locale ?? 'en';
   document.querySelector('html')?.setAttribute('lang', locale);
-  let messages: Record<string, MessageSchema> = {
+  const messages: Record<string, MessageSchema> = {
     en,
   };
   try {
     if (locale !== 'en') {
-      let r = await http
+      const r = await http
         .get(`/assets/locale/${locale}.json`, { validateStatus: () => true })
         .then((r) => (r.status === 200 ? r.data : null));
       if (r) messages[locale] = r;

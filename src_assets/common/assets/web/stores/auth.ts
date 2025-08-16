@@ -40,7 +40,9 @@ export const useAuthStore = defineStore('auth', () => {
   async function init(): Promise<void> {
     if (ready.value) return;
     try {
-      const res = await http.get<AuthStatusResponse>('/api/auth/status', { validateStatus: () => true });
+      const res = await http.get<AuthStatusResponse>('/api/auth/status', {
+        validateStatus: () => true,
+      });
       if (res && res.status === 200 && res.data) {
         if (typeof res.data.credentials_configured === 'boolean') {
           credentialsConfigured.value = res.data.credentials_configured;
