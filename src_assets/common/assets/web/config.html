@@ -117,6 +117,95 @@
           box-shadow: 0 0 0 0 rgba(253, 126, 20, 0);
         }
       }
+
+      /* Search functionality styles */
+      .config-search {
+        position: relative;
+        flex: 1 1 340px;
+        max-width: 480px;
+        margin: 0 1rem;
+      }
+
+      .config-search-results {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        z-index: 1050;
+        background: var(--bs-body-bg);
+        border: 1px solid var(--bs-border-color);
+        border-top: none;
+        border-radius: 0 0 .375rem .375rem;
+        max-height: 320px;
+        overflow-y: auto;
+        box-shadow: 0 .125rem .25rem rgba(0, 0, 0, .075);
+      }
+
+      .search-result-item {
+        padding: .75rem 1rem;
+        cursor: pointer;
+        border-bottom: 1px solid var(--bs-border-color);
+      }
+
+      .search-result-item:last-child {
+        border-bottom: none;
+      }
+
+      .search-result-item:hover,
+      .search-result-item.active {
+        background-color: var(--bs-primary-bg-subtle);
+        color: var(--bs-emphasis-color);
+      }
+
+      .search-result-item.no-results {
+        cursor: default;
+        color: var(--bs-secondary-color);
+        font-style: italic;
+      }
+
+      .search-breadcrumb {
+        font-weight: 500;
+        color: var(--bs-emphasis-color);
+      }
+
+      .search-description {
+        font-size: .875rem;
+        color: var(--bs-secondary-color);
+        margin-top: .25rem;
+        line-height: 1.3;
+      }
+
+      /* Search hit highlight animation */
+      .search-hit-pulse {
+        animation: searchPulse 2.5s ease-in-out;
+      }
+
+      @keyframes searchPulse {
+        0% {
+          box-shadow: 0 0 0 .25rem rgba(13, 110, 253, .4);
+        }
+        70% {
+          box-shadow: 0 0 0 0 rgba(13, 110, 253, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(13, 110, 253, 0);
+        }
+      }
+
+      /* Responsive adjustments */
+      @media (max-width: 768px) {
+        .header-row {
+          flex-wrap: wrap;
+          gap: .5rem;
+        }
+        
+        .config-search {
+          order: 3;
+          flex: 1 1 100%;
+          margin: .5rem 0 0 0;
+          max-width: none;
+        }
+      }
     </style>
 </head>
 
@@ -126,6 +215,52 @@
     <div class="config-sticky-header">
       <div class="header-row">
         <h1>{{ $t('config.configuration') }}</h1>
+        <div class="config-search" v-if="initialized">
+          <input 
+            type="text" 
+            class="form-control" 
+            v-model="searchQuery"
+            @input="onSearchInput"
+            @keydown="onSearchKeydown"
+            @focus="searchActive = true"
+            @blur="onSearchBlur"
+            placeholder="Search settings..."
+            aria-label="Search settings"
+            role="combobox"
+            :aria-expanded="searchActive && searchResults.length > 0"
+            :aria-owns="searchActive && searchResults.length > 0 ? 'search-listbox' : null"
+            :aria-activedescendant="searchActiveIndex >= 0 ? `search-option-${searchActiveIndex}` : null"
+            aria-autocomplete="list"
+            ref="searchInput"
+          />
+          <div 
+            v-if="searchActive && searchResults.length > 0" 
+            class="config-search-results"
+            id="search-listbox"
+            role="listbox"
+          >
+            <div 
+              v-for="(result, index) in searchResults" 
+              :key="`${result.tabId}-${result.key}`"
+              :id="`search-option-${index}`"
+              class="search-result-item"
+              :class="{ active: index === searchActiveIndex }"
+              role="option"
+              :aria-selected="index === searchActiveIndex"
+              @mousedown.prevent="selectSearchResult(result)"
+              @mouseenter="searchActiveIndex = index"
+            >
+              <div class="search-breadcrumb">{{ result.tabName }} › {{ result.labelText }}</div>
+              <div v-if="result.descText" class="search-description">{{ result.descText }}</div>
+            </div>
+          </div>
+          <div 
+            v-if="searchActive && searchQuery && searchResults.length === 0" 
+            class="config-search-results"
+          >
+            <div class="search-result-item no-results">No matches found</div>
+          </div>
+        </div>
         <div class="status-actions">
           <div class="status-area" :class="{ clickable: restartRequired }" role="button" :aria-disabled="!restartRequired"
             tabindex="0" @click="onStatusClick" @keydown.enter.prevent="onStatusClick"
@@ -232,6 +367,15 @@
         serverBaseline: {},
         restartGatedDirty: {},
         pendingRestartSave: false,
+        // Search functionality
+        searchQuery: '',
+        searchResults: [],
+        searchActiveIndex: -1,
+        searchIndex: [],
+        searchActive: false,
+        searching: false,
+        suppressHashHandlerUntil: 0,
+        _searchDebounceTimer: null,
         tabs: [ // TODO: Move the options to each Component instead, encapsulate.
           {
             id: "general",
@@ -446,6 +590,11 @@
           // Establish server baseline for diffing and mark initialization complete so autosave can start reacting
           this.serverBaseline = this.serialize();
           this.initialized = true;
+          
+          // Build search index after configuration and tabs are fully loaded
+          this.$nextTick(() => {
+            this.buildSearchIndex();
+          });
         });
     },
     methods: {
@@ -603,6 +752,254 @@
           }
         });
       },
+
+      // Search functionality methods
+      buildSearchIndex() {
+        this.searchIndex = [];
+        
+        this.tabs.forEach(tab => {
+          Object.keys(tab.options).forEach(key => {
+            // Get label text - try translation first, fallback to key
+            let labelText = '';
+            try {
+              const translatedLabel = this.$t(`config.${key}`);
+              labelText = translatedLabel !== `config.${key}` ? translatedLabel : key;
+            } catch (e) {
+              labelText = key;
+            }
+
+            // Get description text with platform-specific resolution
+            let descText = '';
+            try {
+              // Try platform-specific first
+              let descKey = `config.${key}_desc_${this.platform}`;
+              let translatedDesc = this.$t(descKey);
+              
+              if (translatedDesc === descKey) {
+                // Fallback to generic description
+                descKey = `config.${key}_desc`;
+                translatedDesc = this.$t(descKey);
+                
+                if (translatedDesc !== descKey) {
+                  descText = translatedDesc;
+                }
+              } else {
+                descText = translatedDesc;
+              }
+            } catch (e) {
+              // Ignore translation errors
+            }
+
+            this.searchIndex.push({
+              key,
+              tabId: tab.id,
+              tabName: tab.name,
+              labelText,
+              descText,
+              rawKey: key
+            });
+          });
+        });
+      },
+
+      normalizeText(text) {
+        return text.toLowerCase().trim();
+      },
+
+      scoreEntry(entry, queryTokens) {
+        const searchText = this.normalizeText(`${entry.tabName} ${entry.labelText} ${entry.descText} ${entry.rawKey}`);
+        
+        // Check if all tokens are present
+        const allTokensMatch = queryTokens.every(token => 
+          searchText.includes(this.normalizeText(token))
+        );
+        
+        if (!allTokensMatch) return -1;
+
+        let score = 0;
+        const normalizedLabel = this.normalizeText(entry.labelText);
+        const normalizedRawKey = this.normalizeText(entry.rawKey);
+        
+        queryTokens.forEach(token => {
+          const normalizedToken = this.normalizeText(token);
+          
+          // Exact prefix match on label or raw key (best score)
+          if (normalizedLabel.startsWith(normalizedToken) || normalizedRawKey.startsWith(normalizedToken)) {
+            score -= 20;
+          }
+          // Prefix match on any word in label
+          else if (normalizedLabel.split(' ').some(word => word.startsWith(normalizedToken))) {
+            score -= 10;
+          }
+          // Substring match in label
+          else if (normalizedLabel.includes(normalizedToken)) {
+            score -= 5;
+          }
+          // Match only in description
+          else if (this.normalizeText(entry.descText).includes(normalizedToken)) {
+            score -= 1;
+          }
+        });
+
+        return score;
+      },
+
+      onSearchInput() {
+        if (this._searchDebounceTimer) {
+          clearTimeout(this._searchDebounceTimer);
+        }
+        
+        this._searchDebounceTimer = setTimeout(() => {
+          this.performSearch();
+        }, 120);
+      },
+
+      performSearch() {
+        const query = this.searchQuery.trim();
+        if (!query) {
+          this.searchResults = [];
+          this.searchActiveIndex = -1;
+          return;
+        }
+
+        const tokens = query.split(/\s+/).filter(t => t.length > 0);
+        const results = this.searchIndex
+          .map(entry => ({
+            ...entry,
+            score: this.scoreEntry(entry, tokens)
+          }))
+          .filter(entry => entry.score > -1)
+          .sort((a, b) => {
+            if (a.score !== b.score) return a.score - b.score;
+            // Tie-break by tab name, then label
+            if (a.tabName !== b.tabName) return a.tabName.localeCompare(b.tabName);
+            return a.labelText.localeCompare(b.labelText);
+          })
+          .slice(0, 10);
+
+        this.searchResults = results;
+        this.searchActiveIndex = results.length > 0 ? 0 : -1;
+      },
+
+      onSearchKeydown(e) {
+        if (!this.searchActive || this.searchResults.length === 0) {
+          // Handle global shortcuts
+          if (e.key === '/' || (e.ctrlKey && e.key === 'k')) {
+            e.preventDefault();
+            this.$refs.searchInput?.focus();
+          }
+          return;
+        }
+
+        switch (e.key) {
+          case 'ArrowDown':
+            e.preventDefault();
+            this.searchActiveIndex = Math.min(this.searchActiveIndex + 1, this.searchResults.length - 1);
+            break;
+          case 'ArrowUp':
+            e.preventDefault();
+            this.searchActiveIndex = Math.max(this.searchActiveIndex - 1, 0);
+            break;
+          case 'Enter':
+            e.preventDefault();
+            if (this.searchActiveIndex >= 0 && this.searchResults[this.searchActiveIndex]) {
+              this.selectSearchResult(this.searchResults[this.searchActiveIndex]);
+            } else if (this.searchResults.length === 1) {
+              this.selectSearchResult(this.searchResults[0]);
+            }
+            break;
+          case 'Escape':
+            e.preventDefault();
+            if (this.searchQuery) {
+              this.clearSearch();
+            } else {
+              this.searchActive = false;
+              this.$refs.searchInput?.blur();
+            }
+            break;
+        }
+      },
+
+      onSearchBlur() {
+        // Delay to allow click events on results
+        setTimeout(() => {
+          this.searchActive = false;
+        }, 150);
+      },
+
+      selectSearchResult(entry) {
+        // Navigate to tab if different
+        if (this.currentTab !== entry.tabId) {
+          this.currentTab = entry.tabId;
+        }
+
+        // Clear search and close dropdown
+        this.clearSearch();
+        this.searchActive = false;
+
+        // Set hash suppression to prevent double-scroll
+        this.suppressHashHandlerUntil = Date.now() + 1000;
+
+        // Wait for component to mount/update, then scroll and highlight
+        this.$nextTick(() => {
+          setTimeout(() => {
+            const element = document.getElementById(entry.key);
+            if (element) {
+              // Set hash for consistency
+              window.location.hash = '#' + entry.key;
+              
+              // Scroll into view
+              element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              
+              // Apply highlight
+              this.highlightElement(element);
+              
+              // Focus first interactive element
+              const focusable = element.querySelector('input, select, textarea, button');
+              if (focusable) {
+                setTimeout(() => {
+                  focusable.focus({ preventScroll: true });
+                }, 500);
+              }
+            } else {
+              // Fallback: scroll to tab top
+              const tabElement = document.querySelector('.config-page');
+              if (tabElement) {
+                tabElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }
+            }
+          }, 100);
+        });
+      },
+
+      highlightElement(element) {
+        // Remove any existing highlight
+        const existing = document.querySelector('.search-hit-pulse');
+        if (existing) {
+          existing.classList.remove('search-hit-pulse');
+        }
+
+        // Find best container for highlight
+        let target = element;
+        if (element.tagName === 'INPUT' || element.tagName === 'SELECT' || element.tagName === 'TEXTAREA') {
+          // For form controls, highlight the parent container
+          target = element.closest('.mb-3, .form-check') || element;
+        }
+
+        // Apply highlight
+        target.classList.add('search-hit-pulse');
+        
+        // Remove highlight after animation
+        setTimeout(() => {
+          target.classList.remove('search-hit-pulse');
+        }, 2500);
+      },
+
+      clearSearch() {
+        this.searchQuery = '';
+        this.searchResults = [];
+        this.searchActiveIndex = -1;
+      }
     },
     watch: {
       // Automatically save whenever any config value changes after initialization
@@ -619,6 +1016,20 @@
           this.pendingRestartSave = Object.keys(this.restartGatedDirty).length > 0;
           this.scheduleAutoSave();
         }
+      },
+
+      // Watch for locale changes to rebuild search index
+      'config.locale': {
+        handler(newLocale, oldLocale) {
+          if (this.initialized && newLocale !== oldLocale) {
+            // Rebuild search index after locale change with slight delay to let i18n update
+            this.$nextTick(() => {
+              setTimeout(() => {
+                this.buildSearchIndex();
+              }, 200);
+            });
+          }
+        }
       }
     },
     mounted() {
@@ -631,6 +1042,11 @@
       }
       // Handle hashchange events
       const handleHash = () => {
+        // Check if hash handling is suppressed (for search navigation)
+        if (this.suppressHashHandlerUntil > Date.now()) {
+          return;
+        }
+        
         let hash = window.location.hash;
         if (hash) {
           // remove the # from the hash
