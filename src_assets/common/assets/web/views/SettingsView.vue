@@ -1,7 +1,8 @@
 <template>
   <main ref="mainEl" class="flex-1 px-0 md:px-2 xl:px-6 py-2 md:py-6 space-y-6 overflow-x-hidden">
     <header
-      class="sticky top-0 z-20 -mx-0 md:-mx-2 xl:-mx-6 px-0 md:px-2 xl:px-6 py-3 bg-light/70 dark:bg-dark/60 backdrop-blur supports-[backdrop-filter]:bg-light/50 supports-[backdrop-filter]:dark:bg-dark/40 border-b border-dark/10 dark:border-light/10">
+      class="sticky top-0 z-20 -mx-0 md:-mx-2 xl:-mx-6 px-0 md:px-2 xl:px-6 py-3 bg-light/70 dark:bg-dark/60 backdrop-blur supports-[backdrop-filter]:bg-light/50 supports-[backdrop-filter]:dark:bg-dark/40 border-b border-dark/10 dark:border-light/10"
+    >
       <div class="flex items-center justify-between gap-4 flex-wrap">
         <div class="min-w-0">
           <h2 class="text-sm font-semibold uppercase tracking-wider">Settings</h2>
@@ -10,35 +11,62 @@
           </p>
         </div>
 
-        <!-- In-page search -->
         <div class="relative flex-1 max-w-2xl min-w-[260px]">
-          <input v-model="searchQuery" type="text" placeholder="Search settings... (Enter to jump)"
+          <input
+            v-model="searchQuery"
+            type="text"
+            placeholder="Search settings... (Enter to jump)"
             class="w-full px-3 py-2 text-sm rounded-md bg-black/5 dark:bg-white/10 text-dark dark:text-light placeholder-black/40 dark:placeholder-light/50 focus:outline-none focus:ring-2 focus:ring-primary/40"
-            @focus="searchOpen = searchQuery.length > 0" @blur="() => setTimeout(() => (searchOpen = false), 120)"
-            @keydown.enter.prevent="jumpFirstResult" />
-          <i class="fas fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-[12px] opacity-60" />
+            @focus="searchOpen = searchQuery.length > 0"
+            @blur="() => setTimeout(() => (searchOpen = false), 120)"
+            @keydown.enter.prevent="jumpFirstResult"
+          />
+          <i
+            class="fas fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-[12px] opacity-60"
+          />
           <transition name="fade">
-            <div v-if="searchOpen"
-              class="absolute mt-2 w-full z-20 bg-white/95 dark:bg-surface/95 backdrop-blur rounded-md shadow-lg border border-black/5 dark:border-white/10 max-h-80 overflow-auto">
+            <div
+              v-if="searchOpen"
+              class="absolute mt-2 w-full z-20 bg-white/95 dark:bg-surface/95 backdrop-blur rounded-md shadow-lg border border-black/5 dark:border-white/10 max-h-80 overflow-auto"
+            >
               <div v-if="searchResults.length === 0" class="px-3 py-2 text-[12px] opacity-60">
                 No results
               </div>
-              <button v-for="(r, idx) in searchResults" :key="idx"
+              <button
+                v-for="(r, idx) in searchResults"
+                :key="idx"
                 class="w-full text-left px-3 py-2 hover:bg-black/5 dark:hover:bg-white/10 text-[13px] flex items-start gap-2"
-                @click="goTo(r)">
+                @click="goTo(r)"
+              >
                 <span class="shrink-0 mt-0.5">
                   <i class="fas fa-compass text-primary text-[11px]" />
                 </span>
                 <span class="min-w-0">
                   <span class="block font-medium truncate">{{ r.label }}</span>
                   <span class="block text-[11px] opacity-60 truncate">{{ r.path }}</span>
+                  <span
+                    v-if="r.desc"
+                    class="block text-[11px] opacity-70 line-clamp-2 break-words"
+                    >{{ r.desc }}</span
+                  >
+                  <span
+                    v-if="r.options && r.options.length"
+                    class="block text-[11px] opacity-60 mt-1 truncate"
+                    >Options:
+                    {{
+                      r.options
+                        .map((o) => o.text)
+                        .filter(Boolean)
+                        .slice(0, 3)
+                        .join(', ')
+                    }}<span v-if="r.options.length > 3">…</span></span
+                  >
                 </span>
               </button>
             </div>
           </transition>
         </div>
 
-        <!-- Save / apply -->
         <div v-if="!autoSave" class="flex gap-2">
           <button class="btn" :disabled="saveState === 'saving'" @click="save">Save</button>
           <button v-if="saveState === 'saved' && !restarted" class="btn ghost" @click="apply">
@@ -48,28 +76,40 @@
         <div v-else class="text-[11px] font-medium min-h-[1rem] flex items-center gap-2">
           <transition name="fade"><span v-if="saveState === 'saving'">Saving…</span></transition>
           <transition name="fade">
-            <span v-if="saveState === 'saved'" class="text-green-600 dark:text-green-400">Saved</span>
+            <span v-if="saveState === 'saved'" class="text-green-600 dark:text-green-400"
+              >Saved</span
+            >
           </transition>
         </div>
       </div>
     </header>
 
-    <!-- Body -->
     <div v-if="isReady" class="space-y-4">
-      <section v-for="tab in tabs" :id="tab.id" :key="tab.id" :ref="(el) => sectionRefs.set(tab.id, el)"
-        class="scroll-mt-24">
-        <button type="button"
+      <section
+        v-for="tab in tabs"
+        :id="tab.id"
+        :key="tab.id"
+        :ref="(el) => sectionRefs.set(tab.id, el)"
+        class="scroll-mt-24"
+      >
+        <button
+          type="button"
           class="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 transition text-left"
-          @click="toggle(tab.id)">
+          @click="toggle(tab.id)"
+        >
           <span class="font-semibold">{{ tab.name }}</span>
-          <i :class="[
-            'fas text-xs transition-transform',
-            isOpen(tab.id) ? 'fa-chevron-up' : 'fa-chevron-down',
-          ]" />
+          <i
+            :class="[
+              'fas text-xs transition-transform',
+              isOpen(tab.id) ? 'fa-chevron-up' : 'fa-chevron-down',
+            ]"
+          />
         </button>
         <transition name="fade">
-          <div v-show="isOpen(tab.id)"
-            class="mt-2 bg-white/80 dark:bg-surface/70 backdrop-blur-sm border border-black/5 dark:border-white/10 rounded-xl shadow-sm p-6 space-y-6">
+          <div
+            v-show="isOpen(tab.id)"
+            class="mt-2 bg-white/80 dark:bg-surface/70 backdrop-blur-sm border border-black/5 dark:border-white/10 rounded-xl shadow-sm p-6 space-y-6"
+          >
             <component :is="tab.component" />
           </div>
         </transition>
@@ -87,7 +127,10 @@
 
     <div class="text-[11px]">
       <transition name="fade">
-        <div v-if="saveState === 'saved' && !restarted && !autoSave" class="text-green-600 dark:text-green-400">
+        <div
+          v-if="saveState === 'saved' && !restarted && !autoSave"
+          class="text-green-600 dark:text-green-400"
+        >
           Saved. Click Apply to restart.
         </div>
       </transition>
@@ -97,11 +140,11 @@
     </div>
   </main>
 
-  <!-- Unsaved sticky bar (manual mode) -->
   <transition name="slide-fade">
     <div v-if="dirty && !autoSave" class="fixed bottom-4 right-6 z-30">
       <div
-        class="bg-white/90 dark:bg-surface/90 backdrop-blur rounded-lg shadow border border-black/5 dark:border-white/10 px-4 py-2 flex items-center gap-3">
+        class="bg-white/90 dark:bg-surface/90 backdrop-blur rounded-lg shadow border border-black/5 dark:border-white/10 px-4 py-2 flex items-center gap-3"
+      >
         <span class="text-[11px] font-medium">Unsaved changes</span>
         <button class="btn" :disabled="saveState === 'saving'" @click="save">Save</button>
       </div>
@@ -110,7 +153,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch, markRaw } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, markRaw } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import General from '@/configs/tabs/General.vue';
 import Inputs from '@/configs/tabs/Inputs.vue';
@@ -120,6 +163,7 @@ import Advanced from '@/configs/tabs/Advanced.vue';
 import AudioVideo from '@/configs/tabs/AudioVideo.vue';
 import ContainerEncoders from '@/configs/tabs/ContainerEncoders.vue';
 import { useConfigStore } from '@/stores/config';
+import { useAuthStore } from '@/stores/auth';
 import { http } from '@/http';
 import { storeToRefs } from 'pinia';
 
@@ -167,6 +211,26 @@ onMounted(async () => {
   // Let the store handle auth/retries; ensure config is fetched and then build index
   await store.fetchConfig();
   if (config.value) queueBuildIndex();
+});
+// Rebuild index after auth becomes ready / authenticated to avoid needing a manual reload
+const auth = useAuthStore();
+// If auth store hasn't been initialized, ensure it does
+onMounted(() => {
+  if (auth && typeof auth.init === 'function') auth.init().catch(() => {});
+});
+
+// When auth becomes ready or authenticated, rebuild index (debounced a bit)
+let authTimer = null;
+watch(
+  () => ({ ready: auth.ready, authed: auth.isAuthenticated }),
+  () => {
+    clearTimeout(authTimer);
+    authTimer = setTimeout(() => queueBuildIndex(), 120);
+  },
+  { deep: true },
+);
+onUnmounted(() => {
+  if (authTimer) clearTimeout(authTimer);
 });
 
 async function save() {
@@ -216,7 +280,7 @@ watch(
     if (!isReady.value || oldV === undefined) return; // ignore before ready
     dirty.value = true;
     debounceSave();
-  }
+  },
 );
 
 const route = useRoute();
@@ -241,7 +305,6 @@ watch(
   (id) => typeof id === 'string' && scrollToOpen(id),
 );
 
-// --- Search ---
 function buildSearchIndex() {
   const root = mainEl.value;
   if (!root) return;
@@ -257,12 +320,69 @@ function buildSearchIndex() {
       if (forId) {
         try {
           target = sec.querySelector('#' + CSS.escape(forId));
-        } catch { }
+        } catch {}
       }
       if (!target)
         target = lbl.closest('div')?.querySelector('input,select,textarea,.form-control');
+      // Attempt to locate a descriptor/description element associated with this label.
+      let descText = '';
+      try {
+        const isDescClass = (cls) =>
+          !!cls &&
+          (cls.includes('text-[11px]') || cls.includes('form-text') || cls.includes('text-xs'));
+        // First search within the immediate container for a small description div.
+        const container = lbl.parentElement;
+        if (container) {
+          const candidate = Array.from(container.querySelectorAll('div,p,small')).find(
+            (d) => d !== lbl && isDescClass(d.className) && d.textContent.trim().length > 0,
+          );
+          if (candidate) descText = candidate.textContent.trim();
+        }
+        // Fallback: look at following siblings up to a few steps
+        if (!descText) {
+          let sib = lbl.nextElementSibling;
+          let steps = 0;
+          while (sib && steps < 6) {
+            if (isDescClass(sib.className) && sib.textContent.trim()) {
+              descText = sib.textContent.trim();
+              break;
+            }
+            sib = sib.nextElementSibling;
+            steps++;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      // If the control is a select, gather option texts/values to allow matching
+      let optionsList = [];
+      let optionsText = '';
+      try {
+        if (target && target.tagName && target.tagName.toLowerCase() === 'select') {
+          optionsList = Array.from(target.querySelectorAll('option')).map((o) => ({
+            text: (o.textContent || '').trim(),
+            value: o.value,
+          }));
+          optionsText = optionsList
+            .map((o) => o.text)
+            .filter(Boolean)
+            .join(' | ');
+        }
+      } catch {
+        optionsList = [];
+        optionsText = '';
+      }
+
       if (target)
-        items.push({ sectionId, label: text, path: `${sectionTitle} › ${text}`, el: target });
+        items.push({
+          sectionId,
+          label: text,
+          path: `${sectionTitle} › ${text}`,
+          el: target,
+          desc: descText,
+          options: optionsList,
+          optionsText,
+        });
     }
   }
   searchIndex.value = items;
@@ -281,11 +401,34 @@ function queueBuildIndex() {
 watch(searchQuery, (q) => {
   const v = (q || '').trim().toLowerCase();
   searchOpen.value = v.length > 0;
-  searchResults.value = v
-    ? searchIndex.value
-      .filter((it) => it.label.toLowerCase().includes(v) || it.path.toLowerCase().includes(v))
-      .slice(0, 15)
-    : [];
+  if (!v) {
+    searchResults.value = [];
+    return;
+  }
+
+  // Score matches: label matches highest, path next, desc lowest. Boost exact startsWith.
+  const scoreFor = (it) => {
+    const lv = it.label.toLowerCase();
+    const pv = it.path.toLowerCase();
+    const dv = (it.desc || '').toLowerCase();
+    const ov = (it.optionsText || '').toLowerCase();
+    let score = 0;
+    if (lv.includes(v)) score += 100 - lv.indexOf(v); // earlier in label is better
+    if (lv.startsWith(v)) score += 50;
+    if (pv.includes(v)) score += 40 - pv.indexOf(v) / 100; // smaller index better
+    if (dv.includes(v)) score += 20 - dv.indexOf(v) / 1000;
+    if (ov.includes(v)) score += 60 - ov.indexOf(v) / 10; // option text matches are strong
+    // penalize very long descriptions/path to prefer concise matches
+    score -= (pv.length + dv.length + ov.length) / 1000;
+    return score;
+  };
+
+  searchResults.value = searchIndex.value
+    .map((it) => ({ it, s: scoreFor(it) }))
+    .filter((x) => x.s > 0)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, 15)
+    .map((x) => x.it);
 });
 function jumpFirstResult() {
   if (searchResults.value.length) goTo(searchResults.value[0]);
@@ -297,7 +440,7 @@ function goTo(item) {
     try {
       item.el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       flash(item.el);
-    } catch { }
+    } catch {}
   }, 250);
 }
 function flash(el) {
@@ -341,6 +484,6 @@ function flash(el) {
 
 .no-scrollbar {
   -ms-overflow-style: none;
-  scrollbar-width: none
+  scrollbar-width: none;
 }
 </style>

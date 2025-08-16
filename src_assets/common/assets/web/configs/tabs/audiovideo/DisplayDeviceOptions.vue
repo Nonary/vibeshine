@@ -47,13 +47,19 @@ function addRemappingEntry() {
 
   config.value.dd_mode_remapping[type].push(template);
   // reassign to trigger version bump
-  store.updateOption('dd_mode_remapping', JSON.parse(JSON.stringify(config.value.dd_mode_remapping)));
+  store.updateOption(
+    'dd_mode_remapping',
+    JSON.parse(JSON.stringify(config.value.dd_mode_remapping)),
+  );
 }
 
 function removeRemappingEntry(idx) {
   const type = getRemappingType();
   config.value.dd_mode_remapping[type].splice(idx, 1);
-  store.updateOption('dd_mode_remapping', JSON.parse(JSON.stringify(config.value.dd_mode_remapping)));
+  store.updateOption(
+    'dd_mode_remapping',
+    JSON.parse(JSON.stringify(config.value.dd_mode_remapping)),
+  );
 }
 </script>
 
@@ -73,27 +79,27 @@ function removeRemappingEntry(idx) {
               <label for="dd_configuration_option" class="form-label">{{
                 $t('config.dd_config_label')
               }}</label>
-              <<<<<<< HEAD <select id="dd_configuration_option" v-model="config.dd_configuration_option"
-                class="form-control">
-                =======
-                <select id="dd_configuration_option" v-model="config.dd_configuration_option" class="form-control">
-                  >>>>>>> 8362ac14 (fix config saving bug)
-                  <option value="disabled">
-                    {{ $t('_common.disabled_def') }}
-                  </option>
-                  <option value="verify_only">
-                    {{ $t('config.dd_config_verify_only') }}
-                  </option>
-                  <option value="ensure_active">
-                    {{ $t('config.dd_config_ensure_active') }}
-                  </option>
-                  <option value="ensure_primary">
-                    {{ $t('config.dd_config_ensure_primary') }}
-                  </option>
-                  <option value="ensure_only_display">
-                    {{ $t('config.dd_config_ensure_only_display') }}
-                  </option>
-                </select>
+              <select
+                id="dd_configuration_option"
+                v-model="config.dd_configuration_option"
+                class="form-control"
+              >
+                <option value="disabled">
+                  {{ $t('_common.disabled_def') }}
+                </option>
+                <option value="verify_only">
+                  {{ $t('config.dd_config_verify_only') }}
+                </option>
+                <option value="ensure_active">
+                  {{ $t('config.dd_config_ensure_active') }}
+                </option>
+                <option value="ensure_primary">
+                  {{ $t('config.dd_config_ensure_primary') }}
+                </option>
+                <option value="ensure_only_display">
+                  {{ $t('config.dd_config_ensure_only_display') }}
+                </option>
+              </select>
             </div>
 
             <!-- Resolution option -->
@@ -101,7 +107,11 @@ function removeRemappingEntry(idx) {
               <label for="dd_resolution_option" class="form-label">{{
                 $t('config.dd_resolution_option')
               }}</label>
-              <select id="dd_resolution_option" v-model="config.dd_resolution_option" class="form-control">
+              <select
+                id="dd_resolution_option"
+                v-model="config.dd_resolution_option"
+                class="form-control"
+              >
                 <option value="disabled">
                   {{ $t('config.dd_resolution_option_disabled') }}
                 </option>
@@ -112,9 +122,12 @@ function removeRemappingEntry(idx) {
                   {{ $t('config.dd_resolution_option_manual') }}
                 </option>
               </select>
-              <p v-if="
-                config.dd_resolution_option === 'auto' || config.dd_resolution_option === 'manual'
-              " class="text-[11px] opacity-60 mt-1">
+              <p
+                v-if="
+                  config.dd_resolution_option === 'auto' || config.dd_resolution_option === 'manual'
+                "
+                class="text-[11px] opacity-60 mt-1"
+              >
                 {{ $t('config.dd_resolution_option_ogs_desc') }}
               </p>
 
@@ -122,8 +135,13 @@ function removeRemappingEntry(idx) {
                 <p class="text-[11px] opacity-60">
                   {{ $t('config.dd_resolution_option_manual_desc') }}
                 </p>
-                <input id="dd_manual_resolution" v-model="config.dd_manual_resolution" type="text"
-                  class="form-control monospace" placeholder="2560x1440" />
+                <input
+                  id="dd_manual_resolution"
+                  v-model="config.dd_manual_resolution"
+                  type="text"
+                  class="form-control monospace"
+                  placeholder="2560x1440"
+                />
               </div>
             </div>
 
@@ -132,7 +150,11 @@ function removeRemappingEntry(idx) {
               <label for="dd_refresh_rate_option" class="form-label">{{
                 $t('config.dd_refresh_rate_option')
               }}</label>
-              <select id="dd_refresh_rate_option" v-model="config.dd_refresh_rate_option" class="form-control">
+              <select
+                id="dd_refresh_rate_option"
+                v-model="config.dd_refresh_rate_option"
+                class="form-control"
+              >
                 <option value="disabled">
                   {{ $t('config.dd_refresh_rate_option_disabled') }}
                 </option>
@@ -148,8 +170,13 @@ function removeRemappingEntry(idx) {
                 <p class="text-[11px] opacity-60">
                   {{ $t('config.dd_refresh_rate_option_manual_desc') }}
                 </p>
-                <input id="dd_manual_refresh_rate" v-model="config.dd_manual_refresh_rate" type="text"
-                  class="form-control monospace" placeholder="59.9558" />
+                <input
+                  id="dd_manual_refresh_rate"
+                  v-model="config.dd_manual_refresh_rate"
+                  type="text"
+                  class="form-control monospace"
+                  placeholder="59.9558"
+                />
               </div>
             </div>
 
@@ -168,8 +195,15 @@ function removeRemappingEntry(idx) {
               <label for="dd_wa_hdr_toggle_delay" class="form-label">{{
                 $t('config.dd_wa_hdr_toggle_delay')
               }}</label>
-              <input id="dd_wa_hdr_toggle_delay" v-model="config.dd_wa_hdr_toggle_delay" type="number"
-                class="form-control" placeholder="0" min="0" max="3000" />
+              <input
+                id="dd_wa_hdr_toggle_delay"
+                v-model="config.dd_wa_hdr_toggle_delay"
+                type="number"
+                class="form-control"
+                placeholder="0"
+                min="0"
+                max="3000"
+              />
               <p class="text-[11px] opacity-60 mt-1">
                 {{ $t('config.dd_wa_hdr_toggle_delay_desc_1') }}<br />
                 {{ $t('config.dd_wa_hdr_toggle_delay_desc_2') }}<br />
@@ -182,8 +216,14 @@ function removeRemappingEntry(idx) {
               <label for="dd_config_revert_delay" class="form-label">{{
                 $t('config.dd_config_revert_delay')
               }}</label>
-              <input id="dd_config_revert_delay" v-model="config.dd_config_revert_delay" type="number"
-                class="form-control" placeholder="3000" min="0" />
+              <input
+                id="dd_config_revert_delay"
+                v-model="config.dd_config_revert_delay"
+                type="number"
+                class="form-control"
+                placeholder="3000"
+                min="0"
+              />
               <p class="text-[11px] opacity-60 mt-1">
                 {{ $t('config.dd_config_revert_delay_desc') }}
               </p>
@@ -191,8 +231,12 @@ function removeRemappingEntry(idx) {
 
             <!-- Config revert on disconnect -->
             <div>
-              <Checkbox id="dd_config_revert_on_disconnect" v-model="config.dd_config_revert_on_disconnect"
-                locale-prefix="config" default="false" />
+              <Checkbox
+                id="dd_config_revert_on_disconnect"
+                v-model="config.dd_config_revert_on_disconnect"
+                locale-prefix="config"
+                default="false"
+              />
             </div>
 
             <!-- Display mode remapping -->
@@ -220,28 +264,48 @@ function removeRemappingEntry(idx) {
               </p>
 
               <div v-if="config.dd_mode_remapping[getRemappingType()].length > 0" class="space-y-2">
-                <div v-for="(value, idx) in config.dd_mode_remapping[getRemappingType()]" :key="idx"
-                  class="grid grid-cols-12 gap-2 items-center">
+                <div
+                  v-for="(value, idx) in config.dd_mode_remapping[getRemappingType()]"
+                  :key="idx"
+                  class="grid grid-cols-12 gap-2 items-center"
+                >
                   <div v-if="getRemappingType() !== REFRESH_RATE_ONLY" class="col-span-3">
-                    <input v-model="value.requested_resolution" type="text" class="form-control monospace"
-                      :placeholder="'1920x1080'" />
+                    <input
+                      v-model="value.requested_resolution"
+                      type="text"
+                      class="form-control monospace"
+                      :placeholder="'1920x1080'"
+                    />
                   </div>
                   <div v-if="getRemappingType() !== RESOLUTION_ONLY" class="col-span-2">
-                    <input v-model="value.requested_fps" type="text" class="form-control monospace"
-                      :placeholder="'60'" />
+                    <input
+                      v-model="value.requested_fps"
+                      type="text"
+                      class="form-control monospace"
+                      :placeholder="'60'"
+                    />
                   </div>
                   <div v-if="getRemappingType() !== REFRESH_RATE_ONLY" class="col-span-3">
-                    <input v-model="value.final_resolution" type="text" class="form-control monospace"
-                      :placeholder="'2560x1440'" />
+                    <input
+                      v-model="value.final_resolution"
+                      type="text"
+                      class="form-control monospace"
+                      :placeholder="'2560x1440'"
+                    />
                   </div>
                   <div v-if="getRemappingType() !== RESOLUTION_ONLY" class="col-span-2">
-                    <input v-model="value.final_refresh_rate" type="text" class="form-control monospace"
-                      :placeholder="'119.95'" />
+                    <input
+                      v-model="value.final_refresh_rate"
+                      type="text"
+                      class="form-control monospace"
+                      :placeholder="'119.95'"
+                    />
                   </div>
                   <div class="col-span-2 text-right">
                     <button
                       class="inline-flex items-center justify-center px-3 py-2 rounded-md bg-red-600 text-white text-sm hover:bg-red-700"
-                      @click="removeRemappingEntry(idx)">
+                      @click="removeRemappingEntry(idx)"
+                    >
                       <i class="fas fa-trash" />
                     </button>
                   </div>
@@ -250,7 +314,8 @@ function removeRemappingEntry(idx) {
               <div class="mt-2">
                 <button
                   class="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-green-600 text-white text-sm hover:bg-green-700"
-                  @click="addRemappingEntry()">
+                  @click="addRemappingEntry()"
+                >
                   &plus; {{ $t('config.dd_mode_remapping_add') }}
                 </button>
               </div>
