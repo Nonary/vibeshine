@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from 'vue';
 import PlatformLayout from '@/PlatformLayout.vue';
-import { useConfigStore } from '@/stores/config.js';
+import { useConfigStore } from '@/stores/config';
 import { computed } from 'vue';
 
 const store = useConfigStore();
@@ -14,7 +14,13 @@ const platform = computed(() => config.value?.platform || '');
     <!-- FEC Percentage -->
     <div class="mb-6">
       <label for="fec_percentage" class="form-label">{{ $t('config.fec_percentage') }}</label>
-      <input id="fec_percentage" v-model="config.fec_percentage" type="text" class="form-control" placeholder="20" />
+      <input
+        id="fec_percentage"
+        v-model="config.fec_percentage"
+        type="text"
+        class="form-control"
+        placeholder="20"
+      />
       <div class="form-text">{{ $t('config.fec_percentage_desc') }}</div>
     </div>
 
@@ -28,7 +34,14 @@ const platform = computed(() => config.value?.platform || '');
     <!-- Min Threads -->
     <div class="mb-6">
       <label for="min_threads" class="form-label">{{ $t('config.min_threads') }}</label>
-      <input id="min_threads" v-model="config.min_threads" type="number" class="form-control" placeholder="2" min="1" />
+      <input
+        id="min_threads"
+        v-model="config.min_threads"
+        type="number"
+        class="form-control"
+        placeholder="2"
+        min="1"
+      />
       <div class="form-text">{{ $t('config.min_threads_desc') }}</div>
     </div>
 

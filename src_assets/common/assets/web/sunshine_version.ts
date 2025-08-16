@@ -1,10 +1,25 @@
-class SunshineVersion {
-  constructor(release = null, version = null) {
+interface GitHubRelease {
+  tag_name: string;
+  name: string;
+  tag_tag?: string; // Note: This appears to be a typo in the original code
+}
+
+export default class SunshineVersion {
+  public release: GitHubRelease | null;
+  public version: string;
+  public versionName: string | null;
+  public versionTag: string | null;
+  public versionParts: number[] | null;
+  public versionMajor: number | null;
+  public versionMinor: number | null;
+  public versionPatch: number | null;
+
+  constructor(release: GitHubRelease | null = null, version: string | null = null) {
     if (release) {
       this.release = release;
       this.version = release.tag_name;
       this.versionName = release.name;
-      this.versionTag = release.tag_tag;
+      this.versionTag = release.tag_tag || null;
     } else if (version) {
       this.release = null;
       this.version = version;
@@ -19,7 +34,7 @@ class SunshineVersion {
     this.versionPatch = this.versionParts ? this.versionParts[2] : null;
   }
 
-  parseVersion(version) {
+  parseVersion(version: string): number[] | null {
     if (!version) {
       return null;
     }
@@ -30,8 +45,8 @@ class SunshineVersion {
     return v.split('.').map(Number);
   }
 
-  isGreater(otherVersion) {
-    let otherVersionParts;
+  isGreater(otherVersion: SunshineVersion | string): boolean {
+    let otherVersionParts: number[] | null;
     if (otherVersion instanceof SunshineVersion) {
       otherVersionParts = otherVersion.versionParts;
     } else if (typeof otherVersion === 'string') {
@@ -53,5 +68,3 @@ class SunshineVersion {
     return false;
   }
 }
-
-export default SunshineVersion;

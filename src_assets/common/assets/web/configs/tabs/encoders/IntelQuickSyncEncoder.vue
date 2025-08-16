@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from 'vue';
 import Checkbox from '@/Checkbox.vue';
-import { useConfigStore } from '@/stores/config.js';
+import { useConfigStore } from '@/stores/config';
 
 const store = useConfigStore();
 const config = store.config;
@@ -54,7 +54,13 @@ const config = store.config;
     </div>
 
     <!-- Allow Slow HEVC Encoding -->
-    <Checkbox id="qsv_slow_hevc" v-model="config.qsv_slow_hevc" class="mb-3" locale-prefix="config" default="false" />
+    <Checkbox
+      id="qsv_slow_hevc"
+      v-model="config.qsv_slow_hevc"
+      class="mb-3"
+      locale-prefix="config"
+      default="false"
+    />
   </div>
 </template>
 

@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@codecov/vite-plugin": "1.9.1",
+    "@types/node": "^24.3.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "@vitejs/plugin-vue": "4.6.2",

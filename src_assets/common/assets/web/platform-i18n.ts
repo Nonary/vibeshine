@@ -1,30 +1,19 @@
-import { inject } from 'vue';
+import { inject, Ref } from 'vue';
 
 class PlatformMessageI18n {
-  /**
-   * @param {string} platform
-   */
-  constructor(platform) {
+  platform: string;
+
+  constructor(platform: string) {
     this.platform = platform;
   }
 
-  /**
-   * @param {string} key
-   * @param {string} platform identifier
-   * @return {string} key with platform identifier
-   */
-  getPlatformKey(key, platform) {
+  getPlatformKey(key: string, platform: string): string {
     return key + '_' + platform;
   }
 
-  /**
-   * @param {string} key
-   * @param {string?} defaultMsg
-   * @return {string} translated message or defaultMsg if provided
-   */
-  getMessageUsingPlatform(key, defaultMsg) {
+  getMessageUsingPlatform(key: string, defaultMsg?: string): string {
     const realKey = this.getPlatformKey(key, this.platform);
-    const i18n = inject('i18n');
+    const i18n = inject('i18n') as any;
     let message = i18n.t(realKey);
 
     if (message !== realKey) {
@@ -49,14 +38,10 @@ class PlatformMessageI18n {
   }
 }
 
-/**
- * @param {string?} platform
- * @return {PlatformMessageI18n} instance
- */
-export function usePlatformI18n(platform) {
+export function usePlatformI18n(platform?: string): PlatformMessageI18n {
   // Resolve platform from injected ref if not explicitly passed.
   if (!platform) {
-    const injected = inject('platform', null);
+    const injected = inject('platform', null) as string | Ref<string> | null;
     if (injected) {
       // Support either a ref or plain value
       platform = typeof injected === 'object' && 'value' in injected ? injected.value : injected;
@@ -69,15 +54,10 @@ export function usePlatformI18n(platform) {
     platform = 'windows';
   }
 
-  return inject('platformMessage', () => new PlatformMessageI18n(platform), true);
+  return inject('platformMessage', () => new PlatformMessageI18n(platform!), true);
 }
 
-/**
- * @param {string} key
- * @param {string?} defaultMsg
- * @return {string} translated message or defaultMsg if provided
- */
-export function $tp(key, defaultMsg) {
+export function $tp(key: string, defaultMsg?: string): string {
   try {
     const pm = usePlatformI18n();
     // Guard i18n injection absence (early render before init) inside message getter

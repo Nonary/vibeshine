@@ -1,18 +1,27 @@
 <template>
   <transition name="fade-fast">
     <div v-if="visible" class="fixed inset-0 z-[100] flex flex-col">
-      <div class="absolute inset-0 bg-gradient-to-br from-black/70 via-black/60 to-black/70 backdrop-blur-md"
-        @click="onBackdrop"></div>
+      <div
+        class="absolute inset-0 bg-gradient-to-br from-black/70 via-black/60 to-black/70 backdrop-blur-md"
+        @click="onBackdrop"
+      ></div>
       <div class="relative flex-1 flex flex-col items-center justify-center p-4 overflow-y-auto">
         <div
-          class="w-full max-w-lg rounded-2xl shadow-2xl border border-white/10 dark:border-white/10 bg-white/80 dark:bg-neutral-900/80 backdrop-blur-xl ring-1 ring-black/5 dark:ring-white/5">
-          <header class="px-6 py-5 border-b border-black/10 dark:border-white/10 flex items-center gap-3">
+          class="w-full max-w-lg rounded-2xl shadow-2xl border border-white/10 dark:border-white/10 bg-white/80 dark:bg-neutral-900/80 backdrop-blur-xl ring-1 ring-black/5 dark:ring-white/5"
+        >
+          <header
+            class="px-6 py-5 border-b border-black/10 dark:border-white/10 flex items-center gap-3"
+          >
             <div class="flex-1">
-              <h2 class="text-xl font-semibold tracking-tight text-gray-900 dark:text-white select-none">
+              <h2
+                class="text-xl font-semibold tracking-tight text-gray-900 dark:text-white select-none"
+              >
                 {{ credentialsConfigured ? t('auth.login_title') : t('auth.create_first_user') }}
               </h2>
-              <p v-if="!credentialsConfigured"
-                class="mt-1 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+              <p
+                v-if="!credentialsConfigured"
+                class="mt-1 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
+              >
                 {{ t('auth.first_user_subtitle') }}
               </p>
             </div>
@@ -21,59 +30,88 @@
             <div class="space-y-1">
               <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{
                 t('auth.username')
-                }}</label>
-              <input v-model.trim="username" required autocomplete="username" autofocus
-                class="w-full rounded-lg border border-gray-300/70 dark:border-gray-600/70 bg-white/70 dark:bg-neutral-800/70 px-3 py-2 text-sm placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition" />
+              }}</label>
+              <input
+                v-model.trim="username"
+                required
+                autocomplete="username"
+                autofocus
+                class="w-full rounded-lg border border-gray-300/70 dark:border-gray-600/70 bg-white/70 dark:bg-neutral-800/70 px-3 py-2 text-sm placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition"
+              />
             </div>
             <div v-if="credentialsConfigured" class="space-y-1">
               <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{
                 t('auth.password')
-                }}</label>
-              <input v-model.trim="password" type="password" required autocomplete="current-password"
-                class="w-full rounded-lg border border-gray-300/70 dark:border-gray-600/70 bg-white/70 dark:bg-neutral-800/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition" />
+              }}</label>
+              <input
+                v-model.trim="password"
+                type="password"
+                required
+                autocomplete="current-password"
+                class="w-full rounded-lg border border-gray-300/70 dark:border-gray-600/70 bg-white/70 dark:bg-neutral-800/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition"
+              />
             </div>
             <template v-else>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div class="space-y-1 sm:col-span-2">
                   <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{
                     t('auth.new_password')
-                    }}</label>
-                  <input v-model.trim="newPassword" type="password" required autocomplete="new-password"
-                    class="w-full rounded-lg border border-gray-300/70 dark:border-gray-600/70 bg-white/70 dark:bg-neutral-800/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition" />
+                  }}</label>
+                  <input
+                    v-model.trim="newPassword"
+                    type="password"
+                    required
+                    autocomplete="new-password"
+                    class="w-full rounded-lg border border-gray-300/70 dark:border-gray-600/70 bg-white/70 dark:bg-neutral-800/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition"
+                  />
                 </div>
                 <div class="space-y-1 sm:col-span-2">
                   <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{
                     t('auth.confirm_new_password')
-                    }}</label>
-                  <input v-model.trim="confirmNewPassword" type="password" required autocomplete="new-password"
-                    class="w-full rounded-lg border border-gray-300/70 dark:border-gray-600/70 bg-white/70 dark:bg-neutral-800/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition" />
+                  }}</label>
+                  <input
+                    v-model.trim="confirmNewPassword"
+                    type="password"
+                    required
+                    autocomplete="new-password"
+                    class="w-full rounded-lg border border-gray-300/70 dark:border-gray-600/70 bg-white/70 dark:bg-neutral-800/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition"
+                  />
                 </div>
               </div>
             </template>
             <div class="min-h-[1.25rem]">
-              <p v-if="error" class="text-sm font-medium text-red-600 dark:text-red-400 flex items-center gap-2">
+              <p
+                v-if="error"
+                class="text-sm font-medium text-red-600 dark:text-red-400 flex items-center gap-2"
+              >
                 <i class="fas fa-triangle-exclamation" /> {{ error }}
               </p>
-              <p v-else-if="success"
-                class="text-sm font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-2">
+              <p
+                v-else-if="success"
+                class="text-sm font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-2"
+              >
                 <i class="fas fa-circle-check" /> {{ success }}
               </p>
             </div>
             <div class="flex items-center justify-end pt-1">
-              <button :disabled="submitting"
-                class="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold tracking-wide bg-primary text-onPrimary shadow disabled:opacity-50 disabled:cursor-not-allowed hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary/60 transition">
+              <button
+                :disabled="submitting"
+                class="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold tracking-wide bg-primary text-onPrimary shadow disabled:opacity-50 disabled:cursor-not-allowed hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary/60 transition"
+              >
                 <span v-if="!credentialsConfigured">{{
                   submitting ? t('auth.creating_user') : t('auth.create_user')
-                  }}</span>
+                }}</span>
                 <span v-else>{{
                   submitting ? t('auth.login_loading') : t('auth.login_sign_in')
-                  }}</span>
+                }}</span>
                 <i v-if="submitting" class="fas fa-spinner fa-spin" />
               </button>
             </div>
           </form>
         </div>
-        <p class="mt-6 text-center text-[10px] tracking-wider text-gray-400 dark:text-gray-500 uppercase select-none">
+        <p
+          class="mt-6 text-center text-[10px] tracking-wider text-gray-400 dark:text-gray-500 uppercase select-none"
+        >
           Sunshine
         </p>
       </div>
@@ -82,8 +120,8 @@
 </template>
 <script setup>
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
-import { useAuthStore } from '@/stores/auth.js';
-import { http } from '@/http.js';
+import { useAuthStore } from '@/stores/auth';
+import { http } from '@/http';
 import { useI18n } from 'vue-i18n';
 
 const auth = useAuthStore();

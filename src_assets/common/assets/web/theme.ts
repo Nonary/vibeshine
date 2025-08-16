@@ -1,9 +1,11 @@
-const getStoredTheme = () => localStorage.getItem('theme');
-const setStoredTheme = (theme) => localStorage.setItem('theme', theme);
+type Theme = 'light' | 'dark' | 'auto';
 
-export const getPreferredTheme = () => {
+const getStoredTheme = (): string | null => localStorage.getItem('theme');
+const setStoredTheme = (theme: string): void => localStorage.setItem('theme', theme);
+
+export const getPreferredTheme = (): Theme => {
   const storedTheme = getStoredTheme();
-  if (storedTheme) {
+  if (storedTheme === 'light' || storedTheme === 'dark' || storedTheme === 'auto') {
     return storedTheme;
   }
 
@@ -11,7 +13,7 @@ export const getPreferredTheme = () => {
 };
 
 // Set theme in a Tailwind-friendly way by toggling the `dark` class on <html>.
-const setTheme = (theme) => {
+const setTheme = (theme: Theme): void => {
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
 
   if (theme === 'auto') {
@@ -36,7 +38,7 @@ const setTheme = (theme) => {
   }
 };
 
-export const showActiveTheme = (theme, focus = false) => {
+export const showActiveTheme = (theme: Theme, focus = false): void => {
   const themeSwitcher = document.querySelector('#bd-theme');
 
   if (!themeSwitcher) {
@@ -47,7 +49,7 @@ export const showActiveTheme = (theme, focus = false) => {
   const activeThemeIcon = document.querySelector('.theme-icon-active i');
 
   // Friendly icon map if the DOM buttons are not present
-  const iconMap = {
+  const iconMap: Record<Theme, string> = {
     light: 'fa-solid fa-sun',
     dark: 'fa-solid fa-moon',
     auto: 'fa-solid fa-circle-half-stroke',
@@ -76,30 +78,32 @@ export const showActiveTheme = (theme, focus = false) => {
   }
 
   if (themeSwitcherText) {
-    const pretty = btnToActive ? btnToActive.textContent.trim() : theme;
+    const pretty = btnToActive ? btnToActive.textContent?.trim() : theme;
     const themeSwitcherLabel = `${themeSwitcherText.textContent} (${pretty})`;
     themeSwitcher.setAttribute('aria-label', themeSwitcherLabel);
   }
 
-  if (focus) {
-    themeSwitcher.focus();
+  if (focus && 'focus' in themeSwitcher) {
+    (themeSwitcher as HTMLElement).focus();
   }
 };
 
-export function setupThemeToggleListener() {
+export function setupThemeToggleListener(): void {
   document.querySelectorAll('[data-bs-theme-value]').forEach((toggle) => {
     toggle.addEventListener('click', () => {
-      const theme = toggle.getAttribute('data-bs-theme-value');
-      setStoredTheme(theme);
-      setTheme(theme);
-      showActiveTheme(theme, true);
+      const theme = toggle.getAttribute('data-bs-theme-value') as Theme;
+      if (theme) {
+        setStoredTheme(theme);
+        setTheme(theme);
+        showActiveTheme(theme, true);
+      }
     });
   });
 
   showActiveTheme(getPreferredTheme(), false);
 }
 
-export function loadAutoTheme() {
+export function loadAutoTheme(): void {
   (() => {
     'use strict';
 

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import { http } from '@/http.js';
+import { http } from '@/http';
 
 // Centralized store for configuration defaults and runtime config
 export const useConfigStore = defineStore('config', () => {

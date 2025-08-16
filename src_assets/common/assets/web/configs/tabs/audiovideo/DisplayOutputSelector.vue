@@ -3,7 +3,7 @@ import { ref } from 'vue';
 import { $tp } from '@/platform-i18n';
 import PlatformLayout from '@/PlatformLayout.vue';
 
-import { useConfigStore } from '@/stores/config.js';
+import { useConfigStore } from '@/stores/config';
 import { computed } from 'vue';
 const store = useConfigStore();
 const config = store.config;
@@ -15,8 +15,13 @@ const outputNamePlaceholder = computed(() =>
 <template>
   <div class="mb-4">
     <label for="output_name" class="form-label">{{ $tp('config.output_name') }}</label>
-    <input id="output_name" v-model="config.output_name" type="text" class="form-control"
-      :placeholder="outputNamePlaceholder" />
+    <input
+      id="output_name"
+      v-model="config.output_name"
+      type="text"
+      class="form-control"
+      :placeholder="outputNamePlaceholder"
+    />
     <div class="text-[11px] opacity-60">
       {{ $tp('config.output_name_desc') }}<br />
       <PlatformLayout>

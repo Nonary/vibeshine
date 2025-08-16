@@ -1,6 +1,6 @@
 // Axios HTTP client with centralized auth handling
-import axios from 'axios';
-import { useAuthStore } from '@/stores/auth.js';
+import axios, { AxiosResponse, AxiosError } from 'axios';
+import { useAuthStore } from '@/stores/auth';
 
 // Create a singleton axios instance
 export const http = axios.create({
@@ -13,12 +13,12 @@ export const http = axios.create({
 
 let authInitialized = false;
 
-function initAuthHandling() {
+function initAuthHandling(): void {
   if (authInitialized) return;
   authInitialized = true;
   const auth = useAuthStore();
 
-  function sanitizePath(path) {
+  function sanitizePath(path: string): string {
     try {
       if (typeof path !== 'string') return '/';
       if (!path.startsWith('/')) return '/';
@@ -31,7 +31,7 @@ function initAuthHandling() {
     }
   }
 
-  function triggerLoginModal() {
+  function triggerLoginModal(): void {
     if (typeof window === 'undefined') return;
     try {
       const current = sanitizePath(
@@ -45,14 +45,14 @@ function initAuthHandling() {
 
   // Response interceptor to detect auth changes
   http.interceptors.response.use(
-    async (response) => {
+    async (response: AxiosResponse) => {
       if (response?.status === 401) {
         if (auth.isAuthenticated) auth.setAuthenticated(false);
         triggerLoginModal();
       }
       return response;
     },
-    async (error) => {
+    async (error: AxiosError) => {
       if (error?.response?.status === 401) {
         if (auth.isAuthenticated) auth.setAuthenticated(false);
         triggerLoginModal();
@@ -71,6 +71,6 @@ function initAuthHandling() {
 }
 
 // Called from main init after pinia is ready
-export function initHttpLayer() {
+export function initHttpLayer(): void {
   initAuthHandling();
 }
