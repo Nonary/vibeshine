@@ -1,6 +1,6 @@
 <div align="center">
   <img src="sunshine.png" />
-  <h1 align="center">Sunshine</h1>
+  <h1 align="center">Vibeshine</h1>
   <h4 align="center">Self-hosted game stream host for Moonlight.</h4>
 </div>
 
@@ -21,9 +21,9 @@
 
 ## ℹ️ About
 
-Sunshine is a self-hosted game stream host for Moonlight.
+Vibeshine is a self-hosted game stream host for Moonlight.
 Offering low latency, cloud gaming server capabilities with support for AMD, Intel, and Nvidia GPUs for hardware
-encoding. Software encoding is also available. You can connect to Sunshine from any Moonlight client on a variety of
+encoding. Software encoding is also available. You can connect to Vibeshine from any Moonlight client on a variety of
 devices. A web UI is provided to allow configuration, and client pairing, from your favorite web browser. Pair from
 the local server or any mobile device.
 
@@ -174,7 +174,7 @@ Our support methods are listed in our [LizardByte Docs](https://docs.lizardbyte.
 
 ## 👥 Contributors
 
-Thank you to all the contributors who have helped make Sunshine better!
+Thank you to all the contributors who have helped make Vibeshine better!
 
 ### GitHub
 

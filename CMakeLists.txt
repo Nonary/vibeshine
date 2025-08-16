@@ -4,18 +4,18 @@ cmake_minimum_required(VERSION 3.20)
 # `cmake_path(CONVERT ... TO_NATIVE_PATH_LIST ...)` requires 3.20
 # todo - set this conditionally
 
-project(Sunshine VERSION 0.0.0
+project(Vibeshine VERSION 0.0.0
         DESCRIPTION "Self-hosted game stream host for Moonlight"
         HOMEPAGE_URL "https://app.lizardbyte.dev/Sunshine")
 
 set(PROJECT_LICENSE "GPL-3.0-only")
 
-set(PROJECT_FQDN "dev.lizardbyte.app.Sunshine")
+set(PROJECT_FQDN "dev.lizardbyte.app.Vibeshine")
 
 set(PROJECT_BRIEF_DESCRIPTION "GameStream host for Moonlight")  # must be <= 35 characters
 
 set(PROJECT_LONG_DESCRIPTION "Offering low latency, cloud gaming server capabilities with support for AMD, Intel, \
-and Nvidia GPUs for hardware encoding. Software encoding is also available. You can connect to Sunshine from any \
+and Nvidia GPUs for hardware encoding. Software encoding is also available. You can connect to Vibeshine from any \
 Moonlight client on a variety of devices. A web UI is provided to allow configuration, and client pairing, from \
 your favorite web browser. Pair from the local server or any mobile device.")
 
