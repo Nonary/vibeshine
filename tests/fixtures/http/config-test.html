@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sunshine Configuration Search Demo</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background-color: #f8f9fa;
+    }
+    
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    
+    .search-box {
+      position: relative;
+      margin-bottom: 20px;
+    }
+    
+    .search-input {
+      width: 100%;
+      padding: 12px 40px 12px 40px;
+      border: 2px solid #e9ecef;
+      border-radius: 6px;
+      font-size: 16px;
+    }
+    
+    .search-input:focus {
+      outline: none;
+      border-color: #007bff;
+    }
+    
+    .search-icon {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #6c757d;
+    }
+    
+    .clear-btn {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      font-size: 18px;
+      cursor: pointer;
+      color: #6c757d;
+    }
+    
+    .search-results {
+      border: 1px solid #e9ecef;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    
+    .search-result {
+      padding: 12px;
+      border-bottom: 1px solid #e9ecef;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    
+    .search-result:hover, .search-result.active {
+      background-color: #f8f9fa;
+    }
+    
+    .search-result:last-child {
+      border-bottom: none;
+    }
+    
+    .result-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .result-tab {
+      font-size: 12px;
+      background-color: #e9ecef;
+      padding: 2px 8px;
+      border-radius: 12px;
+      color: #495057;
+    }
+    
+    .result-description {
+      font-size: 14px;
+      color: #6c757d;
+      margin: 0;
+    }
+    
+    .tabs {
+      display: flex;
+      border-bottom: 2px solid #e9ecef;
+      margin-bottom: 20px;
+    }
+    
+    .tab {
+      padding: 12px 20px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      font-size: 16px;
+    }
+    
+    .tab.active {
+      border-bottom-color: #007bff;
+      color: #007bff;
+      font-weight: 600;
+    }
+    
+    .tab-content {
+      padding: 20px;
+      border: 1px solid #e9ecef;
+      border-radius: 6px;
+      margin-bottom: 20px;
+    }
+    
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    .form-label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+    
+    .form-control {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #ced4da;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    
+    .form-text {
+      font-size: 12px;
+      color: #6c757d;
+      margin-top: 4px;
+    }
+    
+    .highlighted-field {
+      background-color: #fff3cd !important;
+      border: 2px solid #ffc107 !important;
+      animation: highlight-pulse 0.5s ease-in-out;
+    }
+    
+    @keyframes highlight-pulse {
+      0% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.7); }
+      70% { box-shadow: 0 0 0 10px rgba(255, 193, 7, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0); }
+    }
+    
+    .no-results {
+      padding: 20px;
+      text-align: center;
+      color: #6c757d;
+      font-style: italic;
+    }
+    
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Sunshine Configuration</h1>
+    
+    <!-- Search Component -->
+    <div class="search-box">
+      <span class="search-icon">🔍</span>
+      <input 
+        type="text" 
+        class="search-input" 
+        placeholder="Search configuration options..."
+        id="searchInput"
+      />
+      <button class="clear-btn hidden" id="clearBtn">×</button>
+    </div>
+    
+    <!-- Search Results -->
+    <div class="search-results hidden" id="searchResults">
+      <div id="resultsContainer"></div>
+    </div>
+    
+    <!-- No Results -->
+    <div class="no-results hidden" id="noResults">
+      No matching options found
+    </div>
+    
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" data-tab="general">General</button>
+      <button class="tab" data-tab="input">Input</button>
+      <button class="tab" data-tab="network">Network</button>
+    </div>
+    
+    <!-- Tab Content -->
+    <div class="tab-content">
+      <div id="general" class="tab-panel">
+        <h3>General Settings</h3>
+        
+        <div class="form-group">
+          <label for="locale" class="form-label">Locale</label>
+          <select id="locale" class="form-control">
+            <option value="en">English</option>
+            <option value="de">Deutsch (German)</option>
+            <option value="fr">Français (French)</option>
+          </select>
+          <div class="form-text">The locale used for Sunshine's user interface.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="sunshine_name" class="form-label">Sunshine Name</label>
+          <input type="text" class="form-control" id="sunshine_name" value="Test Sunshine Server" />
+          <div class="form-text">The name displayed to Moonlight clients</div>
+        </div>
+
+        <div class="form-group">
+          <label for="min_log_level" class="form-label">Minimum Log Level</label>
+          <select id="min_log_level" class="form-control">
+            <option value="0">Verbose</option>
+            <option value="1">Debug</option>
+            <option value="2" selected>Info</option>
+            <option value="3">Warning</option>
+            <option value="4">Error</option>
+            <option value="5">Fatal</option>
+          </select>
+          <div class="form-text">Minimum logging level</div>
+        </div>
+      </div>
+
+      <div id="input" class="tab-panel hidden">
+        <h3>Input Settings</h3>
+        
+        <div class="form-group">
+          <input type="checkbox" id="controller" checked />
+          <label for="controller" class="form-label">Enable Gamepad Input</label>
+          <div class="form-text">Allows guests to control the host system with a gamepad / controller</div>
+        </div>
+
+        <div class="form-group">
+          <input type="checkbox" id="keyboard" checked />
+          <label for="keyboard" class="form-label">Enable Keyboard Input</label>
+          <div class="form-text">Allows guests to control the host system with the keyboard</div>
+        </div>
+
+        <div class="form-group">
+          <input type="checkbox" id="mouse" checked />
+          <label for="mouse" class="form-label">Enable Mouse Input</label>
+          <div class="form-text">Allows guests to control the host system with the mouse</div>
+        </div>
+      </div>
+
+      <div id="network" class="tab-panel hidden">
+        <h3>Network Settings</h3>
+        
+        <div class="form-group">
+          <label for="port" class="form-label">Port</label>
+          <input type="number" class="form-control" id="port" value="47989" />
+          <div class="form-text">Set the family of ports used by Sunshine</div>
+        </div>
+
+        <div class="form-group">
+          <label for="address_family" class="form-label">Address Family</label>
+          <select id="address_family" class="form-control">
+            <option value="ipv4" selected>IPv4</option>
+            <option value="ipv6">IPv6</option>
+            <option value="both">IPv4+IPv6</option>
+          </select>
+          <div class="form-text">Set the address family used by Sunshine</div>
+        </div>
+
+        <div class="form-group">
+          <input type="checkbox" id="upnp" />
+          <label for="upnp" class="form-label">UPnP</label>
+          <div class="form-text">Automatically configure port forwarding for streaming over the Internet</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Search index
+    const searchIndex = [
+      {
+        key: "locale",
+        label: "Locale",
+        description: "The locale used for Sunshine's user interface.",
+        tabId: "general",
+        tabName: "General"
+      },
+      {
+        key: "sunshine_name",
+        label: "Sunshine Name",
+        description: "The name displayed to Moonlight clients",
+        tabId: "general",
+        tabName: "General"
+      },
+      {
+        key: "min_log_level",
+        label: "Minimum Log Level",
+        description: "Minimum logging level",
+        tabId: "general",
+        tabName: "General"
+      },
+      {
+        key: "controller",
+        label: "Enable Gamepad Input",
+        description: "Allows guests to control the host system with a gamepad / controller",
+        tabId: "input",
+        tabName: "Input"
+      },
+      {
+        key: "keyboard",
+        label: "Enable Keyboard Input",
+        description: "Allows guests to control the host system with the keyboard",
+        tabId: "input",
+        tabName: "Input"
+      },
+      {
+        key: "mouse",
+        label: "Enable Mouse Input",
+        description: "Allows guests to control the host system with the mouse",
+        tabId: "input",
+        tabName: "Input"
+      },
+      {
+        key: "port",
+        label: "Port",
+        description: "Set the family of ports used by Sunshine",
+        tabId: "network",
+        tabName: "Network"
+      },
+      {
+        key: "address_family",
+        label: "Address Family",
+        description: "Set the address family used by Sunshine",
+        tabId: "network",
+        tabName: "Network"
+      },
+      {
+        key: "upnp",
+        label: "UPnP",
+        description: "Automatically configure port forwarding for streaming over the Internet",
+        tabId: "network",
+        tabName: "Network"
+      }
+    ];
+
+    let searchResults = [];
+    let activeIndex = -1;
+    let highlightedElement = null;
+
+    // DOM elements
+    const searchInput = document.getElementById('searchInput');
+    const clearBtn = document.getElementById('clearBtn');
+    const searchResultsDiv = document.getElementById('searchResults');
+    const resultsContainer = document.getElementById('resultsContainer');
+    const noResults = document.getElementById('noResults');
+
+    // Search functionality
+    function performSearch(query) {
+      if (!query.trim()) {
+        hideSearchResults();
+        return;
+      }
+
+      const results = [];
+      const lowerQuery = query.toLowerCase().trim();
+
+      searchIndex.forEach(item => {
+        let score = 0;
+        const label = item.label.toLowerCase();
+        const description = item.description.toLowerCase();
+        const key = item.key.toLowerCase();
+
+        // Exact matches get highest score
+        if (label === lowerQuery || key === lowerQuery) {
+          score = 100;
+        }
+        // Start of word matches
+        else if (label.startsWith(lowerQuery) || key.startsWith(lowerQuery) || description.startsWith(lowerQuery)) {
+          score = 80;
+        }
+        // Word boundary matches
+        else if (label.includes(` ${lowerQuery}`) || description.includes(` ${lowerQuery}`)) {
+          score = 60;
+        }
+        // Substring matches
+        else if (label.includes(lowerQuery) || description.includes(lowerQuery) || key.includes(lowerQuery)) {
+          score = 40;
+        }
+
+        if (score > 0) {
+          results.push({ ...item, score });
+        }
+      });
+
+      // Sort by score (highest first)
+      results.sort((a, b) => b.score - a.score);
+      
+      searchResults = results;
+      activeIndex = results.length > 0 ? 0 : -1;
+      displaySearchResults();
+    }
+
+    function displaySearchResults() {
+      if (searchResults.length === 0) {
+        searchResultsDiv.classList.add('hidden');
+        noResults.classList.remove('hidden');
+        return;
+      }
+
+      noResults.classList.add('hidden');
+      searchResultsDiv.classList.remove('hidden');
+
+      resultsContainer.innerHTML = searchResults.slice(0, 10).map((result, index) => `
+        <div class="search-result ${index === activeIndex ? 'active' : ''}" data-index="${index}">
+          <div class="result-title">
+            <span>${result.label}</span>
+            <span class="result-tab">${result.tabName}</span>
+          </div>
+          ${result.description ? `<p class="result-description">${result.description}</p>` : ''}
+        </div>
+      `).join('');
+
+      // Add click handlers
+      document.querySelectorAll('.search-result').forEach((el, index) => {
+        el.addEventListener('click', () => navigateToResult(searchResults[index]));
+      });
+    }
+
+    function hideSearchResults() {
+      searchResultsDiv.classList.add('hidden');
+      noResults.classList.add('hidden');
+      searchResults = [];
+      activeIndex = -1;
+    }
+
+    function navigateToResult(result) {
+      // Switch to the correct tab
+      switchTab(result.tabId);
+      
+      // Clear search
+      searchInput.value = '';
+      clearBtn.classList.add('hidden');
+      hideSearchResults();
+      
+      // Scroll to and highlight the field
+      setTimeout(() => {
+        scrollToAndHighlight(result.key);
+      }, 100);
+    }
+
+    function switchTab(tabId) {
+      // Update tab buttons
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.tab === tabId);
+      });
+      
+      // Update tab panels
+      document.querySelectorAll('.tab-panel').forEach(panel => {
+        panel.classList.toggle('hidden', panel.id !== tabId);
+      });
+    }
+
+    function scrollToAndHighlight(fieldKey) {
+      const element = document.getElementById(fieldKey);
+      if (element) {
+        // Remove any existing highlight
+        removeHighlight();
+        
+        // Scroll to element
+        element.scrollIntoView({ 
+          behavior: 'smooth', 
+          block: 'center' 
+        });
+        
+        // Add highlight class
+        element.classList.add('highlighted-field');
+        highlightedElement = element;
+        
+        // Remove highlight after 3 seconds
+        setTimeout(() => {
+          removeHighlight();
+        }, 3000);
+      }
+    }
+
+    function removeHighlight() {
+      if (highlightedElement) {
+        highlightedElement.classList.remove('highlighted-field');
+        highlightedElement = null;
+      }
+    }
+
+    function moveSelection(direction) {
+      if (searchResults.length === 0) return;
+      
+      activeIndex += direction;
+      
+      if (activeIndex < 0) {
+        activeIndex = searchResults.length - 1;
+      } else if (activeIndex >= searchResults.length) {
+        activeIndex = 0;
+      }
+      
+      displaySearchResults();
+    }
+
+    function selectActiveResult() {
+      if (activeIndex >= 0 && activeIndex < searchResults.length) {
+        navigateToResult(searchResults[activeIndex]);
+      }
+    }
+
+    // Event listeners
+    searchInput.addEventListener('input', (e) => {
+      const query = e.target.value;
+      clearBtn.classList.toggle('hidden', !query);
+      performSearch(query);
+    });
+
+    searchInput.addEventListener('keydown', (e) => {
+      switch(e.key) {
+        case 'Escape':
+          e.preventDefault();
+          searchInput.value = '';
+          clearBtn.classList.add('hidden');
+          hideSearchResults();
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          moveSelection(1);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          moveSelection(-1);
+          break;
+        case 'Enter':
+          e.preventDefault();
+          selectActiveResult();
+          break;
+      }
+    });
+
+    clearBtn.addEventListener('click', () => {
+      searchInput.value = '';
+      clearBtn.classList.add('hidden');
+      hideSearchResults();
+      searchInput.focus();
+    });
+
+    // Tab functionality
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        switchTab(tab.dataset.tab);
+      });
+    });
+  </script>
+</body>
+</html>

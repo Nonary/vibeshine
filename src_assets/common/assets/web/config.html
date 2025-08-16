@@ -13,6 +13,41 @@
       .buttons {
         padding: 1em 0;
       }
+
+      .search-results {
+        max-height: 300px;
+        overflow-y: auto;
+        border: 1px solid #dee2e6;
+        border-radius: 0.375rem;
+        background-color: var(--bs-body-bg);
+        box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+      }
+
+      .highlighted-field {
+        background-color: #fff3cd !important;
+        border: 2px solid #ffc107 !important;
+        transition: all 0.3s ease;
+        animation: highlight-pulse 0.5s ease-in-out;
+      }
+
+      @keyframes highlight-pulse {
+        0% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.7); }
+        70% { box-shadow: 0 0 0 10px rgba(255, 193, 7, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0); }
+      }
+
+      .search-results .list-group-item {
+        border-left: none;
+        border-right: none;
+      }
+
+      .search-results .list-group-item:first-child {
+        border-top: none;
+      }
+
+      .search-results .list-group-item:last-child {
+        border-bottom: none;
+      }
     </style>
 </head>
 
@@ -20,6 +55,63 @@
   <Navbar></Navbar>
   <div class="container">
     <h1 class="my-4">{{ $t('config.configuration') }}</h1>
+    
+    <!-- Search Component -->
+    <div class="mb-3" v-if="config">
+      <div class="input-group">
+        <span class="input-group-text">
+          <i class="fas fa-search"></i>
+        </span>
+        <input
+          type="text"
+          class="form-control"
+          :placeholder="$t('config.search_config')"
+          v-model="searchQuery"
+          @input="performSearch"
+          @keydown.escape="clearSearch"
+          @keydown.arrow-down.prevent="moveSearchSelection(1)"
+          @keydown.arrow-up.prevent="moveSearchSelection(-1)"
+          @keydown.enter.prevent="selectActiveResult"
+        />
+        <button 
+          class="btn btn-outline-secondary" 
+          type="button" 
+          @click="clearSearch"
+          v-if="searchQuery"
+        >
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      
+      <!-- Search Results -->
+      <div class="search-results mt-2" v-if="searchQuery && searchResults.length > 0">
+        <small class="text-muted">
+          {{ searchResults.length === 1 ? $t('config.search_results_count', {count: searchResults.length}) : $t('config.search_results_count_plural', {count: searchResults.length}) }}
+        </small>
+        <div class="list-group list-group-flush">
+          <button
+            type="button"
+            class="list-group-item list-group-item-action"
+            v-for="(result, index) in searchResults.slice(0, 10)"
+            :key="result.key"
+            @click="navigateToResult(result)"
+            :class="{'active': index === searchActiveIndex}"
+          >
+            <div class="d-flex w-100 justify-content-between">
+              <h6 class="mb-1">{{ result.label }}</h6>
+              <small class="text-muted">{{ result.tabName }}</small>
+            </div>
+            <p class="mb-1" v-if="result.description">{{ result.description }}</p>
+          </button>
+        </div>
+      </div>
+      
+      <!-- No Results -->
+      <div class="mt-2" v-if="searchQuery && searchResults.length === 0">
+        <small class="text-muted">{{ $t('config.search_no_results') }}</small>
+      </div>
+    </div>
+    
     <div class="form" v-if="config">
       <!-- Header -->
       <ul class="nav nav-tabs">
@@ -126,6 +218,11 @@
         restarted: false,
         config: null,
         currentTab: "general",
+        searchQuery: "",
+        searchResults: [],
+        searchActiveIndex: -1,
+        searchIndex: [],
+        highlightedElement: null,
         tabs: [ // TODO: Move the options to each Component instead, encapsulate.
           {
             id: "general",
@@ -337,9 +434,155 @@
               }
             });
           });
+
+          // Build search index after config is loaded
+          this.$nextTick(() => {
+            this.buildSearchIndex();
+          });
         });
     },
     methods: {
+      buildSearchIndex() {
+        this.searchIndex = [];
+        
+        this.tabs.forEach(tab => {
+          Object.keys(tab.options).forEach(optionKey => {
+            // Get translated label and description
+            const labelKey = `config.${optionKey}`;
+            const descKey = `config.${optionKey}_desc`;
+            
+            const label = this.$t(labelKey);
+            const description = this.$t(descKey);
+            
+            // Only add to index if we have a valid translation (not just the key)
+            if (label !== labelKey) {
+              this.searchIndex.push({
+                key: optionKey,
+                label: label,
+                description: description !== descKey ? description : '',
+                tabId: tab.id,
+                tabName: tab.name
+              });
+            }
+          });
+        });
+      },
+
+      performSearch() {
+        if (!this.searchQuery.trim()) {
+          this.searchResults = [];
+          this.searchActiveIndex = -1;
+          return;
+        }
+
+        const query = this.searchQuery.toLowerCase().trim();
+        const results = [];
+
+        this.searchIndex.forEach(item => {
+          let score = 0;
+          const label = item.label.toLowerCase();
+          const description = item.description.toLowerCase();
+          const key = item.key.toLowerCase();
+
+          // Exact matches get highest score
+          if (label === query || key === query) {
+            score = 100;
+          }
+          // Start of word matches
+          else if (label.startsWith(query) || key.startsWith(query) || description.startsWith(query)) {
+            score = 80;
+          }
+          // Word boundary matches
+          else if (label.includes(` ${query}`) || description.includes(` ${query}`)) {
+            score = 60;
+          }
+          // Substring matches
+          else if (label.includes(query) || description.includes(query) || key.includes(query)) {
+            score = 40;
+          }
+
+          if (score > 0) {
+            results.push({ ...item, score });
+          }
+        });
+
+        // Sort by score (highest first)
+        results.sort((a, b) => b.score - a.score);
+        
+        this.searchResults = results;
+        this.searchActiveIndex = results.length > 0 ? 0 : -1;
+      },
+
+      clearSearch() {
+        this.searchQuery = "";
+        this.searchResults = [];
+        this.searchActiveIndex = -1;
+        this.removeHighlight();
+      },
+
+      navigateToResult(result) {
+        // Switch to the correct tab
+        this.currentTab = result.tabId;
+        
+        // Clear search after navigation
+        this.searchResults = [];
+        
+        // Wait for tab to render, then scroll to and highlight the field
+        this.$nextTick(() => {
+          setTimeout(() => {
+            this.scrollToAndHighlight(result.key);
+          }, 100);
+        });
+      },
+
+      scrollToAndHighlight(fieldKey) {
+        const element = document.getElementById(fieldKey);
+        if (element) {
+          // Remove any existing highlight
+          this.removeHighlight();
+          
+          // Scroll to element
+          element.scrollIntoView({ 
+            behavior: 'smooth', 
+            block: 'center' 
+          });
+          
+          // Add highlight class
+          element.classList.add('highlighted-field');
+          this.highlightedElement = element;
+          
+          // Remove highlight after 3 seconds
+          setTimeout(() => {
+            this.removeHighlight();
+          }, 3000);
+        }
+      },
+
+      removeHighlight() {
+        if (this.highlightedElement) {
+          this.highlightedElement.classList.remove('highlighted-field');
+          this.highlightedElement = null;
+        }
+      },
+
+      moveSearchSelection(direction) {
+        if (this.searchResults.length === 0) return;
+        
+        this.searchActiveIndex += direction;
+        
+        if (this.searchActiveIndex < 0) {
+          this.searchActiveIndex = this.searchResults.length - 1;
+        } else if (this.searchActiveIndex >= this.searchResults.length) {
+          this.searchActiveIndex = 0;
+        }
+      },
+
+      selectActiveResult() {
+        if (this.searchActiveIndex >= 0 && this.searchActiveIndex < this.searchResults.length) {
+          this.navigateToResult(this.searchResults[this.searchActiveIndex]);
+        }
+      },
+
       forceUpdate() {
         this.$forceUpdate()
       },
