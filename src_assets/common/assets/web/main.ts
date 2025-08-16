@@ -1,5 +1,5 @@
-import { createApp, defineAsyncComponent } from 'vue';
-import { createRouter, createWebHistory } from 'vue-router';
+import { createApp, defineAsyncComponent, Component, AsyncComponentLoader } from 'vue';
+import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
 import { initApp } from './init';
 import App from './App.vue';
 import Home from './views/Home.vue';
@@ -11,23 +11,31 @@ import {
   faEdit, faTrash, faPlus, faPlay, faUndo, faShieldAlt, faCopy, faSun, faMoon,
   faCircleHalfStroke, faArrowLeft
 } from '@fortawesome/free-solid-svg-icons';
+
 library.add(
   faHome, faUnlock, faStream, faCog, faUserShield, faInfo, faCircleExclamation,
   faEdit, faTrash, faPlus, faPlay, faUndo, faShieldAlt, faCopy, faSun, faMoon,
   faCircleHalfStroke, faArrowLeft
 );
 
-const lazy = (loader) =>
+interface LazyComponentOptions {
+  loader: AsyncComponentLoader;
+  delay: number;
+  timeout: number;
+  onError: (error: Error, retry: () => void, fail: () => void, attempts: number) => void;
+}
+
+const lazy = (loader: AsyncComponentLoader): Component =>
   defineAsyncComponent({
     loader,
     delay: 120,
     timeout: 20000,
-    onError(err, retry, fail, attempts) {
+    onError(_err: Error, retry: () => void, fail: () => void, attempts: number) {
       if (attempts <= 2) retry(); else fail();
     }
-  });
+  } as LazyComponentOptions);
 
-const routes = [
+const routes: RouteRecordRaw[] = [
   { path: '/', component: Home },
   { path: '/apps', component: lazy(() => import('./views/Apps.vue')) },
   { path: '/clients', component: lazy(() => import('./views/Clients.vue')) },

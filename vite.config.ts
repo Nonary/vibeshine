@@ -1,10 +1,9 @@
 import fs from 'fs';
-import { resolve } from 'path'
-import { defineConfig } from 'vite'
+import { resolve } from 'path';
+import { defineConfig } from 'vite';
 import { ViteEjsPlugin } from "vite-plugin-ejs";
 import { codecovVitePlugin } from "@codecov/vite-plugin";
-import vue from '@vitejs/plugin-vue'
-import process from 'process'
+import vue from '@vitejs/plugin-vue';
 
 /**
  * Before actually building the pages with Vite, we do an intermediate build step using ejs
@@ -17,7 +16,7 @@ let assetsSrcPath = 'src_assets/common/assets/web';
 let assetsDstPath = 'build/assets/web';
 
 if (process.env.SUNSHINE_BUILD_HOMEBREW) {
-    console.log("Building for homebrew, using default paths")
+    console.log("Building for homebrew, using default paths");
 }
 else {
     // If the paths supplied in the environment variables contain any symbolic links
@@ -28,18 +27,18 @@ else {
     // To avoid this, we resolve the potential symlinks using `fs.realpathSync` before
     // doing anything else with the paths.
     if (process.env.SUNSHINE_SOURCE_ASSETS_DIR) {
-        let path = resolve(fs.realpathSync(process.env.SUNSHINE_SOURCE_ASSETS_DIR), "common/assets/web");
+        const path = resolve(fs.realpathSync(process.env.SUNSHINE_SOURCE_ASSETS_DIR), "common/assets/web");
         console.log("Using srcdir from Cmake: " + path);
         assetsSrcPath = path;
     }
     if (process.env.SUNSHINE_ASSETS_DIR) {
-        let path = resolve(fs.realpathSync(process.env.SUNSHINE_ASSETS_DIR), "assets/web");
+        const path = resolve(fs.realpathSync(process.env.SUNSHINE_ASSETS_DIR), "assets/web");
         console.log("Using destdir from Cmake: " + path);
         assetsDstPath = path;
     }
 }
 
-let header = fs.readFileSync(resolve(assetsSrcPath, "template_header.html"))
+const header = fs.readFileSync(resolve(assetsSrcPath, "template_header.html"));
 // Ensure we have an absolute, symlink-resolved source path for aliasing (Windows friendly)
 const assetsSrcAbs = resolve(assetsSrcPath);
 
@@ -68,4 +67,4 @@ export default defineConfig({
             input: resolve(assetsSrcPath, 'index.html'),
         },
     },
-})
+});
