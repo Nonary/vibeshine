@@ -200,6 +200,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { useConfigStore } from '@/stores/config';
+import { useAuthStore } from '@/stores/auth';
 import { http } from '@/http';
 
 const store = useConfigStore();
@@ -374,10 +375,9 @@ async function ddResetPersistence() {
 }
 
 // ==== Lifecycle ====
-onMounted(() => {
-  if (!store.config.value) {
-    store.fetchConfig().catch(() => {});
-  }
+onMounted(async () => {
+  const authStore = useAuthStore();
+  await authStore.waitForAuthentication();
 
   // Start polling & ensure console starts at bottom
   nextTick(() => {

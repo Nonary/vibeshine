@@ -6,6 +6,9 @@ import App from '@/App.vue';
 import './styles/tailwind.css';
 import { initHttpLayer } from '@/http';
 import '@fortawesome/fontawesome-free/css/all.min.css';
+import { useAuthStore } from '@/stores/auth';
+import { useAppsStore } from '@/stores/apps';
+import { useConfigStore } from '@/stores/config';
 
 // Core application instance & stores
 const app: VueApp<Element> = createApp(App);
@@ -23,47 +26,15 @@ app.provide('platform', platformRef);
 initApp(app, async () => {
   await initHttpLayer();
 
-  const [{ useAuthStore }, { useConfigStore }, { useAppsStore }] = await Promise.all([
-    import('@/stores/auth'),
-    import('@/stores/config'),
-    import('@/stores/apps'),
-  ]);
-
   const auth = useAuthStore();
   const configStore = useConfigStore();
   const appsStore = useAppsStore();
 
-  let dataLoadGeneration = 0; // increment each auth cycle
-
-  async function loadPostAuthData(gen: number): Promise<void> {
-    try {
-      await Promise.all([configStore.fetchConfig(true), appsStore.loadApps(true)]);
-      // Only update platform if still same auth generation (user hasn't logged out/in again mid-load)
-      if (gen === dataLoadGeneration) {
-        platformRef.value = (configStore.config as any)?.value?.platform || '';
-      }
-    } catch (e) {
-      console.error('post-auth data load failed', e);
-    }
-  }
-
   // Initialize auth status from server
   await auth.init();
 
-  if (auth.isAuthenticated) {
-    dataLoadGeneration += 1;
-    loadPostAuthData(dataLoadGeneration);
-  }
-
-  // Watch for future successful logins
-  watch(
-    () => auth.isAuthenticated,
-    (v: boolean) => {
-      if (v) {
-        dataLoadGeneration += 1;
-        loadPostAuthData(dataLoadGeneration);
-      }
-    },
-    { immediate: false },
-  );
+  auth.waitForAuthentication().then(async () => {
+    await configStore.fetchConfig(true);
+    await appsStore.loadApps(true);
+  });
 });

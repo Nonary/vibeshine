@@ -92,6 +92,12 @@ export const useAuthStore = defineStore('auth', () => {
     credentialsConfigured.value = !!v;
   }
 
+  async function waitForAuthentication(): Promise<void> {
+    while (!isAuthenticated.value) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    }
+  }
+
   return {
     isAuthenticated,
     ready,
@@ -104,6 +110,7 @@ export const useAuthStore = defineStore('auth', () => {
     hideLogin,
     credentialsConfigured,
     setCredentialsConfigured,
+    waitForAuthentication,
     loggingIn,
   };
 });
