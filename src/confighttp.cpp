@@ -33,6 +33,7 @@
 #include "nvhttp.h"
 #include "platform/common.h"
 #include "process.h"
+#include "runtime_config.h"
 #include "utility.h"
 #include "uuid.h"
 
@@ -1171,6 +1172,189 @@ namespace confighttp {
     platf::restart();
   }
 
+  /**
+   * @brief Autosave configuration with classification.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "key": "value"
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/config/autosave| POST| {"locale":"en"}}
+   */
+  void autosaveConfig(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      nlohmann::json output_tree;
+      nlohmann::json input_tree = nlohmann::json::parse(ss);
+      
+      for (const auto &[k, v] : input_tree.items()) {
+        if (v.is_null() || (v.is_string() && v.get<std::string>().empty())) {
+          continue;
+        }
+        
+        std::string value = v.is_string() ? v.get<std::string>() : v.dump();
+        runtime_config::change_type_e type = runtime_config::classify_config_option(k);
+        runtime_config::autosave_state.add_change(k, value, type);
+      }
+      
+      // Apply immediate changes right away
+      runtime_config::autosave_state.apply_immediate_changes();
+      
+      output_tree["status"] = true;
+      output_tree["autosave_status"] = static_cast<int>(runtime_config::autosave_state.get_status());
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "AutosaveConfig: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Get autosave status.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/config/status| GET| null}
+   */
+  void getAutosaveStatus(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      nlohmann::json output_tree;
+      
+      auto status = runtime_config::autosave_state.get_status();
+      auto pending = runtime_config::autosave_state.get_pending_changes();
+      
+      output_tree["status"] = static_cast<int>(status);
+      output_tree["has_pending_immediate"] = !pending.immediate.empty();
+      output_tree["has_pending_session"] = !pending.post_session.empty();
+      output_tree["has_pending_restart"] = !pending.restart_required.empty();
+      output_tree["pending_restart_changes"] = runtime_config::autosave_state.get_restart_required_changes();
+      
+      // Check if sessions can end for post-session changes
+      if (!pending.post_session.empty() && !runtime_config::autosave_state.has_active_sessions()) {
+        // Apply post-session changes if no active sessions
+        if (runtime_config::autosave_state.apply_post_session_changes()) {
+          output_tree["status"] = static_cast<int>(runtime_config::autosave_state.get_status());
+          output_tree["has_pending_session"] = false;
+        }
+      }
+      
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "GetAutosaveStatus: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Approve restart-required changes.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/config/pending/restart/approve| POST| null}
+   */
+  void approveRestartChanges(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      nlohmann::json output_tree;
+      bool success = runtime_config::autosave_state.approve_restart_changes();
+      output_tree["status"] = success;
+      
+      if (success) {
+        // Restart the application
+        platf::restart();
+      }
+      
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "ApproveRestartChanges: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Cancel restart-required changes.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/config/pending/restart/cancel| POST| null}
+   */
+  void cancelRestartChanges(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      nlohmann::json output_tree;
+      runtime_config::autosave_state.cancel_restart_changes();
+      output_tree["status"] = true;
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "CancelRestartChanges: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Cancel post-session changes.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/config/pending/session/cancel| POST| null}
+   */
+  void cancelSessionChanges(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      nlohmann::json output_tree;
+      runtime_config::autosave_state.cancel_post_session_changes();
+      output_tree["status"] = true;
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "CancelSessionChanges: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
   void start() {
     auto shutdown_event = mail::man->event<bool>(mail::shutdown);
 
@@ -1205,6 +1389,11 @@ namespace confighttp {
     server.resource["^/api/apps$"]["POST"] = saveApp;
     server.resource["^/api/config$"]["GET"] = getConfig;
     server.resource["^/api/config$"]["POST"] = saveConfig;
+    server.resource["^/api/config/autosave$"]["POST"] = autosaveConfig;
+    server.resource["^/api/config/status$"]["GET"] = getAutosaveStatus;
+    server.resource["^/api/config/pending/restart/approve$"]["POST"] = approveRestartChanges;
+    server.resource["^/api/config/pending/restart/cancel$"]["POST"] = cancelRestartChanges;
+    server.resource["^/api/config/pending/session/cancel$"]["POST"] = cancelSessionChanges;
     server.resource["^/api/configLocale$"]["GET"] = getLocale;
     server.resource["^/api/restart$"]["POST"] = restart;
     server.resource["^/api/reset-display-device-persistence$"]["POST"] = resetDisplayDevicePersistence;
