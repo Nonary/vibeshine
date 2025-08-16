@@ -1,7 +1,7 @@
 /**
  * @brief Add a button to open the configuration option for each table
  */
-document.addEventListener("DOMContentLoaded", function(): void {
+document.addEventListener("DOMContentLoaded", function (): void {
   const tables = document.querySelectorAll("table");
   tables.forEach((table: Element) => {
     if (table.className !== "doxtable") {
@@ -12,7 +12,7 @@ document.addEventListener("DOMContentLoaded", function(): void {
     while (previousElement && previousElement.tagName !== "H2") {
       previousElement = previousElement.previousElementSibling;
     }
-    
+
     if (previousElement && previousElement.textContent) {
       const sectionId = previousElement.textContent.trim().toLowerCase();
       const newRow = document.createElement("tr");
@@ -22,9 +22,14 @@ document.addEventListener("DOMContentLoaded", function(): void {
 
       const newCode = document.createElement("code");
       newCode.className = "open-button";
-      const hostAuthority = document.getElementById('host-authority') as HTMLInputElement;
-      const hostValue = hostAuthority ? hostAuthority.value : 'localhost';
-      newCode.setAttribute("onclick", `window.open('https://${hostValue}/config/#${sectionId}', '_blank')`);
+      const hostAuthority = document.getElementById(
+        "host-authority"
+      ) as HTMLInputElement;
+      const hostValue = hostAuthority ? hostAuthority.value : "localhost";
+      newCode.setAttribute(
+        "onclick",
+        `window.open('https://${hostValue}/config/#${sectionId}', '_blank')`
+      );
       newCode.textContent = "Open";
 
       newCell.appendChild(newCode);
