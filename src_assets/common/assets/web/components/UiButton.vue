@@ -35,7 +35,7 @@ const variantMap = {
   warning: 'bg-warning text-onPrimary',
   secondary: 'bg-secondary text-onSecondary',
   info: 'bg-info text-onPrimary',
-  neutral: 'bg-surface text-onLight',
+  neutral: 'bg-surface text-onLight dark:text-onDark',
 };
 
 const outlineMap = {
@@ -45,7 +45,7 @@ const outlineMap = {
   warning: 'border border-warning text-warning',
   secondary: 'border border-secondary text-secondary',
   info: 'border border-info text-info',
-  neutral: 'border border-dark text-dark',
+  neutral: 'border border-dark text-dark dark:border-light/40 dark:text-light',
 };
 
 const ghostMap = {
@@ -55,7 +55,7 @@ const ghostMap = {
   warning: 'text-warning hover:bg-warning/10',
   secondary: 'text-secondary hover:bg-secondary/10',
   info: 'text-info hover:bg-info/10',
-  neutral: 'text-dark hover:bg-dark/5',
+  neutral: 'text-dark dark:text-light hover:bg-dark/5 dark:hover:bg-light/10',
 };
 
 const sizeMap = {

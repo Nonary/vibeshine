@@ -395,7 +395,14 @@
     "startup_errors": "<b>Attention!</b> Sunshine detected these errors during startup. We <b>STRONGLY RECOMMEND</b> fixing them before streaming.",
     "version_dirty": "Thank you for helping to make Sunshine a better software!",
     "version_latest": "You are running the latest version of Sunshine",
+    "version_ahead": "You are running a development build ahead of the latest release ({ahead} commits)",
+    "version_behind": "Your build is {behind} commits behind the latest release; consider updating.",
+    "version_compare_unknown": "Unable to determine commit distance to latest release.",
+    "version_branch": "Branch: {branch} (commit {commit})",
     "welcome": "Hello, Sunshine!"
+  },
+  "resources": {
+    "title": "Resources"
   },
   "navbar": {
     "applications": "Applications",
@@ -478,7 +485,6 @@
     "login": "Login",
     "welcome_success": "This page will reload soon, your browser will ask you for the new credentials"
   },
-
   "auth": {
     "title": "API Token Management",
     "generate_new_token": "Generate New Token",

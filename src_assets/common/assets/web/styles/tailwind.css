@@ -24,10 +24,12 @@
     /* Brand (nav text) mixed solar-secondary / lunar-onSecondary */
     --color-brand: 13 59 102;
   }
+
   .dark {
     /* Dark (former lunar) */
     --color-primary: 77 163 255;
-    --color-secondary: 18 34 77; /* Keep structural secondary */
+    --color-secondary: 18 34 77;
+    /* Keep structural secondary */
     --color-success: 129 199 132;
     --color-warning: 255 183 77;
     --color-danger: 229 115 115;
@@ -41,8 +43,10 @@
     --color-on-accent: 5 11 30;
     --color-on-light: 5 11 30;
     --color-on-dark: 245 249 255;
-    --color-brand: 245 249 255; /* brand token switches for readability */
+    --color-brand: 245 249 255;
+    /* brand token switches for readability */
   }
+
   body {
     @apply text-dark dark:text-light bg-light dark:bg-dark antialiased;
   }
@@ -53,56 +57,95 @@
   .btn {
     @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium bg-primary text-onPrimary shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90;
   }
+
   .btn-primary {
     @apply bg-primary text-onPrimary hover:bg-primary/90;
   }
+
   .btn-secondary {
     @apply bg-secondary text-onSecondary hover:bg-secondary/90;
   }
+
   .btn-success {
     @apply bg-success text-onLight hover:bg-success/90;
   }
+
   .btn-danger {
     @apply bg-danger text-onLight hover:bg-danger/90;
   }
+
   .btn-warning {
     @apply bg-warning text-onPrimary hover:bg-warning/90;
   }
+
   .btn-info {
     @apply bg-info text-onLight hover:bg-info/90;
   }
+
   .btn.ghost,
   .btn-ghost {
     @apply bg-transparent shadow-none text-brand hover:bg-brand/10;
   }
+
   .btn.apply {
     @apply btn-primary;
   }
 
   .form-control {
     @apply w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-surface/70 text-dark dark:text-light placeholder-black/40 dark:placeholder-light/40 focus:outline-none focus:ring-2 focus:ring-primary/40;
+    /* normalize native select appearance and ensure padding for custom arrow */
+    -webkit-appearance: none;
+    appearance: none;
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+    background-size: 1.25rem 1.25rem;
   }
+
   .form-control.monospace {
     @apply font-mono;
   }
+
   .form-label {
     @apply block text-sm font-medium mb-1 text-dark dark:text-light;
   }
+
   .form-text {
     @apply text-[11px] opacity-60 mt-1;
   }
+
   .form-select {
     @apply form-control;
   }
+
+  select.form-control option {
+    background-color: rgb(var(--color-light));
+    color: rgb(var(--color-on-light));
+  }
+
+  .dark select.form-control option {
+    background-color: rgb(var(--color-surface));
+    color: rgb(var(--color-on-dark));
+  }
+
+  select.form-control {
+    background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position: calc(100% - 1rem) calc(50% - 0.2rem), calc(100% - 0.7rem) calc(50% - 0.2rem);
+    background-size: 0.45em 0.45em, 0.45em 0.45em;
+    padding-right: 2.25rem;
+  }
+
   .table {
     @apply w-full text-sm border-collapse;
   }
+
   .table th {
     @apply text-left font-semibold pr-3 pb-2;
   }
+
   .table td {
     @apply pr-3 py-2 align-top;
   }
+
   .align-middle {
     vertical-align: middle;
   }
@@ -111,15 +154,19 @@
   .alert {
     @apply rounded-md px-3 py-2 my-2;
   }
+
   .alert-danger {
     @apply bg-red-50 text-red-800 border border-red-100;
   }
+
   .alert-success {
     @apply bg-green-50 text-green-800 border border-green-100;
   }
+
   .alert-warning {
     @apply bg-yellow-50 text-yellow-800 border border-yellow-100;
   }
+
   .alert-primary {
     @apply bg-sky-50 text-sky-800 border border-sky-100;
   }

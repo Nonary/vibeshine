@@ -1,202 +1,249 @@
 <template>
-  <div class="grid grid-cols-12 gap-6">
-    <!-- Apps Grid -->
-    <div class="col-span-12 xl:col-span-8 space-y-6">
-      <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-        <div v-for="(app, i) in apps" :key="i"
-          class="group relative rounded-xl overflow-hidden border border-dark/10 dark:border-light/10 bg-white/60 dark:bg-surface/60 shadow hover:shadow-lg transition flex flex-col">
-          <div class="aspect-[3/4] w-full relative bg-dark/5 dark:bg-dark/30">
-            <img v-if="hasCover(app)" :key="appKey(app, i)" :src="coverSrc(app, i)"
-              class="absolute inset-0 w-full h-full object-cover" loading="lazy" @error="onImgError($event)" />
-            <div v-else class="absolute inset-0 flex items-center justify-center text-4xl font-bold text-primary/40">
-              {{ app.name.substring(0, 1) }}
-            </div>
-            <div class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition">
-              <button
-                class="inline-flex items-center justify-center w-8 h-8 rounded-md bg-black/50 text-white hover:bg-black/70"
-                @click="openEdit(app, i)">
-                <i class="fas fa-cog text-sm" />
-              </button>
-            </div>
-          </div>
-          <div class="p-3 flex flex-col flex-1">
-            <h3 class="text-sm font-semibold truncate mb-1">
-              {{ app.name }}
-            </h3>
-            <p class="text-[10px] uppercase tracking-wider opacity-60 line-clamp-2 mb-2">
-              {{ displayCmd(app) }}
-            </p>
-            <div class="mt-auto flex items-center justify-between">
-              <span
-                class="px-2 py-0.5 rounded-full bg-green-500/15 text-green-600 dark:text-green-400 text-[10px]">Configured</span>
-              <ProfileSelector v-model="profileSelections[app.name]" />
-            </div>
+  <div class="space-y-8 max-w-5xl">
+    <!-- Welcome / Intro -->
+    <div>
+      <h1 class="text-3xl font-semibold mb-2">{{ $t('index.welcome') }}</h1>
+      <p class="text-sm opacity-80">{{ $t('index.description') }}</p>
+    </div>
+
+    <!-- Fatal startup errors -->
+    <div v-if="fancyLogs.some(l => l.level === 'Fatal')">
+      <UiAlert variant="danger">
+        <template #icon>
+          <i class="fas fa-circle-exclamation text-xl" />
+        </template>
+        <div class="space-y-3">
+          <p v-html="$t('index.startup_errors')" class="text-sm leading-relaxed"></p>
+          <ul class="list-disc pl-5 space-y-1 text-xs">
+            <li v-for="(v, i) in fancyLogs.filter(x => x.level === 'Fatal')" :key="i">{{ v.value }}</li>
+          </ul>
+          <div>
+            <a class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-danger-600 text-white text-xs hover:bg-danger-500 transition"
+              href="./troubleshooting#logs">
+              <i class="fas fa-file-lines" /> {{ $t('index.view_logs') || 'View Logs' }}
+            </a>
           </div>
         </div>
-        <button
-          class="aspect-[3/4] rounded-xl border border-dashed border-dark/20 dark:border-light/10 flex flex-col items-center justify-center text-dark/40 dark:text-light/30 hover:border-primary/50 hover:text-primary transition"
-          @click="openAdd">
-          <i class="fas fa-plus text-3xl mb-2" />
-          <span class="text-xs font-medium">Add</span>
-        </button>
-      </div>
-      <!-- Alerts / Warnings placeholder -->
-      <div v-if="fatalLogs.length" class="space-y-3">
-        <UiAlert variant="danger">
-          <template #icon>
-            <i class="fas fa-triangle-exclamation" />
-          </template>
-          <p class="font-medium">
-            Startup errors detected ({{ fatalLogs.length }}). Review before streaming.
-          </p>
+      </UiAlert>
+    </div>
+
+    <!-- Version Card -->
+    <UiCard v-if="version" :title="'Version ' + version.version">
+      <div class="space-y-4 text-sm">
+        <div v-if="loading" class="text-xs italic flex items-center gap-2">
+          <i class="fas fa-spinner animate-spin" /> {{ $t('index.loading_latest') }}
+        </div>
+        <div v-if="branch || commit" class="text-xs opacity-70 font-mono">
+          {{ $t('index.version_branch', { branch, commit: commit.substring(0, 7) }) }}
+        </div>
+        <UiAlert v-if="buildVersionIsDirty" variant="success">
+          <template #icon><i class="fas fa-seedling" /></template>
+          {{ $t('index.version_dirty') }} 🌇
+        </UiAlert>
+        <UiAlert v-if="installedVersionNotStable" variant="info">
+          <template #icon><i class="fas fa-flask" /></template>
+          {{ $t('index.installed_version_not_stable') }}
+        </UiAlert>
+        <UiAlert v-if="!installedVersionNotStable && aheadByCommits > 0" variant="success">
+          <template #icon><i class="fas fa-forward" /></template>
+          {{ $t('index.version_ahead', { ahead: aheadByCommits }) }}
+        </UiAlert>
+        <UiAlert v-if="!installedVersionNotStable && aheadByCommits === 0 && behindByCommits > 0" variant="warning">
+          <template #icon><i class="fas fa-clock-rotate-left" /></template>
+          {{ $t('index.version_behind', { behind: behindByCommits }) }}
+        </UiAlert>
+        <UiAlert v-if="!installedVersionNotStable && !compareInfo && !stableBuildAvailable && !buildVersionIsDirty"
+          variant="info">
+          <template #icon><i class="fas fa-circle-question" /></template>
+          {{ $t('index.version_compare_unknown') }}
+        </UiAlert>
+        <UiAlert
+          v-else-if="(!preReleaseBuildAvailable || !notifyPreReleases) && !stableBuildAvailable && !buildVersionIsDirty"
+          variant="success">
+          <template #icon><i class="fas fa-check-circle" /></template>
+          {{ $t('index.version_latest') }}
+        </UiAlert>
+
+        <!-- Pre-release notice -->
+        <UiAlert v-if="notifyPreReleases && preReleaseBuildAvailable" variant="warning">
+          <template #icon><i class="fas fa-bell" /></template>
+          <div class="flex flex-col gap-3 w-full">
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <p class="text-sm m-0">{{ $t('index.new_pre_release') }}</p>
+              <a class="UiButton UiButton--primary" :href="preReleaseVersion.release.html_url" target="_blank">{{
+                $t('index.download') }}</a>
+            </div>
+            <div class="bg-dark/5 dark:bg-light/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono">
+              <p class="font-semibold mb-2">{{ preReleaseVersion.release.name }}</p>
+              <pre class="whitespace-pre-wrap">{{ preReleaseVersion.release.body }}</pre>
+            </div>
+          </div>
+        </UiAlert>
+
+        <!-- Stable update available -->
+        <UiAlert v-if="stableBuildAvailable" variant="warning">
+          <template #icon><i class="fas fa-arrow-up" /></template>
+          <div class="flex flex-col gap-3 w-full">
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <p class="text-sm m-0">{{ $t('index.new_stable') }}</p>
+              <a class="UiButton UiButton--primary" :href="githubVersion.release.html_url" target="_blank">{{
+                $t('index.download') }}</a>
+            </div>
+            <div class="bg-dark/5 dark:bg-light/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono">
+              <p class="font-semibold mb-2">{{ githubVersion.release.name }}</p>
+              <pre class="whitespace-pre-wrap">{{ githubVersion.release.body }}</pre>
+            </div>
+          </div>
         </UiAlert>
       </div>
-    </div>
+    </UiCard>
 
-    <!-- Side widgets -->
-    <div class="col-span-12 xl:col-span-4 space-y-6">
-      <UiCard title="Streaming Health">
-        <div class="grid grid-cols-3 gap-4 text-center text-xs">
-          <div>
-            <p class="text-[11px] uppercase tracking-wider mb-1 opacity-60">Resolution</p>
-            <p class="font-semibold">--</p>
-          </div>
-          <div>
-            <p class="text-[11px] uppercase tracking-wider mb-1 opacity-60">FPS</p>
-            <p class="font-semibold">--</p>
-          </div>
-          <div>
-            <p class="text-[11px] uppercase tracking-wider mb-1 opacity-60">Bitrate</p>
-            <p class="font-semibold">--</p>
-          </div>
-        </div>
-        <div class="mt-4 h-2 rounded-full bg-dark/10 dark:bg-light/10 overflow-hidden">
-          <div class="h-full w-1/3 bg-gradient-to-r from-green-500 via-yellow-400 to-red-500 animate-pulse" />
-        </div>
-      </UiCard>
-      <UiCard title="Profiles">
-        <div class="flex flex-wrap gap-2">
-          <UiButton size="sm" tone="outline" variant="primary"> Gaming </UiButton>
-          <UiButton size="sm" tone="outline" variant="primary"> Productivity </UiButton>
-          <UiButton size="sm" tone="outline" variant="primary"> Low Latency </UiButton>
-        </div>
-      </UiCard>
-      <UiCard title="Resources">
-        <div class="text-xs space-y-2">
-          <a href="https://app.lizardbyte.dev" target="_blank" class="block text-primary hover:underline">Website</a>
-          <a href="https://app.lizardbyte.dev/discord" target="_blank"
-            class="block text-primary hover:underline">Discord</a>
-          <a href="https://github.com/orgs/LizardByte/discussions" target="_blank"
-            class="block text-primary hover:underline">GitHub Discussions</a>
-        </div>
-      </UiCard>
-    </div>
+    <!-- Resources -->
+    <UiCard :title="$t('resources.title') || 'Resources'">
+      <div class="text-xs space-y-2">
+        <ResourceCard />
+      </div>
+    </UiCard>
   </div>
-  <AppEditModal v-model="showModal" :app="currentApp" :index="currentIndex" @saved="reloadApps" @deleted="reloadApps" />
 </template>
+
 <script setup>
 import { ref, onMounted, computed } from 'vue';
-import UiButton from '@/components/UiButton.vue';
 import UiAlert from '@/components/UiAlert.vue';
 import UiCard from '@/components/UiCard.vue';
-import ProfileSelector from '@/components/ProfileSelector.vue';
-import AppEditModal from '@/components/AppEditModal.vue';
-import { useAppsStore } from '@/stores/apps.js';
-import { http } from '@/http.js';
+import ResourceCard from '@/ResourceCard.vue';
+import SunshineVersion from '@/sunshine_version.js';
+import { useConfigStore } from '@/stores/config.js';
+import { useAuthStore } from '@/stores/auth.js';
 
-const apps = ref([]);
-const appsStore = useAppsStore();
+const version = ref(null);
+const githubVersion = ref(null);
+const preReleaseVersion = ref(null);
+const notifyPreReleases = ref(false);
+const loading = ref(true);
 const logs = ref('');
-const profileSelections = ref({});
-const platform = ref('');
-// modal state reused from ApplicationsView
-const showModal = ref(false);
-const currentApp = ref(null);
-const currentIndex = ref(-1);
+const branch = ref('');
+const commit = ref('');
+const compareInfo = ref(null); // {ahead_by, behind_by, status}
 
-const fatalLogs = computed(() => {
-  if (!logs.value) return [];
-  const regex = /(\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}]):\s/g;
-  const raw = logs.value.split(regex).splice(1);
-  const out = [];
-  for (let i = 0; i < raw.length; i += 2) {
-    const line = raw[i + 1];
-    if (line.startsWith('Fatal:')) out.push(line);
+const configStore = useConfigStore();
+const auth = useAuthStore();
+let started = false; // prevent duplicate concurrent checks
+
+async function runVersionChecks() {
+  if (started) return; // guard
+  started = true;
+  loading.value = true;
+  try {
+    // Use config store (it already handles deep cloning & defaults)
+    const cfg = await configStore.fetchConfig();
+    if (!cfg) {
+      // still not available (possibly lost auth); allow retry later
+      started = false;
+      loading.value = false;
+      return;
+    }
+    // Normalize notify pre-release flag to boolean
+    notifyPreReleases.value = cfg.notify_pre_releases === true || cfg.notify_pre_releases === 'enabled';
+    version.value = new SunshineVersion(null, cfg.version);
+    branch.value = cfg.branch || '';
+    commit.value = cfg.commit || '';
+
+    // Remote release checks (GitHub)
+    try {
+      githubVersion.value = new SunshineVersion(await fetch('https://api.github.com/repos/LizardByte/Sunshine/releases/latest').then(r => r.json()), null);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[Dashboard] latest release fetch failed', e);
+    }
+    try {
+      const releases = await fetch('https://api.github.com/repos/LizardByte/Sunshine/releases').then(r => r.json());
+      const pre = Array.isArray(releases) ? releases.find(r => r.prerelease) : null;
+      if (pre) preReleaseVersion.value = new SunshineVersion(pre, null);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[Dashboard] releases list fetch failed', e);
+    }
+
+    // Compare if we have enough data
+    if (commit.value && githubVersion.value?.version) {
+      try {
+        const baseTag = githubVersion.value.version.startsWith('v') ? githubVersion.value.version : 'v' + githubVersion.value.version;
+        const compareResp = await fetch(`https://api.github.com/repos/LizardByte/Sunshine/compare/${baseTag}...${commit.value}`);
+        if (compareResp.ok) {
+          const cmp = await compareResp.json();
+          compareInfo.value = {
+            ahead_by: cmp.ahead_by,
+            behind_by: cmp.behind_by,
+            status: cmp.status
+          };
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('Compare API failed', e);
+      }
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[Dashboard] version checks failed', e);
   }
-  return out;
+  try {
+    // logs only after auth
+    logs.value = await fetch('./api/logs').then(r => r.text());
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[Dashboard] logs fetch failed', e);
+  }
+  loading.value = false;
+}
+
+onMounted(() => {
+  // If already authenticated (likely after bootstrap), run immediately; otherwise defer.
+  if (auth.isAuthenticated) {
+    runVersionChecks();
+  } else {
+    // Register one-time listener
+    const off = auth.onLogin(() => {
+      off && off();
+      runVersionChecks();
+    });
+  }
 });
 
-function openAdd() {
-  currentApp.value = null;
-  currentIndex.value = -1;
-  showModal.value = true;
-}
-function openEdit(app, index) {
-  currentApp.value = app;
-  currentIndex.value = index;
-  showModal.value = true;
-}
-function displayCmd(app) {
-  if (Array.isArray(app.cmd)) return app.cmd.join(' ');
-  return app.cmd || 'No command';
-}
-function appKey(app, index) {
-  const p = app && app['image-path'] ? app['image-path'].toString() : '';
-  const id = app?.uuid || '';
-  return `${app?.name || 'app'}|${id}|${p}|${index}`;
-}
-function simpleHash(str) {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 16777619) >>> 0;
+const installedVersionNotStable = computed(() => {
+  if (!githubVersion.value || !version.value) return false;
+  // treat non-master branches as pre-release builds automatically
+  if (branch.value && branch.value !== 'master') return true;
+  return version.value.isGreater(githubVersion.value);
+});
+const stableBuildAvailable = computed(() => {
+  if (!githubVersion.value || !version.value) return false;
+  // If we have compare info and we're ahead, do not suggest stable update
+  if (compareInfo.value && compareInfo.value.ahead_by > 0) return false;
+  // If we have compare info and we're exactly equal (ahead_by = behind_by = 0) treat as up-to-date.
+  if (compareInfo.value && compareInfo.value.ahead_by === 0 && compareInfo.value.behind_by === 0) return false;
+  return githubVersion.value.isGreater(version.value);
+});
+const preReleaseBuildAvailable = computed(() => {
+  if (!preReleaseVersion.value || !githubVersion.value || !version.value) return false;
+  return preReleaseVersion.value.isGreater(version.value) && preReleaseVersion.value.isGreater(githubVersion.value);
+});
+const buildVersionIsDirty = computed(() => {
+  if (!version.value) return false;
+  return version.value.version?.split('.').length === 5 && version.value.version.indexOf('dirty') !== -1;
+});
+const aheadByCommits = computed(() => compareInfo.value?.ahead_by || 0);
+const behindByCommits = computed(() => compareInfo.value?.behind_by || 0);
+const fancyLogs = computed(() => {
+  if (!logs.value) return [];
+  const regex = /(\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}]):\s/g;
+  const rawLogLines = logs.value.split(regex).splice(1);
+  const logLines = [];
+  for (let i = 0; i < rawLogLines.length; i += 2) {
+    logLines.push({ timestamp: rawLogLines[i], level: rawLogLines[i + 1].split(':')[0], value: rawLogLines[i + 1] });
   }
-  return (h >>> 0).toString(36);
-}
-function hasCover(app) {
-  try {
-    const p = app?.['image-path'] ? app['image-path'].toString().trim() : '';
-    const hasUuid = !!app?.uuid;
-    if (!p) return hasUuid;
-    if (/^https?:\/\//i.test(p)) return true;
-    if (!p.includes('/') && !p.includes('\\')) return true;
-    const file = p.replace(/\\/g, '/').split('/').pop() || '';
-    const ext = file.substring(file.lastIndexOf('.') + 1).toLowerCase();
-    const allowed = ['png', 'jpg', 'jpeg', 'webp', 'bmp'];
-    return allowed.includes(ext);
-  } catch {
-    return false;
-  }
-}
-function coverSrc(app, index) {
-  // Prefer UUID-based cover
-  if (app?.uuid) {
-    const cb = simpleHash(`${app.uuid}|${index ?? ''}`);
-    // Use a relative path so the UI works when served from a subpath or behind a proxy
-    return `./api/apps/${encodeURIComponent(app.uuid)}/cover?cb=${cb}`;
-  }
-  // Fallback to legacy image-path handling
-  const path = app?.['image-path'];
-  if (!path) return '';
-  const p = path.toString().trim();
-  if (/^https?:\/\//i.test(p)) return p;
-  if (!p.includes('/') && !p.includes('\\')) {
-    return `/assets/${p}`;
-  }
-  const file = p.replace(/\\/g, '/').split('/').pop();
-  if (file) {
-    const cb = simpleHash(`${p}|${index ?? ''}`);
-    const iParam = typeof index === 'number' ? `&i=${index}` : '';
-    // Use a relative path to match the server's routing and avoid absolute-root issues
-    return `./covers/${file}?cb=${cb}${iParam}`;
-  }
-  return p;
-}
-function onImgError(e) {
-  const img = e?.target;
-  if (img) {
-    img.style.display = 'none';
-  }
-}
+  return logLines;
+});
 </script>
+
 <style scoped></style>

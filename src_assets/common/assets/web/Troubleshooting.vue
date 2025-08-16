@@ -163,7 +163,7 @@ import { useConfigStore } from '@/stores/config.js';
 import { http } from '@/http.js';
 
 const store = useConfigStore();
-const platform = computed(() => store.config.value?.platform || '');
+const platform = computed(() => store.platform || (navigator.userAgent.includes('Windows') ? 'windows' : ''));
 
 // ==== State (client-unpairing removed) ====
 const closeAppPressed = ref(false);
@@ -334,7 +334,7 @@ async function ddResetPersistence() {
 // ==== Lifecycle ====
 onMounted(() => {
   if (!store.config.value) {
-    store.fetchConfig().catch(() => {});
+    store.fetchConfig().catch(() => { });
   }
 
   // Start polling & ensure console starts at bottom

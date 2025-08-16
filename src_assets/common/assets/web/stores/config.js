@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { http } from '@/http.js';
 
 // Centralized store for configuration defaults and runtime config
@@ -163,8 +163,8 @@ export const useConfigStore = defineStore('config', () => {
     },
   ]);
 
-  // runtime config loaded from server
   const config = ref(null);
+  const platform = computed(() => config.value?.platform || '');
 
   function setConfig(obj) {
     // deep clone from server
@@ -231,6 +231,7 @@ export const useConfigStore = defineStore('config', () => {
   return {
     tabs,
     config,
+    platform,
     setConfig,
     updateOption,
     serialize,

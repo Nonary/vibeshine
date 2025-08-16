@@ -71,6 +71,34 @@ else()
     endif()
 endif()
 
+# Propagate branch information as a compile definition if available.
+# CI builds define BRANCH env var; local builds derive GIT_DESCRIBE_BRANCH above.
+if(DEFINED GIT_DESCRIBE_BRANCH AND NOT GIT_DESCRIBE_BRANCH STREQUAL "")
+    set(PROJECT_VERSION_BRANCH "${GIT_DESCRIBE_BRANCH}")
+elseif(DEFINED GITHUB_BRANCH AND NOT GITHUB_BRANCH STREQUAL "")
+    set(PROJECT_VERSION_BRANCH "${GITHUB_BRANCH}")
+elseif(DEFINED ENV{BRANCH} AND NOT $ENV{BRANCH} STREQUAL "")
+    set(PROJECT_VERSION_BRANCH "$ENV{BRANCH}")
+else()
+    set(PROJECT_VERSION_BRANCH "unknown")
+endif()
+
+# Ensure we always have a commit hash for comparison logic in the UI.
+# Prefer the CI provided env COMMIT. If not present, fall back to querying git directly.
+if((NOT DEFINED GITHUB_COMMIT) OR (GITHUB_COMMIT STREQUAL ""))
+    if(GIT_EXECUTABLE)
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+            OUTPUT_VARIABLE GIT_FULL_COMMIT
+            RESULT_VARIABLE GIT_FULL_COMMIT_ERROR_CODE
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(NOT GIT_FULL_COMMIT_ERROR_CODE)
+            set(GITHUB_COMMIT "${GIT_FULL_COMMIT}")
+        endif()
+    endif()
+endif()
+
 # set date variables
 set(PROJECT_YEAR "1990")
 set(PROJECT_MONTH "01")
@@ -139,3 +167,4 @@ list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_MAJOR="${PROJECT_VERSION_MAJOR}
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_MINOR="${PROJECT_VERSION_MINOR}")
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_PATCH="${PROJECT_VERSION_PATCH}")
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_COMMIT="${GITHUB_COMMIT}")
+list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_BRANCH="${PROJECT_VERSION_BRANCH}")

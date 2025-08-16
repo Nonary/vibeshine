@@ -4,7 +4,7 @@ import { useConfigStore } from '@/stores/config.js';
 
 // Read platform from centralized config store
 const store = useConfigStore();
-const platform = computed(() => store.config.value?.platform || '');
+const platform = computed(() => store.platform || '');
 </script>
 
 <template>
