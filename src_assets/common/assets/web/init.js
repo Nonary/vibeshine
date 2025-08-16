@@ -1,6 +1,5 @@
 import i18n from '@/locale';
 
-
 export function initApp(app, config) {
   // Wait for locale initialization, then run optional app-level setup (like loading config)
   // If a `config` callback is provided it may be async — run it before mounting so

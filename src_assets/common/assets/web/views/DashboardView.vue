@@ -7,19 +7,23 @@
     </div>
 
     <!-- Fatal startup errors -->
-    <div v-if="fancyLogs.some(l => l.level === 'Fatal')">
+    <div v-if="fancyLogs.some((l) => l.level === 'Fatal')">
       <UiAlert variant="danger">
         <template #icon>
           <i class="fas fa-circle-exclamation text-xl" />
         </template>
         <div class="space-y-3">
-          <p v-html="$t('index.startup_errors')" class="text-sm leading-relaxed"></p>
+          <p class="text-sm leading-relaxed" v-html="$t('index.startup_errors')"></p>
           <ul class="list-disc pl-5 space-y-1 text-xs">
-            <li v-for="(v, i) in fancyLogs.filter(x => x.level === 'Fatal')" :key="i">{{ v.value }}</li>
+            <li v-for="(v, i) in fancyLogs.filter((x) => x.level === 'Fatal')" :key="i">
+              {{ v.value }}
+            </li>
           </ul>
           <div>
-            <a class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-danger-600 text-white text-xs hover:bg-danger-500 transition"
-              href="./troubleshooting#logs">
+            <a
+              class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-danger-600 text-white text-xs hover:bg-danger-500 transition"
+              href="./troubleshooting#logs"
+            >
               <i class="fas fa-file-lines" /> {{ $t('index.view_logs') || 'View Logs' }}
             </a>
           </div>
@@ -48,18 +52,33 @@
           <template #icon><i class="fas fa-forward" /></template>
           {{ $t('index.version_ahead', { ahead: aheadByCommits }) }}
         </UiAlert>
-        <UiAlert v-if="!installedVersionNotStable && aheadByCommits === 0 && behindByCommits > 0" variant="warning">
+        <UiAlert
+          v-if="!installedVersionNotStable && aheadByCommits === 0 && behindByCommits > 0"
+          variant="warning"
+        >
           <template #icon><i class="fas fa-clock-rotate-left" /></template>
           {{ $t('index.version_behind', { behind: behindByCommits }) }}
         </UiAlert>
-        <UiAlert v-if="!installedVersionNotStable && !compareInfo && !stableBuildAvailable && !buildVersionIsDirty"
-          variant="info">
+        <UiAlert
+          v-if="
+            !installedVersionNotStable &&
+            !compareInfo &&
+            !stableBuildAvailable &&
+            !buildVersionIsDirty
+          "
+          variant="info"
+        >
           <template #icon><i class="fas fa-circle-question" /></template>
           {{ $t('index.version_compare_unknown') }}
         </UiAlert>
         <UiAlert
-          v-else-if="(!preReleaseBuildAvailable || !notifyPreReleases) && !stableBuildAvailable && !buildVersionIsDirty"
-          variant="success">
+          v-else-if="
+            (!preReleaseBuildAvailable || !notifyPreReleases) &&
+            !stableBuildAvailable &&
+            !buildVersionIsDirty
+          "
+          variant="success"
+        >
           <template #icon><i class="fas fa-check-circle" /></template>
           {{ $t('index.version_latest') }}
         </UiAlert>
@@ -70,10 +89,16 @@
           <div class="flex flex-col gap-3 w-full">
             <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <p class="text-sm m-0">{{ $t('index.new_pre_release') }}</p>
-              <a class="UiButton UiButton--primary" :href="preReleaseVersion.release.html_url" target="_blank">{{
-                $t('index.download') }}</a>
+              <a
+                class="UiButton UiButton--primary"
+                :href="preReleaseVersion.release.html_url"
+                target="_blank"
+                >{{ $t('index.download') }}</a
+              >
             </div>
-            <div class="bg-dark/5 dark:bg-light/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono">
+            <div
+              class="bg-dark/5 dark:bg-light/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
+            >
               <p class="font-semibold mb-2">{{ preReleaseVersion.release.name }}</p>
               <pre class="whitespace-pre-wrap">{{ preReleaseVersion.release.body }}</pre>
             </div>
@@ -86,10 +111,16 @@
           <div class="flex flex-col gap-3 w-full">
             <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <p class="text-sm m-0">{{ $t('index.new_stable') }}</p>
-              <a class="UiButton UiButton--primary" :href="githubVersion.release.html_url" target="_blank">{{
-                $t('index.download') }}</a>
+              <a
+                class="UiButton UiButton--primary"
+                :href="githubVersion.release.html_url"
+                target="_blank"
+                >{{ $t('index.download') }}</a
+              >
             </div>
-            <div class="bg-dark/5 dark:bg-light/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono">
+            <div
+              class="bg-dark/5 dark:bg-light/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
+            >
               <p class="font-semibold mb-2">{{ githubVersion.release.name }}</p>
               <pre class="whitespace-pre-wrap">{{ githubVersion.release.body }}</pre>
             </div>
@@ -144,21 +175,29 @@ async function runVersionChecks() {
       return;
     }
     // Normalize notify pre-release flag to boolean
-    notifyPreReleases.value = cfg.notify_pre_releases === true || cfg.notify_pre_releases === 'enabled';
+    notifyPreReleases.value =
+      cfg.notify_pre_releases === true || cfg.notify_pre_releases === 'enabled';
     version.value = new SunshineVersion(null, cfg.version);
     branch.value = cfg.branch || '';
     commit.value = cfg.commit || '';
 
     // Remote release checks (GitHub)
     try {
-      githubVersion.value = new SunshineVersion(await fetch('https://api.github.com/repos/LizardByte/Sunshine/releases/latest').then(r => r.json()), null);
+      githubVersion.value = new SunshineVersion(
+        await fetch('https://api.github.com/repos/LizardByte/Sunshine/releases/latest').then((r) =>
+          r.json(),
+        ),
+        null,
+      );
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn('[Dashboard] latest release fetch failed', e);
     }
     try {
-      const releases = await fetch('https://api.github.com/repos/LizardByte/Sunshine/releases').then(r => r.json());
-      const pre = Array.isArray(releases) ? releases.find(r => r.prerelease) : null;
+      const releases = await fetch(
+        'https://api.github.com/repos/LizardByte/Sunshine/releases',
+      ).then((r) => r.json());
+      const pre = Array.isArray(releases) ? releases.find((r) => r.prerelease) : null;
       if (pre) preReleaseVersion.value = new SunshineVersion(pre, null);
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -168,14 +207,18 @@ async function runVersionChecks() {
     // Compare if we have enough data
     if (commit.value && githubVersion.value?.version) {
       try {
-        const baseTag = githubVersion.value.version.startsWith('v') ? githubVersion.value.version : 'v' + githubVersion.value.version;
-        const compareResp = await fetch(`https://api.github.com/repos/LizardByte/Sunshine/compare/${baseTag}...${commit.value}`);
+        const baseTag = githubVersion.value.version.startsWith('v')
+          ? githubVersion.value.version
+          : 'v' + githubVersion.value.version;
+        const compareResp = await fetch(
+          `https://api.github.com/repos/LizardByte/Sunshine/compare/${baseTag}...${commit.value}`,
+        );
         if (compareResp.ok) {
           const cmp = await compareResp.json();
           compareInfo.value = {
             ahead_by: cmp.ahead_by,
             behind_by: cmp.behind_by,
-            status: cmp.status
+            status: cmp.status,
           };
         }
       } catch (e) {
@@ -189,7 +232,7 @@ async function runVersionChecks() {
   }
   try {
     // logs only after auth
-    logs.value = await fetch('./api/logs').then(r => r.text());
+    logs.value = await fetch('./api/logs').then((r) => r.text());
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('[Dashboard] logs fetch failed', e);
@@ -221,16 +264,22 @@ const stableBuildAvailable = computed(() => {
   // If we have compare info and we're ahead, do not suggest stable update
   if (compareInfo.value && compareInfo.value.ahead_by > 0) return false;
   // If we have compare info and we're exactly equal (ahead_by = behind_by = 0) treat as up-to-date.
-  if (compareInfo.value && compareInfo.value.ahead_by === 0 && compareInfo.value.behind_by === 0) return false;
+  if (compareInfo.value && compareInfo.value.ahead_by === 0 && compareInfo.value.behind_by === 0)
+    return false;
   return githubVersion.value.isGreater(version.value);
 });
 const preReleaseBuildAvailable = computed(() => {
   if (!preReleaseVersion.value || !githubVersion.value || !version.value) return false;
-  return preReleaseVersion.value.isGreater(version.value) && preReleaseVersion.value.isGreater(githubVersion.value);
+  return (
+    preReleaseVersion.value.isGreater(version.value) &&
+    preReleaseVersion.value.isGreater(githubVersion.value)
+  );
 });
 const buildVersionIsDirty = computed(() => {
   if (!version.value) return false;
-  return version.value.version?.split('.').length === 5 && version.value.version.indexOf('dirty') !== -1;
+  return (
+    version.value.version?.split('.').length === 5 && version.value.version.indexOf('dirty') !== -1
+  );
 });
 const aheadByCommits = computed(() => compareInfo.value?.ahead_by || 0);
 const behindByCommits = computed(() => compareInfo.value?.behind_by || 0);
@@ -240,7 +289,11 @@ const fancyLogs = computed(() => {
   const rawLogLines = logs.value.split(regex).splice(1);
   const logLines = [];
   for (let i = 0; i < rawLogLines.length; i += 2) {
-    logLines.push({ timestamp: rawLogLines[i], level: rawLogLines[i + 1].split(':')[0], value: rawLogLines[i + 1] });
+    logLines.push({
+      timestamp: rawLogLines[i],
+      level: rawLogLines[i + 1].split(':')[0],
+      value: rawLogLines[i + 1],
+    });
   }
   return logLines;
 });

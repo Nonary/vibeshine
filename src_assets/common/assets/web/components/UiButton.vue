@@ -1,7 +1,14 @@
 <template>
-  <component :is="asTag" :type="asTag === 'button' ? type : undefined" :href="asTag !== 'button' ? href : undefined"
-    :target="target" :rel="rel" :class="computedClasses" v-bind="$attrs"
-    :disabled="asTag === 'button' ? disabled || loading : undefined">
+  <component
+    :is="asTag"
+    :type="asTag === 'button' ? type : undefined"
+    :href="asTag !== 'button' ? href : undefined"
+    :target="target"
+    :rel="rel"
+    :class="computedClasses"
+    v-bind="$attrs"
+    :disabled="asTag === 'button' ? disabled || loading : undefined"
+  >
     <slot />
   </component>
 </template>
@@ -70,7 +77,9 @@ const computedClasses = computed(() => {
   const toneHover =
     props.tone === 'solid'
       ? 'hover:brightness-[1.08] active:brightness-95'
-      : props.tone === 'outline' ? 'hover:bg-primary/5' : '';
+      : props.tone === 'outline'
+        ? 'hover:bg-primary/5'
+        : '';
   return [
     base,
     sizeMap[props.size],

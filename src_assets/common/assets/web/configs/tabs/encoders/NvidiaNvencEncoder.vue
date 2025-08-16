@@ -48,14 +48,28 @@ const platform = computed(() => config.value?.platform || '');
     </div>
 
     <!-- Spatial AQ -->
-    <Checkbox id="nvenc_spatial_aq" v-model="config.nvenc_spatial_aq" class="mb-3" locale-prefix="config"
-      default="false" />
+    <Checkbox
+      id="nvenc_spatial_aq"
+      v-model="config.nvenc_spatial_aq"
+      class="mb-3"
+      locale-prefix="config"
+      default="false"
+    />
 
     <!-- Single-frame VBV/HRD percentage increase -->
     <div class="mb-4">
-      <label for="nvenc_vbv_increase" class="form-label">{{ $t('config.nvenc_vbv_increase') }}</label>
-      <input id="nvenc_vbv_increase" v-model="config.nvenc_vbv_increase" type="number" min="0" max="400"
-        class="form-control" placeholder="0" />
+      <label for="nvenc_vbv_increase" class="form-label">{{
+        $t('config.nvenc_vbv_increase')
+      }}</label>
+      <input
+        id="nvenc_vbv_increase"
+        v-model="config.nvenc_vbv_increase"
+        type="number"
+        min="0"
+        max="400"
+        class="form-control"
+        placeholder="0"
+      />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.nvenc_vbv_increase_desc') }}<br />
         <br />
@@ -72,24 +86,49 @@ const platform = computed(() => config.value?.platform || '');
       </div>
       <div class="p-4">
         <!-- NVENC Realtime HAGS priority -->
-        <Checkbox v-if="platform === 'windows'" id="nvenc_realtime_hags" v-model="config.nvenc_realtime_hags"
-          class="mb-3" locale-prefix="config" default="true">
+        <Checkbox
+          v-if="platform === 'windows'"
+          id="nvenc_realtime_hags"
+          v-model="config.nvenc_realtime_hags"
+          class="mb-3"
+          locale-prefix="config"
+          default="true"
+        >
           <br />
           <br />
-          <a href="https://devblogs.microsoft.com/directx/hardware-accelerated-gpu-scheduling/">HAGS</a>
+          <a href="https://devblogs.microsoft.com/directx/hardware-accelerated-gpu-scheduling/"
+            >HAGS</a
+          >
         </Checkbox>
 
         <!-- Prefer lower encoding latency over power savings -->
-        <Checkbox v-if="platform === 'windows'" id="nvenc_latency_over_power" v-model="config.nvenc_latency_over_power"
-          class="mb-3" locale-prefix="config" default="true" />
+        <Checkbox
+          v-if="platform === 'windows'"
+          id="nvenc_latency_over_power"
+          v-model="config.nvenc_latency_over_power"
+          class="mb-3"
+          locale-prefix="config"
+          default="true"
+        />
 
         <!-- Present OpenGL/Vulkan on top of DXGI -->
-        <Checkbox v-if="platform === 'windows'" id="nvenc_opengl_vulkan_on_dxgi"
-          v-model="config.nvenc_opengl_vulkan_on_dxgi" class="mb-3" locale-prefix="config" default="true" />
+        <Checkbox
+          v-if="platform === 'windows'"
+          id="nvenc_opengl_vulkan_on_dxgi"
+          v-model="config.nvenc_opengl_vulkan_on_dxgi"
+          class="mb-3"
+          locale-prefix="config"
+          default="true"
+        />
 
         <!-- NVENC H264 CAVLC -->
-        <Checkbox id="nvenc_h264_cavlc" v-model="config.nvenc_h264_cavlc" class="mb-3" locale-prefix="config"
-          default="false" />
+        <Checkbox
+          id="nvenc_h264_cavlc"
+          v-model="config.nvenc_h264_cavlc"
+          class="mb-3"
+          locale-prefix="config"
+          default="false"
+        />
       </div>
     </div>
   </div>

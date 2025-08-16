@@ -7,16 +7,31 @@
       </div>
     </div>
     <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
-      <div v-for="(app, i) in apps" :key="appKey(app, i)"
+      <div
+        v-for="(app, i) in apps"
+        :key="appKey(app, i)"
         class="group relative rounded-xl overflow-hidden border border-black/10 dark:border-white/10 bg-white/60 dark:bg-surface/60 shadow hover:shadow-lg transition flex flex-col"
-        role="button" tabindex="0" @click="openEdit(app, i)">
-        <div class="aspect-[3/4] w-full bg-black/10 dark:bg-white/5 relative flex items-center justify-center p-3">
-          <img v-if="hasCover(app)" :key="appKey(app, i)" :src="coverSrc(app, i)"
-            class="max-w-full max-h-full object-contain rounded" loading="lazy" @error="onImgError($event)" />
+        role="button"
+        tabindex="0"
+        @click="openEdit(app, i)"
+      >
+        <div
+          class="aspect-[3/4] w-full bg-black/10 dark:bg-white/5 relative flex items-center justify-center p-3"
+        >
+          <img
+            v-if="hasCover(app)"
+            :key="appKey(app, i)"
+            :src="coverSrc(app, i)"
+            class="max-w-full max-h-full object-contain rounded"
+            loading="lazy"
+            @error="onImgError($event)"
+          />
           <div v-else class="flex items-center justify-center text-4xl font-bold text-primary/40">
             {{ app.name?.substring(0, 1) || '?' }}
           </div>
-          <div class="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition">
+          <div
+            class="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition"
+          >
             <button class="mini-btn" @click.stop="openEdit(app, i)">
               <i class="fas fa-cog" />
             </button>
@@ -27,18 +42,27 @@
             {{ app.name }}
           </h3>
           <div class="mt-auto flex items-center justify-end text-[10px]">
-            <span v-if="app['prep-cmd']?.length" class="opacity-60">{{ app['prep-cmd'].length }} prep</span>
+            <span v-if="app['prep-cmd']?.length" class="opacity-60"
+              >{{ app['prep-cmd'].length }} prep</span
+            >
           </div>
         </div>
       </div>
       <button
         class="aspect-[3/4] rounded-xl border border-dashed border-black/20 dark:border-white/15 flex flex-col items-center justify-center text-black/40 dark:text-white/30 hover:text-primary hover:border-primary/50 transition"
-        @click="openAdd">
+        @click="openAdd"
+      >
         <i class="fas fa-plus text-3xl mb-2" />
         <span class="text-xs font-medium">Add Application</span>
       </button>
     </div>
-    <AppEditModal v-model="showModal" :app="currentApp" :index="currentIndex" @saved="reload" @deleted="reload" />
+    <AppEditModal
+      v-model="showModal"
+      :app="currentApp"
+      :index="currentIndex"
+      @saved="reload"
+      @deleted="reload"
+    />
     <!-- Playnite integration removed for now -->
   </div>
 </template>

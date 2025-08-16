@@ -37,13 +37,10 @@ initApp(app, async () => {
 
   async function loadPostAuthData(gen) {
     try {
-      await Promise.all([
-        configStore.fetchConfig(true),
-        appsStore.loadApps(true),
-      ]);
+      await Promise.all([configStore.fetchConfig(true), appsStore.loadApps(true)]);
       // Only update platform if still same auth generation (user hasn't logged out/in again mid-load)
       if (gen === dataLoadGeneration) {
-        platformRef.value = (configStore.config?.value?.platform) || '';
+        platformRef.value = configStore.config?.value?.platform || '';
       }
     } catch (e) {
       console.error('post-auth data load failed', e);
