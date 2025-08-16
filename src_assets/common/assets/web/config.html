@@ -868,7 +868,7 @@
             ...entry,
             score: this.scoreEntry(entry, tokens)
           }))
-          .filter(entry => entry.score > -1)
+          .filter(entry => entry.score !== -1)
           .sort((a, b) => {
             if (a.score !== b.score) return a.score - b.score;
             // Tie-break by tab name, then label
