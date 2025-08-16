@@ -4,7 +4,7 @@ import { initApp } from '@/init';
 import { router } from '@/router';
 import App from '@/App.vue';
 import './styles/tailwind.css';
-import { initHttpLayer } from '@/http.js';
+import { initHttpLayer } from '@/http';
 import '@fortawesome/fontawesome-free/css/all.min.css';
 
 // Core application instance & stores
@@ -24,9 +24,9 @@ initApp(app, async () => {
   await initHttpLayer();
 
   const [{ useAuthStore }, { useConfigStore }, { useAppsStore }] = await Promise.all([
-    import('@/stores/auth.js'),
-    import('@/stores/config.js'),
-    import('@/stores/apps.js'),
+    import('@/stores/auth'),
+    import('@/stores/config'),
+    import('@/stores/apps'),
   ]);
 
   const auth = useAuthStore();

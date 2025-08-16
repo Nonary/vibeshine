@@ -1,19 +1,27 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
-import { http } from '@/http.js';
+import { ref, Ref } from 'vue';
+import { http } from '@/http';
+
+interface AuthStatusResponse {
+  credentials_configured?: boolean;
+  authenticated?: boolean;
+  login_required?: boolean;
+}
+
+type AuthListener = () => void;
 
 // Auth store now driven by axios/http interceptor layer instead of polling.
 // Provides subscription for login events and a setter used by http.js.
 export const useAuthStore = defineStore('auth', () => {
-  const isAuthenticated = ref(false);
-  const ready = ref(false);
-  const _listeners = [];
-  const pendingRedirect = ref('/');
-  const showLoginModal = ref(false);
-  const credentialsConfigured = ref(true);
-  const loggingIn = ref(false);
+  const isAuthenticated: Ref<boolean> = ref(false);
+  const ready: Ref<boolean> = ref(false);
+  const _listeners: AuthListener[] = [];
+  const pendingRedirect: Ref<string> = ref('/');
+  const showLoginModal: Ref<boolean> = ref(false);
+  const credentialsConfigured: Ref<boolean> = ref(true);
+  const loggingIn: Ref<boolean> = ref(false);
 
-  function setAuthenticated(v) {
+  function setAuthenticated(v: boolean): void {
     if (v === isAuthenticated.value) return;
     const becameAuthed = !isAuthenticated.value && v;
     isAuthenticated.value = v;
@@ -29,10 +37,10 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   // Single init call invoked during app bootstrap after http layer validation.
-  async function init() {
+  async function init(): Promise<void> {
     if (ready.value) return;
     try {
-      const res = await http.get('/api/auth/status', { validateStatus: () => true });
+      const res = await http.get<AuthStatusResponse>('/api/auth/status', { validateStatus: () => true });
       if (res && res.status === 200 && res.data) {
         if (typeof res.data.credentials_configured === 'boolean') {
           credentialsConfigured.value = res.data.credentials_configured;
@@ -52,8 +60,8 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  function onLogin(cb) {
-    if (typeof cb !== 'function') return;
+  function onLogin(cb: AuthListener): () => void {
+    if (typeof cb !== 'function') return () => {};
     _listeners.push(cb);
     if (isAuthenticated.value)
       setTimeout(() => {
@@ -67,18 +75,18 @@ export const useAuthStore = defineStore('auth', () => {
     };
   }
 
-  function requireLogin(redirectPath) {
+  function requireLogin(redirectPath?: string): void {
     if (redirectPath && typeof redirectPath === 'string') {
       pendingRedirect.value = redirectPath;
     }
     showLoginModal.value = true;
   }
 
-  function hideLogin() {
+  function hideLogin(): void {
     showLoginModal.value = false;
   }
 
-  function setCredentialsConfigured(v) {
+  function setCredentialsConfigured(v: boolean): void {
     credentialsConfigured.value = !!v;
   }
 

@@ -1,17 +1,23 @@
-import { createI18n } from 'vue-i18n';
+import { createI18n, I18n } from 'vue-i18n';
 
 // Import only the fallback language files
 import en from '@/public/assets/locale/en.json';
-import { http } from '@/http.js';
+import { http } from '@/http';
 
-export default async function () {
-  let r = await http
+interface LocaleResponse {
+  locale?: string;
+}
+
+type MessageSchema = typeof en;
+
+export default async function (): Promise<any> {
+  let r: LocaleResponse = await http
     .get('./api/configLocale', { validateStatus: () => true })
     .then((r) => (r.status === 200 ? r.data : {}))
     .catch(() => ({}));
   let locale = r.locale ?? 'en';
-  document.querySelector('html').setAttribute('lang', locale);
-  let messages = {
+  document.querySelector('html')?.setAttribute('lang', locale);
+  let messages: Record<string, MessageSchema> = {
     en,
   };
   try {
