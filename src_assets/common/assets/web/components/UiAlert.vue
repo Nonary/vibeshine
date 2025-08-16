@@ -9,7 +9,11 @@
       <div class="flex-1">
         <slot />
       </div>
-      <button v-if="dismissible" class="ml-2 text-dark hover:opacity-70" @click="$emit('close')">
+      <button
+        v-if="dismissible"
+        class="ml-2 text-dark dark:text-light hover:opacity-70"
+        @click="$emit('close')"
+      >
         &times;
       </button>
     </div>

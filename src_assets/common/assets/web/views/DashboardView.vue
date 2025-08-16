@@ -37,7 +37,7 @@
         <div v-if="loading" class="text-xs italic flex items-center gap-2">
           <i class="fas fa-spinner animate-spin" /> {{ $t('index.loading_latest') }}
         </div>
-        <div v-if="branch || commit" class="text-xs opacity-70 font-mono">
+        <div v-if="branch || commit" class="text-xs font-mono text-gray-600 dark:text-gray-300">
           {{ $t('index.version_branch', { branch, commit: commit.substring(0, 7) }) }}
         </div>
         <UiAlert v-if="buildVersionIsDirty" variant="success">
@@ -48,12 +48,20 @@
           <template #icon><i class="fas fa-flask" /></template>
           {{ $t('index.installed_version_not_stable') }}
         </UiAlert>
-        <UiAlert v-if="!installedVersionNotStable && aheadByCommits > 0" variant="success">
+        <UiAlert
+          v-if="compareChecked && !installedVersionNotStable && aheadByCommits > 0"
+          variant="success"
+        >
           <template #icon><i class="fas fa-forward" /></template>
           {{ $t('index.version_ahead', { ahead: aheadByCommits }) }}
         </UiAlert>
         <UiAlert
-          v-if="!installedVersionNotStable && aheadByCommits === 0 && behindByCommits > 0"
+          v-if="
+            compareChecked &&
+            !installedVersionNotStable &&
+            aheadByCommits === 0 &&
+            behindByCommits > 0
+          "
           variant="warning"
         >
           <template #icon><i class="fas fa-clock-rotate-left" /></template>
@@ -61,6 +69,7 @@
         </UiAlert>
         <UiAlert
           v-if="
+            compareChecked &&
             !installedVersionNotStable &&
             !compareInfo &&
             !stableBuildAvailable &&
@@ -97,7 +106,7 @@
               >
             </div>
             <div
-              class="bg-dark/5 dark:bg-light/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
+              class="bg-light/5 dark:bg-dark/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
             >
               <p class="font-semibold mb-2">{{ preReleaseVersion.release.name }}</p>
               <pre class="whitespace-pre-wrap">{{ preReleaseVersion.release.body }}</pre>
@@ -119,7 +128,7 @@
               >
             </div>
             <div
-              class="bg-dark/5 dark:bg-light/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
+              class="bg-light/5 dark:bg-dark/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
             >
               <p class="font-semibold mb-2">{{ githubVersion.release.name }}</p>
               <pre class="whitespace-pre-wrap">{{ githubVersion.release.body }}</pre>
@@ -156,6 +165,7 @@ const logs = ref('');
 const branch = ref('');
 const commit = ref('');
 const compareInfo = ref(null); // {ahead_by, behind_by, status}
+const compareChecked = ref(false); // true once we've attempted to resolve git distance
 
 const configStore = useConfigStore();
 const auth = useAuthStore();
@@ -204,7 +214,7 @@ async function runVersionChecks() {
       console.warn('[Dashboard] releases list fetch failed', e);
     }
 
-    // Compare if we have enough data
+    // Compare if we have enough data. Mark `compareChecked` once we've attempted (success or fail)
     if (commit.value && githubVersion.value?.version) {
       try {
         const baseTag = githubVersion.value.version.startsWith('v')
@@ -224,7 +234,12 @@ async function runVersionChecks() {
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn('Compare API failed', e);
+      } finally {
+        compareChecked.value = true;
       }
+    } else {
+      // Nothing to compare (no commit or no remote version) - treat as checked
+      compareChecked.value = true;
     }
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -261,6 +276,8 @@ const installedVersionNotStable = computed(() => {
 });
 const stableBuildAvailable = computed(() => {
   if (!githubVersion.value || !version.value) return false;
+  // Don't decide until we've checked git distance
+  if (!compareChecked.value) return false;
   // If we have compare info and we're ahead, do not suggest stable update
   if (compareInfo.value && compareInfo.value.ahead_by > 0) return false;
   // If we have compare info and we're exactly equal (ahead_by = behind_by = 0) treat as up-to-date.
@@ -270,6 +287,8 @@ const stableBuildAvailable = computed(() => {
 });
 const preReleaseBuildAvailable = computed(() => {
   if (!preReleaseVersion.value || !githubVersion.value || !version.value) return false;
+  // Only consider pre-release availability after we've confirmed compare status
+  if (!compareChecked.value) return false;
   return (
     preReleaseVersion.value.isGreater(version.value) &&
     preReleaseVersion.value.isGreater(githubVersion.value)

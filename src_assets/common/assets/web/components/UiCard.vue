@@ -10,7 +10,7 @@
       </div>
     </div>
     <slot />
-    <div v-if="$slots.footer" class="mt-4 pt-3 border-t border-dark/10">
+    <div v-if="$slots.footer" class="mt-4 pt-3 border-t border-dark/10 dark:border-light/10">
       <slot name="footer" />
     </div>
   </div>
@@ -24,7 +24,7 @@ const props = defineProps({
 });
 const outer = computed(() =>
   [
-    'rounded-xl bg-light dark:bg-surface text-dark border border-dark/10',
+    'rounded-xl bg-light dark:bg-surface text-dark dark:text-light border border-dark/10 dark:border-light/10',
     props.elevated ? 'shadow-sm shadow-dark/10 dark:shadow-dark/20' : '',
     props.padded ? 'p-5' : '',
   ].join(' '),

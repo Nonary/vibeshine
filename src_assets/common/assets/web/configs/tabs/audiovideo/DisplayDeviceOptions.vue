@@ -13,6 +13,7 @@ const RESOLUTION_ONLY = 'resolution_only';
 const MIXED = 'mixed';
 
 function canBeRemapped() {
+  if (!config.value) return false;
   return (
     (config.value.dd_resolution_option === 'auto' ||
       config.value.dd_refresh_rate_option === 'auto') &&
@@ -21,6 +22,8 @@ function canBeRemapped() {
 }
 
 function getRemappingType() {
+  // If config isn't ready assume mixed (safe default)
+  if (!config.value) return MIXED;
   // Assuming here that at least one setting is set to "auto" if other is not
   if (config.value.dd_resolution_option !== 'auto') {
     return REFRESH_RATE_ONLY;
@@ -34,6 +37,8 @@ function getRemappingType() {
 function addRemappingEntry() {
   const type = getRemappingType();
   let template = {};
+
+  if (!config.value) return;
 
   if (type !== RESOLUTION_ONLY) {
     template['requested_fps'] = '';
@@ -55,6 +60,9 @@ function addRemappingEntry() {
 
 function removeRemappingEntry(idx) {
   const type = getRemappingType();
+  if (!config.value) return;
+  if (!config.value.dd_mode_remapping) return;
+  if (!Array.isArray(config.value.dd_mode_remapping[type])) return;
   config.value.dd_mode_remapping[type].splice(idx, 1);
   store.updateOption(
     'dd_mode_remapping',
@@ -64,7 +72,7 @@ function removeRemappingEntry(idx) {
 </script>
 
 <template>
-  <PlatformLayout>
+  <PlatformLayout v-if="config">
     <template #windows>
       <div class="mb-6">
         <div class="rounded-md overflow-hidden border border-black/5 dark:border-white/10">

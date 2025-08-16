@@ -42,6 +42,7 @@ const extendedClassStr = (() => {
 })();
 
 // Map the value to boolean representation if possible, otherwise return null.
+// Accepts undefined/null and returns null so caller can decide fallback behavior.
 const mapToBoolRepresentation = (value) => {
   // Try literal values first
   if (value === true || value === false) {
@@ -73,13 +74,20 @@ const mapToBoolRepresentation = (value) => {
 // Determine the true/false values for the checkbox
 const checkboxValues = (() => {
   const mappedValues = (() => {
-    const boolValues = mapToBoolRepresentation(model.value);
-    if (boolValues !== null) {
-      return boolValues.possibleValues;
+    // Prefer explicit model value
+    let boolValues = mapToBoolRepresentation(model.value);
+    if (boolValues !== null) return boolValues.possibleValues;
+
+    // If model is undefined/null try the default prop if provided
+    if (model.value === undefined || model.value === null) {
+      const defaultParsed = mapToBoolRepresentation(props.default);
+      if (defaultParsed !== null) return defaultParsed.possibleValues;
     }
 
-    // Return fallback if nothing matches
-    console.error(`Checkbox value ${model.value} did not match any acceptable pattern!`);
+    // Return conservative fallback if nothing matches
+    console.warn(
+      `Checkbox value ${model.value} did not match any acceptable pattern, falling back to ['true','false']`,
+    );
     return ['true', 'false'];
   })();
 
