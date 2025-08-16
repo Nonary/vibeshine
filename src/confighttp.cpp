@@ -1509,6 +1509,32 @@ namespace confighttp {
 
     nlohmann::json output_tree;
     output_tree["status"] = true;
+
+    auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
+
+    for (auto &[name, value] : vars) {
+      output_tree[name] = std::move(value);
+    }
+
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Get immutables metadata about the server.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/meta| GET| null}
+   */
+  void getMetadata(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
     output_tree["platform"] = SUNSHINE_PLATFORM;
     output_tree["version"] = PROJECT_VERSION;
     output_tree["commit"] = PROJECT_VERSION_COMMIT;
@@ -1517,13 +1543,6 @@ namespace confighttp {
 #else
     output_tree["branch"] = "unknown";
 #endif
-
-    auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
-
-    for (auto &[name, value] : vars) {
-      output_tree[name] = std::move(value);
-    }
-
     send_response(response, output_tree);
   }
 
@@ -2026,6 +2045,7 @@ namespace confighttp {
     server.resource["^/api/apps$"]["POST"] = saveApp;
     server.resource["^/api/config$"]["GET"] = getConfig;
     server.resource["^/api/config$"]["POST"] = saveConfig;
+    server.resource["^/api/metadata$"]["GET"] = getMetadata;
     server.resource["^/api/configLocale$"]["GET"] = getLocale;
     server.resource["^/api/restart$"]["POST"] = restart;
     server.resource["^/api/reset-display-device-persistence$"]["POST"] = resetDisplayDevicePersistence;

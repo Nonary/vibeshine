@@ -1,52 +1,70 @@
-interface GitHubRelease {
+// Minimal GitHub release shape used by the UI and SunshineVersion.
+// Keep only the fields we actually reference in the code to reduce noise.
+export interface GitHubRelease {
   tag_name: string;
   name: string;
-  tag_tag?: string; // Note: This appears to be a typo in the original code
+  html_url: string;
+  body: string;
+  prerelease?: boolean;
+  [key: string]: any;
 }
 
 export default class SunshineVersion {
-  public release: GitHubRelease | null;
   public version: string;
-  public versionName: string | null;
-  public versionTag: string | null;
-  public versionParts: number[] | null;
-  public versionMajor: number | null;
-  public versionMinor: number | null;
-  public versionPatch: number | null;
+  public versionParts: number[];
+  public versionMajor: number;
+  public versionMinor: number;
+  public versionPatch: number;
 
-  constructor(release: GitHubRelease | null = null, version: string | null = null) {
-    if (release) {
-      this.release = release;
-      this.version = release.tag_name;
-      this.versionName = release.name;
-      this.versionTag = release.tag_tag || null;
-    } else if (version) {
-      this.release = null;
-      this.version = version;
-      this.versionName = null;
-      this.versionTag = null;
-    } else {
-      throw new Error('Either release or version must be provided');
-    }
+  /**
+   * Construct a SunshineVersion. Either pass a GitHubRelease or a version string.
+   * All fields on the instance are non-nullable and initialised to sensible defaults.
+   */
+  constructor(version: string) {
+    this.version = version || '0.0.0';
     this.versionParts = this.parseVersion(this.version);
-    this.versionMajor = this.versionParts ? this.versionParts[0] : null;
-    this.versionMinor = this.versionParts ? this.versionParts[1] : null;
-    this.versionPatch = this.versionParts ? this.versionParts[2] : null;
+    this.versionMajor = this.versionParts[0];
+    this.versionMinor = this.versionParts[1];
+    this.versionPatch = this.versionParts[2];
   }
 
-  parseVersion(version: string): number[] | null {
-    if (!version) {
-      return null;
-    }
+  /** Create a SunshineVersion from a GitHubRelease */
+  static fromRelease(release: GitHubRelease): SunshineVersion {
+    const tag = (release && release.tag_name) || '0.0.0';
+    return new SunshineVersion(tag);
+  }
+
+  /** Compare this version to a release directly */
+  isGreaterRelease(release: GitHubRelease | string): boolean {
+    if (typeof release === 'string') return this.isGreater(release);
+    const tag = release.tag_name || '';
+    return this.isGreater(tag);
+  }
+
+  /**
+   * Parse a version string like "v1.2.3" or "1.2" into a 3-number array.
+   * Always returns a length-3 array of numbers (no nulls).
+   */
+  parseVersion(version: string): number[] {
+    if (!version) return [0, 0, 0];
     let v = version;
-    if (v.indexOf('v') === 0) {
+    if (v.charAt(0) === 'v') {
       v = v.substring(1);
     }
-    return v.split('.').map(Number);
+    const parts = v.split('.').map((p) => {
+      const n = Number(p);
+      return Number.isFinite(n) ? Math.floor(n) : 0;
+    });
+    // Ensure exactly 3 parts
+    while (parts.length < 3) parts.push(0);
+    return parts.slice(0, 3);
   }
 
+  /**
+   * Return true if this version is greater than the other.
+   */
   isGreater(otherVersion: SunshineVersion | string): boolean {
-    let otherVersionParts: number[] | null;
+    let otherVersionParts: number[];
     if (otherVersion instanceof SunshineVersion) {
       otherVersionParts = otherVersion.versionParts;
     } else if (typeof otherVersion === 'string') {
@@ -57,10 +75,7 @@ export default class SunshineVersion {
       );
     }
 
-    if (!this.versionParts || !otherVersionParts) {
-      return false;
-    }
-    for (let i = 0; i < Math.min(3, this.versionParts.length, otherVersionParts.length); i++) {
+    for (let i = 0; i < 3; i++) {
       if (this.versionParts[i] !== otherVersionParts[i]) {
         return this.versionParts[i] > otherVersionParts[i];
       }

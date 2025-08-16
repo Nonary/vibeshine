@@ -32,7 +32,7 @@
     </div>
 
     <!-- Version Card -->
-    <UiCard v-if="version" :title="'Version ' + version.version">
+    <UiCard v-if="installedVersion" :title="'Version ' + installedVersion.version">
       <div class="space-y-4 text-sm">
         <div v-if="loading" class="text-xs italic flex items-center gap-2">
           <i class="fas fa-spinner animate-spin" /> {{ $t('index.loading_latest') }}
@@ -100,7 +100,7 @@
               <p class="text-sm m-0">{{ $t('index.new_pre_release') }}</p>
               <a
                 class="UiButton UiButton--primary"
-                :href="preReleaseVersion.release.html_url"
+                :href="preReleaseRelease?.html_url"
                 target="_blank"
                 >{{ $t('index.download') }}</a
               >
@@ -108,8 +108,8 @@
             <div
               class="bg-light/5 dark:bg-dark/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
             >
-              <p class="font-semibold mb-2">{{ preReleaseVersion.release.name }}</p>
-              <pre class="whitespace-pre-wrap">{{ preReleaseVersion.release.body }}</pre>
+              <p class="font-semibold mb-2">{{ preReleaseRelease?.name }}</p>
+              <pre class="whitespace-pre-wrap">{{ preReleaseRelease?.body }}</pre>
             </div>
           </div>
         </UiAlert>
@@ -122,7 +122,7 @@
               <p class="text-sm m-0">{{ $t('index.new_stable') }}</p>
               <a
                 class="UiButton UiButton--primary"
-                :href="githubVersion.release.html_url"
+                :href="githubRelease?.html_url"
                 target="_blank"
                 >{{ $t('index.download') }}</a
               >
@@ -130,8 +130,8 @@
             <div
               class="bg-light/5 dark:bg-dark/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
             >
-              <p class="font-semibold mb-2">{{ githubVersion.release.name }}</p>
-              <pre class="whitespace-pre-wrap">{{ githubVersion.release.body }}</pre>
+              <p class="font-semibold mb-2">{{ githubRelease?.name }}</p>
+              <pre class="whitespace-pre-wrap">{{ githubRelease?.body }}</pre>
             </div>
           </div>
         </UiAlert>
@@ -147,24 +147,39 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
 import UiAlert from '@/components/UiAlert.vue';
 import UiCard from '@/components/UiCard.vue';
 import ResourceCard from '@/ResourceCard.vue';
-import SunshineVersion from '@/sunshine_version';
+import SunshineVersion, { GitHubRelease } from '@/sunshine_version';
 import { useConfigStore } from '@/stores/config';
 import { useAuthStore } from '@/stores/auth';
 
-const version = ref(null);
-const githubVersion = ref(null);
-const preReleaseVersion = ref(null);
+const installedVersion = ref<SunshineVersion>(new SunshineVersion('0.0.0'));
+const githubRelease = ref<GitHubRelease | null>(null);
+const preReleaseRelease = ref<GitHubRelease | null>(null);
+
+const githubVersion = computed(() =>
+  githubRelease.value
+    ? SunshineVersion.fromRelease(githubRelease.value)
+    : new SunshineVersion('0.0.0'),
+);
+const preReleaseVersion = computed(() =>
+  preReleaseRelease.value
+    ? SunshineVersion.fromRelease(preReleaseRelease.value)
+    : new SunshineVersion('0.0.0'),
+);
 const notifyPreReleases = ref(false);
 const loading = ref(true);
 const logs = ref('');
 const branch = ref('');
 const commit = ref('');
-const compareInfo = ref(null); // {ahead_by, behind_by, status}
+const compareInfo = ref<{
+  ahead_by: number;
+  behind_by: number;
+  status: 'identical' | 'ahead' | 'behind' | 'diverged';
+} | null>(null);
 const compareChecked = ref(false); // true once we've attempted to resolve git distance
 
 const configStore = useConfigStore();
@@ -187,18 +202,16 @@ async function runVersionChecks() {
     // Normalize notify pre-release flag to boolean
     notifyPreReleases.value =
       cfg.notify_pre_releases === true || cfg.notify_pre_releases === 'enabled';
-    version.value = new SunshineVersion(null, cfg.version);
+    const serverVersion = configStore.metadata?.version || cfg.version;
+    installedVersion.value = new SunshineVersion(serverVersion || '0.0.0');
     branch.value = cfg.branch || '';
     commit.value = cfg.commit || '';
 
     // Remote release checks (GitHub)
     try {
-      githubVersion.value = new SunshineVersion(
-        await fetch('https://api.github.com/repos/LizardByte/Sunshine/releases/latest').then((r) =>
-          r.json(),
-        ),
-        null,
-      );
+      githubRelease.value = await fetch(
+        'https://api.github.com/repos/LizardByte/Sunshine/releases/latest',
+      ).then((r) => r.json());
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn('[Dashboard] latest release fetch failed', e);
@@ -208,18 +221,18 @@ async function runVersionChecks() {
         'https://api.github.com/repos/LizardByte/Sunshine/releases',
       ).then((r) => r.json());
       const pre = Array.isArray(releases) ? releases.find((r) => r.prerelease) : null;
-      if (pre) preReleaseVersion.value = new SunshineVersion(pre, null);
+      if (pre) preReleaseRelease.value = pre;
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn('[Dashboard] releases list fetch failed', e);
     }
 
     // Compare if we have enough data. Mark `compareChecked` once we've attempted (success or fail)
-    if (commit.value && githubVersion.value?.version) {
+    if (commit.value && githubRelease.value?.tag_name) {
       try {
-        const baseTag = githubVersion.value.version.startsWith('v')
-          ? githubVersion.value.version
-          : 'v' + githubVersion.value.version;
+        const baseTag = githubRelease.value.tag_name.startsWith('v')
+          ? githubRelease.value.tag_name
+          : 'v' + githubRelease.value.tag_name;
         const compareResp = await fetch(
           `https://api.github.com/repos/LizardByte/Sunshine/compare/${baseTag}...${commit.value}`,
         );
@@ -255,27 +268,19 @@ async function runVersionChecks() {
   loading.value = false;
 }
 
-onMounted(() => {
-  // If already authenticated (likely after bootstrap), run immediately; otherwise defer.
-  if (auth.isAuthenticated) {
-    runVersionChecks();
-  } else {
-    // Register one-time listener
-    const off = auth.onLogin(() => {
-      off && off();
-      runVersionChecks();
-    });
-  }
+onMounted(async () => {
+  await auth.waitForAuthentication();
+  await runVersionChecks();
 });
 
 const installedVersionNotStable = computed(() => {
-  if (!githubVersion.value || !version.value) return false;
+  if (!githubRelease.value || !installedVersion.value) return false;
   // treat non-master branches as pre-release builds automatically
   if (branch.value && branch.value !== 'master') return true;
-  return version.value.isGreater(githubVersion.value);
+  return installedVersion.value.isGreaterRelease(githubRelease.value);
 });
 const stableBuildAvailable = computed(() => {
-  if (!githubVersion.value || !version.value) return false;
+  if (!githubRelease.value || !installedVersion.value) return false;
   // Don't decide until we've checked git distance
   if (!compareChecked.value) return false;
   // If we have compare info and we're ahead, do not suggest stable update
@@ -283,21 +288,22 @@ const stableBuildAvailable = computed(() => {
   // If we have compare info and we're exactly equal (ahead_by = behind_by = 0) treat as up-to-date.
   if (compareInfo.value && compareInfo.value.ahead_by === 0 && compareInfo.value.behind_by === 0)
     return false;
-  return githubVersion.value.isGreater(version.value);
+  return githubVersion.value.isGreater(installedVersion.value);
 });
 const preReleaseBuildAvailable = computed(() => {
-  if (!preReleaseVersion.value || !githubVersion.value || !version.value) return false;
+  if (!preReleaseRelease.value || !githubRelease.value || !installedVersion.value) return false;
   // Only consider pre-release availability after we've confirmed compare status
   if (!compareChecked.value) return false;
   return (
-    preReleaseVersion.value.isGreater(version.value) &&
+    preReleaseVersion.value.isGreater(installedVersion.value) &&
     preReleaseVersion.value.isGreater(githubVersion.value)
   );
 });
 const buildVersionIsDirty = computed(() => {
-  if (!version.value) return false;
+  if (!installedVersion.value) return false;
   return (
-    version.value.version?.split('.').length === 5 && version.value.version.indexOf('dirty') !== -1
+    installedVersion.value.version?.split('.').length === 5 &&
+    installedVersion.value.version.indexOf('dirty') !== -1
   );
 });
 const aheadByCommits = computed(() => compareInfo.value?.ahead_by || 0);

@@ -2,6 +2,15 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { http } from '@/http';
 
+// Metadata describing build/runtime info returned by /api/meta
+export interface MetaInfo {
+  platform?: string;
+  status?: boolean;
+  version?: string;
+  commit?: string;
+  branch?: string;
+}
+
 // --- Defaults (flat) -------------------------------------------------------
 // Keep these separate from runtime state so reading defaults does NOT mutate
 // the actual config object that will be POSTed back to the server.
@@ -182,6 +191,8 @@ export const useConfigStore = defineStore('config', () => {
   const version = ref(0); // increments only on real user changes
   const loading = ref(false);
   const error = ref<string | null>(null);
+  // Single meta object kept completely separate from user config
+  const metadata = ref<MetaInfo>({});
 
   function buildWrapper() {
     const target: any = {};
@@ -227,7 +238,7 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   function setConfig(obj: any) {
-    // deep clone server data (do not inject defaults)
+    // config payload should not include metadata anymore; just clone
     _data.value = obj ? JSON.parse(JSON.stringify(obj)) : {};
 
     // decode known JSON string fields
@@ -257,10 +268,6 @@ export const useConfigStore = defineStore('config', () => {
   function serialize(): Record<string, any> | null {
     if (!_data.value) return null;
     const out: Record<string, any> = JSON.parse(JSON.stringify(_data.value));
-    // remove server-only keys
-    delete out.platform;
-    delete out.status;
-    delete out.version;
     // prune defaults (value exactly equals default)
     for (const k of Object.keys(out)) {
       if (k in defaultMap && deepEqual(out[k], defaultMap[k])) delete out[k];
@@ -275,6 +282,16 @@ export const useConfigStore = defineStore('config', () => {
     try {
       const r = await http.get('/api/config');
       if (r.status !== 200) throw new Error('bad status ' + r.status);
+      // Fetch metadata (non-fatal if it fails)
+      try {
+        const mr = await http.get('/api/metadata');
+        if (mr.status === 200 && mr.data) {
+          metadata.value = mr.data;
+        }
+      } catch (_) {
+        /* ignore */
+      }
+      // keep settings and metadata separate
       setConfig(r.data);
       return config.value;
     } catch (e: any) {
@@ -286,18 +303,15 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
-  const platform = computed(() => (_data.value && _data.value.platform) || '');
-
   return {
     // state
     tabs,
     defaults: defaultMap,
     config, // ref to wrapper for template access
-    platform,
     version, // increments only on user mutation
+    metadata,
     loading,
     error,
-    // actions
     fetchConfig,
     setConfig,
     updateOption,

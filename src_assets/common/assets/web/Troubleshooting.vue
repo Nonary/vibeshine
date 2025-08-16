@@ -197,18 +197,15 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { useConfigStore } from '@/stores/config';
 import { useAuthStore } from '@/stores/auth';
 import { http } from '@/http';
 
 const store = useConfigStore();
-const platform = computed(
-  () => store.platform || (navigator.userAgent.includes('Windows') ? 'windows' : ''),
-);
+const platform = computed(() => store.metadata.platform);
 
-// ==== State (client-unpairing removed) ====
 const closeAppPressed = ref(false);
 const closeAppStatus = ref(null);
 const ddResetPressed = ref(false);
