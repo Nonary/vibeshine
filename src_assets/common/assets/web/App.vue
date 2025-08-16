@@ -1,7 +1,8 @@
 <template>
   <div class="min-h-screen flex flex-col bg-light dark:bg-dark text-dark dark:text-light">
     <header
-      class="h-14 flex items-center gap-4 px-4 border-b border-dark/10 dark:border-light/10 bg-light/70 dark:bg-dark/60 backdrop-blur supports-[backdrop-filter]:bg-light/40 supports-[backdrop-filter]:dark:bg-dark/40">
+      class="h-14 flex items-center gap-4 px-4 border-b border-dark/10 dark:border-light/10 bg-light/70 dark:bg-dark/60 backdrop-blur supports-[backdrop-filter]:bg-light/40 supports-[backdrop-filter]:dark:bg-dark/40"
+    >
       <div class="flex items-center gap-3 min-w-0">
         <img src="/images/logo-sunshine-45.png" alt="Sunshine" class="h-8 w-8" />
         <h1 class="text-base md:text-lg font-semibold tracking-tight truncate">
@@ -17,6 +18,9 @@
         </RouterLink>
         <RouterLink to="/clients" :class="linkClass('/clients')">
           <i class="fas fa-users-cog" /><span>{{ $t('clients.nav') }}</span>
+        </RouterLink>
+        <RouterLink to="/api-tokens" :class="linkClass('/api-tokens')">
+          <i class="fas fa-key" /><span>{{ $t('auth.title') }}</span>
         </RouterLink>
         <RouterLink to="/settings" :class="linkClass('/settings')">
           <i class="fas fa-sliders" /><span>Settings</span>
@@ -41,18 +45,26 @@
     <LoginModal />
     <transition name="fade-fast">
       <div v-if="loggedOut" class="fixed inset-0 z-[120] flex flex-col">
-        <div class="absolute inset-0 bg-gradient-to-br from-black/70 via-black/60 to-black/70 backdrop-blur-md"></div>
+        <div
+          class="absolute inset-0 bg-gradient-to-br from-black/70 via-black/60 to-black/70 backdrop-blur-md"
+        ></div>
         <div class="relative flex-1 flex flex-col items-center justify-center p-6 overflow-y-auto">
           <div class="w-full max-w-md mx-auto text-center space-y-6">
-            <img src="/images/logo-sunshine-45.png" alt="Sunshine" class="h-24 w-24 opacity-80 mx-auto select-none" />
+            <img
+              src="/images/logo-sunshine-45.png"
+              alt="Sunshine"
+              class="h-24 w-24 opacity-80 mx-auto select-none"
+            />
             <div class="space-y-2">
               <h2 class="text-2xl font-semibold tracking-tight">{{ $t('auth.logout_success') }}</h2>
               <p class="text-sm opacity-80 leading-relaxed">{{ $t('auth.logout_refresh_hint') }}</p>
             </div>
             <div class="flex items-center justify-center pt-2">
-              <button type="button"
+              <button
+                type="button"
                 class="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold tracking-wide bg-primary/80 text-onPrimary shadow hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary/60 transition disabled:opacity-50"
-                @click="refreshPage">
+                @click="refreshPage"
+              >
                 {{ $t('auth.logout_refresh_button') }}
                 <i class="fas fa-rotate" />
               </button>
@@ -98,6 +110,7 @@ watch(
       '/logs': 'navbar.troubleshoot',
       '/troubleshooting': 'navbar.troubleshoot',
       '/clients': 'clients.nav',
+      '/api-tokens': 'auth.title',
     };
     const v = map[p] || 'Sunshine';
     // If the map value is an i18n key (contains a dot), try to translate it
@@ -125,5 +138,4 @@ async function logout() {
 function refreshPage() {
   window.location.reload();
 }
-
 </script>

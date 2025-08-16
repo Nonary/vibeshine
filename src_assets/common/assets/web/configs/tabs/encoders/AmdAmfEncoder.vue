@@ -44,7 +44,9 @@ const config = store.config;
       <div class="p-4">
         <!-- AMF Rate Control -->
         <div class="mb-4">
-          <label for="amf_rate_control" class="form-label">{{ $t('config.amf.rate_control') }}</label>
+          <label for="amf_rate_control" class="form-label">{{
+            $t('config.amf.rate_control')
+          }}</label>
           <select id="amf_rate_control" v-model="config.rate_control" class="form-control">
             <option value="cbr">
               {{ $t('config.amd_rc_cbr') }}
@@ -65,8 +67,13 @@ const config = store.config;
         </div>
 
         <!-- AMF HRD Enforcement -->
-        <Checkbox id="amd_enforce_hrd" v-model="config.amd_enforce_hrd" class="mb-3" locale-prefix="config"
-          default="false" />
+        <Checkbox
+          id="amd_enforce_hrd"
+          v-model="config.amd_enforce_hrd"
+          class="mb-3"
+          locale-prefix="config"
+          default="false"
+        />
       </div>
     </div>
 
@@ -98,11 +105,22 @@ const config = store.config;
         </div>
 
         <!-- AMD Preanalysis -->
-        <Checkbox id="amd_preanalysis" v-model="config.amd_preanalysis" class="mb-3" locale-prefix="config"
-          default="false" />
+        <Checkbox
+          id="amd_preanalysis"
+          v-model="config.amd_preanalysis"
+          class="mb-3"
+          locale-prefix="config"
+          default="false"
+        />
 
         <!-- AMD VBAQ -->
-        <Checkbox id="amd_vbaq" v-model="config.amd_vbaq" class="mb-3" locale-prefix="config" default="true" />
+        <Checkbox
+          id="amd_vbaq"
+          v-model="config.amd_vbaq"
+          class="mb-3"
+          locale-prefix="config"
+          default="true"
+        />
 
         <!-- AMF Coder (H264) -->
         <div class="mb-6">

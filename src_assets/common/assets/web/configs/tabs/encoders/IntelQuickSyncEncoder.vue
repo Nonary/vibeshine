@@ -54,7 +54,13 @@ const config = store.config;
     </div>
 
     <!-- Allow Slow HEVC Encoding -->
-    <Checkbox id="qsv_slow_hevc" v-model="config.qsv_slow_hevc" class="mb-3" locale-prefix="config" default="false" />
+    <Checkbox
+      id="qsv_slow_hevc"
+      v-model="config.qsv_slow_hevc"
+      class="mb-3"
+      locale-prefix="config"
+      default="false"
+    />
   </div>
 </template>
 

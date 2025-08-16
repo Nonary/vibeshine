@@ -5,7 +5,9 @@
     </h1>
 
     <!-- Pair New Client -->
-    <div class="card p-4 mb-6 shadow-sm border border-dark/10 dark:border-light/10 rounded-md bg-white dark:bg-surface">
+    <div
+      class="card p-4 mb-6 shadow-sm border border-dark/10 dark:border-light/10 rounded-md bg-white dark:bg-surface"
+    >
       <h2 class="text-lg font-medium mb-2 flex items-center gap-2">
         <i class="fas fa-link" /> {{ $t('clients.pair_title') }}
       </h2>
@@ -14,18 +16,31 @@
         <div class="flex flex-col flex-1">
           <label class="text-xs font-semibold uppercase tracking-wide mb-1" for="pin-input">{{
             $t('navbar.pin')
-            }}</label>
-          <input id="pin-input" v-model="pin" type="text" inputmode="numeric" pattern="\\d*" maxlength="4"
+          }}</label>
+          <input
+            id="pin-input"
+            v-model="pin"
+            type="text"
+            inputmode="numeric"
+            pattern="\\d*"
+            maxlength="4"
             class="form-control px-3 py-2 rounded border focus:outline-none focus:ring w-full"
-            :placeholder="$t('navbar.pin')" required />
+            :placeholder="$t('navbar.pin')"
+            required
+          />
         </div>
         <div class="flex flex-col flex-1">
           <label class="text-xs font-semibold uppercase tracking-wide mb-1" for="name-input">{{
             $t('pin.device_name')
-            }}</label>
-          <input id="name-input" v-model="deviceName" type="text"
+          }}</label>
+          <input
+            id="name-input"
+            v-model="deviceName"
+            type="text"
             class="form-control px-3 py-2 rounded border focus:outline-none focus:ring w-full"
-            :placeholder="$t('pin.device_name')" required />
+            :placeholder="$t('pin.device_name')"
+            required
+          />
         </div>
         <div class="flex flex-col">
           <button :disabled="pairing" class="btn btn-primary px-4 py-2 mt-2 md:mt-0">
@@ -49,12 +64,18 @@
     </div>
 
     <!-- Existing Clients -->
-    <div class="card p-4 shadow-sm border border-dark/10 dark:border-light/10 rounded-md bg-white dark:bg-surface mb-6">
+    <div
+      class="card p-4 shadow-sm border border-dark/10 dark:border-light/10 rounded-md bg-white dark:bg-surface mb-6"
+    >
       <div class="flex items-center gap-3 mb-3">
         <h2 class="text-lg font-medium flex items-center gap-2">
           <i class="fas fa-users" /> {{ $t('clients.existing_title') }}
         </h2>
-        <button class="btn btn-danger ms-auto" :disabled="unpairAllPressed || clients.length === 0" @click="unpairAll">
+        <button
+          class="btn btn-danger ms-auto"
+          :disabled="unpairAllPressed || clients.length === 0"
+          @click="unpairAll"
+        >
           <i class="fas fa-user-slash" /> {{ $t('troubleshooting.unpair_all') }}
         </button>
       </div>
@@ -65,13 +86,23 @@
       <div v-if="unpairAllStatus === false" class="alert alert-danger mb-3">
         {{ $t('troubleshooting.unpair_all_error') }}
       </div>
-      <ul v-if="clients && clients.length > 0" class="list-group list-group-flush list-group-item-light divide-y">
-        <li v-for="client in clients" :key="client.uuid" class="flex items-center py-2 px-2 hover:bg-primary/5">
+      <ul
+        v-if="clients && clients.length > 0"
+        class="list-group list-group-flush list-group-item-light divide-y"
+      >
+        <li
+          v-for="client in clients"
+          :key="client.uuid"
+          class="flex items-center py-2 px-2 hover:bg-primary/5"
+        >
           <div class="flex-1">
             {{ client.name !== '' ? client.name : $t('troubleshooting.unpair_single_unknown') }}
           </div>
-          <button class="btn btn-danger btn-sm" :disabled="removing[client.uuid] === true"
-            @click="unpairSingle(client.uuid)">
+          <button
+            class="btn btn-danger btn-sm"
+            :disabled="removing[client.uuid] === true"
+            @click="unpairSingle(client.uuid)"
+          >
             <i class="fas fa-trash" />
           </button>
         </li>

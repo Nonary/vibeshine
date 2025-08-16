@@ -3,18 +3,33 @@
     <!-- Apps Grid -->
     <div class="col-span-12 xl:col-span-8 space-y-6">
       <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-        <div v-for="(app, i) in apps" :key="i"
-          class="group relative rounded-xl overflow-hidden border border-dark/10 dark:border-light/10 bg-white/60 dark:bg-surface/60 shadow hover:shadow-lg transition flex flex-col">
+        <div
+          v-for="(app, i) in apps"
+          :key="i"
+          class="group relative rounded-xl overflow-hidden border border-dark/10 dark:border-light/10 bg-white/60 dark:bg-surface/60 shadow hover:shadow-lg transition flex flex-col"
+        >
           <div class="aspect-[3/4] w-full relative bg-dark/5 dark:bg-dark/30">
-            <img v-if="hasCover(app)" :key="appKey(app, i)" :src="coverSrc(app, i)"
-              class="absolute inset-0 w-full h-full object-cover" loading="lazy" @error="onImgError($event)" />
-            <div v-else class="absolute inset-0 flex items-center justify-center text-4xl font-bold text-primary/40">
+            <img
+              v-if="hasCover(app)"
+              :key="appKey(app, i)"
+              :src="coverSrc(app, i)"
+              class="absolute inset-0 w-full h-full object-cover"
+              loading="lazy"
+              @error="onImgError($event)"
+            />
+            <div
+              v-else
+              class="absolute inset-0 flex items-center justify-center text-4xl font-bold text-primary/40"
+            >
               {{ app.name.substring(0, 1) }}
             </div>
-            <div class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition">
+            <div
+              class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition"
+            >
               <button
                 class="inline-flex items-center justify-center w-8 h-8 rounded-md bg-black/50 text-white hover:bg-black/70"
-                @click="openEdit(app, i)">
+                @click="openEdit(app, i)"
+              >
                 <i class="fas fa-cog text-sm" />
               </button>
             </div>
@@ -28,14 +43,17 @@
             </p>
             <div class="mt-auto flex items-center justify-between">
               <span
-                class="px-2 py-0.5 rounded-full bg-green-500/15 text-green-600 dark:text-green-400 text-[10px]">Configured</span>
+                class="px-2 py-0.5 rounded-full bg-green-500/15 text-green-600 dark:text-green-400 text-[10px]"
+                >Configured</span
+              >
               <ProfileSelector v-model="profileSelections[app.name]" />
             </div>
           </div>
         </div>
         <button
           class="aspect-[3/4] rounded-xl border border-dashed border-dark/20 dark:border-light/10 flex flex-col items-center justify-center text-dark/40 dark:text-light/30 hover:border-primary/50 hover:text-primary transition"
-          @click="openAdd">
+          @click="openAdd"
+        >
           <i class="fas fa-plus text-3xl mb-2" />
           <span class="text-xs font-medium">Add</span>
         </button>
@@ -71,7 +89,9 @@
           </div>
         </div>
         <div class="mt-4 h-2 rounded-full bg-dark/10 dark:bg-light/10 overflow-hidden">
-          <div class="h-full w-1/3 bg-gradient-to-r from-green-500 via-yellow-400 to-red-500 animate-pulse" />
+          <div
+            class="h-full w-1/3 bg-gradient-to-r from-green-500 via-yellow-400 to-red-500 animate-pulse"
+          />
         </div>
       </UiCard>
       <UiCard title="Profiles">
@@ -83,16 +103,35 @@
       </UiCard>
       <UiCard title="Resources">
         <div class="text-xs space-y-2">
-          <a href="https://app.lizardbyte.dev" target="_blank" class="block text-primary hover:underline">Website</a>
-          <a href="https://app.lizardbyte.dev/discord" target="_blank"
-            class="block text-primary hover:underline">Discord</a>
-          <a href="https://github.com/orgs/LizardByte/discussions" target="_blank"
-            class="block text-primary hover:underline">GitHub Discussions</a>
+          <a
+            href="https://app.lizardbyte.dev"
+            target="_blank"
+            class="block text-primary hover:underline"
+            >Website</a
+          >
+          <a
+            href="https://app.lizardbyte.dev/discord"
+            target="_blank"
+            class="block text-primary hover:underline"
+            >Discord</a
+          >
+          <a
+            href="https://github.com/orgs/LizardByte/discussions"
+            target="_blank"
+            class="block text-primary hover:underline"
+            >GitHub Discussions</a
+          >
         </div>
       </UiCard>
     </div>
   </div>
-  <AppEditModal v-model="showModal" :app="currentApp" :index="currentIndex" @saved="reloadApps" @deleted="reloadApps" />
+  <AppEditModal
+    v-model="showModal"
+    :app="currentApp"
+    :index="currentIndex"
+    @saved="reloadApps"
+    @deleted="reloadApps"
+  />
 </template>
 <script setup>
 import { ref, onMounted, computed } from 'vue';

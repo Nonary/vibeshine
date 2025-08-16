@@ -5,6 +5,7 @@ import ApplicationsView from '@/views/ApplicationsView.vue';
 import SettingsView from '@/views/SettingsView.vue';
 import TroubleshootingView from '@/views/TroubleshootingView.vue';
 import ClientManagementView from '@/views/ClientManagementView.vue';
+import ApiTokenManager from '@/ApiTokenManager.vue';
 // Login view
 
 const routes = [
@@ -14,6 +15,7 @@ const routes = [
   { path: '/logs', component: DashboardView },
   { path: '/troubleshooting', component: TroubleshootingView },
   { path: '/clients', component: ClientManagementView },
+  { path: '/api-tokens', component: ApiTokenManager },
 ];
 
 export const router = createRouter({

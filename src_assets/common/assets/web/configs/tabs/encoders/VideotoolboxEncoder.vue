@@ -41,8 +41,14 @@ const config = store.config;
         </option>
       </select>
     </div>
-    <Checkbox id="vt_realtime" v-model="config.vt_realtime" class="mb-4" desc="" locale-prefix="config"
-      default="true" />
+    <Checkbox
+      id="vt_realtime"
+      v-model="config.vt_realtime"
+      class="mb-4"
+      desc=""
+      locale-prefix="config"
+      default="true"
+    />
   </div>
 </template>
 
