@@ -1,31 +1,35 @@
 <script setup>
 import Checkbox from '@/Checkbox.vue';
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { useConfigStore } from '@/stores/config';
+import { storeToRefs } from 'pinia';
 
 const store = useConfigStore();
-const config = store.config;
-import { computed } from 'vue';
-const platform = computed(() => config.value?.platform || '');
+const { config, metadata } = storeToRefs(store);
+const platform = computed(() => metadata.value?.platform || '');
 
 function addCmd() {
-  let template = { do: '', undo: '' };
-  if (store) {
-    if (store.config && store.config.platform === 'windows')
-      template = { ...template, elevated: false };
-    // ensure array
-    if (!config.value.global_prep_cmd) config.value.global_prep_cmd = [];
-    config.value.global_prep_cmd.push(template);
-    // reassign to trigger store setter/version bump
-    store.updateOption('global_prep_cmd', [...config.value.global_prep_cmd]);
-  }
+  const template = {
+    do: '',
+    undo: '',
+    ...(platform.value === 'windows' ? { elevated: false } : {}),
+  };
+  if (!config.value) return;
+  const current = Array.isArray(config.value.global_prep_cmd) ? config.value.global_prep_cmd : [];
+  const next = [...current, template];
+  store.updateOption('global_prep_cmd', next);
+  if (store.markManualDirty) store.markManualDirty('global_prep_cmd');
 }
 
 function removeCmd(index) {
-  if (config.value && config.value.global_prep_cmd) {
-    config.value.global_prep_cmd.splice(index, 1);
-    store.updateOption('global_prep_cmd', [...config.value.global_prep_cmd]);
-  }
+  if (!config.value) return;
+  const current = Array.isArray(config.value.global_prep_cmd)
+    ? [...config.value.global_prep_cmd]
+    : [];
+  if (index < 0 || index >= current.length) return;
+  current.splice(index, 1);
+  store.updateOption('global_prep_cmd', current);
+  if (store.markManualDirty) store.markManualDirty('global_prep_cmd');
 }
 </script>
 
@@ -122,10 +126,20 @@ function removeCmd(index) {
           class="grid grid-cols-12 gap-2 items-start"
         >
           <div class="col-span-5">
-            <input v-model="c.do" type="text" class="form-control monospace" />
+            <input
+              v-model="c.do"
+              type="text"
+              class="form-control monospace"
+              @input="store.markManualDirty()"
+            />
           </div>
           <div class="col-span-5">
-            <input v-model="c.undo" type="text" class="form-control monospace" />
+            <input
+              v-model="c.undo"
+              type="text"
+              class="form-control monospace"
+              @input="store.markManualDirty()"
+            />
           </div>
           <div v-if="platform === 'windows'" class="col-span-1">
             <Checkbox
@@ -133,6 +147,7 @@ function removeCmd(index) {
               v-model="c.elevated"
               label="_common.elevated"
               desc=""
+              @change="store.markManualDirty()"
             />
           </div>
           <div class="col-span-1 flex gap-2">

@@ -189,6 +189,9 @@ export const useConfigStore = defineStore('config', () => {
   const _data = ref<Record<string, any> | null>(null); // only user/server values
   const config = ref<any>(null); // wrapper with getters/setters for UI binding
   const version = ref(0); // increments only on real user changes
+  // Track keys that should require manual save (no autosave)
+  const manualSaveKeys = new Set<string>(['global_prep_cmd']);
+  const manualDirty = ref(false);
   const loading = ref(false);
   const error = ref<string | null>(null);
   // Single meta object kept completely separate from user config
@@ -230,7 +233,13 @@ export const useConfigStore = defineStore('config', () => {
           const prev = _data.value[k];
           if (deepEqual(prev, v)) return; // ignore no-op
           _data.value[k] = v;
-          version.value++;
+          // If this key requires manual save, do not bump version so
+          // autosave logic won't trigger; mark manual dirty instead
+          if (manualSaveKeys.has(k)) {
+            manualDirty.value = true;
+          } else {
+            version.value++;
+          }
         },
       });
     });
@@ -262,7 +271,16 @@ export const useConfigStore = defineStore('config', () => {
 
   function updateOption(key: string, value: any) {
     if (!config.value) return;
-    (config.value as any)[key] = value; // triggers setter
+    (config.value as any)[key] = value; // triggers setter (handles manual/auto)
+  }
+
+  // Explicitly mark a manual-dirty change (e.g., when mutating nested fields)
+  function markManualDirty(_key?: string) {
+    manualDirty.value = true;
+  }
+
+  function resetManualDirty() {
+    manualDirty.value = false;
   }
 
   function serialize(): Record<string, any> | null {
@@ -309,12 +327,15 @@ export const useConfigStore = defineStore('config', () => {
     defaults: defaultMap,
     config, // ref to wrapper for template access
     version, // increments only on user mutation
+    manualDirty,
     metadata,
     loading,
     error,
     fetchConfig,
     setConfig,
     updateOption,
+    markManualDirty,
+    resetManualDirty,
     serialize,
   };
 });

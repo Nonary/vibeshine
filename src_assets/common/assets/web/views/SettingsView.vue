@@ -67,7 +67,7 @@
           </transition>
         </div>
 
-        <div v-if="!autoSave" class="flex gap-2">
+        <div v-if="showSave" class="flex gap-2">
           <button class="btn" :disabled="saveState === 'saving'" @click="save">Save</button>
           <button v-if="saveState === 'saved' && !restarted" class="btn ghost" @click="apply">
             Apply
@@ -141,7 +141,7 @@
   </main>
 
   <transition name="slide-fade">
-    <div v-if="dirty && !autoSave" class="fixed bottom-4 right-6 z-30">
+    <div v-if="(dirty && !autoSave) || store.manualDirty === true" class="fixed bottom-4 right-6 z-30">
       <div
         class="bg-white/90 dark:bg-surface/90 backdrop-blur rounded-lg shadow border border-black/5 dark:border-white/10 px-4 py-2 flex items-center gap-3"
       >
@@ -179,6 +179,7 @@ const saveState = ref('idle'); // 'idle' | 'saving' | 'saved' | 'error'
 const restarted = ref(false);
 const dirty = ref(false);
 const autoSave = ref(true);
+const showSave = computed(() => store.manualDirty === true || !autoSave.value);
 
 const mainEl = ref(null);
 const searchQuery = ref('');
@@ -246,6 +247,8 @@ async function save() {
   if (res.status === 200) {
     saveState.value = 'saved';
     dirty.value = false;
+    // Clear manual-dirty after successful save
+    if (store.resetManualDirty) store.resetManualDirty();
   } else {
     saveState.value = 'error';
   }
