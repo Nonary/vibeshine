@@ -1,18 +1,21 @@
 <template>
-  <div class="card p-2">
-    <div class="card-body">
-      <h2>{{ $t('resource_card.resources') }}</h2>
-      <br />
-      <p>{{ $t('resource_card.resources_desc') }}</p>
-      <div class="card-group p-4 align-items-center">
-        <a class="btn btn-success m-1" href="https://app.lizardbyte.dev" target="_blank">
+  <div class="card p-3">
+    <div class="card-body text-center">
+      <h2 class="text-lg font-semibold">{{ $t('resource_card.resources') }}</h2>
+      <div class="my-3 text-sm">{{ $t('resource_card.resources_desc') }}</div>
+      <div class="flex justify-center gap-3 p-4">
+        <a class="btn btn-success px-4 py-2" href="https://app.lizardbyte.dev" target="_blank">
           {{ $t('resource_card.lizardbyte_website') }}</a
         >
-        <a class="btn btn-primary m-1" href="https://app.lizardbyte.dev/discord" target="_blank">
+        <a
+          class="btn btn-primary px-4 py-2"
+          href="https://app.lizardbyte.dev/discord"
+          target="_blank"
+        >
           <i class="fab fa-fw fa-discord" /> Discord</a
         >
         <a
-          class="btn btn-secondary m-1"
+          class="btn btn-secondary px-4 py-2"
           href="https://github.com/orgs/LizardByte/discussions"
           target="_blank"
         >
@@ -22,21 +25,20 @@
     </div>
   </div>
   <!-- Legal -->
-  <div class="card p-2 mt-4">
-    <div class="card-body">
-      <h2>{{ $t('resource_card.legal') }}</h2>
-      <br />
-      <p>{{ $t('resource_card.legal_desc') }}</p>
-      <div class="card-group p-4 align-items-center">
+  <div class="card p-3 mt-4">
+    <div class="card-body text-center">
+      <h2 class="text-lg font-semibold">{{ $t('resource_card.legal') }}</h2>
+      <div class="my-3 text-sm">{{ $t('resource_card.legal_desc') }}</div>
+      <div class="flex justify-center gap-3 p-4">
         <a
-          class="btn btn-danger m-1"
+          class="btn btn-danger px-4 py-2"
           href="https://github.com/LizardByte/Sunshine/blob/master/LICENSE"
           target="_blank"
         >
           <i class="fas fa-fw fa-file-alt" /> {{ $t('resource_card.license') }}</a
         >
         <a
-          class="btn btn-danger m-1"
+          class="btn btn-danger px-4 py-2"
           href="https://github.com/LizardByte/Sunshine/blob/master/NOTICE"
           target="_blank"
         >

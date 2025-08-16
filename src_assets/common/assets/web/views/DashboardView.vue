@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-8 max-w-5xl">
+  <div class="space-y-8 max-w-6xl mx-auto px-4">
     <!-- Welcome / Intro -->
     <div>
       <h1 class="text-3xl font-semibold mb-2">{{ $t('index.welcome') }}</h1>

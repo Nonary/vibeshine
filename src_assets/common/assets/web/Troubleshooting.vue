@@ -287,7 +287,6 @@ async function refreshLogs() {
   }
 
   try {
-    console.log(authStore.isAuthenticated);
     const r = await http.get('./api/logs', {
       responseType: 'text',
       transformResponse: [(v) => v],

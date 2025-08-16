@@ -399,7 +399,8 @@
     "version_behind": "Your build is {behind} commits behind the latest release; consider updating.",
     "version_compare_unknown": "Unable to determine commit distance to latest release.",
     "version_branch": "Branch: {branch} (commit {commit})",
-    "welcome": "Hello, Sunshine!"
+    "view_logs": "Open Troubleshooting — Logs",
+    "welcome": "Hello, Vibeshine!"
   },
   "resources": {
     "title": "Resources"
