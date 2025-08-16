@@ -23,6 +23,7 @@
     "@codecov/vite-plugin": "1.9.1",
     "@vitejs/plugin-vue": "4.6.2",
     "serve": "14.2.4",
+    "typescript": "^5.0.0",
     "vite": "4.5.14",
     "vite-plugin-ejs": "1.6.4"
   }

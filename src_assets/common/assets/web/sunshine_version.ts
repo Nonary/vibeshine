@@ -1,5 +1,20 @@
+interface SunshineRelease {
+  tag_name: string;
+  name: string;
+  tag_tag: string;
+}
+
 class SunshineVersion {
-  constructor(release = null, version = null) {
+  release: SunshineRelease | null;
+  version: string;
+  versionName: string | null;
+  versionTag: string | null;
+  versionParts: number[] | null;
+  versionMajor: number | null;
+  versionMinor: number | null;
+  versionPatch: number | null;
+
+  constructor(release: SunshineRelease | null = null, version: string | null = null) {
     if (release) {
       this.release = release;
       this.version = release.tag_name;
@@ -19,7 +34,7 @@ class SunshineVersion {
     this.versionPatch = this.versionParts ? this.versionParts[2] : null;
   }
 
-  parseVersion(version) {
+  parseVersion(version: string): number[] | null {
     if (!version) {
       return null;
     }
@@ -30,8 +45,8 @@ class SunshineVersion {
     return v.split('.').map(Number);
   }
 
-  isGreater(otherVersion) {
-    let otherVersionParts;
+  isGreater(otherVersion: SunshineVersion | string): boolean {
+    let otherVersionParts: number[] | null;
     if (otherVersion instanceof SunshineVersion) {
       otherVersionParts = otherVersion.versionParts;
     } else if (typeof otherVersion === 'string') {
