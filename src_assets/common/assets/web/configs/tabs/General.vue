@@ -152,7 +152,7 @@ function removeCmd(index) {
           </div>
           <div class="col-span-1 flex gap-2">
             <button
-              class="inline-flex items-center px-3 py-1.5 rounded-md bg-danger text-onLight"
+              class="inline-flex items-center px-3 py-1.5 rounded-md bg-danger text-onDark"
               @click="removeCmd(i)"
             >
               <i class="fas fa-trash" />

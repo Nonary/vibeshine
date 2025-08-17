@@ -2,9 +2,9 @@
 import { computed } from 'vue';
 import { useConfigStore } from '@/stores/config';
 
-// Read platform from centralized config store
+// Read platform from centralized config store metadata
 const store = useConfigStore();
-const platform = computed(() => store.platform || '');
+const platform = computed(() => (store.metadata && store.metadata.platform) || '');
 </script>
 
 <template>

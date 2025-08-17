@@ -165,16 +165,35 @@
           </button>
           <button class="ghost-btn" @click="close">Cancel</button>
         </div>
-        <button v-if="form.index !== -1" class="danger-btn" :disabled="saving.v" @click="del">
+        <button
+          v-if="form.index !== -1"
+          class="danger-btn"
+          :disabled="saving.v"
+          @click="showDeleteConfirm = true"
+        >
           <i class="fas fa-trash" />
         </button>
       </div>
+      <!-- Confirm delete modal -->
+      <UiConfirmModal
+        v-model:open="showDeleteConfirm"
+        :title="$t('apps.confirm_delete_title_named', { name: form.name || '' })"
+        :message="$t('apps.confirm_delete_message_named', { name: form.name || '' })"
+        :confirm-text="$t('apps.delete')"
+        :cancelText="$t('cancel')"
+        confirm-icon="fas fa-trash"
+        variant="danger"
+        icon="fas fa-triangle-exclamation"
+        @confirm="del"
+        @cancel="showDeleteConfirm = false"
+      />
     </div>
   </div>
 </template>
 <script setup>
-import { reactive, watch, computed } from 'vue';
+import { reactive, watch, computed, ref } from 'vue';
 import { http } from '@/http';
+import UiConfirmModal from '@/components/UiConfirmModal.vue';
 const props = defineProps({
   modelValue: Boolean,
   platform: String,
@@ -240,6 +259,7 @@ function addPrep() {
   });
 }
 const saving = reactive({ v: false });
+const showDeleteConfirm = ref(false);
 
 function simpleHash(str) {
   let h = 2166136261 >>> 0;
@@ -291,7 +311,6 @@ async function save() {
   }
 }
 async function del() {
-  if (!confirm('Delete this application?')) return;
   saving.v = true;
   try {
     await http.delete(`./api/apps/${form.index}`, { validateStatus: () => true });

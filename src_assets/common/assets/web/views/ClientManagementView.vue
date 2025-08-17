@@ -26,7 +26,8 @@
               v-model="pin"
               type="text"
               inputmode="numeric"
-              pattern="\\d*"
+              pattern="^[0-9]{4}$"
+              title="Enter 4 digits"
               maxlength="4"
               class="form-control"
               :placeholder="$t('navbar.pin')"
@@ -86,9 +87,12 @@
           class="ml-auto"
           variant="danger"
           :disabled="unpairAllPressed || clients.length === 0"
-          @click="unpairAll"
+          @click="askConfirmUnpairAll"
         >
-          <i class="fas fa-user-slash" /> {{ $t('troubleshooting.unpair_all') }}
+          <template #icon>
+            <i class="fas fa-user-slash" />
+          </template>
+          {{ $t('troubleshooting.unpair_all') }}
         </UiButton>
       </template>
       <p class="text-sm opacity-75 mb-3">{{ $t('troubleshooting.unpair_desc') }}</p>
@@ -112,7 +116,7 @@
             size="sm"
             :disabled="removing[client.uuid] === true"
             aria-label="Remove"
-            @click="unpairSingle(client.uuid)"
+            @click="askConfirmUnpair(client.uuid)"
           >
             <i class="fas fa-trash" />
           </UiButton>
@@ -124,6 +128,42 @@
     </UiCard>
 
     <ApiTokenManager></ApiTokenManager>
+
+    <!-- Confirm remove single client -->
+    <UiConfirmModal
+      v-model:open="showConfirmRemove"
+      :title="
+        $t('clients.confirm_remove_title_named', {
+          name: pendingRemoveName || $t('troubleshooting.unpair_single_unknown'),
+        })
+      "
+      :message="
+        $t('clients.confirm_remove_message_named', {
+          name: pendingRemoveName || $t('troubleshooting.unpair_single_unknown'),
+        })
+      "
+      :confirm-text="$t('clients.remove')"
+      :cancelText="$t('cancel')"
+      confirm-icon="fas fa-user-slash"
+      variant="danger"
+      icon="fas fa-triangle-exclamation"
+      @confirm="confirmRemove"
+      @cancel="showConfirmRemove = false"
+    />
+
+    <!-- Confirm unpair all -->
+    <UiConfirmModal
+      v-model:open="showConfirmUnpairAll"
+      :title="$t('clients.confirm_unpair_all_title')"
+      :message="$t('clients.confirm_unpair_all_message_count', { count: clients.length })"
+      :confirm-text="$t('troubleshooting.unpair_all')"
+      :cancelText="$t('cancel')"
+      confirm-icon="fas fa-user-slash"
+      variant="danger"
+      icon="fas fa-triangle-exclamation"
+      @confirm="confirmUnpairAll"
+      @cancel="showConfirmUnpairAll = false"
+    />
   </div>
 </template>
 
@@ -134,6 +174,7 @@ import UiCard from '@/components/UiCard.vue';
 import UiButton from '@/components/UiButton.vue';
 import UiAlert from '@/components/UiAlert.vue';
 import ApiTokenManager from '@/ApiTokenManager.vue';
+import UiConfirmModal from '@/components/UiConfirmModal.vue';
 
 const clients = ref([]);
 const pin = ref('');
@@ -143,6 +184,10 @@ const pairStatus = ref(null); // true/false/null
 const unpairAllPressed = ref(false);
 const unpairAllStatus = ref(null);
 const removing = ref({});
+const showConfirmRemove = ref(false);
+const pendingRemoveUuid = ref('');
+const pendingRemoveName = ref('');
+const showConfirmUnpairAll = ref(false);
 
 async function refreshClients() {
   try {
@@ -165,13 +210,31 @@ async function registerDevice() {
   pairStatus.value = null;
   pairing.value = true;
   try {
-    const body = { pin: pin.value.trim(), name: deviceName.value.trim() };
+    const trimmedName = deviceName.value.trim();
+    const body = { pin: pin.value.trim(), name: trimmedName };
     const r = await http.post('./api/pin', body, { validateStatus: () => true });
-    pairStatus.value = r.data?.status === true;
-    if (pairStatus.value) {
+    const ok =
+      r &&
+      r.status >= 200 &&
+      r.status < 300 &&
+      (r.data?.status === true || r.data?.status === 'true' || r.data?.status === 1);
+    pairStatus.value = !!ok;
+    if (ok) {
+      const prevCount = clients.value?.length || 0;
+      // Kick one immediate refresh
+      await refreshClients();
+      // Poll briefly to catch eventual consistency from backend
+      const deadline = Date.now() + 5000; // up to 5s
+      const target = trimmedName.toLowerCase();
+      while (Date.now() < deadline) {
+        const found = clients.value?.some((c) => (c.name || '').toLowerCase() === target);
+        if (found || (clients.value?.length || 0) > prevCount) break;
+        await new Promise((res) => setTimeout(res, 400));
+        await refreshClients();
+      }
+      // Clear inputs after we tried to load the updated list
       pin.value = '';
       deviceName.value = '';
-      refreshClients();
     }
   } catch {
     pairStatus.value = false;
@@ -181,6 +244,22 @@ async function registerDevice() {
       pairStatus.value = null;
     }, 5000);
   }
+}
+
+function askConfirmUnpair(uuid) {
+  pendingRemoveUuid.value = uuid;
+  const c = clients.value.find((x) => x.uuid === uuid);
+  pendingRemoveName.value = c && c.name ? c.name : '';
+  showConfirmRemove.value = true;
+}
+
+async function confirmRemove() {
+  const uuid = pendingRemoveUuid.value;
+  showConfirmRemove.value = false;
+  pendingRemoveUuid.value = '';
+  pendingRemoveName.value = '';
+  if (!uuid) return;
+  await unpairSingle(uuid);
 }
 
 async function unpairSingle(uuid) {
@@ -194,6 +273,15 @@ async function unpairSingle(uuid) {
     removing.value = { ...removing.value };
     refreshClients();
   }
+}
+
+function askConfirmUnpairAll() {
+  showConfirmUnpairAll.value = true;
+}
+
+async function confirmUnpairAll() {
+  showConfirmUnpairAll.value = false;
+  await unpairAll();
 }
 
 async function unpairAll() {

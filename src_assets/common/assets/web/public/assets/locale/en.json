@@ -42,6 +42,9 @@
     "cmd_prep_name": "Command Preparations",
     "covers_found": "Covers Found",
     "delete": "Delete",
+    "confirm_delete_title": "Delete Application",
+    "confirm_delete_title_named": "Delete \"{name}\"?",
+    "confirm_delete_message_named": "This removes the application entry \"{name}\" from your list. It does not delete files on disk.",
     "detached_cmds": "Detached Commands",
     "detached_cmds_add": "Add Detached Command",
     "detached_cmds_desc": "A list of commands to be run in the background.",
@@ -428,7 +431,15 @@
     "pair_title": "Pair Client",
     "pair_desc": "Enter the 4-digit PIN shown in Moonlight along with a friendly device name to pair this client.",
     "existing_title": "Paired Clients",
-    "pairing": "Pairing..."
+    "pairing": "Pairing...",
+    "remove": "Remove",
+    "confirm_remove_title": "Remove Client",
+    "confirm_remove_message": "Are you sure you want to remove this client? It will need to be re-paired.",
+    "confirm_remove_title_named": "Remove Client \"{name}\"?",
+    "confirm_remove_message_named": "This will unpair {name} from Sunshine. They will need to pair again to connect.",
+    "confirm_unpair_all_title": "Unpair All Clients",
+    "confirm_unpair_all_message": "Are you sure you want to unpair all clients? They will all need to be re-paired.",
+    "confirm_unpair_all_message_count": "This will unpair all {count} client(s). They will all need to pair again to connect."
   },
   "password": {
     "confirm_password": "Confirm Password",
@@ -443,7 +454,7 @@
     "pair_failure": "Pairing Failed: Check if the PIN is typed correctly",
     "pair_success": "Success! Please check Moonlight to continue",
     "pin_pairing": "PIN Pairing",
-    "send": "Send",
+    "send": "Pair",
     "warning_msg": "Make sure you have access to the client you are pairing with. This software can give total control to your computer, so be careful!"
   },
   "resource_card": {
@@ -519,6 +530,8 @@
     "failed_to_generate_token": "Failed to generate token.",
     "request_failed": "Request failed",
     "confirm_revoke": "Are you sure you want to revoke this token? This action cannot be undone.",
+    "confirm_revoke_title": "Revoke API Token?",
+    "confirm_revoke_message_hash": "Revoke token {hash}? This immediately disables the token and cannot be undone.",
     "failed_to_revoke_token": "Failed to revoke token.",
     "error_revoking_token": "Error revoking token",
     "select_api_path_and_token": "Please select an API path and provide a token.",

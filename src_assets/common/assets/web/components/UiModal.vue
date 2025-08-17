@@ -7,31 +7,37 @@
       ></div>
       <div class="relative flex-1 flex flex-col items-center justify-center p-4 overflow-y-auto">
         <div
-          class="w-full max-w-lg rounded-2xl shadow-2xl border border-white/10 dark:border-white/10 bg-white/90 dark:bg-neutral-900/85 backdrop-blur-xl ring-1 ring-black/5 dark:ring-white/5"
+          class="relative w-full max-w-lg rounded-2xl shadow-2xl border border-white/10 dark:border-white/10 bg-white/90 dark:bg-neutral-900/85 backdrop-blur-xl ring-1 ring-black/5 dark:ring-white/5 flex flex-col"
         >
-          <header
-            class="px-6 py-5 border-b border-black/10 dark:border-white/10 flex items-center gap-3"
+          <!-- Close button (absolute, non-intrusive) -->
+          <button
+            v-if="dismissible"
+            class="absolute top-3 right-3 p-2 rounded-md text-dark/70 dark:text-light/80 hover:bg-black/5 dark:hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            aria-label="Close"
+            @click="emit('update:open', false)"
           >
-            <h3 v-if="title" class="text-lg font-semibold text-dark dark:text-light">
+            <i class="fas fa-times" />
+          </button>
+          <!-- Icon row -->
+          <div v-if="slots.icon" class="px-6 pt-8 flex items-center justify-center">
+            <slot name="icon" />
+          </div>
+
+          <!-- Title row -->
+          <header class="px-8 pt-3 pb-1 flex items-center justify-center text-center">
+            <h3 v-if="title" class="text-xl font-semibold text-dark dark:text-light">
               {{ title }}
             </h3>
             <slot name="title" />
-            <button
-              v-if="dismissible"
-              class="ml-auto text-dark/70 dark:text-light/80 hover:opacity-80"
-              aria-label="Close"
-              @click="emit('update:open', false)"
-            >
-              <i class="fas fa-times" />
-            </button>
           </header>
-          <div class="px-6 py-5">
+
+          <!-- Body row -->
+          <div class="px-8 py-5 flex-1">
             <slot />
           </div>
-          <footer
-            v-if="$slots.footer"
-            class="px-6 py-4 border-t border-black/10 dark:border-white/10"
-          >
+
+          <!-- Footer row (dedicated for buttons) -->
+          <footer v-if="slots.footer" class="px-8 pb-6 flex items-center justify-end gap-3">
             <slot name="footer" />
           </footer>
         </div>
@@ -41,6 +47,7 @@
 </template>
 
 <script setup>
+import { useSlots } from 'vue';
 defineProps({
   open: { type: Boolean, default: false },
   title: { type: String, default: '' },
@@ -48,6 +55,7 @@ defineProps({
   backdropClose: { type: Boolean, default: true },
 });
 const emit = defineEmits(['update:open']);
+const slots = useSlots();
 </script>
 
 <style scoped>

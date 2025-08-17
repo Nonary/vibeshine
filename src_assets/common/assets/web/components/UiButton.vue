@@ -38,7 +38,7 @@ const base =
 const variantMap = {
   primary: 'bg-primary text-onPrimary',
   success: 'bg-success text-onPrimary',
-  danger: 'bg-danger text-onPrimary',
+  danger: 'bg-danger text-onDark',
   warning: 'bg-warning text-onPrimary',
   secondary: 'bg-secondary text-onSecondary',
   info: 'bg-info text-onPrimary',
@@ -80,11 +80,16 @@ const computedClasses = computed(() => {
       : props.tone === 'outline'
         ? 'hover:bg-primary/5'
         : '';
+  const darkDangerGradient =
+    props.tone === 'solid' && props.variant === 'danger'
+      ? 'dark:bg-gradient-to-b dark:from-danger dark:to-danger/80'
+      : '';
   return [
     base,
     sizeMap[props.size],
     palette[props.variant] || palette.primary,
     toneHover,
+    darkDangerGradient,
     props.block ? 'w-full' : '',
     props.loading ? 'cursor-wait' : '',
   ].join(' ');

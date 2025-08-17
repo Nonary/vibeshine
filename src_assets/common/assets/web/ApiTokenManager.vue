@@ -138,7 +138,9 @@
       </div>
       <template #footer>
         <div class="flex items-center justify-end">
-          <UiButton variant="primary" @click="showTokenModal = false">Done</UiButton>
+          <UiButton variant="primary" @click="showTokenModal = false">{{
+            $t('_common.dismiss')
+          }}</UiButton>
         </div>
       </template>
     </UiModal>
@@ -272,7 +274,13 @@
         <div class="grid md:grid-cols-2 gap-4">
           <div>
             <label class="form-label">Token</label>
-            <input v-model="test.token" class="form-control monospace" placeholder="Paste token" />
+            <input
+              v-model="test.token"
+              class="form-control monospace"
+              placeholder="Paste token"
+              type="password"
+              autocomplete="off"
+            />
           </div>
           <div>
             <label class="form-label">Route (GET only)</label>
@@ -320,9 +328,11 @@
     <!-- Revoke confirm modal -->
     <UiConfirmModal
       v-model:open="showRevoke"
-      title="Revoke Token"
-      :message="`Are you sure you want to revoke token ${shortHash(pendingRevoke?.hash || '')}? This cannot be undone.`"
-      confirm-text="Revoke"
+      :title="$t('auth.confirm_revoke_title')"
+      :message="
+        $t('auth.confirm_revoke_message_hash', { hash: shortHash(pendingRevoke?.hash || '') })
+      "
+      :confirm-text="$t('auth.revoke')"
       confirm-icon="fas fa-ban"
       variant="danger"
       icon="fas fa-triangle-exclamation"
@@ -339,6 +349,7 @@ import UiAlert from '@/components/UiAlert.vue';
 import UiModal from '@/components/UiModal.vue';
 import UiConfirmModal from '@/components/UiConfirmModal.vue';
 import { http } from '@/http';
+import { useAuthStore } from '@/stores/auth';
 
 type RouteDef = { path: string; methods: string[] };
 type Scope = { path: string; methods: string[] };
@@ -433,7 +444,9 @@ async function createToken(): Promise<void> {
   creating.value = true;
   try {
     // Tentative payload; backend can map to expected format
-    const payload = { scopes: getEffectiveScopes() };
+    const newScopes = getEffectiveScopes();
+    lastCreatedScopes.value = newScopes.slice();
+    const payload = { scopes: newScopes };
     const res = await http.post('/api/token', payload, { validateStatus: () => true });
     if (res.status >= 200 && res.status < 300) {
       const token = (res.data && (res.data.token || res.data.value || res.data)) as string;
@@ -442,6 +455,9 @@ async function createToken(): Promise<void> {
         // refresh active list
         await loadTokens();
         showTokenModal.value = true;
+        // Auto-select first GET-capable scope path for tester (if any)
+        const first = firstGetScopePath(lastCreatedScopes.value);
+        if (first) test.path = first;
       } else {
         createError.value = 'Token created, but server returned no token string.';
       }
@@ -504,6 +520,12 @@ function normalizeToken(rec: any): TokenRecord | null {
 }
 
 async function loadTokens(): Promise<void> {
+  const auth = useAuthStore();
+  if (!auth.isAuthenticated) {
+    // Not authenticated; do not poll or load
+    tokensLoading.value = false;
+    return;
+  }
   tokensLoading.value = true;
   tokensError.value = '';
   try {
@@ -596,6 +618,21 @@ const testResponse = ref('');
 const testError = ref('');
 const canSendTest = computed(() => !!test.token && !!test.path);
 
+// Store last created token scopes to assist tester auto-selection
+const lastCreatedScopes = ref<Scope[]>([]);
+
+function firstGetScopePath(scopesIn: Scope[]): string {
+  try {
+    for (const s of scopesIn || []) {
+      const methods = (s.methods || []).map((m) => String(m).toUpperCase());
+      if (methods.includes('GET')) return s.path;
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
+
 async function sendTest(): Promise<void> {
   testError.value = '';
   testResponse.value = '';
@@ -639,18 +676,44 @@ function prettyPrint(data: any): string {
   }
 }
 
-onMounted(async () => {
-  await loadTokens();
-  // Auto-fill tester token after create
-  watchCreatedForTester();
+onMounted(() => {
+  const auth = useAuthStore();
+  const start = () => {
+    loadTokens();
+    // Auto-fill tester token after create
+    watchCreatedForTester();
+  };
+  if (auth.isAuthenticated) start();
+  else {
+    // Wait for auth only; do not init here
+    const off = auth.onLogin(() => {
+      try {
+        start();
+      } finally {
+        // unsubscribe after first run
+        off?.();
+      }
+    });
+  }
 });
 
 function watchCreatedForTester() {
+  const auth = useAuthStore();
+  if (!auth.isAuthenticated) return;
   let last = '';
   const iv = setInterval(() => {
+    if (!auth.isAuthenticated) {
+      clearInterval(iv);
+      return;
+    }
     if (createdToken.value && createdToken.value !== last) {
       test.token = createdToken.value;
       last = createdToken.value;
+      // Also try to preselect first GET scope path from last create
+      if (!test.path) {
+        const first = firstGetScopePath(lastCreatedScopes.value);
+        if (first) test.path = first;
+      }
     }
   }, 300);
   // Stop after some time to avoid leaks

@@ -10,7 +10,8 @@
     --color-secondary: 13 59 102;
     --color-success: 76 175 80;
     --color-warning: 245 124 0;
-    --color-danger: 211 47 47;
+    /* Danger (lighter red for better contrast with white text) */
+    --color-danger: 220 38 38; /* ~Tailwind red-600 */
     --color-info: 2 136 209;
     --color-light: 255 253 248;
     --color-dark: 33 33 33;
@@ -32,7 +33,8 @@
     /* Keep structural secondary */
     --color-success: 129 199 132;
     --color-warning: 255 183 77;
-    --color-danger: 229 115 115;
+    /* Danger: distinct rosy hue in dark mode for clear contrast and unique character */
+    --color-danger: 244 63 94; /* ~Tailwind rose-500 */
     --color-info: 140 203 255;
     --color-light: 245 249 255;
     --color-dark: 5 11 30;
@@ -79,7 +81,7 @@
   }
 
   .btn-danger {
-    @apply bg-danger text-onLight hover:bg-danger/90;
+    @apply bg-danger text-onDark hover:bg-danger/90;
   }
 
   .btn-warning {
