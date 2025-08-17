@@ -309,8 +309,8 @@ namespace platf::dxgi {
       sizeof(message)
     );
 
-    // Allow more time for Playnite to initialize and connect, especially when Sunshine runs as a service
-    pipe->wait_for_client_connection(15000);
+    // Wait for control client to connect
+    pipe->wait_for_client_connection(3000);
 
     if (!pipe->is_connected()) {
       BOOST_LOG(error) << "Client did not connect to pipe instance within the specified timeout. Disconnecting server pipe.";
@@ -318,17 +318,7 @@ namespace platf::dxgi {
       return false;
     }
     BOOST_LOG(info) << "Anonymous handshake: control client connected; sending data-pipe name (" << sizeof(message) << " bytes)";
-    // Prefer a blocking write for the control handshake to avoid overlapped races
-    if (auto wp = dynamic_cast<platf::dxgi::WinPipe *>(pipe.get())) {
-      if (!wp->write_blocking(bytes)) {
-        BOOST_LOG(warning) << "Handshake blocking send failed; falling back to async send";
-        if (!pipe->send(bytes, 5000)) {
-          BOOST_LOG(error) << "Failed to send handshake message to client";
-          pipe->disconnect();
-          return false;
-        }
-      }
-    } else if (!pipe->send(bytes, 5000)) {
+    if (!pipe->send(bytes, 5000)) {
       BOOST_LOG(error) << "Failed to send handshake message to client";
       pipe->disconnect();
       return false;
@@ -489,26 +479,6 @@ namespace platf::dxgi {
     if (result) {
       return bytesWritten == bytes.size();
     } else {
-      DWORD err = GetLastError();
-      if (err == ERROR_PIPE_LISTENING && _is_server) {
-        // Rare race: server still in listening state despite connected flag; attempt to complete connection and retry once
-        BOOST_LOG(warning) << "WriteFile encountered ERROR_PIPE_LISTENING; attempting to complete connection and retry";
-        connect_server_pipe(timeout_ms > 0 ? timeout_ms : 5000);
-        if (_connected.load(std::memory_order_acquire)) {
-          io_context retry_ctx;
-          if (!retry_ctx.is_valid()) {
-            BOOST_LOG(error) << "Failed to create retry I/O context for send, error=" << GetLastError();
-            return false;
-          }
-          bytesWritten = 0;
-          if (WriteFile(_pipe.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &bytesWritten, retry_ctx.get())) {
-            return bytesWritten == bytes.size();
-          }
-          // Fall through to generic handler on failure
-          ctx = std::move(retry_ctx);
-          err = GetLastError();
-        }
-      }
       return handle_send_error(ctx, timeout_ms, bytesWritten);
     }
   }

@@ -22,8 +22,8 @@ using namespace std::chrono_literals;
 namespace platf::playnite {
 
   namespace {
-    // Well-known control pipe name that the Playnite plugin connects to.
-    // AnonymousPipeFactory will exchange a per-session data pipe name after connect.
+    // Well-known public pipe name that the Playnite plugin connects to.
+    // We now use this single pipe for data I/O (no secondary anonymous pipe).
     constexpr const char *kControlPipeName = "sunshine_playnite_connector";
   }
 
@@ -93,14 +93,20 @@ namespace platf::playnite {
         broken_.store(true);
       };
 
-      // Use anonymous handshake: host control pipe, then switch to a per-session data pipe
-      platf::dxgi::AnonymousPipeFactory anon_factory;
+      // Public single-pipe approach: accept client directly on public pipe and use it as data pipe
+      platf::dxgi::NamedPipeFactory factory;
 
       BOOST_LOG(info) << "Playnite IPC: waiting for control connection on pipe '" << kControlPipeName << "'";
-      auto data_pipe = anon_factory.create_server(kControlPipeName);
+      auto data_pipe = factory.create_server(kControlPipeName);
       if (!data_pipe) {
         if (!running_.load()) break;
         std::this_thread::sleep_for(500ms);
+        continue;
+      }
+      data_pipe->wait_for_client_connection(15000);
+      if (!data_pipe->is_connected()) {
+        if (!running_.load()) break;
+        std::this_thread::sleep_for(300ms);
         continue;
       }
 
