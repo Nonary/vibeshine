@@ -218,7 +218,7 @@ namespace platf::playnite_integration {
               ok = platf::img::convert_to_png_96dpi(wsrc, wdst);
             }
             if (ok) {
-              std::string out = dst.string();
+              std::string out = dst.generic_string();
               if (!app.contains("image-path") || app["image-path"].get<std::string>() != out) {
                 app["image-path"] = out;
                 changed = true;

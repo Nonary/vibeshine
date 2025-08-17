@@ -109,58 +109,32 @@ function Test-PipeAvailable {
 
 function Connect-SunshinePipe {
   param(
-    [string]$ControlName = 'sunshine_playnite_connector',
+    [string]$PublicName = 'sunshine_playnite_connector',
     [int]$TimeoutMs = 5000
   )
 
   try {
-    Write-Log "Connecting control pipe '$ControlName' (timeout=${TimeoutMs}ms)"
-    # Probe for control pipe first to provide clearer diagnostics (only if WaitNamedPipe is available)
+    Write-Log "Connecting public pipe '$PublicName' (timeout=${TimeoutMs}ms)"
     if (([System.Management.Automation.PSTypeName]'Win32.NativeMethods').Type) {
       $probeDeadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
       while ([DateTime]::UtcNow -lt $probeDeadline) {
-        if (Test-PipeAvailable -Name $ControlName -TimeoutMs 300) { break }
+        if (Test-PipeAvailable -Name $PublicName -TimeoutMs 300) { break }
         Start-Sleep -Milliseconds 200
       }
     }
-    $ctrl = New-Object System.IO.Pipes.NamedPipeClientStream('.', $ControlName, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::None)
-    $ctrl.Connect([Math]::Max(1000, [int]($TimeoutMs/2)))
-    Write-Log "Control pipe connected: CanRead=$($ctrl.CanRead) CanWrite=$($ctrl.CanWrite) IsConnected=$($ctrl.IsConnected)"
-
-    $br = New-Object System.IO.BinaryReader($ctrl, [System.Text.Encoding]::Unicode)
-    $bw = New-Object System.IO.BinaryWriter($ctrl)
-
-    # Expect 40 WCHARs (80 bytes) for pipe name
-    $raw = $br.ReadBytes(80)
-    if ($raw.Length -lt 80) { throw "Handshake message too short ($($raw.Length) bytes)." }
-    $pipeName = [System.Text.Encoding]::Unicode.GetString($raw).Trim([char]0)
-    if ([string]::IsNullOrWhiteSpace($pipeName)) { throw "Invalid data pipe name received." }
-    Write-Log "Received data pipe name '$pipeName'"
-
-    # Send ACK (0x02)
-    $bw.Write([byte]0x02)
-    $bw.Flush()
-    Write-Log "Sent handshake ACK"
+    $pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', $PublicName, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::None)
+    $pipe.Connect([Math]::Max(1000, [int]($TimeoutMs/2)))
+    $writer = New-Object System.IO.StreamWriter($pipe, [System.Text.Encoding]::UTF8, 8192, $true)
+    $writer.AutoFlush = $true
+    $reader = New-Object System.IO.StreamReader($pipe, [System.Text.Encoding]::UTF8, $false, 8192, $true)
+    Write-Log "Public pipe connected: CanRead=$($pipe.CanRead) CanWrite=$($pipe.CanWrite) IsConnected=$($pipe.IsConnected)"
+    return @{ Stream = $pipe; Writer = $writer; Reader = $reader }
   } catch {
-    if ($ctrl) { $ctrl.Dispose() }
+    if ($pipe) { try { $pipe.Dispose() } catch {} }
     $ex = $_.Exception
-    Write-Log "Control handshake failed: $($ex.GetType().FullName): $($ex.Message) HResult=$([String]::Format('0x{0:X8}', $ex.HResult))"
-    if ($ex.InnerException) { Write-Log "Inner: $($ex.InnerException.GetType().FullName): $($ex.InnerException.Message)" }
+    Write-Log "Public connect failed: $($ex.GetType().FullName): $($ex.Message) HResult=$([String]::Format('0x{0:X8}', $ex.HResult))"
     throw
   }
-
-  try { $ctrl.Dispose() } catch {}
-
-  # Connect data pipe
-  Write-Log "Connecting data pipe '$pipeName'"
-  $data = New-Object System.IO.Pipes.NamedPipeClientStream('.', $pipeName, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::None)
-  $data.Connect([Math]::Max(1000, [int]($TimeoutMs/2)))
-  $writer = New-Object System.IO.StreamWriter($data, [System.Text.Encoding]::UTF8, 8192, $true)
-  $writer.AutoFlush = $true
-  $reader = New-Object System.IO.StreamReader($data, [System.Text.Encoding]::UTF8, $false, 8192, $true)
-  Write-Log "Data pipe connected: CanRead=$($data.CanRead) CanWrite=$($data.CanWrite) IsConnected=$($data.IsConnected)"
-
-  return @{ Stream = $data; Writer = $writer; Reader = $reader }
 }
 
 function Send-JsonMessage {
@@ -274,7 +248,7 @@ function Get-PlayniteGames {
 function Send-InitialSnapshot {
   Write-Log "Building initial snapshot"
   $categories = Get-PlayniteCategories
-  $json = @{ type = 'categories'; payload = $categories } | ConvertTo-Json -Depth 6
+  $json = @{ type = 'categories'; payload = $categories } | ConvertTo-Json -Depth 6 -Compress
   Send-JsonMessage -Json $json
   $catCount = $categories.Count
   Write-Log ("Sent categories snapshot ({0})" -f $catCount)
@@ -284,7 +258,7 @@ function Send-InitialSnapshot {
   $batchSize = 100
   for ($i = 0; $i -lt $games.Count; $i += $batchSize) {
     $chunk = $games[$i..([Math]::Min($i + $batchSize - 1, $games.Count - 1))]
-    $jsonG = @{ type = 'games'; payload = $chunk } | ConvertTo-Json -Depth 8
+    $jsonG = @{ type = 'games'; payload = $chunk } | ConvertTo-Json -Depth 8 -Compress
     Send-JsonMessage -Json $jsonG
     $batchIndex = [int]([double]$i / $batchSize) + 1
     $chunkCount = $chunk.Count
@@ -334,16 +308,18 @@ function Start-ConnectorLoop {
 # Synchronous single-shot connection probe to ensure logging works even before background loop
 function Try-ConnectOnce {
   try {
-    Write-Log "Try-ConnectOnce: probing control pipe and attempting handshake"
-    $tmp = Connect-SunshinePipe -TimeoutMs 5000
-    Write-Log "Try-ConnectOnce: handshake completed; establishing primary connection"
-    # Promote to primary connection and send initial snapshot on the main thread (has PlayniteApi access)
-    $global:SunConn = $tmp
-    try {
-      Send-InitialSnapshot
-      Write-Log "Try-ConnectOnce: initial snapshot sent"
-    } catch {
-      Write-Log "Try-ConnectOnce: failed to send initial snapshot: $($_.Exception.Message)"
+    Write-Log "Try-ConnectOnce: attempting initial public pipe connect"
+    $tmp = Connect-SunshinePipe -TimeoutMs 8000
+    if ($tmp -and $tmp.Stream -and $tmp.Stream.CanWrite) {
+      $global:SunConn = $tmp
+      try {
+        Send-InitialSnapshot
+        Write-Log "Try-ConnectOnce: initial snapshot sent"
+      } catch {
+        Write-Log "Try-ConnectOnce: failed to send initial snapshot: $($_.Exception.Message)"
+      }
+    } else {
+      Write-Log "Try-ConnectOnce: connection object invalid"
     }
   } catch {
     Write-Log "Try-ConnectOnce: failed: $($_.Exception.Message)"
@@ -354,15 +330,11 @@ function OnApplicationStarted() {
   try {
     Initialize-Logging
     Write-Log "OnApplicationStarted invoked"
-    # First, do a single synchronous probe for clearer diagnostics
+    # First, do a synchronous initial connect + snapshot for immediate availability
     Try-ConnectOnce
-    # Optionally start background connector if not connected
-    if (-not $global:SunConn -or -not $global:SunConn.Stream -or -not $global:SunConn.Stream.CanRead) {
-      $null = [System.Threading.Tasks.Task]::Run([Action]{ Start-ConnectorLoop })
-      Write-Log "OnApplicationStarted: background connector started"
-    } else {
-      Write-Log "OnApplicationStarted: primary connection established; background connector not started"
-    }
+    # Then start background connector for ongoing read + self-healing reconnection
+    $null = [System.Threading.Tasks.Task]::Run([Action]{ Start-ConnectorLoop })
+    Write-Log "OnApplicationStarted: background connector started"
   } catch {
     # Fallback: run synchronously once
     Write-Log "OnApplicationStarted: background task failed, running synchronously"
@@ -372,7 +344,7 @@ function OnApplicationStarted() {
 
 function Send-StatusMessage {
   param([string]$Name, [object]$Game)
-  $payload = @{ type = 'status'; status = @{ name = $Name; id = $Game.Id.ToString(); installDir = $Game.InstallDirectory; exe = (Get-GameActionInfo -Game $Game).exe } } | ConvertTo-Json -Depth 5
+  $payload = @{ type = 'status'; status = @{ name = $Name; id = $Game.Id.ToString(); installDir = $Game.InstallDirectory; exe = (Get-GameActionInfo -Game $Game).exe } } | ConvertTo-Json -Depth 5 -Compress
   Send-JsonMessage -Json $payload
 }
 
