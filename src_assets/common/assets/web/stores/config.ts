@@ -192,6 +192,7 @@ export const useConfigStore = defineStore('config', () => {
   // Track keys that should require manual save (no autosave)
   const manualSaveKeys = new Set<string>(['global_prep_cmd']);
   const manualDirty = ref(false);
+  const savingState = ref<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle');
   const loading = ref(false);
   const error = ref<string | null>(null);
   // Single meta object kept completely separate from user config
@@ -237,8 +238,10 @@ export const useConfigStore = defineStore('config', () => {
           // autosave logic won't trigger; mark manual dirty instead
           if (manualSaveKeys.has(k)) {
             manualDirty.value = true;
+            savingState.value = 'dirty';
           } else {
             version.value++;
+            savingState.value = 'dirty';
           }
         },
       });
@@ -277,10 +280,38 @@ export const useConfigStore = defineStore('config', () => {
   // Explicitly mark a manual-dirty change (e.g., when mutating nested fields)
   function markManualDirty(_key?: string) {
     manualDirty.value = true;
+    savingState.value = 'dirty';
   }
 
   function resetManualDirty() {
     manualDirty.value = false;
+  }
+
+  async function save(): Promise<boolean> {
+    try {
+      savingState.value = 'saving';
+      const body = serialize();
+      const res = await http.post('/api/config', body || {}, {
+        headers: { 'Content-Type': 'application/json' },
+        validateStatus: () => true,
+      });
+      if (res.status === 200) {
+        savingState.value = 'saved';
+        manualDirty.value = false;
+        // Reset to idle after a short delay if no new changes
+        setTimeout(() => {
+          if (savingState.value === 'saved' && !manualDirty.value) {
+            savingState.value = 'idle';
+          }
+        }, 3000);
+        return true;
+      }
+      savingState.value = 'error';
+      return false;
+    } catch (e) {
+      savingState.value = 'error';
+      return false;
+    }
   }
 
   function serialize(): Record<string, any> | null {
@@ -328,6 +359,7 @@ export const useConfigStore = defineStore('config', () => {
     config, // ref to wrapper for template access
     version, // increments only on user mutation
     manualDirty,
+    savingState,
     metadata,
     loading,
     error,
@@ -336,6 +368,7 @@ export const useConfigStore = defineStore('config', () => {
     updateOption,
     markManualDirty,
     resetManualDirty,
+    save,
     serialize,
   };
 });

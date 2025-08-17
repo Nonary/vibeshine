@@ -1,149 +1,198 @@
 <template>
-  <div class="space-y-8 max-w-6xl mx-auto px-4">
-    <!-- Welcome / Intro -->
-    <div>
-      <h1 class="text-3xl font-semibold mb-2">{{ $t('index.welcome') }}</h1>
-      <p class="text-sm opacity-80">{{ $t('index.description') }}</p>
-    </div>
+  <div class="space-y-8 max-w-6xl mx-auto px-2 md:px-4">
+    <!-- Hero / Intro -->
+    <section
+      class="rounded-xl border border-black/5 dark:border-white/10 bg-white/70 dark:bg-surface/70 backdrop-blur p-5 md:p-6 shadow-sm"
+    >
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div class="min-w-0">
+          <h2 class="text-xl md:text-2xl font-semibold tracking-tight">
+            {{ $t('index.welcome') }}
+          </h2>
+          <p class="text-sm opacity-80 mt-1 leading-relaxed">
+            {{ $t('index.description') }}
+          </p>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <RouterLink
+            to="/settings"
+            class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/80 text-onPrimary shadow hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary/60 transition"
+          >
+            <i class="fas fa-sliders" />
+            <span>Settings</span>
+          </RouterLink>
+          <RouterLink
+            to="/applications"
+            class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/10 transition"
+          >
+            <i class="fas fa-grid-2" />
+            <span>Applications</span>
+          </RouterLink>
+        </div>
+      </div>
+    </section>
 
-    <!-- Fatal startup errors -->
-    <div v-if="fancyLogs.some((l) => l.level === 'Fatal')">
-      <UiAlert variant="danger">
-        <template #icon>
-          <i class="fas fa-circle-exclamation text-xl" />
+    <!-- Fatal startup errors moved into Version card to avoid layout shift -->
+
+    <!-- Main Grid -->
+    <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+      <!-- Version Card -->
+      <UiCard v-if="installedVersion" class="xl:col-span-2">
+        <template #title>
+          <h2 class="text-2xl font-semibold tracking-tight mx-auto text-center">
+            {{ 'Version ' + installedVersion.version }}
+          </h2>
         </template>
-        <div class="space-y-3">
-          <p class="text-sm leading-relaxed" v-html="$t('index.startup_errors')"></p>
-          <ul class="list-disc pl-5 space-y-1 text-xs">
-            <li v-for="(v, i) in fancyLogs.filter((x) => x.level === 'Fatal')" :key="i">
-              {{ v.value }}
-            </li>
-          </ul>
-          <div>
-            <a
-              class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-danger-600 text-white text-xs hover:bg-danger-500 transition"
-              href="./troubleshooting#logs"
-            >
-              <i class="fas fa-file-lines" /> {{ $t('index.view_logs') || 'View Logs' }}
-            </a>
+        <div class="space-y-4 text-sm">
+          <!-- Fatal Errors (embedded) -->
+          <UiAlert v-if="fancyLogs.some((l) => l.level === 'Fatal')" variant="danger">
+            <template #icon>
+              <i class="fas fa-circle-exclamation text-xl" />
+            </template>
+            <div class="space-y-3">
+              <p class="text-sm leading-relaxed" v-html="$t('index.startup_errors')"></p>
+              <ul class="list-disc pl-5 space-y-1 text-xs">
+                <li v-for="(v, i) in fancyLogs.filter((x) => x.level === 'Fatal')" :key="i">
+                  {{ v.value }}
+                </li>
+              </ul>
+              <div>
+                <a
+                  class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-danger-600 text-white hover:bg-danger-500 transition"
+                  href="./troubleshooting#logs"
+                >
+                  <i class="fas fa-file-lines" /> {{ $t('index.view_logs') || 'View Logs' }}
+                </a>
+              </div>
+            </div>
+          </UiAlert>
+          <div v-if="loading" class="text-xs italic flex items-center gap-2">
+            <i class="fas fa-spinner animate-spin" /> {{ $t('index.loading_latest') }}
           </div>
+          <div v-if="branch || commit" class="flex items-center gap-2 text-xs">
+            <span
+              v-if="branch"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/5 dark:bg-white/10"
+            >
+              <i class="fas fa-code-branch" /> {{ branch }}
+            </span>
+            <span
+              v-if="commit"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/5 dark:bg-white/10 font-mono"
+            >
+              <i class="fas fa-hashtag" /> {{ commit.substring(0, 7) }}
+            </span>
+          </div>
+          <UiAlert v-if="buildVersionIsDirty" variant="success">
+            <template #icon><i class="fas fa-seedling" /></template>
+            {{ $t('index.version_dirty') }} 🌇
+          </UiAlert>
+          <UiAlert v-if="installedVersionNotStable" variant="info">
+            <template #icon><i class="fas fa-flask" /></template>
+            {{ $t('index.installed_version_not_stable') }}
+          </UiAlert>
+          <UiAlert
+            v-if="compareChecked && !installedVersionNotStable && aheadByCommits > 0"
+            variant="success"
+          >
+            <template #icon><i class="fas fa-forward" /></template>
+            {{ $t('index.version_ahead', { ahead: aheadByCommits }) }}
+          </UiAlert>
+          <UiAlert
+            v-if="
+              compareChecked &&
+              !installedVersionNotStable &&
+              aheadByCommits === 0 &&
+              behindByCommits > 0
+            "
+            variant="warning"
+          >
+            <template #icon><i class="fas fa-clock-rotate-left" /></template>
+            {{ $t('index.version_behind', { behind: behindByCommits }) }}
+          </UiAlert>
+          <UiAlert
+            v-if="
+              compareChecked &&
+              !installedVersionNotStable &&
+              !compareInfo &&
+              !stableBuildAvailable &&
+              !buildVersionIsDirty
+            "
+            variant="info"
+          >
+            <template #icon><i class="fas fa-circle-question" /></template>
+            {{ $t('index.version_compare_unknown') }}
+          </UiAlert>
+          <UiAlert
+            v-else-if="
+              (!preReleaseBuildAvailable || !notifyPreReleases) &&
+              !stableBuildAvailable &&
+              !buildVersionIsDirty
+            "
+            variant="success"
+          >
+            <template #icon><i class="fas fa-check-circle" /></template>
+            {{ $t('index.version_latest') }}
+          </UiAlert>
+
+          <!-- Pre-release notice -->
+          <UiAlert v-if="notifyPreReleases && preReleaseBuildAvailable" variant="warning">
+            <template #icon><i class="fas fa-bell" /></template>
+            <div class="flex flex-col gap-3 w-full">
+              <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <p class="text-sm m-0">{{ $t('index.new_pre_release') }}</p>
+                <a
+                  class="UiButton UiButton--primary"
+                  :href="preReleaseRelease?.html_url"
+                  target="_blank"
+                  >{{ $t('index.download') }}</a
+                >
+              </div>
+              <div
+                class="bg-light/5 dark:bg-dark/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
+              >
+                <p class="font-semibold mb-2">{{ preReleaseRelease?.name }}</p>
+                <pre class="whitespace-pre-wrap">{{ preReleaseRelease?.body }}</pre>
+              </div>
+            </div>
+          </UiAlert>
+
+          <!-- Stable update available -->
+          <UiAlert v-if="stableBuildAvailable" variant="warning">
+            <template #icon><i class="fas fa-arrow-up" /></template>
+            <div class="flex flex-col gap-3 w-full">
+              <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <p class="text-sm m-0">{{ $t('index.new_stable') }}</p>
+                <a
+                  class="UiButton UiButton--primary"
+                  :href="githubRelease?.html_url"
+                  target="_blank"
+                  >{{ $t('index.download') }}</a
+                >
+              </div>
+              <div
+                class="bg-light/5 dark:bg-dark/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
+              >
+                <p class="font-semibold mb-2">{{ githubRelease?.name }}</p>
+                <pre class="whitespace-pre-wrap">{{ githubRelease?.body }}</pre>
+              </div>
+            </div>
+          </UiAlert>
         </div>
-      </UiAlert>
+      </UiCard>
+
+      <!-- Resources -->
+      <UiCard>
+        <template #title>
+          <h2 class="text-2xl font-semibold tracking-tight mx-auto text-center">
+            {{ $t('resources.title') || 'Resources' }}
+          </h2>
+        </template>
+        <div class="text-xs space-y-2">
+          <ResourceCard />
+        </div>
+      </UiCard>
     </div>
-
-    <!-- Version Card -->
-    <UiCard v-if="installedVersion" :title="'Version ' + installedVersion.version">
-      <div class="space-y-4 text-sm">
-        <div v-if="loading" class="text-xs italic flex items-center gap-2">
-          <i class="fas fa-spinner animate-spin" /> {{ $t('index.loading_latest') }}
-        </div>
-        <div v-if="branch || commit" class="text-xs font-mono text-gray-600 dark:text-gray-300">
-          {{ $t('index.version_branch', { branch, commit: commit.substring(0, 7) }) }}
-        </div>
-        <UiAlert v-if="buildVersionIsDirty" variant="success">
-          <template #icon><i class="fas fa-seedling" /></template>
-          {{ $t('index.version_dirty') }} 🌇
-        </UiAlert>
-        <UiAlert v-if="installedVersionNotStable" variant="info">
-          <template #icon><i class="fas fa-flask" /></template>
-          {{ $t('index.installed_version_not_stable') }}
-        </UiAlert>
-        <UiAlert
-          v-if="compareChecked && !installedVersionNotStable && aheadByCommits > 0"
-          variant="success"
-        >
-          <template #icon><i class="fas fa-forward" /></template>
-          {{ $t('index.version_ahead', { ahead: aheadByCommits }) }}
-        </UiAlert>
-        <UiAlert
-          v-if="
-            compareChecked &&
-            !installedVersionNotStable &&
-            aheadByCommits === 0 &&
-            behindByCommits > 0
-          "
-          variant="warning"
-        >
-          <template #icon><i class="fas fa-clock-rotate-left" /></template>
-          {{ $t('index.version_behind', { behind: behindByCommits }) }}
-        </UiAlert>
-        <UiAlert
-          v-if="
-            compareChecked &&
-            !installedVersionNotStable &&
-            !compareInfo &&
-            !stableBuildAvailable &&
-            !buildVersionIsDirty
-          "
-          variant="info"
-        >
-          <template #icon><i class="fas fa-circle-question" /></template>
-          {{ $t('index.version_compare_unknown') }}
-        </UiAlert>
-        <UiAlert
-          v-else-if="
-            (!preReleaseBuildAvailable || !notifyPreReleases) &&
-            !stableBuildAvailable &&
-            !buildVersionIsDirty
-          "
-          variant="success"
-        >
-          <template #icon><i class="fas fa-check-circle" /></template>
-          {{ $t('index.version_latest') }}
-        </UiAlert>
-
-        <!-- Pre-release notice -->
-        <UiAlert v-if="notifyPreReleases && preReleaseBuildAvailable" variant="warning">
-          <template #icon><i class="fas fa-bell" /></template>
-          <div class="flex flex-col gap-3 w-full">
-            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-              <p class="text-sm m-0">{{ $t('index.new_pre_release') }}</p>
-              <a
-                class="UiButton UiButton--primary"
-                :href="preReleaseRelease?.html_url"
-                target="_blank"
-                >{{ $t('index.download') }}</a
-              >
-            </div>
-            <div
-              class="bg-light/5 dark:bg-dark/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
-            >
-              <p class="font-semibold mb-2">{{ preReleaseRelease?.name }}</p>
-              <pre class="whitespace-pre-wrap">{{ preReleaseRelease?.body }}</pre>
-            </div>
-          </div>
-        </UiAlert>
-
-        <!-- Stable update available -->
-        <UiAlert v-if="stableBuildAvailable" variant="warning">
-          <template #icon><i class="fas fa-arrow-up" /></template>
-          <div class="flex flex-col gap-3 w-full">
-            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-              <p class="text-sm m-0">{{ $t('index.new_stable') }}</p>
-              <a
-                class="UiButton UiButton--primary"
-                :href="githubRelease?.html_url"
-                target="_blank"
-                >{{ $t('index.download') }}</a
-              >
-            </div>
-            <div
-              class="bg-light/5 dark:bg-dark/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
-            >
-              <p class="font-semibold mb-2">{{ githubRelease?.name }}</p>
-              <pre class="whitespace-pre-wrap">{{ githubRelease?.body }}</pre>
-            </div>
-          </div>
-        </UiAlert>
-      </div>
-    </UiCard>
-
-    <!-- Resources -->
-    <UiCard :title="$t('resources.title') || 'Resources'">
-      <div class="text-xs space-y-2">
-        <ResourceCard />
-      </div>
-    </UiCard>
   </div>
 </template>
 

@@ -141,7 +141,10 @@
   </main>
 
   <transition name="slide-fade">
-    <div v-if="(dirty && !autoSave) || store.manualDirty === true" class="fixed bottom-4 right-6 z-30">
+    <div
+      v-if="(dirty && !autoSave) || store.manualDirty === true"
+      class="fixed bottom-4 right-6 z-30"
+    >
       <div
         class="bg-white/90 dark:bg-surface/90 backdrop-blur rounded-lg shadow border border-black/5 dark:border-white/10 px-4 py-2 flex items-center gap-3"
       >
@@ -236,19 +239,12 @@ onUnmounted(() => {
 
 async function save() {
   if (!config.value) return;
-  saveState.value = 'saving';
   restarted.value = false;
-  const body = store.serialize ? store.serialize() : {};
-  const res = await http.post('/api/config', body, {
-    headers: { 'Content-Type': 'application/json' },
-    validateStatus: () => true,
-  });
-
-  if (res.status === 200) {
+  saveState.value = 'saving';
+  const ok = await (store.save ? store.save() : Promise.resolve(false));
+  if (ok) {
     saveState.value = 'saved';
     dirty.value = false;
-    // Clear manual-dirty after successful save
-    if (store.resetManualDirty) store.resetManualDirty();
   } else {
     saveState.value = 'error';
   }
@@ -282,6 +278,7 @@ watch(
   (v, oldV) => {
     if (!isReady.value || oldV === undefined) return; // ignore before ready
     dirty.value = true;
+    if (store.savingState !== undefined) store.savingState = 'dirty';
     debounceSave();
   },
 );

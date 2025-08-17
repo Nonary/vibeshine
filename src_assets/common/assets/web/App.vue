@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen flex flex-col bg-light dark:bg-dark text-dark dark:text-light">
     <header
-      class="h-14 flex items-center gap-4 px-4 border-b border-dark/10 dark:border-light/10 bg-light/70 dark:bg-dark/60 backdrop-blur supports-[backdrop-filter]:bg-light/40 supports-[backdrop-filter]:dark:bg-dark/40"
+      class="sticky top-0 z-30 h-14 flex items-center gap-4 px-4 border-b border-dark/10 dark:border-light/10 bg-light/70 dark:bg-dark/60 backdrop-blur supports-[backdrop-filter]:bg-light/40 supports-[backdrop-filter]:dark:bg-dark/40"
     >
       <div class="flex items-center gap-3 min-w-0">
         <img src="/images/logo-sunshine-45.png" alt="Sunshine" class="h-8 w-8" />
@@ -30,7 +30,7 @@
         </a>
       </nav>
       <div class="ml-auto flex items-center gap-3 text-xs">
-        <StreamingStatus />
+        <SavingStatus />
         <ThemeToggle />
       </div>
     </header>
@@ -79,7 +79,7 @@ import { ref, watch, computed } from 'vue';
 declare const useI18n: any;
 import { useRoute, useRouter } from 'vue-router';
 import ThemeToggle from '@/ThemeToggle.vue';
-import StreamingStatus from '@/components/StreamingStatus.vue';
+import SavingStatus from '@/components/SavingStatus.vue';
 import LoginModal from '@/components/LoginModal.vue';
 import { http } from '@/http';
 import { useAuthStore } from './stores/auth';
