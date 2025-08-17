@@ -24,6 +24,10 @@ namespace platf::playnite_integration {
   // Attempt to install the Playnite plugin. Returns true on success and sets error on failure.
   bool install_plugin(std::string &error);
 
+  // Install the Playnite plugin to a specific destination directory (absolute path).
+  // Returns true on success and sets error on failure.
+  bool install_plugin_to(const std::string &dest_dir, std::string &error);
+
   // Compute the target extensions directory that would be used for installation.
   // Returns true on success and writes the absolute path to out.
   bool get_extension_target_dir(std::string &out);

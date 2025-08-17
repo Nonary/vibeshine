@@ -34,6 +34,7 @@ namespace platf::playnite {
     if (running_.exchange(true)) {
       return;
     }
+    BOOST_LOG(info) << "Playnite IPC: starting server thread";
     worker_ = std::thread([this]() { run(); });
   }
 
@@ -41,6 +42,7 @@ namespace platf::playnite {
     if (!running_.exchange(false)) {
       return;
     }
+    BOOST_LOG(info) << "Playnite IPC: stopping server thread";
     if (pipe_) {
       pipe_->stop();
       pipe_.reset();
@@ -53,10 +55,31 @@ namespace platf::playnite {
   void IpcServer::run() {
     while (running_.load()) {
       auto on_message = [this](std::span<const uint8_t> bytes) {
-        if (handler_) {
-          handler_(bytes);
-        } else {
-          BOOST_LOG(debug) << "Playnite IPC: received " << bytes.size() << " bytes";
+        BOOST_LOG(info) << "Playnite IPC: received message (" << bytes.size() << " bytes)";
+        // Accumulate and split on newline to get complete JSON frames
+        if (!bytes.empty()) {
+          recv_buffer_.append(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+        }
+        size_t start = 0;
+        while (true) {
+          auto pos = recv_buffer_.find('\n', start);
+          if (pos == std::string::npos) break;
+          std::string line = recv_buffer_.substr(start, pos - start);
+          // Trim optional CR
+          if (!line.empty() && line.back() == '\r') line.pop_back();
+          // Advance start past this newline
+          start = pos + 1;
+          // Skip empty lines
+          auto non_ws = line.find_first_not_of(" \t\r\n");
+          if (non_ws == std::string::npos) continue;
+          if (handler_) {
+            auto sp = std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(line.data()), line.size());
+            handler_(sp);
+          }
+        }
+        if (start > 0) {
+          // Keep leftover partial frame
+          recv_buffer_.erase(0, start);
         }
       };
 
@@ -73,6 +96,7 @@ namespace platf::playnite {
       // Use anonymous handshake: host control pipe, then switch to a per-session data pipe
       platf::dxgi::AnonymousPipeFactory anon_factory;
 
+      BOOST_LOG(info) << "Playnite IPC: waiting for control connection on pipe '" << kControlPipeName << "'";
       auto data_pipe = anon_factory.create_server(kControlPipeName);
       if (!data_pipe) {
         if (!running_.load()) break;
@@ -96,6 +120,7 @@ namespace platf::playnite {
         std::this_thread::sleep_for(300ms);
         continue;
       }
+      BOOST_LOG(info) << "Playnite IPC: client connected, PID=" << client_pid;
 
       std::vector<DWORD> playnite_pids;
       {
@@ -162,6 +187,7 @@ namespace platf::playnite {
       pipe_ = std::make_unique<platf::dxgi::AsyncNamedPipe>(std::move(data_pipe));
       pipe_->start(on_message, on_error, on_broken);
       active_.store(true);
+      BOOST_LOG(info) << "Playnite IPC: data pipe established";
 
       // Wait until disconnection/broken or stop requested
       while (running_.load() && pipe_->is_connected() && !broken_.load()) {
@@ -173,6 +199,7 @@ namespace platf::playnite {
         pipe_.reset();
       }
       active_.store(false);
+      BOOST_LOG(info) << "Playnite IPC: disconnected";
 
       if (!running_.load()) break;
       std::this_thread::sleep_for(300ms);
@@ -181,12 +208,14 @@ namespace platf::playnite {
 
   bool IpcServer::send_json_line(const std::string &json) {
     if (!pipe_ || !pipe_->is_connected()) {
+      BOOST_LOG(info) << "Playnite IPC: send_json_line called but pipe not connected";
       return false;
     }
     // Append a newline delimiter for the plugin's line-based reader
     std::string payload = json;
     payload.push_back('\n');
     auto bytes = std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(payload.data()), payload.size());
+    BOOST_LOG(info) << "Playnite IPC: sending command (" << payload.size() << " bytes)";
     pipe_->send(bytes);
     return true;
   }

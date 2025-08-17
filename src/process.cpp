@@ -76,12 +76,15 @@ namespace proc {
           if (exit_timeout.count() < 0) {
             BOOST_LOG(warning) << "App did not fully exit within the timeout. Terminating the app's remaining processes."sv;
           } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
             BOOST_LOG(info) << "All app processes have successfully exited."sv;
           }
         } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
           BOOST_LOG(info) << "App did not respond to a graceful termination request. Forcefully terminating the app's processes."sv;
         }
       } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
         BOOST_LOG(info) << "No graceful exit timeout was specified for this app. Forcefully terminating the app's processes."sv;
       }
 
@@ -237,6 +240,7 @@ namespace proc {
       if (ec) {
         BOOST_LOG(warning) << "Couldn't spawn ["sv << cmd << "]: System: "sv << ec.message();
       } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
         child.detach();
       }
     }
@@ -244,7 +248,7 @@ namespace proc {
     // Playnite-backed apps: invoke via Playnite and treat as placebo (lifetime managed via Playnite status)
 #ifdef _WIN32
     if (!_app.playnite_id.empty()) {
-      BOOST_LOG(info) << "Launching Playnite game id ["sv << _app.playnite_id << "]"sv;
+      BOOST_LOG(info) << "Launching Playnite game via Playnite, id=" << _app.playnite_id;
       bool launched = false;
       try {
         launched = platf::playnite_integration::launch_game(_app.playnite_id);
@@ -261,6 +265,7 @@ namespace proc {
         if (fec) {
           BOOST_LOG(warning) << "Playnite URI launch failed: "sv << fec.message();
         } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
           child.detach();
           launched = true;
         }
@@ -269,13 +274,16 @@ namespace proc {
         BOOST_LOG(error) << "Failed to launch Playnite game."sv;
         return -1;
       }
+      BOOST_LOG(info) << "Playnite launch path complete; treating app as placebo (status-driven).";
       placebo = true;
     } else
 #endif
     if (_app.cmd.empty()) {
       BOOST_LOG(info) << "Executing [Desktop]"sv;
+      BOOST_LOG(info) << "Playnite launch path complete; treating app as placebo (status-driven).";
       placebo = true;
     } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
       boost::filesystem::path working_dir = _app.working_dir.empty() ?
                                               find_working_directory(_app.cmd, _env) :
                                               boost::filesystem::path(_app.working_dir);
@@ -317,6 +325,7 @@ namespace proc {
                std::chrono::steady_clock::now() - _app_launch_time < 5s) {
       BOOST_LOG(info) << "App exited gracefully within 5 seconds of launch. Treating the app as a detached command."sv;
       BOOST_LOG(info) << "Adjust this behavior in the Applications tab or apps.json if this is not what you want."sv;
+      BOOST_LOG(info) << "Playnite launch path complete; treating app as placebo (status-driven).";
       placebo = true;
       return _app_id;
     }
@@ -480,6 +489,7 @@ namespace proc {
 
         dollar = std::find(next, std::end(val_raw), '$');
       } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
         dollar = next;
       }
     }
@@ -576,6 +586,7 @@ namespace proc {
       if (file_hash) {
         to_hash.push_back(file_hash.value());
       } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
         // Fallback to just hashing image path
         to_hash.push_back(file_path);
       }
@@ -710,6 +721,7 @@ namespace proc {
           // Avoid using index to generate id if possible
           ctx.id = std::get<0>(possible_ids);
         } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
           // Fallback to include index on collision
           ctx.id = std::get<1>(possible_ids);
         }

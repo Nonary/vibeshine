@@ -309,19 +309,31 @@ namespace platf::dxgi {
       sizeof(message)
     );
 
-    pipe->wait_for_client_connection(3000);
+    // Allow more time for Playnite to initialize and connect, especially when Sunshine runs as a service
+    pipe->wait_for_client_connection(15000);
 
     if (!pipe->is_connected()) {
       BOOST_LOG(error) << "Client did not connect to pipe instance within the specified timeout. Disconnecting server pipe.";
       pipe->disconnect();
       return false;
     }
-
-    if (!pipe->send(bytes, 5000)) {
+    BOOST_LOG(info) << "Anonymous handshake: control client connected; sending data-pipe name (" << sizeof(message) << " bytes)";
+    // Prefer a blocking write for the control handshake to avoid overlapped races
+    if (auto wp = dynamic_cast<platf::dxgi::WinPipe *>(pipe.get())) {
+      if (!wp->write_blocking(bytes)) {
+        BOOST_LOG(warning) << "Handshake blocking send failed; falling back to async send";
+        if (!pipe->send(bytes, 5000)) {
+          BOOST_LOG(error) << "Failed to send handshake message to client";
+          pipe->disconnect();
+          return false;
+        }
+      }
+    } else if (!pipe->send(bytes, 5000)) {
       BOOST_LOG(error) << "Failed to send handshake message to client";
       pipe->disconnect();
       return false;
     }
+    BOOST_LOG(info) << "Anonymous handshake: control message sent";
 
     return true;
   }
@@ -477,6 +489,26 @@ namespace platf::dxgi {
     if (result) {
       return bytesWritten == bytes.size();
     } else {
+      DWORD err = GetLastError();
+      if (err == ERROR_PIPE_LISTENING && _is_server) {
+        // Rare race: server still in listening state despite connected flag; attempt to complete connection and retry once
+        BOOST_LOG(warning) << "WriteFile encountered ERROR_PIPE_LISTENING; attempting to complete connection and retry";
+        connect_server_pipe(timeout_ms > 0 ? timeout_ms : 5000);
+        if (_connected.load(std::memory_order_acquire)) {
+          io_context retry_ctx;
+          if (!retry_ctx.is_valid()) {
+            BOOST_LOG(error) << "Failed to create retry I/O context for send, error=" << GetLastError();
+            return false;
+          }
+          bytesWritten = 0;
+          if (WriteFile(_pipe.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &bytesWritten, retry_ctx.get())) {
+            return bytesWritten == bytes.size();
+          }
+          // Fall through to generic handler on failure
+          ctx = std::move(retry_ctx);
+          err = GetLastError();
+        }
+      }
       return handle_send_error(ctx, timeout_ms, bytesWritten);
     }
   }
@@ -650,6 +682,7 @@ namespace platf::dxgi {
 
     if (BOOL result = ConnectNamedPipe(_pipe.get(), ctx.get()); result) {
       _connected = true;
+      BOOST_LOG(info) << "NamedPipe server: ConnectNamedPipe completed synchronously";
       return;
     }
 
@@ -657,6 +690,7 @@ namespace platf::dxgi {
     if (err == ERROR_PIPE_CONNECTED) {
       // Client already connected
       _connected = true;
+      BOOST_LOG(info) << "NamedPipe server: client already connected (ERROR_PIPE_CONNECTED)";
       return;
     }
 
@@ -675,6 +709,7 @@ namespace platf::dxgi {
       DWORD transferred = 0;
       if (GetOverlappedResult(_pipe.get(), ctx.get(), &transferred, FALSE)) {
         _connected = true;
+        BOOST_LOG(info) << "NamedPipe server: overlapped ConnectNamedPipe completed";
       } else {
         DWORD err = GetLastError();
         if (err != ERROR_OPERATION_ABORTED) {
@@ -700,6 +735,20 @@ namespace platf::dxgi {
     if (_pipe) {
       FlushFileBuffers(_pipe.get());
     }
+  }
+
+  bool WinPipe::write_blocking(std::span<const uint8_t> bytes) {
+    if (!_pipe || !_connected.load(std::memory_order_acquire)) {
+      return false;
+    }
+    DWORD written = 0;
+    BOOL ok = WriteFile(_pipe.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
+    if (!ok) {
+      DWORD err = GetLastError();
+      BOOST_LOG(error) << "WinPipe::write_blocking failed, error=" << err;
+      return false;
+    }
+    return written == bytes.size();
   }
 
   bool WinPipe::get_client_process_id(DWORD &pid) {
