@@ -33,7 +33,7 @@ const props = defineProps({
 const asTag = computed(() => (props.as === 'a' ? 'a' : 'button'));
 
 const base =
-  'relative inline-flex items-center justify-center font-medium rounded-md transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
+  'relative inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium rounded-md transition leading-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
 
 const variantMap = {
   primary: 'bg-primary text-onPrimary',
@@ -91,4 +91,11 @@ const computedClasses = computed(() => {
 });
 </script>
 
-<style scoped></style>
+<style scoped>
+/* Normalize icon sizing and alignment inside buttons */
+:deep(i),
+:deep(svg) {
+  line-height: 1;
+  display: inline-block;
+}
+</style>

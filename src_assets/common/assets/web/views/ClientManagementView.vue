@@ -5,74 +5,83 @@
     </h1>
 
     <!-- Pair New Client -->
-    <section
-      class="p-5 mb-8 rounded-md border border-dark/10 dark:border-light/10 bg-white dark:bg-surface shadow-sm space-y-3"
-    >
-      <header class="space-y-1">
+    <UiCard class="mb-8">
+      <template #title>
         <h2 class="text-lg font-medium flex items-center gap-2">
           <i class="fas fa-link" /> {{ $t('clients.pair_title') }}
         </h2>
+      </template>
+      <div class="space-y-4">
         <p class="text-sm opacity-75">{{ $t('clients.pair_desc') }}</p>
-      </header>
-      <form class="flex flex-col gap-4 md:flex-row md:items-end" @submit.prevent="registerDevice">
-        <div class="flex flex-col flex-1">
-          <label class="text-[11px] font-semibold tracking-wide uppercase mb-1" for="pin-input">{{
-            $t('navbar.pin')
-          }}</label>
-          <input
-            id="pin-input"
-            v-model="pin"
-            type="text"
-            inputmode="numeric"
-            pattern="\\d*"
-            maxlength="4"
-            class="form-control"
-            :placeholder="$t('navbar.pin')"
-            required
-          />
-        </div>
-        <div class="flex flex-col flex-1">
-          <label class="text-[11px] font-semibold tracking-wide uppercase mb-1" for="name-input">{{
-            $t('pin.device_name')
-          }}</label>
-          <input
-            id="name-input"
-            v-model="deviceName"
-            type="text"
-            class="form-control"
-            :placeholder="$t('pin.device_name')"
-            required
-          />
-        </div>
-        <div class="flex flex-col">
-          <UiButton :disabled="pairing" class="mt-1 md:mt-0" variant="primary" type="submit">
-            <span v-if="!pairing">{{ $t('pin.send') }}</span>
-            <span v-else>{{ $t('clients.pairing') }}</span>
-          </UiButton>
-        </div>
-      </form>
-      <div>
-        <UiAlert v-if="pairStatus === true" variant="success">{{ $t('pin.pair_success') }}</UiAlert>
-        <UiAlert v-if="pairStatus === false" variant="danger">{{ $t('pin.pair_failure') }}</UiAlert>
-      </div>
-      <UiAlert variant="warning" class="text-sm flex items-start gap-2">
-        <template #default>
-          <div class="flex items-start gap-2">
-            <b class="font-semibold">{{ $t('_common.warning') }}</b>
-            <span>{{ $t('pin.warning_msg') }}</span>
+        <form
+          class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end"
+          @submit.prevent="registerDevice"
+        >
+          <div class="flex flex-col">
+            <label class="text-[11px] font-semibold tracking-wide uppercase mb-1" for="pin-input">{{
+              $t('navbar.pin')
+            }}</label>
+            <input
+              id="pin-input"
+              v-model="pin"
+              type="text"
+              inputmode="numeric"
+              pattern="\\d*"
+              maxlength="4"
+              class="form-control"
+              :placeholder="$t('navbar.pin')"
+              required
+            />
           </div>
-        </template>
-      </UiAlert>
-    </section>
+          <div class="flex flex-col">
+            <label
+              class="text-[11px] font-semibold tracking-wide uppercase mb-1"
+              for="name-input"
+              >{{ $t('pin.device_name') }}</label
+            >
+            <input
+              id="name-input"
+              v-model="deviceName"
+              type="text"
+              class="form-control"
+              :placeholder="$t('pin.device_name')"
+              required
+            />
+          </div>
+          <div class="flex flex-col md:items-end">
+            <UiButton :disabled="pairing" class="w-full md:w-auto" variant="primary" type="submit">
+              <span v-if="!pairing">{{ $t('pin.send') }}</span>
+              <span v-else>{{ $t('clients.pairing') }}</span>
+            </UiButton>
+          </div>
+        </form>
+        <div class="space-y-2">
+          <UiAlert v-if="pairStatus === true" variant="success">{{
+            $t('pin.pair_success')
+          }}</UiAlert>
+          <UiAlert v-if="pairStatus === false" variant="danger">{{
+            $t('pin.pair_failure')
+          }}</UiAlert>
+        </div>
+        <UiAlert variant="warning" class="text-sm flex items-start gap-2">
+          <template #default>
+            <div class="flex items-start gap-2">
+              <b class="font-semibold">{{ $t('_common.warning') }}</b>
+              <span>{{ $t('pin.warning_msg') }}</span>
+            </div>
+          </template>
+        </UiAlert>
+      </div>
+    </UiCard>
 
     <!-- Existing Clients -->
-    <section
-      class="p-5 mb-8 rounded-md border border-dark/10 dark:border-light/10 bg-white dark:bg-surface shadow-sm"
-    >
-      <div class="flex items-center gap-3 mb-4">
+    <UiCard class="mb-8">
+      <template #title>
         <h2 class="text-lg font-medium flex items-center gap-2">
           <i class="fas fa-users" /> {{ $t('clients.existing_title') }}
         </h2>
+      </template>
+      <template #actions>
         <UiButton
           class="ml-auto"
           variant="danger"
@@ -81,7 +90,7 @@
         >
           <i class="fas fa-user-slash" /> {{ $t('troubleshooting.unpair_all') }}
         </UiButton>
-      </div>
+      </template>
       <p class="text-sm opacity-75 mb-3">{{ $t('troubleshooting.unpair_desc') }}</p>
       <UiAlert v-if="unpairAllStatus === true" variant="success" class="mb-3">{{
         $t('troubleshooting.unpair_all_success')
@@ -112,348 +121,19 @@
       <div v-else class="p-4 text-center italic opacity-75">
         {{ $t('troubleshooting.unpair_single_no_devices') }}
       </div>
-    </section>
+    </UiCard>
 
-    <section
-      class="p-5 mb-8 rounded-md border border-dark/10 dark:border-light/10 bg-white dark:bg-surface shadow-sm"
-    >
-      <h2 class="text-lg font-medium mb-4 flex items-center gap-2">
-        <i class="fas fa-key" /> {{ $t('auth.generate_new_token') }}
-      </h2>
-      <p v-if="$te('auth.generate_token_help')" class="text-xs opacity-75 mb-3">
-        {{ $t('auth.generate_token_help') }}
-      </p>
-      <form novalidate class="space-y-5" @submit.prevent="generateToken">
-        <div class="space-y-4">
-          <div
-            v-for="(scope, idx) in scopes"
-            :key="scope.id ?? idx"
-            class="grid grid-cols-1 md:grid-cols-12 gap-4 items-end"
-          >
-            <div class="col-span-12 md:col-span-5 flex flex-col">
-              <label :for="'scope-path-' + idx" class="text-[11px] font-semibold uppercase mb-1">{{
-                $t('auth.select_api_path')
-              }}</label>
-              <select
-                :id="'scope-path-' + idx"
-                v-model="scope.path"
-                class="form-control"
-                @change="onScopePathChange(scope)"
-              >
-                <option value="" disabled>{{ $t('auth.select_api_path') }}</option>
-                <option
-                  v-for="route in apiRoutes.filter((r) => r.selectable !== false)"
-                  :key="route.path"
-                  :value="route.path"
-                >
-                  {{ route.path }}
-                </option>
-              </select>
-            </div>
-            <div class="col-span-12 md:col-span-5 flex flex-col">
-              <label
-                :for="'scope-methods-' + idx"
-                class="text-[11px] font-semibold uppercase mb-1"
-                >{{ $t('auth.scopes') }}</label
-              >
-              <select
-                :id="'scope-methods-' + idx"
-                v-model="scope.methods"
-                multiple
-                size="4"
-                :disabled="!scope.path"
-                class="form-control h-28"
-              >
-                <option v-for="m in getMethodsForPath(scope.path)" :key="m" :value="m">
-                  {{ m }}
-                </option>
-              </select>
-            </div>
-            <div class="col-span-12 md:col-span-2 flex">
-              <UiButton
-                type="button"
-                variant="danger"
-                class="w-full"
-                size="sm"
-                :aria-label="$t('auth.remove')"
-                :disabled="scopes.length === 1 && !scope.path && !scope.methods?.length"
-                @click="removeScope(idx)"
-              >
-                {{ $t('auth.remove') }}
-              </UiButton>
-            </div>
-          </div>
-
-          <div class="flex items-center gap-4 flex-wrap">
-            <UiButton type="button" variant="primary" size="sm" @click="addScope">
-              {{ $t('auth.add_scope') }}
-            </UiButton>
-            <span v-if="isGenerateDisabled" class="text-xs opacity-60">{{
-              $t('auth.generate_disabled_hint')
-            }}</span>
-          </div>
-
-          <div v-if="validScopes.length" class="pt-1">
-            <strong class="mr-2 text-sm">{{ $t('auth.selected_scopes') }}:</strong>
-            <div class="flex flex-wrap items-center gap-2 mt-2">
-              <template v-for="(s, i) in validScopes" :key="i">
-                <span
-                  class="inline-flex items-center bg-dark/5 dark:bg-light/10 text-xs rounded px-2 py-1"
-                >
-                  <span class="font-semibold mr-2">{{ s.path }}</span>
-                  <span
-                    v-for="m in s.methods"
-                    :key="m"
-                    class="ml-1 inline-flex items-center bg-primary text-onPrimary text-[10px] uppercase rounded px-1.5 py-0.5"
-                    >{{ m }}</span
-                  >
-                </span>
-              </template>
-            </div>
-          </div>
-
-          <div class="flex gap-3 flex-wrap">
-            <UiButton
-              type="submit"
-              variant="primary"
-              :disabled="isGenerateDisabled || isGenerating"
-              :loading="isGenerating"
-            >
-              <span v-if="!isGenerating">{{ $t('auth.generate_token') }}</span>
-              <span v-else>{{ $t('auth.loading') }}</span>
-            </UiButton>
-            <UiButton
-              type="button"
-              tone="ghost"
-              variant="neutral"
-              :disabled="isGenerating"
-              @click="resetForm"
-            >
-              {{ $t('_common.cancel') }}
-            </UiButton>
-          </div>
-
-          <UiAlert v-if="displayedToken" variant="success" class="mt-2">
-            <div class="mb-2 font-medium text-sm">{{ $t('auth.token_success') }}</div>
-            <div class="flex gap-2 flex-col md:flex-row">
-              <input
-                type="text"
-                class="form-control flex-1 font-mono"
-                :value="displayedToken"
-                readonly
-              />
-              <UiButton
-                type="button"
-                variant="primary"
-                :disabled="tokenCopied"
-                :title="$t('auth.copy_token')"
-                @click="copyToken"
-              >
-                {{ tokenCopied ? $t('auth.token_copied') : $t('auth.copy_token') }}
-              </UiButton>
-            </div>
-          </UiAlert>
-        </div>
-      </form>
-    </section>
-
-    <!-- API Token Management: Active Tokens -->
-    <section
-      class="p-5 mb-8 rounded-md border border-dark/10 dark:border-light/10 bg-white dark:bg-surface shadow-sm"
-    >
-      <div class="flex items-center gap-3 mb-5 flex-wrap">
-        <h2 class="text-lg font-medium flex items-center gap-2">
-          <i class="fas fa-list" /> {{ $t('auth.active_tokens') }}
-        </h2>
-        <UiButton
-          type="button"
-          tone="ghost"
-          variant="neutral"
-          size="sm"
-          :disabled="isLoadingTokens"
-          @click="loadTokens"
-        >
-          {{ $t('auth.refresh') }}
-        </UiButton>
-        <div class="ml-auto flex gap-4 flex-wrap items-end">
-          <div class="flex flex-col w-40">
-            <label class="text-[11px] font-semibold uppercase mb-1">{{
-              $t('auth.search_tokens')
-            }}</label>
-            <input
-              v-model="tokenFilter"
-              type="text"
-              class="form-control"
-              :placeholder="$t('auth.search_tokens')"
-              autocomplete="off"
-              @input="onFilterInput"
-            />
-          </div>
-          <div class="flex flex-col w-40">
-            <label class="text-[11px] font-semibold uppercase mb-1">{{
-              $t('auth.sort_field')
-            }}</label>
-            <select v-model="sortField" class="form-control">
-              <option value="created_at">{{ $t('auth.created') }}</option>
-              <option value="username">{{ $t('auth.username') }}</option>
-              <option value="hash">{{ $t('auth.hash') }}</option>
-            </select>
-          </div>
-          <div class="flex flex-col w-32">
-            <label class="text-[11px] font-semibold uppercase mb-1">{{
-              $t('auth.sort_direction')
-            }}</label>
-            <select v-model="sortDir" class="form-control">
-              <option value="desc">{{ $t('auth.desc') }}</option>
-              <option value="asc">{{ $t('auth.asc') }}</option>
-            </select>
-          </div>
-        </div>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead class="bg-dark/5 dark:bg-light/5">
-            <tr class="text-left">
-              <th class="p-2 font-semibold">{{ $t('auth.hash') }}</th>
-              <th class="p-2 font-semibold">{{ $t('auth.username') }}</th>
-              <th class="p-2 font-semibold">{{ $t('auth.created') }}</th>
-              <th class="p-2 font-semibold">{{ $t('auth.scopes') }}</th>
-              <th class="p-2 text-right" />
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-dark/10 dark:divide-light/10">
-            <tr v-if="isLoadingTokens">
-              <td colspan="5" class="text-center py-6 text-sm">{{ $t('auth.loading') }}</td>
-            </tr>
-            <tr v-else-if="!sortedTokens.length">
-              <td colspan="5" class="text-center py-6 text-sm">
-                {{ tokens.length ? $t('auth.no_matching_tokens') : $t('auth.no_active_tokens') }}
-              </td>
-            </tr>
-            <tr v-for="t in sortedTokens" :key="t.hash" class="hover:bg-primary/5 transition">
-              <td class="p-2 align-top max-w-[160px]">
-                <div class="flex items-center gap-2">
-                  <code class="truncate text-[11px] font-mono" :title="t.hash">{{ t.hash }}</code>
-                  <UiButton
-                    type="button"
-                    tone="ghost"
-                    variant="neutral"
-                    size="sm"
-                    :disabled="copiedHash === t.hash"
-                    @click.prevent="copyHash(t.hash)"
-                  >
-                    {{ copiedHash === t.hash ? $t('auth.hash_copied') : $t('auth.copy_hash') }}
-                  </UiButton>
-                </div>
-              </td>
-              <td class="p-2 align-top max-w-[160px] truncate">{{ t.username }}</td>
-              <td class="p-2 align-top" :title="formatFullDate(t.created_at)">
-                {{ formatDate(t.created_at) }}
-              </td>
-              <td class="p-2 align-top">
-                <div class="flex flex-wrap gap-1">
-                  <span v-for="(s, i) in t.scopes" :key="i" class="inline-flex items-start">
-                    <span
-                      class="inline-flex items-center bg-dark/5 dark:bg-light/10 text-xs rounded px-2 py-0.5 mr-1"
-                      >{{ s.path }}</span
-                    >
-                    <span
-                      v-for="m in s.methods"
-                      :key="m"
-                      class="inline-flex items-center bg-primary text-onPrimary text-[10px] uppercase rounded px-1.5 py-0.5 mr-1"
-                      >{{ m }}</span
-                    >
-                  </span>
-                </div>
-              </td>
-              <td class="p-2 align-top text-right">
-                <UiButton
-                  variant="danger"
-                  size="sm"
-                  :disabled="revoking === t.hash"
-                  @click="revokeToken(t.hash)"
-                >
-                  {{ $t('auth.revoke') }}
-                </UiButton>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- API Token Management: Test Token -->
-    <section
-      class="p-5 mb-14 rounded-md border border-dark/10 dark:border-light/10 bg-white dark:bg-surface shadow-sm"
-    >
-      <h2 class="text-lg font-medium mb-4 flex items-center gap-2">
-        <i class="fas fa-vial" /> {{ $t('auth.test_api_token') }}
-      </h2>
-      <p v-if="$te('auth.testing_help')" class="text-xs opacity-75 mb-4">
-        {{ $t('auth.testing_help') }}
-      </p>
-      <form class="grid grid-cols-1 md:grid-cols-12 gap-4 mb-4" @submit.prevent="testToken">
-        <div class="col-span-1 md:col-span-6 flex flex-col">
-          <label for="testPath" class="text-[11px] font-semibold uppercase mb-1">{{
-            $t('auth.api_path_get_only')
-          }}</label>
-          <select id="testPath" v-model="testPath" class="form-control" required>
-            <option value="" disabled>{{ $t('auth.select_api_path_to_test') }}</option>
-            <option
-              v-for="route in apiRoutes.filter(
-                (r) => r.selectable !== false && r.methods.includes('GET'),
-              )"
-              :key="route.path"
-              :value="route.path"
-            >
-              {{ route.path }}
-            </option>
-          </select>
-        </div>
-        <div class="col-span-1 md:col-span-6 flex flex-col">
-          <label for="testTokenInput" class="text-[11px] font-semibold uppercase mb-1">{{
-            $t('auth.token')
-          }}</label>
-          <input
-            id="testTokenInput"
-            v-model="testTokenInput"
-            type="password"
-            class="form-control"
-            autocomplete="off"
-            :placeholder="$t('auth.paste_token_here')"
-            required
-          />
-        </div>
-        <div class="col-span-1 flex items-end">
-          <UiButton
-            type="submit"
-            variant="primary"
-            :disabled="isTesting || !testPath || !testTokenInput"
-            :loading="isTesting"
-          >
-            <span v-if="!isTesting">{{ $t('auth.test_token') }}</span>
-            <span v-else>{{ $t('auth.loading') }}</span>
-          </UiButton>
-        </div>
-      </form>
-      <div v-if="testResult || testError" class="mt-2">
-        <div class="font-semibold mb-2 text-sm">{{ $t('auth.result') }}</div>
-        <UiAlert v-if="testError" variant="danger" class="mb-2">{{ testError }}</UiAlert>
-        <pre
-          v-if="testResult"
-          class="bg-dark/5 dark:bg-light/5 p-3 rounded text-[11px] overflow-auto max-h-72 whitespace-pre-wrap font-mono"
-          >{{ testResult }}</pre
-        >
-      </div>
-    </section>
+    <ApiTokenManager></ApiTokenManager>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, computed } from 'vue';
 import { http } from '@/http';
+import UiCard from '@/components/UiCard.vue';
 import UiButton from '@/components/UiButton.vue';
 import UiAlert from '@/components/UiAlert.vue';
+import ApiTokenManager from '@/ApiTokenManager.vue';
 
 const clients = ref([]);
 const pin = ref('');

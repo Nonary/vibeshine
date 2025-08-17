@@ -27,6 +27,7 @@ const props = defineProps({
   dismissible: { type: Boolean, default: false },
   icon: { type: String, default: '' },
 });
+defineEmits(['close']);
 
 const base = 'rounded-md px-4 py-3 text-sm shadow-sm border';
 const variants = {
@@ -35,7 +36,7 @@ const variants = {
   warning: 'bg-warning/10 border-warning/30 text-warning',
   info: 'bg-info/10 border-info/30 text-info',
   primary: 'bg-primary/10 border-primary/30 text-primary',
-  neutral: 'bg-surface border-dark/10 text-dark',
+  neutral: 'bg-surface border-dark/10 text-dark dark:text-light',
 };
 const wrapper = computed(() => `${base} ${variants[props.variant] || variants.info}`);
 </script>

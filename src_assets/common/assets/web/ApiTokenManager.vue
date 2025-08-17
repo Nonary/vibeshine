@@ -1,298 +1,250 @@
 <template>
-  <div class="max-w-5xl mx-auto px-4 py-6 token-page">
-    <h1 class="text-2xl font-semibold mb-4">
-      {{ $t('auth.title') }}
-    </h1>
-
-    <!-- Generate token -->
-    <section
-      id="generate-token-section"
-      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent"
-    >
-      <div class="px-4 py-3 border-b border-black/5 dark:border-white/10 flex items-center">
-        <h2 class="text-lg font-medium m-0">
-          {{ $t('auth.generate_new_token') }}
-        </h2>
+  <div class="max-w-6xl mx-auto px-4 py-6 space-y-8">
+    <header class="flex items-center justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-semibold tracking-tight">API Token Management</h1>
+        <p class="text-sm opacity-70">Create scoped tokens, manage active ones, and test safely.</p>
       </div>
-      <div class="p-4">
-        <p v-if="$te('auth.generate_token_help')" class="text-[11px] opacity-60 mb-3">
-          {{ $t('auth.generate_token_help') }}
-        </p>
+      <div class="text-xs opacity-75">
+        <span class="inline-flex items-center gap-2">
+          <i class="fas fa-shield-halved"></i>
+          Least-privilege scopes for better security
+        </span>
+      </div>
+    </header>
 
-        <form novalidate @submit.prevent="generateToken">
-          <div class="flex flex-col space-y-3">
-            <div
-              v-for="(scope, idx) in scopes"
-              :key="scope.id ?? idx"
-              class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end"
-            >
-              <div class="col-span-12 md:col-span-5">
-                <label :for="'scope-path-' + idx" class="block text-sm font-medium mb-1">{{
-                  $t('auth.select_api_path')
-                }}</label>
-                <select
-                  :id="'scope-path-' + idx"
-                  v-model="scope.path"
-                  class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-surface/70"
-                  @change="onScopePathChange(scope)"
-                >
-                  <option value="" disabled>
-                    {{ $t('auth.select_api_path') }}
-                  </option>
-                  <option
-                    v-for="route in apiRoutes.filter((r) => r.selectable !== false)"
-                    :key="route.path"
-                    :value="route.path"
-                  >
-                    {{ route.path }}
-                  </option>
-                </select>
-              </div>
+    <!-- Create Token -->
+    <section
+      class="p-5 mb-8 rounded-md border border-dark/10 dark:border-light/10 bg-white dark:bg-surface shadow-sm"
+    >
+      <header class="flex items-center gap-3 mb-4">
+        <h2 class="text-lg font-medium flex items-center gap-2">
+          <i class="fas fa-key icon" /> Create Token
+        </h2>
+      </header>
+      <div class="space-y-5">
+        <div class="text-sm opacity-75">
+          Choose one or more route scopes. Each scope grants specific HTTP methods for a path.
+        </div>
 
-              <div class="col-span-12 md:col-span-5">
-                <label :for="'scope-methods-' + idx" class="block text-sm font-medium mb-1">{{
-                  $t('auth.scopes')
-                }}</label>
-                <select
-                  :id="'scope-methods-' + idx"
-                  v-model="scope.methods"
-                  class="w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-surface/70"
-                  multiple
-                  size="4"
-                  :disabled="!scope.path"
-                >
-                  <option v-for="m in getMethodsForPath(scope.path)" :key="m" :value="m">
-                    {{ m }}
-                  </option>
-                </select>
-              </div>
-
-              <div class="col-span-12 md:col-span-2 flex">
-                <button
-                  type="button"
-                  class="w-full inline-flex items-center justify-center px-3 py-2 rounded-md bg-red-600 text-white text-sm hover:bg-red-700"
-                  :aria-label="$t('auth.remove')"
-                  :disabled="scopes.length === 1 && !scope.path && !scope.methods?.length"
-                  @click="removeScope(idx)"
-                >
-                  {{ $t('auth.remove') }}
-                </button>
-              </div>
-            </div>
-
-            <div class="flex items-center gap-2">
-              <button
-                type="button"
-                class="inline-flex items-center px-3 py-2 rounded-md bg-sky-600 text-white text-sm hover:bg-sky-700"
-                @click="addScope"
+        <!-- Add scope row -->
+        <div class="flex flex-wrap items-start gap-3">
+          <div class="flex flex-col flex-1 min-w-[240px]">
+            <label class="form-label">Route</label>
+            <select v-model="draft.path" class="form-control form-select">
+              <option disabled value="">Select a route…</option>
+              <option v-for="r in ROUTE_OPTIONS" :key="r.path" :value="r.path">
+                {{ r.path }}
+              </option>
+            </select>
+          </div>
+          <div class="flex flex-col min-w-[220px]">
+            <label class="form-label">Methods</label>
+            <div class="flex flex-wrap gap-2">
+              <label
+                v-for="m in draftMethods"
+                :key="m"
+                class="inline-flex items-center gap-2 px-2 py-1 rounded-md bg-black/5 dark:bg-white/10 cursor-pointer select-none"
               >
-                {{ $t('auth.add_scope') }}
-              </button>
-              <span v-if="isGenerateDisabled" class="text-[13px] text-muted">
-                {{ $t('auth.generate_disabled_hint') }}
-              </span>
-            </div>
-
-            <div v-if="validScopes.length" class="mt-1">
-              <strong class="mr-2">{{ $t('auth.selected_scopes') }}:</strong>
-              <div class="flex flex-wrap items-center gap-2 mt-2">
-                <template v-for="(s, i) in validScopes" :key="i">
-                  <span
-                    class="inline-flex items-center bg-gray-100 dark:bg-gray-800 text-sm rounded px-2 py-0.5"
-                  >
-                    <span class="font-semibold mr-2">{{ s.path }}</span>
-                    <span
-                      v-for="m in s.methods"
-                      :key="m"
-                      class="ml-1 inline-flex items-center bg-sky-500 text-white text-xs uppercase rounded px-2 py-0.5"
-                      >{{ m }}</span
-                    >
-                  </span>
-                </template>
-              </div>
-            </div>
-
-            <div class="flex gap-2">
-              <button
-                type="submit"
-                class="inline-flex items-center px-4 py-2 rounded-md bg-sky-600 text-white text-sm hover:bg-sky-700"
-                :disabled="isGenerateDisabled || isGenerating"
-              >
-                <span v-if="!isGenerating">{{ $t('auth.generate_token') }}</span>
-                <span v-else>{{ $t('auth.loading') }}</span>
-              </button>
-              <button
-                type="button"
-                class="inline-flex items-center px-4 py-2 rounded-md bg-gray-200 dark:bg-gray-700 text-sm"
-                :disabled="isGenerating"
-                @click="resetForm"
-              >
-                {{ $t('_common.cancel') }}
-              </button>
-            </div>
-
-            <div
-              v-if="displayedToken"
-              class="mt-2 bg-green-50 border border-green-200 rounded p-3"
-              role="status"
-              aria-live="polite"
-            >
-              <div class="mb-2 font-medium">
-                {{ $t('auth.token_success') }}
-              </div>
-              <div class="flex gap-2">
                 <input
-                  type="text"
-                  class="flex-1 px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-                  :value="displayedToken"
-                  readonly
+                  v-model="draft.selectedMethods"
+                  class="accent-primary"
+                  type="checkbox"
+                  :value="m"
                 />
-                <button
-                  type="button"
-                  class="inline-flex items-center px-3 py-2 rounded-md bg-green-600 text-white text-sm hover:bg-green-700"
-                  :disabled="tokenCopied"
-                  :title="$t('auth.copy_token')"
-                  @click="copyToken"
-                >
-                  {{ tokenCopied ? $t('auth.token_copied') : $t('auth.copy_token') }}
-                </button>
-              </div>
+                <span class="uppercase text-[11px] tracking-wide font-semibold">{{ m }}</span>
+              </label>
+            </div>
+            <div v-if="draft.path && draftMethods.length === 0" class="form-text">
+              No methods available for this route.
             </div>
           </div>
-        </form>
-      </div>
-    </section>
-
-    <!-- Active tokens -->
-    <section
-      id="active-tokens-section"
-      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent"
-    >
-      <div class="px-4 py-3 border-b border-black/5 dark:border-white/10 flex items-center">
-        <h2 class="text-lg font-medium m-0">
-          {{ $t('auth.active_tokens') }}
-        </h2>
-        <button
-          type="button"
-          class="ml-auto inline-flex items-center px-3 py-1 rounded-md bg-gray-200 dark:bg-gray-700 text-sm"
-          :disabled="isLoadingTokens"
-          @click="loadTokens"
-        >
-          {{ $t('auth.refresh') }}
-        </button>
-      </div>
-      <div class="p-4">
-        <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end mb-3">
-          <div class="col-span-1 md:col-span-6">
-            <label class="block text-sm font-medium">{{ $t('auth.search_tokens') }}</label>
-            <input
-              v-model="tokenFilter"
-              type="text"
-              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-              :placeholder="$t('auth.search_tokens')"
-              autocomplete="off"
-              @input="onFilterInput"
-            />
-          </div>
-          <div class="col-span-1 md:col-span-3">
-            <label class="block text-sm font-medium">{{ $t('auth.sort_field') }}</label>
-            <select
-              v-model="sortField"
-              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-            >
-              <option value="created_at">
-                {{ $t('auth.created') }}
-              </option>
-              <option value="username">
-                {{ $t('auth.username') }}
-              </option>
-              <option value="hash">
-                {{ $t('auth.hash') }}
-              </option>
-            </select>
-          </div>
-          <div class="col-span-1 md:col-span-3">
-            <label class="block text-sm font-medium">{{ $t('auth.sort_direction') }}</label>
-            <select
-              v-model="sortDir"
-              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-            >
-              <option value="desc">
-                {{ $t('auth.desc') }}
-              </option>
-              <option value="asc">
-                {{ $t('auth.asc') }}
-              </option>
-            </select>
+          <div class="flex items-center">
+            <UiButton variant="primary" size="md" :disabled="!canAddScope" @click="addScope">
+              <i class="fas fa-plus icon" /> Add Scope
+            </UiButton>
           </div>
         </div>
 
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm align-middle">
-            <thead class="text-left">
+        <!-- Current scopes summary -->
+        <div v-if="scopes.length" class="space-y-2">
+          <div class="text-xs uppercase tracking-wider opacity-70">Scopes</div>
+          <div class="flex flex-col gap-2">
+            <div
+              v-for="(s, idx) in scopes"
+              :key="idx + ':' + s.path"
+              class="flex items-start gap-2"
+            >
+              <div
+                class="flex flex-wrap items-center gap-1 bg-black/5 dark:bg-white/10 rounded px-2 py-1"
+              >
+                <span class="font-semibold">{{ s.path }}</span>
+                <span class="flex gap-1 flex-wrap">
+                  <span
+                    v-for="m in s.methods"
+                    :key="m"
+                    class="uppercase text-[11px] tracking-wide bg-primary/20 text-brand rounded px-1 py-0.5"
+                    >{{ m }}</span
+                  >
+                </span>
+              </div>
+              <button class="btn ghost text-xs" title="Remove" @click="removeScope(idx)">
+                <i class="fas fa-times icon"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <UiButton
+            variant="success"
+            size="md"
+            :disabled="!canGenerate || creating"
+            :loading="creating"
+            @click="createToken"
+          >
+            <i class="fas fa-key icon" /> Generate Token
+          </UiButton>
+          <span v-if="creating" class="text-xs opacity-70">Creating…</span>
+        </div>
+
+        <!-- Created token output moved to modal -->
+
+        <UiAlert v-if="createError" variant="danger" dismissible @close="createError = ''">
+          {{ createError }}
+        </UiAlert>
+      </div>
+    </section>
+
+    <!-- Token Modal -->
+    <UiModal v-model:open="showTokenModal" title="API Token Created" :dismissible="true">
+      <div class="space-y-3">
+        <UiAlert variant="warning">
+          <i class="fas fa-triangle-exclamation" /> This token is shown only once. Save or copy it
+          now. You cannot retrieve it later.
+        </UiAlert>
+        <div
+          class="rounded-md border border-dark/10 dark:border-light/10 p-3 bg-black/5 dark:bg-white/10"
+        >
+          <div class="text-xs opacity-80">Token</div>
+          <code class="block text-sm font-mono break-words my-1">{{ createdToken }}</code>
+          <div class="flex items-center gap-3">
+            <UiButton size="sm" variant="primary" @click="copy(createdToken)">
+              <i class="fas fa-copy icon" /> Copy
+            </UiButton>
+            <span v-if="copied" class="text-xs text-success">Copied!</span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex items-center justify-end">
+          <UiButton variant="primary" @click="showTokenModal = false">Done</UiButton>
+        </div>
+      </template>
+    </UiModal>
+
+    <!-- Active Tokens -->
+    <section
+      class="p-5 mb-8 rounded-md border border-dark/10 dark:border-light/10 bg-white dark:bg-surface shadow-sm"
+    >
+      <div class="flex items-center gap-3 mb-4">
+        <h2 class="text-lg font-medium flex items-center gap-2">
+          <i class="fas fa-lock icon" /> Active Tokens
+        </h2>
+        <UiButton
+          class="ml-auto"
+          variant="neutral"
+          tone="ghost"
+          size="sm"
+          :loading="tokensLoading"
+          aria-label="Refresh tokens"
+          @click="loadTokens"
+        >
+          <i class="fas fa-rotate icon" />
+          <span class="hidden sm:inline">Refresh</span>
+        </UiButton>
+      </div>
+      <div class="space-y-3">
+        <div class="flex flex-wrap items-end gap-3">
+          <div class="flex-1 min-w-[220px]">
+            <input
+              v-model="filter"
+              class="form-control"
+              placeholder="Filter by hash or path…"
+              type="text"
+            />
+          </div>
+          <div class="text-xs">
+            <label class="flex flex-col">
+              <span class="opacity-70">Sort</span>
+              <select v-model="sortBy" class="form-control form-select">
+                <option value="created">Newest</option>
+                <option value="path">Path</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div v-if="tokensError" class="text-sm text-danger">{{ tokensError }}</div>
+
+        <div v-if="filteredTokens.length === 0 && !tokensLoading" class="text-sm opacity-70">
+          No active tokens.
+        </div>
+
+        <div v-else class="overflow-auto">
+          <table class="table min-w-[640px]">
+            <thead>
               <tr>
-                <th>{{ $t('auth.hash') }}</th>
-                <th>{{ $t('auth.username') }}</th>
-                <th>{{ $t('auth.created') }}</th>
-                <th>{{ $t('auth.scopes') }}</th>
-                <th class="text-right" />
+                <th class="w-40">Hash</th>
+                <th>Scopes</th>
+                <th class="w-28">Created</th>
+                <th class="w-24"></th>
               </tr>
             </thead>
-            <tbody class="divide-y">
-              <tr v-if="isLoadingTokens">
-                <td colspan="5" class="text-center">
-                  {{ $t('auth.loading') }}
-                </td>
-              </tr>
-              <tr v-else-if="!sortedTokens.length">
-                <td colspan="5" class="text-center">
-                  {{ tokens.length ? $t('auth.no_matching_tokens') : $t('auth.no_active_tokens') }}
-                </td>
-              </tr>
-              <tr v-for="t in sortedTokens" :key="t.hash">
-                <td class="truncate" style="max-width: 160px">
-                  <div class="flex items-center gap-2">
-                    <code class="truncate" :title="t.hash">{{ t.hash }}</code>
-                    <button
-                      type="button"
-                      class="inline-flex items-center px-2 py-1 rounded-md bg-gray-200 dark:bg-gray-700 text-sm"
-                      :disabled="copiedHash === t.hash"
-                      @click.prevent="copyHash(t.hash)"
-                    >
-                      {{ copiedHash === t.hash ? $t('auth.hash_copied') : $t('auth.copy_hash') }}
-                    </button>
-                  </div>
-                </td>
-                <td class="truncate" style="max-width: 160px">
-                  {{ t.username }}
-                </td>
-                <td :title="formatFullDate(t.created_at)">
-                  {{ formatDate(t.created_at) }}
-                </td>
-                <td>
-                  <div class="flex flex-wrap gap-1">
-                    <span v-for="(s, i) in t.scopes" :key="i" class="inline-flex items-center">
-                      <span
-                        class="inline-flex items-center bg-gray-100 dark:bg-gray-800 text-sm rounded px-2 py-0.5 mr-1"
-                        >{{ s.path }}</span
-                      >
-                      <span
-                        v-for="m in s.methods"
-                        :key="m"
-                        class="inline-flex items-center bg-sky-500 text-white text-xs uppercase rounded px-2 py-0.5 mr-1"
-                        >{{ m }}</span
-                      >
-                    </span>
-                  </div>
-                </td>
-                <td class="text-right">
-                  <button
-                    class="inline-flex items-center px-3 py-1 rounded-md bg-red-600 text-white text-sm"
-                    :disabled="revoking === t.hash"
-                    @click="revokeToken(t.hash)"
+            <tbody>
+              <tr v-for="t in filteredTokens" :key="t.hash">
+                <td class="align-middle">
+                  <span
+                    class="font-mono text-xs inline-block min-w-[70px] cursor-pointer"
+                    tabindex="0"
+                    title="Click to copy"
+                    @click="copy(t.hash)"
+                    @keydown.enter.prevent="copy(t.hash)"
                   >
-                    {{ $t('auth.revoke') }}
-                  </button>
+                    {{ shortHash(t.hash) }}
+                  </span>
+                </td>
+                <td class="align-middle">
+                  <div class="flex flex-wrap gap-1">
+                    <div
+                      v-for="(s, idx) in t.scopes"
+                      :key="idx"
+                      class="rounded bg-black/5 dark:bg-white/10 px-2 py-1"
+                    >
+                      <span class="font-semibold">{{ s.path }}</span>
+                      <span class="ml-1 space-x-1">
+                        <span
+                          v-for="m in s.methods"
+                          :key="m"
+                          class="uppercase text-[11px] tracking-wide bg-primary/20 text-brand rounded px-1 py-0.5"
+                          >{{ m }}</span
+                        >
+                      </span>
+                    </div>
+                  </div>
+                </td>
+                <td class="text-xs opacity-70 align-middle">
+                  {{ t.createdAt ? formatTime(t.createdAt) : '—' }}
+                </td>
+                <td class="align-middle">
+                  <UiButton
+                    size="sm"
+                    variant="danger"
+                    :loading="revoking === t.hash"
+                    @click="promptRevoke(t)"
+                  >
+                    <i class="fas fa-ban icon" /> Revoke
+                  </UiButton>
                 </td>
               </tr>
             </tbody>
@@ -301,96 +253,99 @@
       </div>
     </section>
 
-    <!-- Test token -->
+    <!-- Tester (GET only) -->
     <section
-      id="test-token-section"
-      class="mb-6 rounded-md border border-black/5 dark:border-white/10 bg-white/50 dark:bg-transparent"
+      class="p-5 mb-8 rounded-md border border-dark/10 dark:border-light/10 bg-white dark:bg-surface shadow-sm"
     >
-      <div class="px-4 py-3 border-b border-black/5 dark:border-white/10">
-        <h2 class="text-lg font-medium m-0">
-          {{ $t('auth.test_api_token') }}
+      <header class="flex items-center gap-3 mb-4">
+        <h2 class="text-lg font-medium flex items-center gap-2">
+          <i class="fas fa-vial icon" /> Test Token
         </h2>
-      </div>
-      <div class="p-4">
-        <p v-if="$te('auth.testing_help')" class="text-[11px] opacity-60">
-          {{ $t('auth.testing_help') }}
-        </p>
-        <form class="grid grid-cols-1 md:grid-cols-12 gap-3" @submit.prevent="testToken">
-          <div class="col-span-1 md:col-span-6">
-            <label for="testPath" class="block text-sm font-medium">{{
-              $t('auth.api_path_get_only')
-            }}</label>
-            <select
-              id="testPath"
-              v-model="testPath"
-              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-              required
-            >
-              <option value="" disabled>
-                {{ $t('auth.select_api_path_to_test') }}
-              </option>
-              <option
-                v-for="route in apiRoutes.filter(
-                  (r) => r.selectable !== false && r.methods.includes('GET'),
-                )"
-                :key="route.path"
-                :value="route.path"
-              >
-                {{ route.path }}
-              </option>
+      </header>
+      <div class="space-y-4">
+        <UiAlert variant="neutral">
+          <span class="text-xs">
+            Tester performs only safe GET requests. Select a route and send a request with your
+            token.
+          </span>
+        </UiAlert>
+        <div class="grid md:grid-cols-2 gap-4">
+          <div>
+            <label class="form-label">Token</label>
+            <input v-model="test.token" class="form-control monospace" placeholder="Paste token" />
+          </div>
+          <div>
+            <label class="form-label">Route (GET only)</label>
+            <select v-model="test.path" class="form-control form-select">
+              <option disabled value="">Select a GET route…</option>
+              <option v-for="r in GET_OPTIONS" :key="r.path" :value="r.path">{{ r.path }}</option>
             </select>
           </div>
-          <div class="col-span-1 md:col-span-6">
-            <label for="testTokenInput" class="block text-sm font-medium">{{
-              $t('auth.token')
-            }}</label>
+          <div>
+            <label class="form-label">Header Scheme</label>
+            <select v-model="test.scheme" class="form-control form-select">
+              <option value="bearer">Authorization: Bearer &lt;token&gt;</option>
+              <option value="x-api-token">X-Api-Token: &lt;token&gt;</option>
+              <option value="x-token">X-Token: &lt;token&gt;</option>
+              <option value="query">Query param ?token=&lt;token&gt;</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Query String (optional)</label>
             <input
-              id="testTokenInput"
-              v-model="testTokenInput"
-              type="password"
-              class="w-full px-3 py-2 rounded-md border border-black/10 dark:border-white/15"
-              autocomplete="off"
-              :placeholder="$t('auth.paste_token_here')"
-              required
+              v-model="test.query"
+              class="form-control"
+              placeholder="e.g. limit=50&tail=true"
             />
           </div>
-          <div class="col-span-1">
-            <button
-              type="submit"
-              class="inline-flex items-center px-4 py-2 rounded-md bg-sky-600 text-white text-sm"
-              :disabled="isTesting || !testPath || !testTokenInput"
-            >
-              <span v-if="!isTesting">{{ $t('auth.test_token') }}</span>
-              <span v-else>{{ $t('auth.loading') }}</span>
-            </button>
-          </div>
-        </form>
+        </div>
+        <div class="flex items-center gap-3">
+          <UiButton variant="primary" :disabled="!canSendTest" :loading="testing" @click="sendTest">
+            <i class="fas fa-paper-plane icon" /> Test Token
+          </UiButton>
+          <span v-if="testing" class="text-xs opacity-70">Sending…</span>
+        </div>
 
-        <div v-if="testResult || testError" class="mt-3">
-          <div class="font-semibold mb-2">
-            {{ $t('auth.result') }}
-          </div>
-          <div v-if="testError" class="bg-red-50 border border-red-200 rounded p-2 text-sm">
-            {{ testError }}
-          </div>
-          <pre v-if="testResult" class="bg-gray-50 dark:bg-gray-900 p-2 rounded text-sm mb-0">{{
-            testResult
-          }}</pre>
+        <div v-if="testError" class="alert alert-danger text-sm">{{ testError }}</div>
+
+        <div v-if="testResponse" class="space-y-2">
+          <div class="text-xs opacity-70">Response</div>
+          <pre
+            class="p-3 rounded-md bg-black/5 dark:bg-white/10 text-dark dark:text-light text-xs overflow-auto max-h-[60vh]"
+          ><code class="whitespace-pre-wrap">{{ testResponse }}</code></pre>
         </div>
       </div>
     </section>
+
+    <!-- Revoke confirm modal -->
+    <UiConfirmModal
+      v-model:open="showRevoke"
+      title="Revoke Token"
+      :message="`Are you sure you want to revoke token ${shortHash(pendingRevoke?.hash || '')}? This cannot be undone.`"
+      confirm-text="Revoke"
+      confirm-icon="fas fa-ban"
+      variant="danger"
+      icon="fas fa-triangle-exclamation"
+      @confirm="confirmRevoke"
+      @cancel="showRevoke = false"
+    />
   </div>
 </template>
 
-<script>
-import { defineComponent } from 'vue';
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref } from 'vue';
+import UiButton from '@/components/UiButton.vue';
+import UiAlert from '@/components/UiAlert.vue';
+import UiModal from '@/components/UiModal.vue';
+import UiConfirmModal from '@/components/UiConfirmModal.vue';
 import { http } from '@/http';
 
-/**
- * List of available API routes and their supported methods
- * @type {Array<{path: string, methods: string[]}>}
- */
-const API_ROUTES = [
+type RouteDef = { path: string; methods: string[] };
+type Scope = { path: string; methods: string[] };
+type TokenRecord = { hash: string; scopes: Scope[]; createdAt?: string | number | null };
+
+// Available API routes and methods
+const ROUTE_OPTIONS: RouteDef[] = [
   { path: '/api/pin', methods: ['POST'] },
   { path: '/api/apps', methods: ['GET', 'POST'] },
   { path: '/api/logs', methods: ['GET'] },
@@ -410,529 +365,311 @@ const API_ROUTES = [
   { path: '/api/token/([a-fA-F0-9]+)', methods: ['DELETE'] },
 ];
 
-export default defineComponent({
-  name: 'ApiTokenManager',
-  data() {
-    return {
-      scopes: [{ path: '', methods: [] }],
-      tokenResult: '',
-      displayedToken: '',
-      tokenCopied: false,
-      tokens: [],
-      apiRoutes: API_ROUTES,
-      tokenFilter: '',
-      debouncedFilter: '',
-      sortField: 'created_at',
-      sortDir: 'desc',
-      copiedHash: '',
-      isGenerating: false,
-      isLoadingTokens: false,
-      revoking: '',
-      // Token tester state
-      testPath: '',
-      testTokenInput: '',
-      testResult: '',
-      testError: '',
-      isTesting: false,
-    };
-  },
-  computed: {
-    validScopes() {
-      const filtered = this.scopes.filter(
-        (s) => s.path && s.methods && Array.isArray(s.methods) && s.methods.length > 0,
-      );
-      return filtered;
-    },
-    isGenerateDisabled() {
-      return !this.validScopes.length || this.isGenerating;
-    },
-    filteredTokens() {
-      const filter = (this.debouncedFilter || '').trim().toLowerCase();
-      if (!filter) return this.tokens;
-      return this.tokens.filter(
-        (t) =>
-          t.username.toLowerCase().includes(filter) ||
-          t.hash.toLowerCase().includes(filter) ||
-          (t.scopes || []).some((s) => s.path.toLowerCase().includes(filter)),
-      );
-    },
-    sortedTokens() {
-      const arr = [...this.filteredTokens];
-      arr.sort((a, b) => {
-        let av, bv;
-        if (this.sortField === 'created_at') {
-          av = a.created_at;
-          bv = b.created_at;
-        } else if (this.sortField === 'username') {
-          av = a.username.toLowerCase();
-          bv = b.username.toLowerCase();
-        } else {
-          av = a.hash.toLowerCase();
-          bv = b.hash.toLowerCase();
-        }
-        if (av < bv) return this.sortDir === 'asc' ? -1 : 1;
-        if (av > bv) return this.sortDir === 'asc' ? 1 : -1;
-        return 0;
-      });
-      return arr;
-    },
-  },
-  mounted() {
-    this.loadTokens();
-    if (this.$t) {
-      document.title = this.$t('auth.title');
-    }
-    if (this.$i18n && this.$i18n.watchLocale) {
-      this.$i18n.watchLocale(() => {
-        document.title = this.$t('auth.title');
-      });
-    } else if (this.$i18n && this.$i18n.locale) {
-      this.$watch(
-        () => this.$i18n.locale,
-        () => {
-          document.title = this.$t('auth.title');
-        },
-      );
-    }
-  },
-  methods: {
-    /**
-     * Add a new empty scope to the scopes list
-     * @returns {void}
-     */
-    addScope() {
-      this.scopes.push({ path: '', methods: [] });
-    },
-    onScopePathChange(scope) {
-      scope.methods = [];
-    },
-    /**
-     * Remove a scope from the scopes list
-     * @param {number} idx - Index of the scope to remove
-     * @returns {void}
-     */
-    removeScope(idx) {
-      if (this.scopes.length > 1) {
-        this.scopes.splice(idx, 1);
-      } else {
-        // Clear instead of removing the last row entirely for better UX
-        this.scopes[0] = { path: '', methods: [] };
-      }
-    },
+const GET_OPTIONS = computed(() => ROUTE_OPTIONS.filter((r) => r.methods.includes('GET')));
 
-    /**
-     * Get available HTTP methods for a given API path
-     * @param {string} path - The API path
-     * @returns {string[]} Array of HTTP methods
-     */
-    getMethodsForPath(path) {
-      const found = this.apiRoutes.find((r) => r.path === path);
-      return found ? found.methods : ['GET', 'POST', 'DELETE', 'PATCH', 'PUT'];
-    },
-
-    /**
-     * Reset the token generation form to its initial state
-     * @returns {void}
-     */
-    resetForm() {
-      this.scopes = [{ path: '', methods: [] }];
-      this.tokenResult = '';
-      this.displayedToken = '';
-      this.tokenCopied = false;
-    },
-
-    /**
-     * Generate a new API token with selected scopes
-     * @returns {Promise<void>}
-     */
-    async generateToken() {
-      const filtered = this.validScopes;
-      if (!filtered.length) {
-        alert(this.$t('auth.please_specify_scope'));
-        return;
-      }
-      this.isGenerating = true;
-      this.tokenCopied = false;
-      try {
-        const res = await http.post(
-          '/api/token',
-          { scopes: filtered },
-          { validateStatus: () => true },
-        );
-        const data = res.data || {};
-        if (res.status === 200 && data.token) {
-          this.tokenResult = data.token;
-          this.displayedToken = data.token;
-          await this.loadTokens();
-        } else {
-          this.tokenResult = `Error: ${data.error || this.$t('auth.failed_to_generate_token')}`;
-          this.displayedToken = '';
-        }
-      } catch (e) {
-        this.tokenResult = `${this.$t('auth.request_failed')}: ${e.message}`;
-        this.displayedToken = '';
-      } finally {
-        this.isGenerating = false;
-      }
-    },
-
-    /**
-     * Load active tokens from the server
-     * @returns {Promise<void>}
-     */
-    async loadTokens() {
-      this.isLoadingTokens = true;
-      try {
-        const res = await http.get('/api/tokens', { validateStatus: () => true });
-        if (res.status === 200) {
-          this.tokens = res.data || [];
-        } else {
-          console.error('Failed to load tokens');
-          this.tokens = [];
-        }
-      } catch (e) {
-        console.error('Error fetching tokens:', e);
-        this.tokens = [];
-      } finally {
-        this.isLoadingTokens = false;
-      }
-    },
-
-    /**
-     * Revoke an active token
-     * @param {string} hash - The token hash to revoke
-     * @returns {Promise<void>}
-     */
-    async revokeToken(hash) {
-      if (!confirm(this.$t('auth.confirm_revoke'))) return;
-      this.revoking = hash;
-      try {
-        const res = await http.delete(`/api/token/${hash}`, { validateStatus: () => true });
-        if (res.status === 200) {
-          await this.loadTokens();
-        } else {
-          alert(this.$t('auth.failed_to_revoke_token'));
-        }
-      } catch (e) {
-        alert(`${this.$t('auth.error_revoking_token')}: ${e.message}`);
-      } finally {
-        this.revoking = '';
-      }
-    },
-
-    /**
-     * Format timestamp to localized date string
-     * @param {number} ts - Unix timestamp
-     * @returns {string} Formatted date string
-     */
-    formatDate(ts) {
-      const d = new Date(ts * 1000);
-      return (
-        d.toLocaleDateString() +
-        ' ' +
-        d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      );
-    },
-
-    /**
-     * Format timestamp to full localized date and time string
-     * @param {number} ts - Unix timestamp
-     * @returns {string} Full formatted date string
-     */
-    formatFullDate(ts) {
-      return new Date(ts * 1000).toLocaleString();
-    },
-
-    /**
-     * Test an API token against a selected endpoint
-     * @returns {Promise<void>}
-     */
-    async testToken() {
-      this.testResult = '';
-      this.testError = '';
-      if (!this.testPath || !this.testTokenInput) {
-        this.testError = this.$t('auth.select_api_path_and_token');
-        return;
-      }
-      this.isTesting = true;
-      try {
-        const res = await http.get(this.testPath, {
-          headers: { Authorization: 'Bearer ' + this.testTokenInput },
-          validateStatus: () => true,
-          responseType: 'text',
-          transformResponse: [(v) => v],
-        });
-        const contentType = res.headers
-          ? res.headers['content-type'] || res.headers['Content-Type']
-          : '';
-        let bodyText = res.data;
-        let isJson = contentType && contentType.indexOf('application/json') !== -1 && bodyText;
-        if (isJson) {
-          try {
-            this.testResult = JSON.stringify(JSON.parse(bodyText), null, 2);
-          } catch {
-            this.testResult = bodyText;
-          }
-        } else {
-          this.testResult = bodyText;
-        }
-        if (res.status < 200 || res.status >= 300) {
-          this.testError = `HTTP ${res.status}`;
-        } else {
-          this.testError = '';
-        }
-      } catch (e) {
-        this.testError = `${this.$t('auth.request_failed')}: ${e.message}`;
-      } finally {
-        this.isTesting = false;
-      }
-    },
-    copyToken() {
-      if (!this.displayedToken) return;
-      navigator.clipboard?.writeText(this.displayedToken).then(() => {
-        this.tokenCopied = true;
-        setTimeout(() => {
-          this.tokenCopied = false;
-        }, 3000);
-      });
-    },
-    onFilterInput() {
-      clearTimeout(this._filterTimer);
-      this._filterTimer = setTimeout(() => {
-        this.debouncedFilter = this.tokenFilter;
-      }, 180);
-    },
-    copyHash(hash) {
-      navigator.clipboard?.writeText(hash).then(() => {
-        this.copiedHash = hash;
-        setTimeout(() => {
-          if (this.copiedHash === hash) this.copiedHash = '';
-        }, 2000);
-      });
-    },
-  },
+// Create token state
+const draft = reactive<{ path: string; selectedMethods: string[] }>({
+  path: '',
+  selectedMethods: [],
 });
+const scopes = ref<Scope[]>([]);
+const creating = ref(false);
+const createdToken = ref('');
+const createError = ref('');
+const copied = ref(false);
+const showTokenModal = ref(false);
+
+const draftMethods = computed<string[]>(
+  () => ROUTE_OPTIONS.find((r) => r.path === draft.path)?.methods || [],
+);
+const canAddScope = computed(() => !!draft.path && draft.selectedMethods.length > 0);
+const canGenerate = computed(
+  () => scopes.value.length > 0 || (draft.path && draft.selectedMethods.length > 0),
+);
+
+function addScope(): void {
+  if (!canAddScope.value) return;
+  const methods = Array.from(new Set(draft.selectedMethods.map((m) => m.toUpperCase())));
+  const existingIdx = scopes.value.findIndex((s) => s.path === draft.path);
+  if (existingIdx !== -1) {
+    // Merge and de-duplicate
+    const merged = Array.from(
+      new Set([...scopes.value[existingIdx].methods, ...methods]),
+    ) as string[];
+    scopes.value[existingIdx] = { path: draft.path, methods: merged };
+  } else {
+    scopes.value.push({ path: draft.path, methods });
+  }
+  // reset draft
+  draft.path = '';
+  draft.selectedMethods = [];
+}
+
+function removeScope(idx: number): void {
+  scopes.value.splice(idx, 1);
+}
+
+function getEffectiveScopes(): Scope[] {
+  const s = scopes.value.slice();
+  if (draft.path && draft.selectedMethods.length > 0) {
+    const methods = Array.from(new Set(draft.selectedMethods.map((m) => m.toUpperCase())));
+    const idx = s.findIndex((x) => x.path === draft.path);
+    if (idx !== -1) {
+      s[idx] = {
+        path: draft.path,
+        methods: Array.from(new Set([...(s[idx].methods || []), ...methods])),
+      };
+    } else {
+      s.push({ path: draft.path, methods });
+    }
+  }
+  return s;
+}
+
+async function createToken(): Promise<void> {
+  createError.value = '';
+  createdToken.value = '';
+  copied.value = false;
+  creating.value = true;
+  try {
+    // Tentative payload; backend can map to expected format
+    const payload = { scopes: getEffectiveScopes() };
+    const res = await http.post('/api/token', payload, { validateStatus: () => true });
+    if (res.status >= 200 && res.status < 300) {
+      const token = (res.data && (res.data.token || res.data.value || res.data)) as string;
+      if (typeof token === 'string' && token.length > 0) {
+        createdToken.value = token;
+        // refresh active list
+        await loadTokens();
+        showTokenModal.value = true;
+      } else {
+        createError.value = 'Token created, but server returned no token string.';
+      }
+    } else {
+      const msg = (res.data && (res.data.message || res.data.error)) || `HTTP ${res.status}`;
+      createError.value = `Failed to create token: ${msg}`;
+    }
+  } catch (e: any) {
+    createError.value = e?.message || 'Network error creating token.';
+  } finally {
+    creating.value = false;
+  }
+}
+
+async function copy(text: string): Promise<void> {
+  copied.value = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    copied.value = true;
+    setTimeout(() => (copied.value = false), 1500);
+  } catch {
+    // fallback
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      copied.value = true;
+      setTimeout(() => (copied.value = false), 1500);
+    } catch {
+      /* noop */
+    }
+  }
+}
+
+// Active tokens state
+const tokens = ref<TokenRecord[]>([]);
+const tokensLoading = ref(false);
+const tokensError = ref('');
+const filter = ref('');
+const sortBy = ref<'created' | 'path'>('created');
+const revoking = ref('');
+const showRevoke = ref(false);
+const pendingRevoke = ref<TokenRecord | null>(null);
+
+function normalizeToken(rec: any): TokenRecord | null {
+  if (!rec) return null;
+  const scopes: Scope[] = Array.isArray(rec.scopes)
+    ? rec.scopes.map((s: any) => ({
+        path: s.path || s.route || '',
+        methods: (s.methods || s.verbs || []).map((v: any) => String(v).toUpperCase()),
+      }))
+    : [];
+  const hash: string = rec.hash || rec.id || rec.token_hash || '';
+  const createdAt = rec.createdAt || rec.created_at || rec.created || null;
+  if (!hash) return null;
+  return { hash, scopes, createdAt };
+}
+
+async function loadTokens(): Promise<void> {
+  tokensLoading.value = true;
+  tokensError.value = '';
+  try {
+    const res = await http.get('/api/tokens', { validateStatus: () => true });
+    if (res.status >= 200 && res.status < 300) {
+      const list = Array.isArray(res.data) ? res.data : res.data?.tokens || [];
+      tokens.value = (list as any[]).map((x) => normalizeToken(x)).filter(Boolean) as TokenRecord[];
+    } else {
+      const msg = (res.data && (res.data.message || res.data.error)) || `HTTP ${res.status}`;
+      tokensError.value = `Failed to load tokens: ${msg}`;
+    }
+  } catch (e: any) {
+    tokensError.value = e?.message || 'Network error loading tokens.';
+  } finally {
+    tokensLoading.value = false;
+  }
+}
+
+function promptRevoke(t: TokenRecord): void {
+  pendingRevoke.value = t;
+  showRevoke.value = true;
+}
+
+async function confirmRevoke(): Promise<void> {
+  const t = pendingRevoke.value;
+  if (!t?.hash) return;
+  revoking.value = t.hash;
+  try {
+    const url = `/api/token/${encodeURIComponent(t.hash)}`;
+    const res = await http.delete(url, { validateStatus: () => true });
+    if (res.status >= 200 && res.status < 300) {
+      tokens.value = tokens.value.filter((x) => x.hash !== t.hash);
+      showRevoke.value = false;
+      pendingRevoke.value = null;
+    } else {
+      const msg = (res.data && (res.data.message || res.data.error)) || `HTTP ${res.status}`;
+      alert(`Failed to revoke: ${msg}`);
+    }
+  } catch (e: any) {
+    alert(`Failed to revoke: ${e?.message || 'Network error'}`);
+  } finally {
+    revoking.value = '';
+  }
+}
+
+const filteredTokens = computed<TokenRecord[]>(() => {
+  const q = (filter.value || '').toLowerCase();
+  let out = tokens.value.filter((t) => {
+    if (!q) return true;
+    if (t.hash.toLowerCase().includes(q)) return true;
+    return t.scopes.some((s) => s.path.toLowerCase().includes(q));
+  });
+  if (sortBy.value === 'created') {
+    out = out
+      .slice()
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  } else if (sortBy.value === 'path') {
+    out = out
+      .slice()
+      .sort((a, b) => (a.scopes[0]?.path || '').localeCompare(b.scopes[0]?.path || ''));
+  }
+  return out;
+});
+
+function shortHash(h: string): string {
+  if (!h) return '';
+  if (h.length <= 10) return h;
+  return `${h.slice(0, 6)}…${h.slice(-4)}`;
+}
+
+function formatTime(v: any): string {
+  try {
+    const d = typeof v === 'number' ? new Date(v) : new Date(String(v));
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleString();
+  } catch {
+    return '—';
+  }
+}
+
+// Tester state
+const test = reactive<{
+  token: string;
+  path: string;
+  query: string;
+  scheme: 'bearer' | 'x-api-token' | 'x-token' | 'query';
+}>({ token: '', path: '', query: '', scheme: 'bearer' });
+const testing = ref(false);
+const testResponse = ref('');
+const testError = ref('');
+const canSendTest = computed(() => !!test.token && !!test.path);
+
+async function sendTest(): Promise<void> {
+  testError.value = '';
+  testResponse.value = '';
+  testing.value = true;
+  try {
+    const urlBase = test.path;
+    const qs = (test.query || '').trim();
+    const fullUrl = qs ? `${urlBase}?${qs}` : urlBase;
+    const headers: Record<string, string> = { 'X-Requested-With': 'XMLHttpRequest' };
+    if (test.scheme === 'bearer') headers['Authorization'] = `Bearer ${test.token}`;
+    if (test.scheme === 'x-api-token') headers['X-Api-Token'] = test.token;
+    if (test.scheme === 'x-token') headers['X-Token'] = test.token;
+    const url =
+      test.scheme === 'query'
+        ? `${fullUrl}${fullUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(test.token)}`
+        : fullUrl;
+    const res = await http.get(url, { headers, validateStatus: () => true });
+    const pretty = prettyPrint(res.data);
+    testResponse.value = `${res.status} ${res.statusText || ''}\n\n${pretty}`;
+  } catch (e: any) {
+    testError.value = e?.message || 'Test request failed.';
+  } finally {
+    testing.value = false;
+  }
+}
+
+function prettyPrint(data: any): string {
+  try {
+    if (typeof data === 'string') {
+      // try parse as JSON, else return as-is
+      try {
+        const obj = JSON.parse(data);
+        return JSON.stringify(obj, null, 2);
+      } catch {
+        return data;
+      }
+    }
+    return JSON.stringify(data, null, 2);
+  } catch {
+    return String(data);
+  }
+}
+
+onMounted(async () => {
+  await loadTokens();
+  // Auto-fill tester token after create
+  watchCreatedForTester();
+});
+
+function watchCreatedForTester() {
+  let last = '';
+  const iv = setInterval(() => {
+    if (createdToken.value && createdToken.value !== last) {
+      test.token = createdToken.value;
+      last = createdToken.value;
+    }
+  }, 300);
+  // Stop after some time to avoid leaks
+  setTimeout(() => clearInterval(iv), 30000);
+}
 </script>
 
 <style scoped>
-.token-page h1 {
-  margin-bottom: 1rem;
+.icon {
+  font-size: 0.95em;
+  line-height: 1;
 }
 
-.help {
-  font-size: 0.9rem;
-  opacity: 0.8;
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
 }
-
-.scope-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  align-items: flex-end;
-  margin-bottom: 0.5rem;
-}
-
-.scope-col {
-  display: flex;
-  flex-direction: column;
-  min-width: 200px;
-}
-
-.scope-label {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  opacity: 0.7;
-  margin-bottom: 0.15rem;
-}
-
-.scope-actions {
-  display: flex;
-  align-items: center;
-}
-
-.scope-toolbar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.scope-summary {
-  font-size: 0.85rem;
-  line-height: 1.4;
-}
-
-.method-chip-group {
-  display: inline-block;
-  margin-right: 0.5rem;
-  margin-top: 0.25rem;
-}
-
-.path-chip {
-  background: var(--color-bg-alt, #333);
-  padding: 2px 6px;
-  border-radius: 4px 0 0 4px;
-  font-weight: 600;
-}
-
-.method-chip {
-  background: var(--color-accent, #555);
-  padding: 2px 6px;
-  border-radius: 0 4px 4px 0;
-  margin-left: 1px;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-}
-
-.token-box {
-  background: rgba(255, 255, 255, 0.05);
-  padding: 0.75rem;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 6px;
-}
-
-.token-box code {
-  display: block;
-  word-break: break-all;
-  margin: 0.35rem 0;
-}
-
-.token-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.copy-feedback {
-  font-size: 0.75rem;
-  color: var(--color-success, #4caf50);
-}
-
-.token-filter input {
-  width: 100%;
-  max-width: 320px;
-}
-
-.filter-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  align-items: flex-end;
-}
-
-.sort-controls {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.sort-controls label {
-  display: flex;
-  flex-direction: column;
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  opacity: 0.75;
-}
-
-.hash-wrapper {
-  cursor: pointer;
-  display: inline-block;
-  min-width: 70px;
-}
-
-.hash-wrapper:focus {
-  outline: 1px solid var(--color-accent, #555);
-  outline-offset: 2px;
-}
-
-.mini-btn {
-  font-size: 0.6rem;
-  margin-left: 0.25rem;
-  padding: 2px 4px;
-}
-
-.scope-cell {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-
-.scope-pill {
-  display: flex;
-  flex-wrap: wrap;
-  background: rgba(255, 255, 255, 0.06);
-  padding: 2px 4px;
-  border-radius: 4px;
-}
-
-.scope-pill + .scope-pill {
-  margin-top: 3px;
-}
-
-.pill-path {
-  font-weight: 600;
-  margin-right: 4px;
-}
-
-.pill-method {
-  background: var(--color-accent, #444);
-  padding: 0 4px;
-  border-radius: 3px;
-  margin-right: 2px;
-  font-size: 0.65rem;
-  text-transform: uppercase;
-}
-
-.tester-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-}
-
-.flex-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.ml-auto {
-  margin-left: auto;
-}
-
-.ml-2 {
-  margin-left: 0.5rem;
-}
-
-.mt-2 {
-  margin-top: 0.5rem;
-}
-
-.mt-3 {
-  margin-top: 0.75rem;
-}
-
-.mt-4 {
-  margin-top: 1rem;
-}
-
-.text-muted {
-  opacity: 0.6;
-  font-size: 0.75rem;
-}
-
-@media (max-width: 680px) {
-  .scope-row {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .scope-actions {
-    justify-content: flex-end;
-  }
-
-  .tester-grid {
-    flex-direction: column;
-  }
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>

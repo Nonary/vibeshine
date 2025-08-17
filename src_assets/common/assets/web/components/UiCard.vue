@@ -1,7 +1,7 @@
 <template>
   <div :class="outer">
-    <div v-if="title || $slots.title" class="mb-4 flex items-center gap-3">
-      <h2 v-if="title" class="text-2xl font-semibold tracking-tight">
+    <div v-if="title || $slots.title" class="card-header">
+      <h2 v-if="title" class="text-lg font-medium flex items-center gap-2">
         {{ title }}
       </h2>
       <slot name="title" />
@@ -24,9 +24,10 @@ const props = defineProps({
 });
 const outer = computed(() =>
   [
-    'rounded-xl bg-light dark:bg-surface text-dark dark:text-light border border-dark/10 dark:border-light/10',
-    props.elevated ? 'shadow-md shadow-dark/12 dark:shadow-dark/30' : '',
-    props.padded ? 'p-7' : '',
+    // Match client management card style closely
+    'rounded-md border border-dark/10 dark:border-light/10 bg-white dark:bg-surface text-dark dark:text-light shadow-sm',
+    props.padded ? 'p-5' : '',
+    props.elevated ? '' : '',
   ].join(' '),
 );
 </script>
