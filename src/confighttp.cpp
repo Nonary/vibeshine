@@ -28,6 +28,12 @@
 #include "file_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
+#include "platform/common.h"
+#ifdef _WIN32
+#include "src/platform/windows/playnite_integration.h"
+#include "config_playnite.h"
+#include <ShlObj.h>
+#endif
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
@@ -316,6 +322,27 @@ namespace confighttp {
     headers.emplace("Access-Control-Allow-Origin", "https://images.igdb.com/");
     response->write(content, headers);
   }
+
+  /**
+   * @brief Get the Playnite integration page (Windows-only link; page exists for parity).
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void getPlaynitePage(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::string content = file_handler::read_file(WEB_DIR "playnite.html");
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "text/html; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    response->write(content, headers);
+  }
+
 
   /**
    * @brief Get the clients page.
@@ -724,6 +751,18 @@ namespace confighttp {
         if (i != index) {
           new_apps.push_back(apps_node[i]);
         }
+        else {
+          // Prevent deleting auto-synced Playnite apps (only manual ones may be removed)
+          try {
+            auto &app = apps_node[i];
+            bool is_playnite = app.contains("playnite-id");
+            std::string managed = app.contains("playnite-managed") ? app["playnite-managed"].get<std::string>() : std::string();
+            if (is_playnite && managed != "manual") {
+              bad_request(response, request, "Cannot delete auto-synced Playnite app");
+              return;
+            }
+          } catch (...) {}
+        }
       }
       file_tree["apps"] = new_apps;
 
@@ -760,6 +799,10 @@ namespace confighttp {
     output_tree["status"] = true;
     send_response(response, output_tree);
   }
+
+#ifdef _WIN32
+  // removed unused forward declaration for default_playnite_ext_dir()
+#endif
 
   /**
    * @brief Unpair a client.
@@ -1006,6 +1049,79 @@ namespace confighttp {
     response->write(SimpleWeb::StatusCode::success_ok, content, headers);
   }
 
+#ifdef _WIN32
+  static std::filesystem::path conf_get_default_playnite_ext_dir() {
+    wchar_t appdataPath[MAX_PATH] = {};
+    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, appdataPath))) {
+      return {};
+    }
+    return std::filesystem::path(appdataPath) / L"Playnite" / L"Extensions" / L"SunshinePlaynite";
+  }
+
+  void getPlayniteStatus(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+    nlohmann::json out;
+    out["enabled"] = config::playnite.enabled;
+    out["active"] = platf::playnite_integration::is_active();
+    std::string destPath;
+    std::filesystem::path dest;
+    if (platf::playnite_integration::get_extension_target_dir(destPath)) {
+      dest = destPath;
+    } else {
+      dest = conf_get_default_playnite_ext_dir();
+    }
+    bool installed = std::filesystem::exists(dest / "extension.yaml") && std::filesystem::exists(dest / "main.ps1");
+    out["installed"] = installed;
+    out["extensions_dir"] = dest.string();
+    send_response(response, out);
+  }
+
+  void getPlayniteGames(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+#ifndef _WIN32
+    bad_request(response, request, "Playnite integration is only available on Windows");
+    return;
+#else
+    try {
+      std::string json;
+      if (!platf::playnite_integration::get_games_list_json(json)) {
+        // return empty array if not available
+        json = "[]";
+      }
+      SimpleWeb::CaseInsensitiveMultimap headers;
+      headers.emplace("Content-Type", "application/json");
+      headers.emplace("X-Frame-Options", "DENY");
+      headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+      response->write(SimpleWeb::StatusCode::success_ok, json, headers);
+    } catch (std::exception &e) {
+      bad_request(response, request, e.what());
+    }
+#endif
+  }
+
+  void installPlaynite(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+    std::string err;
+    nlohmann::json out;
+    bool ok = platf::playnite_integration::install_plugin(err);
+    out["status"] = ok;
+    if (!ok) out["error"] = err;
+    send_response(response, out);
+  }
+#endif
+
   /**
    * @brief Update existing credentials.
    * @param response The HTTP response object.
@@ -1194,6 +1310,7 @@ namespace confighttp {
     server.resource["^/$"]["GET"] = getIndexPage;
     server.resource["^/pin/?$"]["GET"] = getPinPage;
     server.resource["^/apps/?$"]["GET"] = getAppsPage;
+    server.resource["^/playnite/?$"]["GET"] = getPlaynitePage;
     server.resource["^/clients/?$"]["GET"] = getClientsPage;
     server.resource["^/config/?$"]["GET"] = getConfigPage;
     server.resource["^/password/?$"]["GET"] = getPasswordPage;
@@ -1215,6 +1332,11 @@ namespace confighttp {
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/apps/close$"]["POST"] = closeApp;
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
+#ifdef _WIN32
+    server.resource["^/api/playnite/status$"]["GET"] = getPlayniteStatus;
+    server.resource["^/api/playnite/install$"]["POST"] = installPlaynite;
+    server.resource["^/api/playnite/games$"]["GET"] = getPlayniteGames;
+#endif
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;
     server.resource["^/assets\\/.+$"]["GET"] = getNodeModules;

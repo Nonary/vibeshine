@@ -52,6 +52,18 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/publish.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/misc.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/misc.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/misc_utils.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/misc_utils.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_ipc.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_ipc.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_protocol.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_protocol.cpp"
+        "${CMAKE_SOURCE_DIR}/src/config_playnite.h"
+        "${CMAKE_SOURCE_DIR}/src/config_playnite.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_integration.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_integration.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/input.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_base.cpp"
@@ -59,6 +71,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_ram.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_wgc.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/audio.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/image_convert.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/image_convert.cpp"
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/src/ViGEmClient.cpp"
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Client.h"
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Common.h"
@@ -86,7 +100,9 @@ list(PREPEND PLATFORM_LIBRARIES
         ntdll
         setupapi
         shlwapi
+        shell32
         synchronization.lib
+        Windowscodecs
         userenv
         ws2_32
         wsock32

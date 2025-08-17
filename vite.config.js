@@ -66,6 +66,7 @@ export default defineConfig({
         rollupOptions: {
             input: {
                 apps: resolve(assetsSrcPath, 'apps.html'),
+                playnite: resolve(assetsSrcPath, 'playnite.html'),
                 config: resolve(assetsSrcPath, 'config.html'),
                 index: resolve(assetsSrcPath, 'index.html'),
                 password: resolve(assetsSrcPath, 'password.html'),

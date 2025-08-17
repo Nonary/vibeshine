@@ -61,6 +61,8 @@ namespace proc {
     std::string output;
     std::string image_path;
     std::string id;
+    // When present, this app should be launched via Playnite instead of direct cmd.
+    std::string playnite_id;
     bool elevated;
     bool auto_detach;
     bool wait_all;
