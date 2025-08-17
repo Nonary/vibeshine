@@ -229,6 +229,12 @@ const compareInfo = ref<{
   behind_by: number;
   status: 'identical' | 'ahead' | 'behind' | 'diverged';
 } | null>(null);
+// Compare info against the latest pre-release tag (if present)
+const preCompareInfo = ref<{
+  ahead_by: number;
+  behind_by: number;
+  status: 'identical' | 'ahead' | 'behind' | 'diverged';
+} | null>(null);
 const compareChecked = ref(false); // true once we've attempted to resolve git distance
 
 const configStore = useConfigStore();
@@ -293,6 +299,23 @@ async function runVersionChecks() {
             status: cmp.status,
           };
         }
+        // Also attempt compare against pre-release tag if available
+        if (preReleaseRelease.value?.tag_name) {
+          const preTag = preReleaseRelease.value.tag_name.startsWith('v')
+            ? preReleaseRelease.value.tag_name
+            : 'v' + preReleaseRelease.value.tag_name;
+          const preResp = await fetch(
+            `https://api.github.com/repos/LizardByte/Sunshine/compare/${preTag}...${commit.value}`,
+          );
+          if (preResp.ok) {
+            const preCmp = await preResp.json();
+            preCompareInfo.value = {
+              ahead_by: preCmp.ahead_by,
+              behind_by: preCmp.behind_by,
+              status: preCmp.status,
+            };
+          }
+        }
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn('Compare API failed', e);
@@ -343,6 +366,15 @@ const preReleaseBuildAvailable = computed(() => {
   if (!preReleaseRelease.value || !githubRelease.value || !installedVersion.value) return false;
   // Only consider pre-release availability after we've confirmed compare status
   if (!compareChecked.value) return false;
+  // If our commit is ahead of the pre-release tag, don't suggest the pre-release
+  if (preCompareInfo.value && preCompareInfo.value.ahead_by > 0) return false;
+  // If exactly equal to the pre-release commit, also do not suggest
+  if (
+    preCompareInfo.value &&
+    preCompareInfo.value.ahead_by === 0 &&
+    preCompareInfo.value.behind_by === 0
+  )
+    return false;
   return (
     preReleaseVersion.value.isGreater(installedVersion.value) &&
     preReleaseVersion.value.isGreater(githubVersion.value)

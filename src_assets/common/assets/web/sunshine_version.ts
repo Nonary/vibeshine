@@ -47,15 +47,31 @@ export default class SunshineVersion {
    */
   parseVersion(version: string): number[] {
     if (!version) return [0, 0, 0];
-    let v = version;
-    if (v.charAt(0) === 'v') {
-      v = v.substring(1);
+    let v = version.trim();
+    // Strip leading 'v'
+    if (v.startsWith('v') || v.startsWith('V')) {
+      v = v.slice(1);
     }
+    // Drop pre-release/build metadata (e.g., -rc.1, +build)
+    const dash = v.indexOf('-');
+    const plus = v.indexOf('+');
+    const cutIdx = [dash, plus].filter((i) => i >= 0).sort((a, b) => a - b)[0];
+    if (cutIdx !== undefined) {
+      v = v.slice(0, cutIdx);
+    }
+    // Extract numeric major.minor.patch via regex to avoid NaN on suffixed parts
+    const m = v.match(/^(\d+)\.(\d+)(?:\.(\d+))?$/);
+    if (m) {
+      const maj = parseInt(m[1], 10);
+      const min = parseInt(m[2], 10);
+      const pat = m[3] ? parseInt(m[3], 10) : 0;
+      return [maj, min, pat];
+    }
+    // Fallback: split and coerce numerics defensively
     const parts = v.split('.').map((p) => {
-      const n = Number(p);
-      return Number.isFinite(n) ? Math.floor(n) : 0;
+      const n = parseInt(p, 10);
+      return Number.isFinite(n) ? n : 0;
     });
-    // Ensure exactly 3 parts
     while (parts.length < 3) parts.push(0);
     return parts.slice(0, 3);
   }
