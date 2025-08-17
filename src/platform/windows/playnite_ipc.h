@@ -58,5 +58,6 @@ namespace platf::playnite {
     std::function<void(std::span<const uint8_t>)> handler_;
     std::atomic<bool> broken_ {false};
     std::atomic<bool> active_ {false};
+    std::string recv_buffer_;
   };
 }  // namespace platf::playnite

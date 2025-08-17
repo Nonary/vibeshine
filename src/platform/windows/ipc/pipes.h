@@ -288,6 +288,10 @@ namespace platf::dxgi {
      */
     void flush_buffers();
 
+    // Synchronous write helper (blocking) for small control messages.
+    // Returns true on success.
+    bool write_blocking(std::span<const uint8_t> bytes);
+
     // Retrieve the client process ID for a connected server pipe.
     bool get_client_process_id(DWORD &pid);
 

@@ -1073,9 +1073,11 @@ namespace confighttp {
     } else {
       dest = conf_get_default_playnite_ext_dir();
     }
-    bool installed = std::filesystem::exists(dest / "extension.yaml") && std::filesystem::exists(dest / "main.ps1");
+    bool installed = std::filesystem::exists(dest / "extension.yaml") && std::filesystem::exists(dest / "SunshinePlaynite.psm1");
     out["installed"] = installed;
     out["extensions_dir"] = dest.string();
+    BOOST_LOG(info) << "Playnite status: enabled=" << out["enabled"] << ", active=" << out["active"]
+                    << ", installed=" << installed << ", dir=" << dest.string();
     send_response(response, out);
   }
 
@@ -1094,6 +1096,7 @@ namespace confighttp {
         // return empty array if not available
         json = "[]";
       }
+      BOOST_LOG(info) << "Playnite games: json length=" << json.size();
       SimpleWeb::CaseInsensitiveMultimap headers;
       headers.emplace("Content-Type", "application/json");
       headers.emplace("X-Frame-Options", "DENY");
@@ -1115,7 +1118,16 @@ namespace confighttp {
     print_req(request);
     std::string err;
     nlohmann::json out;
-    bool ok = platf::playnite_integration::install_plugin(err);
+    // Prefer same resolved dir as status
+    std::string target;
+    bool have_target = platf::playnite_integration::get_extension_target_dir(target);
+    bool ok = false;
+    if (have_target) {
+      ok = platf::playnite_integration::install_plugin_to(target, err);
+    } else {
+      ok = platf::playnite_integration::install_plugin(err);
+    }
+    BOOST_LOG(info) << "Playnite install: status=" << (ok ? "true" : "false") << (ok ? "" : std::string(", error=") + err);
     out["status"] = ok;
     if (!ok) out["error"] = err;
     send_response(response, out);

@@ -44,6 +44,7 @@ namespace platf::playnite_integration {
         BOOST_LOG(info) << "Playnite integration disabled";
         return;
       }
+      BOOST_LOG(info) << "Playnite integration: enabled; starting IPC server";
       g_instance = this;
       server_ = std::make_unique<platf::playnite::IpcServer>();
       server_->set_message_handler([this](std::span<const uint8_t> bytes) {
@@ -82,6 +83,7 @@ namespace platf::playnite_integration {
           last_games_ = msg.games;
         }
         if (config::playnite.auto_sync) {
+          BOOST_LOG(info) << "Playnite: auto_sync enabled; syncing apps metadata";
           try { sync_apps_metadata(); }
           catch (const std::exception &e) { BOOST_LOG(error) << "Playnite sync failed: " << e.what(); }
         }
@@ -134,6 +136,7 @@ namespace platf::playnite_integration {
         return a.lastPlayed > b.lastPlayed; // ISO8601 sorts lexicographically
       });
       int recentN = std::max(0, config::playnite.recent_games);
+      BOOST_LOG(info) << "Playnite sync: selecting recentN=" << recentN;
       for (int i = 0; i < (int)games_copy.size() && i < recentN; ++i) {
         selected.push_back(games_copy[i]);
         source_flags[games_copy[i].id] |= 0x1;
@@ -142,6 +145,7 @@ namespace platf::playnite_integration {
       if (!config::playnite.sync_categories.empty()) {
         auto catset = std::unordered_set<std::string>();
         for (const auto &c : config::playnite.sync_categories) catset.insert(to_lower_copy(c));
+        BOOST_LOG(info) << "Playnite sync: category filter size=" << catset.size();
         std::vector<platf::playnite_protocol::Game> last_copy;
         {
           std::scoped_lock lk(mutex_);
@@ -157,6 +161,7 @@ namespace platf::playnite_integration {
         std::scoped_lock lk(mutex_);
         selected = last_games_;
       }
+      BOOST_LOG(info) << "Playnite sync: total selected games=" << selected.size();
 
       // Build indexes from selected games
       for (const auto &g : selected) {
@@ -165,6 +170,7 @@ namespace platf::playnite_integration {
       }
 
       bool changed = false;
+      size_t matched = 0;
       for (auto &app : root["apps"]) {
         std::string cmd = app.contains("cmd") && app["cmd"].is_string() ? app["cmd"].get<std::string>() : std::string();
         std::string wdir = app.contains("working-dir") && app["working-dir"].is_string() ? app["working-dir"].get<std::string>() : std::string();
@@ -178,6 +184,7 @@ namespace platf::playnite_integration {
           if (it2 != by_dir.end()) match = it2->second.g;
         }
         if (!match) continue;
+        ++matched;
 
         try {
           if (!match->name.empty() && (!app.contains("name") || app["name"].get<std::string>() != match->name)) {
@@ -236,6 +243,9 @@ namespace platf::playnite_integration {
         file_handler::write_file(path.c_str(), root.dump(4));
         proc::refresh(config::stream.file_apps);
         BOOST_LOG(info) << "Playnite sync: apps.json updated";
+        BOOST_LOG(info) << "Playnite sync: matched apps updated count=" << matched;
+      } else {
+        BOOST_LOG(info) << "Playnite sync: no changes to apps.json (matched=" << matched << ")";
       }
     }
 
@@ -258,31 +268,41 @@ namespace platf::playnite_integration {
 
   // Safe implementation to avoid problematic wide-char literal in older compilers
   static bool resolve_extensions_dir_safe(std::filesystem::path &destOut) {
+    BOOST_LOG(info) << "Playnite installer: resolving extensions dir (begin)";
+    BOOST_LOG(info) << "Playnite installer: resolving extensions dir";
     if (!config::playnite.extensions_dir.empty()) {
       destOut = std::filesystem::path(config::playnite.extensions_dir);
+      BOOST_LOG(info) << "Playnite installer: using configured extensions_dir=" << destOut.string();
       return true;
     }
     auto pids1 = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
     auto pids2 = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
+    BOOST_LOG(info) << "Playnite installer: found Playnite PIDs desktop=" << pids1.size() << ", fullscreen=" << pids2.size();
     std::vector<DWORD> pids = pids1; pids.insert(pids.end(), pids2.begin(), pids2.end());
     for (DWORD pid : pids) {
-      winrt::handle hp {OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)};
-      if (!hp) continue;
+      HANDLE hp = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+      if (!hp) { BOOST_LOG(info) << "Playnite installer: OpenProcess failed for PID=" << pid; continue; }
       std::wstring buf; buf.resize(32768);
       DWORD size = static_cast<DWORD>(buf.size());
-      if (QueryFullProcessImageNameW(hp.get(), 0, buf.data(), &size)) {
+      if (QueryFullProcessImageNameW(hp, 0, buf.data(), &size)) {
         buf.resize(size);
         std::filesystem::path exePath = buf;
         std::filesystem::path base = exePath.parent_path();
         std::filesystem::path extDir = base / L"Extensions" / L"SunshinePlaynite";
+        BOOST_LOG(info) << "Playnite installer: found running Playnite pid=" << pid << ", base=" << base.string();
+        CloseHandle(hp);
         destOut = extDir; return true;
+      } else {
+        BOOST_LOG(info) << "Playnite installer: QueryFullProcessImageNameW failed for PID=" << pid;
+        CloseHandle(hp);
       }
     }
     auto userTok = platf::dxgi::retrieve_users_token(false);
-    if (!userTok) return false;
+    if (!userTok) { BOOST_LOG(info) << "Playnite installer: retrieve_users_token failed"; return false; }
     PWSTR roaming = nullptr;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, userTok, &roaming)) && roaming) {
       destOut = std::filesystem::path(roaming) / L"Playnite" / L"Extensions" / L"SunshinePlaynite";
+      BOOST_LOG(info) << "Playnite installer: resolved via active user token to " << destOut.string();
       CoTaskMemFree(roaming); CloseHandle(userTok); return true;
     }
     CloseHandle(userTok); return false;
@@ -330,7 +350,7 @@ namespace platf::playnite_integration {
   }
 
 
-  bool install_plugin(std::string &error) {
+  static bool do_install_plugin_impl(const std::string &dest_override, std::string &error) {
 #ifndef _WIN32
     error = "Playnite integration is only supported on Windows";
     return false;
@@ -342,43 +362,76 @@ namespace platf::playnite_integration {
       exePath.resize(wcslen(exePath.c_str()));
       std::filesystem::path exeDir = std::filesystem::path(exePath).parent_path();
       std::filesystem::path srcDir = exeDir / L"plugins" / L"playnite" / L"SunshinePlaynite";
+      BOOST_LOG(info) << "Playnite installer: srcDir=" << srcDir.string();
+      BOOST_LOG(info) << "Playnite installer: src exists? " << (std::filesystem::exists(srcDir) ? "yes" : "no");
+      BOOST_LOG(info) << "Playnite installer: src file(extension.yaml) exists? " << (std::filesystem::exists(srcDir / L"extension.yaml") ? "yes" : "no");
+      BOOST_LOG(info) << "Playnite installer: src file(SunshinePlaynite.psm1) exists? " << (std::filesystem::exists(srcDir / L"SunshinePlaynite.psm1") ? "yes" : "no");
       if (!std::filesystem::exists(srcDir)) {
         error = "Plugin source not found: " + srcDir.string();
         return false;
       }
 
-      // Determine destination directory
+      // Determine destination directory (support SYSTEM context and running Playnite)
       std::filesystem::path destDir;
-      if (!config::playnite.extensions_dir.empty()) {
+      if (!dest_override.empty()) {
+        destDir = std::filesystem::path(dest_override);
+        BOOST_LOG(info) << "Playnite installer: using API override destDir=" << destDir.string();
+      } else if (!config::playnite.extensions_dir.empty()) {
         destDir = config::playnite.extensions_dir;
+        BOOST_LOG(info) << "Playnite installer: using configured extensions_dir=" << destDir.string();
       } else {
-        // Default: %AppData%\\Playnite\\Extensions\\SunshinePlaynite
-        wchar_t appdataPath[MAX_PATH] = {};
-        if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, appdataPath))) {
-          error = "Failed to resolve %AppData% path";
-          return false;
+        // Prefer the same resolution used by status API
+        std::string resolved;
+        if (platf::playnite_integration::get_extension_target_dir(resolved)) {
+          destDir = std::filesystem::path(resolved);
+          BOOST_LOG(info) << "Playnite installer: using resolved target dir from API=" << destDir.string();
+        } else if (resolve_extensions_dir_safe(destDir)) {
+          BOOST_LOG(info) << "Playnite installer: using resolved target dir via safe resolver=" << destDir.string();
+        } else {
+          // Fallback to current user's %AppData% if we cannot resolve via token/process
+          wchar_t appdataPath[MAX_PATH] = {};
+          if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, appdataPath))) {
+            error = "Failed to resolve %AppData% path";
+            return false;
+          }
+          destDir = std::filesystem::path(appdataPath) / L"Playnite" / L"Extensions" / L"SunshinePlaynite";
+          BOOST_LOG(info) << "Playnite installer: fallback destDir=%AppData% -> " << destDir.string();
         }
-        destDir = std::filesystem::path(appdataPath) / L"Playnite" / L"Extensions" / L"SunshinePlaynite";
       }
-      std::error_code ec;
+std::error_code ec;
       std::filesystem::create_directories(destDir, ec);
 
       auto copy_one = [&](const wchar_t *name) {
         ec.clear();
-        std::filesystem::copy_file(srcDir / name, destDir / name, std::filesystem::copy_options::overwrite_existing, ec);
+        auto src = srcDir / name;
+        auto dst = destDir / name;
+        std::wstring wname(name);
+        std::string sname(wname.begin(), wname.end());
+        BOOST_LOG(info) << "Playnite installer: copying "  << sname <<  " from "  << src.string() << " to "  << dst.string();
+        std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing, ec);
         return !ec;
       };
 
-      if (!copy_one(L"extension.yaml") || !copy_one(L"main.ps1")) {
+      if (!copy_one(L"extension.yaml") || !copy_one(L"SunshinePlaynite.psm1")) {
         error = "Failed to copy plugin files to " + destDir.string();
         return false;
       }
+      BOOST_LOG(info) << "Playnite installer: installation complete";
       return true;
     } catch (const std::exception &e) {
+      BOOST_LOG(info) << "Playnite installer: exception: " << e.what();
       error = e.what();
       return false;
     }
 #endif
+  }
+
+  bool install_plugin(std::string &error) {
+    return do_install_plugin_impl(std::string(), error);
+  }
+
+  bool install_plugin_to(const std::string &dest_dir, std::string &error) {
+    return do_install_plugin_impl(dest_dir, error);
   }
 
 }  // namespace platf::playnite_integration
