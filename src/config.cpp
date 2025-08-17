@@ -25,6 +25,7 @@
 #include "logging.h"
 #include "nvhttp.h"
 #include "platform/common.h"
+#include "config_playnite.h"
 #include "rtsp.h"
 #include "utility.h"
 
@@ -1291,6 +1292,9 @@ namespace config {
         }
       }
     }
+
+    // Playnite integration options (consume keys if present)
+    config::apply_playnite(vars);
 
     auto it = vars.find("flags"s);
     if (it != std::end(vars)) {

@@ -6,6 +6,10 @@ const props = defineProps({
     type: String,
     default: ""
   },
+  disabled: {
+    type: Boolean,
+    default: false
+  },
   desc: {
     type: String,
     default: null
@@ -116,6 +120,7 @@ const defValue = parsedDefaultPropValue ? "_common.enabled_def_cbox" : "_common.
            class="form-check-input"
            :id="props.id"
            v-model="model"
+           :disabled="props.disabled"
            :true-value="checkboxValues.truthy"
            :false-value="checkboxValues.falsy" />
     <div class="form-text" v-if="showDesc">

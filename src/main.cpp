@@ -21,6 +21,9 @@
 #include "system_tray.h"
 #include "upnp.h"
 #include "video.h"
+#ifdef _WIN32
+#include "src/platform/windows/playnite_integration.h"
+#endif
 
 extern "C" {
 #include "rswrapper.h"
@@ -322,6 +325,11 @@ int main(int argc, char *argv[]) {
 
     return -1;
   }
+
+#ifdef _WIN32
+  // Start Playnite integration (IPC + handlers)
+  auto playnite_integration_guard = platf::playnite_integration::start();
+#endif
 
   std::unique_ptr<platf::deinit_t> mDNS;
   auto sync_mDNS = std::async(std::launch::async, [&mDNS]() {

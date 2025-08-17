@@ -19,6 +19,9 @@
           <li class="nav-item">
             <a class="nav-link" href="./apps"><i class="fas fa-fw fa-stream"></i> {{ $t('navbar.applications') }}</a>
           </li>
+          <li class="nav-item" v-if="platform === 'windows'">
+            <a class="nav-link" href="./playnite"><i class="fas fa-fw fa-gamepad"></i> {{ $t('navbar.playnite') }}</a>
+          </li>
           <li class="nav-item">
             <a class="nav-link" href="./config"><i class="fas fa-fw fa-cog"></i> {{ $t('navbar.configuration') }}</a>
           </li>
@@ -43,7 +46,16 @@ import { initDiscord } from '@lizardbyte/shared-web/src/js/discord.js'
 
 export default {
   components: { ThemeToggle },
+  data() {
+    return {
+      platform: ''
+    }
+  },
   created() {
+    // Determine platform to conditionally show Windows-only items
+    fetch('./api/config').then(r => r.json()).then(cfg => {
+      this.platform = cfg.platform || ''
+    }).catch(() => {})
     console.log("Header mounted!")
   },
   mounted() {

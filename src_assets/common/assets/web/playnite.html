@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="auto">
+
+<head>
+  <%- header %>
+  <style>
+    .section {
+      padding: 1em;
+      border: 1px solid #dee2e6;
+      border-top: none;
+    }
+  </style>
+</head>
+
+<body id="app" v-cloak>
+  <Navbar></Navbar>
+  <div class="container">
+    <h1 class="my-4">{{ $t('playnite.title') }}</h1>
+    <p>{{ $t('playnite.desc') }}</p>
+
+    <div class="alert alert-info" v-if="platform && platform !== 'windows'">
+      {{ $t('playnite.only_windows') }}
+    </div>
+
+    <div v-if="platform === 'windows'">
+      <!-- Status & Install -->
+      <div class="card my-3">
+        <div class="card-header">{{ $t('playnite.status_title') }}</div>
+        <div class="card-body section">
+          <div class="mb-3">
+            <Checkbox v-model="playnite.playnite_enabled"
+                      id="playnite_enabled"
+                      :default="'disabled'"
+                      :localePrefix="'playnite'"
+                      :label="$t('playnite.integration_enabled')"
+                      :desc="''"
+            />
+          </div>
+
+          <div class="row g-3 align-items-center mb-2">
+            <div class="col-auto"><b>{{ $t('playnite.status_installed') }}:</b></div>
+            <div class="col-auto">
+              <span class="badge" :class="status.installed ? 'bg-success' : 'bg-secondary'">{{ status.installed ? $t('_common.enabled') : $t('_common.disabled') }}</span>
+            </div>
+          </div>
+          <div class="row g-3 align-items-center mb-2">
+            <div class="col-auto"><b>{{ $t('playnite.status_connected') }}:</b></div>
+            <div class="col-auto">
+              <span class="badge" :class="status.active ? 'bg-success' : 'bg-secondary'">{{ status.active ? $t('_common.enabled') : $t('_common.disabled') }}</span>
+            </div>
+          </div>
+          <div class="row g-3 align-items-center mb-2" v-if="status.extensions_dir">
+            <div class="col-auto"><b>{{ $t('playnite.extensions_dir') }}:</b></div>
+            <div class="col-auto"><code>{{ status.extensions_dir }}</code></div>
+          </div>
+
+          <button class="btn btn-primary mt-2" @click="install" :disabled="installing || status.installed">
+            <span v-if="installing" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+            {{ $t('playnite.install_button') }}
+          </button>
+          <span class="text-success ms-2" v-if="installOk">{{ $t('playnite.install_success') }}</span>
+          <span class="text-danger ms-2" v-if="installErr">{{ $t('playnite.install_error') }}<template v-if="installErrorMsg">: {{ installErrorMsg }}</template></span>
+        </div>
+      </div>
+
+      <!-- Settings -->
+      <div class="card my-3">
+        <div class="card-header">{{ $t('playnite.settings_title') }}</div>
+        <div class="card-body section">
+          <div class="row mb-3">
+            <div class="col-md-6">
+              <Checkbox v-model="playnite.playnite_auto_sync"
+                        id="playnite_auto_sync"
+                        :default="'disabled'"
+                        :localePrefix="'playnite'"
+                        :label="$t('playnite.auto_sync')"
+                        :desc="''"
+              />
+            </div>
+          </div>
+          <div class="row mb-3">
+            <div class="col-md-6">
+              <label for="recent" class="form-label">{{ $t('playnite.recent_games') }}</label>
+              <input id="recent" type="number" class="form-control" v-model.number="playnite.playnite_recent_games" min="0" />
+            </div>
+          </div>
+          <div class="row mb-3">
+            <div class="col-md-8">
+              <label for="cats" class="form-label">{{ $t('playnite.sync_categories') }}</label>
+              <input id="cats" type="text" class="form-control" v-model="playnite.playnite_sync_categories" placeholder="Action;Favorites;RPG" />
+              <div class="form-text">{{ $t('playnite.sync_categories_help') }}</div>
+            </div>
+          </div>
+          <div class="row mb-3">
+            <div class="col-md-8">
+              <label for="extdir" class="form-label">{{ $t('playnite.extensions_dir') }}</label>
+              <input id="extdir" type="text" class="form-control" v-model="playnite.playnite_extensions_dir" />
+            </div>
+          </div>
+          <div class="row mb-3">
+            <div class="col-md-8">
+              <label for="installdir" class="form-label">{{ $t('playnite.install_dir') }}</label>
+              <input id="installdir" type="text" class="form-control" v-model="playnite.playnite_install_dir" />
+            </div>
+          </div>
+
+          <div class="mt-3">
+            <button class="btn btn-primary me-2" @click="save" :disabled="saving">
+              <span v-if="saving" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+              {{ $t('_common.save') }}
+            </button>
+            <span class="text-success" v-if="saved">{{ $t('playnite.save_success') }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+
+<script type="module">
+  import { createApp, computed } from 'vue'
+  import { initApp } from './init'
+  import Navbar from './Navbar.vue'
+  import Checkbox from './Checkbox.vue'
+
+  const defaults = {
+    playnite_enabled: 'disabled',
+    playnite_auto_sync: 'disabled',
+    playnite_recent_games: 20,
+    playnite_sync_categories: '',
+    playnite_install_dir: '',
+    playnite_extensions_dir: '',
+  }
+
+  const app = createApp({
+    components: { Navbar, Checkbox },
+    data() {
+      return {
+        platform: '',
+        playnite: JSON.parse(JSON.stringify(defaults)),
+        status: { enabled: false, active: false, installed: false, extensions_dir: '' },
+        saving: false,
+        saved: false,
+        installing: false,
+        installOk: false,
+        installErr: false,
+        installErrorMsg: '',
+      }
+    },
+    provide() {
+      return { platform: computed(() => this.platform) }
+    },
+    created() {
+      this.refreshConfig()
+      this.refreshStatus()
+    },
+    methods: {
+      async refreshConfig() {
+        try {
+          const cfg = await fetch('./api/config').then(r => r.json())
+          this.platform = cfg.platform || ''
+          // load keys if present, else use defaults
+          for (const k of Object.keys(defaults)) {
+            if (cfg[k] !== undefined) this.playnite[k] = cfg[k]
+          }
+        } catch (e) { console.error(e) }
+      },
+      async refreshStatus() {
+        try {
+          const st = await fetch('./api/playnite/status').then(r => r.json())
+          this.status = st
+        } catch (e) { console.error(e) }
+      },
+      async save() {
+        this.saving = this.saved = false
+        // Only send keys different from defaults to keep config minimal
+        const out = {}
+        for (const [k, v] of Object.entries(this.playnite)) {
+          if (JSON.stringify(v) !== JSON.stringify(defaults[k])) out[k] = v
+        }
+        try {
+          const r = await fetch('./api/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(out) })
+          if (r.status === 200) {
+            this.saved = true
+          }
+        } catch (e) { console.error(e) }
+        this.saving = false
+      },
+      async install() {
+        this.installing = true
+        this.installOk = false
+        this.installErr = false
+        this.installErrorMsg = ''
+        try {
+          const r = await fetch('./api/playnite/install', { method: 'POST', headers: {'Content-Type': 'application/json'} })
+          let body = null
+          try { body = await r.json() } catch {}
+          const ok = r.ok && body && body.status === true
+          if (ok) {
+            this.installOk = true
+            await this.refreshStatus()
+          } else {
+            this.installErr = true
+            this.installErrorMsg = body && body.error ? body.error : (r.statusText || 'Unknown error')
+          }
+        } catch (e) {
+          this.installErr = true
+          this.installErrorMsg = (e && e.message) ? e.message : ''
+        }
+        this.installing = false
+      }
+    }
+  })
+
+  initApp(app)
+</script>

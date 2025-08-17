@@ -26,6 +26,9 @@
 #include "display_device.h"
 #include "logging.h"
 #include "platform/common.h"
+#ifdef _WIN32
+#include "platform/windows/playnite_integration.h"
+#endif
 #include "process.h"
 #include "system_tray.h"
 #include "utility.h"
@@ -238,6 +241,37 @@ namespace proc {
       }
     }
 
+    // Playnite-backed apps: invoke via Playnite and treat as placebo (lifetime managed via Playnite status)
+#ifdef _WIN32
+    if (!_app.playnite_id.empty()) {
+      BOOST_LOG(info) << "Launching Playnite game id ["sv << _app.playnite_id << "]"sv;
+      bool launched = false;
+      try {
+        launched = platf::playnite_integration::launch_game(_app.playnite_id);
+      } catch (...) {
+        launched = false;
+      }
+      if (!launched) {
+        BOOST_LOG(warning) << "Playnite launch IPC failed or inactive; attempting URI fallback"sv;
+        // Best-effort fallback using Playnite URI protocol
+        std::string uri = std::string("playnite://playnite/start/") + _app.playnite_id;
+        std::error_code fec;
+        boost::filesystem::path wd; // empty working dir as lvalue
+        auto child = platf::run_command(false, true, std::string("cmd /c start \"\" \"") + uri + "\"", wd, _env, _pipe.get(), fec, nullptr);
+        if (fec) {
+          BOOST_LOG(warning) << "Playnite URI launch failed: "sv << fec.message();
+        } else {
+          child.detach();
+          launched = true;
+        }
+      }
+      if (!launched) {
+        BOOST_LOG(error) << "Failed to launch Playnite game."sv;
+        return -1;
+      }
+      placebo = true;
+    } else
+#endif
     if (_app.cmd.empty()) {
       BOOST_LOG(info) << "Executing [Desktop]"sv;
       placebo = true;
@@ -592,6 +626,7 @@ namespace proc {
         auto cmd = app_node.get_optional<std::string>("cmd"s);
         auto image_path = app_node.get_optional<std::string>("image-path"s);
         auto working_dir = app_node.get_optional<std::string>("working-dir"s);
+        auto playnite_id = app_node.get_optional<std::string>("playnite-id"s);
         auto elevated = app_node.get_optional<bool>("elevated"s);
         auto auto_detach = app_node.get_optional<bool>("auto-detach"s);
         auto wait_all = app_node.get_optional<bool>("wait-all"s);
@@ -659,6 +694,10 @@ namespace proc {
 
         if (image_path) {
           ctx.image_path = parse_env_val(this_env, *image_path);
+        }
+
+        if (playnite_id) {
+          ctx.playnite_id = parse_env_val(this_env, *playnite_id);
         }
 
         ctx.elevated = elevated.value_or(false);
