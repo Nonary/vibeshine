@@ -10,7 +10,7 @@
       <section
         class="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900"
       >
-        <header class="flex items-start justify-between gap-4">
+        <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 id="close_apps" class="text-xl font-medium text-gray-900 dark:text-gray-100">
               {{ $t('troubleshooting.force_close') }}
@@ -50,7 +50,7 @@
       <section
         class="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900"
       >
-        <header class="flex items-start justify-between gap-4">
+        <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 id="restart" class="text-xl font-medium text-gray-900 dark:text-gray-100">
               {{ $t('troubleshooting.restart_sunshine') }}
@@ -83,7 +83,7 @@
         v-if="platform === 'windows'"
         class="lg:col-span-2 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900"
       >
-        <header class="flex items-start justify-between gap-4">
+        <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 id="dd_reset" class="text-xl font-medium text-gray-900 dark:text-gray-100">
               {{ $t('troubleshooting.dd_reset') }}
@@ -134,12 +134,12 @@
           </p>
         </div>
 
-        <div class="flex items-center gap-2">
+        <div class="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
           <input
             v-model="logFilter"
             type="text"
             :placeholder="$t('troubleshooting.logs_find')"
-            class="w-80 rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"
+            class="w-full sm:w-80 rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"
             @input="handleFilterInput"
           />
           <button
@@ -147,34 +147,30 @@
             @click="toggleWrap"
           >
             <i :class="wrapLongLines ? 'fas fa-align-left' : 'fas fa-ellipsis-h'"></i>
-            <span>{{ wrapLongLines ? 'Wrap' : 'No-wrap' }}</span>
+            <span>{{ wrapLongLines ? $t('troubleshooting.wrap') : $t('troubleshooting.no_wrap') }}</span>
+          </button>
+          <button
+            :disabled="!actualLogs"
+            class="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-100"
+            :aria-label="$t('troubleshooting.copy_logs')"
+            @click="copyLogs"
+          >
+            <i class="fas fa-copy"></i>
+            <span>{{ $t('troubleshooting.copy_logs') }}</span>
           </button>
         </div>
       </div>
 
       <!-- Logs console -->
       <div class="relative">
-        <!-- Sticky Copy Button -->
-        <div class="pointer-events-none absolute right-4 top-4 z-20">
-          <button
-            :disabled="!actualLogs"
-            class="pointer-events-auto inline-flex items-center gap-2 rounded-xl bg-gray-900/90 px-4 py-2 text-sm font-semibold text-white shadow-lg ring-1 ring-black/10 backdrop-blur hover:bg-gray-900 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/90 dark:text-gray-900 dark:hover:bg-white"
-            aria-label="Copy logs"
-            @click="copyLogs"
-          >
-            <i class="fas fa-copy"></i>
-            <span>{{ $t('_common.copy') }}</span>
-          </button>
-        </div>
-
-        <!-- “New logs” Banner (appears at bottom of viewport inside console) -->
+        <!-- New logs banner (appears at bottom of viewport inside console) -->
         <transition name="slide-up">
           <button
             v-if="newLogsAvailable"
             class="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-amber-600"
             @click="jumpToLatest"
           >
-            {{ newLogsLabel }}
+            {{ $t('troubleshooting.new_logs_available') }}
             <span v-if="unseenLines > 0" class="ml-2 rounded bg-amber-600/20 px-2 py-0.5 text-xs">
               +{{ unseenLines }}
             </span>
@@ -207,21 +203,21 @@ const store = useConfigStore();
 const platform = computed(() => store.metadata.platform);
 
 const closeAppPressed = ref(false);
-const closeAppStatus = ref(null);
+const closeAppStatus = ref(null as null | boolean);
 const ddResetPressed = ref(false);
-const ddResetStatus = ref(null);
+const ddResetStatus = ref(null as null | boolean);
 const restartPressed = ref(false);
 
 const logs = ref('Loading...');
 const logFilter = ref('');
 const wrapLongLines = ref(true);
 
-const logContainer = ref(null);
+const logContainer = ref<HTMLElement | null>(null);
 const autoScrollEnabled = ref(true);
 const newLogsAvailable = ref(false);
 const unseenLines = ref(0);
 
-let logInterval = null;
+let logInterval: number | null = null;
 let lastLineCount = 0;
 
 const filteredLines = computed(() => {
@@ -235,11 +231,7 @@ const filteredLines = computed(() => {
 
 const actualLogs = computed(() => filteredLines.value);
 
-// Banner text (localizable)
-const newLogsLabel = computed(() => {
-  // Fall back to generic text if no localized key is suitable
-  return 'New logs available — jump to latest';
-});
+// Banner text now localized directly in template
 
 // ==== Behavior ====
 function handleFilterInput() {
@@ -269,7 +261,7 @@ function onLogScroll() {
   }
 }
 
-function isNearBottom(el) {
+function isNearBottom(el: HTMLElement) {
   const threshold = 24; // px tolerance
   return el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
 }
@@ -296,7 +288,7 @@ async function refreshLogs() {
       // Count new lines before replacing
       const prev = logs.value || '';
       const prevCount = prev ? prev.split('\n').length : 0;
-      const nextText = r.data;
+      const nextText = r.data as string;
       const nextCount = nextText ? nextText.split('\n').length : 0;
 
       logs.value = nextText;
@@ -387,12 +379,12 @@ onMounted(async () => {
     if (logContainer.value) scrollToBottom();
   });
 
-  logInterval = setInterval(refreshLogs, 5000);
+  logInterval = window.setInterval(refreshLogs, 5000);
   refreshLogs();
 });
 
 onBeforeUnmount(() => {
-  if (logInterval) clearInterval(logInterval);
+  if (logInterval) window.clearInterval(logInterval);
 });
 </script>
 

@@ -6,7 +6,7 @@
       <div class="flex items-center gap-3 min-w-0">
         <img src="/images/logo-sunshine-45.png" alt="Sunshine" class="h-8 w-8" />
         <h1 class="text-base md:text-lg font-semibold tracking-tight truncate">
-          {{ displayTitle }}
+          {{ displayTitle && displayTitle.includes('.') ? $t(displayTitle) : displayTitle }}
         </h1>
       </div>
       <nav class="hidden md:flex items-center gap-1 text-sm font-medium ml-2">
