@@ -7,28 +7,30 @@
       </div>
     </div>
 
-    <!-- Simple list view -->
-    <div class="rounded-xl overflow-hidden border border-black/10 dark:border-white/10 bg-white/60 dark:bg-surface/60">
-      <div class="divide-y divide-black/5 dark:divide-white/10">
-        <div
+    <!-- Redesigned list view -->
+    <div class="rounded-2xl overflow-hidden border border-black/10 dark:border-white/10 bg-white/80 dark:bg-surface/80 backdrop-blur max-w-3xl mx-auto">
+      <div v-if="apps && apps.length" class="divide-y divide-black/5 dark:divide-white/10">
+        <button
           v-for="(app, i) in apps"
           :key="appKey(app, i)"
-          class="flex items-center justify-between px-4 py-3 hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+          type="button"
+          class="w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           @click="openEdit(app, i)"
+          @keydown.enter.prevent="openEdit(app, i)"
+          @keydown.space.prevent="openEdit(app, i)"
         >
-          <div class="min-w-0 flex-1">
-            <div class="text-sm font-medium truncate">{{ app.name || '(untitled)' }}</div>
-            <div class="text-[11px] opacity-60 truncate">{{ app.cmd || '' }}</div>
+          <div class="flex items-center justify-between px-4 py-3 hover:bg-black/5 dark:hover:bg-white/10">
+            <div class="min-w-0 flex-1">
+              <div class="text-sm font-semibold truncate">{{ app.name || '(untitled)' }}</div>
+              <div class="mt-0.5 text-[11px] opacity-60 truncate" v-if="app['working-dir']">{{ app['working-dir'] }}</div>
+            </div>
+            <div class="shrink-0 text-dark/50 dark:text-light/60">
+              <i class="fas fa-chevron-right" />
+            </div>
           </div>
-          <div class="flex items-center gap-3 shrink-0 text-[11px] opacity-70">
-            <span v-if="app['prep-cmd']?.length">{{ app['prep-cmd'].length }} prep</span>
-            <button class="mini-btn" @click.stop="openEdit(app, i)"><i class="fas fa-pen" /></button>
-          </div>
-        </div>
-        <div v-if="!apps || apps.length === 0" class="px-4 py-8 text-center text-sm opacity-60">
-          No applications configured.
-        </div>
+        </button>
       </div>
+      <div v-else class="px-6 py-10 text-center text-sm opacity-60">No applications configured.</div>
     </div>
 
     <AppEditModal
@@ -96,15 +98,5 @@ function appKey(app, index) {
 .dark .main-btn:hover {
   background: #4da3ff;
 }
-.mini-btn {
-  background: rgba(0, 0, 0, 0.65);
-  color: #fff;
-  font-size: 11px;
-  padding: 4px 8px;
-  border-radius: 6px;
-}
-
-.mini-btn:hover {
-  background: rgba(0, 0, 0, 0.85);
-}
+/* Row chevron styling adapts via text color set inline */
 </style>

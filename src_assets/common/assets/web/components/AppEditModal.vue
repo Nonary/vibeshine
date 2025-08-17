@@ -1,183 +1,144 @@
 <template>
-  <div v-if="open" class="fixed inset-0 z-50 flex items-start justify-center p-6 overflow-y-auto">
-    <div class="fixed inset-0 bg-black/50 backdrop-blur-sm" @click="close" />
-    <div
-      class="relative w-full max-w-3xl mx-auto bg-white dark:bg-surface rounded-xl shadow-xl flex flex-col border border-black/10 dark:border-white/10"
-    >
-      <div
-        class="flex items-center justify-between px-6 py-4 border-b border-black/5 dark:border-white/10"
-      >
-        <h2 class="font-semibold text-sm">
-          {{ form.index === -1 ? 'Add Application' : 'Edit Application' }}
-        </h2>
-        <button class="text-black/50 dark:text-white/50 hover:text-red-600" @click="close">
-          <i class="fas fa-times" />
-        </button>
+  <UiModal :open="open" :dismissible="true" :backdrop-close="true" size="2xl" @update:open="v => emit('update:modelValue', v)">
+    <template #icon>
+      <div class="h-14 w-14 rounded-full bg-gradient-to-br from-primary/20 to-primary/10 text-primary flex items-center justify-center shadow-inner">
+        <i class="fas fa-window-restore text-xl" />
       </div>
-      <div class="p-6 space-y-6 text-xs overflow-y-auto max-h-[70vh]">
-        <div class="grid gap-4 sm:grid-cols-2">
-          <div class="space-y-1 col-span-2">
-            <label class="font-medium">Name</label>
-            <input v-model="form.name" class="app-input" placeholder="Game or App Name" />
-          </div>
-          <div class="space-y-1 col-span-2 flex flex-col">
-            <label class="font-medium">Image Path</label>
-            <input
-              v-model="form['image-path']"
-              class="app-input font-mono"
-              placeholder="/path/to/image.png"
-            />
-            <p class="text-[11px] text-black/60 dark:text-white/40 mt-1">
-              Optional. Stored with the app but not fetched or proxied by Sunshine.
-            </p>
-          </div>
-          <div class="space-y-1 col-span-2">
-            <label class="font-medium">Command (single)</label>
-            <textarea
-              v-model="cmdText"
-              class="app-input font-mono h-20"
-              placeholder="Executable command line"
-            />
-            <p class="text-black/60 dark:text-white/50">
-              Enter the full command line to run (single string).
-            </p>
-          </div>
-          <div class="space-y-1 col-span-2">
-            <label class="font-medium">Working Directory</label>
-            <input
-              v-model="form['working-dir']"
-              class="app-input font-mono"
-              placeholder="C:/Games/App"
-            />
-          </div>
-          <div class="space-y-1 col-span-2 grid grid-cols-2 gap-4">
-            <label class="inline-flex items-center gap-2 text-[11px]"
-              ><input
-                v-model="form['exclude-global-prep-cmd']"
-                type="checkbox"
-                class="app-checkbox"
-              />
-              Exclude Global Prep</label
-            >
-            <label class="inline-flex items-center gap-2 text-[11px]"
-              ><input v-model="form['auto-detach']" type="checkbox" class="app-checkbox" /> Auto
-              Detach</label
-            >
-            <label class="inline-flex items-center gap-2 text-[11px]"
-              ><input v-model="form['wait-all']" type="checkbox" class="app-checkbox" /> Wait
-              All</label
-            >
-            <label v-if="platform === 'windows'" class="inline-flex items-center gap-2 text-[11px]"
-              ><input v-model="form.elevated" type="checkbox" class="app-checkbox" />
-              Elevated</label
-            >
-          </div>
-          <div class="space-y-1 col-span-2 sm:col-span-1">
-            <label class="font-medium">Exit Timeout (s)</label>
-            <input
-              v-model.number="form['exit-timeout']"
-              type="number"
-              min="0"
-              class="app-input w-32"
-            />
+    </template>
+    <template #title>
+      <div class="flex items-center gap-3">
+        <span class="text-xl font-semibold">{{ form.index === -1 ? 'Add Application' : 'Edit Application' }}</span>
+        <span v-if="form.name" class="text-xs opacity-60">{{ form.name }}</span>
+      </div>
+    </template>
+
+    <form class="space-y-6 text-sm" @submit.prevent="save" @keydown.ctrl.enter.stop.prevent="save">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="space-y-1 md:col-span-2">
+          <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Name</label>
+          <input v-model="form.name" class="ui-input" placeholder="Game or App Name" />
+        </div>
+        <div class="space-y-1 md:col-span-2">
+          <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Command</label>
+          <textarea v-model="cmdText" class="ui-input font-mono h-20" placeholder="Executable command line" />
+          <p class="text-[11px] opacity-60">Enter the full command line (single string).</p>
+        </div>
+        <div class="space-y-1 md:col-span-1">
+          <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Working Dir</label>
+          <input v-model="form['working-dir']" class="ui-input font-mono" placeholder="C:/Games/App" />
+        </div>
+        <div class="space-y-1 md:col-span-1">
+          <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Exit Timeout</label>
+          <div class="flex items-center gap-2">
+            <input v-model.number="form['exit-timeout']" type="number" min="0" class="ui-input w-28" />
+            <span class="text-xs opacity-60">seconds</span>
           </div>
         </div>
-        <div>
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="font-semibold text-xs uppercase tracking-wider">Prep Commands</h3>
-            <button class="mini-btn" @click="addPrep"><i class="fas fa-plus" /> Add</button>
-          </div>
-          <div
-            v-if="form['prep-cmd'].length === 0"
-            class="text-[11px] text-black/60 dark:text-white/40"
-          >
-            None
-          </div>
-          <div v-else class="space-y-3">
-            <div
-              v-for="(p, i) in form['prep-cmd']"
-              :key="i"
-              class="grid gap-2 md:grid-cols-5 items-start"
-            >
-              <input v-model="p.do" placeholder="do" class="app-input font-mono md:col-span-2" />
-              <input
-                v-model="p.undo"
-                placeholder="undo"
-                class="app-input font-mono md:col-span-2"
-              />
-              <div class="flex items-center gap-2 md:col-span-1">
-                <label
-                  v-if="platform === 'windows'"
-                  class="inline-flex items-center gap-1 text-[11px]"
-                  ><input v-model="p.elevated" type="checkbox" class="app-checkbox" /> Elev</label
-                >
-                <button class="mini-btn danger" @click="form['prep-cmd'].splice(i, 1)">
-                  <i class="fas fa-trash" />
-                </button>
-              </div>
+        <div class="space-y-1 md:col-span-2">
+          <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Image Path</label>
+          <input v-model="form['image-path']" class="ui-input font-mono" placeholder="/path/to/image.png" />
+          <p class="text-[11px] opacity-60">Optional; stored only and not fetched by Sunshine.</p>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <label class="flex items-center gap-2 text-xs">
+          <input v-model="form['exclude-global-prep-cmd']" type="checkbox" class="ui-checkbox" />
+          Exclude Global Prep
+        </label>
+        <label class="flex items-center gap-2 text-xs">
+          <input v-model="form['auto-detach']" type="checkbox" class="ui-checkbox" />
+          Auto Detach
+        </label>
+        <label class="flex items-center gap-2 text-xs">
+          <input v-model="form['wait-all']" type="checkbox" class="ui-checkbox" />
+          Wait All
+        </label>
+        <label v-if="platform === 'windows'" class="flex items-center gap-2 text-xs">
+          <input v-model="form.elevated" type="checkbox" class="ui-checkbox" />
+          Elevated
+        </label>
+      </div>
+
+      <section class="space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-xs font-semibold uppercase tracking-wider opacity-70">Prep Commands</h3>
+          <UiButton size="sm" variant="primary" @click="addPrep">
+            <i class="fas fa-plus" /> Add
+          </UiButton>
+        </div>
+        <div v-if="form['prep-cmd'].length === 0" class="text-[12px] opacity-60">None</div>
+        <div v-else class="space-y-2">
+          <div v-for="(p, i) in form['prep-cmd']" :key="i" class="grid md:grid-cols-12 gap-2">
+            <input v-model="p.do" placeholder="do" class="ui-input font-mono md:col-span-5" />
+            <input v-model="p.undo" placeholder="undo" class="ui-input font-mono md:col-span-5" />
+            <div class="flex items-center gap-2 md:col-span-2">
+              <label v-if="platform === 'windows'" class="flex items-center gap-1 text-xs">
+                <input v-model="p.elevated" type="checkbox" class="ui-checkbox" /> Elev
+              </label>
+              <UiButton size="sm" variant="danger" @click="form['prep-cmd'].splice(i, 1)">
+                <i class="fas fa-trash" />
+              </UiButton>
             </div>
           </div>
         </div>
-        <div>
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="font-semibold text-xs uppercase tracking-wider">Detached Commands</h3>
-            <button class="mini-btn" @click="form.detached.push('')">
-              <i class="fas fa-plus" /> Add
-            </button>
-          </div>
-          <div
-            v-if="form.detached.length === 0"
-            class="text-[11px] text-black/60 dark:text-white/40"
-          >
-            None
-          </div>
-          <div v-else class="space-y-2">
-            <div v-for="(d, i) in form.detached" :key="i" class="flex gap-2 items-start">
-              <input v-model="form.detached[i]" class="app-input font-mono flex-1" />
-              <button class="mini-btn danger" @click="form.detached.splice(i, 1)">
-                <i class="fas fa-times" />
-              </button>
-            </div>
+      </section>
+
+      <section class="space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-xs font-semibold uppercase tracking-wider opacity-70">Detached Commands</h3>
+          <UiButton size="sm" variant="primary" @click="form.detached.push('')">
+            <i class="fas fa-plus" /> Add
+          </UiButton>
+        </div>
+        <div v-if="form.detached.length === 0" class="text-[12px] opacity-60">None</div>
+        <div v-else class="space-y-2">
+          <div v-for="(d, i) in form.detached" :key="i" class="flex gap-2 items-start">
+            <input v-model="form.detached[i]" class="ui-input font-mono flex-1" />
+            <UiButton size="sm" variant="danger" @click="form.detached.splice(i, 1)">
+              <i class="fas fa-times" />
+            </UiButton>
           </div>
         </div>
+      </section>
+      <section class="sr-only">
+        <!-- hidden submit to allow Enter to save within fields -->
+        <button type="submit" tabindex="-1" aria-hidden="true"></button>
+      </section>
+    </form>
+
+    <template #footer>
+      <div class="flex items-center justify-end w-full gap-2">
+        <UiButton tone="ghost" variant="neutral" @click="close">Cancel</UiButton>
+        <UiButton v-if="form.index !== -1" variant="danger" :disabled="saving.v" @click="showDeleteConfirm = true">
+          <i class="fas fa-trash" /> Delete
+        </UiButton>
+        <UiButton variant="primary" :loading="saving.v" :disabled="saving.v" @click="save">
+          <i class="fas fa-save" /> Save
+        </UiButton>
       </div>
-      <div
-        class="flex items-center justify-between px-6 py-4 border-t border-black/5 dark:border-white/10 gap-3"
-      >
-        <div class="flex gap-2">
-          <button class="main-btn" :disabled="saving.v" @click="save">
-            <i class="fas fa-save" /> <span class="hidden sm:inline">Save</span>
-          </button>
-          <button class="ghost-btn" @click="close">Cancel</button>
-        </div>
-        <button
-          v-if="form.index !== -1"
-          class="danger-btn"
-          :disabled="saving.v"
-          @click="showDeleteConfirm = true"
-        >
-          <i class="fas fa-trash" />
-        </button>
-      </div>
-      <!-- Confirm delete modal -->
-      <UiConfirmModal
-        v-model:open="showDeleteConfirm"
-        :title="$t('apps.confirm_delete_title_named', { name: form.name || '' })"
-        :message="$t('apps.confirm_delete_message_named', { name: form.name || '' })"
-        :confirm-text="$t('apps.delete')"
-        :cancelText="$t('cancel')"
-        confirm-icon="fas fa-trash"
-        variant="danger"
-        icon="fas fa-triangle-exclamation"
-        @confirm="del"
-        @cancel="showDeleteConfirm = false"
-      />
-    </div>
-  </div>
+    </template>
+
+    <UiConfirmModal
+      v-model:open="showDeleteConfirm"
+      :title="$t('apps.confirm_delete_title_named', { name: form.name || '' })"
+      :message="$t('apps.confirm_delete_message_named', { name: form.name || '' })"
+      :confirm-text="$t('apps.delete')"
+      :cancelText="$t('cancel')"
+      confirm-icon="fas fa-trash"
+      variant="danger"
+      icon="fas fa-triangle-exclamation"
+      @confirm="del"
+      @cancel="showDeleteConfirm = false"
+    />
+  </UiModal>
 </template>
+
 <script setup>
 import { reactive, watch, computed, ref } from 'vue';
 import { http } from '@/http';
+import UiModal from '@/components/UiModal.vue';
+import UiButton from '@/components/UiButton.vue';
 import UiConfirmModal from '@/components/UiConfirmModal.vue';
 const props = defineProps({
   modelValue: Boolean,
@@ -273,110 +234,22 @@ async function del() {
 }
 </script>
 <style scoped>
-.app-input {
+.ui-input {
   width: 100%;
   border: 1px solid rgba(0, 0, 0, 0.12);
-  background: rgba(255, 255, 255, 0.7);
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 11px;
+  background: rgba(255, 255, 255, 0.75);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
   line-height: 1.2;
 }
-
-.dark .app-input {
-  background: rgba(10, 16, 40, 0.6);
-  border-color: rgba(255, 255, 255, 0.15);
+.dark .ui-input {
+  background: rgba(13, 16, 28, 0.65);
+  border-color: rgba(255, 255, 255, 0.14);
   color: #f5f9ff;
 }
-
-.app-input:focus {
-  outline: 2px solid rgba(253, 184, 19, 0.5);
-}
-
-.dark .app-input:focus {
-  outline: 2px solid rgba(77, 163, 255, 0.5);
-}
-
-.app-checkbox {
+.ui-checkbox {
   width: 14px;
   height: 14px;
-}
-
-.main-btn,
-.ghost-btn,
-.danger-btn,
-.mini-btn {
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  cursor: pointer;
-}
-
-.main-btn {
-  background: rgba(253, 184, 19, 0.9);
-  color: #212121;
-}
-
-.main-btn:hover {
-  background: #fdb813;
-}
-
-.dark .main-btn {
-  background: rgba(77, 163, 255, 0.85);
-  color: #050b1e;
-}
-
-.dark .main-btn:hover {
-  background: #4da3ff;
-}
-
-.ghost-btn {
-  background: transparent;
-  color: #0d3b66;
-}
-
-.ghost-btn:hover {
-  background: rgba(13, 59, 102, 0.1);
-}
-
-.dark .ghost-btn {
-  color: #f5f9ff;
-}
-
-.dark .ghost-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.danger-btn {
-  background: #d32f2f;
-  color: #fff;
-  padding: 6px 10px;
-}
-
-.danger-btn:hover {
-  background: #b71c1c;
-}
-
-.mini-btn {
-  background: rgba(0, 0, 0, 0.65);
-  color: #fff;
-  padding: 4px 8px;
-}
-
-.mini-btn:hover {
-  background: rgba(0, 0, 0, 0.85);
-}
-
-.mini-btn.danger {
-  background: #d32f2f;
-}
-
-.mini-btn.danger:hover {
-  background: #b71c1c;
 }
 </style>

@@ -1,128 +1,96 @@
 <template>
-  <transition name="fade-fast">
-    <div v-if="visible" class="fixed inset-0 z-[100] flex flex-col">
-      <div
-        class="absolute inset-0 bg-gradient-to-br from-black/70 via-black/60 to-black/70 backdrop-blur-md"
-        @click="onBackdrop"
-      ></div>
-      <div class="relative flex-1 flex flex-col items-center justify-center p-4 overflow-y-auto">
-        <div
-          class="w-full max-w-lg rounded-2xl shadow-2xl border border-white/10 dark:border-white/10 bg-white/80 dark:bg-neutral-900/80 backdrop-blur-xl ring-1 ring-black/5 dark:ring-white/5"
-        >
-          <header
-            class="px-6 py-5 border-b border-black/10 dark:border-white/10 flex items-center gap-3"
-          >
-            <div class="flex-1">
-              <h2
-                class="text-xl font-semibold tracking-tight text-gray-900 dark:text-white select-none"
-              >
-                {{ credentialsConfigured ? t('auth.login_title') : t('auth.create_first_user') }}
-              </h2>
-              <p
-                v-if="!credentialsConfigured"
-                class="mt-1 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
-              >
-                {{ t('auth.first_user_subtitle') }}
-              </p>
-            </div>
-          </header>
-          <form class="px-6 py-6 space-y-5" novalidate @submit.prevent="submit">
-            <div class="space-y-1">
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{
-                t('auth.username')
-              }}</label>
-              <input
-                v-model.trim="username"
-                required
-                autocomplete="username"
-                autofocus
-                class="w-full rounded-lg border border-gray-300/70 dark:border-gray-600/70 bg-white/70 dark:bg-neutral-800/70 px-3 py-2 text-sm placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition"
-              />
-            </div>
-            <div v-if="credentialsConfigured" class="space-y-1">
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{
-                t('auth.password')
-              }}</label>
-              <input
-                v-model.trim="password"
-                type="password"
-                required
-                autocomplete="current-password"
-                class="w-full rounded-lg border border-gray-300/70 dark:border-gray-600/70 bg-white/70 dark:bg-neutral-800/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition"
-              />
-            </div>
-            <template v-else>
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div class="space-y-1 sm:col-span-2">
-                  <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{
-                    t('auth.new_password')
-                  }}</label>
-                  <input
-                    v-model.trim="newPassword"
-                    type="password"
-                    required
-                    autocomplete="new-password"
-                    class="w-full rounded-lg border border-gray-300/70 dark:border-gray-600/70 bg-white/70 dark:bg-neutral-800/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition"
-                  />
-                </div>
-                <div class="space-y-1 sm:col-span-2">
-                  <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{
-                    t('auth.confirm_new_password')
-                  }}</label>
-                  <input
-                    v-model.trim="confirmNewPassword"
-                    type="password"
-                    required
-                    autocomplete="new-password"
-                    class="w-full rounded-lg border border-gray-300/70 dark:border-gray-600/70 bg-white/70 dark:bg-neutral-800/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition"
-                  />
-                </div>
-              </div>
-            </template>
-            <div class="min-h-[1.25rem]">
-              <p
-                v-if="error"
-                class="text-sm font-medium text-red-600 dark:text-red-400 flex items-center gap-2"
-              >
-                <i class="fas fa-triangle-exclamation" /> {{ error }}
-              </p>
-              <p
-                v-else-if="success"
-                class="text-sm font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-2"
-              >
-                <i class="fas fa-circle-check" /> {{ success }}
-              </p>
-            </div>
-            <div class="flex items-center justify-end pt-1">
-              <button
-                :disabled="submitting"
-                class="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold tracking-wide bg-primary text-onPrimary shadow disabled:opacity-50 disabled:cursor-not-allowed hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary/60 transition"
-              >
-                <span v-if="!credentialsConfigured">{{
-                  submitting ? t('auth.creating_user') : t('auth.create_user')
-                }}</span>
-                <span v-else>{{
-                  submitting ? t('auth.login_loading') : t('auth.login_sign_in')
-                }}</span>
-                <i v-if="submitting" class="fas fa-spinner fa-spin" />
-              </button>
-            </div>
-          </form>
-        </div>
-        <p
-          class="mt-6 text-center text-[10px] tracking-wider text-gray-400 dark:text-gray-500 uppercase select-none"
-        >
-          Sunshine
+  <UiModal :open="visible" :dismissible="false" :backdrop-close="false" size="xl">
+    <template #icon>
+      <div class="h-14 w-14 rounded-full bg-gradient-to-br from-primary/20 to-primary/10 text-primary flex items-center justify-center shadow-inner">
+        <i class="fas fa-lock text-xl" />
+      </div>
+    </template>
+    <template #title>
+      <div class="flex flex-col items-center gap-1 text-center">
+        <h2 class="text-xl font-semibold tracking-tight">
+          {{ credentialsConfigured ? t('auth.login_title') : t('auth.create_first_user') }}
+        </h2>
+        <p v-if="!credentialsConfigured" class="text-xs font-medium uppercase tracking-wider opacity-70">
+          {{ t('auth.first_user_subtitle') }}
         </p>
       </div>
-    </div>
-  </transition>
+    </template>
+
+    <form class="px-1 py-2 space-y-5" novalidate @submit.prevent="submit" @keydown.ctrl.enter.stop.prevent="submit">
+      <div class="space-y-1">
+        <label class="text-xs font-semibold uppercase tracking-wide opacity-70">{{ t('auth.username') }}</label>
+        <input
+          v-model.trim="username"
+          required
+          autocomplete="username"
+          class="ui-input"
+        />
+      </div>
+      <div v-if="credentialsConfigured" class="space-y-1">
+        <label class="text-xs font-semibold uppercase tracking-wide opacity-70">{{ t('auth.password') }}</label>
+        <input
+          v-model.trim="password"
+          type="password"
+          required
+          autocomplete="current-password"
+          class="ui-input"
+        />
+      </div>
+      <template v-else>
+        <div class="space-y-1">
+          <label class="text-xs font-semibold uppercase tracking-wide opacity-70">{{ t('auth.new_password') }}</label>
+          <input
+            v-model.trim="newPassword"
+            type="password"
+            required
+            autocomplete="new-password"
+            class="ui-input"
+          />
+        </div>
+        <div class="space-y-1">
+          <label class="text-xs font-semibold uppercase tracking-wide opacity-70">{{ t('auth.confirm_new_password') }}</label>
+          <input
+            v-model.trim="confirmNewPassword"
+            type="password"
+            required
+            autocomplete="new-password"
+            class="ui-input"
+          />
+        </div>
+      </template>
+
+      <div class="min-h-[1.25rem]">
+        <p v-if="error" class="text-sm font-medium text-red-600 dark:text-red-400 flex items-center gap-2">
+          <i class="fas fa-triangle-exclamation" /> {{ error }}
+        </p>
+        <p v-else-if="success" class="text-sm font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-2">
+          <i class="fas fa-circle-check" /> {{ success }}
+        </p>
+      </div>
+
+      <section class="sr-only">
+        <button type="submit" tabindex="-1" aria-hidden="true"></button>
+      </section>
+    </form>
+
+    <template #footer>
+      <div class="flex items-center justify-end w-full">
+        <UiButton :disabled="submitting" variant="primary" @click="submit">
+          <span v-if="!credentialsConfigured">{{ submitting ? t('auth.creating_user') : t('auth.create_user') }}</span>
+          <span v-else>{{ submitting ? t('auth.login_loading') : t('auth.login_sign_in') }}</span>
+          <i v-if="submitting" class="fas fa-spinner fa-spin" />
+        </UiButton>
+      </div>
+    </template>
+  </UiModal>
 </template>
 <script setup>
-import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useAuthStore } from '@/stores/auth';
 import { http } from '@/http';
 import { useI18n } from 'vue-i18n';
+import UiModal from '@/components/UiModal.vue';
+import UiButton from '@/components/UiButton.vue';
 
 const auth = useAuthStore();
 const { t } = useI18n();
@@ -152,11 +120,6 @@ function reset() {
   confirmNewPassword.value = '';
   error.value = '';
   success.value = '';
-}
-
-function close() {
-  // Prevent closing unless already authenticated
-  if (auth.isAuthenticated) auth.hideLogin();
 }
 
 async function submit() {
@@ -220,33 +183,16 @@ async function submit() {
   }
 }
 
-function onBackdrop(e) {
-  e.stopPropagation();
-  // do not close
-}
-
-function handleKey(e) {
-  if (e.key === 'Escape') {
-    e.preventDefault();
-    e.stopPropagation();
-  }
-}
-
-onMounted(() => {
-  window.addEventListener('keydown', handleKey, true);
-});
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', handleKey, true);
-});
+// Backdrop and escape are disabled by UiModal when dismissible=false
 </script>
-<style>
-.fade-fast-enter-active,
-.fade-fast-leave-active {
-  transition: opacity 0.18s ease;
+<style scoped>
+.ui-input {
+  width: 100%;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.85);
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 14px;
 }
-
-.fade-fast-enter-from,
-.fade-fast-leave-to {
-  opacity: 0;
-}
+.dark .ui-input { background: rgba(13,16,28,0.65); border-color: rgba(255,255,255,0.14); color: #f5f9ff; }
 </style>
