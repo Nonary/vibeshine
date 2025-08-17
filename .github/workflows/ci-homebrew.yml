@@ -47,7 +47,7 @@ jobs:
             release: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Fix homebrew python
         if: matrix.os_name == 'macos' && matrix.os_version == '13'
@@ -151,7 +151,7 @@ jobs:
       - name: Validate Homebrew Formula
         id: test
         if: matrix.release != true
-        uses: LizardByte/actions/actions/release_homebrew@v2025.715.25226
+        uses: LizardByte/actions/actions/release_homebrew@v2025.814.40518
         with:
           formula_file: ${{ github.workspace }}/homebrew/sunshine.rb
           git_email: ${{ secrets.GIT_EMAIL }}
