@@ -22,28 +22,13 @@
           </div>
           <div class="space-y-1 col-span-2 flex flex-col">
             <label class="font-medium">Image Path</label>
-            <div class="flex items-start gap-3">
-              <input
-                v-model="form['image-path']"
-                class="app-input font-mono flex-1"
-                placeholder="/path/to/image.png"
-              />
-              <div
-                class="w-24 h-32 bg-black/5 dark:bg-white/5 rounded overflow-hidden flex items-center justify-center"
-              >
-                <img
-                  v-if="previewSrc"
-                  :src="previewSrc"
-                  class="max-w-full max-h-full object-contain"
-                  loading="lazy"
-                />
-                <div v-else class="text-2xl font-bold text-primary/40">
-                  {{ form.name?.substring(0, 1) || '?' }}
-                </div>
-              </div>
-            </div>
+            <input
+              v-model="form['image-path']"
+              class="app-input font-mono"
+              placeholder="/path/to/image.png"
+            />
             <p class="text-[11px] text-black/60 dark:text-white/40 mt-1">
-              Paste a URL or local image filename here. Save to persist.
+              Optional. Stored with the app but not fetched or proxied by Sunshine.
             </p>
           </div>
           <div class="space-y-1 col-span-2">
@@ -261,41 +246,7 @@ function addPrep() {
 const saving = reactive({ v: false });
 const showDeleteConfirm = ref(false);
 
-function simpleHash(str) {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  return (h >>> 0).toString(36);
-}
-function coverSrc(app, index) {
-  if (app?.uuid) {
-    const cb = simpleHash(`${app.uuid}|${index ?? ''}`);
-    return `./api/apps/${encodeURIComponent(app.uuid)}/cover?cb=${cb}`;
-  }
-  const path = (app?.['image-path'] || '').toString().trim();
-  if (!path) return '';
-  if (/^https?:\/\//i.test(path)) return path;
-  if (!path.includes('/') && !path.includes('\\')) {
-    return `./assets/${path}`;
-  }
-  const file = path.replace(/\\/g, '/').split('/').pop();
-  if (file) {
-    const cb = simpleHash(`${path}|${index ?? ''}`);
-    const iParam = typeof index === 'number' ? `&i=${index}` : '';
-    return `./covers/${file}?cb=${cb}${iParam}`;
-  }
-  return path;
-}
-
-const previewSrc = computed(() => {
-  // prefer uuid cover if present, otherwise use image-path
-  const a = form || {};
-  if (a.uuid) return coverSrc(a, a.index);
-  if (a['image-path']) return coverSrc(a, a.index);
-  return '';
-});
+// Cover preview logic removed; Sunshine no longer fetches or proxies images
 async function save() {
   saving.v = true;
   const payload = JSON.parse(JSON.stringify(form));

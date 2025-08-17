@@ -212,7 +212,9 @@ const toggle = (id) => {
 };
 
 onMounted(async () => {
-  // Let the store handle auth/retries; ensure config is fetched and then build index
+  // Wait for authentication before calling APIs during mount
+  const auth = useAuthStore();
+  await auth.waitForAuthentication();
   await store.fetchConfig();
   if (config.value) queueBuildIndex();
 });
@@ -238,6 +240,8 @@ onUnmounted(() => {
 });
 
 async function save() {
+  // Guard autosave/background save when not authenticated
+  if (!auth.isAuthenticated) return;
   if (!config.value) return;
   restarted.value = false;
   saveState.value = 'saving';

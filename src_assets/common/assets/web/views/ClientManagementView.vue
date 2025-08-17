@@ -175,6 +175,7 @@ import UiButton from '@/components/UiButton.vue';
 import UiAlert from '@/components/UiAlert.vue';
 import ApiTokenManager from '@/ApiTokenManager.vue';
 import UiConfirmModal from '@/components/UiConfirmModal.vue';
+import { useAuthStore } from '@/stores/auth';
 
 const clients = ref([]);
 const pin = ref('');
@@ -190,6 +191,8 @@ const pendingRemoveName = ref('');
 const showConfirmUnpairAll = ref(false);
 
 async function refreshClients() {
+  const auth = useAuthStore();
+  if (!auth.isAuthenticated) return;
   try {
     const r = await http.get('./api/clients/list', { validateStatus: () => true });
     const response = r.data || {};
@@ -299,8 +302,6 @@ async function unpairAll() {
     refreshClients();
   }
 }
-
-onMounted(() => refreshClients());
 
 // ---------------- API TOKEN MANAGEMENT LOGIC (migrated from ApiTokenManager) ----------------
 const scopes = ref([{ path: '', methods: [] }]);
@@ -523,8 +524,11 @@ function copyHash(hash) {
   });
 }
 
-onMounted(() => {
-  loadTokens();
+onMounted(async () => {
+  const auth = useAuthStore();
+  await auth.waitForAuthentication();
+  await refreshClients();
+  await loadTokens();
 });
 </script>
 

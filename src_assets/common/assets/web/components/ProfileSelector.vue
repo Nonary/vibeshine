@@ -18,6 +18,7 @@
 import { ref, onMounted, watch } from 'vue';
 import { useConfigStore } from '@/stores/config';
 import { http } from '@/http';
+import { useAuthStore } from '@/stores/auth';
 const props = defineProps({
   modelValue: { type: String, default: '__default' },
   label: { type: String, default: '' },
@@ -28,6 +29,9 @@ const clients = ref([]);
 const configStore = useConfigStore();
 
 onMounted(async () => {
+  const auth = useAuthStore();
+  // Only call APIs after authentication is ready
+  await auth.waitForAuthentication();
   try {
     // ensure config available (some environments expect platform to be present)
     if (!configStore.config.value)

@@ -28,8 +28,8 @@ namespace confighttp {
   void start();
 
   enum class TokenScope {
-    Read,
-    Write
+  Read,  ///< Read-only scope: allows GET/HEAD style operations
+  Write  ///< Read-write scope: allows modifying operations (POST/PUT/DELETE)
   };
 
   // Authentication functions

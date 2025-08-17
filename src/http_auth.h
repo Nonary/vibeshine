@@ -106,13 +106,8 @@ namespace confighttp {
      * @return JSON string listing tokens (hashed) and metadata.
      */
     std::string list_api_tokens_json() const;
-    /**
-     * @brief Revoke a token by its hash string.
-     * @param token_hash Hash identifying the token.
-     * @return Username owning the revoked token, or `std::nullopt` if not found.
-     */
-    /**
-     * @brief Authenticate using a raw token (not hash) for path & method.
+  /**
+   * @brief Authenticate using a raw token (not hash) for path & method.
      * @param token The un-hashed provided token.
      * @param path Target path.
      * @param method HTTP method.
@@ -339,7 +334,6 @@ namespace confighttp {
    * @brief Construct an AuthResult representing an authentication error (no Basic auth support).
    * @param code HTTP status to return.
    * @param error Message body.
-   * @param location Optional redirect location.
    * @return Structured AuthResult.
    */
   AuthResult make_auth_error(StatusCode code, const std::string &error);

@@ -10,15 +10,22 @@
   </div>
 </template>
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { useAuthStore } from '@/stores/auth';
 // Placeholder polling logic; backend endpoint not yet implemented
 const streaming = ref(false);
+let iv;
 onMounted(() => {
-  // TODO replace with real endpoint
-  setInterval(() => {
+  const auth = useAuthStore();
+  // TODO replace with real endpoint; guard polling by auth
+  iv = setInterval(() => {
+    if (!auth.isAuthenticated) return;
     // placeholder polling: no state change
     void streaming.value;
   }, 10000);
+});
+onBeforeUnmount(() => {
+  if (iv) clearInterval(iv);
 });
 </script>
 <style scoped></style>
