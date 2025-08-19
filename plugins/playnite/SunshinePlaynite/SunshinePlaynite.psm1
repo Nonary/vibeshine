@@ -19,6 +19,15 @@ $script:IsGameRunning = $false
 # Logger state
 $script:LogPath = $null
 $script:HostLogger = $null
+$script:Bg = $null
+# Thread-safe map for launcher connections shared across runspaces
+try {
+  $lcVar = Get-Variable -Name 'LauncherConns' -Scope Global -ErrorAction SilentlyContinue
+} catch { $lcVar = $null }
+if (-not $lcVar -or -not ($lcVar.Value -is [System.Collections.Concurrent.ConcurrentDictionary[string,object]])) {
+  $global:LauncherConns = New-Object 'System.Collections.Concurrent.ConcurrentDictionary[string,object]'
+}
+$script:Outbox = $null
 
 # Connection state (single-threaded)
 $script:ControlPipeName = 'sunshine_playnite_connector'
@@ -32,7 +41,8 @@ function Resolve-LogPath {
     if ($PSScriptRoot) {
       return (Join-Path $PSScriptRoot 'sunshine_playnite.log')
     }
-  } catch {}
+  }
+  catch {}
   # Last resort: temp folder
   return (Join-Path $env:TEMP 'sunshine_playnite.log')
 }
@@ -55,103 +65,255 @@ function Initialize-Logging {
     ) -join [Environment]::NewLine
     try {
       [System.IO.File]::WriteAllText($script:LogPath, $hdr + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
-    } catch {
+    }
+    catch {
       # Fallback to Out-File if static write fails
       $hdr | Out-File -FilePath $script:LogPath -Encoding utf8
     }
     if ($script:HostLogger) { $script:HostLogger.Info("SunshinePlaynite: logging initialized at $script:LogPath") }
-  } catch {}
+  }
+  catch {}
 }
 
 function Write-Log {
   param([string]$Message)
   try {
     $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')
+    if (-not $script:LogPath) {
+      try { $script:LogPath = Resolve-LogPath } catch {}
+    }
     if ($script:LogPath) {
       try {
         [System.IO.File]::AppendAllText($script:LogPath, "[$ts] $Message" + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
-      } catch {
+      }
+      catch {
         Add-Content -Path $script:LogPath -Value "[$ts] $Message" -Encoding utf8
       }
     }
     if ($script:HostLogger) { $script:HostLogger.Info("SunshinePlaynite: $Message") }
-  } catch {}
-}
-
-# (Removed jobs/runspaces; everything runs on UI DispatcherTimer tick)
-
-#
-# Thread marshalling helpers
-# Ensure all interactions with Playnite API occur on the UI/main thread.
-#
-function Invoke-PlayniteMain {
-  param([ScriptBlock]$Script)
-  # Try WPF Dispatcher first (Playnite is a WPF app), then Playnite API's InvokeOnMainThread, else run inline
-  $script:__inv_inner = $Script
-  try {
-    # Attempt to use WPF Dispatcher if available
-    try { $null = [System.Windows.Application] } catch { try { [void][System.Reflection.Assembly]::Load('PresentationFramework') } catch {} }
-    if ([System.Windows.Application]::Current -and [System.Windows.Application]::Current.Dispatcher) {
-      $disp = [System.Windows.Application]::Current.Dispatcher
-      if ($disp.CheckAccess()) {
-        return (& $script:__inv_inner)
-      } else {
-        $script:__inv_tmp = $null
-        $disp.Invoke([System.Action]{ $script:__inv_tmp = (& $script:__inv_inner) })
-        $res = $script:__inv_tmp
-        Remove-Variable -Name __inv_tmp -Scope Script -ErrorAction SilentlyContinue
-        return $res
-      }
-    }
-  } catch {
-    # Ignore and try Playnite API path or fallback
   }
-  try {
-    if ($PlayniteApi -and ($PlayniteApi.PSObject.Methods.Name -contains 'InvokeOnMainThread')) {
-      $script:__inv_tmp2 = $null
-      $PlayniteApi.InvokeOnMainThread([System.Action]{ $script:__inv_tmp2 = (& $script:__inv_inner) })
-      $res2 = $script:__inv_tmp2
-      Remove-Variable -Name __inv_tmp2 -Scope Script -ErrorAction SilentlyContinue
-      return $res2
-    }
-  } catch {
-    # Ignore and fallback to direct invocation
-  } finally {
-    Remove-Variable -Name __inv_inner -Scope Script -ErrorAction SilentlyContinue
-  }
-  # Fallback: run directly
-  return (& $Script)
+  catch {}
 }
 
-function Invoke-PlayniteMainAsync {
-  param([ScriptBlock]$Script)
-  try {
-    try { $null = [System.Windows.Application] } catch { try { [void][System.Reflection.Assembly]::Load('PresentationFramework') } catch {} }
-    if ([System.Windows.Application]::Current -and [System.Windows.Application]::Current.Dispatcher) {
-      $disp = [System.Windows.Application]::Current.Dispatcher
-      [void]$disp.BeginInvoke([System.Action]{ & $Script })
-      return
-    }
-  } catch {}
-  # Fallback to synchronous
-  try { & $Script } catch {}
-}
+## Removed: P/Invoke probe (WaitNamedPipe). Use NamedPipeClientStream.Connect(timeout).
 
-# Native interop for probing named pipe availability
+# UI bridge: static C# helper to run Playnite API calls on the UI thread without requiring a PS runspace there
 try {
-  if (-not ([System.Management.Automation.PSTypeName]'Win32.NativeMethods').Type) {
-    Add-Type -Namespace Win32 -Name NativeMethods -MemberDefinition @"
+  if (-not ([System.Management.Automation.PSTypeName]'UIBridge').Type) {
+    Add-Type -TypeDefinition @"
 using System;
-using System.Runtime.InteropServices;
-public static class NativeMethods {
-  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
-  public static extern bool WaitNamedPipe(string lpNamedPipeName, uint nTimeOut);
+using System.Collections;
+using System.Reflection;
+using System.Windows.Threading;
+
+public static class UIBridge
+{
+    public static Dispatcher Dispatcher;
+    public static object Api;
+
+    public static void Init(Dispatcher d, object api)
+    {
+        Dispatcher = d;
+        Api = api;
+    }
+
+    public static void Invoke(Action action)
+    {
+        if (action == null) return;
+        var d = Dispatcher;
+        if (d != null) { d.BeginInvoke(action); }
+        else { action(); }
+    }
+
+    public static void InvokeWithApi(Action<object> action)
+    {
+        if (action == null) return;
+        var api = Api;
+        if (api == null) return;
+        var d = Dispatcher;
+        if (d != null) { d.BeginInvoke(new Action(() => action(api))); }
+        else { action(api); }
+    }
+
+    public static void StartGameByGuidString(string guidStr)
+    {
+        if (string.IsNullOrWhiteSpace(guidStr)) return;
+        Guid gid; if (!Guid.TryParse(guidStr, out gid)) return;
+        var api = Api; if (api == null) return;
+        try
+        {
+            var m = api.GetType().GetMethod("StartGame", new Type[] { typeof(Guid) });
+            if (m != null) { m.Invoke(api, new object[] { gid }); return; }
+        }
+        catch { }
+        try
+        {
+            var dbProp = api.GetType().GetProperty("Database");
+            var db = dbProp != null ? dbProp.GetValue(api) : null; if (db == null) return;
+            var gamesProp = db.GetType().GetProperty("Games");
+            var games = gamesProp != null ? gamesProp.GetValue(db) as IEnumerable : null; if (games == null) return;
+            object found = null;
+            foreach (var g in games)
+            {
+                try
+                {
+                    var idProp = g.GetType().GetProperty("Id");
+                    if (idProp != null)
+                    {
+                        var idVal = idProp.GetValue(g, null);
+                        if (idVal is Guid)
+                        {
+                            var gg = (Guid)idVal;
+                            if (gg.Equals(gid)) { found = g; break; }
+                        }
+                    }
+                }
+                catch { }
+            }
+            if (found != null)
+            {
+                var m2 = api.GetType().GetMethod("StartGame", new Type[] { found.GetType() });
+                if (m2 != null) m2.Invoke(api, new object[] { found });
+            }
+        }
+        catch { }
+    }
+
+    public static void StartGameByGuidStringOnUIThread(string guidStr)
+    {
+        var d = Dispatcher;
+        if (d != null) { d.BeginInvoke(new Action(() => StartGameByGuidString(guidStr))); }
+        else { StartGameByGuidString(guidStr); }
+    }
+}
+"@ -ReferencedAssemblies @('WindowsBase')
+    Write-Log "Loaded UIBridge"
+  }
+}
+catch { Write-Log "Failed to load UIBridge: $($_.Exception.Message)" }
+
+## Single outbox queue + minimal writer pump
+try {
+  if (-not ([System.Management.Automation.PSTypeName]'OutboxPump').Type) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+using System.Threading;
+using System.Collections.Concurrent;
+
+public static class OutboxPump
+{
+    static CancellationTokenSource _cts;
+    static Thread _thread;
+
+    public static void Start(TextWriter writer, BlockingCollection<string> outbox)
+    {
+        Stop();
+        _cts = new CancellationTokenSource();
+        _thread = new Thread(() =>
+        {
+            try
+            {
+                while (!_cts.IsCancellationRequested)
+                {
+                    string line;
+                    if (!outbox.TryTake(out line, 500)) { continue; }
+                    try { writer.WriteLine(line); writer.Flush(); }
+                    catch { /* swallow transient write errors; outer loop handles reconnect */ }
+                }
+            }
+            catch { }
+        });
+        _thread.IsBackground = true;
+        _thread.Start();
+    }
+
+    public static void Stop()
+    {
+        try { if (_cts != null) _cts.Cancel(); } catch { }
+        try { if (_thread != null && _thread.IsAlive) _thread.Join(500); } catch { }
+        _cts = null; _thread = null;
+    }
 }
 "@
-    Write-Log "Loaded Win32.NativeMethods for WaitNamedPipe"
+    Write-Log "Loaded OutboxPump"
   }
-} catch {
-  Write-Log "Failed to load Win32.NativeMethods: $($_.Exception.Message)"
+}
+catch { Write-Log "Failed to load OutboxPump: $($_.Exception.Message)" }
+
+# Per-connection writer pump to avoid UI-thread blocking on launcher pipe writes
+try {
+  if (-not ([System.Management.Automation.PSTypeName]'PerConnPump').Type) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+using System.Threading;
+using System.Collections.Concurrent;
+
+public sealed class PerConnPump : IDisposable
+{
+    readonly TextWriter _writer;
+    readonly BlockingCollection<string> _q;
+    readonly Thread _t;
+    readonly CancellationTokenSource _cts = new CancellationTokenSource();
+
+    public PerConnPump(TextWriter writer, BlockingCollection<string> queue)
+    {
+        if (writer == null) { throw new ArgumentNullException("writer"); }
+        if (queue == null) { throw new ArgumentNullException("queue"); }
+        _writer = writer;
+        _q = queue;
+        _t = new Thread(Run);
+        _t.IsBackground = true;
+        try { _t.Name = "PerConnPump"; } catch { }
+    }
+
+    void Run()
+    {
+        try
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                string line;
+                if (!_q.TryTake(out line, 500)) continue;
+                try { _writer.WriteLine(line); _writer.Flush(); }
+                catch { }
+            }
+        }
+        catch { }
+    }
+
+    public void Start()
+    {
+        _t.Start();
+    }
+
+    public void Dispose()
+    {
+        try { _cts.Cancel(); } catch {}
+        try { if (_t.IsAlive) _t.Join(500); } catch {}
+    }
+}
+"@
+    Write-Log "Loaded PerConnPump"
+  }
+}
+catch { Write-Log "Failed to load PerConnPump: $($_.Exception.Message)" }
+
+# Outbox shared between UI and background runspace (ensure defined under StrictMode)
+try {
+  if (-not (Get-Variable -Name 'Outbox' -Scope Script -ErrorAction SilentlyContinue) -or -not $script:Outbox) {
+    $script:Outbox = New-Object 'System.Collections.Concurrent.BlockingCollection[string]'
+    $Outbox = $script:Outbox
+    Write-Log "Outbox initialized"
+  }
+  elseif (-not $Outbox) {
+    $Outbox = $script:Outbox
+  }
+}
+catch {
+  $script:Outbox = New-Object 'System.Collections.Concurrent.BlockingCollection[string]'
+  $Outbox = $script:Outbox
 }
 
 # Extra P/Invoke for nonblocking peeks
@@ -177,150 +339,244 @@ function Get-FullPipeName {
   return "\\\\.\\pipe\\$Name"
 }
 
-function Test-PipeAvailable {
-  param([string]$Name, [int]$TimeoutMs = 500)
+## Removed Test-PipeAvailable (pre-probe not needed)
+
+function Connect-SunshinePipe {
+  param(
+    [string]$PublicName = 'sunshine_playnite_connector',
+    [int]$TimeoutMs = 5000
+  )
+
+  # Mandatory anonymous handshake protocol:
+  # 1) Connect to control pipe ($PublicName)
+  # 2) Read 80-byte wchar[40] data-pipe name (AnonConnectMsg)
+  # 3) Send single-byte ACK (0x02)
+  # 4) Disconnect control pipe
+  # 5) Connect to returned data pipe name and build UTF-8 line reader/writer
+
+  $control = $null
+  $data = $null
+  $reader = $null
+  $writer = $null
+  $ACK = 0x02
+
   try {
-    $full = Get-FullPipeName -Name $Name
-    if ([Win32.NativeMethods]::WaitNamedPipe($full, [uint32]$TimeoutMs)) {
-      Write-Log "WaitNamedPipe succeeded for '$full' within ${TimeoutMs}ms"
-      return $true
-    } else {
-      $err = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
-      Write-Log "WaitNamedPipe timeout/fail for '$full' err=$err after ${TimeoutMs}ms"
-      return $false
+    Write-Log "Handshake: connecting control pipe '$PublicName' (timeout=${TimeoutMs}ms)"
+    $control = New-Object System.IO.Pipes.NamedPipeClientStream('.', $PublicName, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::Asynchronous)
+    $control.Connect([Math]::Max(1000, [int]$TimeoutMs))
+    Write-Log "Handshake: control connected (IsConnected=$($control.IsConnected))"
+
+    # Read fixed-size AnonConnectMsg (wchar[40] => 80 bytes) with a simple synchronous read
+    $expected = 80
+    $buf = New-Object byte[] $expected
+    $off = 0
+    try { $control.ReadTimeout = 3000 } catch { Write-Log "Handshake: control stream does not support ReadTimeout; proceeding" }
+    while ($off -lt $expected) {
+      $n = $control.Read($buf, $off, ($expected - $off))
+      if ($n -le 0) { throw "Control pipe closed during handshake ($off/$expected)" }
+      $off += $n
     }
-  } catch {
-    Write-Log "Test-PipeAvailable exception: $($_.Exception.Message)"
-    return $false
+    # Decode wchar[40] to .NET string; trim trailing nulls
+    $pipeName = [System.Text.Encoding]::Unicode.GetString($buf)
+    $pipeName = $pipeName.Trim([char]0)
+    if (-not $pipeName) { throw "Handshake received empty data pipe name" }
+    Write-Log "Handshake: received data pipe name '$pipeName'"
+
+    # Send ACK (single byte 0x02)
+    $ackBuf = [byte[]]@([byte]$ACK)
+    $control.Write($ackBuf, 0, 1)
+    $control.Flush()
+    Write-Log "Handshake: ACK sent"
+
+    # Close control and connect to data pipe
+    try { $control.Dispose() } catch {}
+    $control = $null
+
+    $data = New-Object System.IO.Pipes.NamedPipeClientStream('.', $pipeName, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::Asynchronous)
+    $data.Connect(10000)
+    try { $data.ReadTimeout = 5000 } catch {}
+    try { $data.WriteTimeout = 5000 } catch {}
+    $writer = New-Object System.IO.StreamWriter($data, [System.Text.Encoding]::UTF8, 8192, $true)
+    $writer.AutoFlush = $true
+    $reader = New-Object System.IO.StreamReader($data, [System.Text.Encoding]::UTF8, $false, 8192, $true)
+    Write-Log "Handshake: data pipe connected (IsConnected=$($data.IsConnected))"
+    return @{ Stream = $data; Writer = $writer; Reader = $reader }
+  }
+  catch {
+    if ($reader) { try { $reader.Dispose() } catch {} }
+    if ($writer) { try { $writer.Dispose() } catch {} }
+    if ($data) { try { $data.Dispose() } catch {} }
+    if ($control) { try { $control.Dispose() } catch {} }
+    $ex = $_.Exception
+    Write-Log "Handshake connect failed: $($ex.GetType().FullName): $($ex.Message) HResult=$([String]::Format('0x{0:X8}', $ex.HResult))"
+    throw
   }
 }
 
-function Connect-ControlPipe {
-  param([int]$TimeoutMs = 3000)
-  $PublicName = $script:ControlPipeName
+function Send-JsonMessage {
+  param(
+    [Parameter(Mandatory)] [string]$Json,
+    [switch]$AllowConnectIfMissing
+  )
+  # Single strategy: enqueue to the shared outbox; background writer will flush to pipe
+  try { $null = $Outbox.Add($Json); Write-Log ("Queued line of {0} chars" -f $Json.Length) }
+  catch { Write-Log "Failed to enqueue message: $($_.Exception.Message)" }
+}
+
+# Discover running launcher helper processes and extract their public GUID and game id
+function Get-LauncherProcesses {
+  # Tolerate Playnite.Launcher / playnite-launcher / playnite_launcher / ... (+ optional suffix)
+  $nameRegex = '(?i)^playnite[\._-]?launcher(?:.*)?\.exe$'
+  $found = New-Object System.Collections.ArrayList
+
+  function Add-Candidate {
+    param($pid, $name, $cmdline)
+    if (-not $name -or ($name -notmatch $nameRegex)) { return }
+    if (-not $cmdline) {
+      Write-Log "LauncherProbe: PID=$pid Name=$name has empty/blocked CommandLine"
+      return
+    }
+
+    $pub = $null; $gid = $null
+
+    # Accept -/-- or /, allow space or '=' between key and value
+    if ($cmdline -match '(?i)(?:^|\s)[-/]{1,2}public[-_]?guid(?:\s+|=)\{?([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})\}?') {
+      $pub = $matches[1]
+    }
+    if ($cmdline -match '(?i)(?:^|\s)[-/]{1,2}game[-_]?id(?:\s+|=)\{?([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})\}?') {
+      $gid = $matches[1]
+    }
+
+    if ($pub) { [void]$found.Add(@{ Pid = [int]$pid; PublicGuid = $pub; GameId = $gid }) }
+  }
+
+  # 1) CIM/WMI broad LIKE filter
   try {
-    Write-Log "Connecting control pipe '$PublicName' (timeout=${TimeoutMs}ms)"
-    if (([System.Management.Automation.PSTypeName]'Win32.NativeMethods').Type) {
-      $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
-      while ([DateTime]::UtcNow -lt $deadline) {
-        if (Test-PipeAvailable -Name $PublicName -TimeoutMs 250) { break }
-        Start-Sleep -Milliseconds 100
+    $q = "SELECT ProcessId, Name, CommandLine FROM Win32_Process WHERE Name LIKE 'Playnite%Launcher%.exe'"
+    $cim = Get-CimInstance -Query $q -ErrorAction SilentlyContinue
+    foreach ($p in ($cim | Where-Object { $_.Name -match $nameRegex })) {
+      Add-Candidate -pid $p.ProcessId -name $p.Name -cmdline $p.CommandLine
+    }
+  }
+  catch { Write-Log "LauncherProbe: CIM LIKE query failed: $($_.Exception.Message)" }
+
+  # 2) Fallback: Get-Process then query each PID’s CommandLine via CIM/WMI
+  try {
+    foreach ($gp in (Get-Process -Name 'playnite*' -ErrorAction SilentlyContinue)) {
+      $pid = [int]$gp.Id
+      $name = $gp.Name
+      $cmd = $null
+      try {
+        $c = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $pid) -ErrorAction SilentlyContinue
+        if (-not $c) { $c = Get-WmiObject Win32_Process -Filter ("ProcessId={0}" -f $pid) -ErrorAction SilentlyContinue }
+        if ($c) { $cmd = [string]$c.CommandLine }
       }
+      catch {}
+      Add-Candidate -pid $pid -name $name -cmdline $cmd
     }
-    $pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', $PublicName, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::None)
-    $pipe.Connect([Math]::Max(1000, [int]($TimeoutMs)))
-    try { $pipe.ReadMode = [System.IO.Pipes.PipeTransmissionMode]::Byte } catch {}
-    try { $pipe.ReadTimeout = 50 } catch {}
-    try { $pipe.WriteTimeout = 2000 } catch {}
-    Write-Log "Control pipe connected: CanRead=$($pipe.CanRead) CanWrite=$($pipe.CanWrite)"
-    return $pipe
-  } catch {
-    if ($pipe) { try { $pipe.Dispose() } catch {} }
-    Write-Log "Control connect failed: $($_.Exception.Message)"; return $null
   }
+  catch { Write-Log "LauncherProbe: Get-Process pass failed: $($_.Exception.Message)" }
+
+  # Marker-based discovery removed: do not scan %APPDATA%\Sunshine\playnite_launcher for JSON markers
+
+  if ($found.Count -gt 0) { Write-Log ("LauncherProbe: total candidates={0}" -f $found.Count) }
+  return , $found  # ensure array even if single
 }
 
-function Try-Receive-Handshake {
-  param([System.IO.Pipes.PipeStream]$ControlPipe, [int]$TimeoutMs = 1500)
-  # Expect 80-byte struct of wchar[40] containing the data pipe name
-  $targetSize = 80
-  $t0 = [DateTime]::UtcNow
-  $acc = New-Object byte[] $targetSize
-  $off = 0
-  while (([DateTime]::UtcNow - $t0).TotalMilliseconds -lt $TimeoutMs -and $off -lt $targetSize) {
+
+# Ensure connections to discovered launchers; start reader threads to handle commands
+function Ensure-LauncherConnections {
+  $found = Get-LauncherProcesses
+  foreach ($it in $found) {
+    $guid = [string]$it.PublicGuid
+    # Ensure braces to match the server-side control pipe naming
+    $pipeGuid = if ($guid -match '^\{[0-9A-Fa-f\-]{36}\}$') { $guid } else { '{' + $guid + '}' }
+    $guid = $pipeGuid
     try {
-      if (([System.Management.Automation.PSTypeName]'Win32.NativePeek').Type) {
-        $h = $ControlPipe.SafePipeHandle.DangerousGetHandle()
-        $avail = 0u
-        [void][Win32.NativePeek]::PeekNamedPipe($h, [IntPtr]::Zero, 0u, [IntPtr]::Zero, [ref]$avail, [IntPtr]::Zero)
-        if ($avail -lt 1) { Start-Sleep -Milliseconds 25; continue }
-      }
-      $read = $ControlPipe.Read($acc, $off, ($targetSize - $off))
-      if ($read -le 0) { Start-Sleep -Milliseconds 25; continue }
-      $off += $read
-    } catch {
-      Start-Sleep -Milliseconds 25
-    }
-  }
-  if ($off -lt $targetSize) { return $null }
-  # Decode UTF-16LE wide string up to first NUL
-  try {
-    $s = [System.Text.Encoding]::Unicode.GetString($acc, 0, $targetSize)
-    $nul = $s.IndexOf([char]0)
-    if ($nul -gt -1) { $s = $s.Substring(0, $nul) }
-    $s = $s.Trim()
-    if (-not [string]::IsNullOrWhiteSpace($s)) { return $s }
-  } catch {}
-  return $null
-}
-
-function Send-Handshake-Ack {
-  param([System.IO.Pipes.PipeStream]$ControlPipe)
-  try {
-    $b = [byte[]](0x02)
-    $ControlPipe.Write($b, 0, 1)
-    $ControlPipe.Flush()
-    Write-Log "Sent handshake ACK"
-  } catch {
-    Write-Log "Failed to send handshake ACK: $($_.Exception.Message)"
-  }
-}
-
-function Ensure-DataConnection {
-  # Returns $true if connected and writer ready
-  if ($script:PipeStream -and $script:PipeStream.IsConnected) { return $true }
-  # Clean up
-  try { if ($script:PipeWriter) { $script:PipeWriter.Dispose(); $script:PipeWriter = $null } } catch {}
-  try { if ($script:PipeStream) { $script:PipeStream.Dispose(); $script:PipeStream = $null } } catch {}
-
-  $ctrl = Connect-ControlPipe -TimeoutMs 3000
-  if (-not $ctrl) { return $false }
-
-  $dataName = Try-Receive-Handshake -ControlPipe $ctrl -TimeoutMs 1500
-  if ($dataName) {
-    Write-Log "Handshake received; data pipe name='$dataName'"
-    Send-Handshake-Ack -ControlPipe $ctrl
-    try { $ctrl.Dispose() } catch {}
+      $exists = $false
+      try { $exists = $global:LauncherConns.ContainsKey($guid) } catch { $exists = $false }
+      if ($exists) { continue }
+    } catch {}
     try {
-      $dp = [System.IO.Pipes.NamedPipeClientStream]::new('.', $dataName, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::None)
-      $dp.Connect(5000)
-      try { $dp.ReadMode = [System.IO.Pipes.PipeTransmissionMode]::Byte } catch {}
-      try { $dp.ReadTimeout = 10 } catch {}
-      try { $dp.WriteTimeout = 2000 } catch {}
-      $script:PipeStream = $dp
-      $script:PipeWriter = New-Object System.IO.StreamWriter($dp, [System.Text.Encoding]::UTF8, 8192, $true)
-      $script:PipeWriter.AutoFlush = $true
-      $script:RecvBuffer = ''
-      Write-Log "Connected to secured data pipe"
-      return $true
-    } catch {
-      Write-Log "Failed to connect data pipe: $($_.Exception.Message)"
-      try { $ctrl.Dispose() } catch {}
-      return $false
+      $pipe = "sunshine_playnite_ctl_$guid"
+      Write-Log "LauncherWatcher: connecting to pipe '$pipe' for pid=$($it.Pid)"
+      $conn = Connect-SunshinePipe -PublicName $pipe -TimeoutMs 10000
+      if (-not $conn) { continue }
+      $connInfo = @{ Stream = $conn.Stream; Writer = $conn.Writer; Reader = $conn.Reader; Pid = $it.Pid; GameId = $it.GameId }
+      # Attach a per-connection outbox + pump to avoid UI-thread blocking
+      try {
+        $connInfo.Outbox = New-Object 'System.Collections.Concurrent.BlockingCollection[string]'
+        if (-not $connInfo.Writer) {
+          $connInfo.Writer = New-Object System.IO.StreamWriter($conn.Stream, [System.Text.Encoding]::UTF8, 8192, $true)
+          $connInfo.Writer.AutoFlush = $true
+        }
+        $connInfo.Pump = New-Object PerConnPump($connInfo.Writer, $connInfo.Outbox)
+        $connInfo.Pump.Start()
+      } catch { Write-Log "LauncherWatcher: failed to start per-connection pump: $($_.Exception.Message)" }
+      try {
+        if (-not $global:LauncherConns.TryAdd($guid, $connInfo)) {
+          Write-Log "LauncherWatcher: connection already present for $guid; skipping add"
+          continue
+        }
+      } catch { $global:LauncherConns[$guid] = $connInfo }
+
+      # Send a tiny sanity status so the launcher log confirms data-pipe reads (enqueue; background will write)
+      try {
+        $hello = @{ type = 'status'; status = @{ name = 'hello'; id = [string]$it.GameId } } | ConvertTo-Json -Compress
+        if ($connInfo.Outbox) { $null = $connInfo.Outbox.Add($hello) }
+        Write-Log "LauncherWatcher: enqueued hello probe to ${guid}"
+      } catch { Write-Log ("LauncherWatcher: hello probe enqueue failed for {0}: {1}" -f $guid, $_.Exception.Message) }
+
+      # Start a dedicated runspace for this connection reader to avoid no-runspace errors
+      $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+      $rs.ApartmentState = [System.Threading.ApartmentState]::MTA
+      $rs.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::UseNewThread
+      $rs.Open()
+      if ($PlayniteApi) { $rs.SessionStateProxy.SetVariable('PlayniteApi', $PlayniteApi) }
+      if ($Outbox) { $rs.SessionStateProxy.SetVariable('Outbox', $Outbox) }
+      try { if ($global:LauncherConns) { $rs.SessionStateProxy.SetVariable('LauncherConns', $global:LauncherConns) } } catch {}
+      if ($PSScriptRoot) { $rs.SessionStateProxy.SetVariable('PSScriptRoot', $PSScriptRoot) }
+      $rs.SessionStateProxy.SetVariable('ConnGuid', $guid)
+      $rs.SessionStateProxy.SetVariable('Conn', $connInfo)
+      $ps = [System.Management.Automation.PowerShell]::Create()
+      $ps.Runspace = $rs
+      $modulePath = try { Join-Path $PSScriptRoot 'SunshinePlaynite.psm1' } catch { $null }
+      if ($modulePath) { $ps.AddScript("Import-Module -Force '$modulePath'") | Out-Null }
+      # Ensure the runspace's $global:LauncherConns points to the shared table passed in
+      $ps.AddScript('$global:LauncherConns = $LauncherConns') | Out-Null
+      $ps.AddScript('Start-LauncherConnReader -Guid $ConnGuid -Conn $Conn') | Out-Null
+      $h = $ps.BeginInvoke()
+      $connInfo.Runspace = $rs; $connInfo.PowerShell = $ps; $connInfo.Handle = $h
+      Write-Log "LauncherWatcher: connected to $pipe"
     }
-  } else {
-    # Fallback: use control pipe for data (single-pipe servers)
-    Write-Log "No handshake received; using control pipe as data pipe"
-    $script:PipeStream = $ctrl
-    $script:PipeWriter = New-Object System.IO.StreamWriter($ctrl, [System.Text.Encoding]::UTF8, 8192, $true)
-    $script:PipeWriter.AutoFlush = $true
-    $script:RecvBuffer = ''
-    return $true
+    catch { Write-Log "LauncherWatcher: failed to connect to ${guid}: $($_.Exception.Message)" }
   }
 }
 
-function Send-JsonLine {
-  param([Parameter(Mandatory)][string]$Json)
-  if (-not (Ensure-DataConnection)) { Write-Log "Send: not connected"; return }
+# Reader loop for a single launcher connection; runs inside its own PowerShell runspace
+function Start-LauncherConnReader {
+  param([Parameter(Mandatory)][string]$Guid,
+        [Parameter(Mandatory)][hashtable]$Conn)
   try {
-    $script:PipeWriter.WriteLine($Json)
-    $script:PipeWriter.Flush()
-    Write-Log ("Sent line of {0} chars" -f $Json.Length)
-  } catch {
-    Write-Log "Send failed: $($_.Exception.Message)"
-    try { if ($script:PipeStream) { $script:PipeStream.Dispose() } } catch {}
-    $script:PipeStream = $null; $script:PipeWriter = $null
-  }
+    while ($Conn -and $Conn.Reader -and $Conn.Stream -and $Conn.Stream.CanRead) {
+      $line = $null
+      try { $line = $Conn.Reader.ReadLine() } catch { break }
+      if ($null -eq $line) { break }
+      try {
+        $obj = $line | ConvertFrom-Json -ErrorAction Stop
+        if ($obj.type -eq 'command' -and $obj.command -eq 'launch' -and $obj.id) {
+          [UIBridge]::StartGameByGuidStringOnUIThread([string]$obj.id)
+          Write-Log "LauncherConn[$Guid]: launch dispatched for $($obj.id)"
+        }
+      } catch { Write-Log "LauncherConn[$Guid]: parse failure: $($_.Exception.Message)" }
+    }
+  } catch { Write-Log "LauncherConn[$Guid]: reader crashed: $($_.Exception.Message)" }
+  try { if ($Conn.Reader) { $Conn.Reader.Dispose() } } catch {}
+  try { if ($Conn.Writer) { $Conn.Writer.Dispose() } } catch {}
+  try { if ($Conn.Stream) { $Conn.Stream.Dispose() } } catch {}
+  try { if ($Conn.Pump) { $Conn.Pump.Dispose() } } catch {}
+  try { $tmp = $null; [void]$global:LauncherConns.TryRemove($Guid, [ref]$tmp) } catch {}
+  Write-Log "LauncherConn[$Guid]: disconnected"
 }
 
 function Get-PlayniteCategories {
@@ -362,7 +618,8 @@ function Get-GameActionInfo {
         if ($play.WorkingDir) { $workDir = $play.WorkingDir }
       }
     }
-  } catch {}
+  }
+  catch {}
   if (-not $workDir -and $Game.InstallDirectory) { $workDir = $Game.InstallDirectory }
   return @{ exe = $exe; args = $args; workingDir = $workDir }
 }
@@ -376,38 +633,42 @@ function Get-BoxArtPath {
       Remove-Variable -Name __img -Scope Script -ErrorAction SilentlyContinue
       return $val
     }
-  } catch {}
+  }
+  catch {}
   return ''
 }
 
 function Get-PlayniteGames {
   if (-not $PlayniteApi) { return @() }
   $catMap = Get-CategoryNamesMap
-  $script:__catMap = $catMap
-  $result = Invoke-PlayniteMain {
-    $games = @()
-    foreach ($g in $PlayniteApi.Database.Games) {
-      $act = Get-GameActionInfo -Game $g
-      $catNames = @()
-      if ($g.CategoryIds) { foreach ($cid in $g.CategoryIds) { if ($script:__catMap.ContainsKey($cid)) { $catNames += $script:__catMap[$cid] } } }
-      $playtimeMin = 0
-      try { if ($g.Playtime) { $playtimeMin = [int]([double]$g.Playtime / 60.0) } } catch {}
-      $lastPlayed = ''
-      try { if ($g.LastActivity) { $lastPlayed = ([DateTime]$g.LastActivity).ToString('o') } } catch {}
-      $boxArt = Get-BoxArtPath -Game $g
-      $games += @{
-        id = $g.Id.ToString()
-        name = $g.Name
-        exe = $act.exe
-        args = $act.args
-        workingDir = $act.workingDir
-        categories = $catNames
-        playtimeMinutes = $playtimeMin
-        lastPlayed = $lastPlayed
-        boxArtPath = $boxArt
-        description = $g.Description
-        tags = @() # TODO: fill from $g.TagIds if needed
-      }
+  $games = @()
+  foreach ($g in $PlayniteApi.Database.Games) {
+    $act = Get-GameActionInfo -Game $g
+    $catNames = @()
+    if ($g.CategoryIds) { foreach ($cid in $g.CategoryIds) { if ($catMap.ContainsKey($cid)) { $catNames += $catMap[$cid] } } }
+    $playtimeMin = 0
+    try { if ($g.Playtime) { $playtimeMin = [int]([double]$g.Playtime / 60.0) } } catch {}
+    $lastPlayed = ''
+    try { if ($g.LastActivity) { $lastPlayed = ([DateTime]$g.LastActivity).ToString('o') } } catch {}
+    $boxArt = Get-BoxArtPath -Game $g
+    # Determine installed state explicitly; fallback to InstallDirectory when IsInstalled is unavailable
+    $installed = $false
+    try {
+      if ($null -ne $g.IsInstalled) { $installed = [bool]$g.IsInstalled }
+      elseif ($g.InstallDirectory) { $installed = $true }
+    } catch {}
+    $games += @{
+      id              = $g.Id.ToString()
+      name            = $g.Name
+      exe             = $act.exe
+      args            = $act.args
+      workingDir      = $act.workingDir
+      categories      = $catNames
+      playtimeMinutes = $playtimeMin
+      lastPlayed      = $lastPlayed
+      boxArtPath      = $boxArt
+      installed       = $installed
+      tags            = @() # TODO: fill from $g.TagIds if needed
     }
     $games
   }
@@ -420,7 +681,7 @@ function Send-InitialSnapshot {
   Write-Log "Building initial snapshot"
   $categories = Get-PlayniteCategories
   $json = @{ type = 'categories'; payload = $categories } | ConvertTo-Json -Depth 6 -Compress
-  Send-JsonLine -Json $json
+  Send-JsonMessage -Json $json -AllowConnectIfMissing
   $catCount = $categories.Count
   Write-Log ("Sent categories snapshot ({0})" -f $catCount)
 
@@ -430,7 +691,7 @@ function Send-InitialSnapshot {
   for ($i = 0; $i -lt $games.Count; $i += $batchSize) {
     $chunk = $games[$i..([Math]::Min($i + $batchSize - 1, $games.Count - 1))]
     $jsonG = @{ type = 'games'; payload = $chunk } | ConvertTo-Json -Depth 8 -Compress
-    Send-JsonLine -Json $jsonG
+    Send-JsonMessage -Json $jsonG -AllowConnectIfMissing
     $batchIndex = [int]([double]$i / $batchSize) + 1
     $chunkCount = $chunk.Count
     Write-Log ("Sent games batch {0} with {1} items" -f $batchIndex, $chunkCount)
@@ -441,81 +702,165 @@ function Send-InitialSnapshot {
   $script:LastSnapshotAt = [DateTime]::UtcNow
 }
 
-function Maybe-SendSnapshot {
-  param([switch]$Force)
-  if ($Force) { Send-InitialSnapshot; return }
-  if (-not $script:InitialSnapshotSent) { Send-InitialSnapshot; return }
-  if ($script:IsGameRunning) { return }
-  try {
-    $now = [DateTime]::UtcNow
-    $elapsed = ($now - $script:LastSnapshotAt).TotalSeconds
-    if ($elapsed -ge $script:SnapshotIntervalSeconds) { Send-InitialSnapshot }
-  } catch { Send-InitialSnapshot }
-}
-
-function Drain-IncomingMessages {
-  if (-not $script:PipeStream -or -not $script:PipeStream.IsConnected) { return }
-  try {
-    $avail = 0u
-    if (([System.Management.Automation.PSTypeName]'Win32.NativePeek').Type) {
-      $h = $script:PipeStream.SafePipeHandle.DangerousGetHandle()
-      [void][Win32.NativePeek]::PeekNamedPipe($h, [IntPtr]::Zero, 0u, [IntPtr]::Zero, [ref]$avail, [IntPtr]::Zero)
-      if ($avail -eq 0u) { return }
-    }
-    $toRead = [Math]::Min([int]$avail, 4096)
-    if ($toRead -le 0) { $toRead = 4096 }
-    $buf = New-Object byte[] $toRead
-    $n = $script:PipeStream.Read($buf, 0, $buf.Length)
-    if ($n -le 0) { return }
-    $chunk = [System.Text.Encoding]::UTF8.GetString($buf, 0, $n)
-    $script:RecvBuffer += $chunk
-    while ($true) {
-      $idx = $script:RecvBuffer.IndexOf("`n")
-      if ($idx -lt 0) { break }
-      $line = $script:RecvBuffer.Substring(0, $idx)
-      if ($line.EndsWith("`r")) { $line = $line.Substring(0, $line.Length-1) }
-      $script:RecvBuffer = $script:RecvBuffer.Substring($idx + 1)
-      if (-not [string]::IsNullOrWhiteSpace($line)) {
-        try { $obj = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
-        if ($obj.type -eq 'command' -and $obj.command -eq 'launch' -and $obj.id) {
-          try { $gid = [Guid]$obj.id } catch { $gid = $null }
-          if ($gid) {
-            try { $PlayniteApi.StartGame($gid) } catch {}
+function Start-ConnectorLoop {
+  try { if (-not $script:LogPath) { Initialize-Logging } } catch {}
+  while ($true) {
+    try {
+      if (-not $global:SunConn -or -not $global:SunConn.Stream -or -not $global:SunConn.Stream.CanWrite) {
+        Write-Log "Connector loop: attempting connection"
+        $global:SunConn = Connect-SunshinePipe -TimeoutMs 10000
+        Write-Log "Connector loop: connected"
+        # Start writer pump bound to this connection
+        try { [OutboxPump]::Start($global:SunConn.Writer, $Outbox) } catch { Write-Log "Failed to start OutboxPump: $($_.Exception.Message)" }
+        # Send initial snapshot on (re)connect
+        Send-InitialSnapshot
+      }
+      else {
+        Write-Log "Connector loop: using existing connection"
+      }
+      # Reader loop: handle simple line-delimited command messages from Sunshine
+      while ($global:SunConn -and $global:SunConn.Stream -and $global:SunConn.Stream.CanRead) {
+        try {
+          $line = $global:SunConn.Reader.ReadLine()
+        }
+        catch {
+          Write-Log "Reader exception: $($_.Exception.Message)"
+          break
+        }
+        if ($null -eq $line) { Write-Log "Reader: EOF from server"; break }
+        $lineLen = $line.Length
+        Write-Log ("Received line ({0} chars)" -f $lineLen)
+        try {
+          $obj = $line | ConvertFrom-Json -ErrorAction Stop
+          if ($obj.type -eq 'command' -and $obj.command -eq 'launch' -and $obj.id) {
+            try {
+              [UIBridge]::StartGameByGuidStringOnUIThread([string]$obj.id)
+              Write-Log "Dispatched launch to UI thread via UIBridge.StartGameByGuidStringOnUIThread"
+            } catch { Write-Log "Failed to dispatch launch: $($_.Exception.Message)" }
           }
         }
+        catch { Write-Log "Failed to parse/handle line: $($_.Exception.Message)" }
       }
     }
-  } catch {
-    Write-Log "Drain error: $($_.Exception.Message)"
-    try { $script:PipeStream.Dispose() } catch {}
-    $script:PipeStream = $null; $script:PipeWriter = $null
+    catch {
+      Write-Log "Connector loop: connection attempt failed: $($_.Exception.Message)"
+    }
+    $global:SunConn = $null
+    try { [OutboxPump]::Stop() } catch {}
+    Start-Sleep -Seconds 3
   }
 }
+
+function Start-LauncherWatcherLoop {
+  try { if (-not $script:LogPath) { Initialize-Logging } } catch {}
+  Write-Log "LauncherWatcher: started"
+  while ($true) {
+    try { Ensure-LauncherConnections } catch { Write-Log "LauncherWatcher: error: $($_.Exception.Message)" }
+    Start-Sleep -Milliseconds 1500
+  }
+}
+
+# Synchronous single-shot connection probe to ensure logging works even before background loop
+# Removed legacy Try-ConnectOnce path; background loop owns connection + snapshot
 
 function OnApplicationStarted() {
   try {
     Initialize-Logging
     Write-Log "OnApplicationStarted invoked"
-    # Setup a single-threaded UI dispatcher timer
-    try { $null = [System.Windows.Application] } catch { try { [void][System.Reflection.Assembly]::Load('PresentationFramework') } catch {} }
-    $script:TickTimer = New-Object System.Windows.Threading.DispatcherTimer
-    $script:TickTimer.Interval = [TimeSpan]::FromMilliseconds(250)
-    $script:TickTimer.Add_Tick({
-      if (-not (Ensure-DataConnection)) { return }
-      Drain-IncomingMessages
-      Maybe-SendSnapshot
-    })
-    $script:TickTimer.Start()
-    Write-Log "OnApplicationStarted: dispatcher timer started"
-  } catch {
-    Write-Log "OnApplicationStarted: failed to start dispatcher: $($_.Exception.Message)"
+    # Initialize UI bridge with Playnite's Dispatcher and API
+    try {
+      $dispatcher = $null
+      try {
+        $app = [System.Windows.Application]::Current
+        if ($app -and $app.Dispatcher) { $dispatcher = $app.Dispatcher }
+      }
+      catch {}
+      if (-not $dispatcher) {
+        try { $dispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher } catch {}
+      }
+      [UIBridge]::Init($dispatcher, $PlayniteApi)
+      $hasDisp = ([bool][UIBridge]::Dispatcher)
+      $hasApi = ([bool][UIBridge]::Api)
+      Write-Log ("UIBridge initialized: Dispatcher={0} Api={1}" -f $hasDisp, $hasApi)
+    }
+    catch { Write-Log "Failed to initialize UIBridge: $($_.Exception.Message)" }
+    # Start background connector in a dedicated PowerShell runspace for proper function/variable scope
+    try {
+      $modulePath = try { Join-Path $PSScriptRoot 'SunshinePlaynite.psm1' } catch { $null }
+      $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+      $rs.ApartmentState = [System.Threading.ApartmentState]::MTA
+      $rs.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::UseNewThread
+      $rs.Open()
+      if ($PlayniteApi) { $rs.SessionStateProxy.SetVariable('PlayniteApi', $PlayniteApi) }
+      if ($Outbox) { $rs.SessionStateProxy.SetVariable('Outbox', $Outbox) }
+      if ($PSScriptRoot) { $rs.SessionStateProxy.SetVariable('PSScriptRoot', $PSScriptRoot) }
+      # No need to pass UI objects; UIBridge holds static references accessible across runspaces
+      $ps = [System.Management.Automation.PowerShell]::Create()
+      $ps.Runspace = $rs
+      if ($modulePath) { $ps.AddScript("Import-Module -Force '$modulePath'") | Out-Null }
+      $ps.AddScript('Start-ConnectorLoop') | Out-Null
+      $handle = $ps.BeginInvoke()
+      $script:Bg = @{ Runspace = $rs; PowerShell = $ps; Handle = $handle }
+      Write-Log "OnApplicationStarted: background runspace started"
+
+      # Start launcher watcher in a separate runspace
+      $rs2 = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+      $rs2.ApartmentState = [System.Threading.ApartmentState]::MTA
+      $rs2.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::UseNewThread
+      $rs2.Open()
+      if ($PlayniteApi) { $rs2.SessionStateProxy.SetVariable('PlayniteApi', $PlayniteApi) }
+      if ($Outbox) { $rs2.SessionStateProxy.SetVariable('Outbox', $Outbox) }
+      # Inject the existing shared LauncherConns object so this runspace uses the same instance
+      try { $rs2.SessionStateProxy.SetVariable('LauncherConns', $global:LauncherConns) } catch {}
+      if ($PSScriptRoot) { $rs2.SessionStateProxy.SetVariable('PSScriptRoot', $PSScriptRoot) }
+      $ps2 = [System.Management.Automation.PowerShell]::Create()
+      $ps2.Runspace = $rs2
+      if ($modulePath) { $ps2.AddScript("Import-Module -Force '$modulePath'") | Out-Null }
+      # After module import (which initializes its own table), rebind to the injected shared instance
+      $ps2.AddScript('$global:LauncherConns = $LauncherConns') | Out-Null
+      $ps2.AddScript('Start-LauncherWatcherLoop') | Out-Null
+      $handle2 = $ps2.BeginInvoke()
+      $script:Bg2 = @{ Runspace = $rs2; PowerShell = $ps2; Handle = $handle2 }
+      Write-Log "OnApplicationStarted: launcher watcher runspace started"
+    }
+    catch {
+      Write-Log "OnApplicationStarted: failed to start background runspace: $($_.Exception.Message)"
+    }
+  }
+  catch {
+    # Fallback: run synchronously once
+    Write-Log "OnApplicationStarted: background failed, running connector synchronously"
+    Start-ConnectorLoop
   }
 }
+
+## Removed Process-CmdQueue (no longer used)
 
 function Send-StatusMessage {
   param([string]$Name, [object]$Game)
   $payload = @{ type = 'status'; status = @{ name = $Name; id = $Game.Id.ToString(); installDir = $Game.InstallDirectory; exe = (Get-GameActionInfo -Game $Game).exe } } | ConvertTo-Json -Depth 5 -Compress
-  Send-JsonLine -Json $payload
+  Send-JsonMessage -Json $payload
+  try {
+    $keys = @()
+    try { $keys = @($global:LauncherConns.Keys) } catch { $keys = @() }
+    $count = $keys.Count
+    Write-Log ("Status broadcast: enqueue to {0} launcher connection(s)" -f $count)
+    foreach ($guid in $keys) {
+      $conn = $null
+      try { $conn = $global:LauncherConns[$guid] } catch {}
+      try {
+        if ($conn -and $conn.Outbox) {
+          $null = $conn.Outbox.Add($payload)
+          Write-Log ("Status broadcast: queued for {0}" -f $guid)
+        } else {
+          Write-Log ("Status broadcast: missing conn/outbox for {0}" -f $guid)
+        }
+      } catch {
+        Write-Log ("Status broadcast: enqueue failed for {0}: {1}" -f $guid, $_.Exception.Message)
+      }
+    }
+  }
+  catch { Write-Log ("Status broadcast: unexpected failure: {0}" -f $_.Exception.Message) }
 }
 
 function OnGameStarted() {
@@ -539,10 +884,35 @@ function OnApplicationStopped() {
   try {
     if ($script:TickTimer) { try { $script:TickTimer.Stop() } catch {}; $script:TickTimer = $null }
     if ($global:SunConn -and $global:SunConn.Stream) { $global:SunConn.Stream.Dispose() }
-  } catch {}
+  }
+  catch {}
   $global:SunConn = $null
-  try { if ($script:PipeWriter) { $script:PipeWriter.Dispose() } } catch {}
-  try { if ($script:PipeStream) { $script:PipeStream.Dispose() } } catch {}
-  $script:PipeStream = $null; $script:PipeWriter = $null; $script:RecvBuffer = ''
+  try { [OutboxPump]::Stop() } catch {}
+  try {
+    foreach ($kv in $global:LauncherConns.GetEnumerator()) {
+      $c = $kv.Value
+      try { if ($c.PowerShell) { $c.PowerShell.Stop(); $c.PowerShell.Dispose() } } catch {}
+      try { if ($c.Runspace) { $c.Runspace.Close(); $c.Runspace.Dispose() } } catch {}
+      try { if ($c.Reader) { $c.Reader.Dispose() } } catch {}
+      try { if ($c.Writer) { $c.Writer.Dispose() } } catch {}
+      try { if ($c.Stream) { $c.Stream.Dispose() } } catch {}
+      try { if ($c.Pump) { $c.Pump.Dispose() } } catch {}
+    }
+  }
+  catch {}
+  try { $global:LauncherConns = New-Object 'System.Collections.Concurrent.ConcurrentDictionary[string,object]' } catch { $global:LauncherConns = @{} }
+  try {
+    if ($script:Bg) {
+      try { if ($script:Bg.PowerShell) { $script:Bg.PowerShell.Stop(); $script:Bg.PowerShell.Dispose() } } catch {}
+      try { if ($script:Bg.Runspace) { $script:Bg.Runspace.Close(); $script:Bg.Runspace.Dispose() } } catch {}
+      $script:Bg = $null
+    }
+    if ($script:Bg2) {
+      try { if ($script:Bg2.PowerShell) { $script:Bg2.PowerShell.Stop(); $script:Bg2.PowerShell.Dispose() } } catch {}
+      try { if ($script:Bg2.Runspace) { $script:Bg2.Runspace.Close(); $script:Bg2.Runspace.Dispose() } } catch {}
+      $script:Bg2 = $null
+    }
+  }
+  catch {}
   Write-Log "OnApplicationStopped: connector stopped"
 }

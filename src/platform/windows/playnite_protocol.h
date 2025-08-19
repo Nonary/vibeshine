@@ -35,6 +35,7 @@ namespace platf::playnite_protocol {
     std::string boxArtPath;     // file path or URL
     std::string description;
     std::vector<std::string> tags;
+    bool installed = false;     // Installed state reported by Playnite
   };
 
   struct Message {

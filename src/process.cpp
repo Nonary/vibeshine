@@ -28,6 +28,7 @@
 #include "platform/common.h"
 #ifdef _WIN32
 #include "platform/windows/playnite_integration.h"
+#include "config_playnite.h"
 #endif
 #include "process.h"
 #include "system_tray.h"
@@ -247,16 +248,42 @@ namespace proc {
 
     // Playnite-backed apps: invoke via Playnite and treat as placebo (lifetime managed via Playnite status)
 #ifdef _WIN32
-    if (!_app.playnite_id.empty()) {
-      BOOST_LOG(info) << "Launching Playnite game via Playnite, id=" << _app.playnite_id;
+    if (!_app.playnite_id.empty() && _app.cmd.empty()) {
+      BOOST_LOG(info) << "Launching Playnite game via helper, id=" << _app.playnite_id;
       bool launched = false;
+      // Resolve launcher alongside sunshine.exe: tools\\playnite-launcher.exe
       try {
-        launched = platf::playnite_integration::launch_game(_app.playnite_id);
+        WCHAR exePathW[MAX_PATH] = {};
+        GetModuleFileNameW(nullptr, exePathW, ARRAYSIZE(exePathW));
+        std::filesystem::path exeDir = std::filesystem::path(exePathW).parent_path();
+        std::filesystem::path launcher = exeDir / L"tools" / L"playnite-launcher.exe";
+        std::string lpath = launcher.string();
+        std::string cmd = std::string("\"") + lpath + "\" --game-id " + _app.playnite_id;
+        // Pass focus attempts from config so the helper can try to bring Playnite/game to foreground
+        try {
+          if (config::playnite.focus_attempts > 0) {
+            cmd += std::string(" --focus-attempts ") + std::to_string(config::playnite.focus_attempts);
+          }
+          if (config::playnite.focus_timeout_secs > 0) {
+            cmd += std::string(" --focus-timeout ") + std::to_string(config::playnite.focus_timeout_secs);
+          }
+          if (config::playnite.focus_exit_on_first) {
+            cmd += std::string(" --focus-exit-on-first");
+          }
+        } catch (...) {}
+        std::error_code fec;
+        boost::filesystem::path wd; // empty wd
+        _process = platf::run_command(false, true, cmd, wd, _env, _pipe.get(), fec, &_process_group);
+        if (fec) {
+          BOOST_LOG(warning) << "Playnite helper launch failed: "sv << fec.message() << "; attempting URI fallback"sv;
+        } else {
+          BOOST_LOG(info) << "Playnite helper launched and is being monitored";
+          launched = true;
+        }
       } catch (...) {
         launched = false;
       }
       if (!launched) {
-        BOOST_LOG(warning) << "Playnite launch IPC failed or inactive; attempting URI fallback"sv;
         // Best-effort fallback using Playnite URI protocol
         std::string uri = std::string("playnite://playnite/start/") + _app.playnite_id;
         std::error_code fec;
@@ -274,8 +301,8 @@ namespace proc {
         BOOST_LOG(error) << "Failed to launch Playnite game."sv;
         return -1;
       }
-      BOOST_LOG(info) << "Playnite launch path complete; treating app as placebo (status-driven).";
-      placebo = true;
+      // Track the helper process; when it exits, Sunshine will terminate the stream automatically
+      placebo = false;
     } else
 #endif
     if (_app.cmd.empty()) {

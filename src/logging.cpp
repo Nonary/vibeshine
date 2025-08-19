@@ -22,13 +22,16 @@
 // conditional includes
 #ifdef __ANDROID__
   #include <android/log.h>
-#else
+#endif
+#ifdef SUNSHINE_USE_DISPLAYDEVICE_LOGGING
   #include <display_device/logging.h>
 #endif
 
+#ifdef SUNSHINE_USE_FFMPEG_LOGGING
 extern "C" {
 #include <libavutil/log.h>
 }
+#endif
 
 using namespace std::literals;
 
@@ -182,6 +185,7 @@ namespace logging {
   }
 
 #ifndef __ANDROID__
+  #ifdef SUNSHINE_USE_FFMPEG_LOGGING
   void setup_av_logging(int min_log_level) {
     if (min_log_level >= 1) {
       av_log_set_level(AV_LOG_QUIET);
@@ -209,7 +213,11 @@ namespace logging {
       }
     });
   }
+  #else
+  void setup_av_logging(int) {}
+  #endif
 
+  #ifdef SUNSHINE_USE_DISPLAYDEVICE_LOGGING
   void setup_libdisplaydevice_logging(int min_log_level) {
     constexpr int min_level {static_cast<int>(display_device::Logger::LogLevel::verbose)};
     constexpr int max_level {static_cast<int>(display_device::Logger::LogLevel::fatal)};
@@ -239,6 +247,11 @@ namespace logging {
       }
     });
   }
+  #else
+  void setup_libdisplaydevice_logging(int) {
+    // No-op: tool builds may not link or include libdisplaydevice
+  }
+  #endif
 #endif
 
   void log_flush() {

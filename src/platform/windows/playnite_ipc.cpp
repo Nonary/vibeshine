@@ -22,12 +22,13 @@ using namespace std::chrono_literals;
 namespace platf::playnite {
 
   namespace {
-    // Well-known public pipe name that the Playnite plugin connects to.
-    // We now use this single pipe for data I/O (no secondary anonymous pipe).
+    // Well-known public control pipe name that the Playnite plugin connects to when using
+    // the legacy static mode. Newer flows should pass a dynamic control name.
     constexpr const char *kControlPipeName = "sunshine_playnite_connector";
   }
 
-  IpcServer::IpcServer() = default;
+  IpcServer::IpcServer(): control_name_(kControlPipeName) {}
+  IpcServer::IpcServer(const std::string &control_name): control_name_(control_name.empty() ? kControlPipeName : control_name) {}
   IpcServer::~IpcServer() { stop(); }
 
   void IpcServer::start() {
@@ -93,16 +94,18 @@ namespace platf::playnite {
         broken_.store(true);
       };
 
-      // Public single-pipe approach: accept client directly on public pipe and use it as data pipe
-      platf::dxgi::NamedPipeFactory factory;
+      // Require anonymous handshake: client connects to control pipe and receives data pipe name
+      platf::dxgi::AnonymousPipeFactory factory;
 
-      BOOST_LOG(info) << "Playnite IPC: waiting for control connection on pipe '" << kControlPipeName << "'";
-      auto data_pipe = factory.create_server(kControlPipeName);
+      const char *ctl = control_name_.empty() ? kControlPipeName : control_name_.c_str();
+      BOOST_LOG(info) << "Playnite IPC: waiting for handshake on control pipe '" << ctl << "'";
+      auto data_pipe = factory.create_server(ctl);
       if (!data_pipe) {
         if (!running_.load()) break;
         std::this_thread::sleep_for(500ms);
         continue;
       }
+      // Ensure the data pipe is connected (handshake server already created it)
       data_pipe->wait_for_client_connection(15000);
       if (!data_pipe->is_connected()) {
         if (!running_.load()) break;
@@ -154,6 +157,38 @@ namespace platf::playnite {
 
       std::wstring expected_sid;
       {
+#ifdef SUNSHINE_PLAYNITE_LAUNCHER
+        // In the helper launcher context, compare to this process's user SID
+        HANDLE tok = nullptr;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) {
+          BOOST_LOG(error) << "Playnite IPC: OpenProcessToken failed";
+          data_pipe->disconnect();
+          std::this_thread::sleep_for(300ms);
+          continue;
+        }
+        DWORD len = 0;
+        GetTokenInformation(tok, TokenUser, nullptr, 0, &len);
+        auto buf = std::make_unique<uint8_t[]>(len);
+        auto tu = reinterpret_cast<TOKEN_USER *>(buf.get());
+        if (!GetTokenInformation(tok, TokenUser, tu, len, &len)) {
+          CloseHandle(tok);
+          BOOST_LOG(error) << "Playnite IPC: failed to get token user info";
+          data_pipe->disconnect();
+          std::this_thread::sleep_for(300ms);
+          continue;
+        }
+        LPWSTR sidW = nullptr;
+        if (!ConvertSidToStringSidW(tu->User.Sid, &sidW)) {
+          CloseHandle(tok);
+          BOOST_LOG(error) << "Playnite IPC: failed to convert expected SID";
+          data_pipe->disconnect();
+          std::this_thread::sleep_for(300ms);
+          continue;
+        }
+        expected_sid.assign(sidW);
+        LocalFree(sidW);
+        CloseHandle(tok);
+#else
         platf::dxgi::safe_token user_token;
         user_token.reset(platf::dxgi::retrieve_users_token(false));
         if (!user_token) {
@@ -181,6 +216,7 @@ namespace platf::playnite {
         }
         expected_sid.assign(sidW);
         LocalFree(sidW);
+#endif
       }
 
       if (client_sid != expected_sid) {
@@ -193,7 +229,7 @@ namespace platf::playnite {
       pipe_ = std::make_unique<platf::dxgi::AsyncNamedPipe>(std::move(data_pipe));
       pipe_->start(on_message, on_error, on_broken);
       active_.store(true);
-      BOOST_LOG(info) << "Playnite IPC: data pipe established";
+      BOOST_LOG(info) << "Playnite IPC: data pipe established after handshake";
 
       // Wait until disconnection/broken or stop requested
       while (running_.load() && pipe_->is_connected() && !broken_.load()) {

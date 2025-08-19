@@ -12,3 +12,6 @@ add_custom_target(copy_playnite_plugin ALL
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/plugins/playnite" "${CMAKE_BINARY_DIR}/plugins/playnite"
         COMMENT "Copying Playnite plugin sources")
 add_dependencies(sunshine copy_playnite_plugin)
+
+# Enable libdisplaydevice logging in the main Sunshine binary only
+target_compile_definitions(sunshine PRIVATE SUNSHINE_USE_DISPLAYDEVICE_LOGGING)

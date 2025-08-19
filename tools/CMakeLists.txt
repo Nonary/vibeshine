@@ -28,3 +28,25 @@ target_link_libraries(sunshinesvc
         wtsapi32
         ${PLATFORM_LIBRARIES})
 target_compile_options(sunshinesvc PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
+# Playnite launcher: per-launch helper that hosts a private IPC server
+add_executable(playnite-launcher playnite_launcher.cpp)
+set_target_properties(playnite-launcher PROPERTIES CXX_STANDARD 23)
+set_target_properties(playnite-launcher PROPERTIES WIN32_EXECUTABLE TRUE)
+target_sources(playnite-launcher PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/logging.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_ipc.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_protocol.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/misc_utils.cpp)
+target_compile_definitions(playnite-launcher PRIVATE SUNSHINE_PLAYNITE_LAUNCHER)
+target_link_libraries(playnite-launcher
+        ${Boost_LIBRARIES}
+        ${CMAKE_THREAD_LIBS_INIT}
+        nlohmann_json::nlohmann_json
+        user32
+        Psapi
+        shell32
+        wtsapi32
+        ${PLATFORM_LIBRARIES})
+target_compile_options(playnite-launcher PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
