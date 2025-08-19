@@ -93,6 +93,9 @@ namespace config {
     tmp.clear();
     erase_take(vars, "playnite_auto_sync", tmp);
     if (!tmp.empty()) playnite.auto_sync = to_bool(tmp);
+    tmp.clear();
+    erase_take(vars, "playnite_autosync_require_replacement", tmp);
+    if (!tmp.empty()) playnite.autosync_require_replacement = to_bool(tmp);
 
     // integers
     tmp.clear();
@@ -104,9 +107,55 @@ namespace config {
         BOOST_LOG(warning) << "config: invalid playnite_recent_games value: " << tmp;
       }
     }
+    // Recent max age (days): optional time-based filter for 'recent' selection
+    tmp.clear();
+    erase_take(vars, "playnite_recent_max_age_days", tmp);
+    if (!tmp.empty()) {
+      try {
+        playnite.recent_max_age_days = std::max(0, std::stoi(tmp));
+      } catch (...) {
+        BOOST_LOG(warning) << "config: invalid playnite_recent_max_age_days value: " << tmp;
+      }
+    }
+    // New: delete-after for unplayed auto-synced apps (days)
+    tmp.clear();
+    erase_take(vars, "playnite_autosync_delete_after_days", tmp);
+    if (!tmp.empty()) {
+      try {
+        playnite.autosync_delete_after_days = std::max(0, std::stoi(tmp));
+      } catch (...) {
+        BOOST_LOG(warning) << "config: invalid playnite_autosync_delete_after_days value: " << tmp;
+      }
+    }
+
+    tmp.clear();
+    erase_take(vars, "playnite_focus_attempts", tmp);
+    if (!tmp.empty()) {
+      try {
+        playnite.focus_attempts = std::max(0, std::stoi(tmp));
+      } catch (...) {
+        BOOST_LOG(warning) << "config: invalid playnite_focus_attempts value: " << tmp;
+      }
+    }
+    // Focus timeout (seconds)
+    tmp.clear();
+    erase_take(vars, "playnite_focus_timeout_secs", tmp);
+    if (!tmp.empty()) {
+      try {
+        playnite.focus_timeout_secs = std::max(0, std::stoi(tmp));
+      } catch (...) {
+        BOOST_LOG(warning) << "config: invalid playnite_focus_timeout_secs value: " << tmp;
+      }
+    }
+
+    // Exit on first confirmed focus
+    tmp.clear();
+    erase_take(vars, "playnite_focus_exit_on_first", tmp);
+    if (!tmp.empty()) playnite.focus_exit_on_first = to_bool(tmp);
 
     // lists
     parse_list(vars, "playnite_sync_categories", playnite.sync_categories);
+    parse_list(vars, "playnite_exclude_games", playnite.exclude_games);
 
     // paths
     parse_path(vars, "playnite_install_dir", playnite.install_dir);

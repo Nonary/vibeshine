@@ -25,7 +25,9 @@ namespace platf::playnite {
    */
   class IpcServer {
   public:
+    // Optional dynamic control pipe name; if empty, defaults to the well-known connector name
     IpcServer();
+    explicit IpcServer(const std::string &control_name);
     ~IpcServer();
 
     /**
@@ -59,5 +61,6 @@ namespace platf::playnite {
     std::atomic<bool> broken_ {false};
     std::atomic<bool> active_ {false};
     std::string recv_buffer_;
+    std::string control_name_;
   };
 }  // namespace platf::playnite

@@ -54,12 +54,22 @@
             <div class="col-auto"><code>{{ status.extensions_dir }}</code></div>
           </div>
 
-          <button class="btn btn-primary mt-2" @click="install" :disabled="installing || status.installed">
+          <button class="btn btn-primary mt-2 me-2" @click="install" :disabled="installing">
             <span v-if="installing" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-            {{ $t('playnite.install_button') }}
+            <template v-if="status.installed">{{ $t('playnite.reinstall_button') || 'Reinstall Plugin' }}</template>
+            <template v-else>{{ $t('playnite.install_button') }}</template>
           </button>
           <span class="text-success ms-2" v-if="installOk">{{ $t('playnite.install_success') }}</span>
           <span class="text-danger ms-2" v-if="installErr">{{ $t('playnite.install_error') }}<template v-if="installErrorMsg">: {{ installErrorMsg }}</template></span>
+          <div class="alert alert-success my-3" v-if="saved && !restarted">
+            <b>{{ $t('_common.success') }}</b> {{ $t('config.restart_note') }}
+            <div class="mt-2">
+              <button class="btn btn-success" @click="restart" v-if="saved && !restarted">{{ $t('_common.apply') }}</button>
+            </div>
+          </div>
+          <div class="alert alert-success my-3" v-if="restarted">
+            <b>{{ $t('_common.success') }}</b> {{ $t('config.restart_note') }}
+          </div>
         </div>
       </div>
 
@@ -79,16 +89,112 @@
             </div>
           </div>
           <div class="row mb-3">
-            <div class="col-md-6">
+            <div class="col-md-4">
               <label for="recent" class="form-label">{{ $t('playnite.recent_games') }}</label>
               <input id="recent" type="number" class="form-control" v-model.number="playnite.playnite_recent_games" min="0" />
+              <div class="form-text">{{ $t('playnite.recent_games_desc') }}</div>
+            </div>
+            <div class="col-md-4">
+              <label for="recentAge" class="form-label">{{ $t('playnite.recent_max_age_days') }}</label>
+              <input id="recentAge" type="number" class="form-control" v-model.number="playnite.playnite_recent_max_age_days" min="0" />
+              <div class="form-text">{{ $t('playnite.recent_max_age_days_desc') }}</div>
+            </div>
+            <div class="col-md-4">
+              <label for="deleteAfter" class="form-label">{{ $t('playnite.delete_after_days') }}</label>
+              <input id="deleteAfter" type="number" class="form-control" v-model.number="playnite.playnite_autosync_delete_after_days" min="0" />
+              <div class="form-text">{{ $t('playnite.delete_after_days_desc') }}</div>
+            </div>
+          </div>
+
+          <div class="row mb-3">
+            <div class="col-md-8">
+              <Checkbox v-model="playnite.playnite_autosync_require_replacement"
+                        id="playnite_autosync_require_replacement"
+                        :default="'enabled'"
+                        :localePrefix="'playnite'"
+                        :label="$t('playnite.require_replacement')"
+                        :desc="$t('playnite.require_replacement_desc')"
+              />
+            </div>
+          </div>
+          <div class="row mb-3">
+            <div class="col-md-6">
+              <label for="focusAttempts" class="form-label">{{ $t('playnite.focus_attempts') || 'Auto-focus attempts' }}</label>
+              <input id="focusAttempts" type="number" class="form-control" v-model.number="playnite.playnite_focus_attempts" min="0" />
+              <div class="form-text">{{ $t('playnite.focus_attempts_help') || 'Number of times to try to bring Playnite windows to the foreground when launching.' }}</div>
+            </div>
+          </div>
+          <div class="row mb-3">
+            <div class="col-md-6">
+              <label for="focusTimeout" class="form-label">{{ $t('playnite.focus_timeout_secs') || 'Auto-focus timeout window (seconds)' }}</label>
+              <input id="focusTimeout" type="number" class="form-control" v-model.number="playnite.playnite_focus_timeout_secs" min="0" />
+              <div class="form-text">{{ $t('playnite.focus_timeout_secs_help') || 'How long auto-focus runs while re-applying focus (0 to disable).' }}</div>
+            </div>
+            <div class="col-md-6 d-flex align-items-end">
+              <Checkbox v-model="playnite.playnite_focus_exit_on_first"
+                        id="playnite_focus_exit_on_first"
+                        :default="'disabled'"
+                        :localePrefix="'playnite'"
+                        :label="$t('playnite.focus_exit_on_first') || 'Exit on first confirmed focus'"
+                        :desc="$t('playnite.focus_exit_on_first_help') || 'Stop auto-focus after first success; otherwise, re-apply until attempts or timeout elapse.'"
+              />
             </div>
           </div>
           <div class="row mb-3">
             <div class="col-md-8">
               <label for="cats" class="form-label">{{ $t('playnite.sync_categories') }}</label>
-              <input id="cats" type="text" class="form-control" v-model="playnite.playnite_sync_categories" placeholder="Action;Favorites;RPG" />
+              <div class="input-group">
+                <input id="cats" type="text" class="form-control" v-model="playnite.playnite_sync_categories" placeholder="Action;Favorites;RPG" @focus="loadPlayniteCategoriesIfNeeded" />
+                <button class="btn btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" @click="loadPlayniteCategoriesIfNeeded">
+                  {{ selectedCategories.length ? (selectedCategories.length + ' selected') : 'Choose' }}
+                </button>
+                <div class="dropdown-menu dropdown-menu-end p-2" style="width: 320px; max-height: 280px; overflow-y: auto;">
+                  <div class="mb-2">
+                    <input type="text" class="form-control" :placeholder="$t('apps.add_playnite_search') || 'Search categories...'" v-model="catFilter">
+                  </div>
+                  <div v-if="categoriesLoading" class="text-center py-2">
+                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                  </div>
+                  <template v-else>
+                    <div v-if="filteredCategories.length === 0" class="text-muted small px-2 py-1">No categories</div>
+                    <button v-for="c in filteredCategories" :key="c" class="dropdown-item d-flex align-items-center" @click.prevent="toggleCategory(c)">
+                      <input class="form-check-input me-2" type="checkbox" :checked="selectedSet.has(c)">
+                      <span class="flex-grow-1">{{ c }}</span>
+                    </button>
+                  </template>
+                </div>
+              </div>
               <div class="form-text">{{ $t('playnite.sync_categories_help') }}</div>
+            </div>
+          </div>
+          <div class="row mb-3">
+            <div class="col-md-8">
+              <label for="exclude" class="form-label">{{ $t('playnite.exclude_games') || 'Exclude games from auto-sync' }}</label>
+              <div class="input-group">
+                <input id="exclude" type="text" class="form-control" v-model="playnite.playnite_exclude_games" placeholder="<GUID1>,<GUID2>" @focus="loadPlayniteGamesIfNeeded" />
+                <button class="btn btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" @click="loadPlayniteGamesIfNeeded">
+                  {{ excludedIds.length ? (excludedIds.length + ' selected') : 'Choose' }}
+                </button>
+                <div class="dropdown-menu dropdown-menu-end p-2" style="width: 420px; max-height: 320px; overflow-y: auto;">
+                  <div class="mb-2">
+                    <input type="text" class="form-control" placeholder="Search games..." v-model="gameFilter">
+                  </div>
+                  <div v-if="gamesLoading" class="text-center py-2">
+                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                  </div>
+                  <template v-else>
+                    <div v-if="filteredGames.length === 0" class="text-muted small px-2 py-1">No games</div>
+                    <button v-for="g in filteredGames" :key="g.id" class="dropdown-item d-flex align-items-center justify-content-between" @click.prevent="toggleExcluded(g)">
+                      <div class="d-flex align-items-center">
+                        <input class="form-check-input me-2" type="checkbox" :checked="excludedSet.has(g.id)">
+                        <span class="text-truncate" style="max-width: 240px;">{{ g.name }}</span>
+                      </div>
+                      <span class="badge" :class="g.installed ? 'bg-success' : 'bg-secondary'">{{ g.installed ? 'Installed' : 'Not Installed' }}</span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+              <div class="form-text">Excluded games won’t be auto-synced from Playnite. Uses Playnite game IDs.</div>
             </div>
           </div>
           <div class="row mb-3">
@@ -127,7 +233,14 @@
     playnite_enabled: 'disabled',
     playnite_auto_sync: 'disabled',
     playnite_recent_games: 20,
+    playnite_recent_max_age_days: 0,
+    playnite_autosync_delete_after_days: 0,
+    playnite_autosync_require_replacement: 'enabled',
+    playnite_focus_attempts: 3,
+    playnite_focus_timeout_secs: 15,
+    playnite_focus_exit_on_first: 'disabled',
     playnite_sync_categories: '',
+    playnite_exclude_games: '',
     playnite_install_dir: '',
     playnite_extensions_dir: '',
   }
@@ -137,14 +250,23 @@
     data() {
       return {
         platform: '',
+        currentConfig: {},
         playnite: JSON.parse(JSON.stringify(defaults)),
         status: { enabled: false, active: false, installed: false, extensions_dir: '' },
         saving: false,
         saved: false,
+        restarted: false,
         installing: false,
         installOk: false,
         installErr: false,
         installErrorMsg: '',
+        availableCategories: [],
+        categoriesLoading: false,
+        catFilter: '',
+        // Exclusions UI state
+        availableGames: [],
+        gamesLoading: false,
+        gameFilter: '',
       }
     },
     provide() {
@@ -159,6 +281,8 @@
         try {
           const cfg = await fetch('./api/config').then(r => r.json())
           this.platform = cfg.platform || ''
+          // Keep a copy of the full current config to merge on save
+          this.currentConfig = JSON.parse(JSON.stringify(cfg))
           // load keys if present, else use defaults
           for (const k of Object.keys(defaults)) {
             if (cfg[k] !== undefined) this.playnite[k] = cfg[k]
@@ -171,15 +295,58 @@
           this.status = st
         } catch (e) { console.error(e) }
       },
+      async loadPlayniteCategoriesIfNeeded() {
+        if (this.platform !== 'windows') return
+        if (this.categoriesLoading || this.availableCategories.length) return
+        this.categoriesLoading = true
+        try {
+          const games = await fetch('./api/playnite/games').then(r => r.json())
+          this.availableGames = games || []
+          const set = new Set()
+          for (const g of (games || [])) {
+            for (const c of (g.categories || [])) {
+              if (c && typeof c === 'string') set.add(c)
+            }
+          }
+          this.availableCategories = Array.from(set).sort((a,b)=>a.localeCompare(b))
+        } catch (e) { console.error(e) }
+        this.categoriesLoading = false
+      },
+      async loadPlayniteGamesIfNeeded() {
+        if (this.platform !== 'windows') return
+        if (this.gamesLoading || this.availableGames.length) return
+        this.gamesLoading = true
+        try {
+          const games = await fetch('./api/playnite/games').then(r => r.json())
+          this.availableGames = games || []
+        } catch (e) { console.error(e) }
+        this.gamesLoading = false
+      },
+      toggleCategory(cat) {
+        const set = new Set(this.selectedCategories)
+        if (set.has(cat)) set.delete(cat); else set.add(cat)
+        this.playnite.playnite_sync_categories = Array.from(set).join(';')
+      },
+      toggleExcluded(game) {
+        const ids = new Set(this.excludedIds)
+        if (ids.has(game.id)) ids.delete(game.id); else ids.add(game.id)
+        this.playnite.playnite_exclude_games = Array.from(ids).join(',')
+      },
       async save() {
         this.saving = this.saved = false
-        // Only send keys different from defaults to keep config minimal
-        const out = {}
-        for (const [k, v] of Object.entries(this.playnite)) {
-          if (JSON.stringify(v) !== JSON.stringify(defaults[k])) out[k] = v
+        // Merge with existing config so we don't wipe unrelated keys.
+        const merged = {}
+        // Preserve existing keys except UI-only ones
+        for (const [k, v] of Object.entries(this.currentConfig || {})) {
+          if (k === 'platform' || k === 'version' || k === 'status') continue
+          merged[k] = v
+        }
+        // Overwrite Playnite keys with current UI values (even if equal to defaults)
+        for (const k of Object.keys(defaults)) {
+          merged[k] = this.playnite[k]
         }
         try {
-          const r = await fetch('./api/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(out) })
+          const r = await fetch('./api/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(merged) })
           if (r.status === 200) {
             this.saved = true
           }
@@ -208,6 +375,51 @@
           this.installErrorMsg = (e && e.message) ? e.message : ''
         }
         this.installing = false
+      },
+      async restart() {
+        try {
+          this.restarted = true
+          await fetch('./api/restart', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          })
+        } catch (e) {
+          console.error(e)
+          this.restarted = false
+        }
+      }
+    },
+    computed: {
+      selectedCategories() {
+        const raw = this.playnite.playnite_sync_categories || ''
+        return raw.split(';').map(s=>s.trim()).filter(Boolean)
+      },
+      selectedSet() {
+        return new Set(this.selectedCategories)
+      },
+      filteredCategories() {
+        const q = (this.catFilter || '').toLowerCase()
+        if (!q) return this.availableCategories
+        return this.availableCategories.filter(c => c.toLowerCase().includes(q))
+      },
+      excludedIds() {
+        const raw = this.playnite.playnite_exclude_games || ''
+        return raw.split(',').map(s=>s.trim()).filter(Boolean)
+      },
+      excludedSet() {
+        return new Set(this.excludedIds)
+      },
+      filteredGames() {
+        // Only show installed games
+        let list = (this.availableGames || []).filter(g => !!g.installed)
+        const q = (this.gameFilter || '').toLowerCase()
+        if (q) list = list.filter(g => (g.name||'').toLowerCase().includes(q))
+        // sort: installed first, then name
+        return list.slice().sort((a,b)=>{
+          if (!!a.installed !== !!b.installed) return a.installed ? -1 : 1
+          return (a.name||'').localeCompare(b.name||'')
+        })
       }
     }
   })

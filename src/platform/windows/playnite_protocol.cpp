@@ -52,11 +52,24 @@ namespace platf::playnite_protocol {
           game.args = g.value("args", "");
           game.workingDir = g.value("workingDir", "");
           game.categories = to_string_list(g.value("categories", json::array()));
-          game.playtimeMinutes = g.value("playtimeMinutes", (uint64_t) 0);
+          // playtimeMinutes may arrive as number or string
+          try { game.playtimeMinutes = g.value("playtimeMinutes", (uint64_t) 0); }
+          catch (...) {
+            try { std::string pm = g.value("playtimeMinutes", std::string()); if (!pm.empty()) game.playtimeMinutes = std::stoull(pm); } catch (...) {}
+          }
           game.lastPlayed = g.value("lastPlayed", "");
           game.boxArtPath = g.value("boxArtPath", "");
           game.description = g.value("description", "");
           game.tags = to_string_list(g.value("tags", json::array()));
+          // Installed flag may be provided as 'installed' or 'isInstalled'.
+          // If neither field is present, assume installed=true to avoid filtering out everything.
+          bool has1 = g.contains("installed");
+          bool has2 = g.contains("isInstalled");
+          bool inst = false;
+          if (has1) inst = g.value("installed", false);
+          if (has2) inst = inst || g.value("isInstalled", false);
+          if (!has1 && !has2) inst = true;
+          game.installed = inst;
           if (!game.id.empty()) m.games.emplace_back(std::move(game));
         }
       } else if (type == "status") {
