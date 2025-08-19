@@ -33,6 +33,7 @@
 #ifdef _WIN32
 #include "src/platform/windows/playnite_integration.h"
 #include "src/platform/windows/image_convert.h"
+#include "src/platform/windows/ipc/misc_utils.h"
 #include "config_playnite.h"
 #include <ShlObj.h>
 #endif
@@ -1215,18 +1216,36 @@ namespace confighttp {
     nlohmann::json out;
     out["enabled"] = config::playnite.enabled;
     out["active"] = platf::playnite_integration::is_active();
+    bool session_required = false;
+    bool playnite_running = false;
     std::string destPath;
     std::filesystem::path dest;
     if (platf::playnite_integration::get_extension_target_dir(destPath)) {
       dest = destPath;
     } else {
+      // Could not resolve the user's Playnite extensions directory, likely due to no active desktop session
+      session_required = true;
       dest = conf_get_default_playnite_ext_dir();
     }
     bool installed = std::filesystem::exists(dest / "extension.yaml") && std::filesystem::exists(dest / "SunshinePlaynite.psm1");
     out["installed"] = installed;
     out["extensions_dir"] = dest.string();
+    // Determine if Playnite is currently running (Desktop or Fullscreen app)
+#ifdef _WIN32
+    try {
+      auto d = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
+      auto f = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
+      playnite_running = !d.empty() || !f.empty();
+    } catch (...) {
+      playnite_running = false;
+    }
+#endif
+    out["session_required"] = session_required;
+    out["playnite_running"] = playnite_running;
     BOOST_LOG(info) << "Playnite status: enabled=" << out["enabled"] << ", active=" << out["active"]
-                    << ", installed=" << installed << ", dir=" << dest.string();
+                    << ", installed=" << installed << ", running=" << (playnite_running ? "true" : "false")
+                    << ", session_required=" << (session_required ? "true" : "false")
+                    << ", dir=" << dest.string();
     send_response(response, out);
   }
 
