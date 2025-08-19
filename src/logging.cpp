@@ -167,7 +167,15 @@ namespace logging {
     sink->locked_backend()->add_stream(stream);
 #endif
 
-    sink->locked_backend()->add_stream(boost::make_shared<std::ofstream>(log_file));
+    // Open the log file in binary mode and write a UTF-8 BOM to aid tools like Notepad
+    // in detecting encoding when logs contain non-ASCII (e.g., game titles, paths).
+    auto file_stream = boost::make_shared<std::ofstream>(log_file, std::ios::binary | std::ios::trunc);
+    if (file_stream->is_open()) {
+      const unsigned char bom[3] = {0xEF, 0xBB, 0xBF};
+      file_stream->write(reinterpret_cast<const char *>(bom), 3);
+      file_stream->flush();
+    }
+    sink->locked_backend()->add_stream(file_stream);
     sink->set_filter(severity >= min_log_level);
     sink->set_formatter(&formatter);
 

@@ -576,24 +576,24 @@ static int launcher_run(int argc, char **argv) {
 
   server.set_message_handler([&](std::span<const uint8_t> bytes) {
     // Incoming messages are JSON objects from the plugin; parse and watch for status
-    auto msg = platf::playnite_protocol::parse(bytes);
-    using MT = platf::playnite_protocol::MessageType;
+    auto msg = platf::playnite::parse(bytes);
+    using MT = platf::playnite::MessageType;
     if (msg.type == MT::Status) {
-      BOOST_LOG(info) << "Status: name=" << msg.statusName << " id=" << msg.statusGameId;
+  BOOST_LOG(info) << "Status: name=" << msg.status_name << " id=" << msg.status_game_id;
       auto norm = [](std::string s) {
         s.erase(std::remove_if(s.begin(), s.end(), [](char c){ return c=='{' || c=='}'; }), s.end());
         std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return (char)std::tolower(c); });
         return s;
       };
-      if (!msg.statusGameId.empty() && norm(msg.statusGameId) == norm(game_id)) {
-        if (msg.statusName == "gameStarted") { got_started.store(true); }
-        if (msg.statusName == "gameStopped") { should_exit.store(true); }
-        if (!msg.statusInstallDir.empty()) {
-          last_install_dir = msg.statusInstallDir;
+      if (!msg.status_game_id.empty() && norm(msg.status_game_id) == norm(game_id)) {
+        if (msg.status_name == "gameStarted") { got_started.store(true); }
+        if (msg.status_name == "gameStopped") { should_exit.store(true); }
+        if (!msg.status_install_dir.empty()) {
+          last_install_dir = msg.status_install_dir;
           // As soon as we learn the install dir, spawn a watcher to handle Moonlight-side termination
           spawn_cleanup_watcher(last_install_dir);
         }
-        if (!msg.statusExe.empty()) { last_game_exe = msg.statusExe; }
+  if (!msg.status_exe.empty()) { last_game_exe = msg.status_exe; }
       }
     }
   });

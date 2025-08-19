@@ -60,6 +60,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_ipc.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_protocol.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_protocol.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_sync.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_sync.cpp"
         "${CMAKE_SOURCE_DIR}/src/config_playnite.h"
         "${CMAKE_SOURCE_DIR}/src/config_playnite.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_integration.h"

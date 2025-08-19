@@ -77,15 +77,12 @@ namespace proc {
           if (exit_timeout.count() < 0) {
             BOOST_LOG(warning) << "App did not fully exit within the timeout. Terminating the app's remaining processes."sv;
           } else {
-          BOOST_LOG(info) << "Playnite URI launch started";
             BOOST_LOG(info) << "All app processes have successfully exited."sv;
           }
         } else {
-          BOOST_LOG(info) << "Playnite URI launch started";
           BOOST_LOG(info) << "App did not respond to a graceful termination request. Forcefully terminating the app's processes."sv;
         }
       } else {
-          BOOST_LOG(info) << "Playnite URI launch started";
         BOOST_LOG(info) << "No graceful exit timeout was specified for this app. Forcefully terminating the app's processes."sv;
       }
 
@@ -241,7 +238,6 @@ namespace proc {
       if (ec) {
         BOOST_LOG(warning) << "Couldn't spawn ["sv << cmd << "]: System: "sv << ec.message();
       } else {
-          BOOST_LOG(info) << "Playnite URI launch started";
         child.detach();
       }
     }
@@ -310,7 +306,6 @@ namespace proc {
       BOOST_LOG(info) << "Playnite launch path complete; treating app as placebo (status-driven).";
       placebo = true;
     } else {
-          BOOST_LOG(info) << "Playnite URI launch started";
       boost::filesystem::path working_dir = _app.working_dir.empty() ?
                                               find_working_directory(_app.cmd, _env) :
                                               boost::filesystem::path(_app.working_dir);

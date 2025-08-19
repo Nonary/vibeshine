@@ -49,6 +49,24 @@
 using namespace std::literals;
 
 namespace confighttp {
+  // Global MIME type lookup used for static file responses
+  const std::map<std::string, std::string> mime_types = {
+    {"css", "text/css"},
+    {"gif", "image/gif"},
+    {"htm", "text/html"},
+    {"html", "text/html"},
+    {"ico", "image/x-icon"},
+    {"jpeg", "image/jpeg"},
+    {"jpg", "image/jpeg"},
+    {"js", "application/javascript"},
+    {"json", "application/json"},
+    {"png", "image/png"},
+    {"svg", "image/svg+xml"},
+    {"ttf", "font/ttf"},
+    {"txt", "text/plain"},
+    {"woff2", "font/woff2"},
+    {"xml", "text/xml"},
+  };
   // Helper: sort apps by their 'name' field, if present
   static void sort_apps_by_name(nlohmann::json &file_tree) {
     try {
@@ -693,7 +711,7 @@ namespace confighttp {
         if ((!input_tree.contains("image-path") || (input_tree["image-path"].is_string() && input_tree["image-path"].get<std::string>().empty())) &&
             input_tree.contains("playnite-id") && input_tree["playnite-id"].is_string()) {
           std::string cover;
-          if (platf::playnite_integration::get_cover_png_for_playnite_game(input_tree["playnite-id"].get<std::string>(), cover)) {
+          if (platf::playnite::get_cover_png_for_playnite_game(input_tree["playnite-id"].get<std::string>(), cover)) {
             input_tree["image-path"] = cover;
           }
         }
@@ -1215,12 +1233,12 @@ namespace confighttp {
     print_req(request);
     nlohmann::json out;
     out["enabled"] = config::playnite.enabled;
-    out["active"] = platf::playnite_integration::is_active();
+    out["active"] = platf::playnite::is_active();
     bool session_required = false;
     bool playnite_running = false;
     std::string destPath;
     std::filesystem::path dest;
-    if (platf::playnite_integration::get_extension_target_dir(destPath)) {
+    if (platf::playnite::get_extension_target_dir(destPath)) {
       dest = destPath;
     } else {
       // Could not resolve the user's Playnite extensions directory, likely due to no active desktop session
@@ -1260,7 +1278,7 @@ namespace confighttp {
 #else
     try {
       std::string json;
-      if (!platf::playnite_integration::get_games_list_json(json)) {
+      if (!platf::playnite::get_games_list_json(json)) {
         // return empty array if not available
         json = "[]";
       }
@@ -1288,12 +1306,12 @@ namespace confighttp {
     nlohmann::json out;
     // Prefer same resolved dir as status
     std::string target;
-    bool have_target = platf::playnite_integration::get_extension_target_dir(target);
+    bool have_target = platf::playnite::get_extension_target_dir(target);
     bool ok = false;
     if (have_target) {
-      ok = platf::playnite_integration::install_plugin_to(target, err);
+      ok = platf::playnite::install_plugin_to(target, err);
     } else {
-      ok = platf::playnite_integration::install_plugin(err);
+      ok = platf::playnite::install_plugin(err);
     }
     BOOST_LOG(info) << "Playnite install: status=" << (ok ? "true" : "false") << (ok ? "" : std::string(", error=") + err);
     out["status"] = ok;
@@ -1521,7 +1539,7 @@ namespace confighttp {
       if (!authenticate(resp, req)) return;
       print_req(req);
       nlohmann::json out;
-      bool ok = platf::playnite_integration::force_sync();
+      bool ok = platf::playnite::force_sync();
       out["status"] = ok;
       send_response(resp, out);
     };
