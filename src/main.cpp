@@ -328,7 +328,7 @@ int main(int argc, char *argv[]) {
 
 #ifdef _WIN32
   // Start Playnite integration (IPC + handlers)
-  auto playnite_integration_guard = platf::playnite_integration::start();
+  auto playnite_integration_guard = platf::playnite::start();
 #endif
 
   std::unique_ptr<platf::deinit_t> mDNS;

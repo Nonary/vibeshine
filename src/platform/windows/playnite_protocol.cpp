@@ -11,7 +11,7 @@
 
 using nlohmann::json;
 
-namespace platf::playnite_protocol {
+namespace platf::playnite {
 
   static std::vector<std::string> to_string_list(const json &j) {
     std::vector<std::string> out;
@@ -50,15 +50,15 @@ namespace platf::playnite_protocol {
           game.name = g.value("name", "");
           game.exe = g.value("exe", "");
           game.args = g.value("args", "");
-          game.workingDir = g.value("workingDir", "");
+          game.working_dir = g.value("workingDir", "");
           game.categories = to_string_list(g.value("categories", json::array()));
           // playtimeMinutes may arrive as number or string
-          try { game.playtimeMinutes = g.value("playtimeMinutes", (uint64_t) 0); }
+          try { game.playtime_minutes = g.value("playtimeMinutes", (uint64_t) 0); }
           catch (...) {
-            try { std::string pm = g.value("playtimeMinutes", std::string()); if (!pm.empty()) game.playtimeMinutes = std::stoull(pm); } catch (...) {}
+            try { std::string pm = g.value("playtimeMinutes", std::string()); if (!pm.empty()) game.playtime_minutes = std::stoull(pm); } catch (...) {}
           }
-          game.lastPlayed = g.value("lastPlayed", "");
-          game.boxArtPath = g.value("boxArtPath", "");
+          game.last_played = g.value("lastPlayed", "");
+          game.box_art_path = g.value("boxArtPath", "");
           game.description = g.value("description", "");
           game.tags = to_string_list(g.value("tags", json::array()));
           // Installed flag may be provided as 'installed' or 'isInstalled'.
@@ -75,11 +75,11 @@ namespace platf::playnite_protocol {
       } else if (type == "status") {
         m.type = MessageType::Status;
         const auto &st = j.value("status", json::object());
-        m.statusName = st.value("name", "");
-        m.statusGameId = st.value("id", "");
-        m.statusInstallDir = st.value("installDir", "");
-        m.statusExe = st.value("exe", "");
-        BOOST_LOG(info) << "Playnite protocol: status name='" << m.statusName << "' id='" << m.statusGameId << "'";
+  m.status_name = st.value("name", "");
+  m.status_game_id = st.value("id", "");
+  m.status_install_dir = st.value("installDir", "");
+  m.status_exe = st.value("exe", "");
+  BOOST_LOG(info) << "Playnite protocol: status name='" << m.status_name << "' id='" << m.status_game_id << "'";
       }
     } catch (...) {
       BOOST_LOG(warning) << "Playnite protocol: failed to parse message";
@@ -88,4 +88,4 @@ namespace platf::playnite_protocol {
     return m;
   }
 
-}  // namespace platf::playnite_protocol
+}  // namespace platf::playnite

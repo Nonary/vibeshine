@@ -18,6 +18,8 @@
 namespace config {
   // track modified config options
   inline std::unordered_map<std::string, std::string> modified_config_settings;
+  // when a stream is active, we defer some settings until all sessions end
+  inline std::unordered_map<std::string, std::string> pending_config_settings;
 
   struct video_t {
     // ffmpeg params
@@ -193,7 +195,6 @@ namespace config {
     bool ds4_back_as_touchpad_click;
     bool motion_as_ds4;
     bool touchpad_as_ds4;
-    bool ds5_inputtino_randomize_mac;
 
     bool keyboard;
     bool mouse;
@@ -268,4 +269,18 @@ namespace config {
 
   int parse(int argc, char *argv[]);
   std::unordered_map<std::string, std::string> parse_config(const std::string_view &file_content);
+
+  /**
+   * Apply the provided config vars immediately if safe, deferring stream/encoder-specific ones
+   * when there are active streaming sessions. Returns which keys were applied vs. deferred via out params.
+   */
+  void apply_or_defer(std::unordered_map<std::string, std::string> &&vars,
+                      std::vector<std::string> &applied_keys,
+                      std::vector<std::string> &deferred_keys);
+
+  /**
+   * Apply any pending configuration only when idle (no active sessions and no running app),
+   * to avoid disrupting suspended/paused streams.
+   */
+  void apply_pending_if_idle();
 }  // namespace config

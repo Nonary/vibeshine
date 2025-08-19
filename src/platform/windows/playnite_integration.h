@@ -16,7 +16,7 @@
 #include "src/platform/common.h"
 
 
-namespace platf::playnite_integration {
+namespace platf::playnite {
 
   /**
    * @brief Starts Playnite integration (IPC server + handlers).
@@ -82,4 +82,4 @@ namespace platf::playnite_integration {
 
   // no-op: persistence helper moved to confighttp as refresh_client_apps_cache
 
-}  // namespace platf::playnite_integration
+}  // namespace platf::playnite

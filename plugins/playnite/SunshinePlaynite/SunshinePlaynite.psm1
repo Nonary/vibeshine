@@ -1,9 +1,8 @@
 <#
   Sunshine Playnite Connector (PowerShell Script Extension)
-  - Single-threaded design using UI DispatcherTimer (no jobs/runspaces)
-  - Connect to public control pipe, perform anonymous handshake to secured data pipe
-  - Send categories and games on an interval; handle launch commands inline
-  - Fallback compatible with servers using a single public pipe (no handshake)
+  - Connects to Sunshine over named pipes (control + data via anonymous handshake)
+  - Sends categories and game metadata as JSON messages
+  - Reconnects on failure and runs in background while Playnite is open
 
   Requires: Playnite script extension context (access to $PlayniteApi)
 #>
@@ -11,10 +10,6 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $global:SunConn = $null
-$script:InitialSnapshotSent = $false
-$script:LastSnapshotAt = [DateTime]::MinValue
-$script:SnapshotIntervalSeconds = 30
-$script:IsGameRunning = $false
 
 # Logger state
 $script:LogPath = $null
@@ -28,13 +23,6 @@ if (-not $lcVar -or -not ($lcVar.Value -is [System.Collections.Concurrent.Concur
   $global:LauncherConns = New-Object 'System.Collections.Concurrent.ConcurrentDictionary[string,object]'
 }
 $script:Outbox = $null
-
-# Connection state (single-threaded)
-$script:ControlPipeName = 'sunshine_playnite_connector'
-$script:PipeStream = $null
-$script:PipeWriter = $null
-$script:RecvBuffer = ''
-$script:TickTimer = $null
 
 function Resolve-LogPath {
   try {
@@ -316,23 +304,6 @@ catch {
   $Outbox = $script:Outbox
 }
 
-# Extra P/Invoke for nonblocking peeks
-try {
-  if (-not ([System.Management.Automation.PSTypeName]'Win32.NativePeek').Type) {
-    Add-Type -Namespace Win32 -Name NativePeek -MemberDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public static class NativePeek {
-  [DllImport("kernel32.dll", SetLastError=true)]
-  public static extern bool PeekNamedPipe(IntPtr hNamedPipe, IntPtr lpBuffer, uint nBufferSize, IntPtr lpBytesRead, out uint lpTotalBytesAvail, IntPtr lpBytesLeftThisMessage);
-}
-"@
-    Write-Log "Loaded Win32.NativePeek for PeekNamedPipe"
-  }
-} catch {
-  Write-Log "Failed to load Win32.NativePeek: $($_.Exception.Message)"
-}
-
 function Get-FullPipeName {
   param([string]$Name)
   if ($Name -like "\\\\.\\pipe\\*") { return $Name }
@@ -581,24 +552,18 @@ function Start-LauncherConnReader {
 
 function Get-PlayniteCategories {
   if (-not $PlayniteApi) { return @() }
-  $result = Invoke-PlayniteMain {
-    $cats = @()
-    foreach ($c in $PlayniteApi.Database.Categories) {
-      $cats += @{ id = $c.Id.ToString(); name = $c.Name }
-    }
-    $cats
+  $cats = @()
+  foreach ($c in $PlayniteApi.Database.Categories) {
+    $cats += @{ id = $c.Id.ToString(); name = $c.Name }
   }
-  try { Write-Log "Collected $($result.Count) categories" } catch {}
-  return $result
+  Write-Log "Collected $($cats.Count) categories"
+  return $cats
 }
 
 function Get-CategoryNamesMap {
-  if (-not $PlayniteApi) { return @{} }
-  return (Invoke-PlayniteMain {
-    $map = @{}
-    foreach ($c in $PlayniteApi.Database.Categories) { $map[$c.Id] = $c.Name }
-    $map
-  })
+  $map = @{}
+  foreach ($c in $PlayniteApi.Database.Categories) { $map[$c.Id] = $c.Name }
+  return $map
 }
 
 function Get-GameActionInfo {
@@ -628,10 +593,7 @@ function Get-BoxArtPath {
   param([object]$Game)
   try {
     if ($Game.CoverImage) {
-      $script:__img = $Game.CoverImage
-      $val = Invoke-PlayniteMain { $PlayniteApi.Database.GetFullFilePath($script:__img) }
-      Remove-Variable -Name __img -Scope Script -ErrorAction SilentlyContinue
-      return $val
+      return $PlayniteApi.Database.GetFullFilePath($Game.CoverImage)
     }
   }
   catch {}
@@ -670,11 +632,9 @@ function Get-PlayniteGames {
       installed       = $installed
       tags            = @() # TODO: fill from $g.TagIds if needed
     }
-    $games
   }
-  Remove-Variable -Name __catMap -Scope Script -ErrorAction SilentlyContinue
-  try { Write-Log "Collected $($result.Count) games" } catch {}
-  return $result
+  Write-Log "Collected $($games.Count) games"
+  return $games
 }
 
 function Send-InitialSnapshot {
@@ -698,8 +658,6 @@ function Send-InitialSnapshot {
   }
   $gamesCount = $games.Count
   Write-Log ("Initial snapshot completed: categories={0} games={1}" -f $catCount, $gamesCount)
-  $script:InitialSnapshotSent = $true
-  $script:LastSnapshotAt = [DateTime]::UtcNow
 }
 
 function Start-ConnectorLoop {
@@ -867,7 +825,6 @@ function OnGameStarted() {
   param($evnArgs)
   $game = $evnArgs.Game
   Write-Log "OnGameStarted: $($game.Name) [$($game.Id)]"
-  $script:IsGameRunning = $true
   Send-StatusMessage -Name 'gameStarted' -Game $game
 }
 
@@ -875,14 +832,12 @@ function OnGameStopped() {
   param($evnArgs)
   $game = $evnArgs.Game
   Write-Log "OnGameStopped: $($game.Name) [$($game.Id)]"
-  $script:IsGameRunning = $false
   Send-StatusMessage -Name 'gameStopped' -Game $game
 }
 
 # Optional: clean up on exit
 function OnApplicationStopped() {
   try {
-    if ($script:TickTimer) { try { $script:TickTimer.Stop() } catch {}; $script:TickTimer = $null }
     if ($global:SunConn -and $global:SunConn.Stream) { $global:SunConn.Stream.Dispose() }
   }
   catch {}

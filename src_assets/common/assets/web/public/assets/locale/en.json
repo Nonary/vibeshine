@@ -23,7 +23,8 @@
     "success": "Success!",
     "undo_cmd": "Undo Command",
     "username": "Username",
-    "warning": "Warning!"
+    "warning": "Warning!",
+    "unknown": "Unknown"
   },
   "apps": {
     "actions": "Actions",
@@ -420,10 +421,14 @@
     "status_overall": "Status",
     "integration_enabled": "Integration Enabled",
     "status_installed": "Plugin Installed",
+    "status_active": "Connected",
     "status_connected": "Connected",
+    "status_session_required": "Desktop Session Required",
     "status_desktop_required": "Desktop Session Required",
     "status_uninstalled": "Uninstalled",
     "status_not_running": "Playnite not running",
+    "session_required": "A desktop session is required for Playnite integration. Please log into Windows (unlock the screen or connect to the console) to continue.",
+    "session_required_tooltip": "No active desktop session detected. Log into Windows to enable Playnite integration.",
     "install_button": "Install Sunshine Plugin",
     "reinstall_button": "Reinstall Sunshine Plugin",
     "setup_integration": "Setup Playnite Integration",

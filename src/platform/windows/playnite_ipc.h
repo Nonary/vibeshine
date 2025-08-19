@@ -53,6 +53,24 @@ namespace platf::playnite {
 
   private:
     void run();
+    void accumulate_and_dispatch_lines(std::span<const uint8_t> bytes);
+    std::unique_ptr<platf::dxgi::INamedPipe> wait_for_handshake_and_get_data_pipe();
+    bool validate_client_and_get_expected_sid(platf::dxgi::WinPipe *wp);
+    bool get_client_pid(platf::dxgi::WinPipe *wp, DWORD &pid);
+    bool is_playnite_process(DWORD pid);
+    bool get_client_sid(platf::dxgi::WinPipe *wp, std::wstring &sid);
+    bool get_expected_user_sid(std::wstring &sid);
+    void serve_connected_loop();
+  /**
+   * @brief Check if an interactive user session is currently available.
+   *
+   * We only attempt to create / listen on the Playnite control pipe when an interactive
+   * user session (desktop token) exists. This prevents repeated failing attempts and
+   * associated log spam while Sunshine is running as a service before any user logs in.
+   *
+   * @return true if a user session token could be acquired (session available); false otherwise.
+   */
+  bool is_user_session_available();
 
     std::atomic<bool> running_ {false};
     std::thread worker_;
@@ -62,5 +80,6 @@ namespace platf::playnite {
     std::atomic<bool> active_ {false};
     std::string recv_buffer_;
     std::string control_name_;
+  bool no_session_logged_ = false;  ///< Ensures we only log missing session once until it appears.
   };
 }  // namespace platf::playnite
