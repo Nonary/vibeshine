@@ -18,7 +18,7 @@ module.exports = {
     'plugin:@typescript-eslint/recommended',
     'plugin:prettier/recommended',
     // Keep prettier last to turn off conflicting rules (plugin adds "prettier/prettier" rule)
-    'prettier'
+    'prettier',
   ],
   plugins: ['vue', '@typescript-eslint', 'prettier'],
   // Relax rules that would produce errors across the existing codebase

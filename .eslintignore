@@ -8,3 +8,11 @@ src_assets/types/
 .d.ts
 third-party/
 coverage/
+*.md
+*.MD
+*.yml
+*.yaml
+**/*.md
+**/*.MD
+**/*.yml
+**/*.yaml

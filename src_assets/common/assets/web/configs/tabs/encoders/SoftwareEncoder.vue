@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue';
 import { useConfigStore } from '@/stores/config';
+import { NSelect } from 'naive-ui';
 
 const store = useConfigStore();
 const config = store.config;
@@ -10,35 +11,21 @@ const config = store.config;
   <div id="software-encoder" class="config-page">
     <div class="mb-4">
       <label for="sw_preset" class="form-label">{{ $t('config.sw_preset') }}</label>
-      <select id="sw_preset" v-model="config.sw_preset" class="form-control">
-        <option value="ultrafast">
-          {{ $t('config.sw_preset_ultrafast') }}
-        </option>
-        <option value="superfast">
-          {{ $t('config.sw_preset_superfast') }}
-        </option>
-        <option value="veryfast">
-          {{ $t('config.sw_preset_veryfast') }}
-        </option>
-        <option value="faster">
-          {{ $t('config.sw_preset_faster') }}
-        </option>
-        <option value="fast">
-          {{ $t('config.sw_preset_fast') }}
-        </option>
-        <option value="medium">
-          {{ $t('config.sw_preset_medium') }}
-        </option>
-        <option value="slow">
-          {{ $t('config.sw_preset_slow') }}
-        </option>
-        <option value="slower">
-          {{ $t('config.sw_preset_slower') }}
-        </option>
-        <option value="veryslow">
-          {{ $t('config.sw_preset_veryslow') }}
-        </option>
-      </select>
+      <n-select
+        id="sw_preset"
+        v-model:value="config.sw_preset"
+        :options="[
+          { label: $t('config.sw_preset_ultrafast'), value: 'ultrafast' },
+          { label: $t('config.sw_preset_superfast'), value: 'superfast' },
+          { label: $t('config.sw_preset_veryfast'), value: 'veryfast' },
+          { label: $t('config.sw_preset_faster'), value: 'faster' },
+          { label: $t('config.sw_preset_fast'), value: 'fast' },
+          { label: $t('config.sw_preset_medium'), value: 'medium' },
+          { label: $t('config.sw_preset_slow'), value: 'slow' },
+          { label: $t('config.sw_preset_slower'), value: 'slower' },
+          { label: $t('config.sw_preset_veryslow'), value: 'veryslow' },
+        ]"
+      />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.sw_preset_desc') }}
       </p>
@@ -46,26 +33,18 @@ const config = store.config;
 
     <div class="mb-4">
       <label for="sw_tune" class="form-label">{{ $t('config.sw_tune') }}</label>
-      <select id="sw_tune" v-model="config.sw_tune" class="form-control">
-        <option value="film">
-          {{ $t('config.sw_tune_film') }}
-        </option>
-        <option value="animation">
-          {{ $t('config.sw_tune_animation') }}
-        </option>
-        <option value="grain">
-          {{ $t('config.sw_tune_grain') }}
-        </option>
-        <option value="stillimage">
-          {{ $t('config.sw_tune_stillimage') }}
-        </option>
-        <option value="fastdecode">
-          {{ $t('config.sw_tune_fastdecode') }}
-        </option>
-        <option value="zerolatency">
-          {{ $t('config.sw_tune_zerolatency') }}
-        </option>
-      </select>
+      <n-select
+        id="sw_tune"
+        v-model:value="config.sw_tune"
+        :options="[
+          { label: $t('config.sw_tune_film'), value: 'film' },
+          { label: $t('config.sw_tune_animation'), value: 'animation' },
+          { label: $t('config.sw_tune_grain'), value: 'grain' },
+          { label: $t('config.sw_tune_stillimage'), value: 'stillimage' },
+          { label: $t('config.sw_tune_fastdecode'), value: 'fastdecode' },
+          { label: $t('config.sw_tune_zerolatency'), value: 'zerolatency' },
+        ]"
+      />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.sw_tune_desc') }}
       </p>

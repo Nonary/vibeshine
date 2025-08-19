@@ -1,13 +1,29 @@
-<script setup>
+<script setup lang="ts">
 import { ref } from 'vue';
 import PlatformLayout from '@/PlatformLayout.vue';
 import Checkbox from '@/Checkbox.vue';
 import { useConfigStore } from '@/stores/config';
 import { computed } from 'vue';
+import { NSelect, NInputNumber } from 'naive-ui';
 
 const store = useConfigStore();
 const config = store.config;
 const platform = computed(() => config.value?.platform || '');
+
+const gamepadOptions = computed(() => {
+  const opts = [{ label: '_common.auto', value: 'auto' }];
+  if (platform.value === 'linux') {
+    opts.push(
+      { label: 'config.gamepad_ds5', value: 'ds5' },
+      { label: 'config.gamepad_switch', value: 'switch' },
+      { label: 'config.gamepad_xone', value: 'xone' },
+    );
+  }
+  if (platform.value === 'windows') {
+    opts.push({ label: 'config.gamepad_ds4', value: 'ds4' }, { label: 'config.gamepad_x360', value: 'x360' });
+  }
+  return opts;
+});
 </script>
 
 <template>
@@ -24,34 +40,11 @@ const platform = computed(() => config.value?.platform || '');
     <!-- Emulated Gamepad Type -->
     <div v-if="config.controller === 'enabled' && platform !== 'macos'" class="mb-6">
       <label for="gamepad" class="form-label">{{ $t('config.gamepad') }}</label>
-      <select id="gamepad" v-model="config.gamepad" class="form-control">
-        <option value="auto">
-          {{ $t('_common.auto') }}
-        </option>
-
-        <PlatformLayout>
-          <template #linux>
-            <option value="ds5">
-              {{ $t('config.gamepad_ds5') }}
-            </option>
-            <option value="switch">
-              {{ $t('config.gamepad_switch') }}
-            </option>
-            <option value="xone">
-              {{ $t('config.gamepad_xone') }}
-            </option>
-          </template>
-
-          <template #windows>
-            <option value="ds4">
-              {{ $t('config.gamepad_ds4') }}
-            </option>
-            <option value="x360">
-              {{ $t('config.gamepad_x360') }}
-            </option>
-          </template>
-        </PlatformLayout>
-      </select>
+      <n-select
+        id="gamepad"
+        v-model:value="config.gamepad"
+        :options="gamepadOptions.map(o => ({ label: $t(o.label), value: o.value }))"
+      />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.gamepad_desc') }}
       </p>
@@ -64,7 +57,7 @@ const platform = computed(() => config.value?.platform || '');
       >
         <div class="mb-4">
           <div
-            class="px-3 py-2 rounded-md bg-white/80 dark:bg-surface/70 border border-black/5 dark:border-white/10"
+            class="px-3 py-2 rounded-md bg-light/80 dark:bg-surface/70 border border-dark/10 dark:border-light/10"
           >
             <div class="font-medium mb-2">
               {{
@@ -101,25 +94,41 @@ const platform = computed(() => config.value?.platform || '');
           </div>
         </div>
       </template>
-      <template v-if="config.gamepad === 'ds5' || (config.gamepad === 'auto' && platform === 'linux')">
+      <template
+        v-if="config.gamepad === 'ds5' || (config.gamepad === 'auto' && platform === 'linux')"
+      >
         <div class="mb-3 accordion">
           <div class="accordion-item">
             <h2 class="accordion-header">
-              <button class="accordion-button" type="button" data-bs-toggle="collapse"
-                      data-bs-target="#panelsStayOpen-collapseOne">
-                {{ $t(config.gamepad === 'ds5' ? 'config.gamepad_ds5_manual' : 'config.gamepad_auto') }}
+              <button
+                class="accordion-button"
+                type="button"
+                data-bs-toggle="collapse"
+                data-bs-target="#panelsStayOpen-collapseOne"
+              >
+                {{
+                  $t(config.gamepad === 'ds5' ? 'config.gamepad_ds5_manual' : 'config.gamepad_auto')
+                }}
               </button>
             </h2>
-            <div id="panelsStayOpen-collapseOne" class="accordion-collapse collapse show"
-                 aria-labelledby="panelsStayOpen-headingOne">
+            <div
+              id="panelsStayOpen-collapseOne"
+              class="accordion-collapse collapse show"
+              aria-labelledby="panelsStayOpen-headingOne"
+            >
               <div class="accordion-body">
                 <!-- Controller MAC randomization (Linux only) -->
-                <template v-if="config.gamepad === 'ds5' || (config.gamepad === 'auto' && platform === 'linux')">
-                  <Checkbox class="mb-3"
-                            id="ds5_inputtino_randomize_mac"
-                            locale-prefix="config"
-                            v-model="config.ds5_inputtino_randomize_mac"
-                            default="true"
+                <template
+                  v-if="
+                    config.gamepad === 'ds5' || (config.gamepad === 'auto' && platform === 'linux')
+                  "
+                >
+                  <Checkbox
+                    class="mb-3"
+                    id="ds5_inputtino_randomize_mac"
+                    locale-prefix="config"
+                    v-model="config.ds5_inputtino_randomize_mac"
+                    default="true"
                   ></Checkbox>
                 </template>
               </div>
@@ -134,12 +143,10 @@ const platform = computed(() => config.value?.platform || '');
       <label for="back_button_timeout" class="form-label">{{
         $t('config.back_button_timeout')
       }}</label>
-      <input
+      <n-input-number
         id="back_button_timeout"
-        v-model="config.back_button_timeout"
-        type="text"
-        class="form-control"
-        placeholder="-1"
+        v-model:value="config.back_button_timeout"
+        :placeholder="-1"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.back_button_timeout_desc') }}
@@ -159,12 +166,10 @@ const platform = computed(() => config.value?.platform || '');
     <!-- Key Repeat Delay-->
     <div v-if="config.keyboard === 'enabled' && platform === 'windows'" class="mb-4">
       <label for="key_repeat_delay" class="form-label">{{ $t('config.key_repeat_delay') }}</label>
-      <input
+      <n-input-number
         id="key_repeat_delay"
-        v-model="config.key_repeat_delay"
-        type="text"
-        class="form-control"
-        placeholder="500"
+        v-model:value="config.key_repeat_delay"
+        :placeholder="500"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.key_repeat_delay_desc') }}
@@ -176,12 +181,11 @@ const platform = computed(() => config.value?.platform || '');
       <label for="key_repeat_frequency" class="form-label">{{
         $t('config.key_repeat_frequency')
       }}</label>
-      <input
+      <n-input-number
         id="key_repeat_frequency"
-        v-model="config.key_repeat_frequency"
-        type="text"
-        class="form-control"
-        placeholder="24.9"
+        v-model:value="config.key_repeat_frequency"
+        :step="0.1"
+        :placeholder="24.9"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.key_repeat_frequency_desc') }}

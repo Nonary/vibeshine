@@ -12,22 +12,22 @@
         </div>
 
         <div class="relative flex-1 max-w-2xl min-w-[260px]">
-          <input
-            v-model="searchQuery"
+          <n-input
+            v-model:value="searchQuery"
             type="text"
             placeholder="Search settings... (Enter to jump)"
-            class="w-full px-3 py-2 text-sm rounded-md bg-black/5 dark:bg-white/10 text-dark dark:text-light placeholder-black/40 dark:placeholder-light/50 focus:outline-none focus:ring-2 focus:ring-primary/40"
             @focus="searchOpen = searchQuery.length > 0"
             @blur="() => setTimeout(() => (searchOpen = false), 120)"
             @keydown.enter.prevent="jumpFirstResult"
-          />
-          <i
-            class="fas fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-[12px] opacity-60"
-          />
+          >
+            <template #suffix>
+              <i class="fas fa-magnifying-glass text-[12px] opacity-60" />
+            </template>
+          </n-input>
           <transition name="fade">
             <div
               v-if="searchOpen"
-              class="absolute mt-2 w-full z-20 bg-white/95 dark:bg-surface/95 backdrop-blur rounded-md shadow-lg border border-black/5 dark:border-white/10 max-h-80 overflow-auto"
+              class="absolute mt-2 w-full z-20 bg-light/95 dark:bg-surface/95 backdrop-blur rounded-md shadow-lg border border-dark/10 dark:border-light/10 max-h-80 overflow-auto"
             >
               <div v-if="searchResults.length === 0" class="px-3 py-2 text-[12px] opacity-60">
                 No results
@@ -35,7 +35,7 @@
               <button
                 v-for="(r, idx) in searchResults"
                 :key="idx"
-                class="w-full text-left px-3 py-2 hover:bg-black/5 dark:hover:bg-white/10 text-[13px] flex items-start gap-2"
+                class="w-full text-left px-3 py-2 hover:bg-dark/10 dark:hover:bg-light/10 text-[13px] flex items-start gap-2"
                 @click="goTo(r)"
               >
                 <span class="shrink-0 mt-0.5">
@@ -68,15 +68,13 @@
         </div>
 
         <div v-if="showSave" class="flex gap-2">
-          <button class="btn" :disabled="saveState === 'saving'" @click="save">Save</button>
-          <button v-if="saveState === 'saved' && !restarted" class="btn ghost" @click="apply">
-            Apply
-          </button>
+          <n-button :disabled="saveState === 'saving'" @click="save">Save</n-button>
+          <n-button v-if="saveState === 'saved' && !restarted" tertiary @click="apply">Apply</n-button>
         </div>
         <div v-else class="text-[11px] font-medium min-h-[1rem] flex items-center gap-2">
           <transition name="fade"><span v-if="saveState === 'saving'">Saving…</span></transition>
           <transition name="fade">
-            <span v-if="saveState === 'saved'" class="text-green-600 dark:text-green-400"
+            <span v-if="saveState === 'saved'" class="text-success"
               >Saved</span
             >
           </transition>
@@ -94,7 +92,7 @@
       >
         <button
           type="button"
-          class="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 transition text-left"
+          class="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-dark/5 dark:bg-light/10 hover:bg-dark/10 dark:hover:bg-light/15 transition text-left"
           @click="toggle(tab.id)"
         >
           <span class="font-semibold">{{ tab.name }}</span>
@@ -108,7 +106,7 @@
         <transition name="fade">
           <div
             v-show="isOpen(tab.id)"
-            class="mt-2 bg-white/80 dark:bg-surface/70 backdrop-blur-sm border border-black/5 dark:border-white/10 rounded-xl shadow-sm p-6 space-y-6"
+            class="mt-2 bg-light/80 dark:bg-surface/70 backdrop-blur-sm border border-dark/10 dark:border-light/10 rounded-xl shadow-sm p-6 space-y-6"
           >
             <component :is="tab.component" />
           </div>
@@ -118,45 +116,38 @@
 
     <div v-else class="text-xs opacity-60 space-y-2">
       <div v-if="isLoading">Loading...</div>
-      <div v-else-if="isError" class="text-red-600 dark:text-red-400 space-y-2">
+      <div v-else-if="isError" class="text-danger space-y-2">
         <div>Failed to load configuration.</div>
-        <button class="btn" :disabled="isLoading" @click="store.reloadConfig?.()">Retry</button>
+        <n-button :disabled="isLoading" @click="store.reloadConfig?.()">Retry</n-button>
       </div>
       <div v-else class="opacity-60">No configuration loaded.</div>
     </div>
 
     <div class="text-[11px]">
       <transition name="fade">
-        <div
-          v-if="saveState === 'saved' && !restarted && !autoSave"
-          class="text-green-600 dark:text-green-400"
-        >
+        <div v-if="saveState === 'saved' && !restarted && !autoSave" class="text-success">
           Saved. Click Apply to restart.
         </div>
       </transition>
       <transition name="fade">
-        <div v-if="restarted" class="text-green-600 dark:text-green-400">Restart triggered.</div>
+        <div v-if="restarted" class="text-success">Restart triggered.</div>
       </transition>
     </div>
   </main>
 
   <transition name="slide-fade">
-    <div
-      v-if="(dirty && !autoSave) || store.manualDirty === true"
-      class="fixed bottom-4 right-6 z-30"
-    >
-      <div
-        class="bg-white/90 dark:bg-surface/90 backdrop-blur rounded-lg shadow border border-black/5 dark:border-white/10 px-4 py-2 flex items-center gap-3"
-      >
-        <span class="text-[11px] font-medium">Unsaved changes</span>
-        <button class="btn" :disabled="saveState === 'saving'" @click="save">Save</button>
+      <div v-if="(dirty && !autoSave) || store.manualDirty === true" class="fixed bottom-4 right-6 z-30">
+        <div class="bg-light/90 dark:bg-surface/90 backdrop-blur rounded-lg shadow border border-dark/10 dark:border-light/10 px-4 py-2 flex items-center gap-3">
+          <span class="text-[11px] font-medium">Unsaved changes</span>
+          <n-button :disabled="saveState === 'saving'" @click="save">Save</n-button>
+        </div>
       </div>
-    </div>
   </transition>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, markRaw } from 'vue';
+import { NInput, NButton } from 'naive-ui';
 import { useRoute, useRouter } from 'vue-router';
 import General from '@/configs/tabs/General.vue';
 import Inputs from '@/configs/tabs/Inputs.vue';

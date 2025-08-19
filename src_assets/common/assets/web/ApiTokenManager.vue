@@ -28,43 +28,34 @@
         </div>
 
         <!-- Add scope row -->
-        <div class="flex flex-wrap items-start gap-3">
-          <div class="flex flex-col flex-1 min-w-[240px]">
+        <n-grid cols="24" x-gap="12" y-gap="8" responsive="screen" class="items-start">
+          <n-gi :span="24" :s="12">
             <label class="form-label">Route</label>
-            <select v-model="draft.path" class="form-control form-select">
-              <option disabled value="">Select a route…</option>
-              <option v-for="r in ROUTE_OPTIONS" :key="r.path" :value="r.path">
-                {{ r.path }}
-              </option>
-            </select>
-          </div>
-          <div class="flex flex-col min-w-[220px]">
+            <n-select
+              v-model:value="draft.path"
+              :options="routeSelectOptions"
+              placeholder="Select a route…"
+            />
+          </n-gi>
+          <n-gi :span="24" :s="8">
             <label class="form-label">Methods</label>
-            <div class="flex flex-wrap gap-2">
-              <label
-                v-for="m in draftMethods"
-                :key="m"
-                class="inline-flex items-center gap-2 px-2 py-1 rounded-md bg-black/5 dark:bg-white/10 cursor-pointer select-none"
-              >
-                <input
-                  v-model="draft.selectedMethods"
-                  class="accent-primary"
-                  type="checkbox"
-                  :value="m"
-                />
-                <span class="uppercase text-[11px] tracking-wide font-semibold">{{ m }}</span>
-              </label>
-            </div>
+            <n-checkbox-group v-model:value="draft.selectedMethods">
+              <n-space wrap>
+                <n-checkbox v-for="m in draftMethods" :key="m" :value="m">
+                  <span class="uppercase text-[11px] tracking-wide font-semibold">{{ m }}</span>
+                </n-checkbox>
+              </n-space>
+            </n-checkbox-group>
             <div v-if="draft.path && draftMethods.length === 0" class="form-text">
               No methods available for this route.
             </div>
-          </div>
-          <div class="flex items-center">
-            <UiButton variant="primary" size="md" :disabled="!canAddScope" @click="addScope">
+          </n-gi>
+          <n-gi :span="24" :s="4" class="flex items-center">
+            <n-button type="primary" size="medium" :disabled="!canAddScope" @click="addScope">
               <i class="fas fa-plus icon" /> Add Scope
-            </UiButton>
-          </div>
-        </div>
+            </n-button>
+          </n-gi>
+        </n-grid>
 
         <!-- Current scopes summary -->
         <div v-if="scopes.length" class="space-y-2">
@@ -76,7 +67,7 @@
               class="flex items-start gap-2"
             >
               <div
-                class="flex flex-wrap items-center gap-1 bg-black/5 dark:bg-white/10 rounded px-2 py-1"
+                class="flex flex-wrap items-center gap-1 bg-dark/5 dark:bg-light/10 rounded px-2 py-1"
               >
                 <span class="font-semibold">{{ s.path }}</span>
                 <span class="flex gap-1 flex-wrap">
@@ -88,62 +79,62 @@
                   >
                 </span>
               </div>
-              <button class="btn ghost text-xs" title="Remove" @click="removeScope(idx)">
+              <n-button tertiary size="small" title="Remove" @click="removeScope(idx)">
                 <i class="fas fa-times icon"></i>
-              </button>
+              </n-button>
             </div>
           </div>
         </div>
 
         <div class="flex items-center gap-3">
-          <UiButton
-            variant="success"
-            size="md"
+          <n-button
+            type="success"
+            size="medium"
             :disabled="!canGenerate || creating"
             :loading="creating"
             @click="createToken"
           >
             <i class="fas fa-key icon" /> Generate Token
-          </UiButton>
+          </n-button>
           <span v-if="creating" class="text-xs opacity-70">Creating…</span>
         </div>
 
         <!-- Created token output moved to modal -->
 
-        <UiAlert v-if="createError" variant="danger" dismissible @close="createError = ''">
+        <n-alert v-if="createError" type="error" closable @close="createError = ''">
           {{ createError }}
-        </UiAlert>
+        </n-alert>
       </div>
     </section>
 
     <!-- Token Modal -->
-    <UiModal v-model:open="showTokenModal" title="API Token Created" :dismissible="true">
-      <div class="space-y-3">
-        <UiAlert variant="warning">
-          <i class="fas fa-triangle-exclamation" /> This token is shown only once. Save or copy it
-          now. You cannot retrieve it later.
-        </UiAlert>
-        <div
-          class="rounded-md border border-dark/10 dark:border-light/10 p-3 bg-black/5 dark:bg-white/10"
-        >
-          <div class="text-xs opacity-80">Token</div>
-          <code class="block text-sm font-mono break-words my-1">{{ createdToken }}</code>
-          <div class="flex items-center gap-3">
-            <UiButton size="sm" variant="primary" @click="copy(createdToken)">
-              <i class="fas fa-copy icon" /> Copy
-            </UiButton>
-            <span v-if="copied" class="text-xs text-success">Copied!</span>
+    <n-modal :show="showTokenModal" @update:show="(v) => (showTokenModal = v)">
+      <n-card title="API Token Created" :bordered="false" style="max-width: 40rem; width: 100%">
+        <div class="space-y-3">
+          <n-alert type="warning" :show-icon="true">
+            <i class="fas fa-triangle-exclamation" /> This token is shown only once. Save or copy it
+            now. You cannot retrieve it later.
+          </n-alert>
+          <div class="rounded-md border border-dark/10 dark:border-light/10 p-3 bg-dark/5 dark:bg-light/10">
+            <div class="text-xs opacity-80">Token</div>
+            <code class="block text-sm font-mono break-words my-1">{{ createdToken }}</code>
+            <div class="flex items-center gap-3">
+              <n-button size="small" type="primary" @click="copy(createdToken)">
+                <i class="fas fa-copy icon" /> Copy
+              </n-button>
+              <span v-if="copied" class="text-xs text-success">Copied!</span>
+            </div>
           </div>
         </div>
-      </div>
-      <template #footer>
-        <div class="flex items-center justify-end">
-          <UiButton variant="primary" @click="showTokenModal = false">{{
-            $t('_common.dismiss')
-          }}</UiButton>
-        </div>
-      </template>
-    </UiModal>
+        <template #footer>
+          <div class="flex items-center justify-end">
+            <n-button type="primary" @click="showTokenModal = false">{{
+              $t('_common.dismiss')
+            }}</n-button>
+          </div>
+        </template>
+      </n-card>
+    </n-modal>
 
     <!-- Active Tokens -->
     <section
@@ -153,39 +144,29 @@
         <h2 class="text-lg font-medium flex items-center gap-2">
           <i class="fas fa-lock icon" /> Active Tokens
         </h2>
-        <UiButton
+        <n-button
           class="ml-auto"
-          variant="neutral"
-          tone="ghost"
-          size="sm"
+          type="default"
+          tertiary
+          size="small"
           :loading="tokensLoading"
           aria-label="Refresh tokens"
           @click="loadTokens"
         >
           <i class="fas fa-rotate icon" />
           <span class="hidden sm:inline">Refresh</span>
-        </UiButton>
+        </n-button>
       </div>
       <div class="space-y-3">
-        <div class="flex flex-wrap items-end gap-3">
-          <div class="flex-1 min-w-[220px]">
-            <input
-              v-model="filter"
-              class="form-control"
-              placeholder="Filter by hash or path…"
-              type="text"
-            />
-          </div>
-          <div class="text-xs">
-            <label class="flex flex-col">
-              <span class="opacity-70">Sort</span>
-              <select v-model="sortBy" class="form-control form-select">
-                <option value="created">Newest</option>
-                <option value="path">Path</option>
-              </select>
-            </label>
-          </div>
-        </div>
+        <n-grid cols="24" x-gap="12" y-gap="8" responsive="screen" class="items-end">
+          <n-gi :span="24" :s="18">
+            <n-input v-model:value="filter" placeholder="Filter by hash or path…" />
+          </n-gi>
+          <n-gi :span="24" :s="6">
+            <label class="opacity-70 text-xs block mb-1">Sort</label>
+            <n-select v-model:value="sortBy" :options="sortOptions" />
+          </n-gi>
+        </n-grid>
 
         <div v-if="tokensError" class="text-sm text-danger">{{ tokensError }}</div>
 
@@ -194,7 +175,7 @@
         </div>
 
         <div v-else class="overflow-auto">
-          <table class="table min-w-[640px]">
+          <n-table :bordered="false" :single-line="false" class="min-w-[640px]">
             <thead>
               <tr>
                 <th class="w-40">Hash</th>
@@ -221,7 +202,7 @@
                     <div
                       v-for="(s, idx) in t.scopes"
                       :key="idx"
-                      class="rounded bg-black/5 dark:bg-white/10 px-2 py-1"
+                      class="rounded bg-dark/5 dark:bg-light/10 px-2 py-1"
                     >
                       <span class="font-semibold">{{ s.path }}</span>
                       <span class="ml-1 space-x-1">
@@ -239,18 +220,18 @@
                   {{ t.createdAt ? formatTime(t.createdAt) : '—' }}
                 </td>
                 <td class="align-middle">
-                  <UiButton
-                    size="sm"
-                    variant="danger"
+                  <n-button
+                    size="small"
+                    type="error"
                     :loading="revoking === t.hash"
                     @click="promptRevoke(t)"
                   >
                     <i class="fas fa-ban icon" /> Revoke
-                  </UiButton>
+                  </n-button>
                 </td>
               </tr>
             </tbody>
-          </table>
+          </n-table>
         </div>
       </div>
     </section>
@@ -265,52 +246,38 @@
         </h2>
       </header>
       <div class="space-y-4">
-        <UiAlert variant="neutral">
+        <n-alert type="info">
           <span class="text-xs">
             Tester performs only safe GET requests. Select a route and send a request with your
             token.
           </span>
-        </UiAlert>
-        <div class="grid md:grid-cols-2 gap-4">
-          <div>
+        </n-alert>
+        <n-grid cols="24" x-gap="12" y-gap="12" responsive="screen">
+          <n-gi :span="24" :s="12">
             <label class="form-label">Token</label>
-            <input
-              v-model="test.token"
-              class="form-control monospace"
-              placeholder="Paste token"
-              type="password"
-              autocomplete="off"
-            />
-          </div>
-          <div>
+            <n-input v-model:value="test.token" placeholder="Paste token" type="password" />
+          </n-gi>
+          <n-gi :span="24" :s="12">
             <label class="form-label">Route (GET only)</label>
-            <select v-model="test.path" class="form-control form-select">
-              <option disabled value="">Select a GET route…</option>
-              <option v-for="r in GET_OPTIONS" :key="r.path" :value="r.path">{{ r.path }}</option>
-            </select>
-          </div>
-          <div>
-            <label class="form-label">Header Scheme</label>
-            <select v-model="test.scheme" class="form-control form-select">
-              <option value="bearer">Authorization: Bearer &lt;token&gt;</option>
-              <option value="x-api-token">X-Api-Token: &lt;token&gt;</option>
-              <option value="x-token">X-Token: &lt;token&gt;</option>
-              <option value="query">Query param ?token=&lt;token&gt;</option>
-            </select>
-          </div>
-          <div>
-            <label class="form-label">Query String (optional)</label>
-            <input
-              v-model="test.query"
-              class="form-control"
-              placeholder="e.g. limit=50&tail=true"
+            <n-select
+              v-model:value="test.path"
+              :options="getRouteOptions"
+              placeholder="Select a GET route…"
             />
-          </div>
-        </div>
+          </n-gi>
+          <n-gi :span="24" :s="12">
+            <label class="form-label">Header Scheme</label>
+            <n-select v-model:value="test.scheme" :options="schemeOptions" />
+          </n-gi>
+          <n-gi :span="24" :s="12">
+            <label class="form-label">Query String (optional)</label>
+            <n-input v-model:value="test.query" placeholder="e.g. limit=50&tail=true" />
+          </n-gi>
+        </n-grid>
         <div class="flex items-center gap-3">
-          <UiButton variant="primary" :disabled="!canSendTest" :loading="testing" @click="sendTest">
+          <n-button type="primary" :disabled="!canSendTest" :loading="testing" @click="sendTest">
             <i class="fas fa-paper-plane icon" /> Test Token
-          </UiButton>
+          </n-button>
           <span v-if="testing" class="text-xs opacity-70">Sending…</span>
         </div>
 
@@ -319,35 +286,51 @@
         <div v-if="testResponse" class="space-y-2">
           <div class="text-xs opacity-70">Response</div>
           <pre
-            class="p-3 rounded-md bg-black/5 dark:bg-white/10 text-dark dark:text-light text-xs overflow-auto max-h-[60vh]"
+            class="p-3 rounded-md bg-dark/5 dark:bg-light/10 text-dark dark:text-light text-xs overflow-auto max-h-[60vh]"
           ><code class="whitespace-pre-wrap">{{ testResponse }}</code></pre>
         </div>
       </div>
     </section>
 
     <!-- Revoke confirm modal -->
-    <UiConfirmModal
-      v-model:open="showRevoke"
-      :title="$t('auth.confirm_revoke_title')"
-      :message="
-        $t('auth.confirm_revoke_message_hash', { hash: shortHash(pendingRevoke?.hash || '') })
-      "
-      :confirm-text="$t('auth.revoke')"
-      confirm-icon="fas fa-ban"
-      variant="danger"
-      icon="fas fa-triangle-exclamation"
-      @confirm="confirmRevoke"
-      @cancel="showRevoke = false"
-    />
+    <n-modal :show="showRevoke" @update:show="(v) => (showRevoke = v)">
+      <n-card
+        :title="$t('auth.confirm_revoke_title')"
+        :bordered="false"
+        style="max-width: 32rem; width: 100%"
+      >
+        <div class="text-sm text-center">
+          {{
+            $t('auth.confirm_revoke_message_hash', { hash: shortHash(pendingRevoke?.hash || '') })
+          }}
+        </div>
+        <template #footer>
+          <div class="w-full flex items-center justify-center gap-3">
+            <n-button tertiary @click="showRevoke = false">{{ $t('cancel') }}</n-button>
+            <n-button type="error" @click="confirmRevoke">{{ $t('auth.revoke') }}</n-button>
+          </div>
+        </template>
+      </n-card>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import UiButton from '@/components/UiButton.vue';
-import UiAlert from '@/components/UiAlert.vue';
-import UiModal from '@/components/UiModal.vue';
-import UiConfirmModal from '@/components/UiConfirmModal.vue';
+import {
+  NButton,
+  NAlert,
+  NModal,
+  NCard,
+  NGrid,
+  NGi,
+  NSelect,
+  NInput,
+  NCheckboxGroup,
+  NCheckbox,
+  NTable,
+  NSpace,
+} from 'naive-ui';
 import { http } from '@/http';
 import { useAuthStore } from '@/stores/auth';
 
@@ -377,6 +360,22 @@ const ROUTE_OPTIONS: RouteDef[] = [
 ];
 
 const GET_OPTIONS = computed(() => ROUTE_OPTIONS.filter((r) => r.methods.includes('GET')));
+const routeSelectOptions = computed(() =>
+  ROUTE_OPTIONS.map((r) => ({ label: r.path, value: r.path })),
+);
+const getRouteOptions = computed(() =>
+  GET_OPTIONS.value.map((r) => ({ label: r.path, value: r.path })),
+);
+const sortOptions = [
+  { label: 'Newest', value: 'created' },
+  { label: 'Path', value: 'path' },
+];
+const schemeOptions = [
+  { label: 'Authorization: Bearer <token>', value: 'bearer' },
+  { label: 'X-Api-Token: <token>', value: 'x-api-token' },
+  { label: 'X-Token: <token>', value: 'x-token' },
+  { label: 'Query param ?token=<token>', value: 'query' },
+];
 
 // Create token state
 const draft = reactive<{ path: string; selectedMethods: string[] }>({

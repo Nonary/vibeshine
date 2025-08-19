@@ -3,12 +3,16 @@
     <div class="flex items-center justify-between">
       <h2 class="text-sm font-semibold uppercase tracking-wider">Applications</h2>
       <div class="flex items-center gap-2">
-        <button class="main-btn" @click="openAdd"><i class="fas fa-plus" /> Add</button>
+        <n-button type="primary" size="small" @click="openAdd"
+          ><i class="fas fa-plus" /> Add</n-button
+        >
       </div>
     </div>
 
     <!-- Redesigned list view -->
-    <div class="rounded-2xl overflow-hidden border border-black/10 dark:border-white/10 bg-white/80 dark:bg-surface/80 backdrop-blur max-w-3xl mx-auto">
+  <div
+    class="rounded-2xl overflow-hidden border border-dark/10 dark:border-light/10 bg-light/80 dark:bg-surface/80 backdrop-blur max-w-3xl mx-auto"
+  >
       <div v-if="apps && apps.length" class="divide-y divide-black/5 dark:divide-white/10">
         <button
           v-for="(app, i) in apps"
@@ -19,10 +23,14 @@
           @keydown.enter.prevent="openEdit(app, i)"
           @keydown.space.prevent="openEdit(app, i)"
         >
-          <div class="flex items-center justify-between px-4 py-3 hover:bg-black/5 dark:hover:bg-white/10">
+          <div
+        class="flex items-center justify-between px-4 py-3 hover:bg-dark/10 dark:hover:bg-light/10"
+      >
             <div class="min-w-0 flex-1">
               <div class="text-sm font-semibold truncate">{{ app.name || '(untitled)' }}</div>
-              <div class="mt-0.5 text-[11px] opacity-60 truncate" v-if="app['working-dir']">{{ app['working-dir'] }}</div>
+              <div class="mt-0.5 text-[11px] opacity-60 truncate" v-if="app['working-dir']">
+                {{ app['working-dir'] }}
+              </div>
             </div>
             <div class="shrink-0 text-dark/50 dark:text-light/60">
               <i class="fas fa-chevron-right" />
@@ -30,7 +38,9 @@
           </div>
         </button>
       </div>
-      <div v-else class="px-6 py-10 text-center text-sm opacity-60">No applications configured.</div>
+      <div v-else class="px-6 py-10 text-center text-sm opacity-60">
+        No applications configured.
+      </div>
     </div>
 
     <AppEditModal
@@ -48,6 +58,7 @@ import { ref, onMounted } from 'vue';
 import AppEditModal from '@/components/AppEditModal.vue';
 import { useAppsStore } from '@/stores/apps';
 import { storeToRefs } from 'pinia';
+import { NButton } from 'naive-ui';
 const appsStore = useAppsStore();
 const { apps } = storeToRefs(appsStore);
 const platform = ref('');

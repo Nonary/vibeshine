@@ -1,4 +1,5 @@
 <script setup>
+import { NCheckbox } from 'naive-ui';
 const model = defineModel({ required: true });
 const slots = defineSlots();
 const props = defineProps({
@@ -114,20 +115,17 @@ const defValue = parsedDefaultPropValue ? '_common.enabled_def_cbox' : '_common.
 
 <template>
   <div :class="extendedClassStr">
-    <label :for="props.id" :class="`form-check-label${showDesc ? ' mb-2' : ''}`">
-      {{ $t(labelField) }}
-      <div v-if="showDefValue" class="mt-0 form-text">
-        {{ $t(defValue) }}
-      </div>
-    </label>
-    <input
+    <n-checkbox
       :id="props.id"
-      v-model="model"
-      type="checkbox"
-      class="form-check-input"
+      v-model:checked="model"
       :true-value="checkboxValues.truthy"
       :false-value="checkboxValues.falsy"
-    />
+    >
+      {{ $t(labelField) }}
+    </n-checkbox>
+    <div v-if="showDefValue" class="mt-0 form-text">
+      {{ $t(defValue) }}
+    </div>
     <div v-if="showDesc" class="form-text">
       {{ $t(descField) }}
       <slot />

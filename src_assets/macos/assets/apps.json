@@ -9,9 +9,7 @@
     },
     {
       "name": "Steam Big Picture",
-      "detached": [
-        "open steam://open/bigpicture"
-      ],
+      "detached": ["open steam://open/bigpicture"],
       "prep-cmd": [
         {
           "do": "",

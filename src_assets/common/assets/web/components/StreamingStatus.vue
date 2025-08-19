@@ -3,7 +3,7 @@
     <span
       :class="[
         'h-2.5 w-2.5 rounded-full animate-pulse',
-        streaming ? 'bg-green-500 shadow-[0_0_0_3px] shadow-green-500/30' : 'bg-gray-400',
+        streaming ? 'bg-success ring-2 ring-success/30' : 'bg-dark/30',
       ]"
     />
     <span class="font-medium" v-text="streaming ? 'Live' : 'Idle'" />

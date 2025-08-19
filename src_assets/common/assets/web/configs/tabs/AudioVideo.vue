@@ -6,13 +6,58 @@ import AdapterNameSelector from '@/configs/tabs/audiovideo/AdapterNameSelector.v
 import DisplayOutputSelector from '@/configs/tabs/audiovideo/DisplayOutputSelector.vue';
 import DisplayDeviceOptions from '@/configs/tabs/audiovideo/DisplayDeviceOptions.vue';
 import DisplayModesSettings from '@/configs/tabs/audiovideo/DisplayModesSettings.vue';
-import Checkbox from '@/Checkbox.vue';
+import { NCheckbox, NInput } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
 import { computed } from 'vue';
 
 const store = useConfigStore();
 const config = store.config;
 const platform = computed(() => config.value?.platform || '');
+
+// Replace custom Checkbox with Naive UI using compatibility mapping
+function mapToBoolRepresentation(value) {
+  if (value === true || value === false) return { possibleValues: [true, false], value };
+  if (value === 1 || value === 0) return { possibleValues: [1, 0], value };
+  const stringPairs = [
+    ['true', 'false'],
+    ['1', '0'],
+    ['enabled', 'disabled'],
+    ['enable', 'disable'],
+    ['yes', 'no'],
+    ['on', 'off'],
+  ];
+  const v = String(value ?? '')
+    .toLowerCase()
+    .trim();
+  for (const pair of stringPairs) {
+    if (v === pair[0] || v === pair[1]) return { possibleValues: pair, value: v };
+  }
+  return null;
+}
+
+function boolProxy(key, defaultValue = 'true') {
+  return computed({
+    get() {
+      const raw = config.value?.[key];
+      const parsed = mapToBoolRepresentation(raw);
+      if (parsed) return parsed.value === parsed.possibleValues[0];
+      // fallback to default
+      const defParsed = mapToBoolRepresentation(defaultValue);
+      return defParsed ? defParsed.value === defParsed.possibleValues[0] : !!raw;
+    },
+    set(v) {
+      const raw = config.value?.[key];
+      const parsed = mapToBoolRepresentation(raw);
+      const pv = parsed ? parsed.possibleValues : ['true', 'false'];
+      const next = v ? pv[0] : pv[1];
+      // assign preserving original type if boolean/numeric pair
+      config.value[key] = next;
+    },
+  });
+}
+
+const installSteamDrivers = boolProxy('install_steam_audio_drivers', 'true');
+const streamAudio = boolProxy('stream_audio', 'true');
 </script>
 
 <template>
@@ -20,11 +65,10 @@ const platform = computed(() => config.value?.platform || '');
     <!-- Audio Sink -->
     <div class="mb-6">
       <label for="audio_sink" class="form-label">{{ $t('config.audio_sink') }}</label>
-      <input
+      <n-input
         id="audio_sink"
-        v-model="config.audio_sink"
+        v-model:value="config.audio_sink"
         type="text"
-        class="form-control"
         :placeholder="
           $tp('config.audio_sink_placeholder', 'alsa_output.pci-0000_09_00.3.analog-stereo')
         "
@@ -53,11 +97,10 @@ const platform = computed(() => config.value?.platform || '');
         <!-- Virtual Sink -->
         <div class="mb-6">
           <label for="virtual_sink" class="form-label">{{ $t('config.virtual_sink') }}</label>
-          <input
+          <n-input
             id="virtual_sink"
-            v-model="config.virtual_sink"
+            v-model:value="config.virtual_sink"
             type="text"
-            class="form-control"
             :placeholder="$t('config.virtual_sink_placeholder')"
           />
           <div class="text-[11px] opacity-60 mt-1">
@@ -66,24 +109,16 @@ const platform = computed(() => config.value?.platform || '');
         </div>
 
         <!-- Install Steam Audio Drivers -->
-        <Checkbox
-          id="install_steam_audio_drivers"
-          v-model="config.install_steam_audio_drivers"
-          class="mb-3"
-          locale-prefix="config"
-          default="true"
-        />
+        <n-checkbox v-model:checked="installSteamDrivers" class="mb-3">
+          {{ $t('config.install_steam_audio_drivers') }}
+        </n-checkbox>
       </template>
     </PlatformLayout>
 
     <!-- Disable Audio -->
-    <Checkbox
-      id="stream_audio"
-      v-model="config.stream_audio"
-      class="mb-3"
-      locale-prefix="config"
-      default="true"
-    />
+    <n-checkbox v-model:checked="streamAudio" class="mb-3">
+      {{ $t('config.stream_audio') }}
+    </n-checkbox>
 
     <AdapterNameSelector />
 

@@ -2,6 +2,7 @@
 import { ref } from 'vue';
 import { $tp } from '@/platform-i18n';
 import PlatformLayout from '@/PlatformLayout.vue';
+import { NInput } from 'naive-ui';
 
 import { useConfigStore } from '@/stores/config';
 import { computed } from 'vue';
@@ -13,11 +14,10 @@ const platform = computed(() => config.value?.platform || '');
 <template>
   <div v-if="platform !== 'macos'" class="mb-4">
     <label for="adapter_name" class="form-label">{{ $t('config.adapter_name') }}</label>
-    <input
+    <n-input
       id="adapter_name"
-      v-model="config.adapter_name"
+      v-model:value="config.adapter_name"
       type="text"
-      class="form-control"
       :placeholder="$tp('config.adapter_name_placeholder', '/dev/dri/renderD128')"
     />
     <div class="text-[11px] opacity-60">

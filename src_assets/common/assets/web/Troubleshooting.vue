@@ -1,163 +1,130 @@
 <template>
   <div class="mx-auto max-w-6xl px-4 py-6">
-    <h1 class="mb-6 text-3xl font-semibold tracking-tight text-gray-900 dark:text-gray-100">
+    <h1 class="mb-6 text-3xl font-semibold tracking-tight text-dark dark:text-light">
       {{ $t('troubleshooting.troubleshooting') }}
     </h1>
 
     <!-- Actions grid -->
-    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+    <n-grid cols="24" x-gap="16" y-gap="16" responsive="screen">
       <!-- Force Close App -->
-      <section
-        class="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900"
-      >
-        <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 id="close_apps" class="text-xl font-medium text-gray-900 dark:text-gray-100">
+      <n-gi :span="24" :lg="12">
+        <section class="rounded-2xl border border-dark/10 bg-white p-6 shadow-sm dark:border-light/10 dark:bg-surface">
+          <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 id="close_apps" class="text-xl font-medium text-dark dark:text-light">
+                {{ $t('troubleshooting.force_close') }}
+              </h2>
+              <p class="mt-2 text-sm opacity-70">
+                {{ $t('troubleshooting.force_close_desc') }}
+              </p>
+            </div>
+            <n-button type="warning" :disabled="closeAppPressed" @click="closeApp">
               {{ $t('troubleshooting.force_close') }}
-            </h2>
-            <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
-              {{ $t('troubleshooting.force_close_desc') }}
-            </p>
-          </div>
-          <button
-            class="inline-flex items-center justify-center rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="closeAppPressed"
-            @click="closeApp"
-          >
-            {{ $t('troubleshooting.force_close') }}
-          </button>
-        </header>
+            </n-button>
+          </header>
 
-        <transition name="fade">
-          <p
-            v-if="closeAppStatus === true"
-            class="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/40 dark:text-emerald-100"
-          >
-            {{ $t('troubleshooting.force_close_success') }}
-          </p>
-        </transition>
-        <transition name="fade">
-          <p
-            v-if="closeAppStatus === false"
-            class="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-800 dark:border-rose-900/50 dark:bg-rose-900/40 dark:text-rose-100"
-          >
-            {{ $t('troubleshooting.force_close_error') }}
-          </p>
-        </transition>
-      </section>
+          <transition name="fade">
+            <p v-if="closeAppStatus === true" class="mt-4 alert alert-success rounded-lg px-4 py-2 text-sm">
+              {{ $t('troubleshooting.force_close_success') }}
+            </p>
+          </transition>
+          <transition name="fade">
+            <p v-if="closeAppStatus === false" class="mt-4 alert alert-danger rounded-lg px-4 py-2 text-sm">
+              {{ $t('troubleshooting.force_close_error') }}
+            </p>
+          </transition>
+        </section>
+      </n-gi>
 
       <!-- Restart Sunshine -->
-      <section
-        class="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900"
-      >
-        <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 id="restart" class="text-xl font-medium text-gray-900 dark:text-gray-100">
+      <n-gi :span="24" :lg="12">
+        <section class="rounded-2xl border border-dark/10 bg-white p-6 shadow-sm dark:border-light/10 dark:bg-surface">
+          <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 id="restart" class="text-xl font-medium text-dark dark:text-light">
+                {{ $t('troubleshooting.restart_sunshine') }}
+              </h2>
+              <p class="mt-2 text-sm opacity-70">
+                {{ $t('troubleshooting.restart_sunshine_desc') }}
+              </p>
+            </div>
+            <n-button type="warning" :disabled="restartPressed" @click="restart">
               {{ $t('troubleshooting.restart_sunshine') }}
-            </h2>
-            <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
-              {{ $t('troubleshooting.restart_sunshine_desc') }}
-            </p>
-          </div>
-          <button
-            class="inline-flex items-center justify-center rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="restartPressed"
-            @click="restart"
-          >
-            {{ $t('troubleshooting.restart_sunshine') }}
-          </button>
-        </header>
+            </n-button>
+          </header>
 
-        <transition name="fade">
-          <p
-            v-if="restartPressed === true"
-            class="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/40 dark:text-emerald-100"
-          >
-            {{ $t('troubleshooting.restart_sunshine_success') }}
-          </p>
-        </transition>
-      </section>
+          <transition name="fade">
+            <p v-if="restartPressed === true" class="mt-4 alert alert-success rounded-lg px-4 py-2 text-sm">
+              {{ $t('troubleshooting.restart_sunshine_success') }}
+            </p>
+          </transition>
+        </section>
+      </n-gi>
 
       <!-- Reset persistent display device settings (Windows only) -->
-      <section
-        v-if="platform === 'windows'"
-        class="lg:col-span-2 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900"
-      >
-        <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 id="dd_reset" class="text-xl font-medium text-gray-900 dark:text-gray-100">
+      <n-gi v-if="platform === 'windows'" :span="24">
+        <section v-if="platform === 'windows'" class="lg:col-span-2 rounded-2xl border border-dark/10 bg-white p-6 shadow-sm dark:border-light/10 dark:bg-surface">
+          <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 id="dd_reset" class="text-xl font-medium text-dark dark:text-light">
+                {{ $t('troubleshooting.dd_reset') }}
+              </h2>
+              <p class="mt-2 whitespace-pre-line text-sm opacity-70">
+                {{ $t('troubleshooting.dd_reset_desc') }}
+              </p>
+            </div>
+            <n-button type="warning" :disabled="ddResetPressed" @click="ddResetPersistence">
               {{ $t('troubleshooting.dd_reset') }}
-            </h2>
-            <p class="mt-2 whitespace-pre-line text-sm text-gray-500 dark:text-gray-400">
-              {{ $t('troubleshooting.dd_reset_desc') }}
-            </p>
-          </div>
-          <button
-            class="inline-flex items-center justify-center rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="ddResetPressed"
-            @click="ddResetPersistence"
-          >
-            {{ $t('troubleshooting.dd_reset') }}
-          </button>
-        </header>
+            </n-button>
+          </header>
 
-        <transition name="fade">
-          <p
-            v-if="ddResetStatus === true"
-            class="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/40 dark:text-emerald-100"
-          >
-            {{ $t('troubleshooting.dd_reset_success') }}
-          </p>
-        </transition>
-        <transition name="fade">
-          <p
-            v-if="ddResetStatus === false"
-            class="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-800 dark:border-rose-900/50 dark:bg-rose-900/40 dark:text-rose-100"
-          >
-            {{ $t('troubleshooting.dd_reset_error') }}
-          </p>
-        </transition>
-      </section>
-    </div>
+          <transition name="fade">
+            <p v-if="ddResetStatus === true" class="mt-4 alert alert-success rounded-lg px-4 py-2 text-sm">
+              {{ $t('troubleshooting.dd_reset_success') }}
+            </p>
+          </transition>
+          <transition name="fade">
+            <p v-if="ddResetStatus === false" class="mt-4 alert alert-danger rounded-lg px-4 py-2 text-sm">
+              {{ $t('troubleshooting.dd_reset_error') }}
+            </p>
+          </transition>
+        </section>
+      </n-gi>
+    </n-grid>
 
     <!-- Logs -->
-    <section
-      class="mt-8 rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900"
-    >
+    <section class="mt-8 rounded-2xl border border-dark/10 bg-white shadow-sm dark:border-light/10 dark:bg-surface">
       <div class="flex flex-col gap-4 p-6 md:flex-row md:items-center md:justify-between">
         <div>
-          <h2 id="logs" class="text-xl font-medium text-gray-900 dark:text-gray-100">
+          <h2 id="logs" class="text-xl font-medium text-dark dark:text-light">
             {{ $t('troubleshooting.logs') }}
           </h2>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+          <p class="mt-1 text-sm opacity-70">
             {{ $t('troubleshooting.logs_desc') }}
           </p>
         </div>
 
         <div class="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
-          <input
-            v-model="logFilter"
-            type="text"
+          <n-input
+            v-model:value="logFilter"
             :placeholder="$t('troubleshooting.logs_find')"
-            class="w-full sm:w-80 rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 shadow-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"
             @input="handleFilterInput"
           />
-          <button
-            class="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
-            @click="toggleWrap"
-          >
+          <n-button secondary @click="toggleWrap">
             <i :class="wrapLongLines ? 'fas fa-align-left' : 'fas fa-ellipsis-h'"></i>
-            <span>{{ wrapLongLines ? $t('troubleshooting.wrap') : $t('troubleshooting.no_wrap') }}</span>
-          </button>
-          <button
+            <span>{{
+              wrapLongLines ? $t('troubleshooting.wrap') : $t('troubleshooting.no_wrap')
+            }}</span>
+          </n-button>
+          <n-button
+            type="primary"
             :disabled="!actualLogs"
-            class="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-100"
             :aria-label="$t('troubleshooting.copy_logs')"
             @click="copyLogs"
           >
             <i class="fas fa-copy"></i>
             <span>{{ $t('troubleshooting.copy_logs') }}</span>
-          </button>
+          </n-button>
         </div>
       </div>
 
@@ -165,25 +132,17 @@
       <div class="relative">
         <!-- New logs banner (appears at bottom of viewport inside console) -->
         <transition name="slide-up">
-          <button
-            v-if="newLogsAvailable"
-            class="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-amber-600"
-            @click="jumpToLatest"
-          >
+          <n-button v-if="newLogsAvailable" class="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full px-4 py-2 text-sm font-medium shadow-lg" type="warning" @click="jumpToLatest">
             {{ $t('troubleshooting.new_logs_available') }}
-            <span v-if="unseenLines > 0" class="ml-2 rounded bg-amber-600/20 px-2 py-0.5 text-xs">
+            <span v-if="unseenLines > 0" class="ml-2 rounded bg-warning/20 px-2 py-0.5 text-xs">
               +{{ unseenLines }}
             </span>
             <i class="fas fa-arrow-down ml-2"></i>
-          </button>
+          </n-button>
         </transition>
 
         <!-- Scroll container -->
-        <div
-          ref="logContainer"
-          class="h-[520px] overflow-auto border-t border-gray-200 bg-gray-50 font-mono text-[13px] leading-5 text-gray-900 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"
-          @scroll.passive="onLogScroll"
-        >
+        <div ref="logContainer" class="h-[520px] overflow-auto border-t border-dark/10 bg-light font-mono text-[13px] leading-5 text-dark dark:border-light/10 dark:bg-dark dark:text-light" @scroll.passive="onLogScroll">
           <pre class="m-0 whitespace-pre p-4" :class="{ 'whitespace-pre-wrap': wrapLongLines }">{{
             actualLogs
           }}</pre>
@@ -195,6 +154,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { NGrid, NGi, NButton, NInput } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
 import { useAuthStore } from '@/stores/auth';
 import { http } from '@/http';

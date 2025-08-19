@@ -3,22 +3,15 @@
     <label v-if="label" class="text-[11px] font-medium uppercase tracking-wider opacity-60">{{
       label
     }}</label>
-    <select
-      v-model="model"
-      class="text-xs bg-transparent border rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-primary/40 border-dark/20"
-    >
-      <option value="__default">Default</option>
-      <option v-for="c in clients" :key="c.id" :value="c.id">
-        {{ c.name }}
-      </option>
-    </select>
+    <n-select v-model:value="model" :options="selectOptions" size="small" />
   </div>
 </template>
 <script setup>
-import { ref, onMounted, watch } from 'vue';
+import { ref, onMounted, watch, computed } from 'vue';
 import { useConfigStore } from '@/stores/config';
 import { http } from '@/http';
 import { useAuthStore } from '@/stores/auth';
+import { NSelect } from 'naive-ui';
 const props = defineProps({
   modelValue: { type: String, default: '__default' },
   label: { type: String, default: '' },
@@ -27,6 +20,10 @@ const emit = defineEmits(['update:modelValue']);
 const model = ref(props.modelValue);
 const clients = ref([]);
 const configStore = useConfigStore();
+const selectOptions = computed(() => [
+  { label: 'Default', value: '__default' },
+  ...clients.value.map((c) => ({ label: c.name, value: c.id })),
+]);
 
 onMounted(async () => {
   const auth = useAuthStore();

@@ -1,89 +1,63 @@
-<script setup>
-import { loadAutoTheme, setupThemeToggleListener } from '@/theme';
-import { onMounted } from 'vue';
+<script setup lang="ts">
+import { ref, onMounted, computed, h } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { NDropdown, NButton } from 'naive-ui';
+import { loadAutoTheme, setupThemeToggleListener, getPreferredTheme, setStoredTheme, setTheme } from '@/theme';
+
+const { t } = useI18n();
+
+const open = ref(false);
+const current = ref('auto');
+
+const options = computed(() => [
+  { key: 'light', label: t('navbar.theme_light'), icon: () => h('i', { class: 'fa-solid fa-sun' }) },
+  { key: 'dark', label: t('navbar.theme_dark'), icon: () => h('i', { class: 'fa-solid fa-moon' }) },
+  {
+    key: 'auto',
+    label: t('navbar.theme_auto'),
+    icon: () => h('i', { class: 'fa-solid fa-circle-half-stroke' }),
+  },
+]);
+
+const activeIcon = computed(() => {
+  const m = {
+    light: 'fa-solid fa-sun',
+    dark: 'fa-solid fa-moon',
+    auto: 'fa-solid fa-circle-half-stroke',
+  } as Record<string, string>;
+  return m[current.value] || m.auto;
+});
+
+type ThemeKey = 'light' | 'dark' | 'auto';
+
+interface ThemeOption {
+  key: ThemeKey;
+  label: string;
+  icon: () => ReturnType<typeof h>;
+}
+
+function onSelect(key: string | number): void {
+  const v = String(key) as ThemeKey;
+  setStoredTheme(v);
+  setTheme(v);
+  current.value = v;
+  open.value = false;
+}
 
 onMounted(() => {
   loadAutoTheme();
   setupThemeToggleListener();
+  current.value = getPreferredTheme();
 });
 </script>
 
 <template>
-  <div class="relative inline-block text-left">
-    <button
-      id="bd-theme"
-      aria-haspopup="true"
-      :aria-expanded="open"
-      class="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5"
-      @click="open = !open"
-    >
+  <n-dropdown trigger="click" :options="options" @select="onSelect">
+  <n-button tertiary size="small" class="flex items-center gap-2 bg-transparent border-0 shadow-none hover:bg-transparent focus:outline-none">
       <span class="theme-icon-active"><i :class="activeIcon" /></span>
-      <span id="bd-theme-text">{{ $t('navbar.toggle_theme') }}</span>
-    </button>
-
-    <div
-      v-if="open"
-      class="origin-top-right absolute right-0 mt-2 w-44 rounded-md shadow-lg bg-white dark:bg-surface/90 ring-1 ring-black/5 dark:ring-white/5"
-    >
-      <div class="py-1">
-        <button
-          v-for="opt in options"
-          :key="opt.value"
-          :class="[
-            'w-full text-left px-3 py-2 flex items-center gap-2',
-            opt.value === current ? 'bg-black/5 dark:bg-white/5' : '',
-          ]"
-          @click="select(opt.value)"
-        >
-          <i :class="opt.icon" />
-          <span>{{ opt.label }}</span>
-        </button>
-      </div>
-    </div>
-  </div>
+      <span>{{ $t('navbar.toggle_theme') }}</span>
+    </n-button>
+  </n-dropdown>
 </template>
-
-<script>
-export default {
-  data() {
-    return {
-      open: false,
-      current: null,
-      options: [
-        { value: 'light', label: this.$t('navbar.theme_light'), icon: 'fa-solid fa-sun' },
-        { value: 'dark', label: this.$t('navbar.theme_dark'), icon: 'fa-solid fa-moon' },
-        {
-          value: 'auto',
-          label: this.$t('navbar.theme_auto'),
-          icon: 'fa-solid fa-circle-half-stroke',
-        },
-      ],
-    };
-  },
-  computed: {
-    activeIcon() {
-      const opt = this.options.find((o) => o.value === this.current) || this.options[2];
-      return opt.icon;
-    },
-  },
-  mounted() {
-    // initialize current theme
-    import('@/theme').then((mod) => {
-      this.current = mod.getPreferredTheme();
-    });
-  },
-  methods: {
-    select(v) {
-      import('@/theme').then((mod) => {
-        // Use exported helpers from theme.js
-        mod.setStoredTheme(v);
-        mod.setTheme(v);
-        this.current = v;
-        this.open = false;
-      });
-    },
-  },
-};
-</script>
 
 <style scoped></style>

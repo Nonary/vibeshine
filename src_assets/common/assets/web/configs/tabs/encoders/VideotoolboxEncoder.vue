@@ -2,6 +2,7 @@
 import { ref } from 'vue';
 import Checkbox from '@/Checkbox.vue';
 import { useConfigStore } from '@/stores/config';
+import { NSelect } from 'naive-ui';
 
 const store = useConfigStore();
 const config = store.config;
@@ -12,34 +13,28 @@ const config = store.config;
     <!-- Presets -->
     <div class="mb-4">
       <label for="vt_coder" class="form-label">{{ $t('config.vt_coder') }}</label>
-      <select id="vt_coder" v-model="config.vt_coder" class="form-control">
-        <option value="auto">
-          {{ $t('config.ffmpeg_auto') }}
-        </option>
-        <option value="cabac">
-          {{ $t('config.coder_cabac') }}
-        </option>
-        <option value="cavlc">
-          {{ $t('config.coder_cavlc') }}
-        </option>
-      </select>
+      <n-select
+        id="vt_coder"
+        v-model:value="config.vt_coder"
+        :options="[
+          { label: $t('config.ffmpeg_auto'), value: 'auto' },
+          { label: $t('config.coder_cabac'), value: 'cabac' },
+          { label: $t('config.coder_cavlc'), value: 'cavlc' },
+        ]"
+      />
     </div>
     <div class="mb-4">
       <label for="vt_software" class="form-label">{{ $t('config.vt_software') }}</label>
-      <select id="vt_software" v-model="config.vt_software" class="form-control">
-        <option value="auto">
-          {{ $t('_common.auto') }}
-        </option>
-        <option value="disabled">
-          {{ $t('_common.disabled') }}
-        </option>
-        <option value="allowed">
-          {{ $t('config.vt_software_allowed') }}
-        </option>
-        <option value="forced">
-          {{ $t('config.vt_software_forced') }}
-        </option>
-      </select>
+      <n-select
+        id="vt_software"
+        v-model:value="config.vt_software"
+        :options="[
+          { label: $t('_common.auto'), value: 'auto' },
+          { label: $t('_common.disabled'), value: 'disabled' },
+          { label: $t('config.vt_software_allowed'), value: 'allowed' },
+          { label: $t('config.vt_software_forced'), value: 'forced' },
+        ]"
+      />
     </div>
     <Checkbox
       id="vt_realtime"

@@ -7,46 +7,43 @@
           {{ $t('auth.login_title') }}
         </h1>
       </div>
-      <form v-if="!isLoggedIn" autocomplete="on" @submit.prevent="login">
+
+      <div v-if="!isLoggedIn">
         <div class="mb-3">
           <label for="username" class="form-label">{{ $t('_common.username') }}</label>
-          <input
+          <n-input
             id="username"
-            v-model="credentials.username"
+            v-model:value="credentials.username"
             type="text"
-            class="form-control"
             name="username"
-            required
             autocomplete="username"
+            placeholder="Username"
           />
         </div>
         <div class="mb-3">
           <label for="password" class="form-label">{{ $t('_common.password') }}</label>
-          <input
+          <n-input
             id="password"
-            v-model="credentials.password"
+            v-model:value="credentials.password"
             type="password"
-            class="form-control"
             name="password"
-            required
             autocomplete="current-password"
+            show-password-on="mousedown"
+            placeholder="••••••••"
           />
         </div>
-        <button type="submit" class="btn btn-primary w-100" :disabled="loading">
-          <span v-if="loading" class="spinner-border spinner-border-sm me-2" />
+        <n-button type="primary" class="w-full" :loading="loading" @click="login">
           {{ $t('auth.login_sign_in') }}
-        </button>
-        <div v-if="error" class="alert alert-danger mt-3">
+        </n-button>
+        <n-alert v-if="error" type="error" class="mt-3" closable @close="error = ''">
           {{ error }}
-        </div>
-      </form>
-      <div v-else class="text-center">
-        <div class="alert alert-success">
-          {{ $t('auth.login_success') }}
-        </div>
-        <output class="spinner-border">
-          <span class="visually-hidden">{{ $t('auth.login_loading') }}</span>
-        </output>
+        </n-alert>
+      </div>
+      <div v-else class="text-center space-y-3">
+        <n-alert type="success">{{ $t('auth.login_success') }}</n-alert>
+        <n-spin :show="true">
+          <span class="sr-only">{{ $t('auth.login_loading') }}</span>
+        </n-spin>
       </div>
     </div>
   </div>
@@ -57,6 +54,7 @@ import { ref, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useAuthStore } from '@/stores/auth';
 import { http } from '@/http';
+import { NInput, NButton, NAlert, NSpin } from 'naive-ui';
 
 const auth = useAuthStore();
 const credentials = ref({ username: '', password: '' });

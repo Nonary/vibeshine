@@ -10,17 +10,11 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "types": [
-      "vite/client",
-      "node"
-    ],
+    "types": ["vite/client", "node"],
     "baseUrl": "./",
     "paths": {
       // Map web asset alias first so IDE resolves imports like '@/stores/auth'
-      "@/*": [
-        "src_assets/common/assets/web/*",
-        "src/*"
-      ]
+      "@/*": ["src_assets/common/assets/web/*", "src/*"]
     },
     "allowJs": true,
     "noEmit": true

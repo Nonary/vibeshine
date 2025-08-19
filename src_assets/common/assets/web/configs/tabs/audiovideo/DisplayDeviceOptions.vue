@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import PlatformLayout from '@/PlatformLayout.vue';
 import Checkbox from '@/Checkbox.vue';
 import { useConfigStore } from '@/stores/config';
+import { NSelect, NInput, NInputNumber, NButton } from 'naive-ui';
 
 // Use centralized store for config and platform
 const store = useConfigStore();
@@ -75,7 +76,7 @@ function removeRemappingEntry(idx) {
   <PlatformLayout v-if="config">
     <template #windows>
       <div class="mb-6">
-        <div class="rounded-md overflow-hidden border border-black/5 dark:border-white/10">
+        <div class="rounded-md overflow-hidden border border-dark/10 dark:border-light/10">
           <div class="bg-surface/40 px-4 py-3">
             <h3 class="text-sm font-medium">
               {{ $t('config.dd_options_header') }}
@@ -87,27 +88,17 @@ function removeRemappingEntry(idx) {
               <label for="dd_configuration_option" class="form-label">{{
                 $t('config.dd_config_label')
               }}</label>
-              <select
+              <n-select
                 id="dd_configuration_option"
-                v-model="config.dd_configuration_option"
-                class="form-control"
-              >
-                <option value="disabled">
-                  {{ $t('_common.disabled_def') }}
-                </option>
-                <option value="verify_only">
-                  {{ $t('config.dd_config_verify_only') }}
-                </option>
-                <option value="ensure_active">
-                  {{ $t('config.dd_config_ensure_active') }}
-                </option>
-                <option value="ensure_primary">
-                  {{ $t('config.dd_config_ensure_primary') }}
-                </option>
-                <option value="ensure_only_display">
-                  {{ $t('config.dd_config_ensure_only_display') }}
-                </option>
-              </select>
+                v-model:value="config.dd_configuration_option"
+                :options="[
+                  { label: $t('_common.disabled_def'), value: 'disabled' },
+                  { label: $t('config.dd_config_verify_only'), value: 'verify_only' },
+                  { label: $t('config.dd_config_ensure_active'), value: 'ensure_active' },
+                  { label: $t('config.dd_config_ensure_primary'), value: 'ensure_primary' },
+                  { label: $t('config.dd_config_ensure_only_display'), value: 'ensure_only_display' },
+                ]"
+              />
             </div>
 
             <!-- Resolution option -->
@@ -115,21 +106,15 @@ function removeRemappingEntry(idx) {
               <label for="dd_resolution_option" class="form-label">{{
                 $t('config.dd_resolution_option')
               }}</label>
-              <select
+              <n-select
                 id="dd_resolution_option"
-                v-model="config.dd_resolution_option"
-                class="form-control"
-              >
-                <option value="disabled">
-                  {{ $t('config.dd_resolution_option_disabled') }}
-                </option>
-                <option value="auto">
-                  {{ $t('config.dd_resolution_option_auto') }}
-                </option>
-                <option value="manual">
-                  {{ $t('config.dd_resolution_option_manual') }}
-                </option>
-              </select>
+                v-model:value="config.dd_resolution_option"
+                :options="[
+                  { label: $t('config.dd_resolution_option_disabled'), value: 'disabled' },
+                  { label: $t('config.dd_resolution_option_auto'), value: 'auto' },
+                  { label: $t('config.dd_resolution_option_manual'), value: 'manual' },
+                ]"
+              />
               <p
                 v-if="
                   config.dd_resolution_option === 'auto' || config.dd_resolution_option === 'manual'
@@ -143,11 +128,11 @@ function removeRemappingEntry(idx) {
                 <p class="text-[11px] opacity-60">
                   {{ $t('config.dd_resolution_option_manual_desc') }}
                 </p>
-                <input
+                <n-input
                   id="dd_manual_resolution"
-                  v-model="config.dd_manual_resolution"
+                  v-model:value="config.dd_manual_resolution"
                   type="text"
-                  class="form-control monospace"
+                  class="monospace"
                   placeholder="2560x1440"
                 />
               </div>
@@ -158,31 +143,25 @@ function removeRemappingEntry(idx) {
               <label for="dd_refresh_rate_option" class="form-label">{{
                 $t('config.dd_refresh_rate_option')
               }}</label>
-              <select
+              <n-select
                 id="dd_refresh_rate_option"
-                v-model="config.dd_refresh_rate_option"
-                class="form-control"
-              >
-                <option value="disabled">
-                  {{ $t('config.dd_refresh_rate_option_disabled') }}
-                </option>
-                <option value="auto">
-                  {{ $t('config.dd_refresh_rate_option_auto') }}
-                </option>
-                <option value="manual">
-                  {{ $t('config.dd_refresh_rate_option_manual') }}
-                </option>
-              </select>
+                v-model:value="config.dd_refresh_rate_option"
+                :options="[
+                  { label: $t('config.dd_refresh_rate_option_disabled'), value: 'disabled' },
+                  { label: $t('config.dd_refresh_rate_option_auto'), value: 'auto' },
+                  { label: $t('config.dd_refresh_rate_option_manual'), value: 'manual' },
+                ]"
+              />
 
               <div v-if="config.dd_refresh_rate_option === 'manual'" class="mt-2 pl-4">
                 <p class="text-[11px] opacity-60">
                   {{ $t('config.dd_refresh_rate_option_manual_desc') }}
                 </p>
-                <input
+                <n-input
                   id="dd_manual_refresh_rate"
-                  v-model="config.dd_manual_refresh_rate"
+                  v-model:value="config.dd_manual_refresh_rate"
                   type="text"
-                  class="form-control monospace"
+                  class="monospace"
                   placeholder="59.9558"
                 />
               </div>
@@ -191,27 +170,26 @@ function removeRemappingEntry(idx) {
             <!-- HDR option -->
             <div v-if="config.dd_configuration_option !== 'disabled'">
               <label for="dd_hdr_option" class="form-label">{{ $t('config.dd_hdr_option') }}</label>
-              <select id="dd_hdr_option" v-model="config.dd_hdr_option" class="form-control mb-2">
-                <option value="disabled">
-                  {{ $t('config.dd_hdr_option_disabled') }}
-                </option>
-                <option value="auto">
-                  {{ $t('config.dd_hdr_option_auto') }}
-                </option>
-              </select>
+              <n-select
+                id="dd_hdr_option"
+                v-model:value="config.dd_hdr_option"
+                :options="[
+                  { label: $t('config.dd_hdr_option_disabled'), value: 'disabled' },
+                  { label: $t('config.dd_hdr_option_auto'), value: 'auto' },
+                ]"
+                class="mb-2"
+              />
 
               <label for="dd_wa_hdr_toggle_delay" class="form-label">{{
                 $t('config.dd_wa_hdr_toggle_delay')
               }}</label>
-              <input
-                id="dd_wa_hdr_toggle_delay"
-                v-model="config.dd_wa_hdr_toggle_delay"
-                type="number"
-                class="form-control"
-                placeholder="0"
-                min="0"
-                max="3000"
-              />
+              <n-input-number
+                  id="dd_wa_hdr_toggle_delay"
+                  v-model:value="config.dd_wa_hdr_toggle_delay"
+                  :placeholder="0"
+                  :min="0"
+                  :max="3000"
+                />
               <p class="text-[11px] opacity-60 mt-1">
                 {{ $t('config.dd_wa_hdr_toggle_delay_desc_1') }}<br />
                 {{ $t('config.dd_wa_hdr_toggle_delay_desc_2') }}<br />
@@ -224,13 +202,11 @@ function removeRemappingEntry(idx) {
               <label for="dd_config_revert_delay" class="form-label">{{
                 $t('config.dd_config_revert_delay')
               }}</label>
-              <input
+              <n-input-number
                 id="dd_config_revert_delay"
-                v-model="config.dd_config_revert_delay"
-                type="number"
-                class="form-control"
-                placeholder="3000"
-                min="0"
+                v-model:value="config.dd_config_revert_delay"
+                :placeholder="3000"
+                :min="0"
               />
               <p class="text-[11px] opacity-60 mt-1">
                 {{ $t('config.dd_config_revert_delay_desc') }}
@@ -278,54 +254,48 @@ function removeRemappingEntry(idx) {
                   class="grid grid-cols-12 gap-2 items-center"
                 >
                   <div v-if="getRemappingType() !== REFRESH_RATE_ONLY" class="col-span-3">
-                    <input
-                      v-model="value.requested_resolution"
+                    <n-input
+                      v-model:value="value.requested_resolution"
                       type="text"
-                      class="form-control monospace"
+                      class="monospace"
                       :placeholder="'1920x1080'"
                     />
                   </div>
                   <div v-if="getRemappingType() !== RESOLUTION_ONLY" class="col-span-2">
-                    <input
-                      v-model="value.requested_fps"
+                    <n-input
+                      v-model:value="value.requested_fps"
                       type="text"
-                      class="form-control monospace"
+                      class="monospace"
                       :placeholder="'60'"
                     />
                   </div>
                   <div v-if="getRemappingType() !== REFRESH_RATE_ONLY" class="col-span-3">
-                    <input
-                      v-model="value.final_resolution"
+                    <n-input
+                      v-model:value="value.final_resolution"
                       type="text"
-                      class="form-control monospace"
+                      class="monospace"
                       :placeholder="'2560x1440'"
                     />
                   </div>
                   <div v-if="getRemappingType() !== RESOLUTION_ONLY" class="col-span-2">
-                    <input
-                      v-model="value.final_refresh_rate"
+                    <n-input
+                      v-model:value="value.final_refresh_rate"
                       type="text"
-                      class="form-control monospace"
+                      class="monospace"
                       :placeholder="'119.95'"
                     />
                   </div>
                   <div class="col-span-2 text-right">
-                    <button
-                      class="inline-flex items-center justify-center px-3 py-2 rounded-md bg-red-600 text-white text-sm hover:bg-red-700"
-                      @click="removeRemappingEntry(idx)"
-                    >
+                    <n-button size="small" type="error" @click="removeRemappingEntry(idx)">
                       <i class="fas fa-trash" />
-                    </button>
+                    </n-button>
                   </div>
                 </div>
               </div>
               <div class="mt-2">
-                <button
-                  class="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-green-600 text-white text-sm hover:bg-green-700"
-                  @click="addRemappingEntry()"
-                >
+                <n-button type="success" size="small" @click="addRemappingEntry()">
                   &plus; {{ $t('config.dd_mode_remapping_add') }}
-                </button>
+                </n-button>
               </div>
             </div>
           </div>

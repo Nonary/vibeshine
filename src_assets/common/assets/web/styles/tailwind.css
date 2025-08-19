@@ -56,6 +56,56 @@
 
 /* Legacy class shims (Bootstrap -> Tailwind) for incremental migration */
 @layer components {
+  /*
+   * Naive UI button content alignment and icon spacing
+   * - Ensure icons and text inside buttons are consistently centered with spacing.
+   * - Avoid per-button flex wrappers by normalizing the inner content element.
+   */
+  :root .n-button .n-button__content {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem; /* 8px gap between icon and text */
+  }
+
+  /* Reset icon margins inside Naive buttons (gap handles spacing there) */
+  :root .n-button .n-button__content .icon,
+  :root .n-button .n-button__content .fa,
+  :root .n-button .n-button__content .fas,
+  :root .n-button .n-button__content .far,
+  :root .n-button .n-button__content .fal,
+  :root .n-button .n-button__content .fab {
+    margin: 0 !important;
+  }
+
+  /* Global icon alignment and spacing when used inline (outside buttons) */
+  .icon,
+  .fa,
+  .fas,
+  .far,
+  .fal,
+  .fab {
+    line-height: 1;
+    vertical-align: -0.125em; /* optical alignment with text baseline */
+  }
+
+  /* Provide spacing when icon is leading or trailing text (non-button contexts) */
+  :not(.n-button__content) > .icon:first-child,
+  :not(.n-button__content) > .fa:first-child,
+  :not(.n-button__content) > .fas:first-child,
+  :not(.n-button__content) > .far:first-child,
+  :not(.n-button__content) > .fal:first-child,
+  :not(.n-button__content) > .fab:first-child {
+    margin-right: 0.5rem;
+  }
+
+  :not(.n-button__content) > .icon:last-child,
+  :not(.n-button__content) > .fa:last-child,
+  :not(.n-button__content) > .fas:last-child,
+  :not(.n-button__content) > .far:last-child,
+  :not(.n-button__content) > .fal:last-child,
+  :not(.n-button__content) > .fab:last-child {
+    margin-left: 0.5rem;
+  }
   .card {
     @apply p-5 rounded-md border border-dark/10 dark:border-light/10 bg-white dark:bg-surface shadow-sm;
   }
@@ -102,7 +152,7 @@
   }
 
   .form-control {
-    @apply w-full px-3 py-2 text-sm rounded-md border border-black/10 dark:border-white/15 bg-white dark:bg-surface/70 text-dark dark:text-light placeholder-black/40 dark:placeholder-light/40 focus:outline-none focus:ring-2 focus:ring-primary/40;
+    @apply w-full px-3 py-2 text-sm rounded-md border border-dark/10 dark:border-light/15 bg-light dark:bg-surface/70 text-dark dark:text-light placeholder-dark/40 dark:placeholder-light/40 focus:outline-none focus:ring-2 focus:ring-primary/40;
     /* normalize native select appearance and ensure padding for custom arrow */
     -webkit-appearance: none;
     appearance: none;
@@ -172,22 +222,47 @@
   }
 
   .alert-danger {
-    @apply bg-red-50 text-red-800 border border-red-100;
+    background-color: rgba(var(--color-danger), 0.10);
+    color: rgb(var(--color-on-dark));
+    border: 1px solid rgba(var(--color-danger), 0.25);
   }
 
   .alert-success {
-    @apply bg-green-50 text-green-800 border border-green-100;
+    background-color: rgba(var(--color-success), 0.10);
+    color: rgb(var(--color-on-light));
+    border: 1px solid rgba(var(--color-success), 0.20);
   }
 
   .alert-warning {
-    @apply bg-yellow-50 text-yellow-800 border border-yellow-100;
+    background-color: rgba(var(--color-warning), 0.12);
+    color: rgb(var(--color-on-primary));
+    border: 1px solid rgba(var(--color-warning), 0.25);
   }
 
-  .alert-primary {
-    @apply bg-sky-50 text-sky-800 border border-sky-100;
+  .alert-info {
+    background-color: rgba(var(--color-info), 0.10);
+    color: rgb(var(--color-on-light));
+    border: 1px solid rgba(var(--color-info), 0.20);
   }
 
   /* spacing utilities like mb-3/mb-2 should use Tailwind classes directly in templates; do not @apply them here */
 
   /* Removed .w-100 and .ms-auto alias shims; use w-full and ml-auto directly in templates */
+}
+
+/*
+ * Improve dark-mode visibility for unchecked Naive UI checkboxes.
+ * Adds a subtle inset outline when unchecked; removed when checked.
+ */
+@layer components {
+  .dark .n-checkbox:not(.n-checkbox--checked) .n-checkbox-box,
+  .dark .n-checkbox:not(.n-checkbox--checked) .n-checkbox__input {
+    box-shadow: inset 0 0 0 1.5px rgba(var(--color-light), 0.35);
+    border-color: rgba(var(--color-light), 0.35) !important;
+  }
+
+  .dark .n-checkbox.n-checkbox--checked .n-checkbox-box,
+  .dark .n-checkbox.n-checkbox--checked .n-checkbox__input {
+    box-shadow: none;
+  }
 }

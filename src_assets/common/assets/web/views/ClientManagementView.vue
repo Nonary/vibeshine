@@ -5,8 +5,8 @@
     </h1>
 
     <!-- Pair New Client -->
-    <UiCard class="mb-8">
-      <template #title>
+    <n-card class="mb-8" :segmented="{ content: true, footer: true }">
+      <template #header>
         <h2 class="text-lg font-medium flex items-center gap-2">
           <i class="fas fa-link" /> {{ $t('clients.pair_title') }}
         </h2>
@@ -21,17 +21,15 @@
             <label class="text-[11px] font-semibold tracking-wide uppercase mb-1" for="pin-input">{{
               $t('navbar.pin')
             }}</label>
-            <input
+            <n-input
               id="pin-input"
-              v-model="pin"
+              v-model:value="pin"
               type="text"
               inputmode="numeric"
               pattern="^[0-9]{4}$"
               title="Enter 4 digits"
               maxlength="4"
-              class="form-control"
               :placeholder="$t('navbar.pin')"
-              required
             />
           </div>
           <div class="flex flex-col">
@@ -40,68 +38,65 @@
               for="name-input"
               >{{ $t('pin.device_name') }}</label
             >
-            <input
+            <n-input
               id="name-input"
-              v-model="deviceName"
+              v-model:value="deviceName"
               type="text"
-              class="form-control"
               :placeholder="$t('pin.device_name')"
-              required
             />
           </div>
           <div class="flex flex-col md:items-end">
-            <UiButton :disabled="pairing" class="w-full md:w-auto" variant="primary" type="submit">
+            <n-button
+              :disabled="pairing"
+              class="w-full md:w-auto"
+              type="primary"
+              attr-type="submit"
+            >
               <span v-if="!pairing">{{ $t('pin.send') }}</span>
               <span v-else>{{ $t('clients.pairing') }}</span>
-            </UiButton>
+            </n-button>
           </div>
         </form>
         <div class="space-y-2">
-          <UiAlert v-if="pairStatus === true" variant="success">{{
-            $t('pin.pair_success')
-          }}</UiAlert>
-          <UiAlert v-if="pairStatus === false" variant="danger">{{
-            $t('pin.pair_failure')
-          }}</UiAlert>
+          <n-alert v-if="pairStatus === true" type="success">{{ $t('pin.pair_success') }}</n-alert>
+          <n-alert v-if="pairStatus === false" type="error">{{ $t('pin.pair_failure') }}</n-alert>
         </div>
-        <UiAlert variant="warning" class="text-sm flex items-start gap-2">
+        <n-alert type="warning" class="text-sm flex items-start gap-2" :show-icon="true">
           <template #default>
             <div class="flex items-start gap-2">
               <b class="font-semibold">{{ $t('_common.warning') }}</b>
               <span>{{ $t('pin.warning_msg') }}</span>
             </div>
           </template>
-        </UiAlert>
+        </n-alert>
       </div>
-    </UiCard>
+    </n-card>
 
     <!-- Existing Clients -->
-    <UiCard class="mb-8">
-      <template #title>
+    <n-card class="mb-8" :segmented="{ content: true, footer: true }">
+      <template #header>
         <h2 class="text-lg font-medium flex items-center gap-2">
           <i class="fas fa-users" /> {{ $t('clients.existing_title') }}
         </h2>
       </template>
-      <template #actions>
-        <UiButton
+      <div class="flex items-center">
+        <n-button
           class="ml-auto"
-          variant="danger"
+          type="error"
           :disabled="unpairAllPressed || clients.length === 0"
           @click="askConfirmUnpairAll"
         >
-          <template #icon>
-            <i class="fas fa-user-slash" />
-          </template>
+          <i class="fas fa-user-slash" />
           {{ $t('troubleshooting.unpair_all') }}
-        </UiButton>
-      </template>
+        </n-button>
+      </div>
       <p class="text-sm opacity-75 mb-3">{{ $t('troubleshooting.unpair_desc') }}</p>
-      <UiAlert v-if="unpairAllStatus === true" variant="success" class="mb-3">{{
+      <n-alert v-if="unpairAllStatus === true" type="success" class="mb-3">{{
         $t('troubleshooting.unpair_all_success')
-      }}</UiAlert>
-      <UiAlert v-if="unpairAllStatus === false" variant="danger" class="mb-3">{{
+      }}</n-alert>
+      <n-alert v-if="unpairAllStatus === false" type="error" class="mb-3">{{
         $t('troubleshooting.unpair_all_error')
-      }}</UiAlert>
+      }}</n-alert>
       <ul v-if="clients && clients.length > 0" class="divide-y divide-dark/10 dark:divide-light/10">
         <li
           v-for="client in clients"
@@ -111,70 +106,79 @@
           <div class="flex-1 truncate">
             {{ client.name !== '' ? client.name : $t('troubleshooting.unpair_single_unknown') }}
           </div>
-          <UiButton
-            variant="danger"
-            size="sm"
+          <n-button
+            type="error"
+            size="small"
             :disabled="removing[client.uuid] === true"
             aria-label="Remove"
             @click="askConfirmUnpair(client.uuid)"
           >
             <i class="fas fa-trash" />
-          </UiButton>
+          </n-button>
         </li>
       </ul>
       <div v-else class="p-4 text-center italic opacity-75">
         {{ $t('troubleshooting.unpair_single_no_devices') }}
       </div>
-    </UiCard>
+    </n-card>
 
     <ApiTokenManager></ApiTokenManager>
 
     <!-- Confirm remove single client -->
-    <UiConfirmModal
-      v-model:open="showConfirmRemove"
-      :title="
-        $t('clients.confirm_remove_title_named', {
-          name: pendingRemoveName || $t('troubleshooting.unpair_single_unknown'),
-        })
-      "
-      :message="
-        $t('clients.confirm_remove_message_named', {
-          name: pendingRemoveName || $t('troubleshooting.unpair_single_unknown'),
-        })
-      "
-      :confirm-text="$t('clients.remove')"
-      :cancelText="$t('cancel')"
-      confirm-icon="fas fa-user-slash"
-      variant="danger"
-      icon="fas fa-triangle-exclamation"
-      @confirm="confirmRemove"
-      @cancel="showConfirmRemove = false"
-    />
+    <n-modal :show="showConfirmRemove" @update:show="(v) => (showConfirmRemove = v)">
+      <n-card
+        :title="
+          $t('clients.confirm_remove_title_named', {
+            name: pendingRemoveName || $t('troubleshooting.unpair_single_unknown'),
+          })
+        "
+        style="max-width: 32rem; width: 100%"
+        :bordered="false"
+      >
+        <div class="text-sm text-center">
+          {{
+            $t('clients.confirm_remove_message_named', {
+              name: pendingRemoveName || $t('troubleshooting.unpair_single_unknown'),
+            })
+          }}
+        </div>
+        <template #footer>
+          <div class="w-full flex items-center justify-center gap-3">
+            <n-button tertiary @click="showConfirmRemove = false">{{ $t('cancel') }}</n-button>
+            <n-button type="error" @click="confirmRemove">{{ $t('clients.remove') }}</n-button>
+          </div>
+        </template>
+      </n-card>
+    </n-modal>
 
     <!-- Confirm unpair all -->
-    <UiConfirmModal
-      v-model:open="showConfirmUnpairAll"
-      :title="$t('clients.confirm_unpair_all_title')"
-      :message="$t('clients.confirm_unpair_all_message_count', { count: clients.length })"
-      :confirm-text="$t('troubleshooting.unpair_all')"
-      :cancelText="$t('cancel')"
-      confirm-icon="fas fa-user-slash"
-      variant="danger"
-      icon="fas fa-triangle-exclamation"
-      @confirm="confirmUnpairAll"
-      @cancel="showConfirmUnpairAll = false"
-    />
+    <n-modal :show="showConfirmUnpairAll" @update:show="(v) => (showConfirmUnpairAll = v)">
+      <n-card
+        :title="$t('clients.confirm_unpair_all_title')"
+        style="max-width: 32rem; width: 100%"
+        :bordered="false"
+      >
+        <div class="text-sm text-center">
+          {{ $t('clients.confirm_unpair_all_message_count', { count: clients.length }) }}
+        </div>
+        <template #footer>
+          <div class="w-full flex items-center justify-center gap-3">
+            <n-button tertiary @click="showConfirmUnpairAll = false">{{ $t('cancel') }}</n-button>
+            <n-button type="error" @click="confirmUnpairAll">{{
+              $t('troubleshooting.unpair_all')
+            }}</n-button>
+          </div>
+        </template>
+      </n-card>
+    </n-modal>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, computed } from 'vue';
 import { http } from '@/http';
-import UiCard from '@/components/UiCard.vue';
-import UiButton from '@/components/UiButton.vue';
-import UiAlert from '@/components/UiAlert.vue';
+import { NCard, NButton, NAlert, NModal, NInput } from 'naive-ui';
 import ApiTokenManager from '@/ApiTokenManager.vue';
-import UiConfirmModal from '@/components/UiConfirmModal.vue';
 import { useAuthStore } from '@/stores/auth';
 
 const clients = ref([]);

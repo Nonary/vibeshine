@@ -2,9 +2,33 @@
 import { ref } from 'vue';
 import Checkbox from '@/Checkbox.vue';
 import { useConfigStore } from '@/stores/config';
+import { NSelect } from 'naive-ui';
 
 const store = useConfigStore();
 const config = store.config;
+const usageOptions = [
+  { labelKey: 'config.amd_usage_transcoding', value: 'transcoding' },
+  { labelKey: 'config.amd_usage_webcam', value: 'webcam' },
+  { labelKey: 'config.amd_usage_lowlatency_high_quality', value: 'lowlatency_high_quality' },
+  { labelKey: 'config.amd_usage_lowlatency', value: 'lowlatency' },
+  { labelKey: 'config.amd_usage_ultralowlatency', value: 'ultralowlatency' },
+];
+const rateControlOptions = [
+  { labelKey: 'config.amd_rc_cbr', value: 'cbr' },
+  { labelKey: 'config.amd_rc_cqp', value: 'cqp' },
+  { labelKey: 'config.amd_rc_vbr_latency', value: 'vbr_latency' },
+  { labelKey: 'config.amd_rc_vbr_peak', value: 'vbr_peak' },
+];
+const qualityOptions = [
+  { labelKey: 'config.amd_quality_speed', value: 'speed' },
+  { labelKey: 'config.amd_quality_balanced', value: 'balanced' },
+  { labelKey: 'config.amd_quality_quality', value: 'quality' },
+];
+const coderOptions = [
+  { labelKey: 'config.ffmpeg_auto', value: 'auto' },
+  { labelKey: 'config.coder_cabac', value: 'cabac' },
+  { labelKey: 'config.coder_cavlc', value: 'cavlc' },
+];
 </script>
 
 <template>
@@ -12,30 +36,18 @@ const config = store.config;
     <!-- AMF Usage -->
     <div class="mb-4">
       <label for="amf_quality" class="form-label">{{ $t('config.amf.quality') }}</label>
-      <select id="amf_quality" v-model="config.profile" class="form-control">
-        <option value="transcoding">
-          {{ $t('config.amd_usage_transcoding') }}
-        </option>
-        <option value="webcam">
-          {{ $t('config.amd_usage_webcam') }}
-        </option>
-        <option value="lowlatency_high_quality">
-          {{ $t('config.amd_usage_lowlatency_high_quality') }}
-        </option>
-        <option value="lowlatency">
-          {{ $t('config.amd_usage_lowlatency') }}
-        </option>
-        <option value="ultralowlatency">
-          {{ $t('config.amd_usage_ultralowlatency') }}
-        </option>
-      </select>
+      <n-select
+        id="amf_quality"
+        v-model:value="config.profile"
+        :options="usageOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+      />
       <div class="form-text">
         {{ $t('config.amd_usage_desc') }}
       </div>
     </div>
 
     <!-- AMD Rate Control group options -->
-    <div class="mb-4 rounded-md overflow-hidden border border-black/5 dark:border-white/10">
+    <div class="mb-4 rounded-md overflow-hidden border border-dark/10 dark:border-light/10">
       <div class="bg-surface/40 dark:bg-surface/30 px-4 py-3">
         <h3 class="text-sm font-medium">
           {{ $t('config.amd_rc_group') }}
@@ -47,20 +59,11 @@ const config = store.config;
           <label for="amf_rate_control" class="form-label">{{
             $t('config.amf.rate_control')
           }}</label>
-          <select id="amf_rate_control" v-model="config.rate_control" class="form-control">
-            <option value="cbr">
-              {{ $t('config.amd_rc_cbr') }}
-            </option>
-            <option value="cqp">
-              {{ $t('config.amd_rc_cqp') }}
-            </option>
-            <option value="vbr_latency">
-              {{ $t('config.amd_rc_vbr_latency') }}
-            </option>
-            <option value="vbr_peak">
-              {{ $t('config.amd_rc_vbr_peak') }}
-            </option>
-          </select>
+          <n-select
+            id="amf_rate_control"
+            v-model:value="config.rate_control"
+            :options="rateControlOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+          />
           <p class="text-[11px] opacity-60 mt-1">
             {{ $t('config.amd_rc_desc') }}
           </p>
@@ -78,7 +81,7 @@ const config = store.config;
     </div>
 
     <!-- AMF Quality group options -->
-    <div class="mb-4 rounded-md overflow-hidden border border-black/5 dark:border-white/10">
+    <div class="mb-4 rounded-md overflow-hidden border border-dark/10 dark:border-light/10">
       <div class="bg-surface/40 dark:bg-surface/30 px-4 py-3">
         <h3 class="text-sm font-medium">
           {{ $t('config.amd_quality_group') }}
@@ -88,17 +91,11 @@ const config = store.config;
         <!-- AMF Quality -->
         <div class="mb-6">
           <label for="amd_quality" class="form-label">{{ $t('config.amd_quality') }}</label>
-          <select id="amd_quality" v-model="config.amd_quality" class="form-control">
-            <option value="speed">
-              {{ $t('config.amd_quality_speed') }}
-            </option>
-            <option value="balanced">
-              {{ $t('config.amd_quality_balanced') }}
-            </option>
-            <option value="quality">
-              {{ $t('config.amd_quality_quality') }}
-            </option>
-          </select>
+          <n-select
+            id="amd_quality"
+            v-model:value="config.amd_quality"
+            :options="qualityOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+          />
           <p class="text-[11px] opacity-60 mt-1">
             {{ $t('config.amd_quality_desc') }}
           </p>
@@ -125,17 +122,11 @@ const config = store.config;
         <!-- AMF Coder (H264) -->
         <div class="mb-6">
           <label for="amd_coder" class="form-label">{{ $t('config.amd_coder') }}</label>
-          <select id="amd_coder" v-model="config.amd_coder" class="form-control">
-            <option value="auto">
-              {{ $t('config.ffmpeg_auto') }}
-            </option>
-            <option value="cabac">
-              {{ $t('config.coder_cabac') }}
-            </option>
-            <option value="cavlc">
-              {{ $t('config.coder_cavlc') }}
-            </option>
-          </select>
+          <n-select
+            id="amd_coder"
+            v-model:value="config.amd_coder"
+            :options="coderOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+          />
           <p class="text-[11px] opacity-60 mt-1">
             {{ $t('config.amd_coder_desc') }}
           </p>
