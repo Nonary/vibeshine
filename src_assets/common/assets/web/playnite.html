@@ -38,15 +38,9 @@
           </div>
 
           <div class="row g-3 align-items-center mb-2">
-            <div class="col-auto"><b>{{ $t('playnite.status_installed') }}:</b></div>
+            <div class="col-auto"><b>{{ $t('playnite.status_overall') || 'Status' }}:</b></div>
             <div class="col-auto">
-              <span class="badge" :class="status.installed ? 'bg-success' : 'bg-secondary'">{{ status.installed ? $t('_common.enabled') : $t('_common.disabled') }}</span>
-            </div>
-          </div>
-          <div class="row g-3 align-items-center mb-2">
-            <div class="col-auto"><b>{{ $t('playnite.status_connected') }}:</b></div>
-            <div class="col-auto">
-              <span class="badge" :class="status.active ? 'bg-success' : 'bg-secondary'">{{ status.active ? $t('_common.enabled') : $t('_common.disabled') }}</span>
+              <span class="badge" :class="statusBadgeClass">{{ statusText }}</span>
             </div>
           </div>
           <div class="row g-3 align-items-center mb-2" v-if="status.extensions_dir">
@@ -252,7 +246,7 @@
         platform: '',
         currentConfig: {},
         playnite: JSON.parse(JSON.stringify(defaults)),
-        status: { enabled: false, active: false, installed: false, extensions_dir: '' },
+        status: { enabled: false, active: false, installed: false, extensions_dir: '', session_required: false, playnite_running: false },
         saving: false,
         saved: false,
         restarted: false,
@@ -391,6 +385,21 @@
       }
     },
     computed: {
+      statusText() {
+        if (this.status && this.status.active) return this.$t('playnite.status_connected')
+        if (this.status && this.status.session_required) return this.$t('playnite.status_desktop_required') || 'Desktop Session Required'
+        if (this.status && this.status.installed === false) return this.$t('playnite.status_uninstalled') || 'Uninstalled'
+        if (this.status && this.status.playnite_running === false) return this.$t('playnite.status_not_running') || 'Playnite not running'
+        // Fallback
+        return this.$t('_common.unknown') || 'Unknown'
+      },
+      statusBadgeClass() {
+        if (this.status && this.status.active) return 'bg-success'
+        if (this.status && this.status.session_required) return 'bg-warning text-dark'
+        if (this.status && this.status.installed === false) return 'bg-secondary'
+        if (this.status && this.status.playnite_running === false) return 'bg-danger'
+        return 'bg-secondary'
+      },
       selectedCategories() {
         const raw = this.playnite.playnite_sync_categories || ''
         return raw.split(';').map(s=>s.trim()).filter(Boolean)
