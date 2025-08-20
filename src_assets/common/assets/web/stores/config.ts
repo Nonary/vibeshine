@@ -269,6 +269,23 @@ export const useConfigStore = defineStore('config', () => {
       }
     }
 
+    // Coerce primitive types based on defaults so UI widgets match options.
+    // This fixes cases where server returns numeric fields as strings, causing
+    // selects to show raw values instead of their friendly labels.
+    if (_data.value) {
+      for (const key of Object.keys(_data.value)) {
+        const dv = (defaultMap as any)[key];
+        const cur = (_data.value as any)[key];
+        // If default is a number, coerce string numerics to numbers
+        if (typeof dv === 'number' && typeof cur === 'string') {
+          const n = Number(cur);
+          if (Number.isFinite(n)) {
+            (_data.value as any)[key] = n;
+          }
+        }
+      }
+    }
+
     config.value = buildWrapper();
   }
 

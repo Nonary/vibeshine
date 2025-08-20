@@ -31,6 +31,7 @@ const coderOptions = [
         id="qsv_preset"
         v-model:value="config.qsv_preset"
         :options="presetOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+        :data-search-options="presetOptions.map(o => `${$t(o.labelKey)}::${o.value}`).join('|')"
       />
     </div>
 
@@ -41,6 +42,7 @@ const coderOptions = [
         id="qsv_coder"
         v-model:value="config.qsv_coder"
         :options="coderOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+        :data-search-options="coderOptions.map(o => `${$t(o.labelKey)}::${o.value}`).join('|')"
       />
     </div>
 

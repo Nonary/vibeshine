@@ -98,6 +98,13 @@ function removeRemappingEntry(idx) {
                   { label: $t('config.dd_config_ensure_primary'), value: 'ensure_primary' },
                   { label: $t('config.dd_config_ensure_only_display'), value: 'ensure_only_display' },
                 ]"
+                :data-search-options="[
+                  { label: $t('_common.disabled_def'), value: 'disabled' },
+                  { label: $t('config.dd_config_verify_only'), value: 'verify_only' },
+                  { label: $t('config.dd_config_ensure_active'), value: 'ensure_active' },
+                  { label: $t('config.dd_config_ensure_primary'), value: 'ensure_primary' },
+                  { label: $t('config.dd_config_ensure_only_display'), value: 'ensure_only_display' },
+                ].map(o => `${o.label}::${o.value}`).join('|')"
               />
             </div>
 
@@ -114,6 +121,11 @@ function removeRemappingEntry(idx) {
                   { label: $t('config.dd_resolution_option_auto'), value: 'auto' },
                   { label: $t('config.dd_resolution_option_manual'), value: 'manual' },
                 ]"
+                :data-search-options="[
+                  { label: $t('config.dd_resolution_option_disabled'), value: 'disabled' },
+                  { label: $t('config.dd_resolution_option_auto'), value: 'auto' },
+                  { label: $t('config.dd_resolution_option_manual'), value: 'manual' },
+                ].map(o => `${o.label}::${o.value}`).join('|')"
               />
               <p
                 v-if="
@@ -151,6 +163,11 @@ function removeRemappingEntry(idx) {
                   { label: $t('config.dd_refresh_rate_option_auto'), value: 'auto' },
                   { label: $t('config.dd_refresh_rate_option_manual'), value: 'manual' },
                 ]"
+                :data-search-options="[
+                  { label: $t('config.dd_refresh_rate_option_disabled'), value: 'disabled' },
+                  { label: $t('config.dd_refresh_rate_option_auto'), value: 'auto' },
+                  { label: $t('config.dd_refresh_rate_option_manual'), value: 'manual' },
+                ].map(o => `${o.label}::${o.value}`).join('|')"
               />
 
               <div v-if="config.dd_refresh_rate_option === 'manual'" class="mt-2 pl-4">
@@ -177,6 +194,10 @@ function removeRemappingEntry(idx) {
                   { label: $t('config.dd_hdr_option_disabled'), value: 'disabled' },
                   { label: $t('config.dd_hdr_option_auto'), value: 'auto' },
                 ]"
+                :data-search-options="[
+                  { label: $t('config.dd_hdr_option_disabled'), value: 'disabled' },
+                  { label: $t('config.dd_hdr_option_auto'), value: 'auto' },
+                ].map(o => `${o.label}::${o.value}`).join('|')"
                 class="mb-2"
               />
 

@@ -316,7 +316,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue';
 import {
   NButton,
   NAlert,
@@ -389,6 +389,28 @@ const createError = ref('');
 const copied = ref(false);
 const showTokenModal = ref(false);
 
+// Cleanup trackers for timers and in-flight HTTP
+const _intervals: number[] = [];
+const _timeouts: number[] = [];
+const _aborts = new Set<AbortController>();
+
+function trackInterval(id: number) {
+  _intervals.push(id);
+  return id;
+}
+function trackTimeout(id: number) {
+  _timeouts.push(id);
+  return id;
+}
+function makeAbortController() {
+  const ac = new AbortController();
+  _aborts.add(ac);
+  return ac;
+}
+function releaseAbortController(ac: AbortController) {
+  _aborts.delete(ac);
+}
+
 const draftMethods = computed<string[]>(
   () => ROUTE_OPTIONS.find((r) => r.path === draft.path)?.methods || [],
 );
@@ -441,12 +463,17 @@ async function createToken(): Promise<void> {
   createdToken.value = '';
   copied.value = false;
   creating.value = true;
+  let ac: AbortController | null = null;
   try {
     // Tentative payload; backend can map to expected format
     const newScopes = getEffectiveScopes();
     lastCreatedScopes.value = newScopes.slice();
     const payload = { scopes: newScopes };
-    const res = await http.post('/api/token', payload, { validateStatus: () => true });
+    ac = makeAbortController();
+    const res = await http.post('/api/token', payload, {
+      validateStatus: () => true,
+      signal: ac.signal,
+    });
     if (res.status >= 200 && res.status < 300) {
       const token = (res.data && (res.data.token || res.data.value || res.data)) as string;
       if (typeof token === 'string' && token.length > 0) {
@@ -465,8 +492,10 @@ async function createToken(): Promise<void> {
       createError.value = `Failed to create token: ${msg}`;
     }
   } catch (e: any) {
-    createError.value = e?.message || 'Network error creating token.';
+    if (e?.code !== 'ERR_CANCELED')
+      createError.value = e?.message || 'Network error creating token.';
   } finally {
+    if (ac) releaseAbortController(ac);
     creating.value = false;
   }
 }
@@ -527,8 +556,10 @@ async function loadTokens(): Promise<void> {
   }
   tokensLoading.value = true;
   tokensError.value = '';
+  let ac: AbortController | null = null;
   try {
-    const res = await http.get('/api/tokens', { validateStatus: () => true });
+    ac = makeAbortController();
+    const res = await http.get('/api/tokens', { validateStatus: () => true, signal: ac.signal });
     if (res.status >= 200 && res.status < 300) {
       const list = Array.isArray(res.data) ? res.data : res.data?.tokens || [];
       tokens.value = (list as any[]).map((x) => normalizeToken(x)).filter(Boolean) as TokenRecord[];
@@ -537,8 +568,10 @@ async function loadTokens(): Promise<void> {
       tokensError.value = `Failed to load tokens: ${msg}`;
     }
   } catch (e: any) {
-    tokensError.value = e?.message || 'Network error loading tokens.';
+    if (e?.code !== 'ERR_CANCELED')
+      tokensError.value = e?.message || 'Network error loading tokens.';
   } finally {
+    if (ac) releaseAbortController(ac);
     tokensLoading.value = false;
   }
 }
@@ -552,9 +585,11 @@ async function confirmRevoke(): Promise<void> {
   const t = pendingRevoke.value;
   if (!t?.hash) return;
   revoking.value = t.hash;
+  let ac: AbortController | null = null;
   try {
     const url = `/api/token/${encodeURIComponent(t.hash)}`;
-    const res = await http.delete(url, { validateStatus: () => true });
+    ac = makeAbortController();
+    const res = await http.delete(url, { validateStatus: () => true, signal: ac.signal });
     if (res.status >= 200 && res.status < 300) {
       tokens.value = tokens.value.filter((x) => x.hash !== t.hash);
       showRevoke.value = false;
@@ -564,8 +599,9 @@ async function confirmRevoke(): Promise<void> {
       alert(`Failed to revoke: ${msg}`);
     }
   } catch (e: any) {
-    alert(`Failed to revoke: ${e?.message || 'Network error'}`);
+    if (e?.code !== 'ERR_CANCELED') alert(`Failed to revoke: ${e?.message || 'Network error'}`);
   } finally {
+    if (ac) releaseAbortController(ac);
     revoking.value = '';
   }
 }
@@ -636,6 +672,7 @@ async function sendTest(): Promise<void> {
   testError.value = '';
   testResponse.value = '';
   testing.value = true;
+  let ac: AbortController | null = null;
   try {
     const urlBase = test.path;
     const qs = (test.query || '').trim();
@@ -648,12 +685,14 @@ async function sendTest(): Promise<void> {
       test.scheme === 'query'
         ? `${fullUrl}${fullUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(test.token)}`
         : fullUrl;
-    const res = await http.get(url, { headers, validateStatus: () => true });
+    ac = makeAbortController();
+    const res = await http.get(url, { headers, validateStatus: () => true, signal: ac.signal });
     const pretty = prettyPrint(res.data);
     testResponse.value = `${res.status} ${res.statusText || ''}\n\n${pretty}`;
   } catch (e: any) {
-    testError.value = e?.message || 'Test request failed.';
+    if (e?.code !== 'ERR_CANCELED') testError.value = e?.message || 'Test request failed.';
   } finally {
+    if (ac) releaseAbortController(ac);
     testing.value = false;
   }
 }
@@ -696,27 +735,42 @@ onMounted(() => {
   }
 });
 
+onBeforeUnmount(() => {
+  // Clear timers
+  for (const id of _intervals.splice(0)) clearInterval(id);
+  for (const id of _timeouts.splice(0)) clearTimeout(id);
+  // Abort pending HTTP
+  _aborts.forEach((ac) => {
+    try {
+      ac.abort();
+    } catch {}
+  });
+  _aborts.clear();
+});
+
 function watchCreatedForTester() {
   const auth = useAuthStore();
   if (!auth.isAuthenticated) return;
   let last = '';
-  const iv = setInterval(() => {
-    if (!auth.isAuthenticated) {
-      clearInterval(iv);
-      return;
-    }
-    if (createdToken.value && createdToken.value !== last) {
-      test.token = createdToken.value;
-      last = createdToken.value;
-      // Also try to preselect first GET scope path from last create
-      if (!test.path) {
-        const first = firstGetScopePath(lastCreatedScopes.value);
-        if (first) test.path = first;
+  const iv = trackInterval(
+    setInterval(() => {
+      if (!auth.isAuthenticated) {
+        clearInterval(iv as unknown as number);
+        return;
       }
-    }
-  }, 300);
+      if (createdToken.value && createdToken.value !== last) {
+        test.token = createdToken.value;
+        last = createdToken.value;
+        // Also try to preselect first GET scope path from last create
+        if (!test.path) {
+          const first = firstGetScopePath(lastCreatedScopes.value);
+          if (first) test.path = first;
+        }
+      }
+    }, 300) as unknown as number,
+  );
   // Stop after some time to avoid leaks
-  setTimeout(() => clearInterval(iv), 30000);
+  trackTimeout(setTimeout(() => clearInterval(iv as unknown as number), 30000) as unknown as number);
 }
 </script>
 

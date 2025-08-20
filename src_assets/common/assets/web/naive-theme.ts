@@ -21,6 +21,21 @@ function cssVarRgb(name: string, fallback: string): string {
   return `rgb(${nr}, ${ng}, ${nb})`;
 }
 
+// Resolve `--color-xxx` to a comma-separated "r, g, b" string for rgba()
+function cssVarRgbComma(name: string, fallback: string): string {
+  if (typeof window === 'undefined') return fallback;
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  if (!raw) return fallback;
+  const parts = raw.replace(/\s+/g, ' ').replace(/,/g, ' ').trim().split(' ');
+  if (parts.length < 3) return fallback;
+  const [r, g, b] = parts;
+  const nr = Number(r),
+    ng = Number(g),
+    nb = Number(b);
+  if ([nr, ng, nb].some((n) => !isFinite(n))) return fallback;
+  return `${nr}, ${ng}, ${nb}`;
+}
+
 export function useNaiveThemeOverrides() {
   const overrides = ref<GlobalThemeOverrides>({});
   const compute = () => {
@@ -40,9 +55,9 @@ export function useNaiveThemeOverrides() {
         popoverColor: cssVarRgb('--color-surface', '#ffffff'),
         tableColor: cssVarRgb('--color-light', '#ffffff'),
 
-        // Subtle borders/dividers using theme tokens
-        borderColor: 'rgba(var(--color-dark), 0.10)',
-        dividerColor: 'rgba(var(--color-dark), 0.10)',
+        // Subtle borders/dividers using resolved theme tokens (avoid var() usage here)
+        borderColor: `rgba(${cssVarRgbComma('--color-dark', '0, 0, 0')}, 0.10)`,
+        dividerColor: `rgba(${cssVarRgbComma('--color-dark', '0, 0, 0')}, 0.10)`,
       },
     } as GlobalThemeOverrides;
   };
