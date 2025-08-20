@@ -268,7 +268,6 @@
     },
     created() {
       this.refreshConfig()
-      this.refreshStatus()
     },
     methods: {
       async refreshConfig() {
@@ -281,9 +280,14 @@
           for (const k of Object.keys(defaults)) {
             if (cfg[k] !== undefined) this.playnite[k] = cfg[k]
           }
+          // Only on Windows do we query Playnite status/APIs
+          if (this.platform === 'windows') {
+            await this.refreshStatus()
+          }
         } catch (e) { console.error(e) }
       },
       async refreshStatus() {
+        if (this.platform !== 'windows') return
         try {
           const st = await fetch('./api/playnite/status').then(r => r.json())
           this.status = st
@@ -294,15 +298,21 @@
         if (this.categoriesLoading || this.availableCategories.length) return
         this.categoriesLoading = true
         try {
-          const games = await fetch('./api/playnite/games').then(r => r.json())
-          this.availableGames = games || []
-          const set = new Set()
-          for (const g of (games || [])) {
-            for (const c of (g.categories || [])) {
-              if (c && typeof c === 'string') set.add(c)
+          const cats = await fetch('./api/playnite/categories').then(r => r.json())
+          if (Array.isArray(cats) && cats.length) {
+            this.availableCategories = cats.slice().sort((a,b)=>String(a).localeCompare(String(b)))
+          } else {
+            // Fallback: derive categories from games list if categories are not available
+            const games = await fetch('./api/playnite/games').then(r => r.json())
+            this.availableGames = games || []
+            const set = new Set()
+            for (const g of (games || [])) {
+              for (const c of (g.categories || [])) {
+                if (c && typeof c === 'string') set.add(c)
+              }
             }
+            this.availableCategories = Array.from(set).sort((a,b)=>a.localeCompare(b))
           }
-          this.availableCategories = Array.from(set).sort((a,b)=>a.localeCompare(b))
         } catch (e) { console.error(e) }
         this.categoriesLoading = false
       },
@@ -386,18 +396,25 @@
     },
     computed: {
       statusText() {
-        if (this.status && this.status.active) return this.$t('playnite.status_connected')
-        if (this.status && this.status.session_required) return this.$t('playnite.status_desktop_required') || 'Desktop Session Required'
-        if (this.status && this.status.installed === false) return this.$t('playnite.status_uninstalled') || 'Uninstalled'
-        if (this.status && this.status.playnite_running === false) return this.$t('playnite.status_not_running') || 'Playnite not running'
+        const st = this.status || {}
+        if (st.enabled === false) return this.$t('playnite.status_disabled') || 'Disabled'
+        if (st.active) return this.$t('playnite.status_connected')
+        if (st.session_required) return this.$t('playnite.status_desktop_required') || 'Desktop Session Required'
+        if (st.installed === false) return this.$t('playnite.status_uninstalled') || 'Uninstalled'
+        if (st.playnite_running === false) return this.$t('playnite.status_not_running') || 'Playnite not running'
+        // If installed and Playnite is running but not active, likely waiting for the plugin to connect
+        if (st.installed === true && st.playnite_running === true && !st.active) return this.$t('playnite.status_waiting') || 'Waiting for plugin'
         // Fallback
         return this.$t('_common.unknown') || 'Unknown'
       },
       statusBadgeClass() {
-        if (this.status && this.status.active) return 'bg-success'
-        if (this.status && this.status.session_required) return 'bg-warning text-dark'
-        if (this.status && this.status.installed === false) return 'bg-secondary'
-        if (this.status && this.status.playnite_running === false) return 'bg-danger'
+        const st = this.status || {}
+        if (st.enabled === false) return 'bg-secondary'
+        if (st.active) return 'bg-success'
+        if (st.session_required) return 'bg-warning text-dark'
+        if (st.installed === false) return 'bg-secondary'
+        if (st.playnite_running === false) return 'bg-danger'
+        if (st.installed === true && st.playnite_running === true && !st.active) return 'bg-warning text-dark'
         return 'bg-secondary'
       },
       selectedCategories() {

@@ -423,6 +423,8 @@
     "status_installed": "Plugin Installed",
     "status_active": "Connected",
     "status_connected": "Connected",
+    "status_disabled": "Disabled",
+    "status_waiting": "Waiting for plugin",
     "status_session_required": "Desktop Session Required",
     "status_desktop_required": "Desktop Session Required",
     "status_uninstalled": "Uninstalled",
