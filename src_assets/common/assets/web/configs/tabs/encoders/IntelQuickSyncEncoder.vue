@@ -30,7 +30,7 @@ const coderOptions = [
       <n-select
         id="qsv_preset"
         v-model:value="config.qsv_preset"
-        :options="presetOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+        :options="presetOptions.map((o) => ({ label: $t(o.labelKey), value: o.value }))"
       />
     </div>
 
@@ -40,7 +40,7 @@ const coderOptions = [
       <n-select
         id="qsv_coder"
         v-model:value="config.qsv_coder"
-        :options="coderOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+        :options="coderOptions.map((o) => ({ label: $t(o.labelKey), value: o.value }))"
       />
     </div>
 

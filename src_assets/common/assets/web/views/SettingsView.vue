@@ -69,14 +69,14 @@
 
         <div v-if="showSave" class="flex gap-2">
           <n-button :disabled="saveState === 'saving'" @click="save">Save</n-button>
-          <n-button v-if="saveState === 'saved' && !restarted" tertiary @click="apply">Apply</n-button>
+          <n-button v-if="saveState === 'saved' && !restarted" tertiary @click="apply"
+            >Apply</n-button
+          >
         </div>
         <div v-else class="text-[11px] font-medium min-h-[1rem] flex items-center gap-2">
           <transition name="fade"><span v-if="saveState === 'saving'">Saving…</span></transition>
           <transition name="fade">
-            <span v-if="saveState === 'saved'" class="text-success"
-              >Saved</span
-            >
+            <span v-if="saveState === 'saved'" class="text-success">Saved</span>
           </transition>
         </div>
       </div>
@@ -136,12 +136,17 @@
   </main>
 
   <transition name="slide-fade">
-      <div v-if="(dirty && !autoSave) || store.manualDirty === true" class="fixed bottom-4 right-6 z-30">
-        <div class="bg-light/90 dark:bg-surface/90 backdrop-blur rounded-lg shadow border border-dark/10 dark:border-light/10 px-4 py-2 flex items-center gap-3">
-          <span class="text-[11px] font-medium">Unsaved changes</span>
-          <n-button :disabled="saveState === 'saving'" @click="save">Save</n-button>
-        </div>
+    <div
+      v-if="(dirty && !autoSave) || store.manualDirty === true"
+      class="fixed bottom-4 right-6 z-30"
+    >
+      <div
+        class="bg-light/90 dark:bg-surface/90 backdrop-blur rounded-lg shadow border border-dark/10 dark:border-light/10 px-4 py-2 flex items-center gap-3"
+      >
+        <span class="text-[11px] font-medium">Unsaved changes</span>
+        <n-button :disabled="saveState === 'saving'" @click="save">Save</n-button>
       </div>
+    </div>
   </transition>
 </template>
 

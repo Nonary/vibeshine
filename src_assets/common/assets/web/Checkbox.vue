@@ -10,7 +10,7 @@ const props = defineProps({
   },
   disabled: {
     type: Boolean,
-    default: false
+    default: false,
   },
   desc: {
     type: String,
