@@ -163,7 +163,15 @@ const { config, metadata } = storeToRefs(store);
 const platform = computed(() => (metadata.value?.platform || config.value?.platform || '').toLowerCase());
 const { t } = useI18n();
 
-const status = reactive<{ installed: boolean; active: boolean; user_session_active: boolean; extensions_dir: string }>({ installed: false, active: false, user_session_active: false, extensions_dir: '' });
+const status = reactive<{
+  installed: boolean;
+  active: boolean;
+  enabled?: boolean;
+  user_session_active: boolean;
+  session_required?: boolean;
+  playnite_running?: boolean;
+  extensions_dir: string;
+}>({ installed: false, active: false, user_session_active: false, extensions_dir: '' });
 const installing = ref(false);
 const installOk = ref(false);
 const installErr = ref(false);
@@ -176,8 +184,12 @@ const gameOptions = ref<{ label: string; value: string }[]>([]);
 
 const selectedCategories = computed<string[]>({
   get() {
-    const raw = (config.value?.playnite_sync_categories || '') as string;
-    return raw.split(',').map((s) => s.trim()).filter(Boolean);
+    const raw = String(config.value?.playnite_sync_categories || '');
+    // Support both comma and semicolon separated formats
+    return raw
+      .split(/[;,]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
   },
   set(v: string[]) {
     // Server-side parse_list uses JSON array or comma-separated; use comma-separated
@@ -200,11 +212,14 @@ async function refreshStatus() {
   try {
     const r = await http.get('/api/playnite/status');
     if (r.status === 200 && r.data) {
-      status.installed = !!r.data.installed;
-      status.active = !!r.data.active;
-      // API returns session_required; invert to get user_session_active
-      status.user_session_active = r.data.session_required === undefined ? true : !r.data.session_required;
-      status.extensions_dir = r.data.extensions_dir || '';
+      const d = r.data as any;
+      status.installed = !!d.installed;
+      status.active = !!d.active;
+      status.enabled = d.enabled !== undefined ? !!d.enabled : undefined;
+      status.session_required = d.session_required;
+      status.user_session_active = d.session_required === undefined ? true : !d.session_required;
+      status.playnite_running = d.playnite_running;
+      status.extensions_dir = d.extensions_dir || '';
     }
   } catch (_) {}
 }
@@ -214,13 +229,27 @@ async function loadCategories() {
   if (categoriesLoading.value || categoryOptions.value.length) return;
   categoriesLoading.value = true;
   try {
-    const r = await http.get('/api/playnite/games');
-    const games: any[] = Array.isArray(r.data) ? r.data : [];
+    // Prefer categories endpoint if available
+    try {
+      const rc = await http.get('/api/playnite/categories', { validateStatus: () => true });
+      if (rc.status >= 200 && rc.status < 300 && Array.isArray(rc.data) && rc.data.length) {
+        const cats = (rc.data as any[])
+          .map((c) => String(c))
+          .filter(Boolean)
+          .sort((a, b) => a.localeCompare(b))
+          .map((c) => ({ label: c, value: c }));
+        categoryOptions.value = cats;
+        return;
+      }
+    } catch {}
+    // Fallback: derive from games list
+    const rg = await http.get('/api/playnite/games');
+    const games: any[] = Array.isArray(rg.data) ? rg.data : [];
     const set = new Set<string>();
-    for (const g of games) {
-      for (const c of g?.categories || []) if (c && typeof c === 'string') set.add(c);
-    }
-    categoryOptions.value = Array.from(set).sort((a, b) => a.localeCompare(b)).map((c) => ({ label: c, value: c }));
+    for (const g of games) for (const c of g?.categories || []) if (c && typeof c === 'string') set.add(c);
+    categoryOptions.value = Array.from(set)
+      .sort((a, b) => a.localeCompare(b))
+      .map((c) => ({ label: c, value: c }));
   } catch (_) {}
   categoriesLoading.value = false;
 }
@@ -274,25 +303,38 @@ onMounted(async () => {
   loadCategories();
 });
 
-const statusKind = computed<'active' | 'session' | 'uninstalled'>(() => {
-  if (!status.installed) return 'uninstalled';
+type StatusKind = 'disabled' | 'active' | 'session' | 'uninstalled' | 'not_running' | 'waiting';
+const statusKind = computed<StatusKind>(() => {
+  if (status.enabled === false) return 'disabled';
+  if (status.active) return 'active';
   if (!status.user_session_active) return 'session';
-  return 'active';
+  if (status.installed === false) return 'uninstalled';
+  if (status.playnite_running === false) return 'not_running';
+  if (status.installed === true && status.playnite_running === true && !status.active) return 'waiting';
+  return 'disabled';
 });
 const statusType = computed<'success' | 'warning' | 'error' | 'default'>(() => {
   switch (statusKind.value) {
     case 'active': return 'success';
     case 'session': return 'warning';
+    case 'waiting': return 'warning';
+    case 'not_running': return 'error';
     case 'uninstalled': return 'error';
-    default: return 'default';
+    case 'disabled':
+    default:
+      return 'default';
   }
 });
 const statusText = computed<string>(() => {
   switch (statusKind.value) {
-    case 'active': return t('playnite.status_active');
-    case 'session': return t('playnite.status_session_required');
+    case 'active': return t('playnite.status_connected');
+    case 'session': return t('playnite.status_desktop_required');
     case 'uninstalled': return t('playnite.status_uninstalled');
-    default: return '';
+    case 'not_running': return t('playnite.status_not_running');
+    case 'waiting': return t('playnite.status_waiting');
+    case 'disabled':
+    default:
+      return t('playnite.status_disabled');
   }
 });
 </script>

@@ -89,16 +89,28 @@ namespace platf::playnite {
       out = last_games_;
     }
 
+    void snapshot_categories(std::vector<std::string> &out) {
+      std::scoped_lock lk(mutex_);
+      out = last_categories_;
+    }
+
   private:
     void handle_message(std::span<const uint8_t> bytes) {
       auto msg = platf::playnite::parse(bytes);
       using MT = platf::playnite::MessageType;
       if (msg.type == MT::Categories) {
         BOOST_LOG(info) << "Playnite: received " << msg.categories.size() << " categories";
-        // Placeholder: could cache categories if needed
-        // Treat a categories message as the beginning of a new full snapshot.
+        // Cache distinct category names and treat as the start of a new snapshot for games
         {
           std::scoped_lock lk(mutex_);
+          std::unordered_set<std::string> uniq;
+          last_categories_.clear();
+          for (const auto &c : msg.categories) {
+            if (!c.name.empty() && uniq.insert(c.name).second) {
+              last_categories_.push_back(c.name);
+            }
+          }
+          std::sort(last_categories_.begin(), last_categories_.end(), [](const std::string &a, const std::string &b){ return a < b; });
           new_snapshot_ = true;
         }
       } else if (msg.type == MT::Games) {
@@ -191,6 +203,7 @@ namespace platf::playnite {
     std::unique_ptr<platf::playnite::IpcServer> server_;
     bool new_snapshot_ = true;  // Indicates next games message starts a new accumulation
     std::unordered_set<std::string> game_ids_;  // Track unique IDs during accumulation
+    std::vector<std::string> last_categories_;   // Last known categories (names)
   };
 
   std::unique_ptr<::platf::deinit_t> start() {
@@ -268,10 +281,6 @@ namespace platf::playnite {
   }
 
   bool launch_game(const std::string &playnite_id) {
-#ifndef _WIN32
-    (void) playnite_id;
-    return false;
-#else
     auto inst = g_instance;
     if (!inst) {
       return false;
@@ -283,14 +292,9 @@ namespace platf::playnite {
     j["id"] = playnite_id;
     std::string s = j.dump();
     return inst->send_cmd_json_line(s);
-#endif
   }
 
   bool get_games_list_json(std::string &out_json) {
-#ifndef _WIN32
-    (void) out_json;
-    return false;
-#else
     auto inst = g_instance;
     if (!inst) {
       return false;
@@ -308,14 +312,32 @@ namespace platf::playnite {
     }
     out_json = arr.dump();
     return true;
-#endif
+  }
+
+  bool get_categories_list_json(std::string &out_json) {
+    auto inst = g_instance;
+    if (!inst) {
+      return false;
+    }
+    std::vector<std::string> cats;
+    inst->snapshot_categories(cats);
+    if (cats.empty()) {
+      std::vector<platf::playnite::Game> copy;
+      inst->snapshot_games(copy);
+      std::unordered_set<std::string> uniq;
+      for (const auto &g : copy) {
+        for (const auto &c : g.categories) if (!c.empty()) uniq.insert(c);
+      }
+      cats.assign(uniq.begin(), uniq.end());
+      std::sort(cats.begin(), cats.end(), [](const std::string &a, const std::string &b){ return a < b; });
+    }
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto &c : cats) arr.push_back(c);
+    out_json = arr.dump();
+    return true;
   }
 
   bool stop_game(const std::string &playnite_id) {
-#ifndef _WIN32
-    (void) playnite_id;
-    return false;
-#else
     auto inst = g_instance;
     if (!inst) return false;
     nlohmann::json j;
@@ -323,28 +345,18 @@ namespace platf::playnite {
     j["command"] = "stop";
     if (!playnite_id.empty()) j["id"] = playnite_id;
     return inst->send_cmd_json_line(j.dump());
-#endif
   }
 
   bool force_sync() {
-#ifndef _WIN32
-    return false;
-#else
     auto inst = g_instance;
     if (!inst) {
       return false;
     }
     inst->trigger_sync();
     return true;
-#endif
   }
 
   bool get_cover_png_for_playnite_game(const std::string &playnite_id, std::string &out_path) {
-#ifndef _WIN32
-    (void) playnite_id;
-    (void) out_path;
-    return false;
-#else
     auto inst = g_instance;
     if (!inst) {
       return false;
@@ -382,14 +394,9 @@ namespace platf::playnite {
       }
     } catch (...) {}
     return false;
-#endif
   }
 
   static bool do_install_plugin_impl(const std::string &dest_override, std::string &error) {
-#ifndef _WIN32
-    error = "Playnite integration is only supported on Windows";
-    return false;
-#else
     try {
       // Determine source directory: alongside the Sunshine executable under plugins/playnite/SunshinePlaynite
       std::wstring exePath;
@@ -459,7 +466,6 @@ namespace platf::playnite {
       error = e.what();
       return false;
     }
-#endif
   }
 
   bool install_plugin(std::string &error) {

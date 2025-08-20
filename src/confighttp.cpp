@@ -1435,6 +1435,17 @@ namespace confighttp {
     bool playnite_running = false;
     std::string destPath;
     std::filesystem::path dest;
+    // If there is no active console desktop session, mark as session required.
+    try {
+      HANDLE tok = platf::dxgi::retrieve_users_token(false);
+      if (!tok) {
+        session_required = true;
+      } else {
+        CloseHandle(tok);
+      }
+    } catch (...) {
+      // If we cannot determine, leave as-is
+    }
     if (platf::playnite::get_extension_target_dir(destPath)) {
       dest = destPath;
     } else {
@@ -1446,7 +1457,6 @@ namespace confighttp {
     out["installed"] = installed;
     out["extensions_dir"] = dest.string();
     // Determine if Playnite is currently running (Desktop or Fullscreen app)
-#ifdef _WIN32
     try {
       auto d = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
       auto f = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
@@ -1454,7 +1464,6 @@ namespace confighttp {
     } catch (...) {
       playnite_running = false;
     }
-#endif
     out["session_required"] = session_required;
     out["playnite_running"] = playnite_running;
     BOOST_LOG(info) << "Playnite status: enabled=" << out["enabled"] << ", active=" << out["active"]
@@ -1469,10 +1478,6 @@ namespace confighttp {
       return;
     }
     print_req(request);
-#ifndef _WIN32
-    bad_request(response, request, "Playnite integration is only available on Windows");
-    return;
-#else
     try {
       std::string json;
       if (!platf::playnite::get_games_list_json(json)) {
@@ -1488,7 +1493,28 @@ namespace confighttp {
     } catch (std::exception &e) {
       bad_request(response, request, e.what());
     }
-#endif
+  }
+
+  void getPlayniteCategories(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+    try {
+      std::string json;
+      if (!platf::playnite::get_categories_list_json(json)) {
+        // return empty array if not available
+        json = "[]";
+      }
+      BOOST_LOG(info) << "Playnite categories: json length=" << json.size();
+      SimpleWeb::CaseInsensitiveMultimap headers;
+      headers.emplace("Content-Type", "application/json");
+      headers.emplace("X-Frame-Options", "DENY");
+      headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+      response->write(SimpleWeb::StatusCode::success_ok, json, headers);
+    } catch (std::exception &e) {
+      bad_request(response, request, e.what());
+    }
   }
 
   void installPlaynite(resp_https_t response, req_https_t request) {
@@ -1830,6 +1856,7 @@ namespace confighttp {
     server.resource["^/api/playnite/status$"]["GET"] = getPlayniteStatus;
     server.resource["^/api/playnite/install$"]["POST"] = installPlaynite;
     server.resource["^/api/playnite/games$"]["GET"] = getPlayniteGames;
+    server.resource["^/api/playnite/categories$"]["GET"] = getPlayniteCategories;
     server.resource["^/api/playnite/force_sync$"]["POST"] = [](resp_https_t resp, req_https_t req) {
       if (!authenticate(resp, req)) return;
       print_req(req);

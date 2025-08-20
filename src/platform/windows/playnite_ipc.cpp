@@ -163,7 +163,6 @@ namespace platf::playnite {
   }
 
   bool IpcServer::is_user_session_available() {
-#ifdef _WIN32
     // If not running as SYSTEM, we're already in a user session.
     if (!platf::dxgi::is_running_as_system()) {
       return true;
@@ -173,9 +172,6 @@ namespace platf::playnite {
     if (!tok) return false;
     CloseHandle(tok);
     return true;
-#else
-    return true; // Non-Windows builds treat as always available.
-#endif
   }
 
   bool IpcServer::send_json_line(const std::string &json) {
