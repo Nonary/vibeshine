@@ -39,7 +39,10 @@ target_sources(playnite-launcher PRIVATE
         ${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_protocol.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/misc_utils.cpp)
-target_compile_definitions(playnite-launcher PRIVATE SUNSHINE_PLAYNITE_LAUNCHER)
+target_compile_definitions(playnite-launcher PRIVATE
+        SUNSHINE_PLAYNITE_LAUNCHER
+        SUNSHINE_EXTERNAL_PROCESS=1
+)
 target_link_libraries(playnite-launcher
         ${Boost_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
@@ -50,3 +53,30 @@ target_link_libraries(playnite-launcher
         wtsapi32
         ${PLATFORM_LIBRARIES})
 target_compile_options(playnite-launcher PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+# Add sunshine_wgc_capture executable
+add_executable(sunshine_wgc_capture
+        sunshine_wgc_capture.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/misc_utils.cpp
+        ${CMAKE_SOURCE_DIR}/src/logging.cpp)
+set_target_properties(sunshine_wgc_capture PROPERTIES CXX_STANDARD 23)
+
+# Define helper build flag to conditionally compile logging
+target_compile_definitions(sunshine_wgc_capture PRIVATE
+        SUNSHINE_EXTERNAL_PROCESS=1
+)
+
+target_link_libraries(sunshine_wgc_capture
+        ${Boost_LIBRARIES}
+        ${CMAKE_THREAD_LIBS_INIT}
+        d3d11
+        dxgi
+        ole32
+        user32
+        gdi32
+        windowsapp
+        avrt
+        shcore
+        wtsapi32
+        ${PLATFORM_LIBRARIES})
+target_compile_options(sunshine_wgc_capture PRIVATE ${SUNSHINE_COMPILE_OPTIONS})

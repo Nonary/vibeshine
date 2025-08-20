@@ -1137,17 +1137,25 @@ namespace confighttp {
     ss << request->content.rdbuf();
     try {
       // TODO: Input Validation
-      std::stringstream config_stream;
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
+
+      // Merge incoming keys into the current config instead of overwriting the file
+      // 1) Load current config into a map
+      auto current_vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
+
+      // 2) Apply updates from input (skip null/empty string values)
       for (const auto &[k, v] : input_tree.items()) {
         if (v.is_null() || (v.is_string() && v.get<std::string>().empty())) {
           continue;
         }
+        current_vars[k] = v.is_string() ? v.get<std::string>() : v.dump();
+      }
 
-        // v.dump() will dump valid json, which we do not want for strings in the config right now
-        // we should migrate the config file to straight json and get rid of all this nonsense
-        config_stream << k << " = " << (v.is_string() ? v.get<std::string>() : v.dump()) << std::endl;
+      // 3) Serialize merged map back to config-file format
+      std::stringstream config_stream;
+      for (const auto &kv : current_vars) {
+        config_stream << kv.first << " = " << kv.second << std::endl;
       }
       file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
 

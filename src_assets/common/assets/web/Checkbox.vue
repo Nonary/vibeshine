@@ -1,4 +1,5 @@
 <script setup>
+import { computed } from 'vue';
 import { NCheckbox } from 'naive-ui';
 const model = defineModel({ required: true });
 const slots = defineSlots();
@@ -77,45 +78,39 @@ const mapToBoolRepresentation = (value) => {
   return null;
 };
 
-// Determine the true/false values for the checkbox
-const checkboxValues = (() => {
+// Determine the true/false values for the checkbox reactively so that
+// if the bound value type changes (e.g., server returns boolean later),
+// the mapping updates to keep the checked state in sync.
+const checkboxValues = computed(() => {
   const mappedValues = (() => {
-    // Prefer explicit model value
     let boolValues = mapToBoolRepresentation(model.value);
     if (boolValues !== null) return boolValues.possibleValues;
-
-    // If model is undefined/null try the default prop if provided
-  if (model.value === undefined || model.value === null) {
+    if (model.value === undefined || model.value === null) {
       const defaultParsed = mapToBoolRepresentation(props.defaultValue);
       if (defaultParsed !== null) return defaultParsed.possibleValues;
-  }
-
-    // Return conservative fallback if nothing matches
-    console.warn(
-      `Checkbox value ${model.value} did not match any acceptable pattern, falling back to ['true','false']`,
-    );
+    }
     return ['true', 'false'];
   })();
-
   const truthyIndex = props.inverseValues ? 1 : 0;
   const falsyIndex = props.inverseValues ? 0 : 1;
   return { truthy: mappedValues[truthyIndex], falsy: mappedValues[falsyIndex] };
-})();
-const parsedDefaultPropValue = (() => {
+});
+
+const parsedDefaultPropValue = computed(() => {
   const boolValues = mapToBoolRepresentation(props.defaultValue);
   if (boolValues !== null) {
-    // Convert truthy to true/false.
     return boolValues.value === boolValues.possibleValues[0];
   }
-
   return null;
-})();
+});
 
 const labelField = props.label ?? `${props.localePrefix}.${props.id}`;
 const descField = props.desc ?? `${props.localePrefix}.${props.id}_desc`;
 const showDesc = props.desc !== '' || Object.entries(slots).length > 0;
-const showDefValue = parsedDefaultPropValue !== null;
-const defValue = parsedDefaultPropValue ? '_common.enabled_def_cbox' : '_common.disabled_def_cbox';
+const showDefValue = computed(() => parsedDefaultPropValue.value !== null);
+const defValue = computed(() =>
+  parsedDefaultPropValue.value ? '_common.enabled_def_cbox' : '_common.disabled_def_cbox',
+);
 </script>
 
 <template>

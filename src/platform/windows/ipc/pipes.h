@@ -25,10 +25,6 @@
 #include "src/platform/windows/ipc/misc_utils.h"
 
 // platform includes
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <winsock2.h>
 #include <windows.h>
 
 namespace platf::dxgi {
@@ -223,7 +219,7 @@ namespace platf::dxgi {
     MessageCallback _onMessage;
     ErrorCallback _onError;
     BrokenPipeCallback _onBrokenPipe;
-    std::array<uint8_t, 65536> _buffer;  // Reusable buffer for receiving messages
+    std::array<uint8_t, 256> _buffer;  // Reusable buffer for receiving messages
   };
 
   class WinPipe: public INamedPipe {
@@ -297,7 +293,6 @@ namespace platf::dxgi {
 
     // Retrieve the client's user SID as a string (S-1-5-...)
     bool get_client_user_sid_string(std::wstring &sid_str);
-
   private:
     /**
      * @brief Connects the server pipe, waiting up to the specified time.
@@ -475,16 +470,15 @@ namespace platf::dxgi {
     std::unique_ptr<INamedPipe> create_client(const std::string &pipe_name) override;
 
   private:
+    NamedPipeFactory _pipe_factory;  // value member; simpler lifetime
+
+    /** Performs anonymous pipe handshake helpers */
     std::unique_ptr<INamedPipe> handshake_server(std::unique_ptr<INamedPipe> pipe);
     std::unique_ptr<INamedPipe> handshake_client(std::unique_ptr<INamedPipe> pipe);
-
     bool send_handshake_message(std::unique_ptr<INamedPipe> &pipe, const std::string &pipe_name) const;
     bool wait_for_handshake_ack(std::unique_ptr<INamedPipe> &pipe) const;
     bool receive_handshake_message(std::unique_ptr<INamedPipe> &pipe, AnonConnectMsg &msg) const;
     bool send_handshake_ack(std::unique_ptr<INamedPipe> &pipe) const;
     std::unique_ptr<INamedPipe> connect_to_data_pipe(const std::string &pipeNameStr);
-
-    NamedPipeFactory _pipe_factory;
   };
-
 }  // namespace platf::dxgi

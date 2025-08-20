@@ -7,7 +7,10 @@ import { NInput, NInputNumber, NSelect } from 'naive-ui';
 
 const store = useConfigStore();
 const config = store.config;
-const platform = computed(() => config.value?.platform || '');
+// Derive platform from metadata (preferred) or config, and normalize case
+import { storeToRefs } from 'pinia';
+const { metadata } = storeToRefs(store);
+const platform = computed(() => (metadata.value?.platform || config.value?.platform || '').toLowerCase());
 const { t } = useI18n();
 
 const hevcModeOptions = [0, 1, 2, 3].map((v) => ({ labelKey: `config.hevc_mode_${v}`, value: String(v) }));
@@ -25,7 +28,8 @@ const captureOptions = computed(() => {
   } else if (platform.value === 'windows') {
     base.push(
       { label: 'Desktop Duplication API', value: 'ddx' },
-      { label: 'Windows.Graphics.Capture (beta)', value: 'wgc' },
+      { label: 'Windows.Graphics.Capture Variable Framerate', value: 'wgc' },
+      { label: 'Windows.Graphics.Capture Constant Framerate', value: 'wgcc' },
     );
   }
   return base;

@@ -9,7 +9,7 @@
       <div class="bg-light/70 dark:bg-surface/70 border border-dark/10 dark:border-light/10 rounded-lg p-4 space-y-4">
         <div>
           <Checkbox
-            v-model="config.playnite_enabled"
+            v-model="playniteEnabledProxy"
             id="playnite_enabled"
             :default-value="store.defaults.playnite_enabled"
             :localePrefix="'playnite'"
@@ -173,6 +173,19 @@ const categoriesLoading = ref(false);
 const gamesLoading = ref(false);
 const categoryOptions = ref<{ label: string; value: string }[]>([]);
 const gameOptions = ref<{ label: string; value: string }[]>([]);
+
+// Bind directly to boolean in config; tolerate legacy string values on read
+const playniteEnabledProxy = computed<boolean>({
+  get() {
+    const raw: any = config.value?.playnite_enabled;
+    if (typeof raw === 'boolean') return raw;
+    const s = String(raw).toLowerCase();
+    return s === 'enabled' || s === 'true' || s === 'on' || s === '1';
+  },
+  set(v: boolean) {
+    store.updateOption('playnite_enabled', !!v);
+  },
+});
 
 const selectedCategories = computed<string[]>({
   get() {

@@ -235,7 +235,7 @@ namespace platf::dxgi {
     CloseHandle(snapshot);
     return pids;
   }
-
+ 
   bool is_secure_desktop_active() {
     // Open the input desktop for the current session
     HDESK hDesk = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS | DESKTOP_SWITCHDESKTOP);

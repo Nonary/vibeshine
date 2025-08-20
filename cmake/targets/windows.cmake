@@ -5,7 +5,8 @@ find_library(ZLIB ZLIB1)
 list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
         $<TARGET_OBJECTS:sunshine_rc_object>
         Windowsapp.lib
-        Wtsapi32.lib)
+        Wtsapi32.lib
+        avrt.lib)
 
 # Copy Playnite plugin sources into build output (for packaging/installers)
 add_custom_target(copy_playnite_plugin ALL

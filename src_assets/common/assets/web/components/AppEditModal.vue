@@ -205,6 +205,7 @@
 import { reactive, watch, computed, ref } from 'vue';
 import { http } from '@/http';
 import { NModal, NCard, NButton, NInput, NInputNumber, NCheckbox, NSelect } from 'naive-ui';
+import { storeToRefs } from 'pinia';
 import { useConfigStore } from '@/stores/config';
 const props = defineProps({
   modelValue: Boolean,
@@ -281,11 +282,16 @@ const showDeleteConfirm = ref(false);
 
 // Platform + Playnite detection
 const configStore = useConfigStore();
-const isWindows = computed(() => (configStore.metadata?.platform || '').toLowerCase() === 'windows');
+const { metadata } = storeToRefs(configStore);
+const isWindows = computed(
+  () => (metadata.value?.platform || '').toLowerCase() === 'windows',
+);
 const playniteEnabled = computed(() => {
   try {
-    const v = configStore.config?.playnite_enabled ?? 'disabled';
-    return String(v).toLowerCase() === 'enabled' || v === true || String(v) === 'on';
+    const v = (configStore.config as any)?.playnite_enabled;
+    if (typeof v === 'boolean') return v;
+    const s = String(v || '').toLowerCase();
+    return s === 'enabled' || s === 'true' || s === 'on' || s === '1';
   } catch (_) {
     return false;
   }

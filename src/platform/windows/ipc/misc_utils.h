@@ -13,10 +13,6 @@
 
 // platform includes
 #ifdef _WIN32
-  #ifndef WIN32_LEAN_AND_MEAN
-  #define WIN32_LEAN_AND_MEAN
-  #endif
-  #include <winsock2.h>
   #include <unknwn.h>
   #include <windows.h>
   #include <winrt/base.h>
@@ -194,7 +190,6 @@ namespace platf::dxgi {
 
   // Enumerate PIDs for a given executable name (case-insensitive)
   std::vector<DWORD> find_process_ids_by_name(const std::wstring &process_name);
-
   /**
    * @brief Determine whether the secure (e.g. UAC / logon) desktop is active.
    * @return `true` if the secure desktop is active, else `false`.

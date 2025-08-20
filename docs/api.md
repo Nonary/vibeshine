@@ -49,6 +49,9 @@ See below for details on token endpoints and usage examples.
 ## GET /api/config
 @copydoc confighttp::getConfig()
 
+## GET /api/capabilities
+This endpoint is reserved for future capability reporting and is not currently implemented.
+
 ## GET /api/configLocale
 @copydoc confighttp::getLocale()
 

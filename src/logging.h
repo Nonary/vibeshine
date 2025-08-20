@@ -6,6 +6,7 @@
 
 // lib includes
 #include <boost/log/common.hpp>
+#include <boost/log/expressions.hpp>
 #include <boost/log/sinks.hpp>
 
 using text_sink = boost::log::sinks::asynchronous_sink<boost::log::sinks::text_ostream_backend>;
@@ -19,6 +20,8 @@ extern boost::log::sources::severity_logger<int> fatal;
 #ifdef SUNSHINE_TESTS
 extern boost::log::sources::severity_logger<int> tests;
 #endif
+
+BOOST_LOG_ATTRIBUTE_KEYWORD(severity, "Severity", int)
 
 #include "config.h"
 #include "stat_trackers.h"
