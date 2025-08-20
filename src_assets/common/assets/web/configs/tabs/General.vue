@@ -96,7 +96,11 @@ function removeCmd(index) {
     <!-- Log Level -->
     <div class="mb-6">
       <label for="min_log_level" class="form-label">{{ $t('config.log_level') }}</label>
-      <n-select id="min_log_level" v-model:value="config.min_log_level" :options="logLevelOptions" />
+      <n-select
+        id="min_log_level"
+        v-model:value="config.min_log_level"
+        :options="logLevelOptions"
+      />
       <div class="text-[11px] opacity-60 mt-1">
         {{ $t('config.log_level_desc') }}
       </div>
@@ -152,7 +156,7 @@ function removeCmd(index) {
         </div>
       </div>
       <div class="mt-4">
-        <n-button type="success" @click="addCmd" class="mx-auto block">
+        <n-button type="success" class="mx-auto block" @click="addCmd">
           &plus; {{ $t('config.add') }}
         </n-button>
       </div>

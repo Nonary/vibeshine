@@ -33,7 +33,12 @@ const twopassOptions = [
       <n-select
         id="nvenc_preset"
         v-model:value="config.nvenc_preset"
-        :options="presetOptions.map(o => ({ label: typeof o.label === 'function' ? o.label() : o.label, value: o.value }))"
+        :options="
+          presetOptions.map((o) => ({
+            label: typeof o.label === 'function' ? o.label() : o.label,
+            value: o.value,
+          }))
+        "
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.nvenc_preset_desc') }}
@@ -46,7 +51,7 @@ const twopassOptions = [
       <n-select
         id="nvenc_twopass"
         v-model:value="config.nvenc_twopass"
-        :options="twopassOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+        :options="twopassOptions.map((o) => ({ label: $t(o.labelKey), value: o.value }))"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.nvenc_twopass_desc') }}
