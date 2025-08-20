@@ -22,13 +22,7 @@
               {{ $t('offline.retrying') }}
             </p>
           </div>
-          <div class="flex items-center justify-center pt-2 gap-3">
-            <n-button type="primary" @click="refreshNow">
-              {{ $t('offline.refresh_now') }}
-              <i class="fas fa-rotate" />
-            </n-button>
-          </div>
-          <p class="mt-8 text-[10px] tracking-wider uppercase opacity-60 select-none">
+          <p class="mt-4 text-[12px] opacity-75 select-none">
             {{ $t('offline.close_hint') }}
           </p>
         </div>
@@ -40,15 +34,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useConnectivityStore } from '@/stores/connectivity';
-import { NButton } from 'naive-ui';
 
 const connectivity = useConnectivityStore();
-const visible = computed(() => connectivity.offline);
-
-function refreshNow() {
-  try {
-    window.location.reload();
-  } catch {}
-}
+const visible = computed(() => connectivity.overlayVisible);
 </script>
-

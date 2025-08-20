@@ -10,6 +10,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useAppsStore } from '@/stores/apps';
 import { useConfigStore } from '@/stores/config';
 import { useConnectivityStore } from '@/stores/connectivity';
+import { ensureLocaleLoaded } from '@/locale-manager';
 
 // Core application instance & stores
 const app: VueApp<Element> = createApp(App);
@@ -48,6 +49,15 @@ initApp(app, async () => {
 
   auth.waitForAuthentication().then(async () => {
     await configStore.fetchConfig(true);
+    // React to locale setting changes by switching i18n at runtime
+    watch(
+      () => configStore.config?.locale,
+      async (loc) => {
+        const locale = (loc as any) ?? 'en';
+        await ensureLocaleLoaded(locale);
+      },
+      { immediate: true },
+    );
     await appsStore.loadApps(true);
   });
 });

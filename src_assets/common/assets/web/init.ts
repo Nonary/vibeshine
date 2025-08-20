@@ -1,5 +1,6 @@
 import { App } from 'vue';
 import i18n from '@/locale';
+import { setI18nGlobal } from '@/locale-manager';
 
 export function initApp(
   app: App<Element>,
@@ -11,6 +12,8 @@ export function initApp(
   i18n().then(async (i18n) => {
     app.use(i18n);
     app.provide('i18n', i18n.global);
+    // expose i18n instance for runtime locale switching
+    setI18nGlobal(i18n);
     if (config) {
       try {
         // allow `config` to be async and wait for it to complete

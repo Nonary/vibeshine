@@ -93,7 +93,9 @@ const { t } = useI18n();
 // Show modal only when auth layer is ready, it has requested login,
 // and the user is not already authenticated. This prevents the modal
 // from flashing or appearing for non-auth errors.
-const visible = computed(() => auth.ready && auth.showLoginModal && !auth.isAuthenticated);
+const visible = computed(
+  () => auth.ready && auth.showLoginModal && !auth.isAuthenticated && !auth.logoutInitiated,
+);
 const credentialsConfigured = computed(() => auth.credentialsConfigured);
 
 const username = ref('');
@@ -118,10 +120,15 @@ function reset() {
 }
 
 async function submit() {
+  const MIN_LOGIN_DELAY_MS = 1000;
+  const start = Date.now();
   error.value = '';
   success.value = '';
   if (submitting.value) return;
   submitting.value = true;
+  try {
+    auth.loggingIn.value = true;
+  } catch {}
   try {
     if (!credentialsConfigured.value) {
       if (!newPassword.value || newPassword.value !== confirmNewPassword.value) {
@@ -162,6 +169,11 @@ async function submit() {
       { validateStatus: () => true },
     );
     if (loginRes.status === 200 && loginRes.data && loginRes.data.status) {
+      // Ensure the login feels deliberate: keep the loading state at least MIN_LOGIN_DELAY_MS
+      const elapsed = Date.now() - start;
+      if (elapsed < MIN_LOGIN_DELAY_MS) {
+        await new Promise((r) => setTimeout(r, MIN_LOGIN_DELAY_MS - elapsed));
+      }
       auth.setAuthenticated(true);
       success.value = t('auth.login_success');
       setTimeout(() => {
@@ -175,6 +187,9 @@ async function submit() {
     error.value = t('auth.login_network_error');
   } finally {
     submitting.value = false;
+    try {
+      auth.loggingIn.value = false;
+    } catch {}
   }
 }
 
