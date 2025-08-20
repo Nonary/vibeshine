@@ -279,8 +279,7 @@ namespace config {
                       std::vector<std::string> &deferred_keys);
 
   /**
-   * Apply any pending configuration only when idle (no active sessions and no running app),
-   * to avoid disrupting suspended/paused streams.
+   * Apply any pending configuration if there are no active streaming sessions.
    */
   void apply_pending_if_idle();
 }  // namespace config

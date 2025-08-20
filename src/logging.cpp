@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <fstream>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 
@@ -189,6 +190,51 @@ namespace logging {
     auto android_sink = boost::make_shared<sinks::synchronous_sink<android_sink_backend>>();
     bl::core::get()->add_sink(android_sink);
 #endif
+    return std::make_unique<deinit_t>();
+  }
+
+  [[nodiscard]] std::unique_ptr<deinit_t> init_append(int min_log_level, const std::string &log_file) {
+    if (sink) {
+      deinit();
+    }
+
+#ifndef __ANDROID__
+    setup_av_logging(min_log_level);
+    setup_libdisplaydevice_logging(min_log_level);
+#endif
+
+    sink = boost::make_shared<text_sink>();
+
+#ifndef SUNSHINE_TESTS
+    boost::shared_ptr<std::ostream> stream {&std::cout, boost::null_deleter()};
+    sink->locked_backend()->add_stream(stream);
+#endif
+
+    // Open in append mode to avoid cross-process truncation races. If the file is empty
+    // (newly created), write a UTF-8 BOM once to aid detection in Notepad.
+    bool should_write_bom = false;
+    try {
+      namespace fs = std::filesystem;
+      std::error_code ec;
+      auto sz = fs::exists(log_file, ec) ? fs::file_size(log_file, ec) : 0ull;
+      if (ec) sz = 0ull;
+      should_write_bom = (sz == 0ull);
+    } catch (...) {
+      should_write_bom = true; // best-effort
+    }
+
+    auto file_stream = boost::make_shared<std::ofstream>(log_file, std::ios::binary | std::ios::app);
+    if (file_stream->is_open() && should_write_bom) {
+      const unsigned char bom[3] = {0xEF, 0xBB, 0xBF};
+      file_stream->write(reinterpret_cast<const char *>(bom), 3);
+      file_stream->flush();
+    }
+    sink->locked_backend()->add_stream(file_stream);
+
+    sink->set_filter(severity >= min_log_level);
+    sink->set_formatter(&formatter);
+    sink->locked_backend()->auto_flush(true);
+    bl::core::get()->add_sink(sink);
     return std::make_unique<deinit_t>();
   }
 

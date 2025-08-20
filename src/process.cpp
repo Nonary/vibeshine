@@ -255,6 +255,13 @@ namespace proc {
         std::filesystem::path launcher = exeDir / L"tools" / L"playnite-launcher.exe";
         std::string lpath = launcher.string();
         std::string cmd = std::string("\"") + lpath + "\" --game-id " + _app.playnite_id;
+        // Pass graceful-exit timeout to launcher for cleanup behavior
+        try {
+          int exit_to = (int) std::max<std::int64_t>(0, _app.exit_timeout.count());
+          if (exit_to > 0) {
+            cmd += std::string(" --exit-timeout ") + std::to_string(exit_to);
+          }
+        } catch (...) {}
         // Pass focus attempts from config so the helper can try to bring Playnite/game to foreground
         try {
           if (config::playnite.focus_attempts > 0) {
@@ -364,7 +371,22 @@ namespace proc {
   void proc_t::terminate() {
     std::error_code ec;
     placebo = false;
-    terminate_process_group(_process, _process_group, _app.exit_timeout);
+    // For Playnite-managed apps, request a graceful stop via Playnite first
+#ifdef _WIN32
+    std::chrono::seconds remaining_timeout = _app.exit_timeout;
+    if (!_app.playnite_id.empty()) {
+      try {
+        // Ask Playnite to stop the game; then wait up to exit-timeout to let it close
+        platf::playnite::stop_game(_app.playnite_id);
+        while (remaining_timeout.count() > 0 && _process_group && platf::process_group_running((std::uintptr_t) _process_group.native_handle())) {
+          std::this_thread::sleep_for(1s);
+          remaining_timeout -= 1s;
+        }
+      } catch (...) {}
+    }
+#endif
+    // Regardless, ensure process group is terminated (graceful then forceful with remaining timeout)
+    terminate_process_group(_process, _process_group, remaining_timeout);
     _process = boost::process::v1::child();
     _process_group = boost::process::v1::group();
 
@@ -736,7 +758,8 @@ namespace proc {
         ctx.elevated = elevated.value_or(false);
         ctx.auto_detach = auto_detach.value_or(true);
         ctx.wait_all = wait_all.value_or(true);
-        ctx.exit_timeout = std::chrono::seconds {exit_timeout.value_or(5)};
+        // Default graceful-exit timeout: 10s (Playnite-managed apps are written with this value)
+        ctx.exit_timeout = std::chrono::seconds {exit_timeout.value_or(10)};
 
         auto possible_ids = calculate_app_id(name, ctx.image_path, i++);
         if (ids.count(std::get<0>(possible_ids)) == 0) {

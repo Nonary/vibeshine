@@ -60,6 +60,13 @@ namespace platf::playnite {
   bool launch_game(const std::string &playnite_id);
 
   /**
+   * @brief Request Playnite to stop/quit a running game by its Playnite ID.
+   * @param[in] playnite_id The Playnite identifier of the game to stop.
+   * @return `true` if the stop request was sent, `false` otherwise.
+   */
+  bool stop_game(const std::string &playnite_id);
+
+  /**
    * @brief Get a JSON array string with minimal game info (`{id,name,categories}`).
    * @param[out] out_json Receives the JSON array string on success.
    * @return `true` if the game list data was available and written to `out_json`, `false` otherwise.
