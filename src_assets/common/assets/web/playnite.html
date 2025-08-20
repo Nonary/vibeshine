@@ -358,12 +358,22 @@
         this.saving = false
       },
       async install() {
+        // Ask for confirmation since this will restart Playnite
+        const confirmMsg = this.$t('playnite.install_requires_restart') || 'Installing or updating the Playnite plugin requires restarting Playnite. Continue?'
+        if (!window.confirm(confirmMsg)) {
+          return
+        }
         this.installing = true
         this.installOk = false
         this.installErr = false
         this.installErrorMsg = ''
         try {
-          const r = await fetch('./api/playnite/install', { method: 'POST', headers: {'Content-Type': 'application/json'} })
+          const r = await fetch('./api/playnite/install', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            // Request backend to restart Playnite once install completes
+            body: JSON.stringify({ restart: true })
+          })
           let body = null
           try { body = await r.json() } catch {}
           const ok = r.ok && body && body.status === true
