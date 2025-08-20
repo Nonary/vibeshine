@@ -500,7 +500,15 @@
     "focus_exit_on_first": "Exit on first confirmed focus",
     "focus_exit_on_first_help": "Stop auto-focus after first success; otherwise, re-apply until attempts or timeout elapse.",
     "exclude_games": "Exclude games from auto-sync",
-    "exclude_games_desc": "Selected games will not be auto-synced from Playnite."
+    "exclude_games_desc": "Selected games will not be auto-synced from Playnite.",
+    "install_modal_title": "Install Playnite Plugin",
+    "install_modal_message": "Installing the Playnite plugin will require restarting Playnite. This process will be automated - Playnite will be closed and reopened after installation is complete.",
+    "install_modal_confirm": "Install and Restart",
+    "install_modal_cancel": "Cancel",
+    "status_playnite_not_running": "Playnite Not Running",
+    "playnite_not_running_desc": "Start Playnite to enable plugin communication, or install/reinstall the plugin to automatically start Playnite.",
+    "restart_success": "Plugin installed and Playnite restarted successfully.",
+    "restart_warning": "Plugin installed but failed to restart Playnite automatically."
   },
   "password": {
     "confirm_password": "Confirm Password",

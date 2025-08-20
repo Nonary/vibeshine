@@ -1507,6 +1507,20 @@ namespace confighttp {
       return;
     }
     print_req(request);
+    
+    // Parse the request body to check if restart is requested
+    bool restart_playnite = false;
+    try {
+      auto body = request->content.string();
+      if (!body.empty()) {
+        auto json = nlohmann::json::parse(body);
+        restart_playnite = json.value("restart_playnite", false);
+      }
+    } catch (...) {
+      // If JSON parsing fails, continue without restart
+      restart_playnite = false;
+    }
+    
     std::string err;
     nlohmann::json out;
     // Prefer same resolved dir as status
@@ -1518,6 +1532,29 @@ namespace confighttp {
     } else {
       ok = platf::playnite::install_plugin(err);
     }
+    
+    if (ok && restart_playnite) {
+      BOOST_LOG(info) << "Playnite install: Plugin installed successfully, restarting Playnite";
+      
+      // First terminate any running Playnite processes
+      std::string restart_err;
+      if (platf::playnite::terminate_playnite_processes(restart_err)) {
+        // Wait a moment, then start Playnite again
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        
+        if (!platf::playnite::start_playnite(restart_err)) {
+          BOOST_LOG(warning) << "Playnite install: Failed to restart Playnite: " << restart_err;
+          out["restart_warning"] = restart_err;
+        } else {
+          BOOST_LOG(info) << "Playnite install: Playnite restarted successfully";
+          out["restarted"] = true;
+        }
+      } else {
+        BOOST_LOG(warning) << "Playnite install: Failed to terminate Playnite processes: " << restart_err;
+        out["restart_warning"] = restart_err;
+      }
+    }
+    
     BOOST_LOG(info) << "Playnite install: status=" << (ok ? "true" : "false") << (ok ? "" : std::string(", error=") + err);
     out["status"] = ok;
     if (!ok) out["error"] = err;

@@ -470,6 +470,147 @@ namespace platf::playnite {
     return do_install_plugin_impl(dest_dir, error);
   }
 
-  
+  bool terminate_playnite_processes(std::string &error) {
+#ifndef _WIN32
+    error = "Playnite process management is only supported on Windows";
+    return false;
+#else
+    try {
+      auto desktop_pids = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
+      auto fullscreen_pids = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
+      
+      std::vector<DWORD> all_pids = desktop_pids;
+      all_pids.insert(all_pids.end(), fullscreen_pids.begin(), fullscreen_pids.end());
+      
+      if (all_pids.empty()) {
+        BOOST_LOG(info) << "Playnite restart: No Playnite processes found to terminate";
+        return true; // No processes to terminate is success
+      }
+      
+      BOOST_LOG(info) << "Playnite restart: Terminating " << all_pids.size() << " Playnite processes";
+      
+      bool all_terminated = true;
+      for (DWORD pid : all_pids) {
+        HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+        if (process) {
+          if (TerminateProcess(process, 0)) {
+            BOOST_LOG(info) << "Playnite restart: Terminated PID " << pid;
+          } else {
+            BOOST_LOG(warning) << "Playnite restart: Failed to terminate PID " << pid;
+            all_terminated = false;
+          }
+          CloseHandle(process);
+        } else {
+          BOOST_LOG(warning) << "Playnite restart: Failed to open process handle for PID " << pid;
+          all_terminated = false;
+        }
+      }
+      
+      if (!all_terminated) {
+        error = "Failed to terminate some Playnite processes";
+        return false;
+      }
+      
+      // Wait a brief moment for processes to fully terminate
+      Sleep(1000);
+      return true;
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Playnite restart: Exception during termination: " << e.what();
+      error = e.what();
+      return false;
+    }
+#endif
+  }
+
+  bool start_playnite(std::string &error) {
+#ifndef _WIN32
+    error = "Playnite process management is only supported on Windows";
+    return false;
+#else
+    try {
+      // Check if Playnite is already running
+      auto desktop_pids = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
+      auto fullscreen_pids = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
+      
+      if (!desktop_pids.empty() || !fullscreen_pids.empty()) {
+        BOOST_LOG(info) << "Playnite restart: Playnite is already running";
+        return true;
+      }
+      
+      // Try to find Playnite installation
+      std::filesystem::path playnite_exe;
+      
+      // First try the configured install directory
+      if (!config::playnite.install_dir.empty()) {
+        auto config_path = std::filesystem::path(config::playnite.install_dir) / L"Playnite.DesktopApp.exe";
+        if (std::filesystem::exists(config_path)) {
+          playnite_exe = config_path;
+        }
+      }
+      
+      // If not found, try common installation locations
+      if (playnite_exe.empty()) {
+        std::vector<std::filesystem::path> candidates = {
+          std::filesystem::path(L"C:\\Program Files (x86)\\Playnite\\Playnite.DesktopApp.exe"),
+          std::filesystem::path(L"C:\\Program Files\\Playnite\\Playnite.DesktopApp.exe")
+        };
+        
+        // Also try user's AppData\Local
+        wchar_t localAppData[MAX_PATH] = {};
+        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, localAppData))) {
+          candidates.push_back(std::filesystem::path(localAppData) / L"Playnite\\Playnite.DesktopApp.exe");
+        }
+        
+        for (const auto &candidate : candidates) {
+          if (std::filesystem::exists(candidate)) {
+            playnite_exe = candidate;
+            break;
+          }
+        }
+      }
+      
+      if (playnite_exe.empty()) {
+        error = "Could not find Playnite.DesktopApp.exe in any known location";
+        BOOST_LOG(error) << "Playnite restart: " << error;
+        return false;
+      }
+      
+      BOOST_LOG(info) << "Playnite restart: Starting Playnite from " << playnite_exe.string();
+      
+      // Start Playnite
+      STARTUPINFOW si = {};
+      si.cb = sizeof(si);
+      PROCESS_INFORMATION pi = {};
+      
+      std::wstring exe_path = playnite_exe.wstring();
+      
+      if (CreateProcessW(
+            exe_path.c_str(),
+            nullptr,
+            nullptr,
+            nullptr,
+            FALSE,
+            0,
+            nullptr,
+            nullptr,
+            &si,
+            &pi)) {
+        BOOST_LOG(info) << "Playnite restart: Successfully started Playnite with PID " << pi.dwProcessId;
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return true;
+      } else {
+        DWORD err = GetLastError();
+        error = "Failed to start Playnite: CreateProcess error " + std::to_string(err);
+        BOOST_LOG(error) << "Playnite restart: " << error;
+        return false;
+      }
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Playnite restart: Exception during startup: " << e.what();
+      error = e.what();
+      return false;
+    }
+#endif
+  }
 
 }  // namespace platf::playnite

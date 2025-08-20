@@ -20,7 +20,10 @@ const gamepadOptions = computed(() => {
     );
   }
   if (platform.value === 'windows') {
-    opts.push({ label: 'config.gamepad_ds4', value: 'ds4' }, { label: 'config.gamepad_x360', value: 'x360' });
+    opts.push(
+      { label: 'config.gamepad_ds4', value: 'ds4' },
+      { label: 'config.gamepad_x360', value: 'x360' },
+    );
   }
   return opts;
 });
@@ -43,7 +46,7 @@ const gamepadOptions = computed(() => {
       <n-select
         id="gamepad"
         v-model:value="config.gamepad"
-        :options="gamepadOptions.map(o => ({ label: $t(o.label), value: o.value }))"
+        :options="gamepadOptions.map((o) => ({ label: $t(o.label), value: o.value }))"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.gamepad_desc') }}
@@ -124,10 +127,10 @@ const gamepadOptions = computed(() => {
                   "
                 >
                   <Checkbox
-                    class="mb-3"
                     id="ds5_inputtino_randomize_mac"
-                    locale-prefix="config"
                     v-model="config.ds5_inputtino_randomize_mac"
+                    class="mb-3"
+                    locale-prefix="config"
                     default="true"
                   ></Checkbox>
                 </template>

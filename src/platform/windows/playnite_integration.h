@@ -87,6 +87,20 @@ namespace platf::playnite {
    */
   bool get_cover_png_for_playnite_game(const std::string &playnite_id, std::string &out_path);
 
+  /**
+   * @brief Terminate all running Playnite processes (Desktop and Fullscreen).
+   * @param[out] error Set to a human-readable error message on failure.
+   * @return `true` if all processes were terminated successfully, `false` on failure.
+   */
+  bool terminate_playnite_processes(std::string &error);
+
+  /**
+   * @brief Start Playnite (Desktop app) if not already running.
+   * @param[out] error Set to a human-readable error message on failure.
+   * @return `true` if Playnite was started successfully or was already running, `false` on failure.
+   */
+  bool start_playnite(std::string &error);
+
   // no-op: persistence helper moved to confighttp as refresh_client_apps_cache
 
 }  // namespace platf::playnite

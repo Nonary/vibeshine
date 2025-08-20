@@ -96,7 +96,10 @@ function removeRemappingEntry(idx) {
                   { label: $t('config.dd_config_verify_only'), value: 'verify_only' },
                   { label: $t('config.dd_config_ensure_active'), value: 'ensure_active' },
                   { label: $t('config.dd_config_ensure_primary'), value: 'ensure_primary' },
-                  { label: $t('config.dd_config_ensure_only_display'), value: 'ensure_only_display' },
+                  {
+                    label: $t('config.dd_config_ensure_only_display'),
+                    value: 'ensure_only_display',
+                  },
                 ]"
               />
             </div>
@@ -184,12 +187,12 @@ function removeRemappingEntry(idx) {
                 $t('config.dd_wa_hdr_toggle_delay')
               }}</label>
               <n-input-number
-                  id="dd_wa_hdr_toggle_delay"
-                  v-model:value="config.dd_wa_hdr_toggle_delay"
-                  :placeholder="'0'"
-                  :min="0"
-                  :max="3000"
-                />
+                id="dd_wa_hdr_toggle_delay"
+                v-model:value="config.dd_wa_hdr_toggle_delay"
+                :placeholder="'0'"
+                :min="0"
+                :max="3000"
+              />
               <p class="text-[11px] opacity-60 mt-1">
                 {{ $t('config.dd_wa_hdr_toggle_delay_desc_1') }}<br />
                 {{ $t('config.dd_wa_hdr_toggle_delay_desc_2') }}<br />
