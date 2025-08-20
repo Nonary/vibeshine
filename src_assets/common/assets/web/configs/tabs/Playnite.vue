@@ -32,14 +32,33 @@
             <b>{{ $t('playnite.extensions_dir') }}:</b>
             <code class="text-xs break-all">{{ status.extensions_dir }}</code>
           </div>
+          <div class="flex items-center gap-2" v-if="status.plugin_version">
+            <b>{{ $t('playnite.plugin_version') || 'Plugin' }}:</b>
+            <n-tag size="small" type="default">v{{ status.plugin_version }}</n-tag>
+            <template v-if="status.plugin_latest">
+              <span class="opacity-70">→</span>
+              <n-tag size="small" :type="pluginOutdated ? 'warning' : 'success'">v{{ status.plugin_latest }}</n-tag>
+            </template>
+          </div>
         </div>
         <n-alert v-if="statusKind === 'session'" type="warning" :show-icon="true">
           {{ $t('playnite.session_required') }}
         </n-alert>
+        <n-alert v-if="pluginOutdated" type="warning" :show-icon="true">
+          {{ $t('playnite.plugin_outdated', { installed: status.plugin_version || '?', latest: status.plugin_latest || '?' }) }}
+        </n-alert>
         <div class="flex items-center gap-2">
-          <n-button type="primary" size="small" :loading="installing" @click="install">
+          <n-button type="primary" size="small" :loading="installing" @click="openInstallConfirm">
             <i class="fas fa-plug" />
-            <span class="ml-2">{{ status.installed ? ($t('playnite.reinstall_button') || 'Reinstall Plugin') : ($t('playnite.install_button') || 'Install Plugin') }}</span>
+            <span class="ml-2">
+              {{
+                status.installed
+                  ? (pluginOutdated
+                      ? ($t('playnite.upgrade_button') || 'Upgrade Plugin')
+                      : ($t('playnite.reinstall_button') || 'Reinstall Plugin'))
+                  : ($t('playnite.install_button') || 'Install Plugin')
+              }}
+            </span>
           </n-button>
           <span v-if="installOk" class="text-success text-xs">{{ $t('playnite.install_success') }}</span>
           <span v-if="installErr" class="text-danger text-xs">{{ $t('playnite.install_error') }}<template v-if="installErrorMsg">: {{ installErrorMsg }}</template></span>
@@ -147,6 +166,28 @@
       </div>
     </section>
   </div>
+  <!-- Install/Upgrade confirmation -->
+  <n-modal :show="showInstallConfirm" @update:show="(v) => (showInstallConfirm = v)">
+    <n-card :bordered="false" style="max-width: 32rem; width: 100%">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <i class="fas fa-plug" />
+          <span>
+            {{ status.installed ? (pluginOutdated ? ($t('playnite.upgrade_button') || 'Upgrade Plugin') : ($t('playnite.reinstall_button') || 'Reinstall Plugin')) : ($t('playnite.install_button') || 'Install Plugin') }}
+          </span>
+        </div>
+      </template>
+      <div class="text-sm">
+        {{ $t('playnite.install_requires_restart') || 'This action will restart Playnite to complete plugin (re)installation. Continue?' }}
+      </div>
+      <template #footer>
+        <div class="w-full flex items-center justify-center gap-3">
+          <n-button tertiary @click="showInstallConfirm = false">{{ $t('_common.cancel') }}</n-button>
+          <n-button type="primary" :loading="installing" @click="confirmInstall">{{ $t('_common.continue') || 'Continue' }}</n-button>
+        </div>
+      </template>
+    </n-card>
+  </n-modal>
 </template>
 
 <script setup lang="ts">
@@ -164,8 +205,16 @@ const cfg = computed<any>(() => config.value || {});
 const platform = computed(() => (metadata.value?.platform || cfg.value?.platform || '').toLowerCase());
 const { t } = useI18n();
 
-const status = reactive<{ installed: boolean; active: boolean; user_session_active: boolean; extensions_dir: string }>({ installed: false, active: false, user_session_active: false, extensions_dir: '' });
+const status = reactive<{
+  installed: boolean;
+  active: boolean;
+  user_session_active: boolean;
+  extensions_dir: string;
+  plugin_version?: string;
+  plugin_latest?: string;
+}>({ installed: false, active: false, user_session_active: false, extensions_dir: '' });
 const installing = ref(false);
+const showInstallConfirm = ref(false);
 const installOk = ref(false);
 const installErr = ref(false);
 const installErrorMsg = ref('');
@@ -200,10 +249,13 @@ async function refreshStatus() {
   try {
     const r = await http.get('/api/playnite/status');
     if (r.status === 200 && r.data) {
-      status.installed = !!r.data.installed;
-      status.active = !!r.data.active;
-      status.user_session_active = !!r.data.user_session_active;
-      status.extensions_dir = r.data.extensions_dir || '';
+      const d = r.data as any;
+      status.installed = !!d.installed;
+      status.active = !!d.active;
+      status.user_session_active = !!d.user_session_active;
+      status.extensions_dir = d.extensions_dir || '';
+      status.plugin_version = d.plugin_version || d.version || status.plugin_version;
+      status.plugin_latest = d.plugin_latest || d.latest_version || status.plugin_latest;
     }
   } catch (_) {}
 }
@@ -239,13 +291,19 @@ async function loadGames() {
   gamesLoading.value = false;
 }
 
-async function install() {
+function openInstallConfirm() {
+  showInstallConfirm.value = true;
+}
+
+async function confirmInstall() {
+  installing.value = true;
+  showInstallConfirm.value = false;
   installing.value = true;
   installOk.value = false;
   installErr.value = false;
   installErrorMsg.value = '';
   try {
-    const r = await http.post('/api/playnite/install', {}, { validateStatus: () => true });
+    const r = await http.post('/api/playnite/install', { restart: true }, { validateStatus: () => true });
     let ok = false;
     let body: any = null;
     try { body = r.data; } catch {}
@@ -293,6 +351,26 @@ const statusText = computed<string>(() => {
     case 'uninstalled': return t('playnite.status_uninstalled');
     default: return '';
   }
+});
+
+function cmpSemver(a?: string, b?: string): number {
+  if (!a || !b) return 0;
+  const na = String(a).replace(/^v/i, '').split('.').map((x) => parseInt(x, 10));
+  const nb = String(b).replace(/^v/i, '').split('.').map((x) => parseInt(x, 10));
+  const len = Math.max(na.length, nb.length);
+  for (let i = 0; i < len; i++) {
+    const va = Number.isFinite(na[i]) ? na[i] : 0;
+    const vb = Number.isFinite(nb[i]) ? nb[i] : 0;
+    if (va < vb) return -1;
+    if (va > vb) return 1;
+  }
+  return 0;
+}
+
+const pluginOutdated = computed(() => {
+  if (!status.installed) return false;
+  if (!status.plugin_version || !status.plugin_latest) return false;
+  return cmpSemver(status.plugin_version, status.plugin_latest) < 0;
 });
 </script>
 
