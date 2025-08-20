@@ -2,12 +2,15 @@
 import { ref, computed } from 'vue';
 import PlatformLayout from '@/PlatformLayout.vue';
 import { useConfigStore } from '@/stores/config';
+import { storeToRefs } from 'pinia';
 import { useI18n } from 'vue-i18n';
 import { NInput, NInputNumber, NSelect } from 'naive-ui';
 
 const store = useConfigStore();
 const config = store.config;
-const platform = computed(() => config.value?.platform || '');
+// Use platform from metadata to ensure OS-specific options load correctly.
+const { metadata } = storeToRefs(store);
+const platform = computed(() => metadata.value?.platform || '');
 const { t } = useI18n();
 
 const hevcModeOptions = [0, 1, 2, 3].map((v) => ({ labelKey: `config.hevc_mode_${v}`, value: v }));

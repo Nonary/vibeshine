@@ -47,6 +47,7 @@
                 <router-view />
               </main>
               <LoginModal />
+              <OfflineOverlay />
               <transition name="fade-fast">
                 <div v-if="loggedOut" class="fixed inset-0 z-[120] flex flex-col">
                   <div
@@ -107,6 +108,7 @@ import { useRoute } from 'vue-router';
 import ThemeToggle from '@/ThemeToggle.vue';
 import SavingStatus from '@/components/SavingStatus.vue';
 import LoginModal from '@/components/LoginModal.vue';
+import OfflineOverlay from '@/components/OfflineOverlay.vue';
 import { http } from '@/http';
 import { useAuthStore } from './stores/auth';
 

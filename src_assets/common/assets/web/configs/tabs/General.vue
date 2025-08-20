@@ -4,6 +4,7 @@ import { ref, computed } from 'vue';
 import { useConfigStore } from '@/stores/config';
 import { storeToRefs } from 'pinia';
 import { NSelect, NInput, NButton, NInputNumber } from 'naive-ui';
+import { useI18n } from 'vue-i18n';
 
 const store = useConfigStore();
 const { config, metadata } = storeToRefs(store);
@@ -33,7 +34,10 @@ const localeOptions = [
   { label: '繁體中文 (Chinese Traditional)', value: 'zh_TW' },
 ];
 
-const logLevelOptions = [0, 1, 2, 3, 4, 5, 6].map((v) => ({ label: String(v), value: v }));
+const { t } = useI18n();
+const logLevelOptions = computed(() =>
+  [0, 1, 2, 3, 4, 5, 6].map((v) => ({ label: t(`config.log_level_${v}`), value: v })),
+);
 
 function addCmd() {
   const template = {

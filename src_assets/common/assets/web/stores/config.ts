@@ -246,6 +246,17 @@ export const useConfigStore = defineStore('config', () => {
         },
       });
     });
+    // Virtual, read-only platform property sourced from metadata
+    Object.defineProperty(target, 'platform', {
+      enumerable: true,
+      configurable: true,
+      get() {
+        return metadata.value?.platform || '';
+      },
+      set(_v) {
+        // ignore writes; platform is server-provided only
+      },
+    });
     return target;
   }
 
@@ -338,6 +349,8 @@ export const useConfigStore = defineStore('config', () => {
     for (const k of Object.keys(out)) {
       if (k in defaultMap && deepEqual(out[k], defaultMap[k])) delete out[k];
     }
+    // never persist virtual keys
+    delete (out as any).platform;
     return out;
   }
 
@@ -352,7 +365,15 @@ export const useConfigStore = defineStore('config', () => {
       try {
         const mr = await http.get('/api/metadata');
         if (mr.status === 200 && mr.data) {
-          metadata.value = mr.data;
+          const m = { ...(mr.data as any) } as MetaInfo;
+          // Normalize platform identifiers across build/runtime variations
+          const raw = String((m as any).platform || '').toLowerCase();
+          let norm = raw;
+          if (raw.startsWith('win')) norm = 'windows';
+          else if (raw === 'darwin' || raw.startsWith('mac')) norm = 'macos';
+          else if (raw.startsWith('lin')) norm = 'linux';
+          (m as any).platform = norm;
+          metadata.value = m;
         }
       } catch (_) {
         /* ignore */

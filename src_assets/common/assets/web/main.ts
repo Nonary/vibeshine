@@ -9,6 +9,7 @@ import '@fortawesome/fontawesome-free/css/all.min.css';
 import { useAuthStore } from '@/stores/auth';
 import { useAppsStore } from '@/stores/apps';
 import { useConfigStore } from '@/stores/config';
+import { useConnectivityStore } from '@/stores/connectivity';
 
 // Core application instance & stores
 const app: VueApp<Element> = createApp(App);
@@ -25,10 +26,22 @@ app.provide('platform', platformRef);
 // and a later successful login will re-load fresh data.
 initApp(app, async () => {
   await initHttpLayer();
+  // Start connectivity heartbeat early so we can detect server loss
+  const connectivity = useConnectivityStore();
+  connectivity.start();
 
   const auth = useAuthStore();
   const configStore = useConfigStore();
   const appsStore = useAppsStore();
+
+  // Keep provided platform ref in sync with store metadata for any consumers
+  watch(
+    () => configStore.metadata.platform,
+    (p) => {
+      platformRef.value = p || '';
+    },
+    { immediate: true },
+  );
 
   // Initialize auth status from server
   await auth.init();

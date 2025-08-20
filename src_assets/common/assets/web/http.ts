@@ -46,6 +46,11 @@ function initAuthHandling(): void {
   // Response interceptor to detect auth changes
   http.interceptors.response.use(
     async (response: AxiosResponse) => {
+      try {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('sunshine:online'));
+        }
+      } catch {}
       if (response?.status === 401) {
         if (auth.isAuthenticated) auth.setAuthenticated(false);
         triggerLoginModal();
@@ -53,6 +58,12 @@ function initAuthHandling(): void {
       return response;
     },
     async (error: AxiosError) => {
+      // Network-level errors (no response) indicate possible server unavailability
+      try {
+        if (!error?.response && typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('sunshine:offline'));
+        }
+      } catch {}
       if (error?.response?.status === 401) {
         if (auth.isAuthenticated) auth.setAuthenticated(false);
         triggerLoginModal();

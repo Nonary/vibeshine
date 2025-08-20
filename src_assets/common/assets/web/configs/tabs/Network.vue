@@ -7,7 +7,8 @@ import { NSelect, NInput, NInputNumber } from 'naive-ui';
 const store = useConfigStore();
 const defaultMoonlightPort = 47989;
 const config = store.config;
-const effectivePort = computed(() => +config.value?.port ?? defaultMoonlightPort);
+// Ensure a valid numeric base port even if server returns string/undefined
+const effectivePort = computed(() => Number(config.value?.port ?? defaultMoonlightPort));
 
 const addressFamilyOptions = [
   { label: 'IPv4', value: 'ipv4' },
