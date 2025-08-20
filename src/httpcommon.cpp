@@ -66,6 +66,10 @@ namespace http {
     return 0;
   }
 
+  void refresh_origin_acl() {
+    origin_web_ui_allowed = net::from_enum_string(config::nvhttp.origin_web_ui_allowed);
+  }
+
   int save_user_creds(const std::string &file, const std::string &username, const std::string &password, bool run_our_mouth) {
     pt::ptree outputTree;
 

@@ -21,6 +21,18 @@ function cssVarRgb(name: string, fallback: string): string {
   return `rgb(${nr}, ${ng}, ${nb})`;
 }
 
+// Convert a cssVarRgb result to rgba with alpha. If the input isn't rgb(...),
+// fall back to provided fallback color string.
+function rgbaFromCssVar(name: string, fallbackRgb: string, alpha: number): string {
+  const rgb = cssVarRgb(name, fallbackRgb);
+  const m = /^rgb\((\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\)$/.exec(rgb);
+  if (!m) return `rgba(0, 0, 0, ${alpha})`;
+  const r = Number(m[1]);
+  const g = Number(m[2]);
+  const b = Number(m[3]);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 export function useNaiveThemeOverrides() {
   const overrides = ref<GlobalThemeOverrides>({});
   const compute = () => {
@@ -40,9 +52,9 @@ export function useNaiveThemeOverrides() {
         popoverColor: cssVarRgb('--color-surface', '#ffffff'),
         tableColor: cssVarRgb('--color-light', '#ffffff'),
 
-        // Subtle borders/dividers using theme tokens
-        borderColor: 'rgba(var(--color-dark), 0.10)',
-        dividerColor: 'rgba(var(--color-dark), 0.10)',
+        // Subtle borders/dividers using resolved RGB (avoid passing CSS vars to Naive color utils)
+        borderColor: rgbaFromCssVar('--color-dark', 'rgb(0, 0, 0)', 0.1),
+        dividerColor: rgbaFromCssVar('--color-dark', 'rgb(0, 0, 0)', 0.1),
       },
     } as GlobalThemeOverrides;
   };

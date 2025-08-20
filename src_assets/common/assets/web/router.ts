@@ -10,6 +10,8 @@ const routes = [
   { path: '/', component: DashboardView },
   { path: '/applications', component: ApplicationsView },
   { path: '/settings', component: SettingsView },
+  // Legacy paths (server still routes SPA shell); keep compatibility
+  { path: '/config', redirect: '/settings' },
   { path: '/logs', component: DashboardView },
   { path: '/troubleshooting', component: TroubleshootingView },
   { path: '/clients', component: ClientManagementView },

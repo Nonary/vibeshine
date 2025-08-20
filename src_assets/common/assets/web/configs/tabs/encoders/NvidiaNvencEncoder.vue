@@ -72,7 +72,7 @@ const twopassOptions = [
         v-model:value="config.nvenc_vbv_increase"
         :min="0"
         :max="400"
-        :placeholder="0"
+        :placeholder="'0'"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.nvenc_vbv_increase_desc') }}<br />

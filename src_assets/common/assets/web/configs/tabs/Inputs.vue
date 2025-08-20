@@ -146,7 +146,7 @@ const gamepadOptions = computed(() => {
       <n-input-number
         id="back_button_timeout"
         v-model:value="config.back_button_timeout"
-        :placeholder="-1"
+        :placeholder="'-1'"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.back_button_timeout_desc') }}
@@ -169,7 +169,7 @@ const gamepadOptions = computed(() => {
       <n-input-number
         id="key_repeat_delay"
         v-model:value="config.key_repeat_delay"
-        :placeholder="500"
+        :placeholder="'500'"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.key_repeat_delay_desc') }}
@@ -185,7 +185,7 @@ const gamepadOptions = computed(() => {
         id="key_repeat_frequency"
         v-model:value="config.key_repeat_frequency"
         :step="0.1"
-        :placeholder="24.9"
+        :placeholder="'24.9'"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.key_repeat_frequency_desc') }}

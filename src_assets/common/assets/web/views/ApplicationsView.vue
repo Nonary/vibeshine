@@ -3,9 +3,27 @@
     <div class="flex items-center justify-between">
       <h2 class="text-sm font-semibold uppercase tracking-wider">Applications</h2>
       <div class="flex items-center gap-2">
-        <n-button type="primary" size="small" @click="openAdd"
-          ><i class="fas fa-plus" /> Add</n-button
-        >
+        <!-- Windows + Playnite actions -->
+        <template v-if="isWindows">
+          <n-button v-if="playniteEnabled" size="small" type="error" @click="purgeAutoSync">
+            <i class="fas fa-trash" /> Delete All Auto-Sync
+          </n-button>
+          <n-button
+            v-if="playniteEnabled"
+            size="small"
+            :loading="syncBusy"
+            :disabled="syncBusy"
+            @click="forceSync"
+          >
+            <i class="fas fa-rotate" /> Force Sync
+          </n-button>
+          <n-button v-else size="small" tertiary @click="gotoPlaynite">
+            <i class="fas fa-plug" /> Setup Playnite
+          </n-button>
+        </template>
+        <n-button type="primary" size="small" @click="openAdd">
+          <i class="fas fa-plus" /> Add
+        </n-button>
       </div>
     </div>
 
@@ -27,7 +45,20 @@
         class="flex items-center justify-between px-4 py-3 hover:bg-dark/10 dark:hover:bg-light/10"
       >
             <div class="min-w-0 flex-1">
-              <div class="text-sm font-semibold truncate">{{ app.name || '(untitled)' }}</div>
+              <div class="text-sm font-semibold truncate flex items-center gap-2">
+                <span class="truncate">{{ app.name || '(untitled)' }}</span>
+                <!-- Playnite badges -->
+                <template v-if="app['playnite-id']">
+                  <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-semibold">
+                    Playnite
+                  </span>
+                  <span v-if="app['playnite-managed'] === 'manual'" class="text-[10px] opacity-70">manual</span>
+                  <span v-else-if="(app['playnite-source']||'') === 'recent'" class="text-[10px] opacity-70">recent</span>
+                  <span v-else-if="(app['playnite-source']||'') === 'category'" class="text-[10px] opacity-70">category</span>
+                  <span v-else-if="(app['playnite-source']||'') === 'recent+category'" class="text-[10px] opacity-70">recent+category</span>
+                  <span v-else class="text-[10px] opacity-70">managed</span>
+                </template>
+              </div>
               <div class="mt-0.5 text-[11px] opacity-60 truncate" v-if="app['working-dir']">
                 {{ app['working-dir'] }}
               </div>
@@ -54,14 +85,26 @@
   </div>
 </template>
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import AppEditModal from '@/components/AppEditModal.vue';
 import { useAppsStore } from '@/stores/apps';
 import { storeToRefs } from 'pinia';
 import { NButton } from 'naive-ui';
+import { useConfigStore } from '@/stores/config';
+import { http } from '@/http';
 const appsStore = useAppsStore();
 const { apps } = storeToRefs(appsStore);
-const platform = ref('');
+const configStore = useConfigStore();
+const syncBusy = ref(false);
+const isWindows = computed(() => (configStore.metadata?.platform || '').toLowerCase() === 'windows');
+const playniteEnabled = computed(() => {
+  try {
+    const v = configStore.config?.playnite_enabled ?? 'disabled';
+    return String(v).toLowerCase() === 'enabled' || v === true || String(v) === 'on';
+  } catch (_) {
+    return false;
+  }
+});
 const showModal = ref(false);
 const currentApp = ref(null);
 const currentIndex = ref(-1);
@@ -83,6 +126,43 @@ function appKey(app, index) {
   const id = app?.uuid || '';
   return `${app?.name || 'app'}|${id}|${index}`;
 }
+async function purgeAutoSync() {
+  if (typeof window !== 'undefined') {
+    const ok = window.confirm('Delete all Playnite auto-synced apps?');
+    if (!ok) return;
+  }
+  try {
+    await http.post('./api/apps/purge_autosync', {}, { validateStatus: () => true });
+    await reload();
+  } catch (_) {
+    // ignore
+  }
+}
+async function forceSync() {
+  syncBusy.value = true;
+  try {
+    await http.post('./api/playnite/force_sync', {}, { validateStatus: () => true });
+    await reload();
+  } catch (_) {
+    // ignore
+  } finally {
+    syncBusy.value = false;
+  }
+}
+function gotoPlaynite() {
+  try {
+    if (typeof window !== 'undefined') window.location.href = '/settings#playnite';
+  } catch (_) {}
+}
+onMounted(async () => {
+  // Ensure metadata/config present for platform + playnite detection
+  try {
+    await configStore.fetchConfig?.();
+  } catch (_) {}
+  try {
+    await appsStore.loadApps(true);
+  } catch (_) {}
+});
 </script>
 <style scoped>
 .main-btn {

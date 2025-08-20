@@ -10,6 +10,7 @@
 #include <boost/regex.hpp>
 #include <chrono>
 #include <filesystem>
+#include <algorithm>
 #include <format>
 #include <fstream>
 #include <mutex>
@@ -35,9 +36,18 @@
 #include "globals.h"
 #include "http_auth.h"
 #include "httpcommon.h"
+#include "platform/common.h"
+#ifdef _WIN32
+#include "src/platform/windows/playnite_integration.h"
+#include "src/platform/windows/image_convert.h"
+#include "src/platform/windows/ipc/misc_utils.h"
+#include "config_playnite.h"
+#include <ShlObj.h>
+#endif
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
+#include <nlohmann/json.hpp>
 #include "platform/common.h"
 #if defined(_WIN32)
   #include "platform/windows/misc.h"
@@ -52,6 +62,54 @@ using namespace std::literals;
 namespace pt = boost::property_tree;
 
 namespace confighttp {
+  // Global MIME type lookup used for static file responses
+  const std::map<std::string, std::string> mime_types = {
+    {"css", "text/css"},
+    {"gif", "image/gif"},
+    {"htm", "text/html"},
+    {"html", "text/html"},
+    {"ico", "image/x-icon"},
+    {"jpeg", "image/jpeg"},
+    {"jpg", "image/jpeg"},
+    {"js", "application/javascript"},
+    {"json", "application/json"},
+    {"png", "image/png"},
+    {"svg", "image/svg+xml"},
+    {"ttf", "font/ttf"},
+    {"txt", "text/plain"},
+    {"woff2", "font/woff2"},
+    {"xml", "text/xml"},
+  };
+  // Helper: sort apps by their 'name' field, if present
+  static void sort_apps_by_name(nlohmann::json &file_tree) {
+    try {
+      if (!file_tree.contains("apps") || !file_tree["apps"].is_array()) {
+        return;
+      }
+      auto &apps_node = file_tree["apps"];
+      std::sort(apps_node.begin(), apps_node.end(), [](const nlohmann::json &a, const nlohmann::json &b) {
+        try {
+          return a.at("name").get<std::string>() < b.at("name").get<std::string>();
+        } catch (...) {
+          return false;
+        }
+      });
+    } catch (...) {}
+  }
+
+  bool refresh_client_apps_cache(nlohmann::json &file_tree) {
+    try {
+      sort_apps_by_name(file_tree);
+      file_handler::write_file(config::stream.file_apps.c_str(), file_tree.dump(4));
+      proc::refresh(config::stream.file_apps);
+      return true;
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "refresh_client_apps_cache: failed: " << e.what();
+    } catch (...) {
+      BOOST_LOG(warning) << "refresh_client_apps_cache: failed (unknown)";
+    }
+    return false;
+  }
   namespace fs = std::filesystem;
   using enum confighttp::StatusCode;
 
@@ -381,6 +439,27 @@ namespace confighttp {
     headers.emplace("Access-Control-Allow-Origin", "https://images.igdb.com/");
     response->write(content, headers);
   }
+
+  /**
+   * @brief Get the Playnite integration page (Windows-only link; page exists for parity).
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void getPlaynitePage(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::string content = file_handler::read_file(WEB_DIR "playnite.html");
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "text/html; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    response->write(content, headers);
+  }
+
 
   /**
    * @brief Get the clients page.
@@ -723,6 +802,19 @@ namespace confighttp {
         input_tree.erase("detached");
       }
 
+      // If image-path omitted but we have a Playnite id, try to resolve and set cover immediately (Windows)
+#ifdef _WIN32
+      try {
+        if ((!input_tree.contains("image-path") || (input_tree["image-path"].is_string() && input_tree["image-path"].get<std::string>().empty())) &&
+            input_tree.contains("playnite-id") && input_tree["playnite-id"].is_string()) {
+          std::string cover;
+          if (platf::playnite::get_cover_png_for_playnite_game(input_tree["playnite-id"].get<std::string>(), cover)) {
+            input_tree["image-path"] = cover;
+          }
+        }
+      } catch (...) {}
+#endif
+
       auto &apps_node = file_tree["apps"];
       int index = input_tree["index"].get<int>();  // this will intentionally cause exception if the provided value is the wrong type
 
@@ -753,13 +845,8 @@ namespace confighttp {
         file_tree["apps"] = newApps;
       }
 
-      // Sort the apps array by name
-      std::sort(apps_node.begin(), apps_node.end(), [](const nlohmann::json &a, const nlohmann::json &b) {
-        return a["name"].get<std::string>() < b["name"].get<std::string>();
-      });
-
-      file_handler::write_file(config::stream.file_apps.c_str(), file_tree.dump(4));
-      proc::refresh(config::stream.file_apps);
+      // Update apps file and refresh client cache
+      confighttp::refresh_client_apps_cache(file_tree);
 
       output_tree["status"] = true;
       send_response(response, output_tree);
@@ -881,6 +968,10 @@ namespace confighttp {
     output_tree["status"] = true;
     send_response(response, output_tree);
   }
+
+#ifdef _WIN32
+  // removed unused forward declaration for default_playnite_ext_dir()
+#endif
 
   /**
    * @brief Unpair a client.
@@ -1156,27 +1247,147 @@ namespace confighttp {
       const std::string coverdir = platf::appdata().string() + "/covers/";
       file_handler::make_directory(coverdir);
 
-      std::basic_string path = coverdir + http::url_escape(key) + ".png";
+      // Final destination PNG path
+      const std::string dest_png = coverdir + http::url_escape(key) + ".png";
+
+      // Helper to check PNG magic header
+      auto file_is_png = [](const std::string &p) -> bool {
+        std::ifstream f(p, std::ios::binary);
+        if (!f) return false;
+        unsigned char sig[8]{};
+        f.read(reinterpret_cast<char *>(sig), 8);
+        static const unsigned char pngsig[8] = {0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A};
+        return f.gcount() == 8 && std::equal(std::begin(sig), std::end(sig), std::begin(pngsig));
+      };
+
+      // Build a temp source path (extension based on URL if available)
+      auto ext_from_url = [](std::string u) -> std::string {
+        auto qpos = u.find_first_of("?#");
+        if (qpos != std::string::npos) u = u.substr(0, qpos);
+        auto slash = u.find_last_of('/');
+        if (slash != std::string::npos) u = u.substr(slash + 1);
+        auto dot = u.find_last_of('.');
+        if (dot == std::string::npos) return std::string{".img"};
+        std::string e = u.substr(dot);
+        // sanitize extension
+        if (e.size() > 8) return std::string{".img"};
+        for (char &c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return e;
+      };
+
+      std::string src_tmp;
       if (!url.empty()) {
         if (http::url_get_host(url) != "images.igdb.com") {
           bad_request(response, request, "Only images.igdb.com is allowed");
           return;
         }
-        if (!http::download_file(url, path)) {
+        const std::string ext = ext_from_url(url);
+        src_tmp = coverdir + http::url_escape(key) + "_src" + ext;
+        if (!http::download_file(url, src_tmp)) {
           bad_request(response, request, "Failed to download cover");
           return;
         }
       } else {
         auto data = SimpleWeb::Crypto::Base64::decode(input_tree.value("data", ""));
-
-        std::ofstream imgfile(path);
-        imgfile.write(data.data(), static_cast<int>(data.size()));
+        src_tmp = coverdir + http::url_escape(key) + "_src.bin";
+        std::ofstream imgfile(src_tmp, std::ios::binary);
+        if (!imgfile) {
+          bad_request(response, request, "Failed to write cover data");
+          return;
+        }
+        imgfile.write(data.data(), static_cast<std::streamsize>(data.size()));
       }
+
+      bool converted = false;
+#ifdef _WIN32
+      {
+        // Convert using WIC helper; falls back to copying if already PNG
+        std::wstring src_w(src_tmp.begin(), src_tmp.end());
+        std::wstring dst_w(dest_png.begin(), dest_png.end());
+        converted = platf::img::convert_to_png_96dpi(src_w, dst_w);
+        if (!converted && file_is_png(src_tmp)) {
+          std::error_code ec{};
+          std::filesystem::copy_file(src_tmp, dest_png, std::filesystem::copy_options::overwrite_existing, ec);
+          converted = !ec.operator bool();
+        }
+      }
+#else
+      // Non-Windows: we can’t transcode here; accept only already-PNG data
+      if (file_is_png(src_tmp)) {
+        std::error_code ec{};
+        std::filesystem::rename(src_tmp, dest_png, ec);
+        if (ec) {
+          // If rename fails (cross-device), try copy
+          std::filesystem::copy_file(src_tmp, dest_png, std::filesystem::copy_options::overwrite_existing, ec);
+          if (!ec) {
+            std::filesystem::remove(src_tmp);
+            converted = true;
+          }
+        } else {
+          converted = true;
+        }
+      } else {
+        // Leave a clear error on non-Windows when not PNG
+        bad_request(response, request, "Cover must be PNG on this platform");
+        return;
+      }
+#endif
+
+      // Cleanup temp source file when possible
+      if (!src_tmp.empty()) {
+        std::error_code del_ec{};
+        std::filesystem::remove(src_tmp, del_ec);
+      }
+
+      if (!converted) {
+        bad_request(response, request, "Failed to convert cover to PNG");
+        return;
+      }
+
       output_tree["status"] = true;
-      output_tree["path"] = path;
+      output_tree["path"] = dest_png;
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "UploadCover: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Purge all auto-synced Playnite applications (playnite-managed == "auto").
+   * @api_examples{/api/apps/purge_autosync| POST| null}
+   */
+  void purgeAutoSyncedApps(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      nlohmann::json output_tree;
+      nlohmann::json new_apps = nlohmann::json::array();
+      std::string file = file_handler::read_file(config::stream.file_apps.c_str());
+      nlohmann::json file_tree = nlohmann::json::parse(file);
+      auto &apps_node = file_tree["apps"];
+
+      int removed = 0;
+      for (auto &app : apps_node) {
+        std::string managed = app.contains("playnite-managed") && app["playnite-managed"].is_string() ? app["playnite-managed"].get<std::string>() : std::string();
+        if (managed == "auto") {
+          ++removed; continue;
+        }
+        new_apps.push_back(app);
+      }
+
+      file_tree["apps"] = new_apps;
+      confighttp::refresh_client_apps_cache(file_tree);
+
+      output_tree["status"] = true;
+      output_tree["removed"] = removed;
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "PurgeAutoSyncedApps: "sv << e.what();
       bad_request(response, request, e.what());
     }
   }
@@ -1202,6 +1413,109 @@ namespace confighttp {
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     response->write(success_ok, content, headers);
   }
+
+#ifdef _WIN32
+  static std::filesystem::path conf_get_default_playnite_ext_dir() {
+    wchar_t appdataPath[MAX_PATH] = {};
+    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, appdataPath))) {
+      return {};
+    }
+    return std::filesystem::path(appdataPath) / L"Playnite" / L"Extensions" / L"SunshinePlaynite";
+  }
+
+  void getPlayniteStatus(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+    nlohmann::json out;
+    out["enabled"] = config::playnite.enabled;
+    out["active"] = platf::playnite::is_active();
+    bool session_required = false;
+    bool playnite_running = false;
+    std::string destPath;
+    std::filesystem::path dest;
+    if (platf::playnite::get_extension_target_dir(destPath)) {
+      dest = destPath;
+    } else {
+      // Could not resolve the user's Playnite extensions directory, likely due to no active desktop session
+      session_required = true;
+      dest = conf_get_default_playnite_ext_dir();
+    }
+    bool installed = std::filesystem::exists(dest / "extension.yaml") && std::filesystem::exists(dest / "SunshinePlaynite.psm1");
+    out["installed"] = installed;
+    out["extensions_dir"] = dest.string();
+    // Determine if Playnite is currently running (Desktop or Fullscreen app)
+#ifdef _WIN32
+    try {
+      auto d = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
+      auto f = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
+      playnite_running = !d.empty() || !f.empty();
+    } catch (...) {
+      playnite_running = false;
+    }
+#endif
+    out["session_required"] = session_required;
+    out["playnite_running"] = playnite_running;
+    BOOST_LOG(info) << "Playnite status: enabled=" << out["enabled"] << ", active=" << out["active"]
+                    << ", installed=" << installed << ", running=" << (playnite_running ? "true" : "false")
+                    << ", session_required=" << (session_required ? "true" : "false")
+                    << ", dir=" << dest.string();
+    send_response(response, out);
+  }
+
+  void getPlayniteGames(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+#ifndef _WIN32
+    bad_request(response, request, "Playnite integration is only available on Windows");
+    return;
+#else
+    try {
+      std::string json;
+      if (!platf::playnite::get_games_list_json(json)) {
+        // return empty array if not available
+        json = "[]";
+      }
+      BOOST_LOG(info) << "Playnite games: json length=" << json.size();
+      SimpleWeb::CaseInsensitiveMultimap headers;
+      headers.emplace("Content-Type", "application/json");
+      headers.emplace("X-Frame-Options", "DENY");
+      headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+      response->write(SimpleWeb::StatusCode::success_ok, json, headers);
+    } catch (std::exception &e) {
+      bad_request(response, request, e.what());
+    }
+#endif
+  }
+
+  void installPlaynite(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+    std::string err;
+    nlohmann::json out;
+    // Prefer same resolved dir as status
+    std::string target;
+    bool have_target = platf::playnite::get_extension_target_dir(target);
+    bool ok = false;
+    if (have_target) {
+      ok = platf::playnite::install_plugin_to(target, err);
+    } else {
+      ok = platf::playnite::install_plugin(err);
+    }
+    BOOST_LOG(info) << "Playnite install: status=" << (ok ? "true" : "false") << (ok ? "" : std::string(", error=") + err);
+    out["status"] = ok;
+    if (!ok) out["error"] = err;
+    send_response(response, out);
+  }
+#endif
 
   /**
    * @brief Update existing credentials.
@@ -1511,6 +1825,20 @@ namespace confighttp {
     server.resource["^/api/session/status$"]["GET"] = getSessionStatus;
     // Keep legacy cover upload endpoint present in upstream master
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
+    server.resource["^/api/apps/purge_autosync$"]["POST"] = purgeAutoSyncedApps;
+#ifdef _WIN32
+    server.resource["^/api/playnite/status$"]["GET"] = getPlayniteStatus;
+    server.resource["^/api/playnite/install$"]["POST"] = installPlaynite;
+    server.resource["^/api/playnite/games$"]["GET"] = getPlayniteGames;
+    server.resource["^/api/playnite/force_sync$"]["POST"] = [](resp_https_t resp, req_https_t req) {
+      if (!authenticate(resp, req)) return;
+      print_req(req);
+      nlohmann::json out;
+      bool ok = platf::playnite::force_sync();
+      out["status"] = ok;
+      send_response(resp, out);
+    };
+#endif
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;
     server.resource["^/assets\\/.+$"]["GET"] = getNodeModules;

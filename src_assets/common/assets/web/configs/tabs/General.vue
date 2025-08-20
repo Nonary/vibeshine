@@ -182,7 +182,7 @@ function removeCmd(index) {
       v-model="config.notify_pre_releases"
       class="mb-3"
       locale-prefix="config"
-      default="false"
+      default-value="false"
     />
   </div>
 </template>

@@ -25,9 +25,18 @@ const header = fs.readFileSync(resolve(assetsSrcPath, 'template_header.html'), '
 export default defineConfig(({ mode }) => {
   const isDebug = mode === 'debug';
 
+  // Dynamically include only HTML entry points that actually exist to avoid
+  // Rollup errors when legacy pages are removed. Primary SPA is index.html.
+  const candidatePages = ['index', 'apps', 'playnite', 'clients', 'config', 'password', 'troubleshooting', 'pin'];
+  const input: Record<string, string> = {};
+  for (const name of candidatePages) {
+    const p = resolve(assetsSrcPath, `${name}.html`);
+    if (fs.existsSync(p)) input[name] = p;
+  }
+
   return {
     root: resolve(assetsSrcPath),
-    base: '/',
+    base: './',
     resolve: {
       alias: { '@': resolve(assetsSrcPath) },
     },
@@ -41,7 +50,7 @@ export default defineConfig(({ mode }) => {
       sourcemap: isDebug ? 'inline' : false,
       minify: isDebug ? false : 'esbuild',
       rollupOptions: {
-        input: { index: resolve(assetsSrcPath, 'index.html') },
+        input,
       },
     },
   };

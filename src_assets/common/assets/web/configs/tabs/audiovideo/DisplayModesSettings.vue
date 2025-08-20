@@ -16,7 +16,7 @@ const config = store.config;
     <n-input-number
       id="max_bitrate"
       v-model:value="config.max_bitrate"
-      :placeholder="0"
+      :placeholder="'0'"
     />
     <p class="text-[11px] opacity-60 mt-1">
       {{ $t('config.max_bitrate_desc') }}
@@ -31,7 +31,7 @@ const config = store.config;
       v-model:value="config.minimum_fps_target"
       :min="0"
       :max="1000"
-      :placeholder="0"
+      :placeholder="'0'"
     />
     <p class="text-[11px] opacity-60 mt-1">
       {{ $t('config.minimum_fps_target_desc') }}

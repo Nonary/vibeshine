@@ -57,6 +57,16 @@ namespace logging {
   [[nodiscard]] std::unique_ptr<deinit_t> init(int min_log_level, const std::string &log_file);
 
   /**
+   * @brief Initialize the logging system in append mode.
+   * @param min_log_level The minimum log level to output.
+   * @param log_file The log file to write to.
+   * @return An object that will deinitialize the logging system when it goes out of scope.
+   * @details Opens the file with append semantics to avoid truncation races when multiple
+   *          processes write to the same log. Writes a UTF-8 BOM only if the file is empty.
+   */
+  [[nodiscard]] std::unique_ptr<deinit_t> init_append(int min_log_level, const std::string &log_file);
+
+  /**
    * @brief Setup AV logging.
    * @param min_log_level The log level.
    */

@@ -98,6 +98,25 @@ const defaultGroups = [
     },
   },
   {
+    id: 'playnite',
+    name: 'Playnite',
+    options: {
+      playnite_enabled: 'disabled',
+      playnite_auto_sync: 'disabled',
+      playnite_recent_games: 10,
+      playnite_recent_max_age_days: 0,
+      playnite_autosync_delete_after_days: 0,
+      playnite_autosync_require_replacement: 'enabled',
+      playnite_focus_attempts: 3,
+      playnite_focus_timeout_secs: 15,
+      playnite_focus_exit_on_first: 'disabled',
+      playnite_sync_categories: '',
+      playnite_exclude_games: '',
+      playnite_install_dir: '',
+      playnite_extensions_dir: '',
+    },
+  },
+  {
     id: 'advanced',
     name: 'Advanced',
     options: {
@@ -267,6 +286,18 @@ export const useConfigStore = defineStore('config', () => {
           /* ignore */
         }
       }
+    }
+
+    // Coerce numeric-like strings to numbers using defaults as type hints
+    try {
+      for (const [k, dv] of Object.entries(defaultMap)) {
+        if (typeof dv === 'number' && _data.value && typeof _data.value[k] === 'string') {
+          const n = Number(_data.value[k]);
+          if (!Number.isNaN(n)) _data.value[k] = n;
+        }
+      }
+    } catch (_) {
+      /* ignore */
     }
 
     config.value = buildWrapper();

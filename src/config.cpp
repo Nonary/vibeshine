@@ -8,6 +8,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <set>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -22,10 +23,13 @@
 #include "config.h"
 #include "entry_handler.h"
 #include "file_handler.h"
+#include "httpcommon.h"
+#include "config_playnite.h"
 #include "logging.h"
 #include "nvhttp.h"
 #include "platform/common.h"
 #include "rtsp.h"
+#include "process.h"
 #include "utility.h"
 
 #ifdef _WIN32
@@ -1169,6 +1173,10 @@ namespace config {
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
 
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, {"pc"sv, "lan"sv, "wan"sv});
+    // reflect origin ACL update immediately in HTTP layer
+    if (modified_config_settings.contains("origin_web_ui_allowed")) {
+      http::refresh_origin_acl();
+    }
 
     int to = -1;
     int_between_f(vars, "ping_timeout", to, {-1, std::numeric_limits<int>::max()});
@@ -1217,7 +1225,6 @@ namespace config {
     bool_f(vars, "ds4_back_as_touchpad_click", input.ds4_back_as_touchpad_click);
     bool_f(vars, "motion_as_ds4", input.motion_as_ds4);
     bool_f(vars, "touchpad_as_ds4", input.touchpad_as_ds4);
-    bool_f(vars, "ds5_inputtino_randomize_mac", input.ds5_inputtino_randomize_mac);
 
     bool_f(vars, "mouse", input.mouse);
     bool_f(vars, "keyboard", input.keyboard);
@@ -1292,6 +1299,9 @@ namespace config {
         }
       }
     }
+
+    // Apply Playnite-specific configuration keys
+    config::apply_playnite(vars);
 
     auto it = vars.find("flags"s);
     if (it != std::end(vars)) {

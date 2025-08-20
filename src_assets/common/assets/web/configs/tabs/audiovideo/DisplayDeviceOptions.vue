@@ -186,7 +186,7 @@ function removeRemappingEntry(idx) {
               <n-input-number
                   id="dd_wa_hdr_toggle_delay"
                   v-model:value="config.dd_wa_hdr_toggle_delay"
-                  :placeholder="0"
+                  :placeholder="'0'"
                   :min="0"
                   :max="3000"
                 />
@@ -205,7 +205,7 @@ function removeRemappingEntry(idx) {
               <n-input-number
                 id="dd_config_revert_delay"
                 v-model:value="config.dd_config_revert_delay"
-                :placeholder="3000"
+                :placeholder="'3000'"
                 :min="0"
               />
               <p class="text-[11px] opacity-60 mt-1">

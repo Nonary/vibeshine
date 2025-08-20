@@ -7,6 +7,10 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  disabled: {
+    type: Boolean,
+    default: false
+  },
   desc: {
     type: String,
     default: null,
@@ -27,7 +31,8 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
-  default: {
+  // renamed from `default` to avoid ambiguity with slot name
+  defaultValue: {
     type: undefined,
     default: null,
   },
@@ -80,10 +85,10 @@ const checkboxValues = (() => {
     if (boolValues !== null) return boolValues.possibleValues;
 
     // If model is undefined/null try the default prop if provided
-    if (model.value === undefined || model.value === null) {
-      const defaultParsed = mapToBoolRepresentation(props.default);
+  if (model.value === undefined || model.value === null) {
+      const defaultParsed = mapToBoolRepresentation(props.defaultValue);
       if (defaultParsed !== null) return defaultParsed.possibleValues;
-    }
+  }
 
     // Return conservative fallback if nothing matches
     console.warn(
@@ -97,7 +102,7 @@ const checkboxValues = (() => {
   return { truthy: mappedValues[truthyIndex], falsy: mappedValues[falsyIndex] };
 })();
 const parsedDefaultPropValue = (() => {
-  const boolValues = mapToBoolRepresentation(props.default);
+  const boolValues = mapToBoolRepresentation(props.defaultValue);
   if (boolValues !== null) {
     // Convert truthy to true/false.
     return boolValues.value === boolValues.possibleValues[0];

@@ -11,6 +11,8 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+// third-party includes
+#include <nlohmann/json.hpp>
 
 // local includes
 #include "http_auth.h"
@@ -27,15 +29,17 @@ namespace confighttp {
   constexpr auto PORT_HTTPS = 1;
   void start();
 
+  // Token scopes for API tokens used by tests and UI
   enum class TokenScope {
-  Read,  ///< Read-only scope: allows GET/HEAD style operations
-  Write  ///< Read-write scope: allows modifying operations (POST/PUT/DELETE)
+    Read,  ///< Read-only scope: allows GET/HEAD style operations
+    Write  ///< Read-write scope: allows modifying operations (POST/PUT/DELETE)
   };
 
-  // Authentication functions
+  // Authentication helpers
   AuthResult check_auth(const req_https_t &request);
   bool authenticate(resp_https_t response, req_https_t request);
 
+  // Token scope helpers
   TokenScope scope_from_string(std::string_view s);
   std::string scope_to_string(TokenScope scope);
 
@@ -49,24 +53,10 @@ namespace confighttp {
   void getLoginPage(resp_https_t response, req_https_t request);
   void getSpaEntry(resp_https_t response, req_https_t request);
 
+  // Writes the apps file and refreshes the client-visible app cache/list
+  // Sorts entries by name for a stable UI.
+  bool refresh_client_apps_cache(nlohmann::json &file_tree);
 }  // namespace confighttp
 
-// mime types map
-const std::map<std::string, std::string> mime_types = {
-  {"css", "text/css"},
-  {"gif", "image/gif"},
-  {"htm", "text/html"},
-  {"html", "text/html"},
-  {"ico", "image/x-icon"},
-  {"jpeg", "image/jpeg"},
-  {"jpg", "image/jpeg"},
-  {"js", "application/javascript"},
-  {"json", "application/json"},
-  {"png", "image/png"},
-  {"svg", "image/svg+xml"},
-  {"ttf", "font/ttf"},
-  {"txt", "text/plain"},
-  {"woff2", "font/woff2"},
-  {"xml", "text/xml"},
-  {"webmanifest", "application/manifest+json"},
-};
+// mime types map (defined in confighttp.cpp)
+namespace confighttp { extern const std::map<std::string, std::string> mime_types; }

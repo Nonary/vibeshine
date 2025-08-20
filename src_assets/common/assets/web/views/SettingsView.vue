@@ -156,6 +156,7 @@ import Files from '@/configs/tabs/Files.vue';
 import Advanced from '@/configs/tabs/Advanced.vue';
 import AudioVideo from '@/configs/tabs/AudioVideo.vue';
 import ContainerEncoders from '@/configs/tabs/ContainerEncoders.vue';
+import Playnite from '@/configs/tabs/Playnite.vue';
 import { useConfigStore } from '@/stores/config';
 import { useAuthStore } from '@/stores/auth';
 import { http } from '@/http';
@@ -189,6 +190,7 @@ const tabs = [
   { id: 'encoders', name: 'Encoders', component: markRaw(ContainerEncoders) },
   { id: 'network', name: 'Network', component: markRaw(Network) },
   { id: 'files', name: 'Files', component: markRaw(Files) },
+  { id: 'playnite', name: 'Playnite', component: markRaw(Playnite) },
   { id: 'advanced', name: 'Advanced', component: markRaw(Advanced) },
 ];
 

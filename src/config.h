@@ -19,6 +19,8 @@
 namespace config {
   // track modified config options
   inline std::unordered_map<std::string, std::string> modified_config_settings;
+  // when a stream is active, we defer some settings until all sessions end
+  inline std::unordered_map<std::string, std::string> pending_config_settings;
 
   struct video_t {
     // ffmpeg params
@@ -194,7 +196,6 @@ namespace config {
     bool ds4_back_as_touchpad_click;
     bool motion_as_ds4;
     bool touchpad_as_ds4;
-    bool ds5_inputtino_randomize_mac;
 
     bool keyboard;
     bool mouse;
