@@ -311,6 +311,21 @@ namespace platf::playnite {
 #endif
   }
 
+  bool stop_game(const std::string &playnite_id) {
+#ifndef _WIN32
+    (void) playnite_id;
+    return false;
+#else
+    auto inst = g_instance;
+    if (!inst) return false;
+    nlohmann::json j;
+    j["type"] = "command";
+    j["command"] = "stop";
+    if (!playnite_id.empty()) j["id"] = playnite_id;
+    return inst->send_cmd_json_line(j.dump());
+#endif
+  }
+
   bool force_sync() {
 #ifndef _WIN32
     return false;

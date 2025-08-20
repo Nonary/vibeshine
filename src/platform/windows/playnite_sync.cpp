@@ -154,6 +154,9 @@ void add_missing_auto_entries(nlohmann::json &root,
     int flags = 0; if (auto it=source_flags.find(g.id); it!=source_flags.end()) flags=it->second; mark_app_as_playnite_auto(app, flags);
     // stamp added-at for TTL
     try { app["playnite-added-at"]= nlohmann::json(now_iso8601_utc()); } catch(...){}
+    // Ensure Playnite-managed games have a sensible graceful-exit timeout
+    // Default to 10 seconds for the graceful-then-forceful shutdown recipe
+    try { app["exit-timeout"] = 10; } catch(...){}
     root["apps"].push_back(app); changed=true;
   }
 }

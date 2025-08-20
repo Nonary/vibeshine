@@ -15,6 +15,13 @@ $global:SunConn = $null
 $script:LogPath = $null
 $script:HostLogger = $null
 $script:Bg = $null
+# Cooperative shutdown (shared across all runspaces)
+if (-not (Get-Variable -Name 'Cts' -Scope Script -ErrorAction SilentlyContinue)) {
+  $script:Cts = New-Object System.Threading.CancellationTokenSource
+}
+function Test-Stopping {
+  try { return ($script:Cts -and $script:Cts.IsCancellationRequested) } catch { return $false }
+}
 # Thread-safe map for launcher connections shared across runspaces
 try {
   $lcVar = Get-Variable -Name 'LauncherConns' -Scope Global -ErrorAction SilentlyContinue
@@ -288,6 +295,40 @@ public sealed class PerConnPump : IDisposable
 }
 catch { Write-Log "Failed to load PerConnPump: $($_.Exception.Message)" }
 
+# Cross-runspace shutdown bridge for the connector data pipe
+try {
+  if (-not ([System.Management.Automation.PSTypeName]'ShutdownBridge').Type) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.IO.Pipes;
+
+public static class ShutdownBridge
+{
+    static object _gate = new object();
+    static NamedPipeClientStream _sun;
+
+    public static void SetSunStream(NamedPipeClientStream s)
+    {
+        lock (_gate) { _sun = s; }
+    }
+
+    public static void CloseSunStream()
+    {
+        NamedPipeClientStream s = null;
+        lock (_gate)
+        {
+            s = _sun;
+            _sun = null;
+        }
+        try { if (s != null) s.Dispose(); } catch { }
+    }
+}
+"@
+    Write-Log "Loaded ShutdownBridge"
+  }
+}
+catch { Write-Log "Failed to load ShutdownBridge: $($_.Exception.Message)" }
+
 # Outbox shared between UI and background runspace (ensure defined under StrictMode)
 try {
   if (-not (Get-Variable -Name 'Outbox' -Scope Script -ErrorAction SilentlyContinue) -or -not $script:Outbox) {
@@ -315,7 +356,8 @@ function Get-FullPipeName {
 function Connect-SunshinePipe {
   param(
     [string]$PublicName = 'sunshine_playnite_connector',
-    [int]$TimeoutMs = 5000
+    [int]$TimeoutMs = 5000,
+    [System.Threading.CancellationToken]$Token = $null
   )
 
   # Mandatory anonymous handshake protocol:
@@ -332,6 +374,7 @@ function Connect-SunshinePipe {
   $ACK = 0x02
 
   try {
+    if ($Token -and $Token.IsCancellationRequested) { throw [System.OperationCanceledException]::new() }
     Write-Log "Handshake: connecting control pipe '$PublicName' (timeout=${TimeoutMs}ms)"
     $control = New-Object System.IO.Pipes.NamedPipeClientStream('.', $PublicName, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::Asynchronous)
     $control.Connect([Math]::Max(1000, [int]$TimeoutMs))
@@ -343,6 +386,7 @@ function Connect-SunshinePipe {
     $off = 0
     try { $control.ReadTimeout = 3000 } catch { Write-Log "Handshake: control stream does not support ReadTimeout; proceeding" }
     while ($off -lt $expected) {
+      if ($Token -and $Token.IsCancellationRequested) { throw [System.OperationCanceledException]::new() }
       $n = $control.Read($buf, $off, ($expected - $off))
       if ($n -le 0) { throw "Control pipe closed during handshake ($off/$expected)" }
       $off += $n
@@ -364,7 +408,11 @@ function Connect-SunshinePipe {
     $control = $null
 
     $data = New-Object System.IO.Pipes.NamedPipeClientStream('.', $pipeName, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::Asynchronous)
-    $data.Connect(10000)
+    if ($Token -and $Token.IsCancellationRequested) { throw [System.OperationCanceledException]::new() }
+    $data.Connect(3000)
+    if ($PublicName -eq 'sunshine_playnite_connector') {
+      try { [ShutdownBridge]::SetSunStream($data) } catch {}
+    }
     try { $data.ReadTimeout = 5000 } catch {}
     try { $data.WriteTimeout = 5000 } catch {}
     $writer = New-Object System.IO.StreamWriter($data, [System.Text.Encoding]::UTF8, 8192, $true)
@@ -374,6 +422,7 @@ function Connect-SunshinePipe {
     return @{ Stream = $data; Writer = $writer; Reader = $reader }
   }
   catch {
+    if ($data -and $PublicName -eq 'sunshine_playnite_connector') { try { [ShutdownBridge]::CloseSunStream() } catch {} }
     if ($reader) { try { $reader.Dispose() } catch {} }
     if ($writer) { try { $writer.Dispose() } catch {} }
     if ($data) { try { $data.Dispose() } catch {} }
@@ -471,7 +520,8 @@ function Ensure-LauncherConnections {
     try {
       $pipe = "sunshine_playnite_ctl_$guid"
       Write-Log "LauncherWatcher: connecting to pipe '$pipe' for pid=$($it.Pid)"
-      $conn = Connect-SunshinePipe -PublicName $pipe -TimeoutMs 10000
+      # Pass cancellation token so Connect can be interrupted on shutdown
+      $conn = Connect-SunshinePipe -PublicName $pipe -TimeoutMs 10000 -Token $Cts.Token
       if (-not $conn) { continue }
       $connInfo = @{ Stream = $conn.Stream; Writer = $conn.Writer; Reader = $conn.Reader; Pid = $it.Pid; GameId = $it.GameId }
       # Attach a per-connection outbox + pump to avoid UI-thread blocking
@@ -507,6 +557,7 @@ function Ensure-LauncherConnections {
       if ($Outbox) { $rs.SessionStateProxy.SetVariable('Outbox', $Outbox) }
       try { if ($global:LauncherConns) { $rs.SessionStateProxy.SetVariable('LauncherConns', $global:LauncherConns) } } catch {}
       if ($PSScriptRoot) { $rs.SessionStateProxy.SetVariable('PSScriptRoot', $PSScriptRoot) }
+      $rs.SessionStateProxy.SetVariable('Cts', $Cts)
       $rs.SessionStateProxy.SetVariable('ConnGuid', $guid)
       $rs.SessionStateProxy.SetVariable('Conn', $connInfo)
       $ps = [System.Management.Automation.PowerShell]::Create()
@@ -515,7 +566,7 @@ function Ensure-LauncherConnections {
       if ($modulePath) { $ps.AddScript("Import-Module -Force '$modulePath'") | Out-Null }
       # Ensure the runspace's $global:LauncherConns points to the shared table passed in
       $ps.AddScript('$global:LauncherConns = $LauncherConns') | Out-Null
-      $ps.AddScript('Start-LauncherConnReader -Guid $ConnGuid -Conn $Conn') | Out-Null
+      $ps.AddScript('Start-LauncherConnReader -Guid $ConnGuid -Conn $Conn -Token $Cts.Token') | Out-Null
       $h = $ps.BeginInvoke()
       $connInfo.Runspace = $rs; $connInfo.PowerShell = $ps; $connInfo.Handle = $h
       Write-Log "LauncherWatcher: connected to $pipe"
@@ -527,11 +578,12 @@ function Ensure-LauncherConnections {
 # Reader loop for a single launcher connection; runs inside its own PowerShell runspace
 function Start-LauncherConnReader {
   param([Parameter(Mandatory)][string]$Guid,
-        [Parameter(Mandatory)][hashtable]$Conn)
+        [Parameter(Mandatory)][hashtable]$Conn,
+        [System.Threading.CancellationToken]$Token = $script:Cts.Token)
   try {
-    while ($Conn -and $Conn.Reader -and $Conn.Stream -and $Conn.Stream.CanRead) {
+    while ($Conn -and $Conn.Reader -and $Conn.Stream -and $Conn.Stream.CanRead -and -not ($Token -and $Token.IsCancellationRequested)) {
       $line = $null
-      try { $line = $Conn.Reader.ReadLine() } catch { break }
+      try { $line = $Conn.Reader.ReadLine() } catch { if ($Token -and $Token.IsCancellationRequested) { break } else { break } }
       if ($null -eq $line) { break }
       try {
         $obj = $line | ConvertFrom-Json -ErrorAction Stop
@@ -539,15 +591,24 @@ function Start-LauncherConnReader {
           [UIBridge]::StartGameByGuidStringOnUIThread([string]$obj.id)
           Write-Log "LauncherConn[$Guid]: launch dispatched for $($obj.id)"
         }
-      } catch { Write-Log "LauncherConn[$Guid]: parse failure: $($_.Exception.Message)" }
+      } catch {
+        if ($Token -and $Token.IsCancellationRequested) { break }
+        Write-Log "LauncherConn[$Guid]: parse failure: $($_.Exception.Message)"
+      }
     }
-  } catch { Write-Log "LauncherConn[$Guid]: reader crashed: $($_.Exception.Message)" }
-  try { if ($Conn.Reader) { $Conn.Reader.Dispose() } } catch {}
-  try { if ($Conn.Writer) { $Conn.Writer.Dispose() } } catch {}
-  try { if ($Conn.Stream) { $Conn.Stream.Dispose() } } catch {}
-  try { if ($Conn.Pump) { $Conn.Pump.Dispose() } } catch {}
-  try { $tmp = $null; [void]$global:LauncherConns.TryRemove($Guid, [ref]$tmp) } catch {}
-  Write-Log "LauncherConn[$Guid]: disconnected"
+  } catch {
+    if (-not ($Token -and $Token.IsCancellationRequested)) {
+      Write-Log "LauncherConn[$Guid]: reader crashed: $($_.Exception.Message)"
+    }
+  }
+  finally {
+    try { if ($Conn.Reader) { $Conn.Reader.Dispose() } } catch {}
+    try { if ($Conn.Writer) { $Conn.Writer.Dispose() } } catch {}
+    try { if ($Conn.Stream) { $Conn.Stream.Dispose() } } catch {}
+    try { if ($Conn.Pump) { $Conn.Pump.Dispose() } } catch {}
+    try { $tmp = $null; [void]$global:LauncherConns.TryRemove($Guid, [ref]$tmp) } catch {}
+    Write-Log "LauncherConn[$Guid]: disconnected"
+  }
 }
 
 function Get-PlayniteCategories {
@@ -661,12 +722,16 @@ function Send-InitialSnapshot {
 }
 
 function Start-ConnectorLoop {
+  param([System.Threading.CancellationToken]$Token = $script:Cts.Token)
   try { if (-not $script:LogPath) { Initialize-Logging } } catch {}
-  while ($true) {
+  Write-Log "Connector loop: starting"
+  while (-not ($Token -and $Token.IsCancellationRequested)) {
     try {
       if (-not $global:SunConn -or -not $global:SunConn.Stream -or -not $global:SunConn.Stream.CanWrite) {
+        if ($Token -and $Token.IsCancellationRequested) { break }
         Write-Log "Connector loop: attempting connection"
-        $global:SunConn = Connect-SunshinePipe -TimeoutMs 10000
+        # Keep timeouts small so shutdown isn't held by Connect()
+        $global:SunConn = Connect-SunshinePipe -TimeoutMs 2000 -Token $Token
         Write-Log "Connector loop: connected"
         # Start writer pump bound to this connection
         try { [OutboxPump]::Start($global:SunConn.Writer, $Outbox) } catch { Write-Log "Failed to start OutboxPump: $($_.Exception.Message)" }
@@ -677,11 +742,12 @@ function Start-ConnectorLoop {
         Write-Log "Connector loop: using existing connection"
       }
       # Reader loop: handle simple line-delimited command messages from Sunshine
-      while ($global:SunConn -and $global:SunConn.Stream -and $global:SunConn.Stream.CanRead) {
+      while ($global:SunConn -and $global:SunConn.Stream -and $global:SunConn.Stream.CanRead -and -not ($Token -and $Token.IsCancellationRequested)) {
         try {
           $line = $global:SunConn.Reader.ReadLine()
         }
         catch {
+          if ($Token -and $Token.IsCancellationRequested) { break }
           Write-Log "Reader exception: $($_.Exception.Message)"
           break
         }
@@ -697,37 +763,46 @@ function Start-ConnectorLoop {
             } catch { Write-Log "Failed to dispatch launch: $($_.Exception.Message)" }
           }
         }
-        catch { Write-Log "Failed to parse/handle line: $($_.Exception.Message)" }
+        catch {
+          if ($Token -and $Token.IsCancellationRequested) { break }
+          Write-Log "Failed to parse/handle line: $($_.Exception.Message)"
+        }
       }
     }
     catch {
+      if ($Token -and $Token.IsCancellationRequested) { break }
       Write-Log "Connector loop: connection attempt failed: $($_.Exception.Message)"
     }
+    try { [ShutdownBridge]::CloseSunStream() } catch {}
     $global:SunConn = $null
     try { [OutboxPump]::Stop() } catch {}
-    Start-Sleep -Seconds 3
+    if ($Token -and $Token.WaitHandle.WaitOne(300)) { break }  # was Start-Sleep -Seconds 3; now cancellable short waits
   }
+  Write-Log "Connector loop: exiting (stopping=$([bool]($Token -and $Token.IsCancellationRequested)))"
 }
 
 function Start-LauncherWatcherLoop {
+  param([System.Threading.CancellationToken]$Token = $script:Cts.Token)
   try { if (-not $script:LogPath) { Initialize-Logging } } catch {}
   Write-Log "LauncherWatcher: started"
-  while ($true) {
-    try { Ensure-LauncherConnections } catch { Write-Log "LauncherWatcher: error: $($_.Exception.Message)" }
-    Start-Sleep -Milliseconds 1500
+  while (-not ($Token -and $Token.IsCancellationRequested)) {
+    try { Ensure-LauncherConnections } catch { if ($Token -and $Token.IsCancellationRequested) { break } else { Write-Log "LauncherWatcher: error: $($_.Exception.Message)" } }
+    if ($Token -and $Token.WaitHandle.WaitOne(1500)) { break }
   }
+  Write-Log "LauncherWatcher: exiting"
 }
 
 # Synchronous single-shot connection probe to ensure logging works even before background loop
 # Removed legacy Try-ConnectOnce path; background loop owns connection + snapshot
 
 function OnApplicationStarted() {
-  try {
-    Initialize-Logging
-    Write-Log "OnApplicationStarted invoked"
-    # Initialize UI bridge with Playnite's Dispatcher and API
     try {
-      $dispatcher = $null
+      Initialize-Logging
+      Write-Log "OnApplicationStarted invoked"
+      if (-not $script:Cts) { $script:Cts = New-Object System.Threading.CancellationTokenSource }
+      # Initialize UI bridge with Playnite's Dispatcher and API
+      try {
+        $dispatcher = $null
       try {
         $app = [System.Windows.Application]::Current
         if ($app -and $app.Dispatcher) { $dispatcher = $app.Dispatcher }
@@ -752,11 +827,12 @@ function OnApplicationStarted() {
       if ($PlayniteApi) { $rs.SessionStateProxy.SetVariable('PlayniteApi', $PlayniteApi) }
       if ($Outbox) { $rs.SessionStateProxy.SetVariable('Outbox', $Outbox) }
       if ($PSScriptRoot) { $rs.SessionStateProxy.SetVariable('PSScriptRoot', $PSScriptRoot) }
+      $rs.SessionStateProxy.SetVariable('Cts', $script:Cts)
       # No need to pass UI objects; UIBridge holds static references accessible across runspaces
       $ps = [System.Management.Automation.PowerShell]::Create()
       $ps.Runspace = $rs
       if ($modulePath) { $ps.AddScript("Import-Module -Force '$modulePath'") | Out-Null }
-      $ps.AddScript('Start-ConnectorLoop') | Out-Null
+      $ps.AddScript('Start-ConnectorLoop -Token $Cts.Token') | Out-Null
       $handle = $ps.BeginInvoke()
       $script:Bg = @{ Runspace = $rs; PowerShell = $ps; Handle = $handle }
       Write-Log "OnApplicationStarted: background runspace started"
@@ -771,12 +847,13 @@ function OnApplicationStarted() {
       # Inject the existing shared LauncherConns object so this runspace uses the same instance
       try { $rs2.SessionStateProxy.SetVariable('LauncherConns', $global:LauncherConns) } catch {}
       if ($PSScriptRoot) { $rs2.SessionStateProxy.SetVariable('PSScriptRoot', $PSScriptRoot) }
+      $rs2.SessionStateProxy.SetVariable('Cts', $script:Cts)
       $ps2 = [System.Management.Automation.PowerShell]::Create()
       $ps2.Runspace = $rs2
       if ($modulePath) { $ps2.AddScript("Import-Module -Force '$modulePath'") | Out-Null }
       # After module import (which initializes its own table), rebind to the injected shared instance
       $ps2.AddScript('$global:LauncherConns = $LauncherConns') | Out-Null
-      $ps2.AddScript('Start-LauncherWatcherLoop') | Out-Null
+      $ps2.AddScript('Start-LauncherWatcherLoop -Token $Cts.Token') | Out-Null
       $handle2 = $ps2.BeginInvoke()
       $script:Bg2 = @{ Runspace = $rs2; PowerShell = $ps2; Handle = $handle2 }
       Write-Log "OnApplicationStarted: launcher watcher runspace started"
@@ -835,39 +912,73 @@ function OnGameStopped() {
   Send-StatusMessage -Name 'gameStopped' -Game $game
 }
 
-# Optional: clean up on exit
+# Helper: bounded, non-blocking runspace/PS teardown
+function Close-RunspaceFast {
+  param(
+    [Parameter(Mandatory=$true)][hashtable]$Bag,
+    [int]$TimeoutMs = 500
+  )
+  try {
+    $ps = $null; $rs = $null
+    try { $ps = $Bag.PowerShell } catch {}
+    try { $rs = $Bag.Runspace } catch {}
+    $done = New-Object System.Threading.ManualResetEventSlim($false)
+    $state = [PSCustomObject]@{ PS = $ps; RS = $rs; Done = $done }
+    [System.Threading.ThreadPool]::QueueUserWorkItem({ param($s)
+      try { if ($s.PS) { $s.PS.Stop() } } catch {}
+      try { if ($s.PS) { $s.PS.Dispose() } } catch {}
+      try { if ($s.RS) { $s.RS.Close() } } catch {}
+      try { if ($s.RS) { $s.RS.Dispose() } } catch {}
+      try { $s.Done.Set() } catch {}
+    }, $state) | Out-Null
+    if (-not $done.Wait($TimeoutMs)) {
+      Write-Log "Close-RunspaceFast: timeout after $TimeoutMs ms; abandoning cleanup."
+    }
+  } catch {
+    Write-Log "Close-RunspaceFast: error: $($_.Exception.Message)"
+  }
+}
+
+# Optional: clean up on exit (cooperative cancellation)
 function OnApplicationStopped() {
   try {
-    if ($global:SunConn -and $global:SunConn.Stream) { $global:SunConn.Stream.Dispose() }
+    Write-Log "OnApplicationStopped: begin shutdown"
+    # 1) Signal all loops to exit ASAP
+    try { if ($script:Cts) { $script:Cts.Cancel() } } catch {}
+    # Actively break the connector runspace's blocking ReadLine()
+    try { [ShutdownBridge]::CloseSunStream() } catch {}
+
+    # 2) Proactively close streams to break any ReadLine() blocking
+    try {
+      if ($global:SunConn -and $global:SunConn.Stream) { $global:SunConn.Stream.Dispose() }
+    } catch {}
+    $global:SunConn = $null
+
+    # 3) Stop pumps
+    try { [OutboxPump]::Stop() } catch {}
+
+    # 4) Tear down per-launcher connections (this also unblocks their readers)
+    try {
+      foreach ($kv in $global:LauncherConns.GetEnumerator()) {
+        $c = $kv.Value
+        try { if ($c.Reader)     { $c.Reader.Dispose() } } catch {}
+        try { if ($c.Writer)     { $c.Writer.Dispose() } } catch {}
+        try { if ($c.Stream)     { $c.Stream.Dispose() } } catch {}
+        try { if ($c.Pump)       { $c.Pump.Dispose() } } catch {}
+        try { Close-RunspaceFast -Bag $c -TimeoutMs 300 } catch {}
+      }
+    } catch {}
+    try { $global:LauncherConns = New-Object 'System.Collections.Concurrent.ConcurrentDictionary[string,object]' } catch { $global:LauncherConns = @{} }
+
+    # 5) Shut down the two background runspaces
+    try {
+      if ($script:Bg)  { Close-RunspaceFast -Bag $script:Bg  -TimeoutMs 500; $script:Bg  = $null }
+      if ($script:Bg2) { Close-RunspaceFast -Bag $script:Bg2 -TimeoutMs 500; $script:Bg2 = $null }
+    } catch {}
+
+    Write-Log "OnApplicationStopped: connector stopped"
   }
-  catch {}
-  $global:SunConn = $null
-  try { [OutboxPump]::Stop() } catch {}
-  try {
-    foreach ($kv in $global:LauncherConns.GetEnumerator()) {
-      $c = $kv.Value
-      try { if ($c.PowerShell) { $c.PowerShell.Stop(); $c.PowerShell.Dispose() } } catch {}
-      try { if ($c.Runspace) { $c.Runspace.Close(); $c.Runspace.Dispose() } } catch {}
-      try { if ($c.Reader) { $c.Reader.Dispose() } } catch {}
-      try { if ($c.Writer) { $c.Writer.Dispose() } } catch {}
-      try { if ($c.Stream) { $c.Stream.Dispose() } } catch {}
-      try { if ($c.Pump) { $c.Pump.Dispose() } } catch {}
-    }
+  catch {
+    try { Write-Log "OnApplicationStopped: error during shutdown: $($_.Exception.Message)" } catch {}
   }
-  catch {}
-  try { $global:LauncherConns = New-Object 'System.Collections.Concurrent.ConcurrentDictionary[string,object]' } catch { $global:LauncherConns = @{} }
-  try {
-    if ($script:Bg) {
-      try { if ($script:Bg.PowerShell) { $script:Bg.PowerShell.Stop(); $script:Bg.PowerShell.Dispose() } } catch {}
-      try { if ($script:Bg.Runspace) { $script:Bg.Runspace.Close(); $script:Bg.Runspace.Dispose() } } catch {}
-      $script:Bg = $null
-    }
-    if ($script:Bg2) {
-      try { if ($script:Bg2.PowerShell) { $script:Bg2.PowerShell.Stop(); $script:Bg2.PowerShell.Dispose() } } catch {}
-      try { if ($script:Bg2.Runspace) { $script:Bg2.Runspace.Close(); $script:Bg2.Runspace.Dispose() } } catch {}
-      $script:Bg2 = $null
-    }
-  }
-  catch {}
-  Write-Log "OnApplicationStopped: connector stopped"
 }
