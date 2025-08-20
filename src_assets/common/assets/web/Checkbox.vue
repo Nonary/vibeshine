@@ -9,7 +9,7 @@ const props = defineProps({
   },
   disabled: {
     type: Boolean,
-    default: false
+    default: false,
   },
   desc: {
     type: String,
@@ -85,10 +85,10 @@ const checkboxValues = (() => {
     if (boolValues !== null) return boolValues.possibleValues;
 
     // If model is undefined/null try the default prop if provided
-  if (model.value === undefined || model.value === null) {
+    if (model.value === undefined || model.value === null) {
       const defaultParsed = mapToBoolRepresentation(props.defaultValue);
       if (defaultParsed !== null) return defaultParsed.possibleValues;
-  }
+    }
 
     // Return conservative fallback if nothing matches
     console.warn(

@@ -28,9 +28,9 @@
     </div>
 
     <!-- Redesigned list view -->
-  <div
-    class="rounded-2xl overflow-hidden border border-dark/10 dark:border-light/10 bg-light/80 dark:bg-surface/80 backdrop-blur max-w-3xl mx-auto"
-  >
+    <div
+      class="rounded-2xl overflow-hidden border border-dark/10 dark:border-light/10 bg-light/80 dark:bg-surface/80 backdrop-blur max-w-3xl mx-auto"
+    >
       <div v-if="apps && apps.length" class="divide-y divide-black/5 dark:divide-white/10">
         <button
           v-for="(app, i) in apps"
@@ -42,24 +42,40 @@
           @keydown.space.prevent="openEdit(app, i)"
         >
           <div
-        class="flex items-center justify-between px-4 py-3 hover:bg-dark/10 dark:hover:bg-light/10"
-      >
+            class="flex items-center justify-between px-4 py-3 hover:bg-dark/10 dark:hover:bg-light/10"
+          >
             <div class="min-w-0 flex-1">
               <div class="text-sm font-semibold truncate flex items-center gap-2">
                 <span class="truncate">{{ app.name || '(untitled)' }}</span>
                 <!-- Playnite badges -->
                 <template v-if="app['playnite-id']">
-                  <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-semibold">
+                  <span
+                    class="inline-flex items-center px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-semibold"
+                  >
                     Playnite
                   </span>
-                  <span v-if="app['playnite-managed'] === 'manual'" class="text-[10px] opacity-70">manual</span>
-                  <span v-else-if="(app['playnite-source']||'') === 'recent'" class="text-[10px] opacity-70">recent</span>
-                  <span v-else-if="(app['playnite-source']||'') === 'category'" class="text-[10px] opacity-70">category</span>
-                  <span v-else-if="(app['playnite-source']||'') === 'recent+category'" class="text-[10px] opacity-70">recent+category</span>
+                  <span v-if="app['playnite-managed'] === 'manual'" class="text-[10px] opacity-70"
+                    >manual</span
+                  >
+                  <span
+                    v-else-if="(app['playnite-source'] || '') === 'recent'"
+                    class="text-[10px] opacity-70"
+                    >recent</span
+                  >
+                  <span
+                    v-else-if="(app['playnite-source'] || '') === 'category'"
+                    class="text-[10px] opacity-70"
+                    >category</span
+                  >
+                  <span
+                    v-else-if="(app['playnite-source'] || '') === 'recent+category'"
+                    class="text-[10px] opacity-70"
+                    >recent+category</span
+                  >
                   <span v-else class="text-[10px] opacity-70">managed</span>
                 </template>
               </div>
-              <div class="mt-0.5 text-[11px] opacity-60 truncate" v-if="app['working-dir']">
+              <div v-if="app['working-dir']" class="mt-0.5 text-[11px] opacity-60 truncate">
                 {{ app['working-dir'] }}
               </div>
             </div>
@@ -96,7 +112,9 @@ const appsStore = useAppsStore();
 const { apps } = storeToRefs(appsStore);
 const configStore = useConfigStore();
 const syncBusy = ref(false);
-const isWindows = computed(() => (configStore.metadata?.platform || '').toLowerCase() === 'windows');
+const isWindows = computed(
+  () => (configStore.metadata?.platform || '').toLowerCase() === 'windows',
+);
 const playniteEnabled = computed(() => {
   try {
     const v = configStore.config?.playnite_enabled ?? 'disabled';

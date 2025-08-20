@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import Checkbox from '@/Checkbox.vue';
-import { ref, computed } from 'vue';
+import { computed } from 'vue';
 import { useConfigStore } from '@/stores/config';
 import { storeToRefs } from 'pinia';
 import { NSelect, NInput, NButton, NInputNumber } from 'naive-ui';
+import { useI18n } from 'vue-i18n';
 
 const store = useConfigStore();
 const { config, metadata } = storeToRefs(store);
 const platform = computed(() => metadata.value?.platform || '');
+const { t: $t } = useI18n();
 
 // Select options
 const localeOptions = [
@@ -34,13 +36,13 @@ const localeOptions = [
 ];
 
 const logLevelOptions = [
-  { label: '0', value: '0' },
-  { label: '1', value: '1' },
-  { label: '2', value: '2' },
-  { label: '3', value: '3' },
-  { label: '4', value: '4' },
-  { label: '5', value: '5' },
-  { label: '6', value: '6' },
+  { label: computed(() => $t('config.log_level_0')), value: '0' },
+  { label: computed(() => $t('config.log_level_1')), value: '1' },
+  { label: computed(() => $t('config.log_level_2')), value: '2' },
+  { label: computed(() => $t('config.log_level_3')), value: '3' },
+  { label: computed(() => $t('config.log_level_4')), value: '4' },
+  { label: computed(() => $t('config.log_level_5')), value: '5' },
+  { label: computed(() => $t('config.log_level_6')), value: '6' },
 ];
 
 function addCmd() {
@@ -96,7 +98,11 @@ function removeCmd(index) {
     <!-- Log Level -->
     <div class="mb-6">
       <label for="min_log_level" class="form-label">{{ $t('config.log_level') }}</label>
-      <n-select id="min_log_level" v-model:value="config.min_log_level" :options="logLevelOptions" />
+      <n-select
+        id="min_log_level"
+        v-model:value="config.min_log_level"
+        :options="logLevelOptions"
+      />
       <div class="text-[11px] opacity-60 mt-1">
         {{ $t('config.log_level_desc') }}
       </div>
@@ -152,7 +158,7 @@ function removeCmd(index) {
         </div>
       </div>
       <div class="mt-4">
-        <n-button type="success" @click="addCmd" class="mx-auto block">
+        <n-button type="success" class="mx-auto block" @click="addCmd">
           &plus; {{ $t('config.add') }}
         </n-button>
       </div>

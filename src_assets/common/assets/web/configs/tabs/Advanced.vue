@@ -10,8 +10,14 @@ const config = store.config;
 const platform = computed(() => config.value?.platform || '');
 const { t } = useI18n();
 
-const hevcModeOptions = [0, 1, 2, 3].map((v) => ({ labelKey: `config.hevc_mode_${v}`, value: String(v) }));
-const av1ModeOptions = [0, 1, 2, 3].map((v) => ({ labelKey: `config.av1_mode_${v}`, value: String(v) }));
+const hevcModeOptions = [0, 1, 2, 3].map((v) => ({
+  labelKey: `config.hevc_mode_${v}`,
+  value: String(v),
+}));
+const av1ModeOptions = [0, 1, 2, 3].map((v) => ({
+  labelKey: `config.av1_mode_${v}`,
+  value: String(v),
+}));
 
 const captureOptions = computed(() => {
   const base = [{ label: t('_common.autodetect'), value: '' }];
@@ -65,7 +71,7 @@ const encoderOptions = computed(() => {
     <!-- Quantization Parameter -->
     <div class="mb-6">
       <label for="qp" class="form-label">{{ $t('config.qp') }}</label>
-  <n-input-number id="qp" v-model:value="config.qp" :placeholder="'28'" />
+      <n-input-number id="qp" v-model:value="config.qp" :placeholder="'28'" />
       <div class="form-text">{{ $t('config.qp_desc') }}</div>
     </div>
 
@@ -87,7 +93,7 @@ const encoderOptions = computed(() => {
       <n-select
         id="hevc_mode"
         v-model:value="config.hevc_mode"
-        :options="hevcModeOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+        :options="hevcModeOptions.map((o) => ({ label: $t(o.labelKey), value: o.value }))"
       />
       <div class="form-text">{{ $t('config.hevc_mode_desc') }}</div>
     </div>
@@ -98,7 +104,7 @@ const encoderOptions = computed(() => {
       <n-select
         id="av1_mode"
         v-model:value="config.av1_mode"
-        :options="av1ModeOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+        :options="av1ModeOptions.map((o) => ({ label: $t(o.labelKey), value: o.value }))"
       />
       <div class="form-text">{{ $t('config.av1_mode_desc') }}</div>
     </div>

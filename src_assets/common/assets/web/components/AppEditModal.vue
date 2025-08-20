@@ -43,7 +43,7 @@
                   Change
                 </n-button>
               </div>
-              <div class="text-[11px] opacity-60" v-if="!lockPlaynite">
+              <div v-if="!lockPlaynite" class="text-[11px] opacity-60">
                 Pick from your Playnite library (installed only). Once selected, it locks in.
               </div>
             </template>
@@ -65,7 +65,11 @@
             <label class="text-xs font-semibold uppercase tracking-wide opacity-70"
               >Working Dir</label
             >
-            <n-input v-model:value="form['working-dir']" class="font-mono" placeholder="C:/Games/App" />
+            <n-input
+              v-model:value="form['working-dir']"
+              class="font-mono"
+              placeholder="C:/Games/App"
+            />
           </div>
           <div class="space-y-1 md:col-span-1">
             <label class="text-xs font-semibold uppercase tracking-wide opacity-70"
@@ -80,7 +84,11 @@
             <label class="text-xs font-semibold uppercase tracking-wide opacity-70"
               >Image Path</label
             >
-            <n-input v-model:value="form['image-path']" class="font-mono" placeholder="/path/to/image.png" />
+            <n-input
+              v-model:value="form['image-path']"
+              class="font-mono"
+              placeholder="/path/to/image.png"
+            />
             <p class="text-[11px] opacity-60">Optional; stored only and not fetched by Sunshine.</p>
           </div>
         </div>
@@ -89,9 +97,7 @@
           <n-checkbox v-model:checked="form['exclude-global-prep-cmd']" size="small">
             Exclude Global Prep
           </n-checkbox>
-          <n-checkbox v-model:checked="form['auto-detach']" size="small">
-            Auto Detach
-          </n-checkbox>
+          <n-checkbox v-model:checked="form['auto-detach']" size="small"> Auto Detach </n-checkbox>
           <n-checkbox v-model:checked="form['wait-all']" size="small">Wait All</n-checkbox>
           <n-checkbox v-if="platform === 'windows'" v-model:checked="form.elevated" size="small">
             Elevated
@@ -171,17 +177,23 @@
         @update:show="(v) => (showDeleteConfirm = v)"
       >
         <n-card
-          :title="isPlayniteAuto ? 'Remove and Exclude from Auto‑Sync?' : ($t('apps.confirm_delete_title_named', { name: form.name || '' }) as any)"
+          :title="
+            isPlayniteAuto
+              ? 'Remove and Exclude from Auto‑Sync?'
+              : ($t('apps.confirm_delete_title_named', { name: form.name || '' }) as any)
+          "
           :bordered="false"
           style="max-width: 32rem; width: 100%"
         >
           <div class="text-sm text-center space-y-2">
             <template v-if="isPlayniteAuto">
               <div>
-                This application is managed by Playnite. Removing it will also add it to the Excluded Games list so it won’t be auto‑synced back.
+                This application is managed by Playnite. Removing it will also add it to the
+                Excluded Games list so it won’t be auto‑synced back.
               </div>
               <div class="opacity-80">
-                You can bring it back later by manually adding it in Applications, or by removing the exclusion under Settings → Playnite.
+                You can bring it back later by manually adding it in Applications, or by removing
+                the exclusion under Settings → Playnite.
               </div>
               <div class="opacity-70">Do you want to continue?</div>
             </template>
@@ -253,7 +265,9 @@ const cmdText = computed({
   },
 });
 const isPlaynite = computed(() => !!(form as any)['playnite-id']);
-const isPlayniteAuto = computed(() => isPlaynite.value && ((form as any)['playnite-managed'] !== 'manual'));
+const isPlayniteAuto = computed(
+  () => isPlaynite.value && (form as any)['playnite-managed'] !== 'manual',
+);
 watch(open, (o) => {
   if (o) {
     const copy = JSON.parse(JSON.stringify(props.app || {}));
@@ -281,7 +295,9 @@ const showDeleteConfirm = ref(false);
 
 // Platform + Playnite detection
 const configStore = useConfigStore();
-const isWindows = computed(() => (configStore.metadata?.platform || '').toLowerCase() === 'windows');
+const isWindows = computed(
+  () => (configStore.metadata?.platform || '').toLowerCase() === 'windows',
+);
 const playniteEnabled = computed(() => {
   try {
     const v = configStore.config?.playnite_enabled ?? 'disabled';
@@ -299,7 +315,13 @@ const selectedPlayniteId = ref('');
 const lockPlaynite = ref(false);
 
 async function loadPlayniteGames() {
-  if (!isWindows.value || !playniteEnabled.value || gamesLoading.value || playniteOptions.value.length) return;
+  if (
+    !isWindows.value ||
+    !playniteEnabled.value ||
+    gamesLoading.value ||
+    playniteOptions.value.length
+  )
+    return;
   gamesLoading.value = true;
   try {
     const r = await http.get('/api/playnite/games');
@@ -352,10 +374,19 @@ async function del() {
         const cfg = await http.get('./api/config', { validateStatus: () => true });
         let raw = (cfg?.data && (cfg.data as any).playnite_exclude_games) || '';
         const set = new Set<string>();
-        if (typeof raw === 'string') raw.split(',').map((s) => s.trim()).filter(Boolean).forEach((s) => set.add(s));
+        if (typeof raw === 'string')
+          raw
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+            .forEach((s) => set.add(s));
         set.add(String(pid));
         const next = Array.from(set).join(',');
-        await http.post('./api/config', { playnite_exclude_games: next }, { validateStatus: () => true });
+        await http.post(
+          './api/config',
+          { playnite_exclude_games: next },
+          { validateStatus: () => true },
+        );
       } catch (_) {
         // best-effort; continue with deletion
       }
