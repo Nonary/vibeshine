@@ -334,10 +334,26 @@ export const useConfigStore = defineStore('config', () => {
     manualDirty.value = false;
   }
 
+  function serializeFull(): Record<string, any> | null {
+    if (!config.value) return null;
+    const out: Record<string, any> = {};
+    const keys = new Set<string>([...Object.keys(defaultMap), ...Object.keys(_data.value || {})]);
+    keys.forEach((k) => {
+      try {
+        (out as any)[k] = (config.value as any)[k];
+      } catch {
+        /* ignore */
+      }
+    });
+    delete (out as any).platform;
+    return out;
+  }
+
   async function save(): Promise<boolean> {
     try {
       savingState.value = 'saving';
-      const body = serialize();
+      // Post the full effective config so server-side non-merge save doesn't drop keys
+      const body = serializeFull();
       const res = await http.post('/api/config', body || {}, {
         headers: { 'Content-Type': 'application/json' },
         validateStatus: () => true,
@@ -422,6 +438,7 @@ export const useConfigStore = defineStore('config', () => {
     error,
     fetchConfig,
     setConfig,
+    serializeFull,
     updateOption,
     markManualDirty,
     resetManualDirty,

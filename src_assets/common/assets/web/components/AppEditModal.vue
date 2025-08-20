@@ -415,12 +415,18 @@ async function del() {
     if (isPlayniteAuto.value && pid) {
       try {
         const cfg = await http.get('./api/config', { validateStatus: () => true });
-        let raw = (cfg?.data && (cfg.data as any).playnite_exclude_games) || '';
+        const all: Record<string, any> = (cfg?.data && typeof cfg.data === 'object') ? { ...(cfg.data as any) } : {};
+        const raw = String(all.playnite_exclude_games || '');
         const set = new Set<string>();
-        if (typeof raw === 'string') raw.split(',').map((s) => s.trim()).filter(Boolean).forEach((s) => set.add(s));
+        raw
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .forEach((s) => set.add(s));
         set.add(String(pid));
-        const next = Array.from(set).join(',');
-        await http.post('./api/config', { playnite_exclude_games: next }, { validateStatus: () => true });
+        all.playnite_exclude_games = Array.from(set).join(',');
+        // Post the full config object to avoid wiping other settings
+        await http.post('./api/config', all, { validateStatus: () => true });
       } catch (_) {
         // best-effort; continue with deletion
       }
