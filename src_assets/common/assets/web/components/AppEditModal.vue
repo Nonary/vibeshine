@@ -25,7 +25,31 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="space-y-1 md:col-span-2">
             <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Name</label>
-            <n-input v-model:value="form.name" placeholder="Game or App Name" />
+            <!-- When adding a new app on Windows with Playnite enabled, allow picking a Playnite game -->
+            <template v-if="isNew && isWindows && playniteEnabled">
+              <div class="flex items-center gap-2">
+                <n-select
+                  v-model:value="selectedPlayniteId"
+                  :options="playniteOptions"
+                  :loading="gamesLoading"
+                  filterable
+                  :disabled="lockPlaynite"
+                  placeholder="Select a Playnite game…"
+                  class="flex-1"
+                  @focus="loadPlayniteGames"
+                  @update:value="onPickPlaynite"
+                />
+                <n-button v-if="lockPlaynite" size="small" tertiary @click="unlockPlaynite">
+                  Change
+                </n-button>
+              </div>
+              <div class="text-[11px] opacity-60" v-if="!lockPlaynite">
+                Pick from your Playnite library (installed only). Once selected, it locks in.
+              </div>
+            </template>
+            <template v-else>
+              <n-input v-model:value="form.name" placeholder="Game or App Name" />
+            </template>
           </div>
           <div class="space-y-1 md:col-span-2">
             <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Command</label>
@@ -140,14 +164,30 @@
         </div>
       </template>
 
-      <n-modal :show="showDeleteConfirm" @update:show="(v) => (showDeleteConfirm = v)">
+      <n-modal
+        :show="showDeleteConfirm"
+        :z-index="3300"
+        :mask-style="{ backgroundColor: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(2px)' }"
+        @update:show="(v) => (showDeleteConfirm = v)"
+      >
         <n-card
-          :title="$t('apps.confirm_delete_title_named', { name: form.name || '' })"
+          :title="isPlayniteAuto ? 'Remove and Exclude from Auto‑Sync?' : ($t('apps.confirm_delete_title_named', { name: form.name || '' }) as any)"
           :bordered="false"
           style="max-width: 32rem; width: 100%"
         >
-          <div class="text-sm text-center">
-            {{ $t('apps.confirm_delete_message_named', { name: form.name || '' }) }}
+          <div class="text-sm text-center space-y-2">
+            <template v-if="isPlayniteAuto">
+              <div>
+                This application is managed by Playnite. Removing it will also add it to the Excluded Games list so it won’t be auto‑synced back.
+              </div>
+              <div class="opacity-80">
+                You can bring it back later by manually adding it in Applications, or by removing the exclusion under Settings → Playnite.
+              </div>
+              <div class="opacity-70">Do you want to continue?</div>
+            </template>
+            <template v-else>
+              {{ $t('apps.confirm_delete_message_named', { name: form.name || '' }) }}
+            </template>
           </div>
           <template #footer>
             <div class="w-full flex items-center justify-center gap-3">
@@ -164,7 +204,8 @@
 <script setup lang="ts">
 import { reactive, watch, computed, ref } from 'vue';
 import { http } from '@/http';
-import { NModal, NCard, NButton, NInput, NInputNumber, NCheckbox } from 'naive-ui';
+import { NModal, NCard, NButton, NInput, NInputNumber, NCheckbox, NSelect } from 'naive-ui';
+import { useConfigStore } from '@/stores/config';
 const props = defineProps({
   modelValue: Boolean,
   platform: String,
@@ -211,12 +252,18 @@ const cmdText = computed({
     form.cmd = v;
   },
 });
+const isPlaynite = computed(() => !!(form as any)['playnite-id']);
+const isPlayniteAuto = computed(() => isPlaynite.value && ((form as any)['playnite-managed'] !== 'manual'));
 watch(open, (o) => {
   if (o) {
     const copy = JSON.parse(JSON.stringify(props.app || {}));
     if (Array.isArray(copy.cmd)) copy.cmd = copy.cmd.join(' ');
     Object.assign(form, fresh(), copy);
     form.index = props.index ?? -1;
+    // reset playnite picker state when opening
+    selectedPlayniteId.value = '';
+    lockPlaynite.value = false;
+    // if editing an existing Playnite-managed app, keep name field simple
   }
 });
 function close() {
@@ -231,6 +278,54 @@ function addPrep() {
 }
 const saving = reactive({ v: false });
 const showDeleteConfirm = ref(false);
+
+// Platform + Playnite detection
+const configStore = useConfigStore();
+const isWindows = computed(() => (configStore.metadata?.platform || '').toLowerCase() === 'windows');
+const playniteEnabled = computed(() => {
+  try {
+    const v = configStore.config?.playnite_enabled ?? 'disabled';
+    return String(v).toLowerCase() === 'enabled' || v === true || String(v) === 'on';
+  } catch (_) {
+    return false;
+  }
+});
+const isNew = computed(() => form.index === -1);
+
+// Playnite picker state
+const gamesLoading = ref(false);
+const playniteOptions = ref<{ label: string; value: string }[]>([]);
+const selectedPlayniteId = ref('');
+const lockPlaynite = ref(false);
+
+async function loadPlayniteGames() {
+  if (!isWindows.value || !playniteEnabled.value || gamesLoading.value || playniteOptions.value.length) return;
+  gamesLoading.value = true;
+  try {
+    const r = await http.get('/api/playnite/games');
+    const games: any[] = Array.isArray(r.data) ? r.data : [];
+    playniteOptions.value = games
+      .filter((g) => !!g.installed)
+      .map((g) => ({ label: g.name || g.id, value: g.id }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  } catch (_) {}
+  gamesLoading.value = false;
+}
+
+function onPickPlaynite(id: string) {
+  const opt = playniteOptions.value.find((o) => o.value === id);
+  if (!opt) return;
+  // Lock in selection and set fields
+  form.name = opt.label;
+  (form as any)['playnite-id'] = id;
+  (form as any)['playnite-managed'] = 'manual';
+  // clear command by default for Playnite managed entries
+  if (!form.cmd) form.cmd = '';
+  lockPlaynite.value = true;
+}
+function unlockPlaynite() {
+  lockPlaynite.value = false;
+}
 
 // Cover preview logic removed; Sunshine no longer fetches or proxies images
 async function save() {
@@ -250,7 +345,27 @@ async function save() {
 async function del() {
   saving.v = true;
   try {
+    // If Playnite auto-managed, add to exclusion list before removing
+    const pid = (form as any)['playnite-id'];
+    if (isPlayniteAuto.value && pid) {
+      try {
+        const cfg = await http.get('./api/config', { validateStatus: () => true });
+        let raw = (cfg?.data && (cfg.data as any).playnite_exclude_games) || '';
+        const set = new Set<string>();
+        if (typeof raw === 'string') raw.split(',').map((s) => s.trim()).filter(Boolean).forEach((s) => set.add(s));
+        set.add(String(pid));
+        const next = Array.from(set).join(',');
+        await http.post('./api/config', { playnite_exclude_games: next }, { validateStatus: () => true });
+      } catch (_) {
+        // best-effort; continue with deletion
+      }
+    }
+
     await http.delete(`./api/apps/${form.index}`, { validateStatus: () => true });
+    // Best-effort force sync on Windows environments
+    try {
+      await http.post('./api/playnite/force_sync', {}, { validateStatus: () => true });
+    } catch (_) {}
     emit('deleted');
     close();
   } finally {

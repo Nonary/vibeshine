@@ -162,11 +162,16 @@ async function logout() {
   } catch (e) {
     console.error('Logout failed:', e);
   }
+  // Ensure login modal cannot appear while logout overlay is visible
+  authStore.hideLogin();
   authStore.isAuthenticated = false;
+  authStore.logoutOverlay = true;
   loggedOut.value = true;
 }
 
 function refreshPage() {
+  const authStore = useAuthStore();
+  authStore.logoutOverlay = false;
   window.location.reload();
 }
 </script>

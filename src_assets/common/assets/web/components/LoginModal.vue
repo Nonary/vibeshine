@@ -93,7 +93,9 @@ const { t } = useI18n();
 // Show modal only when auth layer is ready, it has requested login,
 // and the user is not already authenticated. This prevents the modal
 // from flashing or appearing for non-auth errors.
-const visible = computed(() => auth.ready && auth.showLoginModal && !auth.isAuthenticated);
+const visible = computed(
+  () => auth.ready && auth.showLoginModal && !auth.isAuthenticated && !auth.logoutOverlay,
+);
 const credentialsConfigured = computed(() => auth.credentialsConfigured);
 
 const username = ref('');
@@ -193,5 +195,14 @@ async function submit() {
   background: rgba(13, 16, 28, 0.65);
   border-color: rgba(255, 255, 255, 0.14);
   color: #f5f9ff;
+}
+/* Increase backdrop opacity and blur for stricter, less see-through modal */
+/* Use deep selector to target Naive UI modal mask rendered via teleport */
+:deep(.n-modal-mask) {
+  background-color: rgba(0, 0, 0, 0.6) !important;
+  backdrop-filter: blur(3px);
+}
+.dark :deep(.n-modal-mask) {
+  background-color: rgba(0, 0, 0, 0.65) !important;
 }
 </style>

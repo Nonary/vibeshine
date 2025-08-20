@@ -18,6 +18,7 @@ export const useAuthStore = defineStore('auth', () => {
   const _listeners: AuthListener[] = [];
   const pendingRedirect: Ref<string> = ref('/');
   const showLoginModal: Ref<boolean> = ref(false);
+  const logoutOverlay: Ref<boolean> = ref(false);
   const credentialsConfigured: Ref<boolean> = ref(true);
   const loggingIn: Ref<boolean> = ref(false);
 
@@ -81,6 +82,8 @@ export const useAuthStore = defineStore('auth', () => {
     if (redirectPath && typeof redirectPath === 'string') {
       pendingRedirect.value = redirectPath;
     }
+    // Do not show login if logout overlay is active
+    if (logoutOverlay.value) return;
     showLoginModal.value = true;
   }
 
@@ -112,5 +115,6 @@ export const useAuthStore = defineStore('auth', () => {
     setCredentialsConfigured,
     waitForAuthentication,
     loggingIn,
+    logoutOverlay,
   };
 });
