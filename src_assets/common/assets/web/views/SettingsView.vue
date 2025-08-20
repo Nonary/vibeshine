@@ -51,15 +51,16 @@
                   >
                   <span
                     v-if="r.options && r.options.length"
-                    class="block text-[11px] opacity-60 mt-1 truncate"
+                    class="block text-[11px] opacity-60 mt-1 break-words"
                     >Options:
                     {{
                       r.options
-                        .map((o) => o.text)
+                        .map((o) =>
+                          o.text && o.value ? `${o.text} (${o.value})` : o.text || o.value,
+                        )
                         .filter(Boolean)
-                        .slice(0, 3)
                         .join(', ')
-                    }}<span v-if="r.options.length > 3">…</span></span
+                    }}</span
                   >
                 </span>
               </button>
@@ -317,7 +318,9 @@ function buildSearchIndex() {
       if (forId) {
         try {
           target = sec.querySelector('#' + CSS.escape(forId));
-        } catch {}
+        } catch {
+          /* ignore */
+        }
       }
       if (!target)
         target = lbl.closest('div')?.querySelector('input,select,textarea,.form-control');
@@ -358,10 +361,30 @@ function buildSearchIndex() {
         if (target && target.tagName && target.tagName.toLowerCase() === 'select') {
           optionsList = Array.from(target.querySelectorAll('option')).map((o) => ({
             text: (o.textContent || '').trim(),
-            value: o.value,
+            value: (o.value || '').trim(),
           }));
+        }
+        // Also support virtual selects (e.g., Naive UI NSelect) via a data attribute
+        // data-search-options="Label::value|Label2::value2|..."
+        if ((!optionsList || optionsList.length === 0) && target) {
+          const ds = target.getAttribute?.('data-search-options') || '';
+          if (ds && typeof ds === 'string') {
+            optionsList = ds
+              .split('|')
+              .map((chunk) => chunk.trim())
+              .filter(Boolean)
+              .map((pair) => {
+                const [textRaw, valRaw] = pair.split('::');
+                const text = (textRaw || '').trim();
+                const value = (valRaw || '').trim();
+                return { text, value };
+              })
+              .filter((o) => o.text || o.value);
+          }
+        }
+        if (optionsList && optionsList.length) {
           optionsText = optionsList
-            .map((o) => o.text)
+            .map((o) => `${o.text || ''} ${o.value || ''}`.trim())
             .filter(Boolean)
             .join(' | ');
         }
@@ -397,27 +420,39 @@ function queueBuildIndex() {
 
 watch(searchQuery, (q) => {
   const v = (q || '').trim().toLowerCase();
-  searchOpen.value = v.length > 0;
-  if (!v) {
+  const terms = v.split(/\s+/).filter(Boolean);
+  searchOpen.value = terms.length > 0;
+  if (!terms.length) {
     searchResults.value = [];
     return;
   }
 
-  // Score matches: label matches highest, path next, desc lowest. Boost exact startsWith.
+  // Score matches: require all terms to match one of the fields. Label highest, options, path, then desc.
   const scoreFor = (it) => {
     const lv = it.label.toLowerCase();
     const pv = it.path.toLowerCase();
     const dv = (it.desc || '').toLowerCase();
     const ov = (it.optionsText || '').toLowerCase();
-    let score = 0;
-    if (lv.includes(v)) score += 100 - lv.indexOf(v); // earlier in label is better
-    if (lv.startsWith(v)) score += 50;
-    if (pv.includes(v)) score += 40 - pv.indexOf(v) / 100; // smaller index better
-    if (dv.includes(v)) score += 20 - dv.indexOf(v) / 1000;
-    if (ov.includes(v)) score += 60 - ov.indexOf(v) / 10; // option text matches are strong
-    // penalize very long descriptions/path to prefer concise matches
-    score -= (pv.length + dv.length + ov.length) / 1000;
-    return score;
+    let total = 0;
+    for (const term of terms) {
+      let s = 0;
+      if (lv.includes(term)) {
+        s += 100 - lv.indexOf(term);
+        if (lv.startsWith(term)) s += 50;
+      } else if (ov.includes(term)) {
+        s += 60 - ov.indexOf(term) / 10;
+      } else if (pv.includes(term)) {
+        s += 40 - pv.indexOf(term) / 100;
+      } else if (dv.includes(term)) {
+        s += 20 - dv.indexOf(term) / 1000;
+      } else {
+        return 0; // missing term
+      }
+      total += s;
+    }
+    // penalize very long descriptions/path/options to prefer concise matches
+    total -= (pv.length + dv.length + ov.length) / 1000;
+    return total;
   };
 
   searchResults.value = searchIndex.value
@@ -437,7 +472,9 @@ function goTo(item) {
     try {
       item.el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       flash(item.el);
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   }, 250);
 }
 function flash(el) {

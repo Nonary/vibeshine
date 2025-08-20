@@ -265,6 +265,17 @@ export const useConfigStore = defineStore('config', () => {
         },
       });
     });
+    // Virtual, read-only platform property sourced from metadata
+    Object.defineProperty(target, 'platform', {
+      enumerable: true,
+      configurable: true,
+      get() {
+        return metadata.value?.platform || '';
+      },
+      set(_v) {
+        // ignore writes; platform is server-provided only
+      },
+    });
     return target;
   }
 
@@ -288,16 +299,21 @@ export const useConfigStore = defineStore('config', () => {
       }
     }
 
-    // Coerce numeric-like strings to numbers using defaults as type hints
-    try {
-      for (const [k, dv] of Object.entries(defaultMap)) {
-        if (typeof dv === 'number' && _data.value && typeof _data.value[k] === 'string') {
-          const n = Number(_data.value[k]);
-          if (!Number.isNaN(n)) _data.value[k] = n;
+    // Coerce primitive types based on defaults so UI widgets match options.
+    // This fixes cases where server returns numeric fields as strings, causing
+    // selects to show raw values instead of their friendly labels.
+    if (_data.value) {
+      for (const key of Object.keys(_data.value)) {
+        const dv = (defaultMap as any)[key];
+        const cur = (_data.value as any)[key];
+        // If default is a number, coerce string numerics to numbers
+        if (typeof dv === 'number' && typeof cur === 'string') {
+          const n = Number(cur);
+          if (Number.isFinite(n)) {
+            (_data.value as any)[key] = n;
+          }
         }
       }
-    } catch (_) {
-      /* ignore */
     }
 
     config.value = buildWrapper();
@@ -352,6 +368,8 @@ export const useConfigStore = defineStore('config', () => {
     for (const k of Object.keys(out)) {
       if (k in defaultMap && deepEqual(out[k], defaultMap[k])) delete out[k];
     }
+    // never persist virtual keys
+    delete (out as any).platform;
     return out;
   }
 
@@ -366,7 +384,15 @@ export const useConfigStore = defineStore('config', () => {
       try {
         const mr = await http.get('/api/metadata');
         if (mr.status === 200 && mr.data) {
-          metadata.value = mr.data;
+          const m = { ...(mr.data as any) } as MetaInfo;
+          // Normalize platform identifiers across build/runtime variations
+          const raw = String((m as any).platform || '').toLowerCase();
+          let norm = raw;
+          if (raw.startsWith('win')) norm = 'windows';
+          else if (raw === 'darwin' || raw.startsWith('mac')) norm = 'macos';
+          else if (raw.startsWith('lin')) norm = 'linux';
+          (m as any).platform = norm;
+          metadata.value = m;
         }
       } catch (_) {
         /* ignore */

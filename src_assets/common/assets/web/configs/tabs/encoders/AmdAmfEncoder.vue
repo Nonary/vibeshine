@@ -40,6 +40,7 @@ const coderOptions = [
         id="amf_quality"
         v-model:value="config.profile"
         :options="usageOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+        :data-search-options="usageOptions.map(o => `${$t(o.labelKey)}::${o.value}`).join('|')"
       />
       <div class="form-text">
         {{ $t('config.amd_usage_desc') }}
@@ -63,6 +64,7 @@ const coderOptions = [
             id="amf_rate_control"
             v-model:value="config.rate_control"
             :options="rateControlOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+            :data-search-options="rateControlOptions.map(o => `${$t(o.labelKey)}::${o.value}`).join('|')"
           />
           <p class="text-[11px] opacity-60 mt-1">
             {{ $t('config.amd_rc_desc') }}
@@ -95,6 +97,7 @@ const coderOptions = [
             id="amd_quality"
             v-model:value="config.amd_quality"
             :options="qualityOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+            :data-search-options="qualityOptions.map(o => `${$t(o.labelKey)}::${o.value}`).join('|')"
           />
           <p class="text-[11px] opacity-60 mt-1">
             {{ $t('config.amd_quality_desc') }}
@@ -126,6 +129,7 @@ const coderOptions = [
             id="amd_coder"
             v-model:value="config.amd_coder"
             :options="coderOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+            :data-search-options="coderOptions.map(o => `${$t(o.labelKey)}::${o.value}`).join('|')"
           />
           <p class="text-[11px] opacity-60 mt-1">
             {{ $t('config.amd_coder_desc') }}

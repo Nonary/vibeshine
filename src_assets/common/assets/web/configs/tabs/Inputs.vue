@@ -44,6 +44,7 @@ const gamepadOptions = computed(() => {
         id="gamepad"
         v-model:value="config.gamepad"
         :options="gamepadOptions.map(o => ({ label: $t(o.label), value: o.value }))"
+        :data-search-options="gamepadOptions.map(o => `${$t(o.label)}::${o.value ?? ''}`).join('|')"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.gamepad_desc') }}

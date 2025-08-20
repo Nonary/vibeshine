@@ -21,16 +21,19 @@ function cssVarRgb(name: string, fallback: string): string {
   return `rgb(${nr}, ${ng}, ${nb})`;
 }
 
-// Convert a cssVarRgb result to rgba with alpha. If the input isn't rgb(...),
-// fall back to provided fallback color string.
-function rgbaFromCssVar(name: string, fallbackRgb: string, alpha: number): string {
-  const rgb = cssVarRgb(name, fallbackRgb);
-  const m = /^rgb\((\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\)$/.exec(rgb);
-  if (!m) return `rgba(0, 0, 0, ${alpha})`;
-  const r = Number(m[1]);
-  const g = Number(m[2]);
-  const b = Number(m[3]);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+// Resolve `--color-xxx` to a comma-separated "r, g, b" string for rgba()
+function cssVarRgbComma(name: string, fallback: string): string {
+  if (typeof window === 'undefined') return fallback;
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  if (!raw) return fallback;
+  const parts = raw.replace(/\s+/g, ' ').replace(/,/g, ' ').trim().split(' ');
+  if (parts.length < 3) return fallback;
+  const [r, g, b] = parts;
+  const nr = Number(r),
+    ng = Number(g),
+    nb = Number(b);
+  if ([nr, ng, nb].some((n) => !isFinite(n))) return fallback;
+  return `${nr}, ${ng}, ${nb}`;
 }
 
 export function useNaiveThemeOverrides() {
@@ -52,9 +55,9 @@ export function useNaiveThemeOverrides() {
         popoverColor: cssVarRgb('--color-surface', '#ffffff'),
         tableColor: cssVarRgb('--color-light', '#ffffff'),
 
-        // Subtle borders/dividers using resolved RGB (avoid passing CSS vars to Naive color utils)
-        borderColor: rgbaFromCssVar('--color-dark', 'rgb(0, 0, 0)', 0.1),
-        dividerColor: rgbaFromCssVar('--color-dark', 'rgb(0, 0, 0)', 0.1),
+        // Subtle borders/dividers using resolved theme tokens (avoid var() usage here)
+        borderColor: `rgba(${cssVarRgbComma('--color-dark', '0, 0, 0')}, 0.10)`,
+        dividerColor: `rgba(${cssVarRgbComma('--color-dark', '0, 0, 0')}, 0.10)`,
       },
     } as GlobalThemeOverrides;
   };
