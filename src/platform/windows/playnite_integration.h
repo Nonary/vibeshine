@@ -74,6 +74,13 @@ namespace platf::playnite {
   bool get_games_list_json(std::string &out_json);
 
   /**
+   * @brief Get a JSON array string of category names.
+   * @param[out] out_json Receives the JSON array string on success.
+   * @return `true` if category data was available and written to `out_json`, `false` otherwise.
+   */
+  bool get_categories_list_json(std::string &out_json);
+
+  /**
    * @brief Force an immediate Playnite sync (applies auto-sync logic immediately).
    * @return `true` if the sync was triggered, `false` otherwise.
    */

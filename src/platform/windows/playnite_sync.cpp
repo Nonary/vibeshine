@@ -29,21 +29,13 @@ bool parse_iso8601_utc(const std::string &s, std::time_t &out) {
   if(pos<s.size()&&s[pos]=='.'){ ++pos; while(pos<s.size()&&std::isdigit((unsigned char)s[pos])) ++pos; }
   if(pos<s.size()){ char c=s[pos]; if(c=='Z'||c=='z'){ ++pos; } else if(c=='+'||c=='-'){ sg=(c=='+')?1:-1; ++pos; if(!rd(oh,2)||pos>=s.size()||s[pos++]!=':'||!rd(om,2)) return false; }}
   std::tm tm{}; tm.tm_year=Y-1900; tm.tm_mon=M-1; tm.tm_mday=D; tm.tm_hour=h; tm.tm_min=m; tm.tm_sec=sec;
-#if defined(_WIN32)
   std::time_t t = _mkgmtime(&tm);
-#else
-  std::time_t t = timegm(&tm);
-#endif
   if (t==(std::time_t)-1) return false; if (sg) t -= (oh*3600L+om*60L)*sg; out=t; return true;
 }
 
 std::string now_iso8601_utc() {
   std::time_t t=std::time(nullptr); std::tm tm{};
-#if defined(_WIN32)
   gmtime_s(&tm,&t);
-#else
-  gmtime_r(&t,&tm);
-#endif
   std::ostringstream oss; oss<<std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ"); return oss.str();
 }
 
