@@ -13,55 +13,38 @@
       </template>
       <div class="space-y-4">
         <p class="text-sm opacity-75">{{ $t('clients.pair_desc') }}</p>
-        <form
+        <n-form
           class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end"
           @submit.prevent="registerDevice"
         >
-          <div class="flex flex-col">
-            <label class="text-[11px] font-semibold tracking-wide uppercase mb-1" for="pin-input">{{
-              $t('navbar.pin')
-            }}</label>
+          <n-form-item class="flex flex-col" :label="$t('navbar.pin')" label-placement="top">
             <n-input
               id="pin-input"
               v-model:value="pin"
-              type="text"
-              inputmode="numeric"
-              pattern="^[0-9]{4}$"
-              title="Enter 4 digits"
-              maxlength="4"
               :placeholder="$t('navbar.pin')"
+              :input-props="{ inputmode: 'numeric', pattern: '^[0-9]{4}$', title: 'Enter 4 digits', maxlength: 4, required: true }"
             />
-          </div>
-          <div class="flex flex-col">
-            <label
-              class="text-[11px] font-semibold tracking-wide uppercase mb-1"
-              for="name-input"
-              >{{ $t('pin.device_name') }}</label
-            >
+          </n-form-item>
+          <n-form-item class="flex flex-col" :label="$t('pin.device_name')" label-placement="top">
             <n-input
               id="name-input"
               v-model:value="deviceName"
-              type="text"
               :placeholder="$t('pin.device_name')"
+              :input-props="{ required: true }"
             />
-          </div>
-          <div class="flex flex-col md:items-end">
-            <n-button
-              :disabled="pairing"
-              class="w-full md:w-auto"
-              type="primary"
-              attr-type="submit"
-            >
+          </n-form-item>
+          <n-form-item class="flex flex-col md:items-end">
+            <n-button :disabled="pairing" class="w-full md:w-auto" type="primary" html-type="submit">
               <span v-if="!pairing">{{ $t('pin.send') }}</span>
               <span v-else>{{ $t('clients.pairing') }}</span>
             </n-button>
-          </div>
-        </form>
+          </n-form-item>
+        </n-form>
         <div class="space-y-2">
           <n-alert v-if="pairStatus === true" type="success">{{ $t('pin.pair_success') }}</n-alert>
           <n-alert v-if="pairStatus === false" type="error">{{ $t('pin.pair_failure') }}</n-alert>
         </div>
-        <n-alert type="warning" class="text-sm flex items-start gap-2" :show-icon="true">
+        <n-alert type="warning" class="text-sm flex items-start gap-2">
           <template #default>
             <div class="flex items-start gap-2">
               <b class="font-semibold">{{ $t('_common.warning') }}</b>
@@ -177,7 +160,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue';
 import { http } from '@/http';
-import { NCard, NButton, NAlert, NModal, NInput } from 'naive-ui';
+import { NCard, NButton, NAlert, NModal, NInput, NForm, NFormItem } from 'naive-ui';
 import ApiTokenManager from '@/ApiTokenManager.vue';
 import { useAuthStore } from '@/stores/auth';
 

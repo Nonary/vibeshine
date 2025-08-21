@@ -61,6 +61,8 @@ namespace platf::playnite {
     bool get_client_sid(platf::dxgi::WinPipe *wp, std::wstring &sid);
     bool get_expected_user_sid(std::wstring &sid);
     void serve_connected_loop();
+    // Check if any Playnite process is running (Desktop or Fullscreen)
+    bool is_playnite_running();
   /**
    * @brief Check if an interactive user session is currently available.
    *
@@ -80,6 +82,7 @@ namespace platf::playnite {
     std::atomic<bool> active_ {false};
     std::string recv_buffer_;
     std::string control_name_;
-  bool no_session_logged_ = false;  ///< Ensures we only log missing session once until it appears.
+    bool no_session_logged_ = false;  ///< Ensures we only log missing session once until it appears.
+    bool no_playnite_logged_ = false; ///< Ensures we only log missing Playnite once until it appears.
   };
 }  // namespace platf::playnite

@@ -761,6 +761,14 @@ function Start-ConnectorLoop {
               [UIBridge]::StartGameByGuidStringOnUIThread([string]$obj.id)
               Write-Log "Dispatched launch to UI thread via UIBridge.StartGameByGuidStringOnUIThread"
             } catch { Write-Log "Failed to dispatch launch: $($_.Exception.Message)" }
+          } elseif ($obj.type -eq 'command' -and $obj.command -eq 'stop') {
+            # New: forward a synthetic gameStopped status to the matching launcher connection(s)
+            try {
+              $targetId = ''
+              try { if ($obj.id) { $targetId = [string]$obj.id } } catch {}
+              Send-StopSignalToLauncher -GameId $targetId
+              Write-Log ("Forwarded stop signal to launcher(s) for id='{0}'" -f $targetId)
+            } catch { Write-Log ("Failed to forward stop signal: {0}" -f $_.Exception.Message) }
           }
         }
         catch {
@@ -828,10 +836,14 @@ function OnApplicationStarted() {
       if ($Outbox) { $rs.SessionStateProxy.SetVariable('Outbox', $Outbox) }
       if ($PSScriptRoot) { $rs.SessionStateProxy.SetVariable('PSScriptRoot', $PSScriptRoot) }
       $rs.SessionStateProxy.SetVariable('Cts', $script:Cts)
+      # Ensure connector runspace can access the shared launcher connections table
+      try { $rs.SessionStateProxy.SetVariable('LauncherConns', $global:LauncherConns) } catch {}
       # No need to pass UI objects; UIBridge holds static references accessible across runspaces
       $ps = [System.Management.Automation.PowerShell]::Create()
       $ps.Runspace = $rs
       if ($modulePath) { $ps.AddScript("Import-Module -Force '$modulePath'") | Out-Null }
+      # Rebind this runspace's $global:LauncherConns to the injected shared instance
+      $ps.AddScript('$global:LauncherConns = $LauncherConns') | Out-Null
       $ps.AddScript('Start-ConnectorLoop -Token $Cts.Token') | Out-Null
       $handle = $ps.BeginInvoke()
       $script:Bg = @{ Runspace = $rs; PowerShell = $ps; Handle = $handle }
@@ -896,6 +908,57 @@ function Send-StatusMessage {
     }
   }
   catch { Write-Log ("Status broadcast: unexpected failure: {0}" -f $_.Exception.Message) }
+}
+
+# Send a synthetic 'gameStopped' status to launcher connection(s) to trigger graceful staging.
+function Send-StopSignalToLauncher {
+  param([string]$GameId)
+  try {
+    $idStr = if ($GameId) { $GameId } else { '' }
+    $payload = @{ type = 'status'; status = @{ name = 'gameStopped'; id = $idStr } } | ConvertTo-Json -Depth 4 -Compress
+  } catch {
+    Write-Log "StopSignal: failed to build JSON payload"
+    return
+  }
+  try {
+    $keys = @()
+    try { $keys = @($global:LauncherConns.Keys) } catch { $keys = @() }
+    $selected = New-Object System.Collections.ArrayList
+    $norm = { param($s) if (-not $s) { return '' } ($s -replace '[{}]', '').ToLowerInvariant() }
+    if ($GameId) {
+      foreach ($guid in $keys) {
+        try {
+          $conn = $global:LauncherConns[$guid]
+          if (-not $conn) { continue }
+          $cid = ''
+          try { $cid = [string]$conn.GameId } catch {}
+          if (-not $cid) { continue }
+          if ((& $norm $cid) -eq (& $norm $GameId)) { [void]$selected.Add($guid) }
+        } catch {}
+      }
+      if ($selected.Count -eq 0) {
+        Write-Log ("StopSignal: no matching LauncherConns for id='{0}', broadcasting to all ({1})" -f $GameId, $keys.Count)
+        foreach ($guid in $keys) { [void]$selected.Add($guid) }
+      }
+    } else {
+      foreach ($guid in $keys) { [void]$selected.Add($guid) }
+    }
+    Write-Log ("StopSignal: targeting {0} connection(s)" -f $selected.Count)
+    foreach ($guid in $selected) {
+      $conn = $null
+      try { $conn = $global:LauncherConns[$guid] } catch {}
+      if (-not $conn) { continue }
+      try {
+        if ($conn.Outbox) { $null = $conn.Outbox.Add($payload); Write-Log ("StopSignal: queued for {0}" -f $guid) }
+        elseif ($conn.Writer) { $conn.Writer.WriteLine($payload); $conn.Writer.Flush(); Write-Log ("StopSignal: wrote directly for {0}" -f $guid) }
+        else { Write-Log ("StopSignal: no outbox/writer for {0}" -f $guid) }
+      } catch {
+        Write-Log ("StopSignal: enqueue/write failed for {0}: {1}" -f $guid, $_.Exception.Message)
+      }
+    }
+  } catch {
+    Write-Log ("StopSignal: unexpected failure: {0}" -f $_.Exception.Message)
+  }
 }
 
 function OnGameStarted() {

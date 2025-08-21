@@ -4,6 +4,7 @@ import { ref, computed } from 'vue';
 import { useConfigStore } from '@/stores/config';
 import { storeToRefs } from 'pinia';
 import { NSelect, NInput, NButton, NInputNumber } from 'naive-ui';
+import { useI18n } from 'vue-i18n';
 
 const store = useConfigStore();
 const { config, metadata } = storeToRefs(store);
@@ -33,15 +34,10 @@ const localeOptions = [
   { label: '繁體中文 (Chinese Traditional)', value: 'zh_TW' },
 ];
 
-const logLevelOptions = [
-  { label: '0', value: '0' },
-  { label: '1', value: '1' },
-  { label: '2', value: '2' },
-  { label: '3', value: '3' },
-  { label: '4', value: '4' },
-  { label: '5', value: '5' },
-  { label: '6', value: '6' },
-];
+const { t } = useI18n();
+const logLevelOptions = computed(() =>
+  [0, 1, 2, 3, 4, 5, 6].map((v) => ({ label: t(`config.log_level_${v}`), value: v })),
+);
 
 function addCmd() {
   const template = {
@@ -73,7 +69,12 @@ function removeCmd(index) {
     <!-- Locale -->
     <div class="mb-6">
       <label for="locale" class="form-label">{{ $t('config.locale') }}</label>
-      <n-select id="locale" v-model:value="config.locale" :options="localeOptions" />
+      <n-select
+        id="locale"
+        v-model:value="config.locale"
+        :options="localeOptions"
+        :data-search-options="localeOptions.map(o => `${o.label}::${o.value ?? ''}`).join('|')"
+      />
       <div class="text-[11px] opacity-60 mt-1">
         {{ $t('config.locale_desc') }}
       </div>
@@ -96,7 +97,12 @@ function removeCmd(index) {
     <!-- Log Level -->
     <div class="mb-6">
       <label for="min_log_level" class="form-label">{{ $t('config.log_level') }}</label>
-      <n-select id="min_log_level" v-model:value="config.min_log_level" :options="logLevelOptions" />
+      <n-select
+        id="min_log_level"
+        v-model:value="config.min_log_level"
+        :options="logLevelOptions"
+        :data-search-options="logLevelOptions.map(o => `${o.label}::${o.value ?? ''}`).join('|')"
+      />
       <div class="text-[11px] opacity-60 mt-1">
         {{ $t('config.log_level_desc') }}
       </div>
@@ -118,18 +124,18 @@ function removeCmd(index) {
         >
           <div class="col-span-5">
             <n-input
-              v-model="c.do"
+              v-model:value="c.do"
               type="text"
               class="monospace"
-              @input="store.markManualDirty()"
+              @update:value="store.markManualDirty()"
             />
           </div>
           <div class="col-span-5">
             <n-input
-              v-model="c.undo"
+              v-model:value="c.undo"
               type="text"
               class="monospace"
-              @input="store.markManualDirty()"
+              @update:value="store.markManualDirty()"
             />
           </div>
           <div v-if="platform === 'windows'" class="col-span-1">

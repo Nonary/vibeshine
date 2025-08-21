@@ -10,13 +10,13 @@ const config = store.config;
 const platform = computed(() => config.value?.platform || '');
 const { t } = useI18n();
 const presetOptions = [
-  { label: () => `P1 ${t('config.nvenc_preset_1')}`, value: '1' },
-  { label: 'P2', value: '2' },
-  { label: 'P3', value: '3' },
-  { label: 'P4', value: '4' },
-  { label: 'P5', value: '5' },
-  { label: 'P6', value: '6' },
-  { label: () => `P7 ${t('config.nvenc_preset_7')}`, value: '7' },
+  { label: () => `P1 ${t('config.nvenc_preset_1')}`, value: 1 },
+  { label: 'P2', value: 2 },
+  { label: 'P3', value: 3 },
+  { label: 'P4', value: 4 },
+  { label: 'P5', value: 5 },
+  { label: 'P6', value: 6 },
+  { label: () => `P7 ${t('config.nvenc_preset_7')}`, value: 7 },
 ];
 const twopassOptions = [
   { labelKey: 'config.nvenc_twopass_disabled', value: 'disabled' },
@@ -34,6 +34,7 @@ const twopassOptions = [
         id="nvenc_preset"
         v-model:value="config.nvenc_preset"
         :options="presetOptions.map(o => ({ label: typeof o.label === 'function' ? o.label() : o.label, value: o.value }))"
+        :data-search-options="presetOptions.map(o => `${typeof o.label === 'function' ? o.label() : o.label}::${o.value}`).join('|')"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.nvenc_preset_desc') }}
@@ -47,6 +48,7 @@ const twopassOptions = [
         id="nvenc_twopass"
         v-model:value="config.nvenc_twopass"
         :options="twopassOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
+        :data-search-options="twopassOptions.map(o => `${$t(o.labelKey)}::${o.value}`).join('|')"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.nvenc_twopass_desc') }}

@@ -74,6 +74,13 @@ namespace platf::playnite {
   bool get_games_list_json(std::string &out_json);
 
   /**
+   * @brief Get a JSON array string of category names.
+   * @param[out] out_json Receives the JSON array string on success.
+   * @return `true` if category data was available and written to `out_json`, `false` otherwise.
+   */
+  bool get_categories_list_json(std::string &out_json);
+
+  /**
    * @brief Force an immediate Playnite sync (applies auto-sync logic immediately).
    * @return `true` if the sync was triggered, `false` otherwise.
    */
@@ -88,5 +95,16 @@ namespace platf::playnite {
   bool get_cover_png_for_playnite_game(const std::string &playnite_id, std::string &out_path);
 
   // no-op: persistence helper moved to confighttp as refresh_client_apps_cache
+
+  /**
+   * @brief Close any running Playnite instances and restart Playnite.
+   * - When Sunshine runs as SYSTEM, launches Playnite by impersonating the active user.
+   * - Otherwise, launches in the current session.
+   * Attempts a graceful close and then forces termination if needed.
+   * @return true on success (launch attempted), false on failure.
+   */
+  bool restart_playnite();
+
+  // Note: explicit launch helper removed; use restart_playnite() for both cases.
 
 }  // namespace platf::playnite

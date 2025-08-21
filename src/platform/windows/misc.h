@@ -8,6 +8,7 @@
 #include <chrono>
 #include <functional>
 #include <string_view>
+#include <functional>
 #include <system_error>
 
 // platform includes
@@ -110,4 +111,11 @@ namespace platf {
    */
   DWORD get_parent_process_id(DWORD process_id);
 
+
+  /**
+   * @brief Override per-user predefined registry keys (HKCU, HKCR) for the given token.
+   * @param token Primary user token to use for HKCU/HKCR views, or nullptr to restore defaults.
+   * @return true on success.
+   */
+  bool override_per_user_predefined_keys(HANDLE token);
 }  // namespace platf

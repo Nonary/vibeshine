@@ -32,14 +32,43 @@
             <b>{{ $t('playnite.extensions_dir') }}:</b>
             <code class="text-xs break-all">{{ status.extensions_dir }}</code>
           </div>
+          <div class="flex items-center gap-2" v-if="status.plugin_version">
+            <b>{{ $t('playnite.plugin_version') || 'Plugin' }}:</b>
+            <n-tag size="small" type="default">v{{ status.plugin_version }}</n-tag>
+            <template v-if="status.plugin_latest">
+              <span class="opacity-70">→</span>
+              <n-tag size="small" :type="pluginOutdated ? 'warning' : 'success'">v{{ status.plugin_latest }}</n-tag>
+            </template>
+          </div>
         </div>
         <n-alert v-if="statusKind === 'session'" type="warning" :show-icon="true">
           {{ $t('playnite.session_required') }}
         </n-alert>
+        <n-alert v-if="pluginOutdated" type="warning" :show-icon="true">
+          {{ $t('playnite.plugin_outdated', { installed: status.plugin_version || '?', latest: status.plugin_latest || '?' }) }}
+        </n-alert>
         <div class="flex items-center gap-2">
-          <n-button type="primary" size="small" :loading="installing" @click="install">
+          <n-button
+            v-if="canLaunch"
+            size="small"
+            tertiary
+            :loading="launching"
+            @click="launchPlaynite"
+          >
+            <i class="fas fa-rocket" />
+            <span class="ml-2">{{ $t('playnite.launch_button') || 'Launch Playnite' }}</span>
+          </n-button>
+          <n-button v-if="status.extensions_dir" type="primary" size="small" :loading="installing" @click="openInstallConfirm">
             <i class="fas fa-plug" />
-            <span class="ml-2">{{ status.installed ? ($t('playnite.reinstall_button') || 'Reinstall Plugin') : ($t('playnite.install_button') || 'Install Plugin') }}</span>
+            <span class="ml-2">
+              {{
+                status.installed
+                  ? (pluginOutdated
+                      ? ($t('playnite.upgrade_button') || 'Upgrade Plugin')
+                      : ($t('playnite.reinstall_button') || 'Reinstall Plugin'))
+                  : ($t('playnite.install_button') || 'Install Plugin')
+              }}
+            </span>
           </n-button>
           <span v-if="installOk" class="text-success text-xs">{{ $t('playnite.install_success') }}</span>
           <span v-if="installErr" class="text-danger text-xs">{{ $t('playnite.install_error') }}<template v-if="installErrorMsg">: {{ installErrorMsg }}</template></span>
@@ -56,8 +85,6 @@
             id="playnite_auto_sync"
             :default-value="store.defaults.playnite_auto_sync"
             :localePrefix="'playnite'"
-            :label="$t('playnite.auto_sync')"
-            :desc="''"
           />
         </div>
         <div>
@@ -135,23 +162,36 @@
         </div>
       </div>
 
-      <div class="grid md:grid-cols-2 gap-4">
-        <div>
-          <label class="text-xs font-semibold">{{ $t('playnite.extensions_dir') }}</label>
-          <n-input v-model:value="config.playnite_extensions_dir" />
-        </div>
-        <div>
-          <label class="text-xs font-semibold">{{ $t('playnite.install_dir') || 'Playnite Install Directory' }}</label>
-          <n-input v-model:value="config.playnite_install_dir" />
-        </div>
-      </div>
+      
     </section>
   </div>
+  <!-- Install/Upgrade confirmation -->
+  <n-modal :show="showInstallConfirm" @update:show="(v) => (showInstallConfirm = v)">
+    <n-card :bordered="false" style="max-width: 32rem; width: 100%">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <i class="fas fa-plug" />
+          <span>
+            {{ status.installed ? (pluginOutdated ? ($t('playnite.upgrade_button') || 'Upgrade Plugin') : ($t('playnite.reinstall_button') || 'Reinstall Plugin')) : ($t('playnite.install_button') || 'Install Plugin') }}
+          </span>
+        </div>
+      </template>
+      <div class="text-sm">
+        {{ $t('playnite.install_requires_restart') || 'This action will restart Playnite to complete plugin (re)installation. Continue?' }}
+      </div>
+      <template #footer>
+        <div class="w-full flex items-center justify-center gap-3">
+          <n-button tertiary @click="showInstallConfirm = false">{{ $t('_common.cancel') }}</n-button>
+          <n-button type="primary" :loading="installing" @click="confirmInstall">{{ $t('_common.continue') || 'Continue' }}</n-button>
+        </div>
+      </template>
+    </n-card>
+  </n-modal>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
-import { NInput, NInputNumber, NSelect, NButton, NAlert, NTag, NTooltip } from 'naive-ui';
+import { computed, onMounted, reactive, ref, onUnmounted } from 'vue';
+import { NInput, NInputNumber, NSelect, NButton, NAlert, NTag, NTooltip, NModal, NCard } from 'naive-ui';
 import { useI18n } from 'vue-i18n';
 import Checkbox from '@/Checkbox.vue';
 import { useConfigStore } from '@/stores/config';
@@ -163,8 +203,20 @@ const { config, metadata } = storeToRefs(store);
 const platform = computed(() => (metadata.value?.platform || config.value?.platform || '').toLowerCase());
 const { t } = useI18n();
 
-const status = reactive<{ installed: boolean; active: boolean; user_session_active: boolean; extensions_dir: string }>({ installed: false, active: false, user_session_active: false, extensions_dir: '' });
+const status = reactive<{
+  installed: boolean;
+  installed_unknown?: boolean;
+  active: boolean;
+  user_session_active: boolean;
+  enabled?: boolean;
+  playnite_running?: boolean;
+  extensions_dir: string;
+  plugin_version?: string;
+  plugin_latest?: string;
+}>({ installed: false, active: false, user_session_active: false, extensions_dir: '' });
 const installing = ref(false);
+const launching = ref(false);
+const showInstallConfirm = ref(false);
 const installOk = ref(false);
 const installErr = ref(false);
 const installErrorMsg = ref('');
@@ -189,8 +241,12 @@ const playniteEnabledProxy = computed<boolean>({
 
 const selectedCategories = computed<string[]>({
   get() {
-    const raw = (config.value?.playnite_sync_categories || '') as string;
-    return raw.split(',').map((s) => s.trim()).filter(Boolean);
+    const raw = String(config.value?.playnite_sync_categories || '');
+    // Support both comma and semicolon separated formats
+    return raw
+      .split(/[;,]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
   },
   set(v: string[]) {
     // Server-side parse_list uses JSON array or comma-separated; use comma-separated
@@ -213,11 +269,18 @@ async function refreshStatus() {
   try {
     const r = await http.get('/api/playnite/status');
     if (r.status === 200 && r.data) {
-      status.installed = !!r.data.installed;
-      status.active = !!r.data.active;
-      // API returns session_required; invert to get user_session_active
-      status.user_session_active = r.data.session_required === undefined ? true : !r.data.session_required;
-      status.extensions_dir = r.data.extensions_dir || '';
+      const d = r.data as any;
+      status.installed = !!d.installed;
+      status.active = !!d.active;
+      // Support both user_session_active (new) and session_required (old) keys
+      status.user_session_active = typeof d.user_session_active === 'boolean'
+        ? !!d.user_session_active
+        : (typeof d.session_required === 'boolean' ? !d.session_required : status.user_session_active);
+      if (typeof d.enabled === 'boolean') status.enabled = !!d.enabled;
+      if (typeof d.playnite_running === 'boolean') status.playnite_running = !!d.playnite_running;
+      status.extensions_dir = d.extensions_dir || '';
+      status.plugin_version = d.plugin_version || d.version || status.plugin_version;
+      status.plugin_latest = d.plugin_latest || d.latest_version || status.plugin_latest;
     }
   } catch (_) {}
 }
@@ -227,13 +290,27 @@ async function loadCategories() {
   if (categoriesLoading.value || categoryOptions.value.length) return;
   categoriesLoading.value = true;
   try {
-    const r = await http.get('/api/playnite/games');
-    const games: any[] = Array.isArray(r.data) ? r.data : [];
+    // Prefer categories endpoint if available
+    try {
+      const rc = await http.get('/api/playnite/categories', { validateStatus: () => true });
+      if (rc.status >= 200 && rc.status < 300 && Array.isArray(rc.data) && rc.data.length) {
+        const cats = (rc.data as any[])
+          .map((c) => String(c))
+          .filter(Boolean)
+          .sort((a, b) => a.localeCompare(b))
+          .map((c) => ({ label: c, value: c }));
+        categoryOptions.value = cats;
+        return;
+      }
+    } catch {}
+    // Fallback: derive from games list
+    const rg = await http.get('/api/playnite/games');
+    const games: any[] = Array.isArray(rg.data) ? rg.data : [];
     const set = new Set<string>();
-    for (const g of games) {
-      for (const c of g?.categories || []) if (c && typeof c === 'string') set.add(c);
-    }
-    categoryOptions.value = Array.from(set).sort((a, b) => a.localeCompare(b)).map((c) => ({ label: c, value: c }));
+    for (const g of games) for (const c of g?.categories || []) if (c && typeof c === 'string') set.add(c);
+    categoryOptions.value = Array.from(set)
+      .sort((a, b) => a.localeCompare(b))
+      .map((c) => ({ label: c, value: c }));
   } catch (_) {}
   categoriesLoading.value = false;
 }
@@ -253,13 +330,19 @@ async function loadGames() {
   gamesLoading.value = false;
 }
 
-async function install() {
+function openInstallConfirm() {
+  showInstallConfirm.value = true;
+}
+
+async function confirmInstall() {
+  installing.value = true;
+  showInstallConfirm.value = false;
   installing.value = true;
   installOk.value = false;
   installErr.value = false;
   installErrorMsg.value = '';
   try {
-    const r = await http.post('/api/playnite/install', {}, { validateStatus: () => true });
+    const r = await http.post('/api/playnite/install', { restart: true }, { validateStatus: () => true });
     let ok = false;
     let body: any = null;
     try { body = r.data; } catch {}
@@ -285,29 +368,89 @@ onMounted(async () => {
   // Preload lists so existing selections display with names immediately
   loadGames();
   loadCategories();
+  // Periodically refresh Playnite status while on Windows
+  if (platform.value === 'windows') {
+    statusTimer.value = window.setInterval(() => {
+      refreshStatus();
+    }, 3000);
+  }
+});
+onUnmounted(() => {
+  if (statusTimer.value) {
+    window.clearInterval(statusTimer.value);
+    statusTimer.value = undefined;
+  }
 });
 
-const statusKind = computed<'active' | 'session' | 'uninstalled'>(() => {
-  if (!status.installed) return 'uninstalled';
+const statusKind = computed<'disabled' | 'active' | 'waiting' | 'session' | 'uninstalled' | 'unknown'>(() => {
+  // Prefer login/session requirement over unknown detection
+  if (status.enabled === false || (config.value?.playnite_enabled as any) === 'disabled') return 'disabled';
   if (!status.user_session_active) return 'session';
-  return 'active';
+  if (!status.extensions_dir) return 'unknown';
+  if (!status.installed) return 'uninstalled';
+  return status.active ? 'active' : 'waiting';
 });
 const statusType = computed<'success' | 'warning' | 'error' | 'default'>(() => {
   switch (statusKind.value) {
+    case 'disabled': return 'default';
     case 'active': return 'success';
+    case 'waiting': return 'warning';
     case 'session': return 'warning';
+    case 'waiting': return 'warning';
+    case 'not_running': return 'error';
     case 'uninstalled': return 'error';
+    case 'unknown': return 'default';
     default: return 'default';
   }
 });
 const statusText = computed<string>(() => {
   switch (statusKind.value) {
-    case 'active': return t('playnite.status_active');
+    case 'disabled': return (t('playnite.status_disabled') as any) || 'Disabled';
+    case 'active': return t('playnite.status_connected');
+    case 'waiting': return t('playnite.status_waiting');
     case 'session': return t('playnite.status_session_required');
     case 'uninstalled': return t('playnite.status_uninstalled');
+    case 'unknown': return (t('playnite.status_unknown') as any) || t('playnite.status_not_running_unknown');
     default: return '';
   }
 });
+
+function cmpSemver(a?: string, b?: string): number {
+  if (!a || !b) return 0;
+  const na = String(a).replace(/^v/i, '').split('.').map((x) => parseInt(x, 10));
+  const nb = String(b).replace(/^v/i, '').split('.').map((x) => parseInt(x, 10));
+  const len = Math.max(na.length, nb.length);
+  for (let i = 0; i < len; i++) {
+    const va = Number.isFinite(na[i]) ? na[i] : 0;
+    const vb = Number.isFinite(nb[i]) ? nb[i] : 0;
+    if (va < vb) return -1;
+    if (va > vb) return 1;
+  }
+  return 0;
+}
+
+const pluginOutdated = computed(() => {
+  if (!status.installed) return false;
+  if (!status.plugin_version || !status.plugin_latest) return false;
+  return cmpSemver(status.plugin_version, status.plugin_latest) < 0;
+});
+
+const canLaunch = computed(() => {
+  return !!(status.extensions_dir && status.installed && !status.active && status.user_session_active);
+});
+
+const statusTimer = ref<number | undefined>();
+
+async function launchPlaynite() {
+  if (platform.value !== 'windows' || !canLaunch.value) return;
+  launching.value = true;
+  try {
+    await http.post('/api/playnite/launch', {}, { validateStatus: () => true });
+    // Give Playnite a moment to start, then refresh status
+    window.setTimeout(() => refreshStatus(), 1000);
+  } catch (_) {}
+  launching.value = false;
+}
 </script>
 
 <style scoped>

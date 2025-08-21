@@ -7,7 +7,8 @@ import { NSelect, NInput, NInputNumber } from 'naive-ui';
 const store = useConfigStore();
 const defaultMoonlightPort = 47989;
 const config = store.config;
-const effectivePort = computed(() => +config.value?.port ?? defaultMoonlightPort);
+// Ensure a valid numeric base port even if server returns string/undefined
+const effectivePort = computed(() => Number(config.value?.port ?? defaultMoonlightPort));
 
 const addressFamilyOptions = [
   { label: 'IPv4', value: 'ipv4' },
@@ -19,14 +20,14 @@ const originUiOptions = [
   { label: 'WAN', value: 'wan' },
 ];
 const encryptionModeOptionsLan = [
-  { label: '_common.disabled_def', value: '0' },
-  { label: 'config.lan_encryption_mode_1', value: '1' },
-  { label: 'config.lan_encryption_mode_2', value: '2' },
+  { label: '_common.disabled_def', value: 0 },
+  { label: 'config.lan_encryption_mode_1', value: 1 },
+  { label: 'config.lan_encryption_mode_2', value: 2 },
 ];
 const encryptionModeOptionsWan = [
-  { label: '_common.disabled', value: '0' },
-  { label: 'config.wan_encryption_mode_1', value: '1' },
-  { label: 'config.wan_encryption_mode_2', value: '2' },
+  { label: '_common.disabled', value: 0 },
+  { label: 'config.wan_encryption_mode_1', value: 1 },
+  { label: 'config.wan_encryption_mode_2', value: 2 },
 ];
 </script>
 
@@ -42,6 +43,7 @@ const encryptionModeOptionsWan = [
         id="address_family"
         v-model:value="config.address_family"
         :options="addressFamilyOptions.map(o => ({ label: $t('config.address_family_' + o.value), value: o.value }))"
+        :data-search-options="addressFamilyOptions.map(o => `${$t('config.address_family_' + o.value)}::${o.value}`).join('|')"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.address_family_desc') }}
@@ -146,6 +148,7 @@ const encryptionModeOptionsWan = [
         id="origin_web_ui_allowed"
         v-model:value="config.origin_web_ui_allowed"
         :options="originUiOptions.map(o => ({ label: $t('config.origin_web_ui_allowed_' + o.value), value: o.value }))"
+        :data-search-options="originUiOptions.map(o => `${$t('config.origin_web_ui_allowed_' + o.value)}::${o.value}`).join('|')"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.origin_web_ui_allowed_desc') }}
@@ -175,6 +178,7 @@ const encryptionModeOptionsWan = [
         id="lan_encryption_mode"
         v-model:value="config.lan_encryption_mode"
         :options="encryptionModeOptionsLan.map(o => ({ label: $t(o.label), value: o.value }))"
+        :data-search-options="encryptionModeOptionsLan.map(o => `${$t(o.label)}::${o.value}`).join('|')"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.lan_encryption_mode_desc') }}
@@ -190,6 +194,7 @@ const encryptionModeOptionsWan = [
         id="wan_encryption_mode"
         v-model:value="config.wan_encryption_mode"
         :options="encryptionModeOptionsWan.map(o => ({ label: $t(o.label), value: o.value }))"
+        :data-search-options="encryptionModeOptionsWan.map(o => `${$t(o.label)}::${o.value}`).join('|')"
       />
       <p class="text-[11px] opacity-60 mt-1">
         {{ $t('config.wan_encryption_mode_desc') }}

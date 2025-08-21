@@ -38,11 +38,7 @@
 #include "httpcommon.h"
 #include "platform/common.h"
 #ifdef _WIN32
-#include "src/platform/windows/playnite_integration.h"
 #include "src/platform/windows/image_convert.h"
-#include "src/platform/windows/ipc/misc_utils.h"
-#include "config_playnite.h"
-#include <ShlObj.h>
 #endif
 #include "logging.h"
 #include "network.h"
@@ -118,6 +114,24 @@ namespace confighttp {
   using args_t = SimpleWeb::CaseInsensitiveMultimap;
   using resp_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response>;
   using req_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request>;
+
+#ifdef _WIN32
+  // Forward declarations for Playnite handlers implemented in confighttp_playnite.cpp
+  void getPlayniteStatus(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                         std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  void installPlaynite(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                       std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  void getPlayniteGames(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                        std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  void getPlayniteCategories(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                             std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  void postPlayniteForceSync(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                             std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  void postPlayniteLaunch(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                         std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  // Helper to keep confighttp.cpp free of Playnite details
+  void enhance_app_with_playnite_cover(nlohmann::json &input_tree);
+#endif
 
   enum class op_e {
     ADD,  ///< Add client
@@ -802,17 +816,9 @@ namespace confighttp {
         input_tree.erase("detached");
       }
 
-      // If image-path omitted but we have a Playnite id, try to resolve and set cover immediately (Windows)
+      // If image-path omitted but we have a Playnite id, let Playnite helper resolve a cover (Windows)
 #ifdef _WIN32
-      try {
-        if ((!input_tree.contains("image-path") || (input_tree["image-path"].is_string() && input_tree["image-path"].get<std::string>().empty())) &&
-            input_tree.contains("playnite-id") && input_tree["playnite-id"].is_string()) {
-          std::string cover;
-          if (platf::playnite::get_cover_png_for_playnite_game(input_tree["playnite-id"].get<std::string>(), cover)) {
-            input_tree["image-path"] = cover;
-          }
-        }
-      } catch (...) {}
+      enhance_app_with_playnite_cover(input_tree);
 #endif
 
       auto &apps_node = file_tree["apps"];
@@ -1200,6 +1206,108 @@ namespace confighttp {
     }
   }
 
+  /**
+   * @brief Partial update of configuration (PATCH /api/config).
+   * Merges provided JSON object into the existing key=value style config file.
+   * Removes keys when value is null or an empty string. Detects whether a
+   * restart is required and attempts to apply immediately when safe.
+   */
+  void patchConfig(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      nlohmann::json output_tree;
+      nlohmann::json patch_tree = nlohmann::json::parse(ss);
+      if (!patch_tree.is_object()) {
+        bad_request(response, request, "PATCH body must be a JSON object");
+        return;
+      }
+
+      // Load existing config into a map
+      std::unordered_map<std::string, std::string> current = config::parse_config(
+        file_handler::read_file(config::sunshine.config_file.c_str())
+      );
+
+      // Track which keys are being modified to detect restart requirements
+      std::set<std::string> changed_keys;
+
+      for (auto it = patch_tree.begin(); it != patch_tree.end(); ++it) {
+        const std::string key = it.key();
+        const nlohmann::json &val = it.value();
+        changed_keys.insert(key);
+
+        // Remove key when explicitly null or empty string
+        if (val.is_null() || (val.is_string() && val.get<std::string>().empty())) {
+          auto curIt = current.find(key);
+          if (curIt != current.end()) current.erase(curIt);
+          continue;
+        }
+
+        // Persist value: strings are raw, non-strings are dumped as JSON
+        if (val.is_string()) {
+          current[key] = val.get<std::string>();
+        } else {
+          current[key] = val.dump();
+        }
+      }
+
+      // Write back full merged config file
+      std::stringstream config_stream;
+      for (const auto &kv : current) {
+        config_stream << kv.first << " = " << kv.second << std::endl;
+      }
+      file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
+
+      // Detect restart-required keys
+      static const std::set<std::string> restart_required_keys = {
+        "port",
+        "address_family",
+        "upnp",
+        "pkey",
+        "cert"
+      };
+      bool restart_required = false;
+      for (const auto &k : changed_keys) {
+        if (restart_required_keys.count(k)) {
+          restart_required = true;
+          break;
+        }
+      }
+
+      bool applied_now = false;
+      bool deferred = false;
+      if (!restart_required) {
+        if (rtsp_stream::session_count() == 0) {
+          // Apply immediately
+          config::apply_config_now();
+          applied_now = true;
+        } else {
+          config::mark_deferred_reload();
+          deferred = true;
+        }
+      }
+
+      output_tree["status"] = true;
+      output_tree["appliedNow"] = applied_now;
+      output_tree["deferred"] = deferred;
+      output_tree["restartRequired"] = restart_required;
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "PatchConfig: "sv << e.what();
+      bad_request(response, request, e.what());
+      return;
+    }
+  }
+
   // Lightweight session status for UI messaging
   void getSessionStatus(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
@@ -1423,106 +1531,6 @@ namespace confighttp {
   }
 
 #ifdef _WIN32
-  static std::filesystem::path conf_get_default_playnite_ext_dir() {
-    wchar_t appdataPath[MAX_PATH] = {};
-    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, appdataPath))) {
-      return {};
-    }
-    return std::filesystem::path(appdataPath) / L"Playnite" / L"Extensions" / L"SunshinePlaynite";
-  }
-
-  void getPlayniteStatus(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
-    print_req(request);
-    nlohmann::json out;
-    out["enabled"] = config::playnite.enabled;
-    out["active"] = platf::playnite::is_active();
-    bool session_required = false;
-    bool playnite_running = false;
-    std::string destPath;
-    std::filesystem::path dest;
-    if (platf::playnite::get_extension_target_dir(destPath)) {
-      dest = destPath;
-    } else {
-      // Could not resolve the user's Playnite extensions directory, likely due to no active desktop session
-      session_required = true;
-      dest = conf_get_default_playnite_ext_dir();
-    }
-    bool installed = std::filesystem::exists(dest / "extension.yaml") && std::filesystem::exists(dest / "SunshinePlaynite.psm1");
-    out["installed"] = installed;
-    out["extensions_dir"] = dest.string();
-    // Determine if Playnite is currently running (Desktop or Fullscreen app)
-#ifdef _WIN32
-    try {
-      auto d = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
-      auto f = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
-      playnite_running = !d.empty() || !f.empty();
-    } catch (...) {
-      playnite_running = false;
-    }
-#endif
-    out["session_required"] = session_required;
-    out["playnite_running"] = playnite_running;
-    BOOST_LOG(info) << "Playnite status: enabled=" << out["enabled"] << ", active=" << out["active"]
-                    << ", installed=" << installed << ", running=" << (playnite_running ? "true" : "false")
-                    << ", session_required=" << (session_required ? "true" : "false")
-                    << ", dir=" << dest.string();
-    send_response(response, out);
-  }
-
-  void getPlayniteGames(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
-    print_req(request);
-#ifndef _WIN32
-    bad_request(response, request, "Playnite integration is only available on Windows");
-    return;
-#else
-    try {
-      std::string json;
-      if (!platf::playnite::get_games_list_json(json)) {
-        // return empty array if not available
-        json = "[]";
-      }
-      BOOST_LOG(info) << "Playnite games: json length=" << json.size();
-      SimpleWeb::CaseInsensitiveMultimap headers;
-      headers.emplace("Content-Type", "application/json");
-      headers.emplace("X-Frame-Options", "DENY");
-      headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-      response->write(SimpleWeb::StatusCode::success_ok, json, headers);
-    } catch (std::exception &e) {
-      bad_request(response, request, e.what());
-    }
-#endif
-  }
-
-  void installPlaynite(resp_https_t response, req_https_t request) {
-    if (!check_content_type(response, request, "application/json")) {
-      return;
-    }
-    if (!authenticate(response, request)) {
-      return;
-    }
-    print_req(request);
-    std::string err;
-    nlohmann::json out;
-    // Prefer same resolved dir as status
-    std::string target;
-    bool have_target = platf::playnite::get_extension_target_dir(target);
-    bool ok = false;
-    if (have_target) {
-      ok = platf::playnite::install_plugin_to(target, err);
-    } else {
-      ok = platf::playnite::install_plugin(err);
-    }
-    BOOST_LOG(info) << "Playnite install: status=" << (ok ? "true" : "false") << (ok ? "" : std::string(", error=") + err);
-    out["status"] = ok;
-    if (!ok) out["error"] = err;
-    send_response(response, out);
-  }
 #endif
 
   /**
@@ -1820,6 +1828,9 @@ namespace confighttp {
     server.resource["^/api/apps$"]["POST"] = saveApp;
     server.resource["^/api/config$"]["GET"] = getConfig;
     server.resource["^/api/config$"]["POST"] = saveConfig;
+  // Partial updates for config settings; merges with existing file and
+  // removes keys when value is null or empty string.
+  server.resource["^/api/config$"]["PATCH"] = patchConfig;
     server.resource["^/api/metadata$"]["GET"] = getMetadata;
     server.resource["^/api/configLocale$"]["GET"] = getLocale;
     server.resource["^/api/restart$"]["POST"] = restart;
@@ -1838,14 +1849,9 @@ namespace confighttp {
     server.resource["^/api/playnite/status$"]["GET"] = getPlayniteStatus;
     server.resource["^/api/playnite/install$"]["POST"] = installPlaynite;
     server.resource["^/api/playnite/games$"]["GET"] = getPlayniteGames;
-    server.resource["^/api/playnite/force_sync$"]["POST"] = [](resp_https_t resp, req_https_t req) {
-      if (!authenticate(resp, req)) return;
-      print_req(req);
-      nlohmann::json out;
-      bool ok = platf::playnite::force_sync();
-      out["status"] = ok;
-      send_response(resp, out);
-    };
+    server.resource["^/api/playnite/categories$"]["GET"] = getPlayniteCategories;
+    server.resource["^/api/playnite/force_sync$"]["POST"] = postPlayniteForceSync;
+    server.resource["^/api/playnite/launch$"]["POST"] = postPlayniteLaunch;
 #endif
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;

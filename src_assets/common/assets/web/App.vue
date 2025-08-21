@@ -18,16 +18,16 @@
                 </div>
                 <nav class="hidden md:flex items-center gap-1 text-sm font-medium ml-2">
                   <RouterLink to="/" :class="linkClass('/')">
-                    <i class="fas fa-gauge" /><span>Dashboard</span>
+                    <i class="fas fa-gauge" /><span>{{ $t('navbar.home') }}</span>
                   </RouterLink>
                   <RouterLink to="/applications" :class="linkClass('/applications')">
-                    <i class="fas fa-grid-2" /><span>Applications</span>
+                    <i class="fas fa-grid-2" /><span>{{ $t('navbar.applications') }}</span>
                   </RouterLink>
                   <RouterLink to="/clients" :class="linkClass('/clients')">
                     <i class="fas fa-users-cog" /><span>{{ $t('clients.nav') }}</span>
                   </RouterLink>
                   <RouterLink to="/settings" :class="linkClass('/settings')">
-                    <i class="fas fa-sliders" /><span>Settings</span>
+                    <i class="fas fa-sliders" /><span>{{ $t('navbar.configuration') }}</span>
                   </RouterLink>
                   <RouterLink to="/troubleshooting" :class="linkClass('/troubleshooting')">
                     <i class="fas fa-bug" /><span>{{ $t('navbar.troubleshoot') }}</span>
@@ -36,7 +36,22 @@
                     <i class="fas fa-sign-out-alt" /><span>{{ $t('navbar.logout') }}</span>
                   </a>
                 </nav>
-                <div class="ml-auto flex items-center gap-3 text-xs">
+                <!-- Mobile menu button (md:hidden) -->
+                <div class="md:hidden ml-auto flex items-center gap-2">
+                  <n-dropdown
+                    trigger="click"
+                    :show-arrow="true"
+                    :options="mobileMenuOptions"
+                    @select="onMobileSelect"
+                  >
+                    <n-button quaternary circle size="small" aria-label="Menu">
+                      <i class="fas fa-bars" />
+                    </n-button>
+                  </n-dropdown>
+                  <ThemeToggle />
+                </div>
+                <!-- Desktop actions -->
+                <div class="hidden md:flex ml-auto items-center gap-3 text-xs">
                   <SavingStatus />
                   <ThemeToggle />
                 </div>
@@ -46,7 +61,14 @@
               <main class="flex-1 overflow-auto p-4 md:p-6 space-y-6">
                 <router-view />
               </main>
+              <!-- Immediate background for login modal (no transition delay) -->
+              <div v-if="loginOverlay" class="fixed inset-0 z-[110]">
+                <div
+                  class="absolute inset-0 bg-gradient-to-br from-white/70 via-white/60 to-white/70 dark:from-black/70 dark:via-black/60 dark:to-black/70 backdrop-blur-md"
+                ></div>
+              </div>
               <LoginModal />
+              <OfflineOverlay />
               <transition name="fade-fast">
                 <div v-if="loggedOut" class="fixed inset-0 z-[120] flex flex-col">
                   <div
@@ -90,7 +112,7 @@
   </n-config-provider>
 </template>
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue';
+import { ref, watch, computed, h } from 'vue';
 import {
   NConfigProvider,
   NDialogProvider,
@@ -98,23 +120,26 @@ import {
   NNotificationProvider,
   NLoadingBarProvider,
   NButton,
+  NDropdown,
   darkTheme,
 } from 'naive-ui';
 import { useNaiveThemeOverrides, useDarkModeClassRef } from '@/naive-theme';
-// `useI18n` may be available at runtime in some setups; declare it for TS to avoid errors
-declare const useI18n: any;
-import { useRoute } from 'vue-router';
+import { useI18n } from 'vue-i18n';
+import { useRoute, useRouter } from 'vue-router';
 import ThemeToggle from '@/ThemeToggle.vue';
 import SavingStatus from '@/components/SavingStatus.vue';
 import LoginModal from '@/components/LoginModal.vue';
+import OfflineOverlay from '@/components/OfflineOverlay.vue';
 import { http } from '@/http';
 import { useAuthStore } from './stores/auth';
+import { useConnectivityStore } from '@/stores/connectivity';
 
 // Sync Naive theme to existing dark mode class and pick colors from CSS vars
 const isDark = useDarkModeClassRef();
 const naiveOverrides = useNaiveThemeOverrides();
 
 const route = useRoute();
+const router = useRouter();
 
 const linkClass = (path: string) => {
   const base = 'inline-flex items-center gap-2 px-3 py-1 rounded-md text-brand';
@@ -134,44 +159,68 @@ watch(
   () => route.path,
   (p) => {
     const map: Record<string, string> = {
-      '/': 'Dashboard',
-      '/applications': 'Applications',
-      '/settings': 'Settings',
+      '/': 'navbar.home',
+      '/applications': 'navbar.applications',
+      '/settings': 'navbar.configuration',
       '/logs': 'navbar.troubleshoot',
       '/troubleshooting': 'navbar.troubleshoot',
       '/clients': 'clients.nav',
     };
     const v = map[p] || 'Sunshine';
-    // If the map value is an i18n key (contains a dot), try to translate it
-    if (typeof v === 'string' && v.indexOf('.') !== -1 && typeof useI18n !== 'undefined') {
-      // useI18n is not available in this scope, so rely on $t in template — store the key
-      pageTitle.value = v;
-    } else {
-      pageTitle.value = v;
-    }
+    pageTitle.value = v;
   },
   { immediate: true },
 );
 
 const loggedOut = ref(false);
 
+// Mirror LoginModal visibility for instant background application
+const authForOverlay = useAuthStore();
+const loginOverlay = computed(
+  () =>
+    authForOverlay.ready &&
+    authForOverlay.showLoginModal &&
+    !authForOverlay.isAuthenticated &&
+    !authForOverlay.logoutInitiated,
+);
+
 async function logout() {
   const authStore = useAuthStore();
+  const connectivity = useConnectivityStore();
   try {
     await http.post('/api/auth/logout', {}, { validateStatus: () => true });
   } catch (e) {
     console.error('Logout failed:', e);
   }
-  // Ensure login modal cannot appear while logout overlay is visible
-  authStore.hideLogin();
-  authStore.isAuthenticated = false;
-  authStore.logoutOverlay = true;
+  try { (authStore as any).logoutInitiated = true; } catch {}
+  try { authStore.setAuthenticated(false); } catch {}
+  // Stop background connectivity checks and any other background polling
+  try { connectivity.stop(); } catch {}
   loggedOut.value = true;
 }
 
 function refreshPage() {
-  const authStore = useAuthStore();
-  authStore.logoutOverlay = false;
-  window.location.reload();
+  try {
+    window.location.reload();
+  } catch {}
+}
+
+const { t } = useI18n();
+const mobileMenuOptions = computed(() => {
+  const icon = (cls: string) => () => h('i', { class: cls });
+  return [
+    { label: t('navbar.home'), key: '/', icon: icon('fas fa-gauge') },
+    { label: t('navbar.applications'), key: '/applications', icon: icon('fas fa-grid-2') },
+    { label: t('clients.nav'), key: '/clients', icon: icon('fas fa-users-cog') },
+    { label: t('navbar.configuration'), key: '/settings', icon: icon('fas fa-sliders') },
+    { label: t('navbar.troubleshoot'), key: '/troubleshooting', icon: icon('fas fa-bug') },
+    { type: 'divider' as const },
+    { label: t('navbar.logout'), key: '__logout', icon: icon('fas fa-sign-out-alt') },
+  ];
+});
+
+function onMobileSelect(key: string | number) {
+  if (key === '__logout') return logout();
+  if (typeof key === 'string') router.push(key);
 }
 </script>

@@ -21,6 +21,7 @@ export const useAuthStore = defineStore('auth', () => {
   const logoutOverlay: Ref<boolean> = ref(false);
   const credentialsConfigured: Ref<boolean> = ref(true);
   const loggingIn: Ref<boolean> = ref(false);
+  const logoutInitiated: Ref<boolean> = ref(false);
 
   function setAuthenticated(v: boolean): void {
     if (v === isAuthenticated.value) return;
@@ -35,6 +36,14 @@ export const useAuthStore = defineStore('auth', () => {
         }
       }
     }
+  }
+
+  function initiateLogout(): void {
+    // Mark that this logout was user-initiated so we suppress login prompts
+    logoutInitiated.value = true;
+    // Immediately reflect unauthenticated state and hide login modal
+    setAuthenticated(false);
+    showLoginModal.value = false;
   }
 
   // Single init call invoked during app bootstrap after http layer validation.
@@ -79,6 +88,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function requireLogin(redirectPath?: string): void {
+    // If user intentionally logged out, do not show the login modal
+    if (logoutInitiated.value) return;
     if (redirectPath && typeof redirectPath === 'string') {
       pendingRedirect.value = redirectPath;
     }
@@ -106,6 +117,7 @@ export const useAuthStore = defineStore('auth', () => {
     ready,
     init,
     setAuthenticated,
+    initiateLogout,
     onLogin,
     pendingRedirect,
     showLoginModal,
@@ -115,6 +127,6 @@ export const useAuthStore = defineStore('auth', () => {
     setCredentialsConfigured,
     waitForAuthentication,
     loggingIn,
-    logoutOverlay,
+    logoutInitiated,
   };
 });

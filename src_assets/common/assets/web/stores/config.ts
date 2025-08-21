@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref } from 'vue';
 import { http } from '@/http';
 
 // Metadata describing build/runtime info returned by /api/meta
@@ -217,6 +217,17 @@ export const useConfigStore = defineStore('config', () => {
   // Single meta object kept completely separate from user config
   const metadata = ref<MetaInfo>({});
 
+  // --- Autosave (PATCH) queue ------------------------------------------------
+  // Holds only non-manual changes since last flush. Keys are replaced with
+  // the most recent value. Values equal to defaults are converted to null
+  // so the server removes them to fall back to default behavior.
+  const patchQueue = ref<Record<string, any>>({});
+  let flushTimer: any = null; // one-shot timer
+  let flushInFlight = false;
+  const autosaveIntervalMs = 3000;
+  const nextFlushAt = ref<number | null>(null); // when the current timer will fire
+  const lastSaveResult = ref<{ appliedNow?: boolean; deferred?: boolean; restartRequired?: boolean } | null>(null);
+
   function buildWrapper() {
     const target: any = {};
     // union of keys (defaults + current data)
@@ -261,9 +272,26 @@ export const useConfigStore = defineStore('config', () => {
           } else {
             version.value++;
             savingState.value = 'dirty';
+            // queue for patch: send null when value matches default
+            const dv = (defaultMap as any)[k];
+            const toSend = deepEqual(v, dv) ? null : v;
+            patchQueue.value = { ...patchQueue.value, [k]: toSend };
+            // reset autosave timer to full interval on any pending change
+            scheduleAutosave();
           }
         },
       });
+    });
+    // Virtual, read-only platform property sourced from metadata
+    Object.defineProperty(target, 'platform', {
+      enumerable: true,
+      configurable: true,
+      get() {
+        return metadata.value?.platform || '';
+      },
+      set(_v) {
+        // ignore writes; platform is server-provided only
+      },
     });
     return target;
   }
@@ -288,16 +316,21 @@ export const useConfigStore = defineStore('config', () => {
       }
     }
 
-    // Coerce numeric-like strings to numbers using defaults as type hints
-    try {
-      for (const [k, dv] of Object.entries(defaultMap)) {
-        if (typeof dv === 'number' && _data.value && typeof _data.value[k] === 'string') {
-          const n = Number(_data.value[k]);
-          if (!Number.isNaN(n)) _data.value[k] = n;
+    // Coerce primitive types based on defaults so UI widgets match options.
+    // This fixes cases where server returns numeric fields as strings, causing
+    // selects to show raw values instead of their friendly labels.
+    if (_data.value) {
+      for (const key of Object.keys(_data.value)) {
+        const dv = (defaultMap as any)[key];
+        const cur = (_data.value as any)[key];
+        // If default is a number, coerce string numerics to numbers
+        if (typeof dv === 'number' && typeof cur === 'string') {
+          const n = Number(cur);
+          if (Number.isFinite(n)) {
+            (_data.value as any)[key] = n;
+          }
         }
       }
-    } catch (_) {
-      /* ignore */
     }
 
     config.value = buildWrapper();
@@ -318,15 +351,43 @@ export const useConfigStore = defineStore('config', () => {
     manualDirty.value = false;
   }
 
+  function serializeFull(): Record<string, any> | null {
+    if (!config.value) return null;
+    const out: Record<string, any> = {};
+    const keys = new Set<string>([...Object.keys(defaultMap), ...Object.keys(_data.value || {})]);
+    keys.forEach((k) => {
+      try {
+        (out as any)[k] = (config.value as any)[k];
+      } catch {
+        /* ignore */
+      }
+    });
+    delete (out as any).platform;
+    return out;
+  }
+
   async function save(): Promise<boolean> {
     try {
+      // First flush any pending PATCH changes for auto-saved keys
+      if (Object.keys(patchQueue.value).length) {
+        const ok = await flushPatchQueue();
+        if (!ok) return false;
+      }
       savingState.value = 'saving';
-      const body = serialize();
+      // Post the full effective config so server-side non-merge save doesn't drop keys
+      const body = serializeFull();
       const res = await http.post('/api/config', body || {}, {
         headers: { 'Content-Type': 'application/json' },
         validateStatus: () => true,
       });
       if (res.status === 200) {
+        try {
+          lastSaveResult.value = {
+            appliedNow: !!(res as any)?.data?.appliedNow,
+            deferred: !!(res as any)?.data?.deferred,
+            restartRequired: !!(res as any)?.data?.restartRequired,
+          };
+        } catch {}
         savingState.value = 'saved';
         manualDirty.value = false;
         // Reset to idle after a short delay if no new changes
@@ -352,6 +413,8 @@ export const useConfigStore = defineStore('config', () => {
     for (const k of Object.keys(out)) {
       if (k in defaultMap && deepEqual(out[k], defaultMap[k])) delete out[k];
     }
+    // never persist virtual keys
+    delete (out as any).platform;
     return out;
   }
 
@@ -366,7 +429,15 @@ export const useConfigStore = defineStore('config', () => {
       try {
         const mr = await http.get('/api/metadata');
         if (mr.status === 200 && mr.data) {
-          metadata.value = mr.data;
+          const m = { ...(mr.data as any) } as MetaInfo;
+          // Normalize platform identifiers across build/runtime variations
+          const raw = String((m as any).platform || '').toLowerCase();
+          let norm = raw;
+          if (raw.startsWith('win')) norm = 'windows';
+          else if (raw === 'darwin' || raw.startsWith('mac')) norm = 'macos';
+          else if (raw.startsWith('lin')) norm = 'linux';
+          (m as any).platform = norm;
+          metadata.value = m;
         }
       } catch (_) {
         /* ignore */
@@ -383,6 +454,84 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  async function flushPatchQueue(): Promise<boolean> {
+    if (flushInFlight) return true;
+    const payload = patchQueue.value;
+    if (!payload || Object.keys(payload).length === 0) return true;
+    // Clear queue immediately (we'll merge any new changes on top if request fails)
+    patchQueue.value = {};
+    flushInFlight = true;
+    // Clear any scheduled timer since we're flushing now
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = null;
+    nextFlushAt.value = null;
+    try {
+      savingState.value = 'saving';
+      const res = await http.patch('/api/config', payload, {
+        headers: { 'Content-Type': 'application/json' },
+        validateStatus: () => true,
+      });
+      if (res.status === 200) {
+        try {
+          lastSaveResult.value = {
+            appliedNow: !!(res as any)?.data?.appliedNow,
+            deferred: !!(res as any)?.data?.deferred,
+            restartRequired: !!(res as any)?.data?.restartRequired,
+          };
+        } catch {}
+        savingState.value = 'saved';
+        setTimeout(() => {
+          if (savingState.value === 'saved' && !manualDirty.value && Object.keys(patchQueue.value).length === 0) {
+            savingState.value = 'idle';
+          }
+        }, 3000);
+        return true;
+      }
+      savingState.value = 'error';
+      return false;
+    } catch (e) {
+      savingState.value = 'error';
+      return false;
+    } finally {
+      flushInFlight = false;
+    }
+  }
+
+  function startAutosave() {
+    // no-op; autosave uses a debounced one-shot timer via scheduleAutosave()
+  }
+
+  function stopAutosave() {
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = null;
+    nextFlushAt.value = null;
+  }
+
+  async function reloadConfig() {
+    _data.value = null;
+    return await fetchConfig(true);
+  }
+
+  // Start autosave queue watcher by default
+  startAutosave();
+
+  function hasPendingPatch() {
+    return Object.keys(patchQueue.value).length > 0;
+  }
+  function nextAutosaveAt(): number {
+    return nextFlushAt.value || 0;
+  }
+
+  function scheduleAutosave() {
+    if (flushTimer) clearTimeout(flushTimer);
+    nextFlushAt.value = Date.now() + autosaveIntervalMs;
+    flushTimer = setTimeout(() => {
+      nextFlushAt.value = null;
+      if (Object.keys(patchQueue.value).length === 0) return;
+      void flushPatchQueue();
+    }, autosaveIntervalMs);
+  }
+
   return {
     // state
     tabs,
@@ -396,10 +545,20 @@ export const useConfigStore = defineStore('config', () => {
     error,
     fetchConfig,
     setConfig,
+    serializeFull,
     updateOption,
     markManualDirty,
     resetManualDirty,
     save,
     serialize,
+    // queue/autosave utils
+    flushPatchQueue,
+    startAutosave,
+    stopAutosave,
+    reloadConfig,
+    hasPendingPatch,
+    autosaveIntervalMs,
+    nextAutosaveAt,
+    lastSaveResult,
   };
 });

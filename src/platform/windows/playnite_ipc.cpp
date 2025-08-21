@@ -66,6 +66,19 @@ namespace platf::playnite {
         BOOST_LOG(info) << "Playnite IPC: interactive user session detected; starting pipe server";
         no_session_logged_ = false;
       }
+
+      // Reduce log spam by only attempting to create/listen when Playnite is actually running
+      if (!is_playnite_running()) {
+        if (!no_playnite_logged_) {
+          BOOST_LOG(info) << "Playnite IPC: Playnite not running; deferring pipe startup";
+          no_playnite_logged_ = true;
+        }
+        std::this_thread::sleep_for(2s);
+        continue;
+      } else if (no_playnite_logged_) {
+        BOOST_LOG(info) << "Playnite IPC: Playnite detected; enabling pipe handshake";
+        no_playnite_logged_ = false;
+      }
       auto data_pipe = wait_for_handshake_and_get_data_pipe();
       if (!data_pipe) { std::this_thread::sleep_for(500ms); continue; }
       auto on_msg = [this](std::span<const uint8_t> b){ accumulate_and_dispatch_lines(b); };
@@ -121,6 +134,15 @@ namespace platf::playnite {
     return std::find(v1.begin(), v1.end(), pid) != v1.end() || std::find(v2.begin(), v2.end(), pid) != v2.end();
   }
 
+  bool IpcServer::is_playnite_running() {
+    try {
+      auto v1 = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
+      if (!v1.empty()) return true;
+      auto v2 = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
+      return !v2.empty();
+    } catch (...) { return false; }
+  }
+
   bool IpcServer::get_client_sid(platf::dxgi::WinPipe *wp, std::wstring &sid) {
     return wp->get_client_user_sid_string(sid);
   }
@@ -163,7 +185,6 @@ namespace platf::playnite {
   }
 
   bool IpcServer::is_user_session_available() {
-#ifdef _WIN32
     // If not running as SYSTEM, we're already in a user session.
     if (!platf::dxgi::is_running_as_system()) {
       return true;
@@ -173,9 +194,6 @@ namespace platf::playnite {
     if (!tok) return false;
     CloseHandle(tok);
     return true;
-#else
-    return true; // Non-Windows builds treat as always available.
-#endif
   }
 
   bool IpcServer::send_json_line(const std::string &json) {

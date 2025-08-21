@@ -1,6 +1,11 @@
 <template>
   <n-modal :show="open" :mask-closable="true" @update:show="(v) => emit('update:modelValue', v)">
-    <n-card :bordered="false" style="max-width: 56rem; width: 100%">
+    <n-card
+      :bordered="false"
+      :content-style="{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }"
+      class="overflow-hidden"
+      style="max-width: 56rem; width: 100%; height: min(85dvh, calc(100dvh - 2rem)); max-height: calc(100dvh - 2rem)"
+    >
       <template #header>
         <div class="flex items-center gap-3">
           <div
@@ -12,16 +17,26 @@
             <span class="text-xl font-semibold">{{
               form.index === -1 ? 'Add Application' : 'Edit Application'
             }}</span>
-            <span v-if="form.name" class="text-xs opacity-60">{{ form.name }}</span>
           </div>
         </div>
       </template>
 
-      <form
-        class="space-y-6 text-sm"
-        @submit.prevent="save"
-        @keydown.ctrl.enter.stop.prevent="save"
+      <div
+        ref="bodyRef"
+        class="relative flex-1 min-h-0 overflow-auto pr-1"
+        style="padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem)"
       >
+        <!-- Scroll affordance shadows: appear when more content is available -->
+        <div v-if="showTopShadow" class="scroll-shadow-top" aria-hidden="true"></div>
+        <div v-if="showBottomShadow" class="scroll-shadow-bottom" aria-hidden="true"></div>
+        <div v-if="showBottomShadow" class="scroll-hint-below" aria-hidden="true">
+          <i class="fas fa-arrow-down mr-1" /> {{ $t('apps.more_fields_below') }}
+        </div>
+        <form
+          class="space-y-6 text-sm"
+          @submit.prevent="save"
+          @keydown.ctrl.enter.stop.prevent="save"
+        >
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="space-y-1 md:col-span-2">
             <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Name</label>
@@ -127,7 +142,7 @@
             <h3 class="text-xs font-semibold uppercase tracking-wider opacity-70">
               Detached Commands
             </h3>
-            <n-button size="small" type="primary" @click="form.detached.push('')">
+            <n-button size="small" type="primary" @click="addDetached">
               <i class="fas fa-plus" /> Add
             </n-button>
           </div>
@@ -145,21 +160,22 @@
           <!-- hidden submit to allow Enter to save within fields -->
           <button type="submit" tabindex="-1" aria-hidden="true"></button>
         </section>
-      </form>
+        </form>
+      </div>
 
       <template #footer>
-        <div class="flex items-center justify-end w-full gap-2">
-          <n-button tertiary @click="close">Cancel</n-button>
+        <div class="flex items-center justify-end w-full gap-2 border-t border-dark/10 dark:border-light/10 bg-light/80 dark:bg-surface/80 backdrop-blur px-2 py-2">
+          <n-button tertiary @click="close">{{ $t('_common.cancel') }}</n-button>
           <n-button
             v-if="form.index !== -1"
             type="error"
             :disabled="saving.v"
             @click="showDeleteConfirm = true"
           >
-            <i class="fas fa-trash" /> Delete
+            <i class="fas fa-trash" /> {{ $t('apps.delete') }}
           </n-button>
           <n-button type="primary" :loading="saving.v" :disabled="saving.v" @click="save">
-            <i class="fas fa-save" /> Save
+            <i class="fas fa-save" /> {{ $t('_common.save') }}
           </n-button>
         </div>
       </template>
@@ -191,7 +207,7 @@
           </div>
           <template #footer>
             <div class="w-full flex items-center justify-center gap-3">
-              <n-button tertiary @click="showDeleteConfirm = false">{{ $t('cancel') }}</n-button>
+              <n-button tertiary @click="showDeleteConfirm = false">{{ $t('_common.cancel') }}</n-button>
               <n-button type="error" @click="del">{{ $t('apps.delete') }}</n-button>
             </div>
           </template>
@@ -265,6 +281,8 @@ watch(open, (o) => {
     selectedPlayniteId.value = '';
     lockPlaynite.value = false;
     // if editing an existing Playnite-managed app, keep name field simple
+    // Update scroll shadows after content paints
+    requestAnimationFrame(() => updateShadows());
   }
 });
 function close() {
@@ -276,6 +294,7 @@ function addPrep() {
     undo: '',
     ...(props.platform === 'windows' ? { elevated: false } : {}),
   });
+  requestAnimationFrame(() => updateShadows());
 }
 const saving = reactive({ v: false });
 const showDeleteConfirm = ref(false);
@@ -332,6 +351,52 @@ function onPickPlaynite(id: string) {
 function unlockPlaynite() {
   lockPlaynite.value = false;
 }
+function addDetached() {
+  form.detached.push('');
+  requestAnimationFrame(() => updateShadows());
+}
+
+// Scroll affordance logic for modal body
+const bodyRef = ref<HTMLElement | null>(null);
+const showTopShadow = ref(false);
+const showBottomShadow = ref(false);
+
+function updateShadows() {
+  const el = bodyRef.value;
+  if (!el) return;
+  const { scrollTop, scrollHeight, clientHeight } = el;
+  const hasOverflow = scrollHeight > clientHeight + 1;
+  showTopShadow.value = hasOverflow && scrollTop > 4;
+  showBottomShadow.value = hasOverflow && scrollTop + clientHeight < scrollHeight - 4;
+}
+
+function onBodyScroll() {
+  updateShadows();
+}
+
+import { onMounted, onBeforeUnmount } from 'vue';
+let ro: ResizeObserver | null = null;
+onMounted(() => {
+  const el = bodyRef.value;
+  if (el) {
+    el.addEventListener('scroll', onBodyScroll, { passive: true });
+  }
+  // Update on size/content changes
+  try {
+    ro = new ResizeObserver(() => updateShadows());
+    if (el) ro.observe(el);
+  } catch {}
+  // Initial calc after next paint
+  requestAnimationFrame(() => updateShadows());
+});
+onBeforeUnmount(() => {
+  const el = bodyRef.value;
+  if (el) el.removeEventListener('scroll', onBodyScroll as any);
+  try {
+    ro?.disconnect();
+  } catch {}
+  ro = null;
+});
 
 // Cover preview logic removed; Sunshine no longer fetches or proxies images
 async function save() {
@@ -356,12 +421,18 @@ async function del() {
     if (isPlayniteAuto.value && pid) {
       try {
         const cfg = await http.get('./api/config', { validateStatus: () => true });
-        let raw = (cfg?.data && (cfg.data as any).playnite_exclude_games) || '';
+        const all: Record<string, any> = (cfg?.data && typeof cfg.data === 'object') ? { ...(cfg.data as any) } : {};
+        const raw = String(all.playnite_exclude_games || '');
         const set = new Set<string>();
-        if (typeof raw === 'string') raw.split(',').map((s) => s.trim()).filter(Boolean).forEach((s) => set.add(s));
+        raw
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .forEach((s) => set.add(s));
         set.add(String(pid));
-        const next = Array.from(set).join(',');
-        await http.post('./api/config', { playnite_exclude_games: next }, { validateStatus: () => true });
+        all.playnite_exclude_games = Array.from(set).join(',');
+        // Post the full config object to avoid wiping other settings
+        await http.post('./api/config', all, { validateStatus: () => true });
       } catch (_) {
         // best-effort; continue with deletion
       }
@@ -380,6 +451,53 @@ async function del() {
 }
 </script>
 <style scoped>
+.scroll-shadow-top {
+  position: sticky;
+  top: 0;
+  height: 16px;
+  background: linear-gradient(to bottom, rgb(var(--color-light) / 0.9), rgb(var(--color-light) / 0));
+  pointer-events: none;
+  z-index: 1;
+}
+.dark .scroll-shadow-top {
+  background: linear-gradient(to bottom, rgb(var(--color-surface) / 0.9), rgb(var(--color-surface) / 0));
+}
+.scroll-shadow-bottom {
+  position: sticky;
+  bottom: 0;
+  height: 20px;
+  background: linear-gradient(to top, rgb(var(--color-light) / 0.9), rgb(var(--color-light) / 0));
+  pointer-events: none;
+  z-index: 1;
+}
+.dark .scroll-shadow-bottom {
+  background: linear-gradient(to top, rgb(var(--color-surface) / 0.9), rgb(var(--color-surface) / 0));
+}
+.scroll-hint-below {
+  position: sticky;
+  bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  margin-right: auto;
+  left: 0;
+  right: 0;
+  max-width: max-content;
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 8px;
+  color: rgba(0, 0, 0, 0.7);
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
+  z-index: 2;
+}
+.dark .scroll-hint-below {
+  color: rgba(245, 249, 255, 0.85);
+  background: rgba(13, 16, 28, 0.75);
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.5);
+}
 .ui-input {
   width: 100%;
   border: 1px solid rgba(0, 0, 0, 0.12);

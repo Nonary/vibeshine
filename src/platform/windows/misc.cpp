@@ -548,11 +548,6 @@ namespace platf {
     return startup_info;
   }
 
-  /**
-   * @brief This function overrides HKEY_CURRENT_USER and HKEY_CLASSES_ROOT using the provided token.
-   * @param token The primary token identifying the user to use, or `nullptr` to restore original keys.
-   * @return `true` if the override or restore operation was successful.
-   */
   bool override_per_user_predefined_keys(HANDLE token) {
     HKEY user_classes_root = nullptr;
     if (token) {
