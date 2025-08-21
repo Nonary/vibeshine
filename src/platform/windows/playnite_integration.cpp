@@ -36,6 +36,9 @@
 #include <charconv>
 #include <iomanip>
 #include <sstream>
+// boost env/filesystem for process launch helpers
+#include <boost/process/environment.hpp>
+#include <boost/filesystem.hpp>
 
 namespace platf::playnite {
 
@@ -394,6 +397,117 @@ namespace platf::playnite {
       }
     } catch (...) {}
     return false;
+  }
+
+  // Helper: gather running Playnite PIDs and capture any discovered exe path
+  static void collect_playnite_state(std::vector<DWORD> &pids, std::wstring &exe_path_out) {
+    try {
+      auto d = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
+      auto f = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
+      pids = d;
+      pids.insert(pids.end(), f.begin(), f.end());
+      for (DWORD pid : pids) {
+        HANDLE hp = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (!hp) continue;
+        std::wstring buf;
+        buf.resize(32768);
+        DWORD size = static_cast<DWORD>(buf.size());
+        if (QueryFullProcessImageNameW(hp, 0, buf.data(), &size)) {
+          buf.resize(size);
+          exe_path_out = buf;
+          CloseHandle(hp);
+          break;
+        }
+        CloseHandle(hp);
+      }
+    } catch (...) {
+      // best-effort
+    }
+  }
+
+  // Helper: attempt to resolve a Playnite Desktop exe path if not running
+  static bool resolve_playnite_exe_path(std::wstring &exe_path_out) {
+    // Prefer configured install_dir
+    try {
+      if (!config::playnite.install_dir.empty()) {
+        std::filesystem::path p = std::filesystem::path(config::playnite.install_dir) / L"Playnite.DesktopApp.exe";
+        if (std::filesystem::exists(p)) { exe_path_out = p.wstring(); return true; }
+      }
+    } catch (...) {}
+
+    // Try the active user's LocalAppData path
+    try {
+      platf::dxgi::safe_token user_token; user_token.reset(platf::dxgi::retrieve_users_token(false));
+      if (user_token.get()) {
+        PWSTR local = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, user_token.get(), &local)) && local) {
+          std::filesystem::path p = std::filesystem::path(local) / L"Playnite" / L"Playnite.DesktopApp.exe";
+          CoTaskMemFree(local);
+          if (std::filesystem::exists(p)) { exe_path_out = p.wstring(); return true; }
+        }
+      }
+    } catch (...) {}
+
+    // Fall back to current process' LocalAppData
+    try {
+      wchar_t buf[MAX_PATH] = {};
+      if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, buf))) {
+        std::filesystem::path p = std::filesystem::path(buf) / L"Playnite" / L"Playnite.DesktopApp.exe";
+        if (std::filesystem::exists(p)) { exe_path_out = p.wstring(); return true; }
+      }
+    } catch (...) {}
+
+    return false;
+  }
+
+  bool restart_playnite() {
+    // 1) Collect current state and attempt graceful-then-force close from the user's session
+    std::vector<DWORD> pids; std::wstring running_exe;
+    collect_playnite_state(pids, running_exe);
+
+    // Build a small PowerShell to close then kill leftover processes by name
+    std::string ps =
+      "powershell -NoProfile -WindowStyle Hidden -Command \""
+      "try {"
+      "  $procs = @(Get-Process Playnite.DesktopApp,Playnite.FullscreenApp -ErrorAction SilentlyContinue);"
+      "  foreach ($p in $procs) { try { $null = $p.CloseMainWindow(); } catch {} }"
+      "  Start-Sleep -Milliseconds 1200;"
+      "  $procs = @(Get-Process Playnite.DesktopApp,Playnite.FullscreenApp -ErrorAction SilentlyContinue);"
+      "  foreach ($p in $procs) { try { if (-not $p.HasExited) { $p.Kill() } } catch {} }"
+      "} catch {}\"";
+
+    std::error_code ec_close;
+    auto env = boost::this_process::environment();
+    boost::filesystem::path wd;
+    auto child = platf::run_command(false, false, ps, wd, env, nullptr, ec_close, nullptr);
+    if (!ec_close) {
+      try { child.wait_for(std::chrono::milliseconds(2500)); } catch (...) {}
+    }
+
+    // 2) Determine exe path to start
+    std::wstring exe;
+    if (!running_exe.empty()) {
+      exe = running_exe;
+    } else {
+      if (!resolve_playnite_exe_path(exe)) {
+        BOOST_LOG(warning) << "Playnite restart: could not resolve Playnite executable path";
+        // Even if we couldn't resolve path, treat close attempt as success
+        return false;
+      }
+    }
+
+    // 3) Launch Playnite (impersonates active user when running as SYSTEM)
+    std::filesystem::path exePath = exe; std::filesystem::path startDir = exePath.parent_path();
+    std::string cmd = platf::to_utf8(exe);
+    std::error_code ec_launch;
+    auto child2 = platf::run_command(false, true, cmd, startDir, env, nullptr, ec_launch, nullptr);
+    if (ec_launch) {
+      BOOST_LOG(warning) << "Playnite restart: launch failed: " << ec_launch.message();
+      return false;
+    }
+    child2.detach();
+    BOOST_LOG(info) << "Playnite restart: launched " << cmd;
+    return true;
   }
 
   static bool do_install_plugin_impl(const std::string &dest_override, std::string &error) {

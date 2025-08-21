@@ -164,6 +164,16 @@ namespace confighttp {
     print_req(request);
     std::string err;
     nlohmann::json out;
+    bool request_restart = false;
+    try {
+      std::stringstream ss; ss << request->content.rdbuf();
+      if (ss.rdbuf()->in_avail() > 0) {
+        auto in = nlohmann::json::parse(ss);
+        request_restart = in.value("restart", false);
+      }
+    } catch (...) {
+      // ignore body parse errors; treat as no-restart
+    }
     // Prefer same resolved dir as status
     std::string target;
     bool have_target = platf::playnite::get_extension_target_dir(target);
@@ -176,6 +186,11 @@ namespace confighttp {
     BOOST_LOG(info) << "Playnite install: status=" << (ok ? "true" : "false") << (ok ? "" : std::string(", error=") + err);
     out["status"] = ok;
     if (!ok) out["error"] = err;
+    // Optionally close and restart Playnite to pick up the new plugin
+    if (ok && request_restart) {
+      bool restarted = platf::playnite::restart_playnite();
+      out["restarted"] = restarted;
+    }
     send_response(response, out);
   }
 
