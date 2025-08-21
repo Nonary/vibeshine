@@ -428,8 +428,9 @@
       statusText() {
         const st = this.status || {}
         if (st.enabled === false) return this.$t('playnite.status_disabled') || 'Disabled'
-        if (!st.extensions_dir) return (this.$t('playnite.status_unknown') || this.$t('playnite.status_not_running_unknown'))
+        // Prefer session requirement over unknown detection
         if (st.session_required) return this.$t('playnite.status_desktop_required') || 'Desktop Session Required'
+        if (!st.extensions_dir) return (this.$t('playnite.status_unknown') || this.$t('playnite.status_not_running_unknown'))
         if (st.installed === false) return this.$t('playnite.status_uninstalled') || 'Uninstalled'
         if (st.active) return this.$t('playnite.status_connected')
         return this.$t('playnite.status_waiting') || 'Not Connected'
@@ -437,8 +438,8 @@
       statusBadgeClass() {
         const st = this.status || {}
         if (st.enabled === false) return 'bg-secondary'
-        if (!st.extensions_dir) return 'bg-secondary'
         if (st.session_required) return 'bg-warning text-dark'
+        if (!st.extensions_dir) return 'bg-secondary'
         if (st.installed === false) return 'bg-danger'
         if (st.active) return 'bg-success'
         return 'bg-warning text-dark'
