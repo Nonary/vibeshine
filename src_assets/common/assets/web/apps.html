@@ -78,6 +78,21 @@
       <div>{{ $t('apps.applications_desc') }}</div>
     </div>
     <div class="card p-4">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div></div>
+        <div>
+          <button class="btn btn-danger me-2" v-if="platform === 'windows' && playniteEnabled" @click="purgeAutoSync()">
+            <i class="fas fa-trash"></i> {{ $t('apps.delete_all_autosync') || 'Delete All Playnite Auto-Sync Apps' }}
+          </button>
+          <button class="btn btn-secondary" v-if="platform === 'windows' && playniteEnabled" @click="forceSync" :disabled="syncBusy">
+            <span v-if="syncBusy" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+            {{ $t('playnite.force_sync') || 'Force Sync Now' }}
+          </button>
+          <button class="btn btn-outline-secondary" v-if="platform === 'windows' && !playniteEnabled" @click="gotoPlaynite">
+            <i class="fas fa-plug"></i> {{ $t('playnite.setup_integration') || 'Setup Playnite Integration' }}
+          </button>
+        </div>
+      </div>
       <table class="table">
         <thead>
           <tr>
@@ -87,7 +102,19 @@
         </thead>
         <tbody>
           <tr v-for="(app,i) in apps" :key="i">
-            <td>{{app.name}}</td>
+            <td>
+              {{app.name}}
+              <span v-if="app['playnite-id']" class="badge bg-info text-dark ms-2">{{ $t('apps.playnite_badge') }}</span>
+              <small v-if="app['playnite-id']" class="text-muted ms-2">
+                <template v-if="app['playnite-managed'] === 'manual'">{{ $t('apps.playnite_manual') }}</template>
+                <template v-else>
+                  <template v-if="(app['playnite-source']||'') === 'recent'">{{ $t('apps.playnite_source_recent') }}</template>
+                  <template v-else-if="(app['playnite-source']||'') === 'category'">{{ $t('apps.playnite_source_category') }}</template>
+                  <template v-else-if="(app['playnite-source']||'') === 'recent+category'">{{ $t('apps.playnite_source_both') }}</template>
+                  <template v-else>{{ $t('apps.playnite_source_unknown') }}</template>
+                </template>
+              </small>
+            </td>
             <td>
               <button class="btn btn-primary mx-1" @click="editApp(i)">
                 <i class="fas fa-edit"></i> {{ $t('apps.edit') }}
@@ -95,6 +122,15 @@
               <button class="btn btn-danger mx-1" @click="showDeleteForm(i)">
                 <i class="fas fa-trash"></i> {{ $t('apps.delete') }}
               </button>
+              <template v-if="app['playnite-id']">
+                <button class="btn btn-warning mx-1" v-if="!isExcluded(app)" @click="toggleExclude(i)">
+                  <i class="fas fa-ban"></i> {{ $t('apps.exclude_from_autosync') || 'Exclude from auto-sync' }}
+                </button>
+                <button class="btn btn-success mx-1" v-else @click="toggleExclude(i)">
+                  <i class="fas fa-undo"></i> {{ $t('apps.remove_exclusion') || 'Remove exclusion' }}
+                </button>
+              </template>
+              
             </td>
           </tr>
         </tbody>
@@ -102,17 +138,62 @@
     </div>
     <div class="edit-form card mt-2" v-if="showEditForm">
       <div class="p-4">
-        <!-- Application Name -->
-        <div class="mb-3">
-          <label for="appName" class="form-label">{{ $t('apps.app_name') }}</label>
-          <input type="text" class="form-control" id="appName" aria-describedby="appNameHelp" v-model="editForm.name" />
+        <!-- Playnite-managed notice -->
+        <div class="alert alert-info" v-if="editForm && editForm['playnite-id']">
+          <span class="badge bg-info text-dark me-2">{{ $t('apps.playnite_badge') }}</span>
+          {{ $t('apps.playnite_edit_notice') }}
+        </div>
+        <!-- Application Name + Playnite typeahead (Windows) -->
+        <div class="mb-3 position-relative">
+          <label for="appName" class="form-label">
+            {{ $t('apps.app_name') }}
+            <span v-if="editForm && editForm['playnite-id']" class="badge bg-info text-dark ms-2">{{ $t('apps.playnite_badge') }}</span>
+          </label>
+          <input
+            type="text"
+            class="form-control"
+            id="appName"
+            aria-describedby="appNameHelp"
+            v-model="editForm.name"
+            @focus="onNameFocus"
+            @input="maybeShowNameSuggestions"
+            @blur="hideNameSuggestions"
+            :disabled="!!editForm['playnite-id']"
+          />
           <div id="appNameHelp" class="form-text">{{ $t('apps.app_name_desc') }}</div>
+
+          <!-- Inline Playnite suggestions dropdown -->
+          <div
+            v-if="platform === 'windows' && showNameSuggestions && !editForm['playnite-id']"
+            class="card position-absolute w-100 mt-1"
+            style="z-index: 1000;"
+          >
+            <div class="card-body p-2">
+              <div class="list-group" style="max-height: 240px; overflow-y: auto;">
+                <div v-if="nameSuggestions.length === 0" class="text-muted small px-2 py-1">{{ $t('apps.add_playnite_search') || 'Search Playnite games...' }}</div>
+                <button
+                  v-for="g in nameSuggestions"
+                  :key="g.id"
+                  class="list-group-item list-group-item-action d-flex justify-content-between align-items-center"
+                  @click="selectPlayniteGame(g)"
+                >
+                  <span>
+                    {{ g.name }}
+                  </span>
+                  <span class="d-flex align-items-center">
+                    <span class="badge bg-success">{{ 'Installed' }}</span>
+                    <small class="text-muted ms-2">{{ (g.categories||[]).join('; ') }}</small>
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
         <!-- output -->
         <div class="mb-3">
           <label for="appOutput" class="form-label">{{ $t('apps.output_name') }}</label>
           <input type="text" class="form-control monospace" id="appOutput" aria-describedby="appOutputHelp"
-            v-model="editForm.output" />
+            v-model="editForm.output" :disabled="!!editForm['playnite-id']" />
           <div id="appOutputHelp" class="form-text">{{ $t('apps.output_desc') }}</div>
         </div>
         <!-- prep-cmd -->
@@ -174,13 +255,13 @@
         <div class="mb-3">
           <label for="appName" class="form-label">{{ $t('apps.detached_cmds') }}</label>
           <div v-for="(c,i) in editForm.detached" class="d-flex justify-content-between my-2">
-            <input type="text" v-model="editForm.detached[i]" class="form-control monospace">
-            <button class="btn btn-danger mx-2" @click="editForm.detached.splice(i,1)">
+            <input type="text" v-model="editForm.detached[i]" class="form-control monospace" :disabled="!!editForm['playnite-id']">
+            <button class="btn btn-danger mx-2" @click="editForm.detached.splice(i,1)" :disabled="!!editForm['playnite-id']">
               &times;
             </button>
           </div>
           <div class="d-flex justify-content-between">
-            <button class="btn btn-success" @click="editForm.detached.push('');">
+            <button class="btn btn-success" @click="editForm.detached.push('');" :disabled="!!editForm['playnite-id']">
               <i class="fas fa-plus mr-1"></i> {{ $t('apps.detached_cmds_add') }}
             </button>
           </div>
@@ -193,7 +274,7 @@
         <div class="mb-3">
           <label for="appCmd" class="form-label">{{ $t('apps.cmd') }}</label>
           <input type="text" class="form-control monospace" id="appCmd" aria-describedby="appCmdHelp"
-            v-model="editForm.cmd" />
+            v-model="editForm.cmd" :disabled="!!editForm['playnite-id']" />
           <div id="appCmdHelp" class="form-text">
             {{ $t('apps.cmd_desc') }}<br>
             <b>{{ $t('_common.note') }}</b> {{ $t('apps.cmd_note') }}
@@ -203,7 +284,7 @@
         <div class="mb-3">
           <label for="appWorkingDir" class="form-label">{{ $t('apps.working_dir') }}</label>
           <input type="text" class="form-control monospace" id="appWorkingDir" aria-describedby="appWorkingDirHelp"
-            v-model="editForm['working-dir']" />
+            v-model="editForm['working-dir']" :disabled="!!editForm['playnite-id']" />
           <div id="appWorkingDirHelp" class="form-text">{{ $t('apps.working_dir_desc') }}</div>
         </div>
         <!-- elevation -->
@@ -213,6 +294,7 @@
                   label="_common.run_as"
                   desc="apps.run_as_desc"
                   v-model="editForm.elevated"
+                  :disabled="!!editForm['playnite-id']"
                   default="false"
         ></Checkbox>
         <!-- auto-detach -->
@@ -221,6 +303,7 @@
                   label="apps.auto_detach"
                   desc="apps.auto_detach_desc"
                   v-model="editForm['auto-detach']"
+                  :disabled="!!editForm['playnite-id']"
                   default="true"
         ></Checkbox>
         <!-- wait for all processes -->
@@ -229,22 +312,23 @@
                   label="apps.wait_all"
                   desc="apps.wait_all_desc"
                   v-model="editForm['wait-all']"
+                  :disabled="!!editForm['playnite-id']"
                   default="true"
         ></Checkbox>
         <!-- exit timeout -->
         <div class="mb-3">
           <label for="exitTimeout" class="form-label">{{ $t('apps.exit_timeout') }}</label>
           <input type="number" class="form-control monospace" id="exitTimeout" aria-describedby="exitTimeoutHelp"
-                 v-model="editForm['exit-timeout']" min="0" placeholder="5" />
+                 v-model="editForm['exit-timeout']" min="0" placeholder="5" :disabled="!!editForm['playnite-id']" />
           <div id="exitTimeoutHelp" class="form-text">{{ $t('apps.exit_timeout_desc') }}</div>
         </div>
         <div class="mb-3">
           <label for="appImagePath" class="form-label">{{ $t('apps.image') }}</label>
           <div class="input-group dropup">
             <input type="text" class="form-control monospace" id="appImagePath" aria-describedby="appImagePathHelp"
-              v-model="editForm['image-path']" />
+              v-model="editForm['image-path']" :disabled="!!editForm['playnite-id']" />
             <button class="btn btn-secondary dropdown-toggle" type="button" id="findCoverToggle"
-              aria-expanded="false" @click="showCoverFinder" ref="coverFinderDropdown">
+              aria-expanded="false" @click="showCoverFinder" ref="coverFinderDropdown" :disabled="!!editForm['playnite-id']">
               {{ $t('apps.find_cover') }}
             </button>
             <div class="dropdown-menu dropdown-menu-end w-50 cover-finder overflow-hidden"
@@ -351,7 +435,7 @@
       </div>
     </div>
     <div class="mt-2" v-else>
-      <button class="btn btn-primary" @click="newApp">
+      <button class="btn btn-primary me-2" @click="newApp">
         <i class="fas fa-plus"></i> {{ $t('apps.add_new') }}
       </button>
     </div>
@@ -374,11 +458,16 @@
         apps: [],
         showEditForm: false,
         editForm: null,
+        playniteGames: [],
+        showNameSuggestions: false,
         detachedCmd: "",
         coverSearching: false,
         coverFinderBusy: false,
         coverCandidates: [],
         platform: "",
+        playniteEnabled: false,
+        syncBusy: false,
+        excludedIds: [],
       };
     },
     created() {
@@ -391,9 +480,66 @@
 
       fetch("./api/config")
         .then(r => r.json())
-        .then(r => this.platform = r.platform);
+        .then(r => {
+          this.platform = r.platform;
+          const val = (r.playnite_enabled || '').toString().toLowerCase();
+          this.playniteEnabled = (val === 'enabled' || val === 'enable' || val === 'true' || val === '1' || val === 'yes' || val === 'on');
+          const raw = (r.playnite_exclude_games || '').toString();
+          this.excludedIds = raw.split(',').map(s=>s.trim()).filter(Boolean);
+        });
     },
     methods: {
+      gotoPlaynite() {
+        window.location.href = './playnite';
+      },
+      purgeAutoSync() {
+        if (!confirm('Delete all Playnite auto-synced apps?')) return;
+        fetch('./api/apps/purge_autosync', { method: 'POST', headers: { 'Content-Type': 'application/json' }})
+          .then(r => r.json())
+          .then(() => document.location.reload());
+      },
+      async forceSync() {
+        this.syncBusy = true;
+        try {
+          await fetch('./api/playnite/force_sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+          // Refresh list after sync
+          const r = await fetch('./api/apps').then(r => r.json());
+          this.apps = r.apps || [];
+        } catch (e) { console.error(e); }
+        this.syncBusy = false;
+      },
+      isPlayniteAuto(app) {
+        return !!app['playnite-id'] && (app['playnite-managed'] !== 'manual');
+      },
+      isExcluded(app) {
+        if (!app || !app['playnite-id']) return false;
+        return this.excludedIds.includes(app['playnite-id']);
+      },
+      async toggleExclude(index) {
+        const app = this.apps[index];
+        if (!app || !app['playnite-id']) return;
+        const id = app['playnite-id'];
+        const set = new Set(this.excludedIds);
+        const isCurrentlyExcluded = set.has(id);
+        if (!isCurrentlyExcluded) {
+          const ok = confirm('Are you sure? This will remove it from Applications. You will have to manually add it or remove exclusion from the Playnite tab if you change your mind.');
+          if (!ok) return;
+        }
+        if (isCurrentlyExcluded) set.delete(id); else set.add(id);
+        const next = Array.from(set).join(',');
+        try {
+          await fetch('./api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playnite_exclude_games: next }) });
+          if (!isCurrentlyExcluded) {
+            // Removing app from Applications immediately when excluding
+            try {
+              await fetch(`./api/apps/${index}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
+            } catch (e) { console.error(e); }
+          }
+          // Try to trigger re-sync; ignore errors on non-Windows
+          try { await fetch('./api/playnite/force_sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } }); } catch {}
+          document.location.reload();
+        } catch (e) { console.error(e); }
+      },
       newApp() {
         this.editForm = {
           name: "",
@@ -410,6 +556,51 @@
           "image-path": ""
         };
         this.editForm.index = -1;
+        this.showEditForm = true;
+        this.loadPlayniteGamesIfNeeded();
+        this.showNameSuggestions = false;
+      },
+      loadPlayniteGamesIfNeeded() {
+        if (this.platform !== 'windows') return;
+        if (!this.playniteGames.length) {
+          fetch('./api/playnite/games').then(r => r.json()).then(arr => { this.playniteGames = (arr || []).filter(g => !!g.installed); });
+        }
+      },
+      onNameFocus() {
+        this.loadPlayniteGamesIfNeeded();
+        if (!this.editForm['playnite-id']) this.showNameSuggestions = true;
+      },
+      maybeShowNameSuggestions() {
+        if (this.platform !== 'windows') return;
+        // Show dropdown on input to help discovery
+        const q = (this.editForm?.name || '').trim();
+        if (!this.playniteGames.length) {
+          this.loadPlayniteGamesIfNeeded();
+        }
+        this.showNameSuggestions = this.playniteGames.length >= 0;
+      },
+      hideNameSuggestions() {
+        // Delay hiding to allow click events on suggestions to register
+        setTimeout(() => { this.showNameSuggestions = false; }, 150);
+      },
+      selectPlayniteGame(g) {
+        this.editForm = {
+          name: g.name || '',
+          output: "",
+          cmd: [],
+          index: -1,
+          "exclude-global-prep-cmd": false,
+          elevated: false,
+          "auto-detach": true,
+          "wait-all": true,
+          "exit-timeout": 5,
+          "prep-cmd": [],
+          detached: [],
+          "image-path": "",
+          "playnite-id": g.id,
+          "playnite-managed": "manual",
+        };
+        this.showNameSuggestions = false;
         this.showEditForm = true;
       },
       editApp(id) {
@@ -572,6 +763,17 @@
         });
       },
     },
+    computed: {
+      nameSuggestions() {
+        const q = ((this.editForm && this.editForm.name) || '').toLowerCase().trim();
+        // Only installed games
+        const list = this.playniteGames.filter(g => !!g.installed);
+        // If no query, show none but keep dropdown shell visible for UX
+        if (!q) return [];
+        // Limit to 20 to keep UI snappy
+        return list.filter(g => (g.name||'').toLowerCase().includes(q)).slice(0, 20);
+      }
+    }
   });
 
   app.directive('dropdown-show', {

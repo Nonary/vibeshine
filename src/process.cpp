@@ -26,6 +26,10 @@
 #include "display_device.h"
 #include "logging.h"
 #include "platform/common.h"
+#ifdef _WIN32
+#include "platform/windows/playnite_integration.h"
+#include "config_playnite.h"
+#endif
 #include "process.h"
 #include "system_tray.h"
 #include "utility.h"
@@ -238,8 +242,75 @@ namespace proc {
       }
     }
 
+    // Playnite-backed apps: invoke via Playnite and treat as placebo (lifetime managed via Playnite status)
+#ifdef _WIN32
+    if (!_app.playnite_id.empty() && _app.cmd.empty()) {
+      BOOST_LOG(info) << "Launching Playnite game via helper, id=" << _app.playnite_id;
+      bool launched = false;
+      // Resolve launcher alongside sunshine.exe: tools\\playnite-launcher.exe
+      try {
+        WCHAR exePathW[MAX_PATH] = {};
+        GetModuleFileNameW(nullptr, exePathW, ARRAYSIZE(exePathW));
+        std::filesystem::path exeDir = std::filesystem::path(exePathW).parent_path();
+        std::filesystem::path launcher = exeDir / L"tools" / L"playnite-launcher.exe";
+        std::string lpath = launcher.string();
+        std::string cmd = std::string("\"") + lpath + "\" --game-id " + _app.playnite_id;
+        // Pass graceful-exit timeout to launcher for cleanup behavior
+        try {
+          int exit_to = (int) std::max<std::int64_t>(0, _app.exit_timeout.count());
+          if (exit_to > 0) {
+            cmd += std::string(" --exit-timeout ") + std::to_string(exit_to);
+          }
+        } catch (...) {}
+        // Pass focus attempts from config so the helper can try to bring Playnite/game to foreground
+        try {
+          if (config::playnite.focus_attempts > 0) {
+            cmd += std::string(" --focus-attempts ") + std::to_string(config::playnite.focus_attempts);
+          }
+          if (config::playnite.focus_timeout_secs > 0) {
+            cmd += std::string(" --focus-timeout ") + std::to_string(config::playnite.focus_timeout_secs);
+          }
+          if (config::playnite.focus_exit_on_first) {
+            cmd += std::string(" --focus-exit-on-first");
+          }
+        } catch (...) {}
+        std::error_code fec;
+        boost::filesystem::path wd; // empty wd
+        _process = platf::run_command(false, true, cmd, wd, _env, _pipe.get(), fec, &_process_group);
+        if (fec) {
+          BOOST_LOG(warning) << "Playnite helper launch failed: "sv << fec.message() << "; attempting URI fallback"sv;
+        } else {
+          BOOST_LOG(info) << "Playnite helper launched and is being monitored";
+          launched = true;
+        }
+      } catch (...) {
+        launched = false;
+      }
+      if (!launched) {
+        // Best-effort fallback using Playnite URI protocol
+        std::string uri = std::string("playnite://playnite/start/") + _app.playnite_id;
+        std::error_code fec;
+        boost::filesystem::path wd; // empty working dir as lvalue
+        auto child = platf::run_command(false, true, std::string("cmd /c start \"\" \"") + uri + "\"", wd, _env, _pipe.get(), fec, nullptr);
+        if (fec) {
+          BOOST_LOG(warning) << "Playnite URI launch failed: "sv << fec.message();
+        } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
+          child.detach();
+          launched = true;
+        }
+      }
+      if (!launched) {
+        BOOST_LOG(error) << "Failed to launch Playnite game."sv;
+        return -1;
+      }
+      // Track the helper process; when it exits, Sunshine will terminate the stream automatically
+      placebo = false;
+    } else
+#endif
     if (_app.cmd.empty()) {
       BOOST_LOG(info) << "Executing [Desktop]"sv;
+      BOOST_LOG(info) << "Playnite launch path complete; treating app as placebo (status-driven).";
       placebo = true;
     } else {
       boost::filesystem::path working_dir = _app.working_dir.empty() ?
@@ -283,6 +354,7 @@ namespace proc {
                std::chrono::steady_clock::now() - _app_launch_time < 5s) {
       BOOST_LOG(info) << "App exited gracefully within 5 seconds of launch. Treating the app as a detached command."sv;
       BOOST_LOG(info) << "Adjust this behavior in the Applications tab or apps.json if this is not what you want."sv;
+      BOOST_LOG(info) << "Playnite launch path complete; treating app as placebo (status-driven).";
       placebo = true;
       return _app_id;
     }
@@ -299,7 +371,22 @@ namespace proc {
   void proc_t::terminate() {
     std::error_code ec;
     placebo = false;
-    terminate_process_group(_process, _process_group, _app.exit_timeout);
+    // For Playnite-managed apps, request a graceful stop via Playnite first
+#ifdef _WIN32
+    std::chrono::seconds remaining_timeout = _app.exit_timeout;
+    if (!_app.playnite_id.empty()) {
+      try {
+        // Ask Playnite to stop the game; then wait up to exit-timeout to let it close
+        platf::playnite::stop_game(_app.playnite_id);
+        while (remaining_timeout.count() > 0 && _process_group && platf::process_group_running((std::uintptr_t) _process_group.native_handle())) {
+          std::this_thread::sleep_for(1s);
+          remaining_timeout -= 1s;
+        }
+      } catch (...) {}
+    }
+#endif
+    // Regardless, ensure process group is terminated (graceful then forceful with remaining timeout)
+    terminate_process_group(_process, _process_group, remaining_timeout);
     _process = boost::process::v1::child();
     _process_group = boost::process::v1::group();
 
@@ -446,6 +533,7 @@ namespace proc {
 
         dollar = std::find(next, std::end(val_raw), '$');
       } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
         dollar = next;
       }
     }
@@ -542,6 +630,7 @@ namespace proc {
       if (file_hash) {
         to_hash.push_back(file_hash.value());
       } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
         // Fallback to just hashing image path
         to_hash.push_back(file_path);
       }
@@ -592,6 +681,7 @@ namespace proc {
         auto cmd = app_node.get_optional<std::string>("cmd"s);
         auto image_path = app_node.get_optional<std::string>("image-path"s);
         auto working_dir = app_node.get_optional<std::string>("working-dir"s);
+        auto playnite_id = app_node.get_optional<std::string>("playnite-id"s);
         auto elevated = app_node.get_optional<bool>("elevated"s);
         auto auto_detach = app_node.get_optional<bool>("auto-detach"s);
         auto wait_all = app_node.get_optional<bool>("wait-all"s);
@@ -661,16 +751,22 @@ namespace proc {
           ctx.image_path = parse_env_val(this_env, *image_path);
         }
 
+        if (playnite_id) {
+          ctx.playnite_id = parse_env_val(this_env, *playnite_id);
+        }
+
         ctx.elevated = elevated.value_or(false);
         ctx.auto_detach = auto_detach.value_or(true);
         ctx.wait_all = wait_all.value_or(true);
-        ctx.exit_timeout = std::chrono::seconds {exit_timeout.value_or(5)};
+        // Default graceful-exit timeout: 10s (Playnite-managed apps are written with this value)
+        ctx.exit_timeout = std::chrono::seconds {exit_timeout.value_or(10)};
 
         auto possible_ids = calculate_app_id(name, ctx.image_path, i++);
         if (ids.count(std::get<0>(possible_ids)) == 0) {
           // Avoid using index to generate id if possible
           ctx.id = std::get<0>(possible_ids);
         } else {
+          BOOST_LOG(info) << "Playnite URI launch started";
           // Fallback to include index on collision
           ctx.id = std::get<1>(possible_ids);
         }
