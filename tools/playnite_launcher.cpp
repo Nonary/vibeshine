@@ -48,6 +48,11 @@
 #include <cwctype>
 #include <psapi.h>
 #include <tlhelp32.h>
+#include <Shlwapi.h>
+
+#ifndef PROC_THREAD_ATTRIBUTE_PARENT_PROCESS
+  #define PROC_THREAD_ATTRIBUTE_PARENT_PROCESS ProcThreadAttributeValue(0, FALSE, TRUE, FALSE)
+#endif
 
 using namespace std::chrono_literals;
 
@@ -64,6 +69,112 @@ namespace {
     DWORD n = GetEnvironmentVariableW(name, buf, ARRAYSIZE(buf));
     if (n == 0 || n >= ARRAYSIZE(buf)) return L"";
     return std::wstring(buf, n);
+  }
+
+  // Returns true if either Playnite Desktop or Fullscreen is running
+  static bool is_playnite_running() {
+    try {
+      auto d = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
+      if (!d.empty()) return true;
+      auto f = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
+      if (!f.empty()) return true;
+    } catch (...) {}
+    return false;
+  }
+
+  static std::wstring get_explorer_path() {
+    // Prefer %WINDIR%\\explorer.exe
+    WCHAR winDir[MAX_PATH] = {};
+    if (GetWindowsDirectoryW(winDir, ARRAYSIZE(winDir)) > 0) {
+      std::filesystem::path p(winDir);
+      p /= L"explorer.exe";
+      if (std::filesystem::exists(p)) return p.wstring();
+    }
+    // Fallback: SearchPathW
+    WCHAR out[MAX_PATH] = {};
+    DWORD rc = SearchPathW(nullptr, L"explorer.exe", nullptr, ARRAYSIZE(out), out, nullptr);
+    if (rc > 0 && rc < ARRAYSIZE(out)) return std::wstring(out);
+    return L"explorer.exe"; // last resort; CreateProcessW may still find it
+  }
+
+  static HANDLE open_explorer_parent_handle() {
+    // Try shell window PID first (most reliable parent in current session)
+    DWORD pid = 0;
+    HWND shell = GetShellWindow();
+    if (shell) {
+      GetWindowThreadProcessId(shell, &pid);
+    }
+    if (!pid) {
+      // Fallback: try Shell_TrayWnd (taskbar)
+      HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+      if (tray) GetWindowThreadProcessId(tray, &pid);
+    }
+    // Fallback: find by name, prefer same session
+    if (!pid) {
+      DWORD curSession = 0;
+      ProcessIdToSessionId(GetCurrentProcessId(), &curSession);
+      auto pids = platf::dxgi::find_process_ids_by_name(L"explorer.exe");
+      for (DWORD cand : pids) {
+        DWORD sess = 0; ProcessIdToSessionId(cand, &sess);
+        if (sess == curSession) { pid = cand; break; }
+      }
+      if (!pid && !pids.empty()) pid = pids.front();
+    }
+    if (!pid) return nullptr;
+
+    // Required rights: PROCESS_CREATE_PROCESS for parent attribute
+    HANDLE h = OpenProcess(PROCESS_CREATE_PROCESS | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE, FALSE, pid);
+    return h; // may be null on failure
+  }
+
+  // Launch a URI by starting explorer.exe as a detached, breakaway, parented child
+  static bool launch_uri_detached_parented(const std::wstring &uri) {
+    auto parent = open_explorer_parent_handle();
+    if (!parent) {
+      BOOST_LOG(warning) << "Unable to open explorer.exe as parent; proceeding without parent override";
+    }
+
+    STARTUPINFOEXW si{}; si.StartupInfo.cb = sizeof(si);
+    LPPROC_THREAD_ATTRIBUTE_LIST attrList = nullptr;
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(nullptr, parent ? 1 : 0, 0, &size);
+    if (parent) {
+      attrList = (LPPROC_THREAD_ATTRIBUTE_LIST) HeapAlloc(GetProcessHeap(), 0, size);
+      if (!attrList) {
+        CloseHandle(parent);
+        parent = nullptr;
+      } else if (!InitializeProcThreadAttributeList(attrList, 1, 0, &size)) {
+        HeapFree(GetProcessHeap(), 0, attrList); attrList = nullptr;
+        CloseHandle(parent); parent = nullptr;
+      }
+      if (attrList && parent) {
+        if (!UpdateProcThreadAttribute(attrList, 0, PROC_THREAD_ATTRIBUTE_PARENT_PROCESS, &parent, sizeof(parent), nullptr, nullptr)) {
+          DeleteProcThreadAttributeList(attrList); HeapFree(GetProcessHeap(), 0, attrList); attrList = nullptr;
+          CloseHandle(parent); parent = nullptr;
+        } else {
+          si.lpAttributeList = attrList;
+        }
+      }
+    }
+
+    std::wstring exe = get_explorer_path();
+    std::wstring cmd = L"\"" + exe + L"\" " + uri;
+
+    DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT |
+                  CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB;
+    PROCESS_INFORMATION pi{};
+    BOOL ok = CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, flags, nullptr, nullptr, &si.StartupInfo, &pi);
+
+    if (attrList) { DeleteProcThreadAttributeList(attrList); HeapFree(GetProcessHeap(), 0, attrList); }
+    if (parent) CloseHandle(parent);
+    if (ok) {
+      if (pi.hThread) CloseHandle(pi.hThread);
+      if (pi.hProcess) CloseHandle(pi.hProcess);
+      return true;
+    }
+    auto winerr = GetLastError();
+    BOOST_LOG(warning) << "CreateProcessW(explorer uri) failed: " << winerr;
+    return false;
   }
 
   static bool file_exists(const std::wstring &p) {
@@ -815,6 +926,16 @@ static int launcher_run(int argc, char **argv) {
   auto _log_guard = logging::init_append(2 /*info*/, log_path);
   BOOST_LOG(info) << "Playnite launcher starting; pid=" << GetCurrentProcessId();
 
+  // Ensure Playnite is running if requested actions depend on it
+  auto ensure_playnite_open = [&]() {
+    if (!is_playnite_running()) {
+      BOOST_LOG(info) << "Playnite not running; opening playnite:// URI in detached mode";
+      if (!launch_uri_detached_parented(L"playnite://")) {
+        BOOST_LOG(warning) << "Failed to launch playnite:// via detached CreateProcess";
+      }
+    }
+  };
+
   // Cleanup-only mode: optionally wait for a specific PID to exit, then run cleanup
   if (do_cleanup) {
     BOOST_LOG(info) << "Cleanup mode: starting";
@@ -851,42 +972,8 @@ static int launcher_run(int argc, char **argv) {
 
   // Fullscreen mode: start Playnite.FullscreenApp and apply focus attempts, then schedule cleanup and exit
   if (fullscreen) {
-    BOOST_LOG(info) << "Fullscreen mode requested; launching Playnite.FullscreenApp";
-    std::wstring fullpath = find_playnite_fullscreen_path();
-    if (fullpath.empty()) {
-      // Last resort: try the legacy default path
-      fullpath = L"C:\\Program Files\\Playnite\\Playnite.FullscreenApp.exe";
-    }
-    bool launched = false;
-    if (!fullpath.empty() && file_exists(fullpath)) {
-      // Prefer ShellExecuteW to honor app's own show behavior; ensure it is visible.
-      HINSTANCE h = ShellExecuteW(nullptr, L"open", fullpath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-      if ((INT_PTR)h > 32) {
-        launched = true;
-        BOOST_LOG(info) << "Launched Playnite.FullscreenApp at '" << platf::dxgi::wide_to_utf8(fullpath) << "'";
-      } else {
-        BOOST_LOG(warning) << "ShellExecuteW failed for Playnite.FullscreenApp (code=" << (INT_PTR)h << ")";
-      }
-    } else {
-      BOOST_LOG(error) << "Playnite.FullscreenApp.exe not found in common locations";
-    }
-    if (!launched) {
-      // Fallback: CreateProcessW without hiding flags
-      STARTUPINFOW si{}; si.cb = sizeof(si);
-      PROCESS_INFORMATION pi{};
-      std::wstring cmdline = L"\"" + fullpath + L"\"";
-      BOOL ok = CreateProcessW(fullpath.c_str(), cmdline.data(), nullptr, nullptr, FALSE,
-                               CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP,
-                               nullptr, nullptr, &si, &pi);
-      if (ok) {
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
-        launched = true;
-        BOOST_LOG(info) << "CreateProcessW fallback launched Playnite.FullscreenApp";
-      } else {
-        BOOST_LOG(error) << "Failed to start Playnite.FullscreenApp.exe via CreateProcessW";
-      }
-    }
+    BOOST_LOG(info) << "Fullscreen mode requested; ensuring Playnite is running via playnite://";
+    ensure_playnite_open();
     // Wait briefly for process to appear then try to focus
     auto deadline = std::chrono::steady_clock::now() + 5s;
     while (std::chrono::steady_clock::now() < deadline) {
@@ -1012,6 +1099,11 @@ static int launcher_run(int argc, char **argv) {
   });
 
   server.start();
+
+  // If launching a game, ensure Playnite is running first (best-effort)
+  if (!game_id.empty()) {
+    ensure_playnite_open();
+  }
 
   // Wait for data pipe active then send launch command
   auto start_deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
