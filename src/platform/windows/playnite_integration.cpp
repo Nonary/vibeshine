@@ -18,6 +18,7 @@
 #include "src/platform/windows/playnite_ipc.h"
 #include "src/platform/windows/playnite_protocol.h"
 #include "src/platform/windows/playnite_sync.h"
+#include "src/platform/windows/misc.h"
 #include "src/process.h"
 
 #include <algorithm>
@@ -500,7 +501,9 @@ namespace platf::playnite {
     std::filesystem::path exePath = exe; std::filesystem::path startDir = exePath.parent_path();
     std::string cmd = platf::to_utf8(exe);
     std::error_code ec_launch;
-    auto child2 = platf::run_command(false, true, cmd, startDir, env, nullptr, ec_launch, nullptr);
+    // platf::run_command expects a boost::filesystem::path&
+    boost::filesystem::path boostStartDir = boost::filesystem::path(startDir.wstring());
+    auto child2 = platf::run_command(false, true, cmd, boostStartDir, env, nullptr, ec_launch, nullptr);
     if (ec_launch) {
       BOOST_LOG(warning) << "Playnite restart: launch failed: " << ec_launch.message();
       return false;
