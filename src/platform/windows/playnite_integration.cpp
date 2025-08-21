@@ -18,6 +18,8 @@
 #include "src/platform/windows/playnite_ipc.h"
 #include "src/platform/windows/playnite_protocol.h"
 #include "src/platform/windows/playnite_sync.h"
+#include "src/platform/windows/misc.h"
+#include "src/utility.h"
 #include "src/process.h"
 
 #include <algorithm>
@@ -26,6 +28,8 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <ShlObj.h>
+#include <Shlwapi.h>
+#include <shellapi.h>
 #include <span>
 #include <string>
 #include <unordered_set>
@@ -36,6 +40,9 @@
 #include <charconv>
 #include <iomanip>
 #include <sstream>
+// boost env/filesystem for process launch helpers
+#include <boost/process/environment.hpp>
+#include <boost/filesystem.hpp>
 
 namespace platf::playnite {
 
@@ -218,62 +225,154 @@ namespace platf::playnite {
     return false;
   }
 
-  // Safe implementation to avoid problematic wide-char literal in older compilers
-  static bool resolve_extensions_dir_safe(std::filesystem::path &destOut) {
-    BOOST_LOG(info) << "Playnite installer: resolving extensions dir";
-    if (!config::playnite.extensions_dir.empty()) {
-      destOut = std::filesystem::path(config::playnite.extensions_dir);
-      BOOST_LOG(info) << "Playnite installer: using configured extensions_dir=" << destOut.string();
-      return true;
-    }
-    auto pids1 = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
-    auto pids2 = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
-    BOOST_LOG(info) << "Playnite installer: found Playnite PIDs desktop=" << pids1.size() << ", fullscreen=" << pids2.size();
-    std::vector<DWORD> pids = pids1;
-    pids.insert(pids.end(), pids2.begin(), pids2.end());
-    for (DWORD pid : pids) {
-      HANDLE hp = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-      if (!hp) {
-        BOOST_LOG(info) << "Playnite installer: OpenProcess failed for PID=" << pid;
-        continue;
+  // Resolve the Playnite Extensions/SunshinePlaynite directory via the "playnite" URL association.
+  // Uses per-user registry views and impersonates the active user before calling AssocQueryString.
+  static bool resolve_extensions_dir_via_assoc(std::filesystem::path &destOut) {
+    BOOST_LOG(info) << "Playnite: resolving extensions dir via AssocQueryString";
+
+    // Acquire user token when running as SYSTEM so AssocQueryString consults the user's HKCU/HKCR
+    HANDLE user_token = nullptr;
+    if (platf::dxgi::is_running_as_system()) {
+      user_token = platf::dxgi::retrieve_users_token(false);
+      if (!user_token) {
+        BOOST_LOG(info) << "Playnite: no active user token available for association lookup";
+        return false;
       }
-      std::wstring buf;
-      buf.resize(32768);
-      DWORD size = static_cast<DWORD>(buf.size());
-      if (QueryFullProcessImageNameW(hp, 0, buf.data(), &size)) {
-        buf.resize(size);
-        std::filesystem::path exePath = buf;
-        std::filesystem::path base = exePath.parent_path();
-        std::filesystem::path extDir = base / L"Extensions" / L"SunshinePlaynite";
-        BOOST_LOG(info) << "Playnite installer: found running Playnite pid=" << pid << ", base=" << base.string();
-        CloseHandle(hp);
-        destOut = extDir;
-        return true;
+    }
+
+    HRESULT res = E_FAIL;
+    std::wstring cmd_string;
+    {
+      static std::mutex per_user_key_mutex;
+      auto lg = std::lock_guard(per_user_key_mutex);
+
+      if (!platf::override_per_user_predefined_keys(user_token)) {
+        if (user_token) CloseHandle(user_token);
+        return false;
+      }
+
+      std::array<WCHAR, 4096> shell_cmd{};
+      DWORD out_len = static_cast<DWORD>(shell_cmd.size());
+
+      // Impersonate the user while querying associations to ensure resolution uses their profile
+      if (user_token) {
+        auto ec = platf::impersonate_current_user(user_token, [&]() {
+          res = AssocQueryStringW(ASSOCF_NOTRUNCATE,
+                                  ASSOCSTR_COMMAND,
+                                  L"playnite",
+                                  L"open",
+                                  shell_cmd.data(),
+                                  &out_len);
+        });
+        (void) ec; // best-effort; error code already logged by helper if impersonation fails
       } else {
-        BOOST_LOG(info) << "Playnite installer: QueryFullProcessImageNameW failed for PID=" << pid;
-        CloseHandle(hp);
+        res = AssocQueryStringW(ASSOCF_NOTRUNCATE,
+                                ASSOCSTR_COMMAND,
+                                L"playnite",
+                                L"open",
+                                shell_cmd.data(),
+                                &out_len);
+      }
+
+      // Restore original predefined keys regardless of success
+      platf::override_per_user_predefined_keys(nullptr);
+
+      if (res == S_OK) {
+        cmd_string.assign(shell_cmd.data());
       }
     }
-    auto userTok = platf::dxgi::retrieve_users_token(false);
-    if (!userTok) {
-      BOOST_LOG(info) << "Playnite installer: retrieve_users_token failed";
+
+    if (user_token) CloseHandle(user_token);
+
+    if (res != S_OK || cmd_string.empty()) {
+      BOOST_LOG(info) << "Playnite: association query for 'playnite' failed (res=0x" << util::hex(res).to_string_view() << ")";
       return false;
     }
-    PWSTR roaming = nullptr;
-    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, userTok, &roaming)) && roaming) {
-      destOut = std::filesystem::path(roaming) / L"Playnite" / L"Extensions" / L"SunshinePlaynite";
-      BOOST_LOG(info) << "Playnite installer: resolved via active user token to " << destOut.string();
-      CoTaskMemFree(roaming);
-      CloseHandle(userTok);
-      return true;
+
+    // Parse the command line to extract the executable path
+    int argc = 0;
+    std::wstring exe_path_w;
+    auto argv = CommandLineToArgvW(cmd_string.c_str(), &argc);
+    if (argv && argc >= 1) {
+      exe_path_w.assign(argv[0]);
+      LocalFree(argv);
+    } else {
+      // Best-effort fallback parser: quoted or first token until space
+      if (!cmd_string.empty() && cmd_string.front() == L'"') {
+        auto pos = cmd_string.find(L'"', 1);
+        if (pos != std::wstring::npos) {
+          exe_path_w = cmd_string.substr(1, pos - 1);
+        }
+      } else {
+        auto pos = cmd_string.find(L' ');
+        exe_path_w = (pos == std::wstring::npos) ? cmd_string : cmd_string.substr(0, pos);
+      }
     }
-    CloseHandle(userTok);
-    return false;
+
+    if (exe_path_w.empty()) {
+      BOOST_LOG(info) << "Playnite: failed to parse executable path from association command";
+      return false;
+    }
+
+    std::filesystem::path exePath = exe_path_w;
+    std::filesystem::path base = exePath.parent_path();
+    destOut = base / L"Extensions" / L"SunshinePlaynite";
+    BOOST_LOG(info) << "Playnite: resolved extensions dir at " << destOut.string();
+    return true;
+  }
+
+  // Resolve Playnite executable via 'playnite' URL association (per-user), falling back to command parsing.
+  static bool resolve_playnite_exe_via_assoc(std::wstring &exe_out) {
+    HANDLE user_token = nullptr;
+    if (platf::dxgi::is_running_as_system()) {
+      user_token = platf::dxgi::retrieve_users_token(false);
+      if (!user_token) return false;
+    }
+    HRESULT res = E_FAIL;
+    std::wstring exe;
+    {
+      static std::mutex per_user_key_mutex;
+      auto lg = std::lock_guard(per_user_key_mutex);
+      if (!platf::override_per_user_predefined_keys(user_token)) {
+        if (user_token) CloseHandle(user_token);
+        return false;
+      }
+
+      // Try to get the executable directly
+      std::array<WCHAR, 4096> exe_buf{};
+      DWORD out_len = static_cast<DWORD>(exe_buf.size());
+      res = AssocQueryStringW(ASSOCF_NOTRUNCATE, ASSOCSTR_EXECUTABLE, L"playnite", nullptr, exe_buf.data(), &out_len);
+      if (res == S_OK) {
+        exe.assign(exe_buf.data());
+      }
+
+      // If EXECUTABLE not available, parse COMMAND
+      if (exe.empty()) {
+        std::array<WCHAR, 4096> cmd_buf{};
+        out_len = static_cast<DWORD>(cmd_buf.size());
+        HRESULT res2 = AssocQueryStringW(ASSOCF_NOTRUNCATE, ASSOCSTR_COMMAND, L"playnite", L"open", cmd_buf.data(), &out_len);
+        if (res2 == S_OK) {
+          int argc = 0; auto argv = CommandLineToArgvW(cmd_buf.data(), &argc);
+          if (argv && argc >= 1) { exe.assign(argv[0]); LocalFree(argv); }
+          else {
+            std::wstring s{cmd_buf.data()};
+            if (!s.empty() && s.front() == L'"') { auto p = s.find(L'"', 1); if (p != std::wstring::npos) exe = s.substr(1, p - 1); }
+            else { auto p = s.find(L' '); exe = (p == std::wstring::npos) ? s : s.substr(0, p); }
+          }
+        }
+      }
+
+      platf::override_per_user_predefined_keys(nullptr);
+    }
+    if (user_token) CloseHandle(user_token);
+    if (exe.empty() || !std::filesystem::exists(exe)) return false;
+    exe_out = exe;
+    return true;
   }
 
   bool get_extension_target_dir(std::string &out) {
     std::filesystem::path dest;
-    if (!resolve_extensions_dir_safe(dest)) {
+    if (!resolve_extensions_dir_via_assoc(dest)) {
       return false;
     }
     out = dest.string();
@@ -396,6 +495,114 @@ namespace platf::playnite {
     return false;
   }
 
+  // Helper: gather running Playnite PIDs and capture any discovered exe path
+  static void collect_playnite_state(std::vector<DWORD> &pids, std::wstring &exe_path_out) {
+    try {
+      auto d = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
+      auto f = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
+      pids = d;
+      pids.insert(pids.end(), f.begin(), f.end());
+      for (DWORD pid : pids) {
+        HANDLE hp = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (!hp) continue;
+        std::wstring buf;
+        buf.resize(32768);
+        DWORD size = static_cast<DWORD>(buf.size());
+        if (QueryFullProcessImageNameW(hp, 0, buf.data(), &size)) {
+          buf.resize(size);
+          exe_path_out = buf;
+          CloseHandle(hp);
+          break;
+        }
+        CloseHandle(hp);
+      }
+    } catch (...) {
+      // best-effort
+    }
+  }
+
+  // Helper: attempt to resolve a Playnite Desktop exe path if not running
+  static bool resolve_playnite_exe_path(std::wstring &exe_path_out) {
+    // Try the active user's LocalAppData path
+    try {
+      platf::dxgi::safe_token user_token; user_token.reset(platf::dxgi::retrieve_users_token(false));
+      if (user_token.get()) {
+        PWSTR local = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, user_token.get(), &local)) && local) {
+          std::filesystem::path p = std::filesystem::path(local) / L"Playnite" / L"Playnite.DesktopApp.exe";
+          CoTaskMemFree(local);
+          if (std::filesystem::exists(p)) { exe_path_out = p.wstring(); return true; }
+        }
+      }
+    } catch (...) {}
+
+    // Fall back to current process' LocalAppData
+    try {
+      wchar_t buf[MAX_PATH] = {};
+      if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, buf))) {
+        std::filesystem::path p = std::filesystem::path(buf) / L"Playnite" / L"Playnite.DesktopApp.exe";
+        if (std::filesystem::exists(p)) { exe_path_out = p.wstring(); return true; }
+      }
+    } catch (...) {}
+
+    return false;
+  }
+
+  bool restart_playnite() {
+    // 1) Collect current state and attempt graceful-then-force close from the user's session
+    std::vector<DWORD> pids; std::wstring running_exe;
+    collect_playnite_state(pids, running_exe);
+
+    // Build a small PowerShell to close then kill leftover processes by name
+    std::string ps =
+      "powershell -NoProfile -WindowStyle Hidden -Command \""
+      "try {"
+      "  $procs = @(Get-Process Playnite.DesktopApp,Playnite.FullscreenApp -ErrorAction SilentlyContinue);"
+      "  foreach ($p in $procs) { try { $null = $p.CloseMainWindow(); } catch {} }"
+      "  Start-Sleep -Milliseconds 1200;"
+      "  $procs = @(Get-Process Playnite.DesktopApp,Playnite.FullscreenApp -ErrorAction SilentlyContinue);"
+      "  foreach ($p in $procs) { try { if (-not $p.HasExited) { $p.Kill() } } catch {} }"
+      "} catch {}\"";
+
+    std::error_code ec_close;
+    auto env = boost::this_process::environment();
+    boost::filesystem::path wd;
+    auto child = platf::run_command(false, false, ps, wd, env, nullptr, ec_close, nullptr);
+    if (!ec_close) {
+      try { child.wait_for(std::chrono::milliseconds(2500)); } catch (...) {}
+    }
+
+    // 2) Determine exe path to start
+    std::wstring exe;
+    if (!running_exe.empty()) {
+      exe = running_exe;
+    } else {
+      // Prefer URL association (per-user) to determine the Playnite executable
+      if (!resolve_playnite_exe_via_assoc(exe) && !resolve_playnite_exe_path(exe)) {
+        BOOST_LOG(warning) << "Playnite restart: could not resolve Playnite executable path";
+        // Even if we couldn't resolve path, treat close attempt as success
+        return false;
+      }
+    }
+
+    // 3) Launch Playnite (impersonates active user when running as SYSTEM)
+    std::filesystem::path exePath = exe; std::filesystem::path startDir = exePath.parent_path();
+    std::string cmd = platf::to_utf8(exe);
+    std::error_code ec_launch;
+    // platf::run_command expects a boost::filesystem::path&
+    boost::filesystem::path boostStartDir = boost::filesystem::path(startDir.wstring());
+    auto child2 = platf::run_command(false, true, cmd, boostStartDir, env, nullptr, ec_launch, nullptr);
+    if (ec_launch) {
+      BOOST_LOG(warning) << "Playnite restart: launch failed: " << ec_launch.message();
+      return false;
+    }
+    child2.detach();
+    BOOST_LOG(info) << "Playnite restart: launched " << cmd;
+    return true;
+  }
+
+  // explicit launch-only helper removed; use restart_playnite()
+
   static bool do_install_plugin_impl(const std::string &dest_override, std::string &error) {
     try {
       // Determine source directory: alongside the Sunshine executable under plugins/playnite/SunshinePlaynite
@@ -419,26 +626,12 @@ namespace platf::playnite {
       if (!dest_override.empty()) {
         destDir = std::filesystem::path(dest_override);
         BOOST_LOG(info) << "Playnite installer: using API override destDir=" << destDir.string();
-      } else if (!config::playnite.extensions_dir.empty()) {
-        destDir = config::playnite.extensions_dir;
-        BOOST_LOG(info) << "Playnite installer: using configured extensions_dir=" << destDir.string();
       } else {
         // Prefer the same resolution used by status API
         std::string resolved;
         if (platf::playnite::get_extension_target_dir(resolved)) {
           destDir = std::filesystem::path(resolved);
           BOOST_LOG(info) << "Playnite installer: using resolved target dir from API=" << destDir.string();
-        } else if (resolve_extensions_dir_safe(destDir)) {
-          BOOST_LOG(info) << "Playnite installer: using resolved target dir via safe resolver=" << destDir.string();
-        } else {
-          // Fallback to current user's %AppData% if we cannot resolve via token/process
-          wchar_t appdataPath[MAX_PATH] = {};
-          if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, appdataPath))) {
-            error = "Failed to resolve %AppData% path";
-            return false;
-          }
-          destDir = std::filesystem::path(appdataPath) / L"Playnite" / L"Extensions" / L"SunshinePlaynite";
-          BOOST_LOG(info) << "Playnite installer: fallback destDir=%AppData% -> " << destDir.string();
         }
       }
       std::error_code ec;

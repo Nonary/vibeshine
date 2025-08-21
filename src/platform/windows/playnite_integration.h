@@ -96,4 +96,15 @@ namespace platf::playnite {
 
   // no-op: persistence helper moved to confighttp as refresh_client_apps_cache
 
+  /**
+   * @brief Close any running Playnite instances and restart Playnite.
+   * - When Sunshine runs as SYSTEM, launches Playnite by impersonating the active user.
+   * - Otherwise, launches in the current session.
+   * Attempts a graceful close and then forces termination if needed.
+   * @return true on success (launch attempted), false on failure.
+   */
+  bool restart_playnite();
+
+  // Note: explicit launch helper removed; use restart_playnite() for both cases.
+
 }  // namespace platf::playnite

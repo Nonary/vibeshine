@@ -8,6 +8,8 @@
 #include <chrono>
 #include <functional>
 #include <string_view>
+#include <functional>
+#include <system_error>
 
 // platform includes
 #include <Windows.h>
@@ -35,8 +37,16 @@ namespace platf {
    */
   std::string to_utf8(const std::wstring &string);
 
+
   // Additional helpers used by configuration HTTP to safely access user resources
   bool is_running_as_system();
   HANDLE retrieve_users_token(bool elevated);
   std::error_code impersonate_current_user(HANDLE user_token, std::function<void()> callback);
+
+  /**
+   * @brief Override per-user predefined registry keys (HKCU, HKCR) for the given token.
+   * @param token Primary user token to use for HKCU/HKCR views, or nullptr to restore defaults.
+   * @return true on success.
+   */
+  bool override_per_user_predefined_keys(HANDLE token);
 }  // namespace platf
