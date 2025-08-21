@@ -48,7 +48,16 @@
             <div class="col-auto"><code>{{ status.extensions_dir }}</code></div>
           </div>
 
-          <button v-if="status.playnite_running !== false" class="btn btn-primary mt-2 me-2" @click="install" :disabled="installing">
+          <!-- Launch Playnite when installed, plugin not connected, and a desktop session is present -->
+          <button class="btn btn-secondary mt-2 me-2"
+                  v-if="status.extensions_dir && status.installed && !status.active && !status.session_required"
+                  @click="launchPlaynite"
+                  :disabled="launching">
+            <span v-if="launching" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+            {{ $t('playnite.launch_button') || 'Launch Playnite' }}
+          </button>
+
+          <button v-if="status.extensions_dir" class="btn btn-primary mt-2 me-2" @click="install" :disabled="installing">
             <span v-if="installing" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
             <template v-if="status.installed">{{ $t('playnite.reinstall_button') || 'Reinstall Plugin' }}</template>
             <template v-else>{{ $t('playnite.install_button') }}</template>
@@ -77,6 +86,8 @@
                         id="playnite_auto_sync"
                         :default="'enabled'"
                         :localePrefix="'playnite'"
+                        :label="$t('playnite.auto_sync')"
+                        :desc="''"
               />
             </div>
           </div>
@@ -232,7 +243,7 @@
         platform: '',
         currentConfig: {},
         playnite: JSON.parse(JSON.stringify(defaults)),
-        status: { enabled: false, active: false, installed: false, installed_unknown: false, extensions_dir: '', session_required: false, playnite_running: false },
+        status: { enabled: false, active: false, installed: false, extensions_dir: '', session_required: false },
         saving: false,
         saved: false,
         restarted: false,
@@ -240,6 +251,7 @@
         installOk: false,
         installErr: false,
         installErrorMsg: '',
+        launching: false,
         availableCategories: [],
         categoriesLoading: false,
         catFilter: '',
@@ -290,6 +302,16 @@
           const st = await fetch('./api/playnite/status').then(r => r.json())
           this.status = st
         } catch (e) { console.error(e) }
+      },
+      async launchPlaynite() {
+        if (this.platform !== 'windows') return
+        this.launching = true
+        try {
+          await fetch('./api/playnite/launch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+          // Give Playnite a moment to start, then refresh status
+          setTimeout(() => this.refreshStatus(), 1000)
+        } catch (e) { console.error(e) }
+        this.launching = false
       },
       async loadPlayniteCategoriesIfNeeded() {
         if (this.platform !== 'windows') return
@@ -406,24 +428,20 @@
       statusText() {
         const st = this.status || {}
         if (st.enabled === false) return this.$t('playnite.status_disabled') || 'Disabled'
-        if (st.active) return this.$t('playnite.status_connected')
+        if (!st.extensions_dir) return (this.$t('playnite.status_unknown') || this.$t('playnite.status_not_running_unknown'))
         if (st.session_required) return this.$t('playnite.status_desktop_required') || 'Desktop Session Required'
-        if (st.playnite_running === false) return this.$t('playnite.status_not_running_unknown') || 'Playnite not running — plugin status unknown'
         if (st.installed === false) return this.$t('playnite.status_uninstalled') || 'Uninstalled'
-        // If installed and Playnite is running but not active, likely waiting for the plugin to connect
-        if (st.installed === true && st.playnite_running === true && !st.active) return this.$t('playnite.status_waiting') || 'Waiting for plugin'
-        // Fallback
-        return this.$t('_common.unknown') || 'Unknown'
+        if (st.active) return this.$t('playnite.status_connected')
+        return this.$t('playnite.status_waiting') || 'Not Connected'
       },
       statusBadgeClass() {
         const st = this.status || {}
         if (st.enabled === false) return 'bg-secondary'
-        if (st.active) return 'bg-success'
+        if (!st.extensions_dir) return 'bg-secondary'
         if (st.session_required) return 'bg-warning text-dark'
-        if (st.playnite_running === false) return 'bg-danger'
-        if (st.installed === false) return 'bg-secondary'
-        if (st.installed === true && st.playnite_running === true && !st.active) return 'bg-warning text-dark'
-        return 'bg-secondary'
+        if (st.installed === false) return 'bg-danger'
+        if (st.active) return 'bg-success'
+        return 'bg-warning text-dark'
       },
       selectedCategories() {
         const raw = this.playnite.playnite_sync_categories || ''

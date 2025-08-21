@@ -52,13 +52,7 @@ namespace confighttp {
     }
   }
 
-  static std::filesystem::path conf_get_default_playnite_ext_dir() {
-    wchar_t appdataPath[MAX_PATH] = {};
-    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, appdataPath))) {
-      return {};
-    }
-    return std::filesystem::path(appdataPath) / L"Playnite" / L"Extensions" / L"SunshinePlaynite";
-  }
+  // No longer needed: old fallback path resolver removed with AssocQueryString-based detection
 
   void getPlayniteStatus(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
@@ -69,8 +63,7 @@ namespace confighttp {
     out["enabled"] = config::playnite.enabled;
     out["active"] = platf::playnite::is_active();
     bool session_required = false;
-    bool playnite_running = false;
-    bool installed_unknown = false;
+    // Deprecated fields removed: playnite_running, installed_unknown
     std::string destPath;
     std::filesystem::path dest;
     // If there is no active console desktop session, mark as session required.
@@ -84,37 +77,21 @@ namespace confighttp {
     } catch (...) {
       // If we cannot determine, leave as-is
     }
-    // Determine if Playnite is currently running (Desktop or Fullscreen app)
-    try {
-      auto d = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
-      auto f = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
-      playnite_running = !d.empty() || !f.empty();
-    } catch (...) {
-      playnite_running = false;
-    }
-
-    // If Playnite is not running, we cannot reliably detect plugin installation
-    if (!playnite_running) {
-      installed_unknown = true;
-      out["installed_unknown"] = true;
-      out["extensions_dir"] = std::string();
-    } else {
-      if (platf::playnite::get_extension_target_dir(destPath)) {
-        dest = destPath;
-      } else {
-        // Could not resolve the user's Playnite extensions directory, likely due to no active desktop session
-        session_required = true;
-        dest = conf_get_default_playnite_ext_dir();
-      }
+    // Resolve the user's Playnite extensions directory via URL association.
+    // Requires user impersonation when running as SYSTEM.
+    if (platf::playnite::get_extension_target_dir(destPath)) {
+      dest = destPath;
       bool installed = std::filesystem::exists(dest / "extension.yaml") && std::filesystem::exists(dest / "SunshinePlaynite.psm1");
       out["installed"] = installed;
       out["extensions_dir"] = dest.string();
+    } else {
+      out["installed"] = false;
+      out["extensions_dir"] = std::string();
     }
     out["session_required"] = session_required;
-    out["playnite_running"] = playnite_running;
+    // For UI backwards-compatibility: expose user_session_active derived from session_required
+    out["user_session_active"] = !session_required;
     BOOST_LOG(info) << "Playnite status: enabled=" << out["enabled"] << ", active=" << out["active"]
-                    << ", running=" << (playnite_running ? "true" : "false")
-                    << ", installed_unknown=" << (installed_unknown ? "true" : "false")
                     << ", session_required=" << (session_required ? "true" : "false")
                     << ", dir=" << (dest.empty() ? std::string("(unknown)") : dest.string());
     send_response(response, out);
@@ -209,6 +186,16 @@ namespace confighttp {
     print_req(request);
     nlohmann::json out;
     bool ok = platf::playnite::force_sync();
+    out["status"] = ok;
+    send_response(response, out);
+  }
+
+  void postPlayniteLaunch(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) return;
+    print_req(request);
+    nlohmann::json out;
+    // Use unified restart path: will start Playnite if not running
+    bool ok = platf::playnite::restart_playnite();
     out["status"] = ok;
     send_response(response, out);
   }

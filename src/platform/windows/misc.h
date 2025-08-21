@@ -7,6 +7,8 @@
 // standard includes
 #include <chrono>
 #include <string_view>
+#include <functional>
+#include <system_error>
 
 // platform includes
 #include <Windows.h>
@@ -33,4 +35,15 @@ namespace platf {
    * @return The converted UTF-8 string.
    */
   std::string to_utf8(const std::wstring &string);
+
+  // Impersonate the given user token and invoke the callback while impersonating.
+  // Returns an std::error_code describing any failure (empty on success).
+  std::error_code impersonate_current_user(HANDLE user_token, std::function<void()> callback);
+
+  /**
+   * @brief Override per-user predefined registry keys (HKCU, HKCR) for the given token.
+   * @param token Primary user token to use for HKCU/HKCR views, or nullptr to restore defaults.
+   * @return true on success.
+   */
+  bool override_per_user_predefined_keys(HANDLE token);
 }  // namespace platf
