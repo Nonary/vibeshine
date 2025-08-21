@@ -38,8 +38,9 @@ export const useConnectivityStore = defineStore('connectivity', () => {
     if (checking.value) return;
     checking.value = true;
     try {
-      // Any HTTP response (including 401/4xx/5xx) indicates server is reachable
-      const res = await http.get('/api/metadata', {
+      // Any HTTP response (including 401/4xx/5xx) indicates server is reachable.
+      // Use an endpoint allowed while logged out.
+      const res = await http.get('/api/configLocale', {
         validateStatus: () => true,
         timeout: 2500,
       });
@@ -51,12 +52,18 @@ export const useConnectivityStore = defineStore('connectivity', () => {
         failCount.value = 0;
         setOffline(false);
         lastOk.value = Date.now();
-        // If we were offline recently, perform a hard reload to recover state/assets
+        // If we were offline, optionally refresh after prolonged outage only
         if (offlineSince.value != null) {
-          const waited = Date.now() - offlineSince.value;
-          const delay = waited < 200 ? 200 - waited : 0;
-          setTimeout(() => hardReload(), delay);
-          // Don't clear offlineSince until reload replaces the page
+          const offlineDuration = Date.now() - offlineSince.value;
+          const reloadAfterOfflineMs = 10000; // avoid hard reloads on brief blips/login
+          if (offlineDuration >= reloadAfterOfflineMs) {
+            const delay = offlineDuration < 200 ? 200 - offlineDuration : 0;
+            setTimeout(() => hardReload(), delay);
+            // Let page reload clear state
+          } else {
+            // Clear offline marker without reload (quick recovery)
+            offlineSince.value = null;
+          }
         }
       }
     } catch (e) {

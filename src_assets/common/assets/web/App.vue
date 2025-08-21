@@ -61,6 +61,12 @@
               <main class="flex-1 overflow-auto p-4 md:p-6 space-y-6">
                 <router-view />
               </main>
+              <!-- Immediate background for login modal (no transition delay) -->
+              <div v-if="loginOverlay" class="fixed inset-0 z-[110]">
+                <div
+                  class="absolute inset-0 bg-gradient-to-br from-white/70 via-white/60 to-white/70 dark:from-black/70 dark:via-black/60 dark:to-black/70 backdrop-blur-md"
+                ></div>
+              </div>
               <LoginModal />
               <OfflineOverlay />
               <transition name="fade-fast">
@@ -167,6 +173,16 @@ watch(
 );
 
 const loggedOut = ref(false);
+
+// Mirror LoginModal visibility for instant background application
+const authForOverlay = useAuthStore();
+const loginOverlay = computed(
+  () =>
+    authForOverlay.ready &&
+    authForOverlay.showLoginModal &&
+    !authForOverlay.isAuthenticated &&
+    !authForOverlay.logoutInitiated,
+);
 
 async function logout() {
   const authStore = useAuthStore();
