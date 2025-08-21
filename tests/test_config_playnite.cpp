@@ -52,17 +52,7 @@ TEST_F(PlayniteConfigFixture, Lists_ParseJsonArrayAndCsv) {
   EXPECT_EQ(config::playnite.exclude_games[2], "z");
 }
 
-TEST_F(PlayniteConfigFixture, Paths_RelativeResolvedUnderAppdataAndDirectoriesCreated) {
-  auto base = platf::appdata();
-  fs::path rel = fs::path("ut_playnite_cfg") / "sub" / "target.txt";
-  std::unordered_map<std::string, std::string> vars{{"playnite_install_dir", rel.generic_string()},{"playnite_extensions_dir", rel.generic_string()}};
-  config::apply_playnite(vars);
-  fs::path expect = base / rel;
-  EXPECT_EQ(fs::path(config::playnite.install_dir), expect);
-  EXPECT_EQ(fs::path(config::playnite.extensions_dir), expect);
-  // Parent directories should exist per parse_path behavior
-  EXPECT_TRUE(fs::exists(expect.parent_path()));
-}
+// Note: extensions-dir override removed; no path config test required here.
 
 TEST_F(PlayniteConfigFixture, FocusExitOnFirst_ParsesBoolean) {
   std::unordered_map<std::string, std::string> vars{{"playnite_focus_exit_on_first","true"}};

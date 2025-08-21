@@ -48,7 +48,7 @@
             <div class="col-auto"><code>{{ status.extensions_dir }}</code></div>
           </div>
 
-          <button class="btn btn-primary mt-2 me-2" @click="install" :disabled="installing">
+          <button v-if="status.playnite_running !== false" class="btn btn-primary mt-2 me-2" @click="install" :disabled="installing">
             <span v-if="installing" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
             <template v-if="status.installed">{{ $t('playnite.reinstall_button') || 'Reinstall Plugin' }}</template>
             <template v-else>{{ $t('playnite.install_button') }}</template>
@@ -189,18 +189,8 @@
               <div class="form-text">Excluded games won’t be auto-synced from Playnite. Uses Playnite game IDs.</div>
             </div>
           </div>
-          <div class="row mb-3">
-            <div class="col-md-8">
-              <label for="extdir" class="form-label">{{ $t('playnite.extensions_dir') }}</label>
-              <input id="extdir" type="text" class="form-control" v-model="playnite.playnite_extensions_dir" />
-            </div>
-          </div>
-          <div class="row mb-3">
-            <div class="col-md-8">
-              <label for="installdir" class="form-label">{{ $t('playnite.install_dir') }}</label>
-              <input id="installdir" type="text" class="form-control" v-model="playnite.playnite_install_dir" />
-            </div>
-          </div>
+          
+          
 
           <div class="mt-3">
             <button class="btn btn-primary me-2" @click="save" :disabled="saving">
@@ -233,8 +223,6 @@
     playnite_focus_exit_on_first: 'disabled',
     playnite_sync_categories: '',
     playnite_exclude_games: '',
-    playnite_install_dir: '',
-    playnite_extensions_dir: '',
   }
 
   const app = createApp({
@@ -244,7 +232,7 @@
         platform: '',
         currentConfig: {},
         playnite: JSON.parse(JSON.stringify(defaults)),
-        status: { enabled: false, active: false, installed: false, extensions_dir: '', session_required: false, playnite_running: false },
+        status: { enabled: false, active: false, installed: false, installed_unknown: false, extensions_dir: '', session_required: false, playnite_running: false },
         saving: false,
         saved: false,
         restarted: false,
@@ -266,6 +254,18 @@
     },
     created() {
       this.refreshConfig()
+      // Auto-refresh plugin status when on Windows
+      this._statusTimer = setInterval(() => {
+        if (this.platform === 'windows') {
+          this.refreshStatus()
+        }
+      }, 3000)
+    },
+    beforeUnmount() {
+      if (this._statusTimer) {
+        clearInterval(this._statusTimer)
+        this._statusTimer = null
+      }
     },
     methods: {
       async refreshConfig() {
@@ -408,8 +408,8 @@
         if (st.enabled === false) return this.$t('playnite.status_disabled') || 'Disabled'
         if (st.active) return this.$t('playnite.status_connected')
         if (st.session_required) return this.$t('playnite.status_desktop_required') || 'Desktop Session Required'
+        if (st.playnite_running === false) return this.$t('playnite.status_not_running_unknown') || 'Playnite not running — plugin status unknown'
         if (st.installed === false) return this.$t('playnite.status_uninstalled') || 'Uninstalled'
-        if (st.playnite_running === false) return this.$t('playnite.status_not_running') || 'Playnite not running'
         // If installed and Playnite is running but not active, likely waiting for the plugin to connect
         if (st.installed === true && st.playnite_running === true && !st.active) return this.$t('playnite.status_waiting') || 'Waiting for plugin'
         // Fallback
@@ -420,8 +420,8 @@
         if (st.enabled === false) return 'bg-secondary'
         if (st.active) return 'bg-success'
         if (st.session_required) return 'bg-warning text-dark'
-        if (st.installed === false) return 'bg-secondary'
         if (st.playnite_running === false) return 'bg-danger'
+        if (st.installed === false) return 'bg-secondary'
         if (st.installed === true && st.playnite_running === true && !st.active) return 'bg-warning text-dark'
         return 'bg-secondary'
       },

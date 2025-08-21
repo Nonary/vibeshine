@@ -225,11 +225,7 @@ namespace platf::playnite {
   // Safe implementation to avoid problematic wide-char literal in older compilers
   static bool resolve_extensions_dir_safe(std::filesystem::path &destOut) {
     BOOST_LOG(info) << "Playnite installer: resolving extensions dir";
-    if (!config::playnite.extensions_dir.empty()) {
-      destOut = std::filesystem::path(config::playnite.extensions_dir);
-      BOOST_LOG(info) << "Playnite installer: using configured extensions_dir=" << destOut.string();
-      return true;
-    }
+    // No longer using configured overrides; resolve dynamically
     auto pids1 = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
     auto pids2 = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
     BOOST_LOG(info) << "Playnite installer: found Playnite PIDs desktop=" << pids1.size() << ", fullscreen=" << pids2.size();
@@ -428,14 +424,6 @@ namespace platf::playnite {
 
   // Helper: attempt to resolve a Playnite Desktop exe path if not running
   static bool resolve_playnite_exe_path(std::wstring &exe_path_out) {
-    // Prefer configured install_dir
-    try {
-      if (!config::playnite.install_dir.empty()) {
-        std::filesystem::path p = std::filesystem::path(config::playnite.install_dir) / L"Playnite.DesktopApp.exe";
-        if (std::filesystem::exists(p)) { exe_path_out = p.wstring(); return true; }
-      }
-    } catch (...) {}
-
     // Try the active user's LocalAppData path
     try {
       platf::dxgi::safe_token user_token; user_token.reset(platf::dxgi::retrieve_users_token(false));
@@ -536,9 +524,6 @@ namespace platf::playnite {
       if (!dest_override.empty()) {
         destDir = std::filesystem::path(dest_override);
         BOOST_LOG(info) << "Playnite installer: using API override destDir=" << destDir.string();
-      } else if (!config::playnite.extensions_dir.empty()) {
-        destDir = config::playnite.extensions_dir;
-        BOOST_LOG(info) << "Playnite installer: using configured extensions_dir=" << destDir.string();
       } else {
         // Prefer the same resolution used by status API
         std::string resolved;
