@@ -48,7 +48,7 @@
           {{ $t('playnite.plugin_outdated', { installed: status.plugin_version || '?', latest: status.plugin_latest || '?' }) }}
         </n-alert>
         <div class="flex items-center gap-2">
-          <n-button type="primary" size="small" :loading="installing" @click="openInstallConfirm">
+          <n-button v-if="status.playnite_running !== false" type="primary" size="small" :loading="installing" @click="openInstallConfirm">
             <i class="fas fa-plug" />
             <span class="ml-2">
               {{
@@ -152,16 +152,7 @@
         </div>
       </div>
 
-      <div class="grid md:grid-cols-2 gap-4">
-        <div>
-          <label class="text-xs font-semibold">{{ $t('playnite.extensions_dir') }}</label>
-          <n-input v-model:value="cfg.playnite_extensions_dir" />
-        </div>
-        <div>
-          <label class="text-xs font-semibold">{{ $t('playnite.install_dir') || 'Playnite Install Directory' }}</label>
-          <n-input v-model:value="cfg.playnite_install_dir" />
-        </div>
-      </div>
+      
     </section>
   </div>
   <!-- Install/Upgrade confirmation -->
@@ -205,8 +196,10 @@ const { t } = useI18n();
 
 const status = reactive<{
   installed: boolean;
+  installed_unknown?: boolean;
   active: boolean;
   user_session_active: boolean;
+  playnite_running?: boolean;
   extensions_dir: string;
   plugin_version?: string;
   plugin_latest?: string;
@@ -249,8 +242,10 @@ async function refreshStatus() {
     if (r.status === 200 && r.data) {
       const d = r.data as any;
       status.installed = !!d.installed;
+      status.installed_unknown = !!d.installed_unknown;
       status.active = !!d.active;
       status.user_session_active = !!d.user_session_active;
+      status.playnite_running = d.playnite_running;
       status.extensions_dir = d.extensions_dir || '';
       status.plugin_version = d.plugin_version || d.version || status.plugin_version;
       status.plugin_latest = d.plugin_latest || d.latest_version || status.plugin_latest;
@@ -329,8 +324,9 @@ onMounted(async () => {
   loadCategories();
 });
 
-const statusKind = computed<'active' | 'session' | 'uninstalled'>(() => {
-  if (!status.installed) return 'uninstalled';
+const statusKind = computed<'active' | 'session' | 'not_running' | 'uninstalled'>(() => {
+  if (status.playnite_running === false) return 'not_running';
+  if (!status.installed && !status.installed_unknown) return 'uninstalled';
   if (!status.user_session_active) return 'session';
   return 'active';
 });
@@ -338,6 +334,7 @@ const statusType = computed<'success' | 'warning' | 'error' | 'default'>(() => {
   switch (statusKind.value) {
     case 'active': return 'success';
     case 'session': return 'warning';
+    case 'not_running': return 'error';
     case 'uninstalled': return 'error';
     default: return 'default';
   }
@@ -346,6 +343,7 @@ const statusText = computed<string>(() => {
   switch (statusKind.value) {
     case 'active': return t('playnite.status_active');
     case 'session': return t('playnite.status_session_required');
+    case 'not_running': return t('playnite.status_not_running_unknown');
     case 'uninstalled': return t('playnite.status_uninstalled');
     default: return '';
   }

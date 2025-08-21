@@ -157,8 +157,6 @@ namespace config {
     parse_list(vars, "playnite_sync_categories", playnite.sync_categories);
     parse_list(vars, "playnite_exclude_games", playnite.exclude_games);
 
-    // paths
-    parse_path(vars, "playnite_install_dir", playnite.install_dir);
-    parse_path(vars, "playnite_extensions_dir", playnite.extensions_dir);
+    // paths (overrides removed)
   }
 }  // namespace config

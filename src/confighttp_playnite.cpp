@@ -70,6 +70,7 @@ namespace confighttp {
     out["active"] = platf::playnite::is_active();
     bool session_required = false;
     bool playnite_running = false;
+    bool installed_unknown = false;
     std::string destPath;
     std::filesystem::path dest;
     // If there is no active console desktop session, mark as session required.
@@ -83,16 +84,6 @@ namespace confighttp {
     } catch (...) {
       // If we cannot determine, leave as-is
     }
-    if (platf::playnite::get_extension_target_dir(destPath)) {
-      dest = destPath;
-    } else {
-      // Could not resolve the user's Playnite extensions directory, likely due to no active desktop session
-      session_required = true;
-      dest = conf_get_default_playnite_ext_dir();
-    }
-    bool installed = std::filesystem::exists(dest / "extension.yaml") && std::filesystem::exists(dest / "SunshinePlaynite.psm1");
-    out["installed"] = installed;
-    out["extensions_dir"] = dest.string();
     // Determine if Playnite is currently running (Desktop or Fullscreen app)
     try {
       auto d = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
@@ -101,12 +92,31 @@ namespace confighttp {
     } catch (...) {
       playnite_running = false;
     }
+
+    // If Playnite is not running, we cannot reliably detect plugin installation
+    if (!playnite_running) {
+      installed_unknown = true;
+      out["installed_unknown"] = true;
+      out["extensions_dir"] = std::string();
+    } else {
+      if (platf::playnite::get_extension_target_dir(destPath)) {
+        dest = destPath;
+      } else {
+        // Could not resolve the user's Playnite extensions directory, likely due to no active desktop session
+        session_required = true;
+        dest = conf_get_default_playnite_ext_dir();
+      }
+      bool installed = std::filesystem::exists(dest / "extension.yaml") && std::filesystem::exists(dest / "SunshinePlaynite.psm1");
+      out["installed"] = installed;
+      out["extensions_dir"] = dest.string();
+    }
     out["session_required"] = session_required;
     out["playnite_running"] = playnite_running;
     BOOST_LOG(info) << "Playnite status: enabled=" << out["enabled"] << ", active=" << out["active"]
-                    << ", installed=" << installed << ", running=" << (playnite_running ? "true" : "false")
+                    << ", running=" << (playnite_running ? "true" : "false")
+                    << ", installed_unknown=" << (installed_unknown ? "true" : "false")
                     << ", session_required=" << (session_required ? "true" : "false")
-                    << ", dir=" << dest.string();
+                    << ", dir=" << (dest.empty() ? std::string("(unknown)") : dest.string());
     send_response(response, out);
   }
 

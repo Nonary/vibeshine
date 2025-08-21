@@ -37,9 +37,7 @@ namespace config {
     // than the configured recent slots.
     bool autosync_require_replacement = true;
 
-    // Installation/paths
-    std::string install_dir;                // Optional hint where Playnite is installed
-    std::string extensions_dir;             // Playnite extensions dir; default: %AppData%/Playnite/Extensions/SunshinePlaynite
+    // Installation/paths (overrides removed)
   };
 
   extern playnite_t playnite;

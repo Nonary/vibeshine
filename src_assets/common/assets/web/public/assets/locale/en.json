@@ -429,6 +429,7 @@
     "status_desktop_required": "Desktop Session Required",
     "status_uninstalled": "Uninstalled",
     "status_not_running": "Playnite not running",
+    "status_not_running_unknown": "Playnite not running — plugin status unknown",
     "session_required": "A desktop session is required for Playnite integration. Please log into Windows (unlock the screen or connect to the console) to continue.",
     "session_required_tooltip": "No active desktop session detected. Log into Windows to enable Playnite integration.",
     "install_button": "Install Sunshine Plugin",
