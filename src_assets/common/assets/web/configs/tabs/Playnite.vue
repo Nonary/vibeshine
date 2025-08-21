@@ -75,8 +75,6 @@
             id="playnite_auto_sync"
             :default="store.defaults.playnite_auto_sync"
             :localePrefix="'playnite'"
-            :label="$t('playnite.auto_sync')"
-            :desc="''"
           />
         </div>
         <div>
