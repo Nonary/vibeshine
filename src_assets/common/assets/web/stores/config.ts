@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref } from 'vue';
 import { http } from '@/http';
 
 // Metadata describing build/runtime info returned by /api/meta
@@ -217,6 +217,17 @@ export const useConfigStore = defineStore('config', () => {
   // Single meta object kept completely separate from user config
   const metadata = ref<MetaInfo>({});
 
+  // --- Autosave (PATCH) queue ------------------------------------------------
+  // Holds only non-manual changes since last flush. Keys are replaced with
+  // the most recent value. Values equal to defaults are converted to null
+  // so the server removes them to fall back to default behavior.
+  const patchQueue = ref<Record<string, any>>({});
+  let flushTimer: any = null; // one-shot timer
+  let flushInFlight = false;
+  const autosaveIntervalMs = 3000;
+  const nextFlushAt = ref<number | null>(null); // when the current timer will fire
+  const lastSaveResult = ref<{ appliedNow?: boolean; deferred?: boolean; restartRequired?: boolean } | null>(null);
+
   function buildWrapper() {
     const target: any = {};
     // union of keys (defaults + current data)
@@ -261,6 +272,12 @@ export const useConfigStore = defineStore('config', () => {
           } else {
             version.value++;
             savingState.value = 'dirty';
+            // queue for patch: send null when value matches default
+            const dv = (defaultMap as any)[k];
+            const toSend = deepEqual(v, dv) ? null : v;
+            patchQueue.value = { ...patchQueue.value, [k]: toSend };
+            // reset autosave timer to full interval on any pending change
+            scheduleAutosave();
           }
         },
       });
@@ -351,6 +368,11 @@ export const useConfigStore = defineStore('config', () => {
 
   async function save(): Promise<boolean> {
     try {
+      // First flush any pending PATCH changes for auto-saved keys
+      if (Object.keys(patchQueue.value).length) {
+        const ok = await flushPatchQueue();
+        if (!ok) return false;
+      }
       savingState.value = 'saving';
       // Post the full effective config so server-side non-merge save doesn't drop keys
       const body = serializeFull();
@@ -359,6 +381,13 @@ export const useConfigStore = defineStore('config', () => {
         validateStatus: () => true,
       });
       if (res.status === 200) {
+        try {
+          lastSaveResult.value = {
+            appliedNow: !!(res as any)?.data?.appliedNow,
+            deferred: !!(res as any)?.data?.deferred,
+            restartRequired: !!(res as any)?.data?.restartRequired,
+          };
+        } catch {}
         savingState.value = 'saved';
         manualDirty.value = false;
         // Reset to idle after a short delay if no new changes
@@ -425,6 +454,84 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  async function flushPatchQueue(): Promise<boolean> {
+    if (flushInFlight) return true;
+    const payload = patchQueue.value;
+    if (!payload || Object.keys(payload).length === 0) return true;
+    // Clear queue immediately (we'll merge any new changes on top if request fails)
+    patchQueue.value = {};
+    flushInFlight = true;
+    // Clear any scheduled timer since we're flushing now
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = null;
+    nextFlushAt.value = null;
+    try {
+      savingState.value = 'saving';
+      const res = await http.patch('/api/config', payload, {
+        headers: { 'Content-Type': 'application/json' },
+        validateStatus: () => true,
+      });
+      if (res.status === 200) {
+        try {
+          lastSaveResult.value = {
+            appliedNow: !!(res as any)?.data?.appliedNow,
+            deferred: !!(res as any)?.data?.deferred,
+            restartRequired: !!(res as any)?.data?.restartRequired,
+          };
+        } catch {}
+        savingState.value = 'saved';
+        setTimeout(() => {
+          if (savingState.value === 'saved' && !manualDirty.value && Object.keys(patchQueue.value).length === 0) {
+            savingState.value = 'idle';
+          }
+        }, 3000);
+        return true;
+      }
+      savingState.value = 'error';
+      return false;
+    } catch (e) {
+      savingState.value = 'error';
+      return false;
+    } finally {
+      flushInFlight = false;
+    }
+  }
+
+  function startAutosave() {
+    // no-op; autosave uses a debounced one-shot timer via scheduleAutosave()
+  }
+
+  function stopAutosave() {
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = null;
+    nextFlushAt.value = null;
+  }
+
+  async function reloadConfig() {
+    _data.value = null;
+    return await fetchConfig(true);
+  }
+
+  // Start autosave queue watcher by default
+  startAutosave();
+
+  function hasPendingPatch() {
+    return Object.keys(patchQueue.value).length > 0;
+  }
+  function nextAutosaveAt(): number {
+    return nextFlushAt.value || 0;
+  }
+
+  function scheduleAutosave() {
+    if (flushTimer) clearTimeout(flushTimer);
+    nextFlushAt.value = Date.now() + autosaveIntervalMs;
+    flushTimer = setTimeout(() => {
+      nextFlushAt.value = null;
+      if (Object.keys(patchQueue.value).length === 0) return;
+      void flushPatchQueue();
+    }, autosaveIntervalMs);
+  }
+
   return {
     // state
     tabs,
@@ -444,5 +551,14 @@ export const useConfigStore = defineStore('config', () => {
     resetManualDirty,
     save,
     serialize,
+    // queue/autosave utils
+    flushPatchQueue,
+    startAutosave,
+    stopAutosave,
+    reloadConfig,
+    hasPendingPatch,
+    autosaveIntervalMs,
+    nextAutosaveAt,
+    lastSaveResult,
   };
 });

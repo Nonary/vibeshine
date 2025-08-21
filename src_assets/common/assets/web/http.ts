@@ -35,7 +35,7 @@ function initAuthHandling(): void {
         err.code = 'ERR_CANCELED';
         return Promise.reject(err);
       }
-      const allowWhenLoggedOut = /(\s*\/api\/auth\/(login|status)\b|\s*\/api\/password\b)/.test(path);
+      const allowWhenLoggedOut = /(\s*\/api\/auth\/(login|status)\b|\s*\/api\/password\b|\s*\/api\/configLocale\b)/.test(path);
       if (!auth.isAuthenticated && !allowWhenLoggedOut) {
         const err: any = new Error('Request blocked: unauthenticated');
         err.code = 'ERR_CANCELED';

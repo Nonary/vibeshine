@@ -171,7 +171,7 @@ const isLoading = computed(() => store.loading === true);
 const isError = computed(() => store.error != null);
 const isReady = computed(() => !!config.value && !isLoading.value && !isError.value);
 
-const saveState = ref('idle'); // 'idle' | 'saving' | 'saved' | 'error'
+const saveState = computed(() => store.savingState || 'idle');
 const restarted = ref(false);
 const dirty = ref(false);
 const autoSave = ref(true);
@@ -238,14 +238,8 @@ async function save() {
   if (!auth.isAuthenticated) return;
   if (!config.value) return;
   restarted.value = false;
-  saveState.value = 'saving';
   const ok = await (store.save ? store.save() : Promise.resolve(false));
-  if (ok) {
-    saveState.value = 'saved';
-    dirty.value = false;
-  } else {
-    saveState.value = 'error';
-  }
+  if (ok) dirty.value = false;
 }
 
 async function apply() {
@@ -259,15 +253,8 @@ async function apply() {
   );
   setTimeout(() => {
     restarted.value = false;
-    if (!autoSave.value) saveState.value = 'idle';
+    // state will settle back to idle via the store
   }, 5000);
-}
-
-let t = null;
-function debounceSave() {
-  if (!autoSave.value) return;
-  clearTimeout(t);
-  t = setTimeout(save, 800);
 }
 
 // Mark dirty / autosave when version increments (user changed something)
@@ -277,7 +264,6 @@ watch(
     if (!isReady.value || oldV === undefined) return; // ignore before ready
     dirty.value = true;
     if (store.savingState !== undefined) store.savingState = 'dirty';
-    debounceSave();
   },
 );
 

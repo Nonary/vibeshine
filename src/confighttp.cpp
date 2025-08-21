@@ -1198,6 +1198,108 @@ namespace confighttp {
     }
   }
 
+  /**
+   * @brief Partial update of configuration (PATCH /api/config).
+   * Merges provided JSON object into the existing key=value style config file.
+   * Removes keys when value is null or an empty string. Detects whether a
+   * restart is required and attempts to apply immediately when safe.
+   */
+  void patchConfig(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      nlohmann::json output_tree;
+      nlohmann::json patch_tree = nlohmann::json::parse(ss);
+      if (!patch_tree.is_object()) {
+        bad_request(response, request, "PATCH body must be a JSON object");
+        return;
+      }
+
+      // Load existing config into a map
+      std::unordered_map<std::string, std::string> current = config::parse_config(
+        file_handler::read_file(config::sunshine.config_file.c_str())
+      );
+
+      // Track which keys are being modified to detect restart requirements
+      std::set<std::string> changed_keys;
+
+      for (auto it = patch_tree.begin(); it != patch_tree.end(); ++it) {
+        const std::string key = it.key();
+        const nlohmann::json &val = it.value();
+        changed_keys.insert(key);
+
+        // Remove key when explicitly null or empty string
+        if (val.is_null() || (val.is_string() && val.get<std::string>().empty())) {
+          auto curIt = current.find(key);
+          if (curIt != current.end()) current.erase(curIt);
+          continue;
+        }
+
+        // Persist value: strings are raw, non-strings are dumped as JSON
+        if (val.is_string()) {
+          current[key] = val.get<std::string>();
+        } else {
+          current[key] = val.dump();
+        }
+      }
+
+      // Write back full merged config file
+      std::stringstream config_stream;
+      for (const auto &kv : current) {
+        config_stream << kv.first << " = " << kv.second << std::endl;
+      }
+      file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
+
+      // Detect restart-required keys
+      static const std::set<std::string> restart_required_keys = {
+        "port",
+        "address_family",
+        "upnp",
+        "pkey",
+        "cert"
+      };
+      bool restart_required = false;
+      for (const auto &k : changed_keys) {
+        if (restart_required_keys.count(k)) {
+          restart_required = true;
+          break;
+        }
+      }
+
+      bool applied_now = false;
+      bool deferred = false;
+      if (!restart_required) {
+        if (rtsp_stream::session_count() == 0) {
+          // Apply immediately
+          config::apply_config_now();
+          applied_now = true;
+        } else {
+          config::mark_deferred_reload();
+          deferred = true;
+        }
+      }
+
+      output_tree["status"] = true;
+      output_tree["appliedNow"] = applied_now;
+      output_tree["deferred"] = deferred;
+      output_tree["restartRequired"] = restart_required;
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "PatchConfig: "sv << e.what();
+      bad_request(response, request, e.what());
+      return;
+    }
+  }
+
   // Lightweight session status for UI messaging
   void getSessionStatus(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
@@ -1718,6 +1820,9 @@ namespace confighttp {
     server.resource["^/api/apps$"]["POST"] = saveApp;
     server.resource["^/api/config$"]["GET"] = getConfig;
     server.resource["^/api/config$"]["POST"] = saveConfig;
+  // Partial updates for config settings; merges with existing file and
+  // removes keys when value is null or empty string.
+  server.resource["^/api/config$"]["PATCH"] = patchConfig;
     server.resource["^/api/metadata$"]["GET"] = getMetadata;
     server.resource["^/api/configLocale$"]["GET"] = getLocale;
     server.resource["^/api/restart$"]["POST"] = restart;

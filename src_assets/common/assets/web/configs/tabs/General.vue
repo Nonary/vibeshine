@@ -124,18 +124,18 @@ function removeCmd(index) {
         >
           <div class="col-span-5">
             <n-input
-              v-model="c.do"
+              v-model:value="c.do"
               type="text"
               class="monospace"
-              @input="store.markManualDirty()"
+              @update:value="store.markManualDirty()"
             />
           </div>
           <div class="col-span-5">
             <n-input
-              v-model="c.undo"
+              v-model:value="c.undo"
               type="text"
               class="monospace"
-              @input="store.markManualDirty()"
+              @update:value="store.markManualDirty()"
             />
           </div>
           <div v-if="platform === 'windows'" class="col-span-1">
