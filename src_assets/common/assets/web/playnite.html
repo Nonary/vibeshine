@@ -75,10 +75,8 @@
             <div class="col-md-6">
               <Checkbox v-model="playnite.playnite_auto_sync"
                         id="playnite_auto_sync"
-                        :default="'disabled'"
+                        :default="'enabled'"
                         :localePrefix="'playnite'"
-                        :label="$t('playnite.auto_sync')"
-                        :desc="''"
               />
             </div>
           </div>
@@ -225,10 +223,10 @@
 
   const defaults = {
     playnite_enabled: 'disabled',
-    playnite_auto_sync: 'disabled',
-    playnite_recent_games: 20,
-    playnite_recent_max_age_days: 0,
-    playnite_autosync_delete_after_days: 0,
+    playnite_auto_sync: 'enabled',
+    playnite_recent_games: 10,
+    playnite_recent_max_age_days: 30,
+    playnite_autosync_delete_after_days: 14,
     playnite_autosync_require_replacement: 'enabled',
     playnite_focus_attempts: 3,
     playnite_focus_timeout_secs: 15,

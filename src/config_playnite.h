@@ -12,11 +12,11 @@ namespace config {
 
   struct playnite_t {
     bool enabled = false;                   // enable Playnite integration (IPC)
-    bool auto_sync = false;                 // enable automatic sync from Playnite
+    bool auto_sync = true;                  // enable automatic sync from Playnite
     int recent_games = 10;                  // N most recent games
     // If > 0, only treat games whose last played time is within this many days
     // as "recent" for the purposes of recent-based auto-sync selection.
-    int recent_max_age_days = 0;            // 0 = no age limit
+    int recent_max_age_days = 30;           // 0 = no age limit
     std::vector<std::string> sync_categories; // categories to sync
 
     // Focus behavior
@@ -29,7 +29,7 @@ namespace config {
     // auto-synced app that has not been launched from Playnite within this
     // many days of being added by auto-sync will be automatically removed.
     // 0 = remove immediately when it falls out of the selected set.
-    int autosync_delete_after_days = 0;
+    int autosync_delete_after_days = 14;
 
     // When true, only purge auto-synced games that no longer qualify
     // if there is a qualifying replacement to fill the slot. When false,
