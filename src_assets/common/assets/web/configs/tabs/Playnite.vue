@@ -323,8 +323,9 @@ onMounted(async () => {
 });
 
 const statusKind = computed<'active' | 'waiting' | 'session' | 'uninstalled' | 'unknown'>(() => {
-  if (!status.extensions_dir) return 'unknown';
+  // Prefer login/session requirement over unknown detection
   if (!status.user_session_active) return 'session';
+  if (!status.extensions_dir) return 'unknown';
   if (!status.installed) return 'uninstalled';
   return status.active ? 'active' : 'waiting';
 });
