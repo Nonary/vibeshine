@@ -8,14 +8,7 @@
       <h3 class="text-sm font-semibold uppercase tracking-wider">{{ $t('playnite.status_title') }}</h3>
       <div class="bg-light/70 dark:bg-surface/70 border border-dark/10 dark:border-light/10 rounded-lg p-4 space-y-4">
         <div>
-          <Checkbox
-            v-model="config.playnite_enabled"
-            id="playnite_enabled"
-            :default-value="store.defaults.playnite_enabled"
-            :localePrefix="'playnite'"
-            :label="$t('playnite.integration_enabled')"
-            :desc="''"
-          />
+          <Checkbox v-model="config.playnite_enabled" id="playnite_enabled" :default="store.defaults.playnite_enabled" :localePrefix="'playnite'" :label="$t('playnite.integration_enabled')" :desc="''" />
         </div>
         <div class="text-sm grid md:grid-cols-3 gap-3">
           <div class="flex items-center gap-2">
@@ -48,13 +41,7 @@
           {{ $t('playnite.plugin_outdated', { installed: status.plugin_version || '?', latest: status.plugin_latest || '?' }) }}
         </n-alert>
         <div class="flex items-center gap-2">
-          <n-button
-            v-if="canLaunch"
-            size="small"
-            tertiary
-            :loading="launching"
-            @click="launchPlaynite"
-          >
+          <n-button v-if="canLaunch" size="small" tertiary :loading="launching" @click="launchPlaynite">
             <i class="fas fa-rocket" />
             <span class="ml-2">{{ $t('playnite.launch_button') || 'Launch Playnite' }}</span>
           </n-button>
@@ -80,12 +67,7 @@
       <h3 class="text-sm font-semibold uppercase tracking-wider">{{ $t('playnite.settings_title') }}</h3>
       <div class="grid md:grid-cols-3 gap-4">
         <div class="md:col-span-1">
-          <Checkbox
-            v-model="config.playnite_auto_sync"
-            id="playnite_auto_sync"
-            :default-value="store.defaults.playnite_auto_sync"
-            :localePrefix="'playnite'"
-          />
+          <Checkbox v-model="config.playnite_auto_sync" id="playnite_auto_sync" :default="store.defaults.playnite_auto_sync" :localePrefix="'playnite'" />
         </div>
         <div>
           <label class="text-xs font-semibold">{{ $t('playnite.recent_games') }}</label>
@@ -103,14 +85,7 @@
           <div class="text-[11px] opacity-70">{{ $t('playnite.delete_after_days_desc') }}</div>
         </div>
         <div class="md:col-span-2">
-          <Checkbox
-            v-model="config.playnite_autosync_require_replacement"
-            id="playnite_autosync_require_replacement"
-            :default-value="store.defaults.playnite_autosync_require_replacement"
-            :localePrefix="'playnite'"
-            :label="$t('playnite.require_replacement')"
-            :desc="$t('playnite.require_replacement_desc')"
-          />
+          <Checkbox v-model="config.playnite_autosync_require_replacement" id="playnite_autosync_require_replacement" :default="store.defaults.playnite_autosync_require_replacement" :localePrefix="'playnite'" :label="$t('playnite.require_replacement')" :desc="$t('playnite.require_replacement_desc')" />
         </div>
         <div>
           <label class="text-xs font-semibold">{{ $t('playnite.focus_attempts') || 'Auto-focus attempts' }}</label>
@@ -123,14 +98,7 @@
           <div class="text-[11px] opacity-70">{{ $t('playnite.focus_timeout_secs_help') || 'How long auto-focus runs while re-applying focus (0 to disable).' }}</div>
         </div>
         <div class="md:col-span-1 flex items-end">
-          <Checkbox
-            v-model="config.playnite_focus_exit_on_first"
-            id="playnite_focus_exit_on_first"
-            :default-value="store.defaults.playnite_focus_exit_on_first"
-            :localePrefix="'playnite'"
-            :label="$t('playnite.focus_exit_on_first') || 'Exit on first confirmed focus'"
-            :desc="$t('playnite.focus_exit_on_first_help') || 'Stop auto-focus after first success; otherwise, re-apply until attempts or timeout elapse.'"
-          />
+          <Checkbox v-model="config.playnite_focus_exit_on_first" id="playnite_focus_exit_on_first" :default="store.defaults.playnite_focus_exit_on_first" :localePrefix="'playnite'" :label="$t('playnite.focus_exit_on_first') || 'Exit on first confirmed focus'" :desc="$t('playnite.focus_exit_on_first_help') || 'Stop auto-focus after first success; otherwise, re-apply until attempts or timeout elapse.'" />
         </div>
       </div>
 
@@ -208,6 +176,7 @@ const status = reactive<{
   installed_unknown?: boolean;
   active: boolean;
   user_session_active: boolean;
+  enabled?: boolean;
   enabled?: boolean;
   playnite_running?: boolean;
   extensions_dir: string;
@@ -369,9 +338,8 @@ onUnmounted(() => {
   }
 });
 
-const statusKind = computed<'disabled' | 'active' | 'waiting' | 'session' | 'uninstalled' | 'unknown'>(() => {
+const statusKind = computed<'active' | 'waiting' | 'session' | 'uninstalled' | 'unknown'>(() => {
   // Prefer login/session requirement over unknown detection
-  if (status.enabled === false || (config.value?.playnite_enabled as any) === 'disabled') return 'disabled';
   if (!status.user_session_active) return 'session';
   if (!status.extensions_dir) return 'unknown';
   if (!status.installed) return 'uninstalled';
@@ -379,12 +347,9 @@ const statusKind = computed<'disabled' | 'active' | 'waiting' | 'session' | 'uni
 });
 const statusType = computed<'success' | 'warning' | 'error' | 'default'>(() => {
   switch (statusKind.value) {
-    case 'disabled': return 'default';
     case 'active': return 'success';
     case 'waiting': return 'warning';
     case 'session': return 'warning';
-    case 'waiting': return 'warning';
-    case 'not_running': return 'error';
     case 'uninstalled': return 'error';
     case 'unknown': return 'default';
     default: return 'default';
@@ -392,7 +357,6 @@ const statusType = computed<'success' | 'warning' | 'error' | 'default'>(() => {
 });
 const statusText = computed<string>(() => {
   switch (statusKind.value) {
-    case 'disabled': return (t('playnite.status_disabled') as any) || 'Disabled';
     case 'active': return t('playnite.status_connected');
     case 'waiting': return t('playnite.status_waiting');
     case 'session': return t('playnite.status_session_required');
@@ -421,7 +385,6 @@ const pluginOutdated = computed(() => {
   if (!status.plugin_version || !status.plugin_latest) return false;
   return cmpSemver(status.plugin_version, status.plugin_latest) < 0;
 });
-
 const canLaunch = computed(() => {
   return !!(status.extensions_dir && status.installed && !status.active && status.user_session_active);
 });
@@ -433,7 +396,6 @@ async function launchPlaynite() {
   launching.value = true;
   try {
     await http.post('/api/playnite/launch', {}, { validateStatus: () => true });
-    // Give Playnite a moment to start, then refresh status
     window.setTimeout(() => refreshStatus(), 1000);
   } catch (_) {}
   launching.value = false;

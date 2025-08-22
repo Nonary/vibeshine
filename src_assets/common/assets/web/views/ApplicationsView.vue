@@ -63,7 +63,7 @@
                 {{ app['working-dir'] }}
               </div>
             </div>
-            <div class="shrink-0 text-dark/50 dark:text-light/60">
+            <div class="shrink-0 text-dark/50 dark:text-light/70">
               <i class="fas fa-chevron-right" />
             </div>
           </div>

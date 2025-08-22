@@ -404,8 +404,22 @@ namespace proc {
   void proc_t::terminate() {
     std::error_code ec;
     placebo = false;
-    BOOST_LOG(info) << "[terminate] Resetting _app_id for app '" << _app.name << "' (id=" << _app_id << ")";
-    terminate_process_group(_process, _process_group, _app.exit_timeout);
+    // For Playnite-managed apps, request a graceful stop via Playnite first
+#ifdef _WIN32
+    std::chrono::seconds remaining_timeout = _app.exit_timeout;
+    if (!_app.playnite_id.empty()) {
+      try {
+        // Ask Playnite to stop the game; then wait up to exit-timeout to let it close
+        platf::playnite::stop_game(_app.playnite_id);
+        while (remaining_timeout.count() > 0 && _process_group && platf::process_group_running((std::uintptr_t) _process_group.native_handle())) {
+          std::this_thread::sleep_for(1s);
+          remaining_timeout -= 1s;
+        }
+      } catch (...) {}
+    }
+#endif
+    // Regardless, ensure process group is terminated (graceful then forceful with remaining timeout)
+    terminate_process_group(_process, _process_group, remaining_timeout);
     _process = boost::process::v1::child();
     _process_group = boost::process::v1::group();
 
@@ -810,9 +824,21 @@ namespace proc {
   void refresh(const std::string &file_name) {
     auto proc_opt = proc::parse(file_name);
 
-    if (proc_opt) {
-      // Update apps/env atomically to avoid disrupting running process
+    if (!proc_opt) {
+      return;
+    }
+
+    // If an app is currently running, do not replace the entire proc_t instance.
+    // Replacing it would drop tracking state and cause the active stream loop
+    // to think no app is running, prematurely terminating the session.
+    // Instead, update only the applications list to reflect the latest config.
+    if (proc.running() > 0) {
+      // Move the parsed apps list and environment into the existing proc instance
+      // Use proc.update_apps(...) which safely replaces the app list and env
       proc.update_apps(proc_opt->release_apps(), proc_opt->release_env());
+    } else {
+      // No app running: safe to refresh full state (env + apps)
+      proc = std::move(*proc_opt);
     }
   }
 
