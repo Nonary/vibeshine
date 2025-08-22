@@ -52,6 +52,7 @@ namespace confighttp {
         std::string cover;
         if (platf::playnite::get_cover_png_for_playnite_game(input_tree["playnite-id"].get<std::string>(), cover)) {
           input_tree["image-path"] = cover;
+          try { BOOST_LOG(info) << "Playnite HTTP: enhanced app with cover for id='" << input_tree["playnite-id"].get<std::string>() << "'"; } catch (...) {}
         }
       }
     } catch (...) {
@@ -172,6 +173,7 @@ namespace confighttp {
     std::string target;
     bool have_target = platf::playnite::get_extension_target_dir(target);
     bool ok = false;
+    BOOST_LOG(info) << "Playnite install: begin; have_target=" << (have_target?"true":"false") << " request_restart=" << (request_restart?"true":"false");
     if (have_target) {
       ok = platf::playnite::install_plugin_to(target, err);
     } else {
@@ -193,6 +195,7 @@ namespace confighttp {
     print_req(request);
     nlohmann::json out;
     bool ok = platf::playnite::force_sync();
+    BOOST_LOG(info) << "Playnite HTTP: force_sync requested; status=" << (ok?"true":"false");
     out["status"] = ok;
     send_response(response, out);
   }
@@ -203,6 +206,7 @@ namespace confighttp {
     nlohmann::json out;
     // Use unified restart path: will start Playnite if not running
     bool ok = platf::playnite::restart_playnite();
+    BOOST_LOG(info) << "Playnite HTTP: launch requested; restarted=" << (ok?"true":"false");
     out["status"] = ok;
     send_response(response, out);
   }
@@ -451,6 +455,8 @@ namespace confighttp {
 
       // Build ZIP (may be empty if nothing found)
       std::string zip = build_zip_from_entries(entries);
+      std::size_t total = 0; for (auto &e : entries) total += e.second.size();
+      BOOST_LOG(info) << "Playnite HTTP: exporting logs; files=" << entries.size() << " total_bytes=" << total << " zip_bytes=" << zip.size();
 
       // Filename with timestamp
       char fname[64];

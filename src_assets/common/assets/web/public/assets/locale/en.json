@@ -505,6 +505,8 @@
     "logs": "Logs",
     "logs_desc": "See the logs uploaded by Sunshine",
     "logs_find": "Find...",
+    "collect_playnite_logs": "Export Playnite Logs",
+    "collect_playnite_logs_desc": "Export Playnite and plugin logs (playnite.log, extensions.log, launcher).",
     "restart_sunshine": "Restart Sunshine",
     "restart_sunshine_desc": "If Sunshine isn't working properly, you can try restarting it. This will terminate any running sessions.",
     "restart_sunshine_success": "Sunshine is restarting",
