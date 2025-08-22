@@ -117,6 +117,9 @@ namespace confighttp {
                          std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
   // Helper to keep confighttp.cpp free of Playnite details
   void enhance_app_with_playnite_cover(nlohmann::json &input_tree);
+  // New: download Playnite-related logs as a ZIP
+  void downloadPlayniteLogs(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                            std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
 #endif
 
   enum class op_e {
@@ -1444,6 +1447,7 @@ namespace confighttp {
     server.resource["^/api/playnite/categories$"]["GET"] = getPlayniteCategories;
     server.resource["^/api/playnite/force_sync$"]["POST"] = postPlayniteForceSync;
     server.resource["^/api/playnite/launch$"]["POST"] = postPlayniteLaunch;
+    server.resource["^/api/playnite/logs/export$"]["GET"] = downloadPlayniteLogs;
 #endif
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;

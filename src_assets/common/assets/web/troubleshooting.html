@@ -94,6 +94,20 @@
         </div>
       </div>
     </div>
+    <!-- Collect Playnite Logs (Windows only) -->
+    <div class="card p-2 my-4" v-if="platform === 'windows'">
+      <div class="card-body">
+        <h2 id="collect_playnite_logs">{{ $t('troubleshooting.collect_playnite_logs') || 'Export Playnite Logs' }}</h2>
+        <br>
+        <p>{{ $t('troubleshooting.collect_playnite_logs_desc') || 'Export Playnite and plugin logs for troubleshooting.' }}</p>
+        <div>
+          <button class="btn btn-warning" @click="downloadPlayniteLogs">
+            {{ $t('troubleshooting.collect_playnite_logs') || 'Export Playnite Logs' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Unpair Clients -->
     <div class="card my-4">
       <div class="card-body">
@@ -204,6 +218,10 @@
             .then((r) => {
               this.logs = r;
             });
+        },
+        downloadPlayniteLogs() {
+          // Trigger a direct download from the browser
+          window.location.href = "./api/playnite/logs/export";
         },
         closeApp() {
           this.closeAppPressed = true;

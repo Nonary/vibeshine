@@ -793,7 +793,21 @@ namespace proc {
   void refresh(const std::string &file_name) {
     auto proc_opt = proc::parse(file_name);
 
-    if (proc_opt) {
+    if (!proc_opt) {
+      return;
+    }
+
+    // If an app is currently running, do not replace the entire proc_t instance.
+    // Replacing it would drop tracking state and cause the active stream loop
+    // to think no app is running, prematurely terminating the session.
+    // Instead, update only the applications list to reflect the latest config.
+    if (proc.running() > 0) {
+      // Move the parsed apps list into the existing proc instance
+      auto &dest_apps = proc.get_apps();
+      auto &src_apps = proc_opt->get_apps();
+      dest_apps = std::move(src_apps);
+    } else {
+      // No app running: safe to refresh full state (env + apps)
       proc = std::move(*proc_opt);
     }
   }
