@@ -528,7 +528,14 @@
         if (isCurrentlyExcluded) set.delete(id); else set.add(id);
         const next = Array.from(set).join(',');
         try {
-          await fetch('./api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playnite_exclude_games: next }) });
+          const cfg = await fetch('./api/config').then(r => r.json());
+          const merged = {};
+          for (const [k, v] of Object.entries(cfg || {})) {
+            if (k === 'platform' || k === 'version' || k === 'status') continue;
+            merged[k] = v;
+          }
+          if (next) merged.playnite_exclude_games = next; else delete merged.playnite_exclude_games;
+          await fetch('./api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(merged) });
           if (!isCurrentlyExcluded) {
             // Removing app from Applications immediately when excluding
             try {
