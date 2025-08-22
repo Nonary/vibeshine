@@ -102,6 +102,7 @@ namespace platf::playnite {
 
   private:
     void handle_message(std::span<const uint8_t> bytes) {
+      BOOST_LOG(info) << "Playnite: handling message, bytes=" << bytes.size();
       auto msg = platf::playnite::parse(bytes);
       using MT = platf::playnite::MessageType;
       if (msg.type == MT::Categories) {
@@ -156,19 +157,29 @@ namespace platf::playnite {
           (void) sync_apps_metadata();
         }
       } else if (msg.type == MT::Status) {
-  BOOST_LOG(info) << "Playnite: status '" << msg.status_name << "' id=" << msg.status_game_id;
-  if (msg.status_name == "gameStopped") {
+        BOOST_LOG(info) << "Playnite: status '" << msg.status_name
+                        << "' id='" << msg.status_game_id
+                        << "' exe='" << msg.status_exe
+                        << "' installDir='" << msg.status_install_dir << "'";
+        if (msg.status_name == "gameStopped") {
+          BOOST_LOG(info) << "Playnite: received gameStopped; terminating active process";
           proc::proc.terminate();
         }
       } else {
-        BOOST_LOG(warning) << "Playnite: unrecognized message";
+        // Truncate and log a preview of the raw message for diagnostics
+        std::string preview;
+        preview.assign((const char*)bytes.data(), std::min<size_t>(bytes.size(), 256));
+        for (auto &ch : preview) if (ch == '\n' || ch == '\r') ch = ' ';
+        BOOST_LOG(warning) << "Playnite: unrecognized message; size=" << bytes.size() << " preview='" << preview << "'";
       }
     }
 
     bool sync_apps_metadata() try {
       using nlohmann::json;
       const std::string path = config::stream.file_apps;
+      BOOST_LOG(info) << "Playnite sync: reading apps file '" << path << "'";
       std::string content = file_handler::read_file(path.c_str());
+      BOOST_LOG(info) << "Playnite sync: apps file size=" << content.size() << " bytes";
       json root = json::parse(content);
       if (!root.contains("apps") || !root["apps"].is_array()) {
         BOOST_LOG(warning) << "apps.json has no 'apps' array";
@@ -200,10 +211,10 @@ namespace platf::playnite {
       }
       return true;
     } catch (const std::exception &e) {
-      BOOST_LOG(error) << "Playnite sync failed: " << e.what();
+      BOOST_LOG(error) << "Playnite sync failed for '" << config::stream.file_apps << "': " << e.what();
       return false;
     } catch (...) {
-      BOOST_LOG(error) << "Playnite sync failed: unknown error";
+      BOOST_LOG(error) << "Playnite sync failed: unknown error reading/parsing '" << config::stream.file_apps << "'";
       return false;
     }
 
@@ -239,6 +250,7 @@ namespace platf::playnite {
       static std::mutex per_user_key_mutex;
       auto lg = std::lock_guard(per_user_key_mutex);
       if (!platf::override_per_user_predefined_keys(user_token)) {
+        BOOST_LOG(info) << "Playnite: per-user registry override failed (no active session?)";
         if (user_token) CloseHandle(user_token);
         return false;
       }
@@ -249,6 +261,9 @@ namespace platf::playnite {
       HRESULT hr = AssocQueryStringW(ASSOCF_NOTRUNCATE, ASSOCSTR_EXECUTABLE, L"playnite", nullptr, exe_buf.data(), &out_len);
       if (hr == S_OK) {
         exe.assign(exe_buf.data());
+        BOOST_LOG(info) << "Playnite: AssocQueryString EXECUTABLE succeeded";
+      } else {
+        BOOST_LOG(info) << "Playnite: AssocQueryString EXECUTABLE failed hr=0x" << std::hex << hr << std::dec;
       }
 
       // Fallback to ASSOCSTR_COMMAND and parse
@@ -264,6 +279,9 @@ namespace platf::playnite {
             if (!s.empty() && s.front() == L'"') { auto p = s.find(L'"', 1); if (p != std::wstring::npos) exe = s.substr(1, p - 1); }
             else { auto p = s.find(L' '); exe = (p == std::wstring::npos) ? s : s.substr(0, p); }
           }
+          BOOST_LOG(info) << "Playnite: AssocQueryString COMMAND succeeded; parsed exe";
+        } else {
+          BOOST_LOG(info) << "Playnite: AssocQueryString COMMAND failed hr=0x" << std::hex << hr << std::dec;
         }
       }
 
@@ -489,6 +507,7 @@ namespace platf::playnite {
           std::filesystem::path p = std::filesystem::path(local) / L"Playnite" / L"Playnite.DesktopApp.exe";
           CoTaskMemFree(local);
           if (std::filesystem::exists(p)) { exe_path_out = p.wstring(); BOOST_LOG(info) << "Playnite: resolved exe from user's LocalAppData: '" << platf::to_utf8(exe_path_out) << "'"; return true; }
+          BOOST_LOG(info) << "Playnite: no Playnite.DesktopApp.exe at user's LocalAppData";
         }
       }
     } catch (...) {}
@@ -499,6 +518,7 @@ namespace platf::playnite {
       if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, buf))) {
         std::filesystem::path p = std::filesystem::path(buf) / L"Playnite" / L"Playnite.DesktopApp.exe";
         if (std::filesystem::exists(p)) { exe_path_out = p.wstring(); BOOST_LOG(info) << "Playnite: resolved exe from current profile LocalAppData: '" << platf::to_utf8(exe_path_out) << "'"; return true; }
+        BOOST_LOG(info) << "Playnite: no Playnite.DesktopApp.exe at current profile LocalAppData";
       }
     } catch (...) {}
 
@@ -515,6 +535,7 @@ namespace platf::playnite {
     } catch (...) {}
 
     if (!ctx.pids.empty()) {
+      BOOST_LOG(info) << "Playnite: posting WM_CLOSE to " << ctx.pids.size() << " window(s) for '" << platf::to_utf8(std::wstring(exeName)) << "'";
       EnumWindows([](HWND hwnd, LPARAM lparam) -> BOOL {
         auto *c = reinterpret_cast<Ctx*>(lparam);
         DWORD pid = 0; GetWindowThreadProcessId(hwnd, &pid);
@@ -531,6 +552,7 @@ namespace platf::playnite {
     // Kill any remaining processes by name
     try {
       auto ids = platf::dxgi::find_process_ids_by_name(exeName);
+      if (!ids.empty()) BOOST_LOG(info) << "Playnite: terminating remaining processes for '" << platf::to_utf8(std::wstring(exeName)) << "' count=" << ids.size();
       for (DWORD pid : ids) {
         HANDLE hp = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         if (!hp) continue;
