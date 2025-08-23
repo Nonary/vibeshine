@@ -3,7 +3,6 @@
  */
 
 #include "playnite_sync.h"
-#include "src/logging.h"
 
 #include <iomanip>
 #include <sstream>
@@ -45,9 +44,6 @@ std::vector<Game> select_recent_installed_games(const std::vector<Game> &install
                                                 int recentAgeDays,
                                                 const std::unordered_set<std::string> &exclude_lower,
                                                 std::unordered_map<std::string, int> &out_source_flags) {
-  BOOST_LOG(info) << "Playnite sync: selecting recent games; installed=" << installed.size()
-                  << " N=" << recentN << " maxAgeDays=" << recentAgeDays
-                  << " excludeIds=" << exclude_lower.size();
   std::vector<Game> v=installed; std::sort(v.begin(), v.end(), [](auto&a,auto&b){return a.last_played>b.last_played;});
   std::vector<Game> out; out.reserve((size_t)std::max(0,recentN));
   const std::time_t cutoff = std::time(nullptr) - (long long)std::max(0,recentAgeDays)*86400LL;
@@ -56,7 +52,6 @@ std::vector<Game> select_recent_installed_games(const std::vector<Game> &install
   if (recentAgeDays>0) { std::time_t tp=0; if(!parse_iso8601_utc(g.last_played,tp) || tp<cutoff) continue; }
     out.push_back(g); out_source_flags[g.id]|=0x1;
   }
-  BOOST_LOG(info) << "Playnite sync: selected recent count=" << out.size();
   return out;
 }
 
@@ -64,8 +59,6 @@ std::vector<Game> select_category_games(const std::vector<Game> &installed,
                                         const std::vector<std::string> &categories,
                                         const std::unordered_set<std::string> &exclude_lower,
                                         std::unordered_map<std::string, int> &out_source_flags) {
-  BOOST_LOG(info) << "Playnite sync: selecting by categories; installed=" << installed.size()
-                  << " categories=" << categories.size() << " excludeIds=" << exclude_lower.size();
   std::unordered_set<std::string> want; for (auto c:categories) want.insert(to_lower_copy(std::move(c)));
   std::vector<Game> out; out.reserve(installed.size());
   for (const auto &g: installed) {
@@ -73,7 +66,6 @@ std::vector<Game> select_category_games(const std::vector<Game> &installed,
     for (const auto &cn: g.categories) if (want.contains(to_lower_copy(cn))) { ok=true; break; }
     if (ok) { out.push_back(g); out_source_flags[g.id]|=0x2; }
   }
-  BOOST_LOG(info) << "Playnite sync: selected by categories count=" << out.size();
   return out;
 }
 
@@ -81,17 +73,15 @@ void build_game_indexes(const std::vector<Game> &selected,
                         std::unordered_map<std::string, GameRef> &by_exe,
                         std::unordered_map<std::string, GameRef> &by_dir,
                         std::unordered_map<std::string, GameRef> &by_id) {
-  BOOST_LOG(info) << "Playnite sync: building indexes for selected count=" << selected.size();
   for (const auto &g: selected) {
     if (!g.exe.empty()) by_exe[normalize_path_for_match(g.exe)] = GameRef{&g};
   if (!g.working_dir.empty()) by_dir[normalize_path_for_match(g.working_dir)] = GameRef{&g};
     if (!g.id.empty()) by_id[g.id] = GameRef{&g};
   }
-  BOOST_LOG(info) << "Playnite sync: index sizes by_exe=" << by_exe.size() << " by_dir=" << by_dir.size() << " by_id=" << by_id.size();
 }
 
 std::unordered_set<std::string> build_exclusion_lower(const std::vector<std::string> &ids) {
-  std::unordered_set<std::string> s; for (auto v: ids) s.insert(to_lower_copy(std::move(v))); BOOST_LOG(info) << "Playnite sync: built exclusion set size=" << s.size(); return s;
+  std::unordered_set<std::string> s; for (auto v: ids) s.insert(to_lower_copy(std::move(v))); return s;
 }
 
 void snapshot_installed_and_uninstalled(const std::vector<Game> &all,
@@ -99,11 +89,10 @@ void snapshot_installed_and_uninstalled(const std::vector<Game> &all,
                                         std::unordered_set<std::string> &uninstalled_lower) {
   installed = all; for (auto &g: all) if (!g.installed && !g.id.empty()) uninstalled_lower.insert(to_lower_copy(g.id));
   installed.erase(std::remove_if(installed.begin(), installed.end(), [](const auto &g){return !g.installed;}), installed.end());
-  BOOST_LOG(info) << "Playnite sync: snapshot installed=" << installed.size() << " uninstalledIds=" << uninstalled_lower.size();
 }
 
 std::unordered_map<std::string, std::time_t> build_last_played_map(const std::vector<Game> &installed) {
-  std::unordered_map<std::string,std::time_t> m; for (const auto &g: installed) { std::time_t t=0; if(!g.id.empty()&&parse_iso8601_utc(g.last_played,t)) m[g.id]=t; } BOOST_LOG(info) << "Playnite sync: last_played map size=" << m.size(); return m;
+  std::unordered_map<std::string,std::time_t> m; for (const auto &g: installed) { std::time_t t=0; if(!g.id.empty()&&parse_iso8601_utc(g.last_played,t)) m[g.id]=t; } return m;
 }
 
 const Game *match_app_against_indexes(const nlohmann::json &app,
@@ -118,19 +107,12 @@ const Game *match_app_against_indexes(const nlohmann::json &app,
 
 void apply_game_metadata_to_app(const Game &g, nlohmann::json &app) {
   try { if (!g.name.empty()) app["name"]=g.name; } catch(...){}
-  try {
-    if (!g.box_art_path.empty()) {
-      auto dstDir=platf::appdata()/"covers"; file_handler::make_directory(dstDir.string()); auto dst= dstDir/("playnite_"+g.id+".png");
-      bool ok=std::filesystem::exists(dst);
-      if(!ok){ ok=platf::img::convert_to_png_96dpi(std::filesystem::path(g.box_art_path).wstring(), dst.wstring()); }
-      if(ok) { app["image-path"]=dst.generic_string(); BOOST_LOG(info) << "Playnite sync: set image-path for id='" << g.id << "'"; }
-    }
-  } catch(...){}
-  try { app["playnite-id"]=g.id; if (app.contains("cmd")) app.erase("cmd"); if (app.contains("working-dir")) app.erase("working-dir"); BOOST_LOG(info) << "Playnite sync: applied metadata for id='" << g.id << "'"; } catch(...){}
+  try { if (!g.box_art_path.empty()) { auto dstDir=platf::appdata()/"covers"; file_handler::make_directory(dstDir.string()); auto dst= dstDir/("playnite_"+g.id+".png"); bool ok=std::filesystem::exists(dst); if(!ok){ ok=platf::img::convert_to_png_96dpi(std::filesystem::path(g.box_art_path).wstring(), dst.wstring()); } if(ok) app["image-path"]=dst.generic_string(); } } catch(...){}
+  try { app["playnite-id"]=g.id; if (app.contains("cmd")) app.erase("cmd"); if (app.contains("working-dir")) app.erase("working-dir"); } catch(...){}
 }
 
 void mark_app_as_playnite_auto(nlohmann::json &app, int flags) {
-  try { std::string src = flags==0?"unknown": (flags==3?"recent+category": (flags==1?"recent":"category")); app["playnite-source"]=src; app["playnite-managed"]="auto"; BOOST_LOG(info) << "Playnite sync: mark auto with source='" << src << "'"; } catch(...){}
+  try { std::string src = flags==0?"unknown": (flags==3?"recent+category": (flags==1?"recent":"category")); app["playnite-source"]=src; app["playnite-managed"]="auto"; } catch(...){}
 }
 
 bool should_ttl_delete(const nlohmann::json &app, int delete_after_days, std::time_t now_time,
@@ -148,12 +130,10 @@ void iterate_existing_apps(nlohmann::json &root,
                            std::size_t &matched,
                            std::unordered_set<std::string> &matched_ids,
                            bool &changed) {
-  std::size_t before = matched;
   for (auto &app: root["apps"]) {
     auto g = match_app_against_indexes(app, by_id, by_exe, by_dir); if(!g) continue; ++matched; matched_ids.insert(g->id);
     apply_game_metadata_to_app(*g, app); int flags=0; if(auto it=source_flags.find(g->id); it!=source_flags.end()) flags=it->second; mark_app_as_playnite_auto(app, flags); changed=true;
   }
-  BOOST_LOG(info) << "Playnite sync: iterate_existing matched=" << (matched - before);
 }
 
 void add_missing_auto_entries(nlohmann::json &root,
@@ -161,7 +141,6 @@ void add_missing_auto_entries(nlohmann::json &root,
                               const std::unordered_set<std::string> &matched_ids,
                               const std::unordered_map<std::string,int> &source_flags,
                               bool &changed) {
-  std::size_t added = 0;
   for (const auto &g: selected) {
     if (matched_ids.contains(g.id)) continue; nlohmann::json app=nlohmann::json::object(); apply_game_metadata_to_app(g, app);
     int flags = 0; if (auto it=source_flags.find(g.id); it!=source_flags.end()) flags=it->second; mark_app_as_playnite_auto(app, flags);
@@ -171,20 +150,15 @@ void add_missing_auto_entries(nlohmann::json &root,
     // Default to 10 seconds for the graceful-then-forceful shutdown recipe
     try { app["exit-timeout"] = 10; } catch(...){}
     root["apps"].push_back(app); changed=true;
-    ++added;
   }
-  BOOST_LOG(info) << "Playnite sync: add_missing_auto added=" << added;
 }
 
 void write_and_refresh_apps(nlohmann::json &root, const std::string &apps_path) {
-  auto dumped = root.dump(4);
-  file_handler::write_file(apps_path.c_str(), dumped);
-  BOOST_LOG(info) << "Playnite sync: wrote apps.json bytes=" << dumped.size();
-  confighttp::refresh_client_apps_cache(root);
+  file_handler::write_file(apps_path.c_str(), root.dump(4)); confighttp::refresh_client_apps_cache(root);
 }
 
 std::unordered_set<std::string> current_auto_ids(const nlohmann::json &root) {
-  std::unordered_set<std::string> s; for (auto &a: root["apps"]) try{ if(a.contains("playnite-managed") && a["playnite-managed"].get<std::string>()=="auto") s.insert(a.value("playnite-id", std::string())); }catch(...){} BOOST_LOG(info) << "Playnite sync: current auto ids size=" << s.size(); return s;
+  std::unordered_set<std::string> s; for (auto &a: root["apps"]) try{ if(a.contains("playnite-managed") && a["playnite-managed"].get<std::string>()=="auto") s.insert(a.value("playnite-id", std::string())); }catch(...){} return s;
 }
 
 std::size_t count_replacements_available(const std::unordered_set<std::string> &current_auto,
@@ -203,17 +177,15 @@ void purge_uninstalled_and_ttl(nlohmann::json &root,
                                bool &changed) {
   auto cur = current_auto_ids(root); auto repl = count_replacements_available(cur, selected_ids);
   nlohmann::json kept = nlohmann::json::array();
-  std::size_t removed = 0;
   for (auto &app: root["apps"]) {
     bool is_auto=false; std::string pid; try{ is_auto=app.contains("playnite-managed")&&app["playnite-managed"].get<std::string>()=="auto"; if(app.contains("playnite-id")) pid=app["playnite-id"].get<std::string>(); }catch(...){}
     if (is_auto && !pid.empty()) {
-      if (uninstalled_lower.contains(to_lower_copy(pid)) || should_ttl_delete(app, delete_after_days, now_time, last_played_map)) { changed=true; ++removed; continue; }
+      if (uninstalled_lower.contains(to_lower_copy(pid)) || should_ttl_delete(app, delete_after_days, now_time, last_played_map)) { changed=true; continue; }
       if (!selected_ids.contains(pid) && recent_mode && require_repl && repl>0) { --repl; changed=true; continue; }
     }
     kept.push_back(app);
   }
   if (kept.size()!=root["apps"].size()) root["apps"]=std::move(kept);
-  if (removed>0) BOOST_LOG(info) << "Playnite sync: purged apps removed=" << removed;
 }
 } // namespace platf::playnite::sync
  
@@ -228,11 +200,6 @@ void autosync_reconcile(nlohmann::json &root,
                         const std::vector<std::string> &exclude_ids,
                         bool &changed,
                         std::size_t &matched_out) {
-  BOOST_LOG(info) << "Playnite sync: autosync_reconcile start; all_games=" << all_games.size()
-                  << " recentN=" << recentN << " ageDays=" << recentAgeDays
-                  << " deleteAfterDays=" << delete_after_days
-                  << " requireReplacement=" << (require_repl?"true":"false")
-                  << " categories=" << categories.size() << " excludeIds=" << exclude_ids.size();
   if (!root.contains("apps") || !root["apps"].is_array()) {
     root["apps"] = nlohmann::json::array();
   }
@@ -273,6 +240,5 @@ void autosync_reconcile(nlohmann::json &root,
 
   // Add missing
   add_missing_auto_entries(root, selected, matched_ids, source_flags, changed);
-  BOOST_LOG(info) << "Playnite sync: autosync_reconcile done; matched=" << matched_out << " changed=" << (changed?"true":"false") << " selected=" << selected.size();
 }
 } // namespace platf::playnite::sync

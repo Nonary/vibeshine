@@ -158,20 +158,5 @@ namespace config {
     parse_list(vars, "playnite_exclude_games", playnite.exclude_games);
 
     // paths (overrides removed)
-
-    // Log summary of applied configuration for debugging
-    try {
-      BOOST_LOG(info) << "config.playnite: enabled=" << (playnite.enabled?"true":"false")
-                      << " auto_sync=" << (playnite.auto_sync?"true":"false")
-                      << " autosync_require_replacement=" << (playnite.autosync_require_replacement?"true":"false")
-                      << " recent_games=" << playnite.recent_games
-                      << " recent_max_age_days=" << playnite.recent_max_age_days
-                      << " autosync_delete_after_days=" << playnite.autosync_delete_after_days
-                      << " focus_attempts=" << playnite.focus_attempts
-                      << " focus_timeout_secs=" << playnite.focus_timeout_secs
-                      << " focus_exit_on_first=" << (playnite.focus_exit_on_first?"true":"false")
-                      << " sync_categories=" << playnite.sync_categories.size()
-                      << " exclude_games=" << playnite.exclude_games.size();
-    } catch (...) {}
   }
 }  // namespace config
