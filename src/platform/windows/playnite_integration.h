@@ -107,4 +107,6 @@ namespace platf::playnite {
 
   // Note: explicit launch helper removed; use restart_playnite() for both cases.
 
+  
+
 }  // namespace platf::playnite

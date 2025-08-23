@@ -301,16 +301,8 @@ const showDeleteConfirm = ref(false);
 // Platform + Playnite detection
 const configStore = useConfigStore();
 const isWindows = computed(() => (configStore.metadata?.platform || '').toLowerCase() === 'windows');
-const playniteEnabled = computed(() => {
-  try {
-    const v = configStore.config?.playnite_enabled;
-    if (v === true || v === 1) return true;
-    const s = String(v ?? '').toLowerCase().trim();
-    return s === 'true' || s === 'yes' || s === 'enable' || s === 'enabled' || s === 'on' || s === '1';
-  } catch (_) {
-    return false;
-  }
-});
+const playniteInstalled = ref(false);
+const playniteEnabled = computed(() => playniteInstalled.value);
 const isNew = computed(() => form.index === -1);
 
 // Playnite picker state
@@ -320,7 +312,13 @@ const selectedPlayniteId = ref('');
 const lockPlaynite = ref(false);
 
 async function loadPlayniteGames() {
-  if (!isWindows.value || !playniteEnabled.value || gamesLoading.value || playniteOptions.value.length) return;
+  if (!isWindows.value || gamesLoading.value || playniteOptions.value.length) return;
+  // Ensure we have up-to-date install status
+  try {
+    const r = await http.get('/api/playnite/status');
+    if (r.status === 200 && r.data) playniteInstalled.value = !!(r.data as any).installed;
+  } catch (_) {}
+  if (!playniteInstalled.value) return;
   gamesLoading.value = true;
   try {
     const r = await http.get('/api/playnite/games');

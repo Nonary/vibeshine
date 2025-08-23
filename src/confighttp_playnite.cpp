@@ -44,6 +44,16 @@ namespace confighttp {
   void bad_request(resp_https_t response, req_https_t request, const std::string &error_message = "Bad Request");
   bool check_content_type(resp_https_t response, req_https_t request, const std::string_view &contentType);
 
+  // Helper: check if the Sunshine Playnite plugin is installed (by presence of files)
+  static bool is_plugin_installed() {
+    try {
+      std::string destPath;
+      if (!platf::playnite::get_extension_target_dir(destPath)) return false;
+      std::filesystem::path dest = destPath;
+      return std::filesystem::exists(dest / "extension.yaml") && std::filesystem::exists(dest / "SunshinePlaynite.psm1");
+    } catch (...) { return false; }
+  }
+
   // Enhance app JSON with a Playnite-derived cover path when applicable.
   void enhance_app_with_playnite_cover(nlohmann::json &input_tree) {
     try {
@@ -67,7 +77,7 @@ namespace confighttp {
     }
     print_req(request);
     nlohmann::json out;
-    out["enabled"] = config::playnite.enabled;
+    // Active reflects current pipe/server connection only
     out["active"] = platf::playnite::is_active();
     bool session_required = false;
     // Deprecated fields removed: playnite_running, installed_unknown
@@ -98,7 +108,7 @@ namespace confighttp {
     out["session_required"] = session_required;
     // For UI backwards-compatibility: expose user_session_active derived from session_required
     out["user_session_active"] = !session_required;
-    BOOST_LOG(info) << "Playnite status: enabled=" << out["enabled"] << ", active=" << out["active"]
+    BOOST_LOG(info) << "Playnite status: active=" << out["active"]
                     << ", session_required=" << (session_required ? "true" : "false")
                     << ", dir=" << (dest.empty() ? std::string("(unknown)") : dest.string());
     send_response(response, out);
@@ -110,6 +120,12 @@ namespace confighttp {
     }
     print_req(request);
     try {
+      if (!is_plugin_installed()) {
+        SimpleWeb::CaseInsensitiveMultimap headers; headers.emplace("Content-Type", "application/json");
+        headers.emplace("X-Frame-Options", "DENY"); headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+        response->write(SimpleWeb::StatusCode::success_ok, "[]", headers);
+        return;
+      }
       std::string json;
       if (!platf::playnite::get_games_list_json(json)) {
         // return empty array if not available
@@ -132,6 +148,12 @@ namespace confighttp {
     }
     print_req(request);
     try {
+      if (!is_plugin_installed()) {
+        SimpleWeb::CaseInsensitiveMultimap headers; headers.emplace("Content-Type", "application/json");
+        headers.emplace("X-Frame-Options", "DENY"); headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+        response->write(SimpleWeb::StatusCode::success_ok, "[]", headers);
+        return;
+      }
       std::string json;
       if (!platf::playnite::get_categories_list_json(json)) {
         // return empty array if not available

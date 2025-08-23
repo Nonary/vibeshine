@@ -40,6 +40,8 @@
 #include <charconv>
 #include <iomanip>
 #include <sstream>
+#include <thread>
+#include <chrono>
 // boost env/filesystem for process launch helpers
 #include <boost/process/environment.hpp>
 #include <boost/filesystem.hpp>
@@ -50,26 +52,43 @@ namespace platf::playnite {
 
   class deinit_t_impl;  // forward
   static std::atomic<deinit_t_impl*> g_instance{nullptr};
+  static bool is_plugin_installed() {
+    try {
+      std::string dir;
+      if (!get_extension_target_dir(dir)) return false;
+      std::filesystem::path d(dir);
+      return std::filesystem::exists(d / "extension.yaml") && std::filesystem::exists(d / "SunshinePlaynite.psm1");
+    } catch (...) { return false; }
+  }
 
   class deinit_t_impl: public ::platf::deinit_t {
   public:
     deinit_t_impl() {
-      if (!config::playnite.enabled) {
-        BOOST_LOG(info) << "Playnite integration disabled";
-        return;
-      }
-      BOOST_LOG(info) << "Playnite integration: enabled; starting IPC server";
+      BOOST_LOG(info) << "Playnite integration: manager starting";
       g_instance.store(this, std::memory_order_release);
-      server_ = std::make_unique<platf::playnite::IpcServer>();
-      server_->set_message_handler([this](std::span<const uint8_t> bytes) {
-        handle_message(bytes);
-      });
-      server_->start();
-      // Start in a fresh snapshot state
-      new_snapshot_ = true;
+      // If plugin installed at startup, start immediately; otherwise wait for manager loop
+      if (is_plugin_installed()) {
+        BOOST_LOG(info) << "Playnite integration: plugin installed; starting IPC server";
+        server_ = std::make_unique<platf::playnite::IpcServer>();
+        server_->set_message_handler([this](std::span<const uint8_t> bytes) {
+          handle_message(bytes);
+        });
+        server_->start();
+        new_snapshot_ = true;
+      } else {
+        BOOST_LOG(info) << "Playnite integration: plugin not installed; server idle";
+      }
+      // Start manager loop to hot-apply enablement state
+      stop_flag_.store(false, std::memory_order_release);
+      manager_ = std::thread([this]() { this->manager_loop(); });
     }
 
     ~deinit_t_impl() override {
+      // Stop manager thread
+      try {
+        stop_flag_.store(true, std::memory_order_release);
+        if (manager_.joinable()) manager_.join();
+      } catch (...) {}
       if (server_) {
         server_->stop();
         server_.reset();
@@ -97,6 +116,47 @@ namespace platf::playnite {
     void snapshot_categories(std::vector<std::string> &out) {
       std::scoped_lock lk(mutex_);
       out = last_categories_;
+    }
+
+    // Hot-toggle helpers: stop or start the IPC server without destroying the instance
+    void stop_server() {
+      try {
+        if (server_) {
+          BOOST_LOG(info) << "Playnite: stopping IPC server (hot-toggle)";
+          server_->stop();
+          server_.reset();
+        }
+        // Clear cached snapshots so UI doesn't falsely show data as connected
+        try {
+          std::scoped_lock lk(mutex_);
+          last_games_.clear();
+          game_ids_.clear();
+          last_categories_.clear();
+          new_snapshot_ = true;
+        } catch (...) {}
+      } catch (...) {}
+    }
+
+    void ensure_started() {
+      if (server_ && server_->is_active()) return;
+      BOOST_LOG(info) << "Playnite: starting IPC server (hot-toggle)";
+      server_ = std::make_unique<platf::playnite::IpcServer>();
+      server_->set_message_handler([this](std::span<const uint8_t> bytes) {
+        handle_message(bytes);
+      });
+      server_->start();
+      new_snapshot_ = true;
+    }
+
+    void manager_loop() {
+      using namespace std::chrono_literals;
+      // simple periodic reconciliation loop
+      while (!stop_flag_.load(std::memory_order_acquire)) {
+        const bool want = is_plugin_installed();
+        if (want) { ensure_started(); }
+        else { stop_server(); }
+        std::this_thread::sleep_for(1500ms);
+      }
     }
 
   private:
@@ -212,6 +272,8 @@ namespace platf::playnite {
     std::mutex mutex_;
 
     std::unique_ptr<platf::playnite::IpcServer> server_;
+    std::atomic<bool> stop_flag_ {false};
+    std::thread manager_;
     bool new_snapshot_ = true;  // Indicates next games message starts a new accumulation
     std::unordered_set<std::string> game_ids_;  // Track unique IDs during accumulation
     std::vector<std::string> last_categories_;   // Last known categories (names)
@@ -228,6 +290,8 @@ namespace platf::playnite {
     }
     return false;
   }
+
+  
 
   // Consolidated helper: query association for 'playnite' to resolve executable path
   static bool query_assoc_for_playnite(std::wstring &outExe) {

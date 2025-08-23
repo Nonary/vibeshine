@@ -1287,7 +1287,13 @@ namespace confighttp {
       bool applied_now = false;
       bool deferred = false;
       if (!restart_required) {
-        if (rtsp_stream::session_count() == 0) {
+        // Determine if only Playnite-related keys were changed; these are safe to hot-apply
+        // even when a streaming session is active.
+        bool only_playnite = !changed_keys.empty();
+        for (const auto &k : changed_keys) {
+          if (k.rfind("playnite_", 0) != 0) { only_playnite = false; break; }
+        }
+        if (only_playnite || rtsp_stream::session_count() == 0) {
           // Apply immediately
           config::apply_config_now();
           applied_now = true;

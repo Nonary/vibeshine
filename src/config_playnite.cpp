@@ -88,8 +88,7 @@ namespace config {
   void apply_playnite(std::unordered_map<std::string, std::string> &vars) {
     // booleans
     std::string tmp;
-    erase_take(vars, "playnite_enabled", tmp);
-    if (!tmp.empty()) playnite.enabled = to_bool(tmp);
+    // enabled flag removed; integration manager always runs and uses plugin install status
     tmp.clear();
     erase_take(vars, "playnite_auto_sync", tmp);
     if (!tmp.empty()) playnite.auto_sync = to_bool(tmp);

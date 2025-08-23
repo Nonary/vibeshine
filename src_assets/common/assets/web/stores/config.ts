@@ -101,7 +101,6 @@ const defaultGroups = [
     id: 'playnite',
     name: 'Playnite',
     options: {
-      playnite_enabled: false,
       playnite_auto_sync: true,
       playnite_recent_games: 10,
       playnite_recent_max_age_days: 0,
@@ -336,7 +335,6 @@ export const useConfigStore = defineStore('config', () => {
     // Normalize Playnite boolean-like fields to real booleans so toggles
     // persist as true/false instead of enabled/disabled strings.
     const playniteBoolKeys = [
-      'playnite_enabled',
       'playnite_auto_sync',
       'playnite_autosync_require_replacement',
       'playnite_focus_exit_on_first',

@@ -84,7 +84,7 @@
     <!-- Playnite integration removed for now -->
   </div>
 </template>
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
 import AppEditModal from '@/components/AppEditModal.vue';
 import { useAppsStore } from '@/stores/apps';
@@ -97,17 +97,8 @@ const { apps } = storeToRefs(appsStore);
 const configStore = useConfigStore();
 const syncBusy = ref(false);
 const isWindows = computed(() => (configStore.metadata?.platform || '').toLowerCase() === 'windows');
-const playniteEnabled = computed(() => {
-  try {
-    const v = configStore.config?.playnite_enabled;
-    if (v === true || v === 1) return true;
-    const s = String(v ?? '').toLowerCase().trim();
-    // Accept common truthy markers for compatibility
-    return s === 'true' || s === 'yes' || s === 'enable' || s === 'enabled' || s === 'on' || s === '1';
-  } catch (_) {
-    return false;
-  }
-});
+const playniteInstalled = ref(false);
+const playniteEnabled = computed(() => playniteInstalled.value);
 const showModal = ref(false);
 const currentApp = ref(null);
 const currentIndex = ref(-1);
@@ -161,6 +152,11 @@ onMounted(async () => {
   // Ensure metadata/config present for platform + playnite detection
   try {
     await configStore.fetchConfig?.();
+  } catch (_) {}
+  // Fetch Playnite status to determine installation state
+  try {
+    const r = await http.get('/api/playnite/status');
+    if (r.status === 200 && r.data) playniteInstalled.value = !!(r.data as any).installed;
   } catch (_) {}
   try {
     await appsStore.loadApps(true);

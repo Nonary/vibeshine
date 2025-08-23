@@ -7,9 +7,7 @@
     <section v-if="platform === 'windows'" class="space-y-3">
       <h3 class="text-sm font-semibold uppercase tracking-wider">{{ $t('playnite.status_title') }}</h3>
       <div class="bg-light/70 dark:bg-surface/70 border border-dark/10 dark:border-light/10 rounded-lg p-4 space-y-4">
-        <div>
-          <Checkbox v-model="config.playnite_enabled" id="playnite_enabled" :default="store.defaults.playnite_enabled" :localePrefix="'playnite'" :label="$t('playnite.integration_enabled')" :desc="''" />
-        </div>
+        <!-- Integration is always on; no enable/disable toggle -->
         <div class="text-sm grid md:grid-cols-3 gap-3">
           <div class="flex items-center gap-2">
             <b>Status:</b>
@@ -232,7 +230,7 @@ async function refreshStatus() {
       status.user_session_active = typeof d.user_session_active === 'boolean'
         ? !!d.user_session_active
         : (typeof d.session_required === 'boolean' ? !d.session_required : status.user_session_active);
-      if (typeof d.enabled === 'boolean') status.enabled = !!d.enabled;
+      // 'enabled' is no longer a config; presence is indicated by 'installed'
       if (typeof d.playnite_running === 'boolean') status.playnite_running = !!d.playnite_running;
       status.extensions_dir = d.extensions_dir || '';
       status.plugin_version = d.plugin_version || d.version || status.plugin_version;

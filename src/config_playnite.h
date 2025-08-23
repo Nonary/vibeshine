@@ -11,7 +11,7 @@
 namespace config {
 
   struct playnite_t {
-    bool enabled = false;                   // enable Playnite integration (IPC)
+    // Enabled flag removed; integration manager always runs (server up when plugin installed)
     bool auto_sync = true;                  // enable automatic sync from Playnite
     int recent_games = 10;                  // N most recent games
     // If > 0, only treat games whose last played time is within this many days

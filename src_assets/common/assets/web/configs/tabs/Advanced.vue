@@ -28,7 +28,8 @@ const captureOptions = computed(() => {
   } else if (platform.value === 'windows') {
     base.push(
       { label: 'Desktop Duplication API', value: 'ddx' },
-      { label: 'Windows.Graphics.Capture (beta)', value: 'wgc' },
+      { label: 'Windows.Graphics.Capture Variable Framerate', value: 'wgc' },
+      { label: 'Windows.Graphics.Capture Constant Framerate', value: 'wgcc' },
     );
   }
   return base;

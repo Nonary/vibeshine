@@ -15,9 +15,8 @@ struct PlayniteConfigFixture : public ::testing::Test {
 };
 
 TEST_F(PlayniteConfigFixture, Booleans_ParseCaseInsensitiveTruths) {
-  std::unordered_map<std::string, std::string> vars{{"playnite_enabled","YeS"},{"playnite_auto_sync","on"},{"playnite_autosync_require_replacement","0"}};
+  std::unordered_map<std::string, std::string> vars{{"playnite_auto_sync","on"},{"playnite_autosync_require_replacement","0"}};
   config::apply_playnite(vars);
-  EXPECT_TRUE(config::playnite.enabled);
   EXPECT_TRUE(config::playnite.auto_sync);
   EXPECT_FALSE(config::playnite.autosync_require_replacement);
   EXPECT_TRUE(vars.empty());
