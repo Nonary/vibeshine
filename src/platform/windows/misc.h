@@ -8,7 +8,6 @@
 #include <chrono>
 #include <functional>
 #include <string_view>
-#include <functional>
 #include <system_error>
 
 // platform includes
@@ -37,10 +36,12 @@ namespace platf {
    */
   std::string to_utf8(const std::wstring &string);
 
-
   // Additional helpers used by configuration HTTP to safely access user resources
   bool is_running_as_system();
   HANDLE retrieve_users_token(bool elevated);
+
+  // Impersonate the given user token and invoke the callback while impersonating.
+  // Returns an std::error_code describing any failure (empty on success).
   std::error_code impersonate_current_user(HANDLE user_token, std::function<void()> callback);
 
   /**

@@ -836,6 +836,7 @@ namespace proc {
       // Move the parsed apps list and environment into the existing proc instance
       // Use proc.update_apps(...) which safely replaces the app list and env
       proc.update_apps(proc_opt->release_apps(), proc_opt->release_env());
+
     } else {
       // No app running: safe to refresh full state (env + apps)
       proc = std::move(*proc_opt);

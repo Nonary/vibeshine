@@ -11,6 +11,7 @@
 #include <boost/regex.hpp>
 #include <chrono>
 #include <filesystem>
+#include <algorithm>
 #include <format>
 #include <fstream>
 #include <mutex>
@@ -39,10 +40,12 @@
 #include "platform/common.h"
 #ifdef _WIN32
   #include "src/platform/windows/image_convert.h"
+
 #endif
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
+#include <nlohmann/json.hpp>
 #include "platform/common.h"
 
 #include <nlohmann/json.hpp>
@@ -119,16 +122,23 @@ namespace confighttp {
 
 #ifdef _WIN32
   // Forward declarations for Playnite handlers implemented in confighttp_playnite.cpp
-  void getPlayniteStatus(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
-  void installPlaynite(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
-  void getPlayniteGames(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
-  void getPlayniteCategories(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
-  void postPlayniteForceSync(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
-  void postPlayniteLaunch(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  void getPlayniteStatus(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                         std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  void installPlaynite(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                       std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  void getPlayniteGames(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                        std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  void getPlayniteCategories(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                             std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  void postPlayniteForceSync(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                             std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  void postPlayniteLaunch(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                         std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
   // Helper to keep confighttp.cpp free of Playnite details
   void enhance_app_with_playnite_cover(nlohmann::json &input_tree);
   // New: download Playnite-related logs as a ZIP
-  void downloadPlayniteLogs(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  void downloadPlayniteLogs(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                            std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
 #endif
 
   enum class op_e {
@@ -1360,18 +1370,21 @@ namespace confighttp {
       // Helper to check PNG magic header
       auto file_is_png = [](const std::string &p) -> bool {
         std::ifstream f(p, std::ios::binary);
+
         if (!f) {
           return false;
         }
         unsigned char sig[8] {};
         f.read(reinterpret_cast<char *>(sig), 8);
         static const unsigned char pngsig[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+
         return f.gcount() == 8 && std::equal(std::begin(sig), std::end(sig), std::begin(pngsig));
       };
 
       // Build a temp source path (extension based on URL if available)
       auto ext_from_url = [](std::string u) -> std::string {
         auto qpos = u.find_first_of("?#");
+
         if (qpos != std::string::npos) {
           u = u.substr(0, qpos);
         }
@@ -1391,6 +1404,7 @@ namespace confighttp {
         for (char &c : e) {
           c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         }
+
         return e;
       };
 
@@ -1406,15 +1420,6 @@ namespace confighttp {
           bad_request(response, request, "Failed to download cover");
           return;
         }
-      } else {
-        auto data = SimpleWeb::Crypto::Base64::decode(input_tree.value("data", ""));
-        src_tmp = coverdir + http::url_escape(key) + "_src.bin";
-        std::ofstream imgfile(src_tmp, std::ios::binary);
-        if (!imgfile) {
-          bad_request(response, request, "Failed to write cover data");
-          return;
-        }
-        imgfile.write(data.data(), static_cast<std::streamsize>(data.size()));
       }
 
       bool converted = false;
@@ -1433,7 +1438,9 @@ namespace confighttp {
 #else
       // Non-Windows: we can’t transcode here; accept only already-PNG data
       if (file_is_png(src_tmp)) {
+
         std::error_code ec {};
+
         std::filesystem::rename(src_tmp, dest_png, ec);
         if (ec) {
           // If rename fails (cross-device), try copy
@@ -1455,6 +1462,7 @@ namespace confighttp {
       // Cleanup temp source file when possible
       if (!src_tmp.empty()) {
         std::error_code del_ec {};
+
         std::filesystem::remove(src_tmp, del_ec);
       }
 
@@ -1504,10 +1512,9 @@ namespace confighttp {
       confighttp::refresh_client_apps_cache(file_tree);
 
       output_tree["status"] = true;
-      output_tree["removed"] = removed;
       send_response(response, output_tree);
     } catch (std::exception &e) {
-      BOOST_LOG(warning) << "PurgeAutoSyncedApps: "sv << e.what();
+      BOOST_LOG(warning) << "purgeAutoSyncedApps: "sv << e.what();
       bad_request(response, request, e.what());
     }
   }
@@ -1858,7 +1865,6 @@ namespace confighttp {
     server.resource["^/api/playnite/force_sync$"]["POST"] = postPlayniteForceSync;
     server.resource["^/api/playnite/launch$"]["POST"] = postPlayniteLaunch;
     server.resource["^/api/playnite/logs/export$"]["GET"] = downloadPlayniteLogs;
-
 #endif
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;
