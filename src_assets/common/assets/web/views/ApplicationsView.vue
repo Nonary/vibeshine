@@ -1,7 +1,6 @@
 <template>
   <div class="space-y-6">
     <div class="flex items-center justify-between">
-      <h2 class="text-sm font-semibold uppercase tracking-wider">Applications</h2>
       <div class="flex items-center gap-2">
         <!-- Windows + Playnite actions -->
         <template v-if="isWindows">
