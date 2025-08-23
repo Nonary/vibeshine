@@ -57,6 +57,11 @@ install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/assets/"
         DESTINATION "${SUNSHINE_ASSETS_DIR}"
         COMPONENT assets)
 
+# Plugins (copy plugin folders such as `plugins/playnite` into the package)
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/plugins/"
+        DESTINATION "plugins"
+        COMPONENT assets)
+
 # copy assets (excluding shaders) to build directory, for running without install
 file(COPY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/assets/"
         DESTINATION "${CMAKE_BINARY_DIR}/assets"
