@@ -101,15 +101,15 @@ const defaultGroups = [
     id: 'playnite',
     name: 'Playnite',
     options: {
-      playnite_enabled: 'disabled',
-      playnite_auto_sync: 'disabled',
+      playnite_enabled: false,
+      playnite_auto_sync: true,
       playnite_recent_games: 10,
       playnite_recent_max_age_days: 0,
       playnite_autosync_delete_after_days: 0,
-      playnite_autosync_require_replacement: 'enabled',
+      playnite_autosync_require_replacement: true,
       playnite_focus_attempts: 3,
       playnite_focus_timeout_secs: 15,
-      playnite_focus_exit_on_first: 'disabled',
+      playnite_focus_exit_on_first: false,
       playnite_sync_categories: '',
       playnite_exclude_games: '',
       playnite_install_dir: '',
@@ -329,6 +329,33 @@ export const useConfigStore = defineStore('config', () => {
           if (Number.isFinite(n)) {
             (_data.value as any)[key] = n;
           }
+        }
+      }
+    }
+
+    // Normalize Playnite boolean-like fields to real booleans so toggles
+    // persist as true/false instead of enabled/disabled strings.
+    const playniteBoolKeys = [
+      'playnite_enabled',
+      'playnite_auto_sync',
+      'playnite_autosync_require_replacement',
+      'playnite_focus_exit_on_first',
+    ];
+    const toBool = (v: any): boolean | null => {
+      if (v === true || v === false) return v;
+      if (v === 1 || v === 0) return !!v;
+      const s = String(v ?? '').toLowerCase().trim();
+      if (!s) return null;
+      if (['true', 'yes', 'enable', 'enabled', 'on', '1'].includes(s)) return true;
+      if (['false', 'no', 'disable', 'disabled', 'off', '0'].includes(s)) return false;
+      return null;
+    };
+    for (const k of playniteBoolKeys) {
+      if (!_data.value) break;
+      if (Object.prototype.hasOwnProperty.call(_data.value, k)) {
+        const b = toBool((_data.value as any)[k]);
+        if (b !== null) {
+          (_data.value as any)[k] = b;
         }
       }
     }

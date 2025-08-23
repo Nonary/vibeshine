@@ -67,7 +67,7 @@
       <h3 class="text-sm font-semibold uppercase tracking-wider">{{ $t('playnite.settings_title') }}</h3>
       <div class="grid md:grid-cols-3 gap-4">
         <div class="md:col-span-1">
-          <Checkbox v-model="config.playnite_auto_sync" id="playnite_auto_sync" :default="store.defaults.playnite_auto_sync" :localePrefix="'playnite'" />
+          <Checkbox v-model="config.playnite_auto_sync" id="playnite_auto_sync" :default="store.defaults.playnite_auto_sync" :localePrefix="'playnite'" :label="$t('playnite.auto_sync')" :desc="''" />
         </div>
         <div>
           <label class="text-xs font-semibold">{{ $t('playnite.recent_games') }}</label>

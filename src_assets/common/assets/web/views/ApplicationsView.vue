@@ -5,7 +5,7 @@
         <!-- Windows + Playnite actions -->
         <template v-if="isWindows">
           <n-button v-if="playniteEnabled" size="small" type="error" @click="purgeAutoSync">
-            <i class="fas fa-trash" /> Delete All Auto-Sync
+            <i class="fas fa-trash" /> {{ $t('playnite.delete_all_autosync') || 'Delete All Auto-Sync' }}
           </n-button>
           <n-button
             v-if="playniteEnabled"
@@ -14,10 +14,10 @@
             :disabled="syncBusy"
             @click="forceSync"
           >
-            <i class="fas fa-rotate" /> Force Sync
+            <i class="fas fa-rotate" /> {{ $t('playnite.force_sync') || 'Force Sync' }}
           </n-button>
           <n-button v-else size="small" tertiary @click="gotoPlaynite">
-            <i class="fas fa-plug" /> Setup Playnite
+            <i class="fas fa-plug" /> {{ $t('playnite.setup_integration') || 'Setup Playnite' }}
           </n-button>
         </template>
         <n-button type="primary" size="small" @click="openAdd">
@@ -98,8 +98,11 @@ const syncBusy = ref(false);
 const isWindows = computed(() => (configStore.metadata?.platform || '').toLowerCase() === 'windows');
 const playniteEnabled = computed(() => {
   try {
-    const v = configStore.config?.playnite_enabled ?? 'disabled';
-    return String(v).toLowerCase() === 'enabled' || v === true || String(v) === 'on';
+    const v = configStore.config?.playnite_enabled;
+    if (v === true || v === 1) return true;
+    const s = String(v ?? '').toLowerCase().trim();
+    // Accept common truthy markers for compatibility
+    return s === 'true' || s === 'yes' || s === 'enable' || s === 'enabled' || s === 'on' || s === '1';
   } catch (_) {
     return false;
   }

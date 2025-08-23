@@ -715,11 +715,21 @@ function Start-LauncherConnReader {
 }
 
 function Get-PlayniteCategories {
+  # Be defensive: Database or Categories can be null (no categories created yet)
   if (-not $PlayniteApi) { return @() }
   $cats = @()
-  foreach ($c in $PlayniteApi.Database.Categories) {
-    $cats += @{ id = $c.Id.ToString(); name = $c.Name }
-  }
+  try {
+    $db = $null
+    try { $db = $PlayniteApi.Database } catch {}
+    if (-not $db) { return @() }
+    $src = $null
+    try { $src = $db.Categories } catch {}
+    if ($src) {
+      foreach ($c in $src) {
+        try { $cats += @{ id = $c.Id.ToString(); name = $c.Name } } catch {}
+      }
+    }
+  } catch {}
   Write-Log "Collected $($cats.Count) categories"
   try {
     $s = ($cats | Select-Object -First 3)
@@ -731,7 +741,17 @@ function Get-PlayniteCategories {
 
 function Get-CategoryNamesMap {
   $map = @{}
-  foreach ($c in $PlayniteApi.Database.Categories) { $map[$c.Id] = $c.Name }
+  try {
+    $db = $null
+    try { $db = $PlayniteApi.Database } catch {}
+    if (-not $db) { return $map }
+    $src = $null
+    try { $src = $db.Categories } catch {}
+    if (-not $src) { return $map }
+    foreach ($c in $src) {
+      try { $map[$c.Id] = $c.Name } catch {}
+    }
+  } catch {}
   return $map
 }
 
@@ -813,10 +833,11 @@ function Get-PlayniteGames {
 
 function Send-InitialSnapshot {
   Write-Log "Building initial snapshot"
-  $categories = Get-PlayniteCategories
+  # Force array to avoid null Count() semantics if provider returns $null
+  $categories = @(Get-PlayniteCategories)
   $json = @{ type = 'categories'; payload = $categories } | ConvertTo-Json -Depth 6 -Compress
   Send-JsonMessage -Json $json -AllowConnectIfMissing
-  $catCount = $categories.Count
+  $catCount = 0; try { $catCount = [int]$categories.Count } catch { $catCount = 0 }
   Write-Log ("Sent categories snapshot ({0})" -f $catCount)
 
   $games = Get-PlayniteGames
