@@ -1,153 +1,407 @@
 <template>
-  <div class="grid grid-cols-12 gap-6">
-    <!-- Apps Grid -->
-    <div class="col-span-12 xl:col-span-8 space-y-6">
-      <div>
-        <h2 class="text-sm font-semibold uppercase tracking-wider text-solar-secondary dark:text-lunar-info/80 mb-3">Applications</h2>
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
-          <div v-for="(app,i) in apps" :key="i" class="group relative rounded-xl overflow-hidden border border-solar-dark/10 dark:border-lunar-light/10 bg-white/60 dark:bg-lunar-surface/60 shadow hover:shadow-lg transition flex flex-col">
-      <div class="aspect-[3/4] w-full relative bg-solar-dark/5 dark:bg-lunar-dark/30">
-              <img v-if="hasCover(app)" :src="coverSrc(app, i)" :key="appKey(app,i)" @error="onImgError($event)" class="absolute inset-0 w-full h-full object-cover" loading="lazy" />
-              <div v-else class="absolute inset-0 flex items-center justify-center text-4xl font-bold text-solar-primary/40 dark:text-lunar-primary/40">{{ app.name.substring(0,1) }}</div>
-              <div class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition">
-        <button class="inline-flex items-center justify-center w-8 h-8 rounded-md bg-black/50 text-white hover:bg-black/70" @click="openEdit(app,i)"><i class="fas fa-cog text-sm"></i></button>
+  <div class="space-y-8 max-w-6xl mx-auto px-2 md:px-4">
+    <!-- Hero / Intro -->
+    <section
+      class="rounded-xl border border-dark/10 dark:border-light/10 bg-light/70 dark:bg-surface/70 backdrop-blur p-5 md:p-6 shadow-sm"
+    >
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div class="min-w-0">
+          <h2 class="text-xl md:text-2xl font-semibold tracking-tight">
+            {{ $t('index.welcome') }}
+          </h2>
+          <p class="text-sm opacity-80 mt-1 leading-relaxed">
+            {{ $t('index.description') }}
+          </p>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <RouterLink
+            to="/settings"
+            class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/80 text-onPrimary shadow hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary/60 transition"
+          >
+            <i class="fas fa-sliders" />
+            <span>Settings</span>
+          </RouterLink>
+          <RouterLink
+            to="/applications"
+            class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-dark/10 dark:border-light/10 hover:bg-dark/10 dark:hover:bg-light/10 transition"
+          >
+            <i class="fas fa-grid-2" />
+            <span>Applications</span>
+          </RouterLink>
+        </div>
+      </div>
+    </section>
+
+    <!-- Fatal startup errors moved into Version card to avoid layout shift -->
+
+    <!-- Main Grid -->
+    <n-grid cols="24" x-gap="16" y-gap="16" responsive="screen">
+      <!-- Version Card -->
+      <n-gi :span="24" :xl="16">
+        <n-card v-if="installedVersion" :segmented="{ content: true, footer: true }">
+          <template #header>
+            <h2 class="text-2xl font-semibold tracking-tight mx-auto text-center">
+              {{ 'Version ' + installedVersion.version }}
+            </h2>
+          </template>
+          <div class="space-y-4 text-sm">
+            <!-- Fatal Errors (embedded) -->
+            <n-alert
+              v-if="fancyLogs.some((l) => l.level === 'Fatal')"
+              type="error"
+              :show-icon="true"
+            >
+              <div class="space-y-3">
+                <p class="text-sm leading-relaxed" v-html="$t('index.startup_errors')"></p>
+                <ul class="list-disc pl-5 space-y-1 text-xs">
+                  <li v-for="(v, i) in fancyLogs.filter((x) => x.level === 'Fatal')" :key="i">
+                    {{ v.value }}
+                  </li>
+                </ul>
+                <div>
+                  <a
+                    class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-danger text-onDark hover:brightness-110 transition"
+                    href="./troubleshooting#logs"
+                  >
+                    <i class="fas fa-file-lines" /> {{ $t('index.view_logs') || 'View Logs' }}
+                  </a>
+                </div>
               </div>
+            </n-alert>
+            <div v-if="loading" class="text-xs italic flex items-center gap-2">
+              <i class="fas fa-spinner animate-spin" /> {{ $t('index.loading_latest') }}
             </div>
-            <div class="p-3 flex flex-col flex-1">
-              <h3 class="text-sm font-semibold truncate mb-1">{{ app.name }}</h3>
-              <p class="text-[10px] uppercase tracking-wider opacity-60 line-clamp-2 mb-2">{{ displayCmd(app) }}</p>
-              <div class="mt-auto flex items-center justify-between">
-                <span class="px-2 py-0.5 rounded-full bg-green-500/15 text-green-600 dark:text-green-400 text-[10px]">Configured</span>
-                <ProfileSelector v-model="profileSelections[app.name]" />
+            <div v-if="branch || commit" class="flex items-center gap-2 text-xs">
+              <span
+                v-if="branch"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10"
+              >
+                <i class="fas fa-code-branch" /> {{ branch }}
+              </span>
+              <span
+                v-if="commit"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
+              >
+                <i class="fas fa-hashtag" /> {{ commit.substring(0, 7) }}
+              </span>
+            </div>
+            <n-alert v-if="buildVersionIsDirty" type="success" :show-icon="true">
+              {{ $t('index.version_dirty') }} 🌇
+            </n-alert>
+            <n-alert v-if="installedVersionNotStable" type="info" :show-icon="true">
+              {{ $t('index.installed_version_not_stable') }}
+            </n-alert>
+            <n-alert
+              v-if="compareChecked && !installedVersionNotStable && aheadByCommits > 0"
+              type="success"
+            >
+              {{ $t('index.version_ahead', { ahead: aheadByCommits }) }}
+            </n-alert>
+            <n-alert
+              v-if="
+                compareChecked &&
+                !installedVersionNotStable &&
+                aheadByCommits === 0 &&
+                behindByCommits > 0
+              "
+              type="warning"
+            >
+              {{ $t('index.version_behind', { behind: behindByCommits }) }}
+            </n-alert>
+            <n-alert
+              v-if="
+                compareChecked &&
+                !installedVersionNotStable &&
+                !compareInfo &&
+                !stableBuildAvailable &&
+                !buildVersionIsDirty
+              "
+              type="info"
+            >
+              {{ $t('index.version_compare_unknown') }}
+            </n-alert>
+            <n-alert
+              v-else-if="
+                (!preReleaseBuildAvailable || !notifyPreReleases) &&
+                !stableBuildAvailable &&
+                !buildVersionIsDirty
+              "
+              type="success"
+            >
+              {{ $t('index.version_latest') }}
+            </n-alert>
+
+            <!-- Pre-release notice -->
+            <n-alert
+              v-if="notifyPreReleases && preReleaseBuildAvailable"
+              type="warning"
+              :show-icon="true"
+            >
+              <div class="flex flex-col gap-3 w-full">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                  <p class="text-sm m-0">{{ $t('index.new_pre_release') }}</p>
+                  <n-button
+                    tag="a"
+                    type="primary"
+                    :href="preReleaseRelease?.html_url"
+                    target="_blank"
+                  >
+                    {{ $t('index.download') }}
+                  </n-button>
+                </div>
+                <div
+                  class="bg-light/5 dark:bg-dark/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
+                >
+                  <p class="font-semibold mb-2">{{ preReleaseRelease?.name }}</p>
+                  <pre class="whitespace-pre-wrap">{{ preReleaseRelease?.body }}</pre>
+                </div>
               </div>
-            </div>
+            </n-alert>
+
+            <!-- Stable update available -->
+            <n-alert v-if="stableBuildAvailable" type="warning" :show-icon="true">
+              <div class="flex flex-col gap-3 w-full">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                  <p class="text-sm m-0">{{ $t('index.new_stable') }}</p>
+                  <n-button tag="a" type="primary" :href="githubRelease?.html_url" target="_blank">
+                    {{ $t('index.download') }}
+                  </n-button>
+                </div>
+                <div
+                  class="bg-light/5 dark:bg-dark/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
+                >
+                  <p class="font-semibold mb-2">{{ githubRelease?.name }}</p>
+                  <pre class="whitespace-pre-wrap">{{ githubRelease?.body }}</pre>
+                </div>
+              </div>
+            </n-alert>
           </div>
-      <button @click="openAdd" class="aspect-[3/4] rounded-xl border border-dashed border-solar-dark/20 dark:border-lunar-light/10 flex flex-col items-center justify-center text-solar-dark/40 dark:text-lunar-light/30 hover:border-solar-primary/50 hover:text-solar-primary dark:hover:text-lunar-primary/80 transition">
-            <i class="fas fa-plus text-3xl mb-2"></i>
-            <span class="text-xs font-medium">Add</span>
-          </button>
-        </div>
-      </div>
+        </n-card>
+      </n-gi>
 
-      <!-- Alerts / Warnings placeholder -->
-      <div v-if="fatalLogs.length" class="space-y-3">
-        <UiAlert variant="danger">
-          <template #icon><i class="fas fa-triangle-exclamation"></i></template>
-          <p class="font-medium">Startup errors detected ({{ fatalLogs.length }}). Review before streaming.</p>
-        </UiAlert>
-      </div>
-    </div>
-
-    <!-- Side widgets -->
-    <div class="col-span-12 xl:col-span-4 space-y-6">
-      <UiCard title="Streaming Health">
-        <div class="grid grid-cols-3 gap-4 text-center text-xs">
-          <div><p class="text-[11px] uppercase tracking-wider mb-1 opacity-60">Resolution</p><p class="font-semibold">--</p></div>
-          <div><p class="text-[11px] uppercase tracking-wider mb-1 opacity-60">FPS</p><p class="font-semibold">--</p></div>
-          <div><p class="text-[11px] uppercase tracking-wider mb-1 opacity-60">Bitrate</p><p class="font-semibold">--</p></div>
-        </div>
-        <div class="mt-4 h-2 rounded-full bg-solar-dark/10 dark:bg-lunar-light/10 overflow-hidden">
-          <div class="h-full w-1/3 bg-gradient-to-r from-green-500 via-yellow-400 to-red-500 animate-pulse"></div>
-        </div>
-      </UiCard>
-      <UiCard title="Profiles">
-        <div class="flex flex-wrap gap-2">
-          <UiButton size="sm" tone="outline" variant="primary">Gaming</UiButton>
-          <UiButton size="sm" tone="outline" variant="primary">Productivity</UiButton>
-          <UiButton size="sm" tone="outline" variant="primary">Low Latency</UiButton>
-        </div>
-      </UiCard>
-      <UiCard title="Resources">
-        <div class="text-xs space-y-2">
-          <a href="https://app.lizardbyte.dev" target="_blank" class="block text-solar-primary dark:text-lunar-primary hover:underline">Website</a>
-          <a href="https://app.lizardbyte.dev/discord" target="_blank" class="block text-solar-primary dark:text-lunar-primary hover:underline">Discord</a>
-          <a href="https://github.com/orgs/LizardByte/discussions" target="_blank" class="block text-solar-primary dark:text-lunar-primary hover:underline">GitHub Discussions</a>
-        </div>
-      </UiCard>
-    </div>
+      <!-- Resources -->
+      <n-gi :span="24" :xl="8">
+        <n-card>
+          <template #header>
+            <h2 class="text-2xl font-semibold tracking-tight mx-auto text-center">
+              {{ $t('resources.title') || 'Resources' }}
+            </h2>
+          </template>
+          <div class="text-xs space-y-2">
+            <ResourceCard />
+          </div>
+        </n-card>
+      </n-gi>
+    </n-grid>
   </div>
-  <AppEditModal v-model="showModal" :platform="platform" :app="currentApp" :index="currentIndex" @saved="reloadApps" @deleted="reloadApps" />
 </template>
-<script setup>
-import { ref, onMounted, computed } from 'vue'
-import UiButton from '../components/UiButton.vue'
-import UiAlert from '../components/UiAlert.vue'
-import UiCard from '../components/UiCard.vue'
-import ProfileSelector from '../components/ProfileSelector.vue'
-import AppEditModal from '../components/AppEditModal.vue'
 
-const apps = ref([])
-const logs = ref('')
-const profileSelections = ref({})
-const platform = ref('')
-// modal state reused from ApplicationsView
-const showModal = ref(false)
-const currentApp = ref(null)
-const currentIndex = ref(-1)
-async function load(){
-  try { const r = await fetch('./api/apps').then(r=>r.json()); apps.value = r.apps||[] } catch(e){ console.error(e) }
-  if(!platform.value){ try { platform.value = await fetch('./api/config').then(r=>r.json()).then(r=>r.platform) } catch(e){} }
-  try { logs.value = await fetch('./api/logs').then(r => r.text()) } catch(e) {}
-}
-onMounted(load)
-function reloadApps(){ load() }
+<script setup lang="ts">
+import { ref, onMounted, computed } from 'vue';
+import { NCard, NAlert, NButton, NGrid, NGi } from 'naive-ui';
+import ResourceCard from '@/ResourceCard.vue';
+import SunshineVersion, { GitHubRelease } from '@/sunshine_version';
+import { useConfigStore } from '@/stores/config';
+import { useAuthStore } from '@/stores/auth';
 
-const fatalLogs = computed(() => {
-  if(!logs.value) return []
-  const regex = /(\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}]):\s/g
-  const raw = logs.value.split(regex).splice(1)
-  const out=[]
-  for(let i=0;i<raw.length;i+=2){
-    const line = raw[i+1]
-    if(line.startsWith('Fatal:')) out.push(line)
-  }
-  return out
-})
+const installedVersion = ref<SunshineVersion>(new SunshineVersion('0.0.0'));
+const githubRelease = ref<GitHubRelease | null>(null);
+const preReleaseRelease = ref<GitHubRelease | null>(null);
 
-function openAdd(){ currentApp.value=null; currentIndex.value=-1; showModal.value=true }
-function openEdit(app,index){ currentApp.value=app; currentIndex.value=index; showModal.value=true }
-function displayCmd(app){ if(Array.isArray(app.cmd)) return app.cmd.join(' '); return app.cmd || 'No command' }
-function appKey(app, index){
-  const p = (app && app['image-path']) ? app['image-path'].toString() : ''
-  const id = app?.uuid || ''
-  return `${app?.name || 'app'}|${id}|${p}|${index}`
-}
-function simpleHash(str){
-  let h = 2166136261 >>> 0
-  for(let i=0;i<str.length;i++){
-    h ^= str.charCodeAt(i)
-    h = Math.imul(h, 16777619) >>> 0
+const githubVersion = computed(() =>
+  githubRelease.value
+    ? SunshineVersion.fromRelease(githubRelease.value)
+    : new SunshineVersion('0.0.0'),
+);
+const preReleaseVersion = computed(() =>
+  preReleaseRelease.value
+    ? SunshineVersion.fromRelease(preReleaseRelease.value)
+    : new SunshineVersion('0.0.0'),
+);
+const notifyPreReleases = ref(false);
+const loading = ref(true);
+const logs = ref('');
+const branch = ref('');
+const commit = ref('');
+const compareInfo = ref<{
+  ahead_by: number;
+  behind_by: number;
+  status: 'identical' | 'ahead' | 'behind' | 'diverged';
+} | null>(null);
+// Compare info against the latest pre-release tag (if present)
+const preCompareInfo = ref<{
+  ahead_by: number;
+  behind_by: number;
+  status: 'identical' | 'ahead' | 'behind' | 'diverged';
+} | null>(null);
+const compareChecked = ref(false); // true once we've attempted to resolve git distance
+
+const configStore = useConfigStore();
+const auth = useAuthStore();
+let started = false; // prevent duplicate concurrent checks
+
+async function runVersionChecks() {
+  if (started) return; // guard
+  started = true;
+  loading.value = true;
+  try {
+    // Use config store (it already handles deep cloning & defaults)
+    const cfg = await configStore.fetchConfig();
+    if (!cfg) {
+      // still not available (possibly lost auth); allow retry later
+      started = false;
+      loading.value = false;
+      return;
+    }
+    // Normalize notify pre-release flag to boolean
+    notifyPreReleases.value =
+      cfg.notify_pre_releases === true || cfg.notify_pre_releases === 'enabled';
+    const serverVersion = configStore.metadata?.version || cfg.version;
+    installedVersion.value = new SunshineVersion(serverVersion || '0.0.0');
+    branch.value = cfg.branch || '';
+    commit.value = cfg.commit || '';
+
+    // Remote release checks (GitHub)
+    try {
+      githubRelease.value = await fetch(
+        'https://api.github.com/repos/LizardByte/Sunshine/releases/latest',
+      ).then((r) => r.json());
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[Dashboard] latest release fetch failed', e);
+    }
+    try {
+      const releases = await fetch(
+        'https://api.github.com/repos/LizardByte/Sunshine/releases',
+      ).then((r) => r.json());
+      const pre = Array.isArray(releases) ? releases.find((r) => r.prerelease) : null;
+      if (pre) preReleaseRelease.value = pre;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[Dashboard] releases list fetch failed', e);
+    }
+
+    // Compare if we have enough data. Mark `compareChecked` once we've attempted (success or fail)
+    if (commit.value && githubRelease.value?.tag_name) {
+      try {
+        const baseTag = githubRelease.value.tag_name.startsWith('v')
+          ? githubRelease.value.tag_name
+          : 'v' + githubRelease.value.tag_name;
+        const compareResp = await fetch(
+          `https://api.github.com/repos/LizardByte/Sunshine/compare/${baseTag}...${commit.value}`,
+        );
+        if (compareResp.ok) {
+          const cmp = await compareResp.json();
+          compareInfo.value = {
+            ahead_by: cmp.ahead_by,
+            behind_by: cmp.behind_by,
+            status: cmp.status,
+          };
+        }
+        // Also attempt compare against pre-release tag if available
+        if (preReleaseRelease.value?.tag_name) {
+          const preTag = preReleaseRelease.value.tag_name.startsWith('v')
+            ? preReleaseRelease.value.tag_name
+            : 'v' + preReleaseRelease.value.tag_name;
+          const preResp = await fetch(
+            `https://api.github.com/repos/LizardByte/Sunshine/compare/${preTag}...${commit.value}`,
+          );
+          if (preResp.ok) {
+            const preCmp = await preResp.json();
+            preCompareInfo.value = {
+              ahead_by: preCmp.ahead_by,
+              behind_by: preCmp.behind_by,
+              status: preCmp.status,
+            };
+          }
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('Compare API failed', e);
+      } finally {
+        compareChecked.value = true;
+      }
+    } else {
+      // Nothing to compare (no commit or no remote version) - treat as checked
+      compareChecked.value = true;
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[Dashboard] version checks failed', e);
   }
-  return (h >>> 0).toString(36)
-}
-function hasCover(app){
-  return !!(app?.uuid || app?.['image-path'])
-}
-function coverSrc(app, index){
-  // Prefer UUID-based cover
-  if(app?.uuid){
-    const cb = simpleHash(`${app.uuid}|${index ?? ''}`)
-    return `/api/apps/${encodeURIComponent(app.uuid)}/cover?cb=${cb}`
+  try {
+    // logs only after auth
+    logs.value = await fetch('./api/logs').then((r) => r.text());
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[Dashboard] logs fetch failed', e);
   }
-  // Fallback to legacy image-path handling
-  const path = app?.['image-path']
-  if(!path) return ''
-  const p = path.toString().trim()
-  if(/^https?:\/\//i.test(p)) return p
-  if(!p.includes('/') && !p.includes('\\')){
-    return `/assets/${p}`
-  }
-  const file = p.replace(/\\/g,'/').split('/').pop()
-  if(file){
-    const cb = simpleHash(`${p}|${index ?? ''}`)
-    const iParam = (typeof index === 'number') ? `&i=${index}` : ''
-    return `/covers/${file}?cb=${cb}${iParam}`
-  }
-  return p
+  loading.value = false;
 }
-function onImgError(e){
-  const img = e?.target
-  if(img){ img.style.display = 'none' }
-}
+
+onMounted(async () => {
+  await auth.waitForAuthentication();
+  await runVersionChecks();
+});
+
+const installedVersionNotStable = computed(() => {
+  if (!githubRelease.value || !installedVersion.value) return false;
+  // treat non-master branches as pre-release builds automatically
+  if (branch.value && branch.value !== 'master') return true;
+  return installedVersion.value.isGreaterRelease(githubRelease.value);
+});
+const stableBuildAvailable = computed(() => {
+  if (!githubRelease.value || !installedVersion.value) return false;
+  // Don't decide until we've checked git distance
+  if (!compareChecked.value) return false;
+  // If we have compare info and we're ahead, do not suggest stable update
+  if (compareInfo.value && compareInfo.value.ahead_by > 0) return false;
+  // If we have compare info and we're exactly equal (ahead_by = behind_by = 0) treat as up-to-date.
+  if (compareInfo.value && compareInfo.value.ahead_by === 0 && compareInfo.value.behind_by === 0)
+    return false;
+  return githubVersion.value.isGreater(installedVersion.value);
+});
+const preReleaseBuildAvailable = computed(() => {
+  if (!preReleaseRelease.value || !githubRelease.value || !installedVersion.value) return false;
+  // Only consider pre-release availability after we've confirmed compare status
+  if (!compareChecked.value) return false;
+  // If our commit is ahead of the pre-release tag, don't suggest the pre-release
+  if (preCompareInfo.value && preCompareInfo.value.ahead_by > 0) return false;
+  // If exactly equal to the pre-release commit, also do not suggest
+  if (
+    preCompareInfo.value &&
+    preCompareInfo.value.ahead_by === 0 &&
+    preCompareInfo.value.behind_by === 0
+  )
+    return false;
+  return (
+    preReleaseVersion.value.isGreater(installedVersion.value) &&
+    preReleaseVersion.value.isGreater(githubVersion.value)
+  );
+});
+const buildVersionIsDirty = computed(() => {
+  if (!installedVersion.value) return false;
+  return (
+    installedVersion.value.version?.split('.').length === 5 &&
+    installedVersion.value.version.indexOf('dirty') !== -1
+  );
+});
+const aheadByCommits = computed(() => compareInfo.value?.ahead_by || 0);
+const behindByCommits = computed(() => compareInfo.value?.behind_by || 0);
+const fancyLogs = computed(() => {
+  if (!logs.value) return [];
+  const regex = /(\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}]):\s/g;
+  const rawLogLines = logs.value.split(regex).splice(1);
+  const logLines = [];
+  for (let i = 0; i < rawLogLines.length; i += 2) {
+    logLines.push({
+      timestamp: rawLogLines[i],
+      level: rawLogLines[i + 1].split(':')[0],
+      value: rawLogLines[i + 1],
+    });
+  }
+  return logLines;
+});
 </script>
+
 <style scoped></style>
