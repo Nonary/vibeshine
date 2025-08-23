@@ -106,8 +106,8 @@ namespace confighttp {
      * @return JSON string listing tokens (hashed) and metadata.
      */
     std::string list_api_tokens_json() const;
-  /**
-   * @brief Authenticate using a raw token (not hash) for path & method.
+    /**
+     * @brief Authenticate using a raw token (not hash) for path & method.
      * @param token The un-hashed provided token.
      * @param path Target path.
      * @param method HTTP method.

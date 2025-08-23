@@ -4,8 +4,8 @@
  */
 #pragma once
 
-#include <nlohmann/json.hpp>
 #include <filesystem>
+#include <nlohmann/json.hpp>
 
 namespace platf::playnite::frontend {
 
@@ -13,12 +13,7 @@ namespace platf::playnite::frontend {
    * Build the JSON payload returned by the Playnite status endpoint.
    * Inputs are provided explicitly to keep this function pure and unit-testable.
    */
-  inline nlohmann::json build_status_json(bool enabled,
-                                          bool active,
-                                          const std::filesystem::path &extensions_dir,
-                                          bool session_required,
-                                          bool installed,
-                                          bool playnite_running) {
+  inline nlohmann::json build_status_json(bool enabled, bool active, const std::filesystem::path &extensions_dir, bool session_required, bool installed, bool playnite_running) {
     nlohmann::json out;
     out["enabled"] = enabled;
     out["active"] = active;
@@ -29,5 +24,4 @@ namespace platf::playnite::frontend {
     return out;
   }
 
-} // namespace platf::playnite::frontend
-
+}  // namespace platf::playnite::frontend

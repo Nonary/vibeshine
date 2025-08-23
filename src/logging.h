@@ -6,8 +6,8 @@
 
 // lib includes
 #include <boost/log/common.hpp>
-#include <boost/log/sinks.hpp>
 #include <boost/log/expressions.hpp>
+#include <boost/log/sinks.hpp>
 // Expose the severity attribute keyword to all translation units
 BOOST_LOG_ATTRIBUTE_KEYWORD(severity, "Severity", int)
 

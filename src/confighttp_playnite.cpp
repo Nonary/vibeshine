@@ -5,31 +5,31 @@
 
 #ifdef _WIN32
 
-// standard includes
-#include <filesystem>
-#include <string>
-#include <string_view>
-#include <fstream>
-#include <sstream>
+  // standard includes
+  #include <filesystem>
+  #include <fstream>
+  #include <sstream>
+  #include <string>
+  #include <string_view>
 
-// third-party includes
-#include <nlohmann/json.hpp>
-#include <Simple-Web-Server/server_https.hpp>
+  // third-party includes
+  #include <nlohmann/json.hpp>
+  #include <Simple-Web-Server/server_https.hpp>
 
-// local includes
-#include "config_playnite.h"
-#include "src/platform/windows/playnite_integration.h"
-#include "src/platform/windows/ipc/misc_utils.h"
-#include "confighttp.h"
-#include "logging.h"
+  // local includes
+  #include "config_playnite.h"
+  #include "confighttp.h"
+  #include "logging.h"
+  #include "src/platform/windows/ipc/misc_utils.h"
+  #include "src/platform/windows/playnite_integration.h"
 
-// Windows headers
-#include <ShlObj.h>
-#include <KnownFolders.h>
-#include <windows.h>
+  // Windows headers
+  #include <KnownFolders.h>
+  #include <ShlObj.h>
+  #include <windows.h>
 
-// boost
-#include <boost/crc.hpp>
+  // boost
+  #include <boost/crc.hpp>
 
 namespace confighttp {
 
@@ -48,10 +48,14 @@ namespace confighttp {
   static bool is_plugin_installed() {
     try {
       std::string destPath;
-      if (!platf::playnite::get_extension_target_dir(destPath)) return false;
+      if (!platf::playnite::get_extension_target_dir(destPath)) {
+        return false;
+      }
       std::filesystem::path dest = destPath;
       return std::filesystem::exists(dest / "extension.yaml") && std::filesystem::exists(dest / "SunshinePlaynite.psm1");
-    } catch (...) { return false; }
+    } catch (...) {
+      return false;
+    }
   }
 
   // Enhance app JSON with a Playnite-derived cover path when applicable.
@@ -108,9 +112,12 @@ namespace confighttp {
     out["session_required"] = session_required;
     // For UI backwards-compatibility: expose user_session_active derived from session_required
     out["user_session_active"] = !session_required;
-    BOOST_LOG(info) << "Playnite status: active=" << out["active"]
-                    << ", session_required=" << (session_required ? "true" : "false")
-                    << ", dir=" << (dest.empty() ? std::string("(unknown)") : dest.string());
+    // Reduce verbosity: this endpoint can be polled frequently by the UI.
+    // Log at debug level instead of info to avoid log spam while still
+    // keeping the line available when debugging.
+    BOOST_LOG(debug) << "Playnite status: active=" << out["active"]
+                     << ", session_required=" << (session_required ? "true" : "false")
+                     << ", dir=" << (dest.empty() ? std::string("(unknown)") : dest.string());
     send_response(response, out);
   }
 
@@ -121,8 +128,10 @@ namespace confighttp {
     print_req(request);
     try {
       if (!is_plugin_installed()) {
-        SimpleWeb::CaseInsensitiveMultimap headers; headers.emplace("Content-Type", "application/json");
-        headers.emplace("X-Frame-Options", "DENY"); headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+        SimpleWeb::CaseInsensitiveMultimap headers;
+        headers.emplace("Content-Type", "application/json");
+        headers.emplace("X-Frame-Options", "DENY");
+        headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
         response->write(SimpleWeb::StatusCode::success_ok, "[]", headers);
         return;
       }
@@ -131,7 +140,7 @@ namespace confighttp {
         // return empty array if not available
         json = "[]";
       }
-      BOOST_LOG(info) << "Playnite games: json length=" << json.size();
+      BOOST_LOG(debug) << "Playnite games: json length=" << json.size();
       SimpleWeb::CaseInsensitiveMultimap headers;
       headers.emplace("Content-Type", "application/json");
       headers.emplace("X-Frame-Options", "DENY");
@@ -149,8 +158,10 @@ namespace confighttp {
     print_req(request);
     try {
       if (!is_plugin_installed()) {
-        SimpleWeb::CaseInsensitiveMultimap headers; headers.emplace("Content-Type", "application/json");
-        headers.emplace("X-Frame-Options", "DENY"); headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+        SimpleWeb::CaseInsensitiveMultimap headers;
+        headers.emplace("Content-Type", "application/json");
+        headers.emplace("X-Frame-Options", "DENY");
+        headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
         response->write(SimpleWeb::StatusCode::success_ok, "[]", headers);
         return;
       }
@@ -159,7 +170,7 @@ namespace confighttp {
         // return empty array if not available
         json = "[]";
       }
-      BOOST_LOG(info) << "Playnite categories: json length=" << json.size();
+      BOOST_LOG(debug) << "Playnite categories: json length=" << json.size();
       SimpleWeb::CaseInsensitiveMultimap headers;
       headers.emplace("Content-Type", "application/json");
       headers.emplace("X-Frame-Options", "DENY");
@@ -182,7 +193,8 @@ namespace confighttp {
     nlohmann::json out;
     bool request_restart = false;
     try {
-      std::stringstream ss; ss << request->content.rdbuf();
+      std::stringstream ss;
+      ss << request->content.rdbuf();
       if (ss.rdbuf()->in_avail() > 0) {
         auto in = nlohmann::json::parse(ss);
         request_restart = in.value("restart", false);
@@ -201,7 +213,9 @@ namespace confighttp {
     }
     BOOST_LOG(info) << "Playnite install: status=" << (ok ? "true" : "false") << (ok ? "" : std::string(", error=") + err);
     out["status"] = ok;
-    if (!ok) out["error"] = err;
+    if (!ok) {
+      out["error"] = err;
+    }
     // Optionally close and restart Playnite to pick up the new plugin
     if (ok && request_restart) {
       bool restarted = platf::playnite::restart_playnite();
@@ -222,7 +236,8 @@ namespace confighttp {
     nlohmann::json out;
     bool request_restart = false;
     try {
-      std::stringstream ss; ss << request->content.rdbuf();
+      std::stringstream ss;
+      ss << request->content.rdbuf();
       if (ss.rdbuf()->in_avail() > 0) {
         auto in = nlohmann::json::parse(ss);
         request_restart = in.value("restart", false);
@@ -233,7 +248,9 @@ namespace confighttp {
     bool ok = platf::playnite::uninstall_plugin(err);
     BOOST_LOG(info) << "Playnite uninstall: status=" << (ok ? "true" : "false") << (ok ? "" : std::string(", error=") + err);
     out["status"] = ok;
-    if (!ok) out["error"] = err;
+    if (!ok) {
+      out["error"] = err;
+    }
     if (ok && request_restart) {
       bool restarted = platf::playnite::restart_playnite();
       out["restarted"] = restarted;
@@ -242,7 +259,9 @@ namespace confighttp {
   }
 
   void postPlayniteForceSync(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) return;
+    if (!authenticate(response, request)) {
+      return;
+    }
     print_req(request);
     nlohmann::json out;
     bool ok = platf::playnite::force_sync();
@@ -251,7 +270,9 @@ namespace confighttp {
   }
 
   void postPlayniteLaunch(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) return;
+    if (!authenticate(response, request)) {
+      return;
+    }
     print_req(request);
     nlohmann::json out;
     // Use unified restart path: will start Playnite if not running
@@ -265,108 +286,136 @@ namespace confighttp {
     out.push_back(static_cast<char>(v & 0xFF));
     out.push_back(static_cast<char>((v >> 8) & 0xFF));
   }
+
   static inline void write_le32(std::string &out, uint32_t v) {
     out.push_back(static_cast<char>(v & 0xFF));
     out.push_back(static_cast<char>((v >> 8) & 0xFF));
     out.push_back(static_cast<char>((v >> 16) & 0xFF));
     out.push_back(static_cast<char>((v >> 24) & 0xFF));
   }
+
   static inline void current_dos_datetime(uint16_t &dos_time, uint16_t &dos_date) {
     std::time_t tt = std::time(nullptr);
-    std::tm tm{};
-#ifdef _WIN32
+    std::tm tm {};
+  #ifdef _WIN32
     localtime_s(&tm, &tt);
-#else
+  #else
     localtime_r(&tt, &tm);
-#endif
+  #endif
     dos_time = static_cast<uint16_t>(((tm.tm_hour & 0x1F) << 11) | ((tm.tm_min & 0x3F) << 5) | ((tm.tm_sec / 2) & 0x1F));
-    int year = tm.tm_year + 1900; if (year < 1980) year = 1980; if (year > 2107) year = 2107;
+    int year = tm.tm_year + 1900;
+    if (year < 1980) {
+      year = 1980;
+    }
+    if (year > 2107) {
+      year = 2107;
+    }
     dos_date = static_cast<uint16_t>(((year - 1980) << 9) | (((tm.tm_mon + 1) & 0x0F) << 5) | (tm.tm_mday & 0x1F));
   }
 
   // Build a minimal ZIP (stored, no compression) from name->data entries
   static std::string build_zip_from_entries(const std::vector<std::pair<std::string, std::string>> &entries) {
     std::string out;
-    struct CdEnt { std::string name; uint32_t crc; uint32_t size; uint32_t offset; uint16_t dostime; uint16_t dosdate; };
+
+    struct CdEnt {
+      std::string name;
+      uint32_t crc;
+      uint32_t size;
+      uint32_t offset;
+      uint16_t dostime;
+      uint16_t dosdate;
+    };
+
     std::vector<CdEnt> cd;
-    uint16_t dostime = 0, dosdate = 0; current_dos_datetime(dostime, dosdate);
+    uint16_t dostime = 0, dosdate = 0;
+    current_dos_datetime(dostime, dosdate);
     for (const auto &e : entries) {
       const std::string &name = e.first;
       const std::string &data = e.second;
-      boost::crc_32_type crc; crc.process_bytes(data.data(), data.size());
+      boost::crc_32_type crc;
+      crc.process_bytes(data.data(), data.size());
       uint32_t crc32 = crc.checksum();
       uint32_t size = static_cast<uint32_t>(data.size());
       uint32_t off = static_cast<uint32_t>(out.size());
       // Local file header
-      write_le32(out, 0x04034b50u);         // signature
-      write_le16(out, 20);                  // version needed
-      write_le16(out, 0);                   // flags
-      write_le16(out, 0);                   // method: store
-      write_le16(out, dostime);             // mod time
-      write_le16(out, dosdate);             // mod date
-      write_le32(out, crc32);               // crc32
-      write_le32(out, size);                // comp size
-      write_le32(out, size);                // uncomp size
-      write_le16(out, static_cast<uint16_t>(name.size())); // name len
-      write_le16(out, 0);                   // extra len
+      write_le32(out, 0x04034b50u);  // signature
+      write_le16(out, 20);  // version needed
+      write_le16(out, 0);  // flags
+      write_le16(out, 0);  // method: store
+      write_le16(out, dostime);  // mod time
+      write_le16(out, dosdate);  // mod date
+      write_le32(out, crc32);  // crc32
+      write_le32(out, size);  // comp size
+      write_le32(out, size);  // uncomp size
+      write_le16(out, static_cast<uint16_t>(name.size()));  // name len
+      write_le16(out, 0);  // extra len
       out.append(name.data(), name.size());
       out.append(data.data(), data.size());
-      cd.push_back(CdEnt{name, crc32, size, off, dostime, dosdate});
+      cd.push_back(CdEnt {name, crc32, size, off, dostime, dosdate});
     }
     uint32_t cd_start = static_cast<uint32_t>(out.size());
     uint32_t cd_size = 0;
     for (const auto &e : cd) {
       std::string rec;
-      write_le32(rec, 0x02014b50u);       // central dir header sig
-      write_le16(rec, 20);                // version made by
-      write_le16(rec, 20);                // version needed
-      write_le16(rec, 0);                 // flags
-      write_le16(rec, 0);                 // method: store
-      write_le16(rec, e.dostime);         // time
-      write_le16(rec, e.dosdate);         // date
-      write_le32(rec, e.crc);             // crc32
-      write_le32(rec, e.size);            // comp size
-      write_le32(rec, e.size);            // uncomp size
-      write_le16(rec, static_cast<uint16_t>(e.name.size())); // name len
-      write_le16(rec, 0);                 // extra len
-      write_le16(rec, 0);                 // comment len
-      write_le16(rec, 0);                 // disk start
-      write_le16(rec, 0);                 // int attrs
-      write_le32(rec, 0);                 // ext attrs
-      write_le32(rec, e.offset);          // rel offset local header
+      write_le32(rec, 0x02014b50u);  // central dir header sig
+      write_le16(rec, 20);  // version made by
+      write_le16(rec, 20);  // version needed
+      write_le16(rec, 0);  // flags
+      write_le16(rec, 0);  // method: store
+      write_le16(rec, e.dostime);  // time
+      write_le16(rec, e.dosdate);  // date
+      write_le32(rec, e.crc);  // crc32
+      write_le32(rec, e.size);  // comp size
+      write_le32(rec, e.size);  // uncomp size
+      write_le16(rec, static_cast<uint16_t>(e.name.size()));  // name len
+      write_le16(rec, 0);  // extra len
+      write_le16(rec, 0);  // comment len
+      write_le16(rec, 0);  // disk start
+      write_le16(rec, 0);  // int attrs
+      write_le32(rec, 0);  // ext attrs
+      write_le32(rec, e.offset);  // rel offset local header
       rec.append(e.name.data(), e.name.size());
       cd_size += static_cast<uint32_t>(rec.size());
       out.append(rec);
     }
     // End of central directory
     write_le32(out, 0x06054b50u);
-    write_le16(out, 0); // disk num
-    write_le16(out, 0); // disk start
-    write_le16(out, static_cast<uint16_t>(cd.size())); // entries this disk
-    write_le16(out, static_cast<uint16_t>(cd.size())); // total entries
-    write_le32(out, cd_size);   // size of central directory
+    write_le16(out, 0);  // disk num
+    write_le16(out, 0);  // disk start
+    write_le16(out, static_cast<uint16_t>(cd.size()));  // entries this disk
+    write_le16(out, static_cast<uint16_t>(cd.size()));  // total entries
+    write_le32(out, cd_size);  // size of central directory
     write_le32(out, cd_start);  // offset of central directory
-    write_le16(out, 0); // comment length
+    write_le16(out, 0);  // comment length
     return out;
   }
 
   static bool read_file_if_exists(const std::filesystem::path &p, std::string &out) {
-    std::error_code ec{};
-    if (!std::filesystem::exists(p, ec) || std::filesystem::is_directory(p, ec)) return false;
+    std::error_code ec {};
+    if (!std::filesystem::exists(p, ec) || std::filesystem::is_directory(p, ec)) {
+      return false;
+    }
     try {
       std::ifstream f(p, std::ios::binary);
-      if (!f) return false;
-      std::ostringstream ss; ss << f.rdbuf();
+      if (!f) {
+        return false;
+      }
+      std::ostringstream ss;
+      ss << f.rdbuf();
       out = ss.str();
       return true;
-    } catch (...) { return false; }
+    } catch (...) {
+      return false;
+    }
   }
 
   void downloadPlayniteLogs(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) return;
+    if (!authenticate(response, request)) {
+      return;
+    }
     print_req(request);
     try {
-      std::vector<std::pair<std::string, std::string>> entries; // name, data
+      std::vector<std::pair<std::string, std::string>> entries;  // name, data
 
       // sunshine.log (configured location)
       try {
@@ -391,12 +440,16 @@ namespace confighttp {
       // Plugin fallback log: try user's LocalAppData\Temp then process TEMP
       try {
         // Try active user's LocalAppData\Temp
-        platf::dxgi::safe_token user_token; user_token.reset(platf::dxgi::retrieve_users_token(false));
+        platf::dxgi::safe_token user_token;
+        user_token.reset(platf::dxgi::retrieve_users_token(false));
         PWSTR localW = nullptr;
         if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, user_token.get(), &localW)) && localW) {
           std::filesystem::path p = std::filesystem::path(localW) / L"Temp" / L"sunshine_playnite.log";
           CoTaskMemFree(localW);
-          std::string data; if (read_file_if_exists(p, data)) { entries.emplace_back("sunshine_playnite.log", std::move(data)); }
+          std::string data;
+          if (read_file_if_exists(p, data)) {
+            entries.emplace_back("sunshine_playnite.log", std::move(data));
+          }
         }
       } catch (...) {}
       try {
@@ -405,7 +458,10 @@ namespace confighttp {
         DWORD n = GetTempPathW(_countof(tmpPathW), tmpPathW);
         if (n > 0 && n < _countof(tmpPathW)) {
           std::filesystem::path p = std::filesystem::path(tmpPathW) / L"sunshine_playnite.log";
-          std::string data; if (read_file_if_exists(p, data)) { entries.emplace_back("sunshine_playnite.log", std::move(data)); }
+          std::string data;
+          if (read_file_if_exists(p, data)) {
+            entries.emplace_back("sunshine_playnite.log", std::move(data));
+          }
         }
       } catch (...) {}
 
@@ -413,25 +469,40 @@ namespace confighttp {
       auto add_playnite_from_base = [&](const std::filesystem::path &base) {
         bool any = false;
         {
-          std::string data; if (read_file_if_exists(base / L"playnite.log", data)) { entries.emplace_back("playnite.log", std::move(data)); any = true; }
+          std::string data;
+          if (read_file_if_exists(base / L"playnite.log", data)) {
+            entries.emplace_back("playnite.log", std::move(data));
+            any = true;
+          }
         }
         {
-          std::string data; if (read_file_if_exists(base / L"extensions.log", data)) { entries.emplace_back("extensions.log", std::move(data)); any = true; }
+          std::string data;
+          if (read_file_if_exists(base / L"extensions.log", data)) {
+            entries.emplace_back("extensions.log", std::move(data));
+            any = true;
+          }
         }
         {
-          std::string data; if (read_file_if_exists(base / L"launcher.log", data)) { entries.emplace_back("launcher.log", std::move(data)); any = true; }
+          std::string data;
+          if (read_file_if_exists(base / L"launcher.log", data)) {
+            entries.emplace_back("launcher.log", std::move(data));
+            any = true;
+          }
         }
         return any;
       };
       bool got_playnite_logs = false;
       try {
-        platf::dxgi::safe_token user_token; user_token.reset(platf::dxgi::retrieve_users_token(false));
+        platf::dxgi::safe_token user_token;
+        user_token.reset(platf::dxgi::retrieve_users_token(false));
         auto add_from_known = [&](REFKNOWNFOLDERID id) {
           PWSTR pathW = nullptr;
           if (SUCCEEDED(SHGetKnownFolderPath(id, 0, user_token.get(), &pathW)) && pathW) {
             std::filesystem::path base = std::filesystem::path(pathW) / L"Playnite";
             CoTaskMemFree(pathW);
-            if (add_playnite_from_base(base)) got_playnite_logs = true;
+            if (add_playnite_from_base(base)) {
+              got_playnite_logs = true;
+            }
           }
         };
         add_from_known(FOLDERID_RoamingAppData);
@@ -457,7 +528,8 @@ namespace confighttp {
       try {
         // Prefer active user's Roaming/Local AppData
         try {
-          platf::dxgi::safe_token user_token; user_token.reset(platf::dxgi::retrieve_users_token(false));
+          platf::dxgi::safe_token user_token;
+          user_token.reset(platf::dxgi::retrieve_users_token(false));
           auto add_user_sunshine_logs = [&](REFKNOWNFOLDERID id) {
             PWSTR baseW = nullptr;
             if (SUCCEEDED(SHGetKnownFolderPath(id, 0, user_token.get(), &baseW)) && baseW) {
@@ -465,11 +537,17 @@ namespace confighttp {
               CoTaskMemFree(baseW);
               {
                 std::filesystem::path p = base / L"sunshine_playnite_launcher.log";
-                std::string data; if (read_file_if_exists(p, data)) { entries.emplace_back("sunshine_playnite_launcher.log", std::move(data)); }
+                std::string data;
+                if (read_file_if_exists(p, data)) {
+                  entries.emplace_back("sunshine_playnite_launcher.log", std::move(data));
+                }
               }
               {
                 std::filesystem::path p = base / L"sunshine_launcher.log";
-                std::string data; if (read_file_if_exists(p, data)) { entries.emplace_back("sunshine_launcher.log", std::move(data)); }
+                std::string data;
+                if (read_file_if_exists(p, data)) {
+                  entries.emplace_back("sunshine_launcher.log", std::move(data));
+                }
               }
             }
           };
@@ -478,17 +556,25 @@ namespace confighttp {
         } catch (...) {}
         auto try_add_sunshine_logs = [&](int csidl) {
           wchar_t baseW[MAX_PATH] = {};
-          if (!SUCCEEDED(SHGetFolderPathW(nullptr, csidl, nullptr, SHGFP_TYPE_CURRENT, baseW))) return;
+          if (!SUCCEEDED(SHGetFolderPathW(nullptr, csidl, nullptr, SHGFP_TYPE_CURRENT, baseW))) {
+            return;
+          }
           std::filesystem::path base = std::filesystem::path(baseW) / L"Sunshine";
           // Preferred new name
           {
             std::filesystem::path p = base / L"sunshine_playnite_launcher.log";
-            std::string data; if (read_file_if_exists(p, data)) { entries.emplace_back("sunshine_playnite_launcher.log", std::move(data)); }
+            std::string data;
+            if (read_file_if_exists(p, data)) {
+              entries.emplace_back("sunshine_playnite_launcher.log", std::move(data));
+            }
           }
           // Legacy/alternate name
           {
             std::filesystem::path p = base / L"sunshine_launcher.log";
-            std::string data; if (read_file_if_exists(p, data)) { entries.emplace_back("sunshine_launcher.log", std::move(data)); }
+            std::string data;
+            if (read_file_if_exists(p, data)) {
+              entries.emplace_back("sunshine_launcher.log", std::move(data));
+            }
           }
         };
         // Roaming AppData\Sunshine and LocalAppData\Sunshine
@@ -498,7 +584,10 @@ namespace confighttp {
         try {
           std::filesystem::path cfg = platf::appdata();
           std::filesystem::path p = cfg / "sunshine_launcher.log";
-          std::string data; if (read_file_if_exists(p, data)) { entries.emplace_back("sunshine_launcher.log", std::move(data)); }
+          std::string data;
+          if (read_file_if_exists(p, data)) {
+            entries.emplace_back("sunshine_launcher.log", std::move(data));
+          }
         } catch (...) {}
       } catch (...) {}
 
@@ -508,10 +597,9 @@ namespace confighttp {
       // Filename with timestamp
       char fname[64];
       std::time_t tt = std::time(nullptr);
-      std::tm tm{};
+      std::tm tm {};
       localtime_s(&tm, &tt);
-      std::snprintf(fname, sizeof(fname), "playnite-logs-%04d%02d%02d-%02d%02d%02d.zip",
-                    tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+      std::snprintf(fname, sizeof(fname), "playnite-logs-%04d%02d%02d-%02d%02d%02d.zip", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
 
       SimpleWeb::CaseInsensitiveMultimap headers;
       headers.emplace("Content-Type", "application/zip");
@@ -527,4 +615,4 @@ namespace confighttp {
 
 }  // namespace confighttp
 
-#endif // _WIN32
+#endif  // _WIN32

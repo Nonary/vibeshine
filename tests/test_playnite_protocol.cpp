@@ -1,8 +1,8 @@
+#include "src/platform/windows/playnite_protocol.h"
+
 #include <gtest/gtest.h>
 #include <string>
 #include <vector>
-
-#include "src/platform/windows/playnite_protocol.h"
 
 using platf::playnite::Message;
 using platf::playnite::MessageType;
@@ -107,7 +107,7 @@ TEST(PlayniteProtocol_Parse, Games_InstalledField_PrecedenceAndDefault) {
   EXPECT_FALSE(m.games[0].installed);
   EXPECT_TRUE(m.games[1].installed);
   EXPECT_FALSE(m.games[2].installed);
-  EXPECT_TRUE(m.games[3].installed); // default true when neither present
+  EXPECT_TRUE(m.games[3].installed);  // default true when neither present
 }
 
 TEST(PlayniteProtocol_Parse, Games_SkipsMissingId) {
@@ -129,4 +129,3 @@ TEST(PlayniteProtocol_Parse, Status_ParsesFields) {
   EXPECT_EQ(m.status_install_dir, "C:/Games/X");
   EXPECT_EQ(m.status_exe, "C:/Games/X/game.exe");
 }
-

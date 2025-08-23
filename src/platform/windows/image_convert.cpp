@@ -2,16 +2,24 @@
 
 #include "image_convert.h"
 
-#include <Windows.h>
 #include <wincodec.h>
+#include <Windows.h>
 #include <winrt/base.h>
 
 namespace platf::img {
 
   struct CoInitGuard {
     bool inited = false;
-    CoInitGuard() { inited = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)); }
-    ~CoInitGuard() { if (inited) CoUninitialize(); }
+
+    CoInitGuard() {
+      inited = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
+    }
+
+    ~CoInitGuard() {
+      if (inited) {
+        CoUninitialize();
+      }
+    }
   };
 
   bool convert_to_png_96dpi(const std::wstring &src_path, const std::wstring &dst_path) {
@@ -102,5 +110,4 @@ namespace platf::img {
     }
     return true;
   }
-}
-
+}  // namespace platf::img

@@ -4,15 +4,15 @@
  */
 #pragma once
 
-#include <atomic>
-#include <span>
-#include <functional>
-#include <memory>
-#include <string>
-#include <thread>
-
 #include "src/logging.h"
 #include "src/platform/windows/ipc/pipes.h"
+
+#include <atomic>
+#include <functional>
+#include <memory>
+#include <span>
+#include <string>
+#include <thread>
 
 namespace platf::playnite {
 
@@ -43,10 +43,14 @@ namespace platf::playnite {
     /**
      * @brief Set optional handler for raw plugin messages.
      */
-    void set_message_handler(std::function<void(std::span<const uint8_t>)> handler) { handler_ = std::move(handler); }
+    void set_message_handler(std::function<void(std::span<const uint8_t>)> handler) {
+      handler_ = std::move(handler);
+    }
 
     // Returns true if actively connected to the plugin
-    bool is_active() const { return active_.load(); }
+    bool is_active() const {
+      return active_.load();
+    }
 
     // Send a JSON line (UTF-8 + trailing \n) to the plugin if connected
     bool send_json_line(const std::string &json);
@@ -63,16 +67,16 @@ namespace platf::playnite {
     void serve_connected_loop();
     // Check if any Playnite process is running (Desktop or Fullscreen)
     bool is_playnite_running();
-  /**
-   * @brief Check if an interactive user session is currently available.
-   *
-   * We only attempt to create / listen on the Playnite control pipe when an interactive
-   * user session (desktop token) exists. This prevents repeated failing attempts and
-   * associated log spam while Sunshine is running as a service before any user logs in.
-   *
-   * @return true if a user session token could be acquired (session available); false otherwise.
-   */
-  bool is_user_session_available();
+    /**
+     * @brief Check if an interactive user session is currently available.
+     *
+     * We only attempt to create / listen on the Playnite control pipe when an interactive
+     * user session (desktop token) exists. This prevents repeated failing attempts and
+     * associated log spam while Sunshine is running as a service before any user logs in.
+     *
+     * @return true if a user session token could be acquired (session available); false otherwise.
+     */
+    bool is_user_session_available();
 
     std::atomic<bool> running_ {false};
     std::thread worker_;
@@ -83,6 +87,6 @@ namespace platf::playnite {
     std::string recv_buffer_;
     std::string control_name_;
     bool no_session_logged_ = false;  ///< Ensures we only log missing session once until it appears.
-    bool no_playnite_logged_ = false; ///< Ensures we only log missing Playnite once until it appears.
+    bool no_playnite_logged_ = false;  ///< Ensures we only log missing Playnite once until it appears.
   };
 }  // namespace platf::playnite

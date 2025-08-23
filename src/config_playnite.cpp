@@ -5,17 +5,16 @@
 
 #include "config_playnite.h"
 
+#include "src/logging.h"
+#include "src/platform/common.h"
+
 #include <algorithm>
+#include <boost/property_tree/json_parser.hpp>
+#include <boost/property_tree/ptree.hpp>
 #include <filesystem>
 #include <sstream>
 #include <string>
 #include <vector>
-
-#include <boost/property_tree/json_parser.hpp>
-#include <boost/property_tree/ptree.hpp>
-
-#include "src/platform/common.h"
-#include "src/logging.h"
 
 namespace fs = std::filesystem;
 using namespace std::literals;
@@ -25,13 +24,17 @@ namespace config {
   playnite_t playnite;
 
   static bool to_bool(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char) std::tolower(c); });
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+      return (char) std::tolower(c);
+    });
     return s == "true" || s == "yes" || s == "enable" || s == "enabled" || s == "on" || s == "1";
   }
 
   static void erase_take(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::string &out) {
     auto it = vars.find(name);
-    if (it == vars.end()) return;
+    if (it == vars.end()) {
+      return;
+    }
     out = std::move(it->second);
     vars.erase(it);
   }
@@ -39,7 +42,9 @@ namespace config {
   static void parse_list(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::vector<std::string> &out) {
     std::string raw;
     erase_take(vars, name, raw);
-    if (raw.empty()) return;
+    if (raw.empty()) {
+      return;
+    }
 
     // Accept JSON array or simple comma-separated list
     try {
@@ -62,16 +67,25 @@ namespace config {
     std::stringstream ss(raw);
     while (std::getline(ss, item, ',')) {
       // trim
-      item.erase(item.begin(), std::find_if(item.begin(), item.end(), [](unsigned char ch) { return !std::isspace(ch); }));
-      item.erase(std::find_if(item.rbegin(), item.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(), item.end());
-      if (!item.empty()) out.push_back(item);
+      item.erase(item.begin(), std::find_if(item.begin(), item.end(), [](unsigned char ch) {
+                   return !std::isspace(ch);
+                 }));
+      item.erase(std::find_if(item.rbegin(), item.rend(), [](unsigned char ch) {
+                   return !std::isspace(ch);
+                 }).base(),
+                 item.end());
+      if (!item.empty()) {
+        out.push_back(item);
+      }
     }
   }
 
   static void parse_path(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::string &target) {
     std::string raw;
     erase_take(vars, name, raw);
-    if (raw.empty()) return;
+    if (raw.empty()) {
+      return;
+    }
     fs::path p = raw;
     if (p.is_relative()) {
       p = platf::appdata() / p;
@@ -91,10 +105,14 @@ namespace config {
     // enabled flag removed; integration manager always runs and uses plugin install status
     tmp.clear();
     erase_take(vars, "playnite_auto_sync", tmp);
-    if (!tmp.empty()) playnite.auto_sync = to_bool(tmp);
+    if (!tmp.empty()) {
+      playnite.auto_sync = to_bool(tmp);
+    }
     tmp.clear();
     erase_take(vars, "playnite_autosync_require_replacement", tmp);
-    if (!tmp.empty()) playnite.autosync_require_replacement = to_bool(tmp);
+    if (!tmp.empty()) {
+      playnite.autosync_require_replacement = to_bool(tmp);
+    }
 
     // integers
     tmp.clear();
@@ -150,7 +168,9 @@ namespace config {
     // Exit on first confirmed focus
     tmp.clear();
     erase_take(vars, "playnite_focus_exit_on_first", tmp);
-    if (!tmp.empty()) playnite.focus_exit_on_first = to_bool(tmp);
+    if (!tmp.empty()) {
+      playnite.focus_exit_on_first = to_bool(tmp);
+    }
 
     // lists
     parse_list(vars, "playnite_sync_categories", playnite.sync_categories);

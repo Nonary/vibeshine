@@ -15,7 +15,6 @@
 // local includes
 #include "src/platform/common.h"
 
-
 namespace platf::playnite {
 
   /**
@@ -112,7 +111,5 @@ namespace platf::playnite {
   bool restart_playnite();
 
   // Note: explicit launch helper removed; use restart_playnite() for both cases.
-
-  
 
 }  // namespace platf::playnite

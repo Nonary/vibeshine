@@ -27,8 +27,8 @@
 #include "logging.h"
 #include "platform/common.h"
 #ifdef _WIN32
-#include "platform/windows/playnite_integration.h"
-#include "config_playnite.h"
+  #include "config_playnite.h"
+  #include "platform/windows/playnite_integration.h"
 #endif
 #include "process.h"
 #include "system_tray.h"
@@ -308,7 +308,7 @@ namespace proc {
           }
         } catch (...) {}
         std::error_code fec;
-        boost::filesystem::path wd; // empty wd
+        boost::filesystem::path wd;  // empty wd
         _process = platf::run_command(false, true, cmd, wd, _env, _pipe.get(), fec, &_process_group);
         if (fec) {
           BOOST_LOG(warning) << "Playnite helper launch failed: "sv << fec.message() << "; attempting URI fallback"sv;
@@ -323,7 +323,7 @@ namespace proc {
         // Best-effort fallback using Playnite URI protocol
         std::string uri = std::string("playnite://playnite/start/") + _app.playnite_id;
         std::error_code fec;
-        boost::filesystem::path wd; // empty working dir as lvalue
+        boost::filesystem::path wd;  // empty working dir as lvalue
         auto child = platf::run_command(false, true, std::string("cmd /c start \"\" \"") + uri + "\"", wd, _env, _pipe.get(), fec, nullptr);
         if (fec) {
           BOOST_LOG(warning) << "Playnite URI launch failed: "sv << fec.message();
@@ -341,7 +341,7 @@ namespace proc {
       placebo = false;
     } else
 #endif
-    if (_app.cmd.empty()) {
+      if (_app.cmd.empty()) {
       BOOST_LOG(info) << "Executing [Desktop]"sv;
       BOOST_LOG(info) << "Playnite launch path complete; treating app as placebo (status-driven).";
       placebo = true;
@@ -475,8 +475,8 @@ namespace proc {
   // Returns default image if image configuration is not set.
   // Returns http content-type header compatible image type.
   std::string proc_t::get_app_image(int app_id) {
-  std::scoped_lock lk(_apps_mutex);
-  auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto app) {
+    std::scoped_lock lk(_apps_mutex);
+    auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto app) {
       return app.id == std::to_string(app_id);
     });
     auto app_image_path = iter == _apps.end() ? std::string() : iter->image_path;
@@ -564,7 +564,7 @@ namespace proc {
 
         dollar = std::find(next, std::end(val_raw), '$');
       } else {
-          BOOST_LOG(info) << "Playnite URI launch started";
+        BOOST_LOG(info) << "Playnite URI launch started";
         dollar = next;
       }
     }
@@ -661,7 +661,7 @@ namespace proc {
       if (file_hash) {
         to_hash.push_back(file_hash.value());
       } else {
-          BOOST_LOG(info) << "Playnite URI launch started";
+        BOOST_LOG(info) << "Playnite URI launch started";
         // Fallback to just hashing image path
         to_hash.push_back(file_path);
       }
@@ -810,10 +810,7 @@ namespace proc {
         apps.emplace_back(std::move(ctx));
       }
 
-      return std::optional<proc::proc_t>(std::in_place,
-        std::move(this_env),
-        std::move(apps)
-      );
+      return std::optional<proc::proc_t>(std::in_place, std::move(this_env), std::move(apps));
     } catch (std::exception &e) {
       BOOST_LOG(error) << e.what();
     }

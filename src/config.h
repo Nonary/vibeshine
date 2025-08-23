@@ -8,10 +8,10 @@
 #include <bitset>
 #include <chrono>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <shared_mutex>
 
 // local includes
 #include "nvenc/nvenc_config.h"

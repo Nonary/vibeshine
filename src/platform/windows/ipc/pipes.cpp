@@ -25,14 +25,14 @@
 
 // platform includes
 #ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
 #endif
-#include <winsock2.h>
 #include <AclAPI.h>
 #include <combaseapi.h>
 #include <sddl.h>
 #include <Windows.h>
 #include <winrt/base.h>
+#include <winsock2.h>
 
 // local includes
 #include "misc_utils.h"
@@ -313,7 +313,7 @@ namespace platf::dxgi {
       sizeof(message)
     );
 
-  // Wait for control client to connect
+    // Wait for control client to connect
     pipe->wait_for_client_connection(3000);
 
     if (!pipe->is_connected()) {
@@ -321,13 +321,13 @@ namespace platf::dxgi {
       pipe->disconnect();
       return false;
     }
-  BOOST_LOG(info) << "Anonymous handshake: control client connected; sending data-pipe name (" << sizeof(message) << " bytes)";
+    BOOST_LOG(debug) << "Anonymous handshake: control client connected; sending data-pipe name (" << sizeof(message) << " bytes)";
     if (!pipe->send(bytes, 5000)) {
       BOOST_LOG(error) << "Failed to send handshake message to client";
       pipe->disconnect();
       return false;
     }
-  BOOST_LOG(info) << "Anonymous handshake: control message sent";
+    BOOST_LOG(debug) << "Anonymous handshake: control message sent";
 
     return true;
   }
@@ -663,7 +663,7 @@ namespace platf::dxgi {
 
     if (BOOL result = ConnectNamedPipe(_pipe.get(), ctx.get()); result) {
       _connected = true;
-      BOOST_LOG(info) << "NamedPipe server: ConnectNamedPipe completed synchronously";
+      BOOST_LOG(debug) << "NamedPipe server: ConnectNamedPipe completed synchronously";
       return;
     }
 
@@ -671,7 +671,7 @@ namespace platf::dxgi {
     if (err == ERROR_PIPE_CONNECTED) {
       // Client already connected
       _connected = true;
-      BOOST_LOG(info) << "NamedPipe server: client already connected (ERROR_PIPE_CONNECTED)";
+      BOOST_LOG(debug) << "NamedPipe server: client already connected (ERROR_PIPE_CONNECTED)";
       return;
     }
 
@@ -690,7 +690,7 @@ namespace platf::dxgi {
       DWORD transferred = 0;
       if (GetOverlappedResult(_pipe.get(), ctx.get(), &transferred, FALSE)) {
         _connected = true;
-        BOOST_LOG(info) << "NamedPipe server: overlapped ConnectNamedPipe completed";
+        BOOST_LOG(debug) << "NamedPipe server: overlapped ConnectNamedPipe completed";
       } else {
         DWORD err = GetLastError();
         if (err != ERROR_OPERATION_ABORTED) {
@@ -766,7 +766,9 @@ namespace platf::dxgi {
       return false;
     }
     auto token_guard = util::fail_guard([&]() {
-      if (hToken) CloseHandle(hToken);
+      if (hToken) {
+        CloseHandle(hToken);
+      }
     });
 
     DWORD len = 0;

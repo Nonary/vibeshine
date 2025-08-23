@@ -30,7 +30,6 @@ namespace confighttp {
   constexpr auto PORT_HTTPS = 1;
   void start();
 
-
   // Token scopes for API tokens used by tests and UI
   enum class TokenScope {
     Read,  ///< Read-only scope: allows GET/HEAD style operations
@@ -55,11 +54,12 @@ namespace confighttp {
   void getLoginPage(resp_https_t response, req_https_t request);
   void getSpaEntry(resp_https_t response, req_https_t request);
 
-
   // Writes the apps file and refreshes the client-visible app cache/list
   // Sorts entries by name for a stable UI.
   bool refresh_client_apps_cache(nlohmann::json &file_tree);
 }  // namespace confighttp
 
 // mime types map (defined in confighttp.cpp)
-namespace confighttp { extern const std::map<std::string, std::string> mime_types; }
+namespace confighttp {
+  extern const std::map<std::string, std::string> mime_types;
+}

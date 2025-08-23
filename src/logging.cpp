@@ -3,8 +3,8 @@
  * @brief Definitions for logging related functions.
  */
 // standard includes
-#include <fstream>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 
@@ -26,11 +26,11 @@
 #endif
 #ifdef SETUP_AV_LOGGING
 extern "C" {
-#include <libavutil/log.h>
+  #include <libavutil/log.h>
 }
 #endif
 #ifdef SETUP_LIBDISPLAYDEVICE_LOGGING
-#include <display_device/logging.h>
+  #include <display_device/logging.h>
 #endif
 
 using namespace std::literals;
@@ -216,10 +216,12 @@ namespace logging {
       namespace fs = std::filesystem;
       std::error_code ec;
       auto sz = fs::exists(log_file, ec) ? fs::file_size(log_file, ec) : 0ull;
-      if (ec) sz = 0ull;
+      if (ec) {
+        sz = 0ull;
+      }
       should_write_bom = (sz == 0ull);
     } catch (...) {
-      should_write_bom = true; // best-effort
+      should_write_bom = true;  // best-effort
     }
 
     auto file_stream = boost::make_shared<std::ofstream>(log_file, std::ios::binary | std::ios::app);

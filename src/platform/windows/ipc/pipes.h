@@ -26,10 +26,10 @@
 
 // platform includes
 #ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
 #endif
-#include <winsock2.h>
 #include <windows.h>
+#include <winsock2.h>
 
 namespace platf::dxgi {
 
@@ -223,7 +223,7 @@ namespace platf::dxgi {
     MessageCallback _onMessage;
     ErrorCallback _onError;
     BrokenPipeCallback _onBrokenPipe;
-  std::array<uint8_t, 65536> _buffer;  // Reusable buffer for receiving messages
+    std::array<uint8_t, 65536> _buffer;  // Reusable buffer for receiving messages
   };
 
   class WinPipe: public INamedPipe {
@@ -287,15 +287,16 @@ namespace platf::dxgi {
      * @brief Flushes the pipe's buffers.
      */
     void flush_buffers();
-  // Synchronous write helper (blocking) for small control messages.
-  // Returns true on success.
-  bool write_blocking(std::span<const uint8_t> bytes);
+    // Synchronous write helper (blocking) for small control messages.
+    // Returns true on success.
+    bool write_blocking(std::span<const uint8_t> bytes);
 
-  // Retrieve the client process ID for a connected server pipe.
-  bool get_client_process_id(DWORD &pid);
+    // Retrieve the client process ID for a connected server pipe.
+    bool get_client_process_id(DWORD &pid);
 
-  // Retrieve the client's user SID as a string (S-1-5-...)
-  bool get_client_user_sid_string(std::wstring &sid_str);
+    // Retrieve the client's user SID as a string (S-1-5-...)
+    bool get_client_user_sid_string(std::wstring &sid_str);
+
   private:
     /**
      * @brief Connects the server pipe, waiting up to the specified time.

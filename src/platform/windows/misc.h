@@ -102,7 +102,6 @@ namespace platf {
    */
   DWORD get_parent_process_id(DWORD process_id);
 
-
   // Additional helpers used by configuration HTTP to safely access user resource
   HANDLE retrieve_users_token(bool elevated);
 

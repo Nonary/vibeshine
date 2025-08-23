@@ -21,15 +21,15 @@
 
 // local includes
 #include "config.h"
+#include "config_playnite.h"
 #include "entry_handler.h"
 #include "file_handler.h"
 #include "httpcommon.h"
-#include "config_playnite.h"
 #include "logging.h"
 #include "nvhttp.h"
 #include "platform/common.h"
-#include "rtsp.h"
 #include "process.h"
+#include "rtsp.h"
 #include "utility.h"
 
 #ifdef _WIN32
@@ -1479,9 +1479,9 @@ namespace config {
   // Hot-reload manager
   namespace {
     std::atomic<bool> g_deferred_reload {false};
-    std::mutex g_apply_mutex;            // serialize apply_config_now()
-    std::shared_mutex g_apply_gate;      // writers=apply; readers=session start/resume
-  }
+    std::mutex g_apply_mutex;  // serialize apply_config_now()
+    std::shared_mutex g_apply_gate;  // writers=apply; readers=session start/resume
+  }  // namespace
 
   // Acquire a shared lock while preparing/starting sessions.
   std::shared_lock<std::shared_mutex> acquire_apply_read_gate() {
@@ -1491,7 +1491,7 @@ namespace config {
   void apply_config_now() {
     // Ensure only one apply runs at a time and block session start/resume while applying.
     std::unique_lock<std::shared_mutex> write_gate(g_apply_gate);
-    std::unique_lock<std::mutex>        apply_once(g_apply_mutex);
+    std::unique_lock<std::mutex> apply_once(g_apply_mutex);
     try {
       auto vars = parse_config(file_handler::read_file(sunshine.config_file.c_str()));
       // Track old logging params to adjust sinks if needed

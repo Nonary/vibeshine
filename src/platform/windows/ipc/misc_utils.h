@@ -14,12 +14,12 @@
 // platform includes
 #ifdef _WIN32
   #ifndef WIN32_LEAN_AND_MEAN
-  #define WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
   #endif
-  #include <winsock2.h>
   #include <unknwn.h>
   #include <windows.h>
   #include <winrt/base.h>
+  #include <winsock2.h>
 #endif
 #include <avrt.h>
 #include <tlhelp32.h>
@@ -40,10 +40,10 @@ namespace platf::dxgi {
      */
     io_context();
 
-  /**
-   * @brief Destroy context and close the event handle.
-   * Uses RAII via winrt::handle for automatic lifetime management.
-   */
+    /**
+     * @brief Destroy context and close the event handle.
+     * Uses RAII via winrt::handle for automatic lifetime management.
+     */
     ~io_context() = default;
 
     io_context(const io_context &) = delete;

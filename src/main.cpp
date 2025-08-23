@@ -22,7 +22,7 @@
 #include "upnp.h"
 #include "video.h"
 #ifdef _WIN32
-#include "src/platform/windows/playnite_integration.h"
+  #include "src/platform/windows/playnite_integration.h"
 #endif
 
 extern "C" {
