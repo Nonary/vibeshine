@@ -11,11 +11,14 @@
         <div class="text-sm grid md:grid-cols-3 gap-3">
           <div class="flex items-center gap-2">
             <b>{{ $t('playnite.status_overall') }}</b>
-            <n-tooltip v-if="statusKind === 'session'" trigger="hover">
+            <!-- Tooltip for limited and session-required states -->
+            <n-tooltip v-if="statusKind === 'session' || statusKind === 'waiting'" trigger="hover">
               <template #trigger>
                 <n-tag size="small" :type="statusType">{{ statusText }}</n-tag>
               </template>
-              <span>{{ $t('playnite.session_required_tooltip') }}</span>
+              <span>
+                {{ statusKind === 'session' ? $t('playnite.session_required_tooltip') : $t('playnite.limited_tooltip') }}
+              </span>
             </n-tooltip>
             <n-tag v-else size="small" :type="statusType">{{ statusText }}</n-tag>
           </div>
@@ -134,27 +137,39 @@
       <div class="grid md:grid-cols-2 gap-4">
         <div>
           <label class="text-xs font-semibold">{{ $t('playnite.sync_categories') }}</label>
-          <n-select
+          <n-tooltip :disabled="!disablePlayniteSelection" trigger="hover">
+            <template #trigger>
+              <n-select
             v-model:value="selectedCategories"
             multiple
             :options="categoryOptions"
             filterable
             tag
             :loading="categoriesLoading"
+            :disabled="disablePlayniteSelection"
             @focus="loadCategories"
           />
+            </template>
+            <span>{{ disabledHint }}</span>
+          </n-tooltip>
           <div class="text-[11px] opacity-70">{{ $t('playnite.sync_categories_help') }}</div>
         </div>
         <div>
           <label class="text-xs font-semibold">{{ $t('playnite.exclude_games') || 'Exclude games from auto-sync' }}</label>
-          <n-select
+          <n-tooltip :disabled="!disablePlayniteSelection" trigger="hover">
+            <template #trigger>
+              <n-select
             v-model:value="excludedIds"
             multiple
             :options="gameOptions"
             filterable
             :loading="gamesLoading"
+            :disabled="disablePlayniteSelection"
             @focus="loadGames"
           />
+            </template>
+            <span>{{ disabledHint }}</span>
+          </n-tooltip>
           <div class="text-[11px] opacity-70">{{ $t('playnite.exclude_games_desc') || 'Selected games will not be auto-synced from Playnite.' }}</div>
         </div>
       </div>
@@ -467,6 +482,16 @@ const canLaunch = computed(() => {
 });
 
 const statusTimer = ref<number | undefined>();
+
+// Disable category/game selection when not fully connected
+const disablePlayniteSelection = computed<boolean>(() => statusKind.value !== 'active');
+
+const disabledHint = computed<string>(() => {
+  if (statusKind.value === 'session') {
+    return (t('playnite.selects_disabled_hint_session') as any) || 'Cannot modify without Playnite connectivity. Start Playnite or log into the computer to continue.';
+  }
+  return (t('playnite.selects_disabled_hint') as any) || 'Cannot modify without Playnite connectivity. Start Playnite to continue.';
+});
 
 async function launchPlaynite() {
   if (platform.value !== 'windows' || !canLaunch.value) return;

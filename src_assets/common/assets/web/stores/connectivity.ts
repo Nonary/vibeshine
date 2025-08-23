@@ -28,10 +28,16 @@ export const useConnectivityStore = defineStore('connectivity', () => {
   }
 
   function hardReload(): void {
-    // Perform a standard reload; rely on server caching policy and hashed assets
+    // Force a hard reload to fetch fresh index.html and assets.
+    // Use cache-busting query to avoid serving a stale SPA shell.
     try {
-      window.location.reload();
-    } catch {}
+      const href = window.location.href;
+      const url = new URL(href);
+      url.searchParams.set('_r', String(Date.now()));
+      window.location.replace(url.toString());
+    } catch {
+      try { window.location.reload(); } catch {}
+    }
   }
 
   async function checkOnce(): Promise<void> {

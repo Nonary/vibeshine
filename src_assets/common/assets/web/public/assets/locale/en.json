@@ -103,7 +103,7 @@
   "offline": {
     "title": "Lost Connection to Sunshine",
     "description": "The web interface lost connectivity to the Sunshine service.",
-    "retrying": "Attempting to reconnect… The page will refresh once available.",
+    "retrying": "If Sunshine was stopped or restarted, it will reconnect automatically and this page will refresh once it becomes available.",
     "refresh_now": "Refresh now",
     "close_hint": "If you stopped Sunshine intentionally, you may close this tab."
   },
@@ -476,7 +476,10 @@
     "status_active": "Connected",
     "status_connected": "Connected",
     "status_disabled": "Disabled",
-    "status_waiting": "Not Connected",
+    "status_waiting": "Limited",
+    "limited_tooltip": "Games cannot be auto-synced while Playnite is closed. Existing games added to Sunshine will still work. Once you launch Playnite, syncing resumes automatically.",
+    "selects_disabled_hint": "Cannot modify without Playnite connectivity. Start Playnite to enable this.",
+    "selects_disabled_hint_session": "Cannot modify without Playnite connectivity. Start Playnite or log into this computer to enable this.",
     "status_session_required": "Login Required",
     "status_desktop_required": "Login Required",
     "status_uninstalled": "Uninstalled",
