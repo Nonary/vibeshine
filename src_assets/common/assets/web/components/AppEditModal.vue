@@ -303,8 +303,10 @@ const configStore = useConfigStore();
 const isWindows = computed(() => (configStore.metadata?.platform || '').toLowerCase() === 'windows');
 const playniteEnabled = computed(() => {
   try {
-    const v = configStore.config?.playnite_enabled ?? 'disabled';
-    return String(v).toLowerCase() === 'enabled' || v === true || String(v) === 'on';
+    const v = configStore.config?.playnite_enabled;
+    if (v === true || v === 1) return true;
+    const s = String(v ?? '').toLowerCase().trim();
+    return s === 'true' || s === 'yes' || s === 'enable' || s === 'enabled' || s === 'on' || s === '1';
   } catch (_) {
     return false;
   }
