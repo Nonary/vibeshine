@@ -10,6 +10,7 @@
 #include <windows.h>
 
 #include "playnite_ipc.h"
+#include "src/platform/windows/ipc/misc_utils.h"
 
 #include <chrono>
 #include <span>
@@ -53,17 +54,11 @@ namespace platf::playnite {
   void IpcServer::run() {
     while (running_.load()) {
       broken_.store(false);
-      // Skip attempting to create/connect pipes if there is no active user session.
-      if (!is_user_session_available()) {
-        if (!no_session_logged_) {
-          BOOST_LOG(info) << "Playnite IPC: no interactive user session detected; deferring pipe startup";
-          no_session_logged_ = true;
-        }
-        std::this_thread::sleep_for(2s);
-        continue;
-      } else if (no_session_logged_) {
-        // Session appeared after being absent; note once.
-        BOOST_LOG(info) << "Playnite IPC: interactive user session detected; starting pipe server";
+      // Previously we deferred pipe startup until an "interactive" desktop session existed.
+      // That prevented connections from RDP sessions and while the screen was locked.
+      // Remove that dependency so IPC is available in those scenarios as well.
+      if (no_session_logged_) {
+        // If we logged a prior missing-session note, clear it once on first loop after start
         no_session_logged_ = false;
       }
 
@@ -168,11 +163,27 @@ namespace platf::playnite {
   }
 
   bool IpcServer::validate_client_and_get_expected_sid(platf::dxgi::WinPipe *wp) {
-    DWORD pid = 0; if (!get_client_pid(wp, pid)) { wp->disconnect(); return false; }
-    if (!is_playnite_process(pid)) { wp->disconnect(); return false; }
-    std::wstring client_sid; if (!get_client_sid(wp, client_sid)) { wp->disconnect(); return false; }
-    std::wstring expected_sid; if (!get_expected_user_sid(expected_sid)) { wp->disconnect(); return false; }
-    if (client_sid != expected_sid) { wp->disconnect(); return false; }
+    DWORD pid = 0;
+    if (!get_client_pid(wp, pid)) { BOOST_LOG(info) << "Playnite IPC: validation failed: could not get client PID"; wp->disconnect(); return false; }
+    bool ok_proc = is_playnite_process(pid);
+    if (!ok_proc) { BOOST_LOG(info) << "Playnite IPC: validation failed: PID " << pid << " is not a Playnite process"; wp->disconnect(); return false; }
+    std::wstring client_sid;
+    if (!get_client_sid(wp, client_sid)) { BOOST_LOG(info) << "Playnite IPC: validation failed: could not get client SID"; wp->disconnect(); return false; }
+    std::wstring expected_sid;
+    const bool have_expected = get_expected_user_sid(expected_sid);
+    bool sid_match = true;
+    if (have_expected) {
+      sid_match = (client_sid == expected_sid);
+      BOOST_LOG(info) << "Playnite IPC: validation SIDs: client='" << platf::dxgi::wide_to_utf8(client_sid)
+                      << "' expected='" << platf::dxgi::wide_to_utf8(expected_sid) << "' match="
+                      << (sid_match ? "true" : "false");
+    } else {
+      // When running from a service without a console user (e.g., RDP-only or lock screen),
+      // deriving an \"expected\" SID via WTS console token is not possible. Accept the connection
+      // based on Playnite process validation alone.
+      BOOST_LOG(info) << "Playnite IPC: expected user SID unavailable; accepting client based on process validation only";
+    }
+    if (!sid_match) { wp->disconnect(); return false; }
     return true;
   }
 
@@ -185,14 +196,8 @@ namespace platf::playnite {
   }
 
   bool IpcServer::is_user_session_available() {
-    // If not running as SYSTEM, we're already in a user session.
-    if (!platf::dxgi::is_running_as_system()) {
-      return true;
-    }
-    // When running as SYSTEM (service), ensure an interactive user session exists.
-    auto tok = platf::dxgi::retrieve_users_token(false);
-    if (!tok) return false;
-    CloseHandle(tok);
+    // IPC availability should not depend on an "active desktop". Always report available
+    // so callers do not gate pipe creation on console-desktop presence.
     return true;
   }
 

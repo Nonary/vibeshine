@@ -11,6 +11,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+
 // third-party includes
 #include <nlohmann/json.hpp>
 
@@ -28,6 +29,7 @@ namespace confighttp {
 
   constexpr auto PORT_HTTPS = 1;
   void start();
+
 
   // Token scopes for API tokens used by tests and UI
   enum class TokenScope {
@@ -52,6 +54,7 @@ namespace confighttp {
   void logoutUser(resp_https_t response, req_https_t request);
   void getLoginPage(resp_https_t response, req_https_t request);
   void getSpaEntry(resp_https_t response, req_https_t request);
+
 
   // Writes the apps file and refreshes the client-visible app cache/list
   // Sorts entries by name for a stable UI.

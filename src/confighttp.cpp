@@ -7,6 +7,7 @@
 #define BOOST_BIND_GLOBAL_PLACEHOLDERS
 
 // standard includes
+#include <algorithm>
 #include <boost/regex.hpp>
 #include <chrono>
 #include <filesystem>
@@ -38,13 +39,16 @@
 #include "httpcommon.h"
 #include "platform/common.h"
 #ifdef _WIN32
-#include "src/platform/windows/image_convert.h"
+  #include "src/platform/windows/image_convert.h"
+
 #endif
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
 #include <nlohmann/json.hpp>
 #include "platform/common.h"
+
+#include <nlohmann/json.hpp>
 #if defined(_WIN32)
   #include "platform/windows/misc.h"
 
@@ -76,6 +80,7 @@ namespace confighttp {
     {"woff2", "font/woff2"},
     {"xml", "text/xml"},
   };
+
   // Helper: sort apps by their 'name' field, if present
   static void sort_apps_by_name(nlohmann::json &file_tree) {
     try {
@@ -131,6 +136,9 @@ namespace confighttp {
                          std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
   // Helper to keep confighttp.cpp free of Playnite details
   void enhance_app_with_playnite_cover(nlohmann::json &input_tree);
+  // New: download Playnite-related logs as a ZIP
+  void downloadPlayniteLogs(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                            std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
 #endif
 
   enum class op_e {
@@ -473,7 +481,6 @@ namespace confighttp {
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     response->write(content, headers);
   }
-
 
   /**
    * @brief Get the clients page.
@@ -864,15 +871,15 @@ namespace confighttp {
 
   /**
    * @brief Serve a specific application's cover image by UUID.
-  *        Looks for files named @c uuid with a supported image extension in the covers directory.
-  * @api_examples{/api/apps/@c uuid/cover| GET| null}
+   *        Looks for files named @c uuid with a supported image extension in the covers directory.
+   * @api_examples{/api/apps/@c uuid/cover| GET| null}
    */
 
   /**
    * @brief Upload or set a specific application's cover image by UUID.
    *        Accepts either a JSON body with {"url": "..."} (restricted to images.igdb.com) or {"data": base64}.
-  *        Saves to appdata/covers/@c uuid.@c ext where ext is derived from URL or defaults to .png for data.
-  * @api_examples{/api/apps/@c uuid/cover| POST| {"url":"https://images.igdb.com/.../abc.png"}}
+   *        Saves to appdata/covers/@c uuid.@c ext where ext is derived from URL or defaults to .png for data.
+   * @api_examples{/api/apps/@c uuid/cover| POST| {"url":"https://images.igdb.com/.../abc.png"}}
    */
 
   /**
@@ -986,7 +993,7 @@ namespace confighttp {
    * The body for the post request should be JSON serialized in the following format:
    * @code{.json}
    * {
-  *  "uuid": "@c uuid"
+   *  "uuid": "@c uuid"
    * }
    * @endcode
    *
@@ -1248,7 +1255,9 @@ namespace confighttp {
         // Remove key when explicitly null or empty string
         if (val.is_null() || (val.is_string() && val.get<std::string>().empty())) {
           auto curIt = current.find(key);
-          if (curIt != current.end()) current.erase(curIt);
+          if (curIt != current.end()) {
+            current.erase(curIt);
+          }
           continue;
         }
 
@@ -1369,25 +1378,41 @@ namespace confighttp {
       // Helper to check PNG magic header
       auto file_is_png = [](const std::string &p) -> bool {
         std::ifstream f(p, std::ios::binary);
-        if (!f) return false;
-        unsigned char sig[8]{};
+
+        if (!f) {
+          return false;
+        }
+        unsigned char sig[8] {};
         f.read(reinterpret_cast<char *>(sig), 8);
-        static const unsigned char pngsig[8] = {0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A};
+        static const unsigned char pngsig[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+
         return f.gcount() == 8 && std::equal(std::begin(sig), std::end(sig), std::begin(pngsig));
       };
 
       // Build a temp source path (extension based on URL if available)
       auto ext_from_url = [](std::string u) -> std::string {
         auto qpos = u.find_first_of("?#");
-        if (qpos != std::string::npos) u = u.substr(0, qpos);
+
+        if (qpos != std::string::npos) {
+          u = u.substr(0, qpos);
+        }
         auto slash = u.find_last_of('/');
-        if (slash != std::string::npos) u = u.substr(slash + 1);
+        if (slash != std::string::npos) {
+          u = u.substr(slash + 1);
+        }
         auto dot = u.find_last_of('.');
-        if (dot == std::string::npos) return std::string{".img"};
+        if (dot == std::string::npos) {
+          return std::string {".img"};
+        }
         std::string e = u.substr(dot);
         // sanitize extension
-        if (e.size() > 8) return std::string{".img"};
-        for (char &c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (e.size() > 8) {
+          return std::string {".img"};
+        }
+        for (char &c : e) {
+          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+
         return e;
       };
 
@@ -1403,15 +1428,6 @@ namespace confighttp {
           bad_request(response, request, "Failed to download cover");
           return;
         }
-      } else {
-        auto data = SimpleWeb::Crypto::Base64::decode(input_tree.value("data", ""));
-        src_tmp = coverdir + http::url_escape(key) + "_src.bin";
-        std::ofstream imgfile(src_tmp, std::ios::binary);
-        if (!imgfile) {
-          bad_request(response, request, "Failed to write cover data");
-          return;
-        }
-        imgfile.write(data.data(), static_cast<std::streamsize>(data.size()));
       }
 
       bool converted = false;
@@ -1422,7 +1438,7 @@ namespace confighttp {
         std::wstring dst_w(dest_png.begin(), dest_png.end());
         converted = platf::img::convert_to_png_96dpi(src_w, dst_w);
         if (!converted && file_is_png(src_tmp)) {
-          std::error_code ec{};
+          std::error_code ec {};
           std::filesystem::copy_file(src_tmp, dest_png, std::filesystem::copy_options::overwrite_existing, ec);
           converted = !ec.operator bool();
         }
@@ -1430,7 +1446,9 @@ namespace confighttp {
 #else
       // Non-Windows: we can’t transcode here; accept only already-PNG data
       if (file_is_png(src_tmp)) {
-        std::error_code ec{};
+
+        std::error_code ec {};
+
         std::filesystem::rename(src_tmp, dest_png, ec);
         if (ec) {
           // If rename fails (cross-device), try copy
@@ -1451,7 +1469,8 @@ namespace confighttp {
 
       // Cleanup temp source file when possible
       if (!src_tmp.empty()) {
-        std::error_code del_ec{};
+        std::error_code del_ec {};
+
         std::filesystem::remove(src_tmp, del_ec);
       }
 
@@ -1491,7 +1510,8 @@ namespace confighttp {
       for (auto &app : apps_node) {
         std::string managed = app.contains("playnite-managed") && app["playnite-managed"].is_string() ? app["playnite-managed"].get<std::string>() : std::string();
         if (managed == "auto") {
-          ++removed; continue;
+          ++removed;
+          continue;
         }
         new_apps.push_back(app);
       }
@@ -1500,10 +1520,9 @@ namespace confighttp {
       confighttp::refresh_client_apps_cache(file_tree);
 
       output_tree["status"] = true;
-      output_tree["removed"] = removed;
       send_response(response, output_tree);
     } catch (std::exception &e) {
-      BOOST_LOG(warning) << "PurgeAutoSyncedApps: "sv << e.what();
+      BOOST_LOG(warning) << "purgeAutoSyncedApps: "sv << e.what();
       bad_request(response, request, e.what());
     }
   }
@@ -1808,6 +1827,7 @@ namespace confighttp {
     server.default_resource["PUT"] = [](resp_https_t response, req_https_t request) {
       bad_request(response, request);
     };
+
     // Serve the SPA shell for any unmatched GET route. Explicit static and API
     // routes are registered below; UI page routes are deprecated server-side
     // and are handled by the SPA entry responder so frontend can manage
@@ -1828,9 +1848,9 @@ namespace confighttp {
     server.resource["^/api/apps$"]["POST"] = saveApp;
     server.resource["^/api/config$"]["GET"] = getConfig;
     server.resource["^/api/config$"]["POST"] = saveConfig;
-  // Partial updates for config settings; merges with existing file and
-  // removes keys when value is null or empty string.
-  server.resource["^/api/config$"]["PATCH"] = patchConfig;
+    // Partial updates for config settings; merges with existing file and
+    // removes keys when value is null or empty string.
+    server.resource["^/api/config$"]["PATCH"] = patchConfig;
     server.resource["^/api/metadata$"]["GET"] = getMetadata;
     server.resource["^/api/configLocale$"]["GET"] = getLocale;
     server.resource["^/api/restart$"]["POST"] = restart;
@@ -1852,6 +1872,7 @@ namespace confighttp {
     server.resource["^/api/playnite/categories$"]["GET"] = getPlayniteCategories;
     server.resource["^/api/playnite/force_sync$"]["POST"] = postPlayniteForceSync;
     server.resource["^/api/playnite/launch$"]["POST"] = postPlayniteLaunch;
+    server.resource["^/api/playnite/logs/export$"]["GET"] = downloadPlayniteLogs;
 #endif
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;

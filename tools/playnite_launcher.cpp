@@ -446,15 +446,17 @@ namespace {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_secs);
     int successes = 0;
     bool any = false;
+    // Throttle focus application to at most once per second
+    auto last_apply = std::chrono::steady_clock::now() - std::chrono::seconds(1);
     while (std::chrono::steady_clock::now() < deadline) {
       if (cancel && cancel()) break;
       auto pids = platf::dxgi::find_process_ids_by_name(exe_name_w);
       for (auto pid : pids) {
         if (cancel && cancel()) break;
-        if (confirm_foreground_pid(pid)) {
-          std::this_thread::sleep_for(200ms);
-          continue;
-        }
+        if (confirm_foreground_pid(pid)) { std::this_thread::sleep_for(200ms); continue; }
+        // Enforce 1s minimum interval between focus attempts
+        auto now = std::chrono::steady_clock::now();
+        if (now - last_apply < 1s) continue;
         HWND hwnd = find_main_window_for_pid(pid);
         if (hwnd && try_focus_hwnd(hwnd)) {
           std::this_thread::sleep_for(100ms);
@@ -465,8 +467,11 @@ namespace {
             if (max_successes > 0 && successes >= max_successes) return true;
           }
         }
+        // Record the last time we attempted to apply focus
+        last_apply = now;
       }
-      std::this_thread::sleep_for(250ms);
+      // Outer pacing to roughly 1Hz focus attempt cadence
+      std::this_thread::sleep_for(1s);
     }
     return any;
   }
@@ -539,6 +544,8 @@ namespace {
     if (install_dir.empty() || total_wait_sec <= 0 || max_successes < 0) return false;
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(1, total_wait_sec));
     int successes = 0; bool any = false;
+    // Throttle focus application to at most once per second
+    auto last_apply = std::chrono::steady_clock::now() - std::chrono::seconds(1);
     while (std::chrono::steady_clock::now() < deadline) {
       if (cancel && cancel()) break;
       auto candidates = find_pids_under_install_dir_sorted(install_dir);
@@ -546,6 +553,9 @@ namespace {
         for (auto pid : candidates) {
           if (cancel && cancel()) break;
           if (confirm_foreground_pid(pid)) continue;
+          // Enforce 1s minimum interval between focus attempts
+          auto now = std::chrono::steady_clock::now();
+          if (now - last_apply < 1s) continue;
           HWND hwnd = find_main_window_for_pid(pid);
           if (hwnd && try_focus_hwnd(hwnd)) {
             std::this_thread::sleep_for(100ms);
@@ -556,12 +566,15 @@ namespace {
               if (max_successes > 0 && successes >= max_successes) return true;
             }
           }
+          // Record the last time we attempted to apply focus
+          last_apply = now;
         }
       } else {
         // No candidates yet; wait a bit and retry within the total window
-        std::this_thread::sleep_for(250ms);
+        std::this_thread::sleep_for(1s);
       }
-      std::this_thread::sleep_for(250ms);
+      // Outer pacing to roughly 1Hz focus attempt cadence
+      std::this_thread::sleep_for(1s);
     }
     return any;
   }

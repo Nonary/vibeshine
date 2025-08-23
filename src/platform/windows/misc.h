@@ -8,7 +8,6 @@
 #include <chrono>
 #include <functional>
 #include <string_view>
-#include <functional>
 #include <system_error>
 
 // platform includes

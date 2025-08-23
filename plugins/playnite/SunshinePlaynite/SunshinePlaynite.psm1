@@ -14,6 +14,7 @@ $global:SunConn = $null
 # Logger state
 $script:LogPath = $null
 $script:HostLogger = $null
+$script:LogLevel = $null  # DEBUG | INFO | WARN | ERROR (case-insensitive)
 $script:Bg = $null
 # Cooperative shutdown (shared across all runspaces)
 if (-not (Get-Variable -Name 'Cts' -Scope Script -ErrorAction SilentlyContinue)) {
@@ -45,6 +46,12 @@ function Resolve-LogPath {
 function Initialize-Logging {
   try {
     if (-not $script:LogPath) { $script:LogPath = Resolve-LogPath }
+    # Initialize log level from env, default to DEBUG (slightly excessive, but controlled)
+    if (-not $script:LogLevel) {
+      $lvl = $env:SUNSHINE_PLAYNITE_LOGLEVEL
+      if ([string]::IsNullOrWhiteSpace($lvl)) { $lvl = 'DEBUG' }
+      $script:LogLevel = ($lvl.Trim().ToUpperInvariant())
+    }
     if (Get-Variable -Name __logger -Scope Global -ErrorAction SilentlyContinue) { $script:HostLogger = $__logger } else { $script:HostLogger = $null }
     # Basic log rotation (~1 MB)
     if (Test-Path $script:LogPath) {
@@ -56,7 +63,8 @@ function Initialize-Logging {
     $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')
     $hdr = @(
       "[$ts] === Sunshine Playnite Connector starting ===",
-      "Process=$PID User=$env:USERNAME Session=$([Environment]::UserInteractive) PSVersion=$($PSVersionTable.PSVersion)"
+      "Process=$PID User=$env:USERNAME Session=$([Environment]::UserInteractive) PSVersion=$($PSVersionTable.PSVersion)",
+      "LogLevel=$script:LogLevel LogPath=$script:LogPath PSScriptRoot=$PSScriptRoot"
     ) -join [Environment]::NewLine
     try {
       [System.IO.File]::WriteAllText($script:LogPath, $hdr + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
@@ -65,29 +73,106 @@ function Initialize-Logging {
       # Fallback to Out-File if static write fails
       $hdr | Out-File -FilePath $script:LogPath -Encoding utf8
     }
-    if ($script:HostLogger) { $script:HostLogger.Info("SunshinePlaynite: logging initialized at $script:LogPath") }
+    if ($script:HostLogger) { $script:HostLogger.Info("SunshinePlaynite: logging initialized at $script:LogPath (level=$script:LogLevel)") }
   }
   catch {}
 }
 
-function Write-Log {
-  param([string]$Message)
+function Get-LogLevelRank {
+  param([string]$Level)
   try {
+    $useLevel = $Level
+    if (-not $useLevel) { $useLevel = 'INFO' }
+    switch ($useLevel.ToUpperInvariant()) {
+      'DEBUG' { return 0 }
+      'INFO'  { return 1 }
+      'WARN'  { return 2 }
+      'ERROR' { return 3 }
+      default { return 1 }
+    }
+  } catch { return 1 }
+}
+
+function Should-Log {
+  param([string]$Level)
+  try {
+    $curLevel = $script:LogLevel; if (-not $curLevel) { $curLevel = 'INFO' }
+    $reqLevel = $Level; if (-not $reqLevel) { $reqLevel = 'INFO' }
+    $cur = Get-LogLevelRank -Level $curLevel
+    $req = Get-LogLevelRank -Level $reqLevel
+    return ($req -ge $cur)
+  } catch { return $true }
+}
+
+function Write-Log {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true, Position=0)] [string]$Message,
+    [ValidateSet('DEBUG','INFO','WARN','ERROR')] [string]$Level = 'INFO'
+  )
+  try {
+    # Auto-elevate level for common error/warning words if caller didn't set explicit severity
+    $effLevel = $Level
+    try {
+      if ($effLevel -eq 'INFO') {
+        $lm = $Message
+        if ($lm) {
+          $lm = $lm.ToLowerInvariant()
+          if ($lm -match '(?:^|\b)(error|exception)(?:\b|:)') { $effLevel = 'ERROR' }
+          elseif ($lm -match '(?:\b)(failed|failure|timeout|crash(?:ed)?)(?:\b|:)') { $effLevel = 'WARN' }
+        }
+      }
+    } catch {}
+    if (-not (Should-Log -Level $effLevel)) { return }
     $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')
+    $tid = try { [System.Threading.Thread]::CurrentThread.ManagedThreadId } catch { 0 }
+    $rsId = 'NA'
+    try {
+      $drs = [System.Management.Automation.Runspaces.Runspace]::DefaultRunspace
+      if ($drs) { $rsId = ($drs.InstanceId.ToString()) }
+    } catch {}
+    if ($rsId -and $rsId.Length -gt 8) { $rsId = $rsId.Substring(0,8) }
+
+    # Extract tag from conventional "Tag: message" prefix if present
+    $tag = ''
+    try {
+      if ($Message -match '^(?<tag>[A-Za-z0-9 \[\]#_-]{2,32}):\s') { $tag = $matches['tag'] }
+    } catch {}
+
+    $prefix = "[$ts] [$effLevel] [T#$tid RS=$rsId]"
+    if ($tag) { $prefix = "$prefix [$tag]" }
+    $line = "$prefix $Message"
+
     if (-not $script:LogPath) {
       try { $script:LogPath = Resolve-LogPath } catch {}
     }
     if ($script:LogPath) {
       try {
-        [System.IO.File]::AppendAllText($script:LogPath, "[$ts] $Message" + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+        [System.IO.File]::AppendAllText($script:LogPath, $line + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
       }
       catch {
-        Add-Content -Path $script:LogPath -Value "[$ts] $Message" -Encoding utf8
+        Add-Content -Path $script:LogPath -Value $line -Encoding utf8
       }
     }
-    if ($script:HostLogger) { $script:HostLogger.Info("SunshinePlaynite: $Message") }
+    if ($script:HostLogger) {
+      try {
+        $hl = $script:HostLogger
+        switch ($effLevel) {
+          'DEBUG' { if ($hl.PSObject.Methods['Debug']) { $hl.Debug("SunshinePlaynite: $Message") } else { $hl.Info("SunshinePlaynite: $Message") } }
+          'INFO'  { $hl.Info("SunshinePlaynite: $Message") }
+          'WARN'  { if ($hl.PSObject.Methods['Warn']) { $hl.Warn("SunshinePlaynite: $Message") } elseif ($hl.PSObject.Methods['Warning']) { $hl.Warning("SunshinePlaynite: $Message") } else { $hl.Info("SunshinePlaynite: $Message") } }
+          'ERROR' { if ($hl.PSObject.Methods['Error']) { $hl.Error("SunshinePlaynite: $Message") } else { $hl.Info("SunshinePlaynite: $Message") } }
+          default { $hl.Info("SunshinePlaynite: $Message") }
+        }
+      } catch { }
+    }
   }
   catch {}
+}
+
+function Write-DebugLog {
+  param([string]$Message)
+  Write-Log -Message $Message -Level 'DEBUG'
 }
 
 ## Removed: P/Invoke probe (WaitNamedPipe). Use NamedPipeClientStream.Connect(timeout).
@@ -467,7 +552,11 @@ function Get-LauncherProcesses {
       $gid = $matches[1]
     }
 
-    if ($pub) { [void]$found.Add(@{ Pid = [int]$pid; PublicGuid = $pub; GameId = $gid }) }
+    if ($pub) {
+      [void]$found.Add(@{ Pid = [int]$pid; PublicGuid = $pub; GameId = $gid })
+      $gidOut = $gid; if (-not $gidOut) { $gidOut = '' }
+      Write-DebugLog ("LauncherProbe: candidate pid={0} pguid={1} game={2}" -f $pid, $pub, $gidOut)
+    }
   }
 
   # 1) CIM/WMI broad LIKE filter
@@ -499,7 +588,14 @@ function Get-LauncherProcesses {
 
   # Marker-based discovery removed: do not scan %APPDATA%\Sunshine\playnite_launcher for JSON markers
 
-  if ($found.Count -gt 0) { Write-Log ("LauncherProbe: total candidates={0}" -f $found.Count) }
+  if ($found.Count -gt 0) {
+    Write-Log ("LauncherProbe: total candidates={0}" -f $found.Count)
+    try {
+      $samples = ($found | Select-Object -First 3)
+      $sdesc = ($samples | ForEach-Object { "pid=$($_.Pid) guid=$($_.PublicGuid)" }) -join '; '
+      if ($sdesc) { Write-DebugLog ("LauncherProbe: sample: {0}" -f $sdesc) }
+    } catch {}
+  }
   return , $found  # ensure array even if single
 }
 
@@ -524,6 +620,8 @@ function Ensure-LauncherConnections {
       $conn = Connect-SunshinePipe -PublicName $pipe -TimeoutMs 10000 -Token $Cts.Token
       if (-not $conn) { continue }
       $connInfo = @{ Stream = $conn.Stream; Writer = $conn.Writer; Reader = $conn.Reader; Pid = $it.Pid; GameId = $it.GameId }
+      $gOut = $it.GameId; if (-not $gOut) { $gOut = '' }
+      Write-DebugLog ("LauncherWatcher: new connection candidate guid={0} pid={1} game={2}" -f $guid, $it.Pid, $gOut)
       # Attach a per-connection outbox + pump to avoid UI-thread blocking
       try {
         $connInfo.Outbox = New-Object 'System.Collections.Concurrent.BlockingCollection[string]'
@@ -533,6 +631,7 @@ function Ensure-LauncherConnections {
         }
         $connInfo.Pump = New-Object PerConnPump($connInfo.Writer, $connInfo.Outbox)
         $connInfo.Pump.Start()
+        Write-DebugLog ("LauncherWatcher: per-connection pump started for {0}" -f $guid)
       } catch { Write-Log "LauncherWatcher: failed to start per-connection pump: $($_.Exception.Message)" }
       try {
         if (-not $global:LauncherConns.TryAdd($guid, $connInfo)) {
@@ -585,11 +684,15 @@ function Start-LauncherConnReader {
       $line = $null
       try { $line = $Conn.Reader.ReadLine() } catch { if ($Token -and $Token.IsCancellationRequested) { break } else { break } }
       if ($null -eq $line) { break }
+      Write-DebugLog ("LauncherConn[{0}]: received line len={1}" -f $Guid, $line.Length)
       try {
         $obj = $line | ConvertFrom-Json -ErrorAction Stop
         if ($obj.type -eq 'command' -and $obj.command -eq 'launch' -and $obj.id) {
           [UIBridge]::StartGameByGuidStringOnUIThread([string]$obj.id)
           Write-Log "LauncherConn[$Guid]: launch dispatched for $($obj.id)"
+        }
+        elseif ($obj.type -and $obj.command) {
+          Write-DebugLog ("LauncherConn[{0}]: unhandled command type={1} cmd={2}" -f $Guid, [string]$obj.type, [string]$obj.command)
         }
       } catch {
         if ($Token -and $Token.IsCancellationRequested) { break }
@@ -618,6 +721,11 @@ function Get-PlayniteCategories {
     $cats += @{ id = $c.Id.ToString(); name = $c.Name }
   }
   Write-Log "Collected $($cats.Count) categories"
+  try {
+    $s = ($cats | Select-Object -First 3)
+    $names = ($s | ForEach-Object { $_.name }) -join ', '
+    if ($names) { Write-DebugLog ("Categories sample: {0}" -f $names) }
+  } catch {}
   return $cats
 }
 
@@ -695,6 +803,11 @@ function Get-PlayniteGames {
     }
   }
   Write-Log "Collected $($games.Count) games"
+  try {
+    $s = ($games | Select-Object -First 3)
+    $names = ($s | ForEach-Object { $_.name }) -join ', '
+    if ($names) { Write-DebugLog ("Games sample: {0}" -f $names) }
+  } catch {}
   return $games
 }
 
@@ -709,6 +822,7 @@ function Send-InitialSnapshot {
   $games = Get-PlayniteGames
   # Send in batches to avoid overly large messages
   $batchSize = 100
+  Write-DebugLog ("Initial snapshot: totalGames={0} batchSize={1}" -f $games.Count, $batchSize)
   for ($i = 0; $i -lt $games.Count; $i += $batchSize) {
     $chunk = $games[$i..([Math]::Min($i + $batchSize - 1, $games.Count - 1))]
     $jsonG = @{ type = 'games'; payload = $chunk } | ConvertTo-Json -Depth 8 -Compress
@@ -734,7 +848,7 @@ function Start-ConnectorLoop {
         $global:SunConn = Connect-SunshinePipe -TimeoutMs 2000 -Token $Token
         Write-Log "Connector loop: connected"
         # Start writer pump bound to this connection
-        try { [OutboxPump]::Start($global:SunConn.Writer, $Outbox) } catch { Write-Log "Failed to start OutboxPump: $($_.Exception.Message)" }
+        try { [OutboxPump]::Start($global:SunConn.Writer, $Outbox); Write-DebugLog "Connector loop: OutboxPump started" } catch { Write-Log "Failed to start OutboxPump: $($_.Exception.Message)" }
         # Send initial snapshot on (re)connect
         Send-InitialSnapshot
       }
@@ -769,6 +883,8 @@ function Start-ConnectorLoop {
               Send-StopSignalToLauncher -GameId $targetId
               Write-Log ("Forwarded stop signal to launcher(s) for id='{0}'" -f $targetId)
             } catch { Write-Log ("Failed to forward stop signal: {0}" -f $_.Exception.Message) }
+          } else {
+            try { Write-DebugLog ("Connector loop: unhandled message type={0} cmd={1}" -f ([string]$obj.type), ([string]$obj.command)) } catch {}
           }
         }
         catch {
@@ -848,6 +964,7 @@ function OnApplicationStarted() {
       $handle = $ps.BeginInvoke()
       $script:Bg = @{ Runspace = $rs; PowerShell = $ps; Handle = $handle }
       Write-Log "OnApplicationStarted: background runspace started"
+      try { Write-DebugLog ("OnApplicationStarted: RS1={0}" -f $rs.InstanceId) } catch {}
 
       # Start launcher watcher in a separate runspace
       $rs2 = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
@@ -869,6 +986,7 @@ function OnApplicationStarted() {
       $handle2 = $ps2.BeginInvoke()
       $script:Bg2 = @{ Runspace = $rs2; PowerShell = $ps2; Handle = $handle2 }
       Write-Log "OnApplicationStarted: launcher watcher runspace started"
+      try { Write-DebugLog ("OnApplicationStarted: RS2={0}" -f $rs2.InstanceId) } catch {}
     }
     catch {
       Write-Log "OnApplicationStarted: failed to start background runspace: $($_.Exception.Message)"
@@ -1006,6 +1124,7 @@ function Close-RunspaceFast {
 function OnApplicationStopped() {
   try {
     Write-Log "OnApplicationStopped: begin shutdown"
+    try { Write-DebugLog ("OnApplicationStopped: connCount(before)={0}" -f ($global:LauncherConns.Count)) } catch {}
     # 1) Signal all loops to exit ASAP
     try { if ($script:Cts) { $script:Cts.Cancel() } } catch {}
     # Actively break the connector runspace's blocking ReadLine()
@@ -1032,6 +1151,7 @@ function OnApplicationStopped() {
       }
     } catch {}
     try { $global:LauncherConns = New-Object 'System.Collections.Concurrent.ConcurrentDictionary[string,object]' } catch { $global:LauncherConns = @{} }
+    try { Write-DebugLog ("OnApplicationStopped: connCount(after)={0}" -f ($global:LauncherConns.Count)) } catch {}
 
     # 5) Shut down the two background runspaces
     try {
