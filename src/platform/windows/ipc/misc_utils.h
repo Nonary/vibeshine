@@ -40,10 +40,10 @@ namespace platf::dxgi {
      */
     io_context();
 
-    /**
-     * @brief Destroy context and close the event handle.
-     * Uses RAII via winrt::handle for automatic lifetime management.
-     */
+  /**
+   * @brief Destroy context and close the event handle.
+   * Uses RAII via winrt::handle for automatic lifetime management.
+   */
     ~io_context() = default;
 
     io_context(const io_context &) = delete;
@@ -194,7 +194,6 @@ namespace platf::dxgi {
 
   // Enumerate PIDs for a given executable name (case-insensitive)
   std::vector<DWORD> find_process_ids_by_name(const std::wstring &process_name);
-
   /**
    * @brief Determine whether the secure (e.g. UAC / logon) desktop is active.
    * @return `true` if the secure desktop is active, else `false`.

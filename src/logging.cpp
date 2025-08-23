@@ -24,14 +24,13 @@
 #ifdef __ANDROID__
   #include <android/log.h>
 #endif
-#ifdef SUNSHINE_USE_DISPLAYDEVICE_LOGGING
-  #include <display_device/logging.h>
-#endif
-
-#ifdef SUNSHINE_USE_FFMPEG_LOGGING
+#ifdef SETUP_AV_LOGGING
 extern "C" {
 #include <libavutil/log.h>
 }
+#endif
+#ifdef SETUP_LIBDISPLAYDEVICE_LOGGING
+#include <display_device/logging.h>
 #endif
 
 using namespace std::literals;
@@ -50,7 +49,7 @@ bl::sources::severity_logger<int> fatal(5);  // Unrecoverable errors
 bl::sources::severity_logger<int> tests(10);  // Automatic tests output
 #endif
 
-BOOST_LOG_ATTRIBUTE_KEYWORD(severity, "Severity", int)
+// severity keyword is declared in logging.h
 
 namespace logging {
   deinit_t::~deinit_t() {
@@ -237,9 +236,7 @@ namespace logging {
     bl::core::get()->add_sink(sink);
     return std::make_unique<deinit_t>();
   }
-
-#ifndef __ANDROID__
-  #ifdef SUNSHINE_USE_FFMPEG_LOGGING
+#ifdef SETUP_AV_LOGGING
   void setup_av_logging(int min_log_level) {
     if (min_log_level >= 1) {
       av_log_set_level(AV_LOG_QUIET);
@@ -267,11 +264,12 @@ namespace logging {
       }
     });
   }
-  #else
-  void setup_av_logging(int) {}
-  #endif
-
-  #ifdef SUNSHINE_USE_DISPLAYDEVICE_LOGGING
+#else
+  void setup_av_logging(int) {
+    // no-op
+  }
+#endif
+#ifdef SETUP_LIBDISPLAYDEVICE_LOGGING
   void setup_libdisplaydevice_logging(int min_log_level) {
     constexpr int min_level {static_cast<int>(display_device::Logger::LogLevel::verbose)};
     constexpr int max_level {static_cast<int>(display_device::Logger::LogLevel::fatal)};
@@ -301,28 +299,28 @@ namespace logging {
       }
     });
   }
-  #else
+#else
   void setup_libdisplaydevice_logging(int) {
-    // No-op: tool builds may not link or include libdisplaydevice
+    // no-op
   }
-  #endif
 #endif
+
+  void reconfigure_min_log_level(int min_log_level) {
+    // Reconfigure external logging subsystems first so their callbacks
+    // respect the new level immediately.
+    setup_av_logging(min_log_level);
+    setup_libdisplaydevice_logging(min_log_level);
+
+    // If we have an existing sink, update its filter to the new level.
+    if (sink) {
+      sink->set_filter(severity >= min_log_level);
+    }
+  }
 
   void log_flush() {
     if (sink) {
       sink->flush();
     }
-  }
-
-  void reconfigure_min_log_level(int min_log_level) {
-    if (!sink) {
-      return;
-    }
-#ifndef __ANDROID__
-    setup_av_logging(min_log_level);
-    setup_libdisplaydevice_logging(min_log_level);
-#endif
-    sink->set_filter(severity >= min_log_level);
   }
 
   void print_help(const char *name) {

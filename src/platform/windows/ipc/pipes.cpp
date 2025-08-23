@@ -24,6 +24,10 @@
 #include <vector>
 
 // platform includes
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
 #include <AclAPI.h>
 #include <combaseapi.h>
 #include <sddl.h>
@@ -309,7 +313,7 @@ namespace platf::dxgi {
       sizeof(message)
     );
 
-    // Wait for control client to connect
+  // Wait for control client to connect
     pipe->wait_for_client_connection(3000);
 
     if (!pipe->is_connected()) {
@@ -317,13 +321,13 @@ namespace platf::dxgi {
       pipe->disconnect();
       return false;
     }
-    BOOST_LOG(info) << "Anonymous handshake: control client connected; sending data-pipe name (" << sizeof(message) << " bytes)";
+  BOOST_LOG(info) << "Anonymous handshake: control client connected; sending data-pipe name (" << sizeof(message) << " bytes)";
     if (!pipe->send(bytes, 5000)) {
       BOOST_LOG(error) << "Failed to send handshake message to client";
       pipe->disconnect();
       return false;
     }
-    BOOST_LOG(info) << "Anonymous handshake: control message sent";
+  BOOST_LOG(info) << "Anonymous handshake: control message sent";
 
     return true;
   }
@@ -455,15 +459,23 @@ namespace platf::dxgi {
   WinPipe::WinPipe(winrt::file_handle pipe, bool isServer):
       _pipe(std::move(pipe)),
       _is_server(isServer) {
-    _connected.store(static_cast<bool>(_pipe), std::memory_order_release);
+    if (_pipe) {
+      _connected.store(!_is_server, std::memory_order_release);
+    }
   }
 
   WinPipe::~WinPipe() {
-    disconnect();
+    try {
+      WinPipe::disconnect();
+    } catch (const std::exception &ex) {
+      BOOST_LOG(error) << "Exception in WinPipe destructor: " << ex.what();
+    } catch (...) {
+      BOOST_LOG(error) << "Unknown exception in WinPipe destructor.";
+    }
   }
 
   bool WinPipe::send(std::span<const uint8_t> bytes, int timeout_ms) {
-    if (!_connected.load(std::memory_order_acquire)) {
+    if (!_connected.load(std::memory_order_acquire) || !_pipe) {
       return false;
     }
 
@@ -474,13 +486,15 @@ namespace platf::dxgi {
     }
 
     DWORD bytesWritten = 0;
-    BOOL result = WriteFile(_pipe.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &bytesWritten, ctx.get());
-
-    if (result) {
-      return bytesWritten == bytes.size();
-    } else {
+    if (BOOL result = WriteFile(_pipe.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &bytesWritten, ctx.get()); !result) {
       return handle_send_error(ctx, timeout_ms, bytesWritten);
     }
+
+    if (bytesWritten != bytes.size()) {
+      BOOST_LOG(error) << "WriteFile wrote " << bytesWritten << " bytes, expected " << bytes.size();
+      return false;
+    }
+    return true;
   }
 
   bool WinPipe::handle_send_error(io_context &ctx, int timeout_ms, DWORD &bytesWritten) {
@@ -491,7 +505,7 @@ namespace platf::dxgi {
       BOOST_LOG(warning) << "Pipe broken during WriteFile (ERROR_BROKEN_PIPE)";
       return false;
     } else {
-      BOOST_LOG(error) << "WriteFile failed in send, error=" << err;
+      BOOST_LOG(error) << "WriteFile failed (" << err << ") in WinPipe::send";
       return false;
     }
   }
@@ -500,20 +514,17 @@ namespace platf::dxgi {
     DWORD waitResult = WaitForSingleObject(ctx.event(), timeout_ms);
 
     if (waitResult == WAIT_OBJECT_0) {
-      if (GetOverlappedResult(_pipe.get(), ctx.get(), &bytesWritten, FALSE)) {
-        return true;
-      } else {
-        DWORD overlappedErr = GetLastError();
-        if (overlappedErr == ERROR_BROKEN_PIPE) {
-          BOOST_LOG(warning) << "IPC between Sunshine was severed, did the capture process crash?";
-          return false;
+      if (!GetOverlappedResult(_pipe.get(), ctx.get(), &bytesWritten, FALSE)) {
+        DWORD err = GetLastError();
+        if (err != ERROR_OPERATION_ABORTED) {
+          BOOST_LOG(error) << "GetOverlappedResult failed in send, error=" << err;
         }
-        BOOST_LOG(error) << "GetOverlappedResult failed in send, error=" << overlappedErr;
         return false;
       }
+      return true;
     } else if (waitResult == WAIT_TIMEOUT) {
+      BOOST_LOG(warning) << "Send operation timed out after " << timeout_ms << "ms";
       CancelIoEx(_pipe.get(), ctx.get());
-      // Wait for cancellation to complete to ensure OVERLAPPED structure safety
       DWORD transferred = 0;
       GetOverlappedResult(_pipe.get(), ctx.get(), &transferred, TRUE);
       return false;
@@ -850,68 +861,82 @@ namespace platf::dxgi {
   }
 
   void AsyncNamedPipe::worker_thread() noexcept {
-    try {
-      run_message_loop();
-    } catch (const std::exception &e) {
-      if (_onError) {
-        _onError(std::string("Worker thread exception: ") + e.what());
+    safe_execute_operation("worker_thread", [this]() {
+      if (!establish_connection()) {
+        return;
       }
-    } catch (...) {
-      if (_onError) {
-        _onError("Worker thread encountered an unknown exception");
+
+      run_message_loop();
+    });
+  }
+
+  void AsyncNamedPipe::run_message_loop() {
+    using namespace std::chrono_literals;
+    using enum platf::dxgi::PipeResult;
+
+    // No need to add a sleep here: _pipe->receive() blocks until data arrives or times out, so messages are delivered to callbacks as soon as they are available.
+    while (_running.load(std::memory_order_acquire)) {
+      size_t bytesRead = 0;
+      PipeResult res = _pipe->receive(_buffer, bytesRead, 1000);
+
+      // Fast cancel – bail out even before decoding res
+      if (!_running.load(std::memory_order_acquire)) {
+        break;
+      }
+
+      switch (res) {
+        case Success:
+          {
+            if (bytesRead == 0) {  // remote closed
+              return;
+            }
+            // Create span from only the valid portion of the buffer
+            std::span<const uint8_t> message(_buffer.data(), bytesRead);
+            process_message(message);
+            break;  // keep looping
+          }
+
+        case Timeout:
+          break;  // nothing to do
+
+        case BrokenPipe:
+          safe_execute_operation("brokenPipe callback", _onBrokenPipe);
+          return;  // terminate
+
+        case Error:
+        case Disconnected:
+        default:
+          return;  // terminate
       }
     }
   }
 
   bool AsyncNamedPipe::establish_connection() {
-    _pipe->wait_for_client_connection(3000);
+    // For server pipes, we need to wait for a client connection first
+    if (!_pipe || _pipe->is_connected()) {
+      return true;
+    }
+
+    _pipe->wait_for_client_connection(5000);  // Wait up to 5 seconds for connection
     if (!_pipe->is_connected()) {
-      if (_onError) {
-        _onError("Client connection timed out or failed");
-      }
+      BOOST_LOG(error) << "AsyncNamedPipe: Failed to establish connection within timeout";
+      safe_execute_operation("error callback", [this]() {
+        if (_onError) {
+          _onError("Failed to establish connection within timeout");
+        }
+      });
       return false;
     }
-    return true;
+    return _pipe->is_connected();
   }
 
   void AsyncNamedPipe::process_message(std::span<const uint8_t> bytes) const {
-    try {
-      if (_onMessage) {
-        _onMessage(bytes);
-      }
-    } catch (const std::exception &e) {
-      BOOST_LOG(error) << "AsyncNamedPipe: Exception during message callback: " << e.what();
-    } catch (...) {
-      BOOST_LOG(error) << "AsyncNamedPipe: Unknown exception during message callback";
-    }
-  }
-
-  void AsyncNamedPipe::run_message_loop() {
-    if (!establish_connection()) {
+    if (!_onMessage) {
       return;
     }
 
-    while (_running.load(std::memory_order_acquire)) {
-      size_t bytesRead = 0;
-      switch (_pipe->receive(_buffer, bytesRead, 50)) {  // 50ms poll
-        case PipeResult::Success:
-          if (bytesRead > 0) {
-            process_message(std::span<const uint8_t>(_buffer.data(), bytesRead));
-          }
-          break;
-        case PipeResult::Timeout:
-          // keep polling
-          break;
-        case PipeResult::BrokenPipe:
-        case PipeResult::Disconnected:
-        case PipeResult::Error:
-          if (_onBrokenPipe) {
-            _onBrokenPipe();
-          }
-          _running.store(false, std::memory_order_release);
-          break;
-      }
-    }
+    safe_execute_operation("message callback", [this, bytes]() {
+      _onMessage(bytes);
+    });
   }
-
 }  // namespace platf::dxgi

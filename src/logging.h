@@ -7,6 +7,9 @@
 // lib includes
 #include <boost/log/common.hpp>
 #include <boost/log/sinks.hpp>
+#include <boost/log/expressions.hpp>
+// Expose the severity attribute keyword to all translation units
+BOOST_LOG_ATTRIBUTE_KEYWORD(severity, "Severity", int)
 
 using text_sink = boost::log::sinks::asynchronous_sink<boost::log::sinks::text_ostream_backend>;
 

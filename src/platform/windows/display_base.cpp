@@ -981,44 +981,27 @@ namespace platf::dxgi {
 }  // namespace platf::dxgi
 
 namespace platf {
-  /**
-   * Pick a display adapter and capture method.
-   * @param hwdevice_type enables possible use of hardware encoder
-   */
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
-    if (config::video.capture == "ddx" || config::video.capture.empty()) {
-      if (hwdevice_type == mem_type_e::dxgi) {
+    if (hwdevice_type == mem_type_e::dxgi) {
+      if (config::video.capture.starts_with("wgc")) {
+        return dxgi::display_wgc_ipc_vram_t::create(config, display_name);
+      } else {
         auto disp = std::make_shared<dxgi::display_ddup_vram_t>();
-
         if (!disp->init(config, display_name)) {
           return disp;
         }
-      } else if (hwdevice_type == mem_type_e::system) {
+      }
+    } else if (hwdevice_type == mem_type_e::system) {
+      if (config::video.capture.starts_with("wgc")) {
+        return dxgi::display_wgc_ipc_ram_t::create(config, display_name);
+      } else {
         auto disp = std::make_shared<dxgi::display_ddup_ram_t>();
-
         if (!disp->init(config, display_name)) {
           return disp;
         }
       }
     }
 
-    if (config::video.capture == "wgc" || config::video.capture.empty()) {
-      if (hwdevice_type == mem_type_e::dxgi) {
-        auto disp = std::make_shared<dxgi::display_wgc_vram_t>();
-
-        if (!disp->init(config, display_name)) {
-          return disp;
-        }
-      } else if (hwdevice_type == mem_type_e::system) {
-        auto disp = std::make_shared<dxgi::display_wgc_ram_t>();
-
-        if (!disp->init(config, display_name)) {
-          return disp;
-        }
-      }
-    }
-
-    // ddx and wgc failed
     return nullptr;
   }
 

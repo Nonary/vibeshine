@@ -49,6 +49,7 @@ See below for details on token endpoints and usage examples.
 ## GET /api/config
 @copydoc confighttp::getConfig()
 
+
 ## GET /api/configLocale
 @copydoc confighttp::getLocale()
 
