@@ -22,14 +22,6 @@
 #include "upnp.h"
 #include "video.h"
 
-#ifndef SUNSHINE_EXTERNAL_PROCESS
-  #include "logging_tp.h"
-#endif
-
-#ifdef __ANDROID__
-  #include "logging_android.h"
-#endif
-
 extern "C" {
 #include "rswrapper.h"
 }
