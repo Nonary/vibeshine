@@ -10,7 +10,7 @@
         <!-- Integration is always on; no enable/disable toggle -->
         <div class="text-sm grid md:grid-cols-3 gap-3">
           <div class="flex items-center gap-2">
-            <b>Status:</b>
+            <b>{{ $t('playnite.status_overall') }}</b>
             <n-tooltip v-if="statusKind === 'session'" trigger="hover">
               <template #trigger>
                 <n-tag size="small" :type="statusType">{{ statusText }}</n-tag>
@@ -55,9 +55,19 @@
               }}
             </span>
           </n-button>
-          <span v-if="installOk" class="text-success text-xs">{{ $t('playnite.install_success') }}</span>
-          <span v-if="installErr" class="text-danger text-xs">{{ $t('playnite.install_error') }}<template v-if="installErrorMsg">: {{ installErrorMsg }}</template></span>
+          <n-button
+            v-if="status.extensions_dir && status.installed"
+            type="error"
+            size="small"
+            tertiary
+            :loading="uninstalling"
+            @click="openUninstallConfirm"
+          >
+            <i class="fas fa-trash" />
+            <span class="ml-2">{{ $t('playnite.uninstall_button') || 'Uninstall Plugin' }}</span>
+          </n-button>
         </div>
+        
       </div>
     </section>
 
@@ -65,7 +75,14 @@
       <h3 class="text-sm font-semibold uppercase tracking-wider">{{ $t('playnite.settings_title') }}</h3>
       <div class="grid md:grid-cols-3 gap-4">
         <div class="md:col-span-1">
-          <Checkbox v-model="config.playnite_auto_sync" id="playnite_auto_sync" :default="store.defaults.playnite_auto_sync" :localePrefix="'playnite'" :label="$t('playnite.auto_sync')" :desc="''" />
+          <Checkbox
+            v-model="config.playnite_auto_sync"
+            id="playnite_auto_sync"
+            :default="store.defaults.playnite_auto_sync"
+            :localePrefix="'playnite'"
+            label="playnite.auto_sync"
+            :desc="''"
+          />
         </div>
         <div>
           <label class="text-xs font-semibold">{{ $t('playnite.recent_games') }}</label>
@@ -83,7 +100,14 @@
           <div class="text-[11px] opacity-70">{{ $t('playnite.delete_after_days_desc') }}</div>
         </div>
         <div class="md:col-span-2">
-          <Checkbox v-model="config.playnite_autosync_require_replacement" id="playnite_autosync_require_replacement" :default="store.defaults.playnite_autosync_require_replacement" :localePrefix="'playnite'" :label="$t('playnite.require_replacement')" :desc="$t('playnite.require_replacement_desc')" />
+          <Checkbox
+            v-model="config.playnite_autosync_require_replacement"
+            id="playnite_autosync_require_replacement"
+            :default="store.defaults.playnite_autosync_require_replacement"
+            :localePrefix="'playnite'"
+            label="playnite.require_replacement"
+            desc="playnite.require_replacement_desc"
+          />
         </div>
         <div>
           <label class="text-xs font-semibold">{{ $t('playnite.focus_attempts') || 'Auto-focus attempts' }}</label>
@@ -96,7 +120,14 @@
           <div class="text-[11px] opacity-70">{{ $t('playnite.focus_timeout_secs_help') || 'How long auto-focus runs while re-applying focus (0 to disable).' }}</div>
         </div>
         <div class="md:col-span-1 flex items-end">
-          <Checkbox v-model="config.playnite_focus_exit_on_first" id="playnite_focus_exit_on_first" :default="store.defaults.playnite_focus_exit_on_first" :localePrefix="'playnite'" :label="$t('playnite.focus_exit_on_first') || 'Exit on first confirmed focus'" :desc="$t('playnite.focus_exit_on_first_help') || 'Stop auto-focus after first success; otherwise, re-apply until attempts or timeout elapse.'" />
+          <Checkbox
+            v-model="config.playnite_focus_exit_on_first"
+            id="playnite_focus_exit_on_first"
+            :default="store.defaults.playnite_focus_exit_on_first"
+            :localePrefix="'playnite'"
+            label="playnite.focus_exit_on_first"
+            desc="playnite.focus_exit_on_first_help"
+          />
         </div>
       </div>
 
@@ -153,11 +184,31 @@
       </template>
     </n-card>
   </n-modal>
+  <!-- Uninstall confirmation -->
+  <n-modal :show="showUninstallConfirm" @update:show="(v) => (showUninstallConfirm = v)">
+    <n-card :bordered="false" style="max-width: 32rem; width: 100%">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <i class="fas fa-trash" />
+          <span>{{ $t('playnite.uninstall_button') || 'Uninstall Plugin' }}</span>
+        </div>
+      </template>
+      <div class="text-sm">
+        {{ $t('playnite.uninstall_requires_restart') || 'Uninstalling the Playnite plugin may require restarting Playnite. Continue?' }}
+      </div>
+      <template #footer>
+        <div class="w-full flex items-center justify-center gap-3">
+          <n-button tertiary @click="showUninstallConfirm = false">{{ $t('_common.cancel') }}</n-button>
+          <n-button type="error" :loading="uninstalling" @click="confirmUninstall">{{ $t('_common.continue') || 'Continue' }}</n-button>
+        </div>
+      </template>
+    </n-card>
+  </n-modal>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, onUnmounted } from 'vue';
-import { NInput, NInputNumber, NSelect, NButton, NAlert, NTag, NTooltip, NModal, NCard } from 'naive-ui';
+import { NInput, NInputNumber, NSelect, NButton, NAlert, NTag, NTooltip, NModal, NCard, useNotification } from 'naive-ui';
 import { useI18n } from 'vue-i18n';
 import Checkbox from '@/Checkbox.vue';
 import { useConfigStore } from '@/stores/config';
@@ -184,9 +235,13 @@ const status = reactive<{
 const installing = ref(false);
 const launching = ref(false);
 const showInstallConfirm = ref(false);
-const installOk = ref(false);
-const installErr = ref(false);
-const installErrorMsg = ref('');
+const uninstalling = ref(false);
+const showUninstallConfirm = ref(false);
+// Naive UI notifications for transient messages
+const notification = useNotification();
+function notify(type: 'success' | 'error' | 'info' | 'warning', content: string) {
+  notification.create({ type, content, duration: 5000 });
+}
 
 const categoriesLoading = ref(false);
 const gamesLoading = ref(false);
@@ -254,6 +309,7 @@ async function loadCategories() {
           .sort((a, b) => a.localeCompare(b))
           .map((c) => ({ label: c, value: c }));
         categoryOptions.value = cats;
+        categoriesLoading.value = false;
         return;
       }
     } catch {}
@@ -291,10 +347,6 @@ function openInstallConfirm() {
 async function confirmInstall() {
   installing.value = true;
   showInstallConfirm.value = false;
-  installing.value = true;
-  installOk.value = false;
-  installErr.value = false;
-  installErrorMsg.value = '';
   try {
     const r = await http.post('/api/playnite/install', { restart: true }, { validateStatus: () => true });
     let ok = false;
@@ -302,17 +354,44 @@ async function confirmInstall() {
     try { body = r.data; } catch {}
     ok = r.status >= 200 && r.status < 300 && body && body.status === true;
     if (ok) {
-      installOk.value = true;
+      notify('success', (t('playnite.install_success') as any) || 'Plugin installed successfully.');
       await refreshStatus();
     } else {
-      installErr.value = true;
-      installErrorMsg.value = (body && body.error) || r.statusText || 'Unknown error';
+      const msg = (t('playnite.install_error') as any || 'Failed to install plugin.') + (body && body.error ? `: ${body.error}` : '');
+      notify('error', msg);
     }
   } catch (e: any) {
-    installErr.value = true;
-    installErrorMsg.value = e?.message || '';
+    const msg = (t('playnite.install_error') as any || 'Failed to install plugin.') + (e?.message ? `: ${e.message}` : '');
+    notify('error', msg);
   }
   installing.value = false;
+}
+
+function openUninstallConfirm() {
+  showUninstallConfirm.value = true;
+}
+
+async function confirmUninstall() {
+  uninstalling.value = true;
+  showUninstallConfirm.value = false;
+  try {
+    const r = await http.post('/api/playnite/uninstall', { restart: true }, { validateStatus: () => true });
+    let ok = false;
+    let body: any = null;
+    try { body = r.data; } catch {}
+    ok = r.status >= 200 && r.status < 300 && body && body.status === true;
+    if (ok) {
+      notify('success', (t('playnite.uninstall_success') as any) || 'Plugin uninstalled successfully.');
+      await refreshStatus();
+    } else {
+      const msg = (t('playnite.uninstall_error') as any || 'Failed to uninstall plugin.') + (body && body.error ? `: ${body.error}` : '');
+      notify('error', msg);
+    }
+  } catch (e: any) {
+    const msg = (t('playnite.uninstall_error') as any || 'Failed to uninstall plugin.') + (e?.message ? `: ${e.message}` : '');
+    notify('error', msg);
+  }
+  uninstalling.value = false;
 }
 
 onMounted(async () => {

@@ -210,6 +210,37 @@ namespace confighttp {
     send_response(response, out);
   }
 
+  void uninstallPlaynite(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+    std::string err;
+    nlohmann::json out;
+    bool request_restart = false;
+    try {
+      std::stringstream ss; ss << request->content.rdbuf();
+      if (ss.rdbuf()->in_avail() > 0) {
+        auto in = nlohmann::json::parse(ss);
+        request_restart = in.value("restart", false);
+      }
+    } catch (...) {
+      // ignore body parse errors; treat as no-restart
+    }
+    bool ok = platf::playnite::uninstall_plugin(err);
+    BOOST_LOG(info) << "Playnite uninstall: status=" << (ok ? "true" : "false") << (ok ? "" : std::string(", error=") + err);
+    out["status"] = ok;
+    if (!ok) out["error"] = err;
+    if (ok && request_restart) {
+      bool restarted = platf::playnite::restart_playnite();
+      out["restarted"] = restarted;
+    }
+    send_response(response, out);
+  }
+
   void postPlayniteForceSync(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) return;
     print_req(request);

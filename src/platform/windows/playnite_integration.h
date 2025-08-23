@@ -44,6 +44,12 @@ namespace platf::playnite {
    * @return `true` on success, `false` on failure.
    */
   bool install_plugin_to(const std::string &dest_dir, std::string &error);
+  /**
+   * @brief Uninstall the Playnite plugin from the target Extensions directory.
+   * @param[out] error Set to a human-readable error message on failure.
+   * @return `true` on success (including when already uninstalled), `false` on failure.
+   */
+  bool uninstall_plugin(std::string &error);
 
   /**
    * @brief Compute the target extensions directory used for plugin installation.

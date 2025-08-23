@@ -126,6 +126,8 @@ namespace confighttp {
                          std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
   void installPlaynite(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
                        std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
+  void uninstallPlaynite(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
+                         std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
   void getPlayniteGames(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
                         std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
   void getPlayniteCategories(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response,
@@ -1866,6 +1868,7 @@ namespace confighttp {
 #ifdef _WIN32
     server.resource["^/api/playnite/status$"]["GET"] = getPlayniteStatus;
     server.resource["^/api/playnite/install$"]["POST"] = installPlaynite;
+    server.resource["^/api/playnite/uninstall$"]["POST"] = uninstallPlaynite;
     server.resource["^/api/playnite/games$"]["GET"] = getPlayniteGames;
     server.resource["^/api/playnite/categories$"]["GET"] = getPlayniteCategories;
     server.resource["^/api/playnite/force_sync$"]["POST"] = postPlayniteForceSync;

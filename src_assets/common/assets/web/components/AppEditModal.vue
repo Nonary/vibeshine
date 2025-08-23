@@ -40,16 +40,16 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="space-y-1 md:col-span-2">
             <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Name</label>
-            <!-- When adding a new app on Windows with Playnite enabled, allow picking a Playnite game -->
-            <template v-if="isNew && isWindows && playniteEnabled">
+            <!-- When adding a new app on Windows, allow picking a Playnite game (disabled if plugin not installed) -->
+            <template v-if="isNew && isWindows">
               <div class="flex items-center gap-2">
                 <n-select
                   v-model:value="selectedPlayniteId"
                   :options="playniteOptions"
                   :loading="gamesLoading"
                   filterable
-                  :disabled="lockPlaynite"
-                  placeholder="Select a Playnite game…"
+                  :disabled="lockPlaynite || !playniteInstalled"
+                  :placeholder="playniteInstalled ? 'Select a Playnite game…' : 'Playnite plugin not detected'"
                   class="flex-1"
                   @focus="loadPlayniteGames"
                   @update:value="onPickPlaynite"
@@ -279,6 +279,10 @@ watch(open, (o) => {
     // reset playnite picker state when opening
     selectedPlayniteId.value = '';
     lockPlaynite.value = false;
+    // refresh Playnite status early so the picker can enable itself
+    refreshPlayniteStatus().then(() => {
+      if (playniteInstalled.value) loadPlayniteGames();
+    });
     // if editing an existing Playnite-managed app, keep name field simple
     // Update scroll shadows after content paints
     requestAnimationFrame(() => updateShadows());
@@ -302,7 +306,6 @@ const showDeleteConfirm = ref(false);
 const configStore = useConfigStore();
 const isWindows = computed(() => (configStore.metadata?.platform || '').toLowerCase() === 'windows');
 const playniteInstalled = ref(false);
-const playniteEnabled = computed(() => playniteInstalled.value);
 const isNew = computed(() => form.index === -1);
 
 // Playnite picker state
@@ -314,10 +317,7 @@ const lockPlaynite = ref(false);
 async function loadPlayniteGames() {
   if (!isWindows.value || gamesLoading.value || playniteOptions.value.length) return;
   // Ensure we have up-to-date install status
-  try {
-    const r = await http.get('/api/playnite/status');
-    if (r.status === 200 && r.data) playniteInstalled.value = !!(r.data as any).installed;
-  } catch (_) {}
+  await refreshPlayniteStatus();
   if (!playniteInstalled.value) return;
   gamesLoading.value = true;
   try {
@@ -329,6 +329,13 @@ async function loadPlayniteGames() {
       .sort((a, b) => a.label.localeCompare(b.label));
   } catch (_) {}
   gamesLoading.value = false;
+}
+
+async function refreshPlayniteStatus() {
+  try {
+    const r = await http.get('/api/playnite/status', { validateStatus: () => true });
+    if (r.status === 200 && r.data) playniteInstalled.value = !!(r.data as any).installed;
+  } catch (_) {}
 }
 
 function onPickPlaynite(id: string) {

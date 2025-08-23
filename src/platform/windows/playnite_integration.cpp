@@ -161,7 +161,7 @@ namespace platf::playnite {
 
   private:
     void handle_message(std::span<const uint8_t> bytes) {
-      BOOST_LOG(info) << "Playnite: handling message, bytes=" << bytes.size();
+      BOOST_LOG(debug) << "Playnite: handling message, bytes=" << bytes.size();
       auto msg = platf::playnite::parse(bytes);
       using MT = platf::playnite::MessageType;
       if (msg.type == MT::Categories) {
@@ -208,16 +208,16 @@ namespace platf::playnite {
           }
         }
         BOOST_LOG(info) << "Playnite: games batch processed added=" << added << " skipped=" << skipped
-                        << " cumulative=" << (before + added) << " (unique IDs)";
+                         << " cumulative=" << (before + added) << " (unique IDs)";
         if (config::playnite.auto_sync) {
           BOOST_LOG(info) << "Playnite: auto_sync enabled; syncing apps metadata";
           (void) sync_apps_metadata();
         }
       } else if (msg.type == MT::Status) {
         BOOST_LOG(info) << "Playnite: status '" << msg.status_name
-                        << "' id='" << msg.status_game_id
-                        << "' exe='" << msg.status_exe
-                        << "' installDir='" << msg.status_install_dir << "'";
+                         << "' id='" << msg.status_game_id
+                         << "' exe='" << msg.status_exe
+                         << "' installDir='" << msg.status_install_dir << "'";
         if (msg.status_name == "gameStopped") {
           BOOST_LOG(info) << "Playnite: received gameStopped; terminating active process";
           proc::proc.terminate();
@@ -304,7 +304,7 @@ namespace platf::playnite {
       static std::mutex per_user_key_mutex;
       auto lg = std::lock_guard(per_user_key_mutex);
       if (!platf::override_per_user_predefined_keys(user_token)) {
-        BOOST_LOG(info) << "Playnite: per-user registry override failed (no active session?)";
+        BOOST_LOG(debug) << "Playnite: per-user registry override failed (no active session?)";
         if (user_token) CloseHandle(user_token);
         return false;
       }
@@ -315,9 +315,6 @@ namespace platf::playnite {
       HRESULT hr = AssocQueryStringW(ASSOCF_NOTRUNCATE, ASSOCSTR_EXECUTABLE, L"playnite", nullptr, exe_buf.data(), &out_len);
       if (hr == S_OK) {
         exe.assign(exe_buf.data());
-        BOOST_LOG(info) << "Playnite: AssocQueryString EXECUTABLE succeeded";
-      } else {
-        BOOST_LOG(info) << "Playnite: AssocQueryString EXECUTABLE failed hr=0x" << std::hex << hr << std::dec;
       }
 
       // Fallback to ASSOCSTR_COMMAND and parse
@@ -333,9 +330,6 @@ namespace platf::playnite {
             if (!s.empty() && s.front() == L'"') { auto p = s.find(L'"', 1); if (p != std::wstring::npos) exe = s.substr(1, p - 1); }
             else { auto p = s.find(L' '); exe = (p == std::wstring::npos) ? s : s.substr(0, p); }
           }
-          BOOST_LOG(info) << "Playnite: AssocQueryString COMMAND succeeded; parsed exe";
-        } else {
-          BOOST_LOG(info) << "Playnite: AssocQueryString COMMAND failed hr=0x" << std::hex << hr << std::dec;
         }
       }
 
@@ -350,13 +344,11 @@ namespace platf::playnite {
   // Resolve the Playnite Extensions/SunshinePlaynite directory via the "playnite" URL association.
   // Uses per-user registry views and impersonates the active user before calling AssocQueryString.
   static bool resolve_extensions_dir_via_assoc(std::filesystem::path &destOut) {
-    BOOST_LOG(info) << "Playnite: resolving extensions dir via AssocQueryString";
     std::wstring exe_path_w;
     if (!query_assoc_for_playnite(exe_path_w)) return false;
     std::filesystem::path exePath = exe_path_w;
     std::filesystem::path base = exePath.parent_path();
     destOut = base / L"Extensions" / L"SunshinePlaynite";
-    BOOST_LOG(info) << "Playnite: resolved extensions dir at " << destOut.string();
     return true;
   }
 
@@ -701,6 +693,43 @@ namespace platf::playnite {
 
   bool install_plugin_to(const std::string &dest_dir, std::string &error) {
     return do_install_plugin_impl(dest_dir, error);
+  }
+
+  static bool do_uninstall_plugin_impl(std::string &error) {
+    try {
+      std::string target;
+      if (!platf::playnite::get_extension_target_dir(target)) {
+        // If we cannot resolve the directory, consider it already uninstalled.
+        BOOST_LOG(warning) << "Playnite uninstaller: could not resolve Extensions directory; assuming uninstalled";
+        return true;
+      }
+      std::filesystem::path destDir = std::filesystem::path(target);
+      if (!std::filesystem::exists(destDir)) {
+        BOOST_LOG(info) << "Playnite uninstaller: target does not exist; nothing to do";
+        return true;
+      }
+      std::error_code ec;
+      auto removed = std::filesystem::remove_all(destDir, ec);
+      if (ec) {
+        error = std::string("Failed to remove plugin directory: ") + destDir.string() + " (" + ec.message() + ")";
+        BOOST_LOG(warning) << "Playnite uninstaller: remove_all failed: " << ec.message();
+        return false;
+      }
+      BOOST_LOG(info) << "Playnite uninstaller: removed files count=" << removed << " path=" << destDir.string();
+      return true;
+    } catch (const std::exception &e) {
+      error = e.what();
+      BOOST_LOG(warning) << "Playnite uninstaller: exception: " << e.what();
+      return false;
+    } catch (...) {
+      error = "Unknown error";
+      BOOST_LOG(warning) << "Playnite uninstaller: unknown exception";
+      return false;
+    }
+  }
+
+  bool uninstall_plugin(std::string &error) {
+    return do_uninstall_plugin_impl(error);
   }
 
   
