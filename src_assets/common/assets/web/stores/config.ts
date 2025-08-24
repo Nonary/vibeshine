@@ -109,8 +109,8 @@ const defaultGroups = [
       playnite_focus_attempts: 3,
       playnite_focus_timeout_secs: 15,
       playnite_focus_exit_on_first: false,
-      playnite_sync_categories: '',
-      playnite_exclude_games: '',
+      playnite_sync_categories: [],
+      playnite_exclude_games: [],
       playnite_install_dir: '',
       playnite_extensions_dir: '',
     },
@@ -355,6 +355,44 @@ export const useConfigStore = defineStore('config', () => {
         if (b !== null) {
           (_data.value as any)[k] = b;
         }
+      }
+    }
+
+    // Normalize Playnite category/exclusion lists to arrays of {id,name}
+    const normalizeIdNameArray = (v: any, treatStringsAsIds: boolean): Array<{ id: string; name: string }> => {
+      const out: Array<{ id: string; name: string }> = [];
+      if (Array.isArray(v)) {
+        for (const el of v) {
+          if (el && typeof el === 'object') {
+            const id = String((el as any).id || '');
+            const name = String((el as any).name || '');
+            if (id || name) out.push({ id, name });
+          } else if (typeof el === 'string') {
+            const s = el.trim(); if (!s) continue;
+            out.push(treatStringsAsIds ? { id: s, name: '' } : { id: '', name: s });
+          }
+        }
+        return out;
+      }
+      if (typeof v === 'string') {
+        // Try JSON first
+        try {
+          const parsed = JSON.parse(v);
+          return normalizeIdNameArray(parsed, treatStringsAsIds);
+        } catch {}
+        // CSV fallback
+        for (const s of v.split(',').map((s) => s.trim()).filter(Boolean)) {
+          out.push(treatStringsAsIds ? { id: s, name: '' } : { id: '', name: s });
+        }
+      }
+      return out;
+    };
+    if (_data.value) {
+      if (Object.prototype.hasOwnProperty.call(_data.value, 'playnite_sync_categories')) {
+        (_data.value as any).playnite_sync_categories = normalizeIdNameArray((_data.value as any).playnite_sync_categories, false);
+      }
+      if (Object.prototype.hasOwnProperty.call(_data.value, 'playnite_exclude_games')) {
+        (_data.value as any).playnite_exclude_games = normalizeIdNameArray((_data.value as any).playnite_exclude_games, true);
       }
     }
 

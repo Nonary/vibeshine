@@ -78,6 +78,7 @@
       v-model="showModal"
       :app="currentApp"
       :index="currentIndex"
+      :key="modalKey + '|' + (currentIndex ?? -1) + '|' + ((currentApp && (currentApp.uuid || currentApp.name)) || 'new')"
       @saved="reload"
       @deleted="reload"
     />
@@ -85,7 +86,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import AppEditModal from '@/components/AppEditModal.vue';
 import { useAppsStore } from '@/stores/apps';
 import { storeToRefs } from 'pinia';
@@ -100,6 +101,7 @@ const isWindows = computed(() => (configStore.metadata?.platform || '').toLowerC
 const playniteInstalled = ref(false);
 const playniteEnabled = computed(() => playniteInstalled.value);
 const showModal = ref(false);
+const modalKey = ref(0);
 const currentApp = ref(null);
 const currentIndex = ref(-1);
 async function reload() {
@@ -115,6 +117,15 @@ function openEdit(app, i) {
   currentIndex.value = i;
   showModal.value = true;
 }
+// Reset selection when modal closes to avoid stale state on next open
+watch(showModal, (v) => {
+  if (!v) {
+    currentApp.value = null;
+    currentIndex.value = -1;
+    // bump key to force full remount for a clean slate
+    modalKey.value++;
+  }
+});
 // Playnite integration removed
 function appKey(app, index) {
   const id = app?.uuid || '';

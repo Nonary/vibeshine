@@ -15,6 +15,7 @@
 // local includes
 #include "src/platform/common.h"
 
+
 namespace platf::playnite {
 
   /**
@@ -79,7 +80,9 @@ namespace platf::playnite {
   bool get_games_list_json(std::string &out_json);
 
   /**
-   * @brief Get a JSON array string of category names.
+   * @brief Get a JSON array string of categories.
+   * Structure: [{"id":"...","name":"..."}]. When ids are not available,
+   * objects may contain only the name field.
    * @param[out] out_json Receives the JSON array string on success.
    * @return `true` if category data was available and written to `out_json`, `false` otherwise.
    */
@@ -111,5 +114,7 @@ namespace platf::playnite {
   bool restart_playnite();
 
   // Note: explicit launch helper removed; use restart_playnite() for both cases.
+
+  
 
 }  // namespace platf::playnite

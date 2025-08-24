@@ -29,9 +29,7 @@
         <!-- Scroll affordance shadows: appear when more content is available -->
         <div v-if="showTopShadow" class="scroll-shadow-top" aria-hidden="true"></div>
         <div v-if="showBottomShadow" class="scroll-shadow-bottom" aria-hidden="true"></div>
-        <div v-if="showBottomShadow" class="scroll-hint-below" aria-hidden="true">
-          <i class="fas fa-arrow-down mr-1" /> {{ $t('apps.more_fields_below') }}
-        </div>
+        
         <form
           class="space-y-6 text-sm"
           @submit.prevent="save"
@@ -423,15 +421,17 @@ async function del() {
       try {
         const cfg = await http.get('./api/config', { validateStatus: () => true });
         const all: Record<string, any> = (cfg?.data && typeof cfg.data === 'object') ? { ...(cfg.data as any) } : {};
-        const raw = String(all.playnite_exclude_games || '');
-        const set = new Set<string>();
-        raw
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean)
-          .forEach((s) => set.add(s));
-        set.add(String(pid));
-        all.playnite_exclude_games = Array.from(set).join(',');
+        // Normalize to array of {id,name}
+        let arr: Array<{ id: string; name: string }> = [];
+        try {
+          const v = (all as any).playnite_exclude_games;
+          if (Array.isArray(v)) arr = v as any;
+          else if (typeof v === 'string') { try { const parsed = JSON.parse(v); if (Array.isArray(parsed)) arr = parsed as any; } catch { arr = v.split(',').map((s: string) => ({ id: s.trim(), name: '' })).filter((o: any) => o.id); } }
+        } catch {}
+        const name = (playniteOptions.value.find(o => o.value === String(pid))?.label) || '';
+        const map = new Map(arr.map(e => [e.id, e.name] as const));
+        map.set(String(pid), name);
+        (all as any).playnite_exclude_games = Array.from(map.entries()).map(([id, name]) => ({ id, name }));
         // Post the full config object to avoid wiping other settings
         await http.post('./api/config', all, { validateStatus: () => true });
       } catch (_) {
@@ -473,31 +473,6 @@ async function del() {
 }
 .dark .scroll-shadow-bottom {
   background: linear-gradient(to top, rgb(var(--color-surface) / 0.9), rgb(var(--color-surface) / 0));
-}
-.scroll-hint-below {
-  position: sticky;
-  bottom: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: auto;
-  margin-right: auto;
-  left: 0;
-  right: 0;
-  max-width: max-content;
-  padding: 4px 8px;
-  font-size: 11px;
-  border-radius: 8px;
-  color: rgba(0, 0, 0, 0.7);
-  background: rgba(255, 255, 255, 0.8);
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
-  pointer-events: none;
-  z-index: 2;
-}
-.dark .scroll-hint-below {
-  color: rgba(245, 249, 255, 0.85);
-  background: rgba(13, 16, 28, 0.75);
-  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.5);
 }
 .ui-input {
   width: 100%;
