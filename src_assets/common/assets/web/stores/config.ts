@@ -9,6 +9,7 @@ export interface MetaInfo {
   version?: string;
   commit?: string;
   branch?: string;
+  release_date?: string; // ISO 8601 when available
 }
 
 // --- Defaults (flat) -------------------------------------------------------

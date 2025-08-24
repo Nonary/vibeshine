@@ -91,35 +91,7 @@
             <n-alert v-if="installedVersionNotStable" type="info" :show-icon="true">
               {{ $t('index.installed_version_not_stable') }}
             </n-alert>
-            <n-alert
-              v-if="compareChecked && !installedVersionNotStable && aheadByCommits > 0"
-              type="success"
-            >
-              {{ $t('index.version_ahead', { ahead: aheadByCommits }) }}
-            </n-alert>
-            <n-alert
-              v-if="
-                compareChecked &&
-                !installedVersionNotStable &&
-                aheadByCommits === 0 &&
-                behindByCommits > 0
-              "
-              type="warning"
-            >
-              {{ $t('index.version_behind', { behind: behindByCommits }) }}
-            </n-alert>
-            <n-alert
-              v-if="
-                compareChecked &&
-                !installedVersionNotStable &&
-                !compareInfo &&
-                !stableBuildAvailable &&
-                !buildVersionIsDirty
-              "
-              type="info"
-            >
-              {{ $t('index.version_compare_unknown') }}
-            </n-alert>
+            <!-- Git compare alerts removed; date-based update checks only -->
             <n-alert
               v-else-if="
                 (!preReleaseBuildAvailable || !notifyPreReleases) &&
@@ -183,9 +155,7 @@
       <n-gi :span="24" :xl="8">
         <n-card>
           <template #header>
-            <h2 class="text-2xl font-semibold tracking-tight mx-auto text-center">
-              {{ $t('resources.title') || 'Resources' }}
-            </h2>
+            <h2 class="text-2xl font-semibold tracking-tight mx-auto text-center">Web Links</h2>
           </template>
           <div class="text-xs space-y-2">
             <ResourceCard />
@@ -223,18 +193,8 @@ const loading = ref(true);
 const logs = ref('');
 const branch = ref('');
 const commit = ref('');
-const compareInfo = ref<{
-  ahead_by: number;
-  behind_by: number;
-  status: 'identical' | 'ahead' | 'behind' | 'diverged';
-} | null>(null);
-// Compare info against the latest pre-release tag (if present)
-const preCompareInfo = ref<{
-  ahead_by: number;
-  behind_by: number;
-  status: 'identical' | 'ahead' | 'behind' | 'diverged';
-} | null>(null);
-const compareChecked = ref(false); // true once we've attempted to resolve git distance
+// Release-date based update check; no git compare needed
+const installedReleaseDate = ref<number | null>(null); // epoch ms
 
 const configStore = useConfigStore();
 const auth = useAuthStore();
@@ -260,11 +220,18 @@ async function runVersionChecks() {
     installedVersion.value = new SunshineVersion(serverVersion || '0.0.0');
     branch.value = cfg.branch || '';
     commit.value = cfg.commit || '';
+    // Parse installed release date from metadata if provided
+    try {
+      const rd = (configStore.metadata as any)?.release_date as string | undefined;
+      installedReleaseDate.value = rd ? new Date(rd).getTime() : null;
+    } catch {
+      installedReleaseDate.value = null;
+    }
 
     // Remote release checks (GitHub)
     try {
       githubRelease.value = await fetch(
-        'https://api.github.com/repos/LizardByte/Sunshine/releases/latest',
+        'https://api.github.com/repos/Nonary/vibeshine/releases/latest',
       ).then((r) => r.json());
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -272,7 +239,7 @@ async function runVersionChecks() {
     }
     try {
       const releases = await fetch(
-        'https://api.github.com/repos/LizardByte/Sunshine/releases',
+        'https://api.github.com/repos/Nonary/vibeshine/releases',
       ).then((r) => r.json());
       const pre = Array.isArray(releases) ? releases.find((r) => r.prerelease) : null;
       if (pre) preReleaseRelease.value = pre;
@@ -280,51 +247,7 @@ async function runVersionChecks() {
       // eslint-disable-next-line no-console
       console.warn('[Dashboard] releases list fetch failed', e);
     }
-
-    // Compare if we have enough data. Mark `compareChecked` once we've attempted (success or fail)
-    if (commit.value && githubRelease.value?.tag_name) {
-      try {
-        const baseTag = githubRelease.value.tag_name.startsWith('v')
-          ? githubRelease.value.tag_name
-          : 'v' + githubRelease.value.tag_name;
-        const compareResp = await fetch(
-          `https://api.github.com/repos/LizardByte/Sunshine/compare/${baseTag}...${commit.value}`,
-        );
-        if (compareResp.ok) {
-          const cmp = await compareResp.json();
-          compareInfo.value = {
-            ahead_by: cmp.ahead_by,
-            behind_by: cmp.behind_by,
-            status: cmp.status,
-          };
-        }
-        // Also attempt compare against pre-release tag if available
-        if (preReleaseRelease.value?.tag_name) {
-          const preTag = preReleaseRelease.value.tag_name.startsWith('v')
-            ? preReleaseRelease.value.tag_name
-            : 'v' + preReleaseRelease.value.tag_name;
-          const preResp = await fetch(
-            `https://api.github.com/repos/LizardByte/Sunshine/compare/${preTag}...${commit.value}`,
-          );
-          if (preResp.ok) {
-            const preCmp = await preResp.json();
-            preCompareInfo.value = {
-              ahead_by: preCmp.ahead_by,
-              behind_by: preCmp.behind_by,
-              status: preCmp.status,
-            };
-          }
-        }
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('Compare API failed', e);
-      } finally {
-        compareChecked.value = true;
-      }
-    } else {
-      // Nothing to compare (no commit or no remote version) - treat as checked
-      compareChecked.value = true;
-    }
+    // No git compare; date-based logic uses published_at and installedReleaseDate
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('[Dashboard] version checks failed', e);
@@ -345,35 +268,52 @@ onMounted(async () => {
 });
 
 const installedVersionNotStable = computed(() => {
-  if (!githubRelease.value || !installedVersion.value) return false;
-  // treat non-master branches as pre-release builds automatically
-  if (branch.value && branch.value !== 'master') return true;
-  return installedVersion.value.isGreaterRelease(githubRelease.value);
+  if (!githubRelease.value) return false;
+  // treat non-main/master branches as pre-release builds automatically
+  if (branch.value && !['master', 'main'].includes(branch.value)) return true;
+  try {
+    const latestStableTs = githubRelease.value?.published_at
+      ? new Date(githubRelease.value.published_at).getTime()
+      : null;
+    if (installedReleaseDate.value && latestStableTs) {
+      return installedReleaseDate.value > latestStableTs;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
 });
 const stableBuildAvailable = computed(() => {
-  if (!githubRelease.value || !installedVersion.value) return false;
-  // Don't decide until we've checked git distance
-  if (!compareChecked.value) return false;
-  // If we have compare info and we're ahead, do not suggest stable update
-  if (compareInfo.value && compareInfo.value.ahead_by > 0) return false;
-  // If we have compare info and we're exactly equal (ahead_by = behind_by = 0) treat as up-to-date.
-  if (compareInfo.value && compareInfo.value.ahead_by === 0 && compareInfo.value.behind_by === 0)
-    return false;
+  if (!githubRelease.value) return false;
+  try {
+    const latestStableTs = githubRelease.value?.published_at
+      ? new Date(githubRelease.value.published_at).getTime()
+      : null;
+    if (installedReleaseDate.value && latestStableTs) {
+      return installedReleaseDate.value < latestStableTs;
+    }
+  } catch {
+    /* ignore */
+  }
+  // Fallback to semver compare if dates are missing
   return githubVersion.value.isGreater(installedVersion.value);
 });
 const preReleaseBuildAvailable = computed(() => {
-  if (!preReleaseRelease.value || !githubRelease.value || !installedVersion.value) return false;
-  // Only consider pre-release availability after we've confirmed compare status
-  if (!compareChecked.value) return false;
-  // If our commit is ahead of the pre-release tag, don't suggest the pre-release
-  if (preCompareInfo.value && preCompareInfo.value.ahead_by > 0) return false;
-  // If exactly equal to the pre-release commit, also do not suggest
-  if (
-    preCompareInfo.value &&
-    preCompareInfo.value.ahead_by === 0 &&
-    preCompareInfo.value.behind_by === 0
-  )
-    return false;
+  if (!preReleaseRelease.value || !githubRelease.value) return false;
+  try {
+    const preTs = preReleaseRelease.value?.published_at
+      ? new Date(preReleaseRelease.value.published_at).getTime()
+      : null;
+    const stableTs = githubRelease.value?.published_at
+      ? new Date(githubRelease.value.published_at).getTime()
+      : null;
+    if (preTs && installedReleaseDate.value && stableTs) {
+      return preTs > installedReleaseDate.value && preTs > stableTs;
+    }
+  } catch {
+    /* ignore */
+  }
+  // Fallback to semver compare if dates are missing
   return (
     preReleaseVersion.value.isGreater(installedVersion.value) &&
     preReleaseVersion.value.isGreater(githubVersion.value)
@@ -386,8 +326,7 @@ const buildVersionIsDirty = computed(() => {
     installedVersion.value.version.indexOf('dirty') !== -1
   );
 });
-const aheadByCommits = computed(() => compareInfo.value?.ahead_by || 0);
-const behindByCommits = computed(() => compareInfo.value?.behind_by || 0);
+// No git compare; ahead/behind not applicable in date-based flow
 const fancyLogs = computed(() => {
   if (!logs.value) return [];
   const regex = /(\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}]):\s/g;

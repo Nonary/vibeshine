@@ -1092,6 +1092,8 @@ namespace confighttp {
 #else
     output_tree["branch"] = "unknown";
 #endif
+    // Build/release date provided by CMake (ISO 8601 when available)
+    output_tree["release_date"] = PROJECT_RELEASE_DATE;
     send_response(response, output_tree);
   }
 

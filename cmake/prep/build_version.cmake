@@ -99,7 +99,7 @@ if((NOT DEFINED GITHUB_COMMIT) OR (GITHUB_COMMIT STREQUAL ""))
     endif()
 endif()
 
-# set date variables
+# set date variables (defaults; will be auto-resolved below)
 set(PROJECT_YEAR "1990")
 set(PROJECT_MONTH "01")
 set(PROJECT_DAY "01")
@@ -157,9 +157,6 @@ message("CMAKE_PROJECT_VERSION: ${CMAKE_PROJECT_VERSION}")
 message("CMAKE_PROJECT_VERSION_MAJOR: ${CMAKE_PROJECT_VERSION_MAJOR}")
 message("CMAKE_PROJECT_VERSION_MINOR: ${CMAKE_PROJECT_VERSION_MINOR}")
 message("CMAKE_PROJECT_VERSION_PATCH: ${CMAKE_PROJECT_VERSION_PATCH}")
-message("PROJECT_YEAR: ${PROJECT_YEAR}")
-message("PROJECT_MONTH: ${PROJECT_MONTH}")
-message("PROJECT_DAY: ${PROJECT_DAY}")
 
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_NAME="${PROJECT_NAME}")
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION="${PROJECT_VERSION}")
@@ -168,3 +165,50 @@ list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_MINOR="${PROJECT_VERSION_MINOR}
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_PATCH="${PROJECT_VERSION_PATCH}")
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_COMMIT="${GITHUB_COMMIT}")
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_BRANCH="${PROJECT_VERSION_BRANCH}")
+
+# ------------------------------------------------------------
+# Release date (ISO 8601) for update checks
+# Prefer explicit env RELEASE_DATE, else commit date, else YYYY-MM-DD from
+# parsed PROJECT_VERSION (falls back to 1990-01-01 if unknown).
+# ------------------------------------------------------------
+set(PROJECT_RELEASE_DATE_ISO "")
+
+# 1) If provided by CI/environment, use that verbatim
+if(DEFINED ENV{RELEASE_DATE} AND NOT $ENV{RELEASE_DATE} STREQUAL "")
+    set(PROJECT_RELEASE_DATE_ISO "$ENV{RELEASE_DATE}")
+endif()
+
+# 2) If not provided, try getting the last commit date in ISO 8601 from git
+if(PROJECT_RELEASE_DATE_ISO STREQUAL "")
+    if(GIT_EXECUTABLE)
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} log -1 --format=%cI
+            OUTPUT_VARIABLE GIT_COMMIT_DATE_ISO
+            RESULT_VARIABLE GIT_COMMIT_DATE_ISO_ERROR_CODE
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(NOT GIT_COMMIT_DATE_ISO_ERROR_CODE AND NOT "${GIT_COMMIT_DATE_ISO}" STREQUAL "")
+            set(PROJECT_RELEASE_DATE_ISO "${GIT_COMMIT_DATE_ISO}")
+        endif()
+    endif()
+endif()
+
+# 3) If git is unavailable, fall back to current UTC time
+if(PROJECT_RELEASE_DATE_ISO STREQUAL "")
+    string(TIMESTAMP _NOW_ISO "%Y-%m-%dT%H:%M:%SZ" UTC)
+    set(PROJECT_RELEASE_DATE_ISO "${_NOW_ISO}")
+endif()
+
+message("PROJECT_RELEASE_DATE_ISO: ${PROJECT_RELEASE_DATE_ISO}")
+list(APPEND SUNSHINE_DEFINITIONS PROJECT_RELEASE_DATE="${PROJECT_RELEASE_DATE_ISO}")
+
+# Derive PROJECT_YEAR/MONTH/DAY from ISO date if available
+if(PROJECT_RELEASE_DATE_ISO MATCHES "^([0-9][0-9][0-9][0-9])-([0-9][0-9])-([0-9][0-9])")
+    set(PROJECT_YEAR  "${CMAKE_MATCH_1}")
+    set(PROJECT_MONTH "${CMAKE_MATCH_2}")
+    set(PROJECT_DAY   "${CMAKE_MATCH_3}")
+endif()
+
+message("PROJECT_YEAR: ${PROJECT_YEAR}")
+message("PROJECT_MONTH: ${PROJECT_MONTH}")
+message("PROJECT_DAY: ${PROJECT_DAY}")
