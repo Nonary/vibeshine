@@ -50,10 +50,6 @@
 	path = third-party/TPCircularBuffer
 	url = https://github.com/michaeltyson/TPCircularBuffer.git
 	branch = master
-[submodule "third-party/tray"]
-	path = third-party/tray
-	url = https://github.com/LizardByte/tray.git
-	branch = master
 [submodule "third-party/ViGEmClient"]
 	path = third-party/ViGEmClient
 	url = https://github.com/LizardByte/Virtual-Gamepad-Emulation-Client.git
@@ -66,3 +62,6 @@
 	path = third-party/wlr-protocols
 	url = https://github.com/LizardByte-infrastructure/wlr-protocols.git
 	branch = master
+[submodule "third-party/tray"]
+	path = third-party/tray
+	url = https://github.com/Nonary/tray
