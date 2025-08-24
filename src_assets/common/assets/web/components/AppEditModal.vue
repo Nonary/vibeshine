@@ -452,6 +452,43 @@ async function del() {
 }
 </script>
 <style scoped>
+.mobile-only-hidden { display: none; }
+
+/* Mobile-friendly modal sizing and sticky header/footer */
+@media (max-width: 640px) {
+  :deep(.n-modal .n-card) {
+    border-radius: 0 !important;
+    max-width: 100vw !important;
+    width: 100vw !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+  }
+  :deep(.n-modal .n-card .n-card__header),
+  :deep(.n-modal .n-card .n-card-header) {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    backdrop-filter: saturate(1.2) blur(8px);
+    background: rgb(var(--color-light) / 0.9);
+  }
+  :deep(.dark .n-modal .n-card .n-card__header),
+  :deep(.dark .n-modal .n-card .n-card-header) {
+    background: rgb(var(--color-surface) / 0.9);
+  }
+  :deep(.n-modal .n-card .n-card__footer),
+  :deep(.n-modal .n-card .n-card-footer) {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+    backdrop-filter: saturate(1.2) blur(8px);
+    background: rgb(var(--color-light) / 0.9);
+    padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem) !important;
+  }
+  :deep(.dark .n-modal .n-card .n-card__footer),
+  :deep(.dark .n-modal .n-card .n-card-footer) {
+    background: rgb(var(--color-surface) / 0.9);
+  }
+}
 .scroll-shadow-top {
   position: sticky;
   top: 0;

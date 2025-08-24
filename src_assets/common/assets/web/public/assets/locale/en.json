@@ -29,7 +29,10 @@
     "search": "Search",
     "select_all": "Select all",
     "clear": "Clear",
-    "delete": "Delete"
+    "delete": "Delete",
+    "add": "Add",
+    "remove": "Remove",
+    "clear_all": "Clear All"
   },
   "apps": {
     "actions": "Actions",
@@ -547,6 +550,12 @@
     "exclusions_override_note": "Exclusions override categories.",
     "exclude_games": "Exclude games from auto-sync",
     "exclude_games_desc": "Selected games will not be auto-synced from Playnite.",
+    "exclude_games_table_title": "Excluded Games",
+    "table_game": "Game",
+    "table_actions": "Actions",
+    "add_exclusions": "Add Exclusions",
+    "add_exclusions_placeholder": "Search and select games",
+    "add_exclusions_hint": "Pick one or more games to exclude from auto-sync.",
     "games_loaded_live": "Loaded from Playnite",
     "games_loaded_cache": "Loaded from cache",
     "games_not_available": "No games available. Start Playnite to fetch games.",

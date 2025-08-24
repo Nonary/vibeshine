@@ -1,8 +1,8 @@
 <template>
   <div class="space-y-6">
-    <div class="flex items-center justify-between">
+    <div class="apps-header flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
       <h2 class="text-sm font-semibold uppercase tracking-wider">Applications</h2>
-      <div class="flex items-center gap-2">
+      <div class="actions flex items-center gap-2 sm:flex-nowrap sm:justify-end w-full sm:w-auto flex-wrap">
         <!-- Windows + Playnite actions -->
         <template v-if="isWindows">
           <n-button v-if="playniteEnabled" size="small" type="error" @click="purgeAutoSync">
@@ -200,4 +200,75 @@ onMounted(async () => {
   background: #4da3ff;
 }
 /* Row chevron styling adapts via text color set inline */
+
+/* Mobile-friendly modal adjustments for the App editor */
+@media (max-width: 640px) {
+  /* Make the Naive UI modal card act like a full-screen sheet on small screens */
+  :deep(.n-modal .n-card) {
+    border-radius: 0 !important;
+    max-width: 100vw !important;
+    width: 100vw !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+  }
+  /* So content breathes on mobile */
+  :deep(.n-modal .n-card .n-card__content),
+  :deep(.n-modal .n-card .n-card-content) {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+  /* Keep header visible while scrolling */
+  :deep(.n-modal .n-card .n-card__header),
+  :deep(.n-modal .n-card .n-card-header) {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    backdrop-filter: saturate(1.2) blur(8px);
+    background: rgb(var(--color-light) / 0.9);
+  }
+  :deep(.dark .n-modal .n-card .n-card__header),
+  :deep(.dark .n-modal .n-card .n-card-header) {
+    background: rgb(var(--color-surface) / 0.9);
+  }
+  /* Keep footer actions accessible and add safe-area padding */
+  :deep(.n-modal .n-card .n-card__footer),
+  :deep(.n-modal .n-card .n-card-footer) {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+    backdrop-filter: saturate(1.2) blur(8px);
+    background: rgb(var(--color-light) / 0.9);
+    padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem) !important;
+  }
+  :deep(.dark .n-modal .n-card .n-card__footer),
+  :deep(.dark .n-modal .n-card .n-card-footer) {
+    background: rgb(var(--color-surface) / 0.9);
+  }
+}
+
+/* Responsive actions bar for small screens */
+@media (max-width: 640px) {
+  .apps-header {
+    position: sticky;
+    top: 0;
+    z-index: 12;
+    backdrop-filter: blur(8px) saturate(1.05);
+    background: rgb(var(--color-light) / 0.85);
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
+  }
+  .dark .apps-header {
+    background: rgb(var(--color-surface) / 0.85);
+  }
+  .actions {
+    display: flex;
+    flex-direction: column;
+  }
+  /* Make buttons easier to tap and full-width */
+  .actions :deep(.n-button) {
+    width: 100%;
+    height: 40px;
+    font-size: 14px;
+  }
+}
 </style>
