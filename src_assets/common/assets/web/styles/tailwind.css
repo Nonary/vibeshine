@@ -5,25 +5,31 @@
 /* Theme CSS variables (semantic tokens) */
 @layer base {
   :root {
-    /* Light (former solar) */
-    --color-primary: 253 184 19;
-    --color-secondary: 13 59 102;
-    --color-success: 76 175 80;
-    --color-warning: 245 124 0;
-    /* Danger (lighter red for better contrast with white text) */
-    --color-danger: 220 38 38; /* ~Tailwind red-600 */
-    --color-info: 2 136 209;
-    --color-light: 255 253 248;
-    --color-dark: 33 33 33;
-    --color-surface: 255 243 224;
-    --color-accent: 239 108 0;
-    --color-on-primary: 33 33 33;
+    /* Sunshine Light — orange-focused with strong contrast */
+    --color-primary: 194 65 12;   /* #C2410C burnt orange */
+    --color-secondary: 120 53 15; /* #78350F deep umber */
+    --color-success: 76 175 80;   /* #4CAF50 */
+    --color-warning: 245 124 0;   /* #F57C00 (needs black text) */
+    --color-danger: 220 38 38;    /* #DC2626 */
+    --color-info: 2 136 209;      /* #0288D1 */
+
+    /* Warm paper background + surface */
+    --color-light: 255 250 244;   /* #FFFAF4 */
+    --color-dark: 33 33 33;       /* #212121 */
+    --color-surface: 255 241 230; /* #FFF1E6 */
+
+    /* Accent tuned darker so white text works */
+    --color-accent: 204 76 0;     /* #CC4C00 */
+
+    /* On-colors */
+    --color-on-primary: 255 255 255;
     --color-on-secondary: 255 255 255;
     --color-on-accent: 255 255 255;
     --color-on-light: 33 33 33;
     --color-on-dark: 255 255 255;
-    /* Brand (nav text) mixed solar-secondary / lunar-onSecondary */
-    --color-brand: 13 59 102;
+
+    /* Brand (e.g., nav/headings) */
+    --color-brand: 120 53 15;     /* #78350F */
   }
 
   .dark {
@@ -106,8 +112,9 @@
   :not(.n-button__content) > .fab:last-child {
     margin-left: 0.5rem;
   }
+  /* Card + forms: stronger borders in light mode for ≥3:1 contrast */
   .card {
-    @apply p-5 rounded-md border border-dark/10 dark:border-light/10 bg-white dark:bg-surface shadow-sm;
+    @apply p-5 rounded-md border border-dark/55 dark:border-light/10 bg-white dark:bg-surface shadow-sm;
   }
 
   .card-header {
@@ -135,7 +142,7 @@
   }
 
   .btn-warning {
-    @apply bg-warning text-onPrimary hover:bg-warning/90;
+    @apply bg-warning text-onLight hover:bg-warning/90; /* black text for warning */
   }
 
   .btn-info {
@@ -152,7 +159,12 @@
   }
 
   .form-control {
-    @apply w-full px-3 py-2 text-sm rounded-md border border-dark/10 dark:border-light/15 bg-light dark:bg-surface/70 text-dark dark:text-light placeholder-dark/40 dark:placeholder-light/40 focus:outline-none focus:ring-2 focus:ring-primary/40;
+    @apply w-full px-3 py-2 text-sm rounded-md 
+           border border-dark/55 dark:border-light/15
+           bg-light dark:bg-surface/70
+           text-dark dark:text-light
+           placeholder-dark/70 dark:placeholder-light/40
+           focus:outline-none focus:ring-2 focus:ring-primary/40;
     /* normalize native select appearance and ensure padding for custom arrow */
     -webkit-appearance: none;
     appearance: none;
@@ -170,7 +182,11 @@
   }
 
   .form-text {
-    @apply text-[11px] opacity-60 mt-1;
+    @apply text-[11px] mt-1;
+    color: rgb(var(--color-dark) / 0.70);
+  }
+  .dark .form-text {
+    color: rgb(var(--color-light) / 0.65);
   }
 
   .form-select {
@@ -280,5 +296,69 @@
   .dark .n-checkbox.n-checkbox--checked .n-checkbox-box,
   .dark .n-checkbox.n-checkbox--checked .n-checkbox__input {
     box-shadow: none;
+  }
+}
+
+/* Radios — better visible outline when unchecked and clear active dot */
+@layer components {
+  :root .n-radio:not(.n-radio--checked) .n-radio__input {
+    box-shadow: inset 0 0 0 2px rgb(var(--color-secondary) / 0.60);
+    border-color: rgb(var(--color-secondary) / 0.60) !important;
+    background-color: transparent;
+  }
+  :root .n-radio.n-radio--checked .n-radio__dot {
+    background-color: rgb(var(--color-primary));
+  }
+
+  /* Dark mode: add visible outline + readable label */
+  .dark .n-radio:not(.n-radio--checked) .n-radio__input {
+    box-shadow: inset 0 0 0 2px rgb(var(--color-light) / 0.55);
+    border-color: rgb(var(--color-light) / 0.55) !important;
+    background-color: rgb(var(--color-light) / 0.06);
+  }
+  .dark .n-radio:not(.n-radio--checked):hover .n-radio__input {
+    box-shadow: inset 0 0 0 2px rgb(var(--color-light) / 0.75);
+    background-color: rgb(var(--color-light) / 0.10);
+  }
+  .dark .n-radio .n-radio__input:focus-visible {
+    box-shadow: 0 0 0 3px rgb(var(--color-primary) / 0.35),
+      inset 0 0 0 2px rgb(var(--color-light) / 0.55);
+  }
+  .dark .n-radio.n-radio--checked .n-radio__dot {
+    background-color: rgb(var(--color-primary));
+  }
+  /* Naive uses either __label or -label across versions; cover both */
+  .dark .n-radio .n-radio__label,
+  .dark .n-radio .n-radio-label {
+    color: rgb(var(--color-on-dark));
+  }
+
+  /* Ensure the actual visible circle shows a clear outline (unselected) */
+  :root .n-radio:not(.n-radio--checked) .n-radio__dot {
+    box-shadow: inset 0 0 0 2px rgb(var(--color-secondary) / 0.60) !important;
+    background-color: transparent !important;
+  }
+  :root .n-radio:not(.n-radio--checked):hover .n-radio__dot {
+    box-shadow: inset 0 0 0 2px rgb(var(--color-secondary) / 0.80) !important;
+    background-color: rgb(var(--color-secondary) / 0.06) !important;
+  }
+  :root .n-radio:focus-visible .n-radio__dot {
+    box-shadow: 0 0 0 3px rgb(var(--color-primary) / 0.35), inset 0 0 0 2px rgb(var(--color-secondary) / 0.60) !important;
+  }
+  .dark .n-radio:not(.n-radio--checked) .n-radio__dot {
+    box-shadow: inset 0 0 0 2px rgb(var(--color-light) / 0.55) !important;
+    background-color: rgb(var(--color-light) / 0.06) !important;
+  }
+  .dark .n-radio:not(.n-radio--checked):hover .n-radio__dot {
+    box-shadow: inset 0 0 0 2px rgb(var(--color-light) / 0.75) !important;
+    background-color: rgb(var(--color-light) / 0.10) !important;
+  }
+  .dark .n-radio:focus-visible .n-radio__dot {
+    box-shadow: 0 0 0 3px rgb(var(--color-primary) / 0.35), inset 0 0 0 2px rgb(var(--color-light) / 0.55) !important;
+  }
+
+  /* Keyboard focus ring in light mode */
+  :root .n-radio .n-radio__input:focus-visible {
+    box-shadow: 0 0 0 3px rgb(var(--color-primary) / 0.35), inset 0 0 0 2px rgb(var(--color-secondary) / 0.60) !important;
   }
 }
