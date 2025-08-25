@@ -40,46 +40,6 @@ namespace config {
     vars.erase(it);
   }
 
-  static void parse_list(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::vector<std::string> &out) {
-    std::string raw;
-    erase_take(vars, name, raw);
-    if (raw.empty()) {
-      return;
-    }
-
-    // Accept JSON array or simple comma-separated list
-    try {
-      std::stringstream ss;
-      // If already an array, wrap as {"v": raw}
-      ss << "{\"v\":" << raw << "}";
-      boost::property_tree::ptree pt;
-      boost::property_tree::read_json(ss, pt);
-      out.clear();
-      for (auto &child : pt.get_child("v"s)) {
-        out.emplace_back(child.second.get_value<std::string>());
-      }
-      return;
-    } catch (...) {
-      // Fallback to comma-separated
-    }
-
-    out.clear();
-    std::string item;
-    std::stringstream ss(raw);
-    while (std::getline(ss, item, ',')) {
-      // trim
-      item.erase(item.begin(), std::find_if(item.begin(), item.end(), [](unsigned char ch) {
-                   return !std::isspace(ch);
-                 }));
-      item.erase(std::find_if(item.rbegin(), item.rend(), [](unsigned char ch) {
-                   return !std::isspace(ch);
-                 }).base(),
-                 item.end());
-      if (!item.empty()) {
-        out.push_back(item);
-      }
-    }
-  }
 
   static void parse_id_name_array(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::vector<config::id_name_t> &out, std::vector<std::string> *names_out = nullptr, bool treat_strings_as_ids = false) {
     std::string raw;
@@ -158,26 +118,7 @@ namespace config {
       }
     }
   }
-
-  static void parse_path(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::string &target) {
-    std::string raw;
-    erase_take(vars, name, raw);
-    if (raw.empty()) {
-      return;
-    }
-    fs::path p = raw;
-    if (p.is_relative()) {
-      p = platf::appdata() / p;
-    }
-    // Ensure directory exists
-    auto dir = p;
-    dir.remove_filename();
-    if (!dir.empty() && !fs::exists(dir)) {
-      fs::create_directories(dir);
-    }
-    target = p.string();
-  }
-
+  
   void apply_playnite(std::unordered_map<std::string, std::string> &vars) {
     // booleans
     std::string tmp;

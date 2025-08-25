@@ -374,7 +374,6 @@ namespace platf::playnite {
         return false;
       }
 
-      using GRef = platf::playnite::sync::GameRef;
       // Build all games snapshot and reconcile with apps.json via helper
       std::vector<platf::playnite::Game> all;
       { std::scoped_lock lk(mutex_); all = last_games_; }
