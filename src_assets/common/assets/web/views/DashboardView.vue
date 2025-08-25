@@ -1,0 +1,346 @@
+<template>
+  <div class="space-y-8 px-2 md:px-4">
+    <!-- Hero / Intro -->
+    <section
+      class="rounded-xl border border-dark/10 dark:border-light/10 bg-light/70 dark:bg-surface/70 backdrop-blur p-5 md:p-6 shadow-sm"
+    >
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div class="min-w-0">
+          <h2 class="text-xl md:text-2xl font-semibold tracking-tight">
+            {{ $t('index.welcome') }}
+          </h2>
+          <p class="text-sm opacity-80 mt-1 leading-relaxed">
+            {{ $t('index.description') }}
+          </p>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <RouterLink
+            to="/settings"
+            class="btn btn-primary"
+          >
+            <i class="fas fa-sliders" />
+            <span>Settings</span>
+          </RouterLink>
+          <RouterLink
+            to="/applications"
+            class="btn btn-secondary"
+          >
+            <i class="fas fa-th" />
+            <span>Applications</span>
+          </RouterLink>
+        </div>
+      </div>
+    </section>
+
+    <!-- Fatal startup errors moved into Version card to avoid layout shift -->
+
+    <!-- Main Grid -->
+    <n-grid cols="24" x-gap="16" y-gap="16" responsive="screen">
+      <!-- Version Card -->
+      <n-gi :span="24" :xl="16">
+        <n-card v-if="installedVersion" :segmented="{ content: true, footer: true }">
+          <template #header>
+            <h2 class="text-2xl font-semibold tracking-tight mx-auto text-center">
+              {{ 'Version ' + installedVersion.version }}
+            </h2>
+          </template>
+          <div class="space-y-4 text-sm">
+            <!-- Fatal Errors (embedded) -->
+            <n-alert
+              v-if="fancyLogs.some((l) => l.level === 'Fatal')"
+              type="error"
+              :show-icon="true"
+            >
+              <div class="space-y-3">
+                <p class="text-sm leading-relaxed" v-html="$t('index.startup_errors')"></p>
+                <ul class="list-disc pl-5 space-y-1 text-xs">
+                  <li v-for="(v, i) in fancyLogs.filter((x) => x.level === 'Fatal')" :key="i">
+                    {{ v.value }}
+                  </li>
+                </ul>
+                <div>
+                  <a
+                    class="btn btn-danger"
+                    href="./troubleshooting#logs"
+                  >
+                    <i class="fas fa-file-lines" /> {{ $t('index.view_logs') || 'View Logs' }}
+                  </a>
+                </div>
+              </div>
+            </n-alert>
+            <div v-if="loading" class="text-xs italic flex items-center gap-2">
+              <i class="fas fa-spinner animate-spin" /> {{ $t('index.loading_latest') }}
+            </div>
+            <div v-if="branch || commit" class="flex items-center gap-2 text-xs">
+              <span
+                v-if="branch"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10"
+              >
+                <i class="fas fa-code-branch" /> {{ branch }}
+              </span>
+              <span
+                v-if="commit"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
+              >
+                <i class="fas fa-hashtag" /> {{ commit.substring(0, 7) }}
+              </span>
+            </div>
+            <n-alert v-if="buildVersionIsDirty" type="success" :show-icon="true">
+              {{ $t('index.version_dirty') }} 🌇
+            </n-alert>
+            <n-alert v-if="installedVersionNotStable" type="info" :show-icon="true">
+              {{ $t('index.installed_version_not_stable') }}
+            </n-alert>
+            <!-- Git compare alerts removed; date-based update checks only -->
+            <n-alert
+              v-else-if="
+                (!preReleaseBuildAvailable || !notifyPreReleases) &&
+                !stableBuildAvailable &&
+                !buildVersionIsDirty
+              "
+              type="success"
+            >
+              {{ $t('index.version_latest') }}
+            </n-alert>
+
+            <!-- Pre-release notice -->
+            <n-alert
+              v-if="notifyPreReleases && preReleaseBuildAvailable"
+              type="warning"
+              :show-icon="true"
+            >
+              <div class="flex flex-col gap-3 w-full">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                  <p class="text-sm m-0">{{ $t('index.new_pre_release') }}</p>
+                  <n-button
+                    tag="a"
+                    type="primary"
+                    :href="preReleaseRelease?.html_url"
+                    target="_blank"
+                  >
+                    {{ $t('index.download') }}
+                  </n-button>
+                </div>
+                <div
+                  class="bg-light/5 dark:bg-dark/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
+                >
+                  <p class="font-semibold mb-2">{{ preReleaseRelease?.name }}</p>
+                  <pre class="whitespace-pre-wrap">{{ preReleaseRelease?.body }}</pre>
+                </div>
+              </div>
+            </n-alert>
+
+            <!-- Stable update available -->
+            <n-alert v-if="stableBuildAvailable" type="warning" :show-icon="true">
+              <div class="flex flex-col gap-3 w-full">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                  <p class="text-sm m-0">{{ $t('index.new_stable') }}</p>
+                  <n-button tag="a" type="primary" :href="githubRelease?.html_url" target="_blank">
+                    {{ $t('index.download') }}
+                  </n-button>
+                </div>
+                <div
+                  class="bg-light/5 dark:bg-dark/5 rounded p-3 overflow-auto max-h-64 text-xs font-mono"
+                >
+                  <p class="font-semibold mb-2">{{ githubRelease?.name }}</p>
+                  <pre class="whitespace-pre-wrap">{{ githubRelease?.body }}</pre>
+                </div>
+              </div>
+            </n-alert>
+          </div>
+        </n-card>
+      </n-gi>
+
+      <!-- Resources -->
+      <n-gi :span="24" :xl="8">
+        <n-card>
+          <template #header>
+            <h2 class="text-2xl font-semibold tracking-tight mx-auto text-center">Web Links</h2>
+          </template>
+          <div class="text-xs space-y-2">
+            <ResourceCard />
+          </div>
+        </n-card>
+      </n-gi>
+    </n-grid>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted, computed } from 'vue';
+import { NCard, NAlert, NButton, NGrid, NGi } from 'naive-ui';
+import ResourceCard from '@/ResourceCard.vue';
+import SunshineVersion, { GitHubRelease } from '@/sunshine_version';
+import { useConfigStore } from '@/stores/config';
+import { useAuthStore } from '@/stores/auth';
+
+const installedVersion = ref<SunshineVersion>(new SunshineVersion('0.0.0'));
+const githubRelease = ref<GitHubRelease | null>(null);
+const preReleaseRelease = ref<GitHubRelease | null>(null);
+
+const githubVersion = computed(() =>
+  githubRelease.value
+    ? SunshineVersion.fromRelease(githubRelease.value)
+    : new SunshineVersion('0.0.0'),
+);
+const preReleaseVersion = computed(() =>
+  preReleaseRelease.value
+    ? SunshineVersion.fromRelease(preReleaseRelease.value)
+    : new SunshineVersion('0.0.0'),
+);
+const notifyPreReleases = ref(false);
+const loading = ref(true);
+const logs = ref('');
+const branch = ref('');
+const commit = ref('');
+// Release-date based update check; no git compare needed
+const installedReleaseDate = ref<number | null>(null); // epoch ms
+
+const configStore = useConfigStore();
+const auth = useAuthStore();
+let started = false; // prevent duplicate concurrent checks
+
+async function runVersionChecks() {
+  if (started) return; // guard
+  started = true;
+  loading.value = true;
+  try {
+    // Use config store (it already handles deep cloning & defaults)
+    const cfg = await configStore.fetchConfig();
+    if (!cfg) {
+      // still not available (possibly lost auth); allow retry later
+      started = false;
+      loading.value = false;
+      return;
+    }
+    // Normalize notify pre-release flag to boolean
+    notifyPreReleases.value =
+      cfg.notify_pre_releases === true || cfg.notify_pre_releases === 'enabled';
+    const serverVersion = configStore.metadata?.version || cfg.version;
+    installedVersion.value = new SunshineVersion(serverVersion || '0.0.0');
+    branch.value = cfg.branch || '';
+    commit.value = cfg.commit || '';
+    // Parse installed release date from metadata if provided
+    try {
+      const rd = (configStore.metadata as any)?.release_date as string | undefined;
+      installedReleaseDate.value = rd ? new Date(rd).getTime() : null;
+    } catch {
+      installedReleaseDate.value = null;
+    }
+
+    // Remote release checks (GitHub)
+    try {
+      githubRelease.value = await fetch(
+        'https://api.github.com/repos/Nonary/vibeshine/releases/latest',
+      ).then((r) => r.json());
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[Dashboard] latest release fetch failed', e);
+    }
+    try {
+      const releases = await fetch(
+        'https://api.github.com/repos/Nonary/vibeshine/releases',
+      ).then((r) => r.json());
+      const pre = Array.isArray(releases) ? releases.find((r) => r.prerelease) : null;
+      if (pre) preReleaseRelease.value = pre;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[Dashboard] releases list fetch failed', e);
+    }
+    // No git compare; date-based logic uses published_at and installedReleaseDate
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[Dashboard] version checks failed', e);
+  }
+  try {
+    // logs only after auth
+    logs.value = await fetch('./api/logs').then((r) => r.text());
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[Dashboard] logs fetch failed', e);
+  }
+  loading.value = false;
+}
+
+onMounted(async () => {
+  await auth.waitForAuthentication();
+  await runVersionChecks();
+});
+
+const installedVersionNotStable = computed(() => {
+  if (!githubRelease.value) return false;
+  // treat non-main/master branches as pre-release builds automatically
+  if (branch.value && !['master', 'main'].includes(branch.value)) return true;
+  try {
+    const latestStableTs = githubRelease.value?.published_at
+      ? new Date(githubRelease.value.published_at).getTime()
+      : null;
+    if (installedReleaseDate.value && latestStableTs) {
+      return installedReleaseDate.value > latestStableTs;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+});
+const stableBuildAvailable = computed(() => {
+  if (!githubRelease.value) return false;
+  try {
+    const latestStableTs = githubRelease.value?.published_at
+      ? new Date(githubRelease.value.published_at).getTime()
+      : null;
+    if (installedReleaseDate.value && latestStableTs) {
+      return installedReleaseDate.value < latestStableTs;
+    }
+  } catch {
+    /* ignore */
+  }
+  // Fallback to semver compare if dates are missing
+  return githubVersion.value.isGreater(installedVersion.value);
+});
+const preReleaseBuildAvailable = computed(() => {
+  if (!preReleaseRelease.value || !githubRelease.value) return false;
+  try {
+    const preTs = preReleaseRelease.value?.published_at
+      ? new Date(preReleaseRelease.value.published_at).getTime()
+      : null;
+    const stableTs = githubRelease.value?.published_at
+      ? new Date(githubRelease.value.published_at).getTime()
+      : null;
+    if (preTs && installedReleaseDate.value && stableTs) {
+      return preTs > installedReleaseDate.value && preTs > stableTs;
+    }
+  } catch {
+    /* ignore */
+  }
+  // Fallback to semver compare if dates are missing
+  return (
+    preReleaseVersion.value.isGreater(installedVersion.value) &&
+    preReleaseVersion.value.isGreater(githubVersion.value)
+  );
+});
+const buildVersionIsDirty = computed(() => {
+  if (!installedVersion.value) return false;
+  return (
+    installedVersion.value.version?.split('.').length === 5 &&
+    installedVersion.value.version.indexOf('dirty') !== -1
+  );
+});
+// No git compare; ahead/behind not applicable in date-based flow
+const fancyLogs = computed(() => {
+  if (!logs.value) return [];
+  const regex = /(\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}]):\s/g;
+  const rawLogLines = logs.value.split(regex).splice(1);
+  const logLines = [];
+  for (let i = 0; i < rawLogLines.length; i += 2) {
+    logLines.push({
+      timestamp: rawLogLines[i],
+      level: rawLogLines[i + 1].split(':')[0],
+      value: rawLogLines[i + 1],
+    });
+  }
+  return logLines;
+});
+</script>
+
+<style scoped></style>

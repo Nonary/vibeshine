@@ -1,32 +1,81 @@
 <script setup>
-import {ref} from 'vue'
-import {$tp} from '../../platform-i18n'
-import PlatformLayout from '../../PlatformLayout.vue'
-import AdapterNameSelector from './audiovideo/AdapterNameSelector.vue'
-import DisplayOutputSelector from './audiovideo/DisplayOutputSelector.vue'
-import DisplayDeviceOptions from "./audiovideo/DisplayDeviceOptions.vue";
-import DisplayModesSettings from "./audiovideo/DisplayModesSettings.vue";
-import Checkbox from "../../Checkbox.vue";
+import { ref } from 'vue';
+import { $tp } from '@/platform-i18n';
+import PlatformLayout from '@/PlatformLayout.vue';
+import AdapterNameSelector from '@/configs/tabs/audiovideo/AdapterNameSelector.vue';
+import DisplayOutputSelector from '@/configs/tabs/audiovideo/DisplayOutputSelector.vue';
+import DisplayDeviceOptions from '@/configs/tabs/audiovideo/DisplayDeviceOptions.vue';
+import DisplayModesSettings from '@/configs/tabs/audiovideo/DisplayModesSettings.vue';
+import { NCheckbox, NInput } from 'naive-ui';
+import { useConfigStore } from '@/stores/config';
+import { computed } from 'vue';
 
-const props = defineProps([
-  'platform',
-  'config',
-])
+const store = useConfigStore();
+const config = store.config;
+const platform = computed(() => config.value?.platform || '');
 
-const config = ref(props.config)
+// Replace custom Checkbox with Naive UI using compatibility mapping
+function mapToBoolRepresentation(value) {
+  if (value === true || value === false) return { possibleValues: [true, false], value };
+  if (value === 1 || value === 0) return { possibleValues: [1, 0], value };
+  const stringPairs = [
+    ['true', 'false'],
+    ['1', '0'],
+    ['enabled', 'disabled'],
+    ['enable', 'disable'],
+    ['yes', 'no'],
+    ['on', 'off'],
+  ];
+  const v = String(value ?? '')
+    .toLowerCase()
+    .trim();
+  for (const pair of stringPairs) {
+    if (v === pair[0] || v === pair[1]) return { possibleValues: pair, value: v };
+  }
+  return null;
+}
+
+function boolProxy(key, defaultValue = 'true') {
+  return computed({
+    get() {
+      const raw = config.value?.[key];
+      const parsed = mapToBoolRepresentation(raw);
+      if (parsed) return parsed.value === parsed.possibleValues[0];
+      // fallback to default
+      const defParsed = mapToBoolRepresentation(defaultValue);
+      return defParsed ? defParsed.value === defParsed.possibleValues[0] : !!raw;
+    },
+    set(v) {
+      const raw = config.value?.[key];
+      const parsed = mapToBoolRepresentation(raw);
+      const pv = parsed ? parsed.possibleValues : ['true', 'false'];
+      const next = v ? pv[0] : pv[1];
+      // assign preserving original type if boolean/numeric pair
+      config.value[key] = next;
+    },
+  });
+}
+
+const installSteamDrivers = boolProxy('install_steam_audio_drivers', 'true');
+const streamAudio = boolProxy('stream_audio', 'true');
 </script>
 
 <template>
-  <div id="audio-video" class="config-page">
+  <div id="av" class="config-page">
     <!-- Audio Sink -->
-    <div class="mb-3">
+    <div class="mb-6">
       <label for="audio_sink" class="form-label">{{ $t('config.audio_sink') }}</label>
-      <input type="text" class="form-control" id="audio_sink"
-             :placeholder="$tp('config.audio_sink_placeholder', 'alsa_output.pci-0000_09_00.3.analog-stereo')"
-             v-model="config.audio_sink" />
-      <div class="form-text">
-        {{ $tp('config.audio_sink_desc') }}<br>
-        <PlatformLayout :platform="platform">
+      <n-input
+        id="audio_sink"
+        v-model:value="config.audio_sink"
+        type="text"
+        :placeholder="
+          $tp('config.audio_sink_placeholder', 'alsa_output.pci-0000_09_00.3.analog-stereo')
+        "
+      />
+      <div class="text-[11px] opacity-60 mt-1">
+        {{ $tp('config.audio_sink_desc') }}<br />
+        <PlatformLayout>
           <template #windows>
             <pre>tools\audio-info.exe</pre>
           </template>
@@ -35,65 +84,51 @@ const config = ref(props.config)
             <pre>pactl info | grep Source</pre>
           </template>
           <template #macos>
-            <a href="https://github.com/mattingalls/Soundflower" target="_blank">Soundflower</a><br>
+            <a href="https://github.com/mattingalls/Soundflower" target="_blank">Soundflower</a
+            ><br />
             <a href="https://github.com/ExistentialAudio/BlackHole" target="_blank">BlackHole</a>.
           </template>
         </PlatformLayout>
       </div>
     </div>
 
-
-    <PlatformLayout :platform="platform">
+    <PlatformLayout>
       <template #windows>
         <!-- Virtual Sink -->
-        <div class="mb-3">
+        <div class="mb-6">
           <label for="virtual_sink" class="form-label">{{ $t('config.virtual_sink') }}</label>
-          <input type="text" class="form-control" id="virtual_sink" :placeholder="$t('config.virtual_sink_placeholder')"
-                 v-model="config.virtual_sink" />
-          <div class="form-text">{{ $t('config.virtual_sink_desc') }}</div>
+          <n-input
+            id="virtual_sink"
+            v-model:value="config.virtual_sink"
+            type="text"
+            :placeholder="$t('config.virtual_sink_placeholder')"
+          />
+          <div class="text-[11px] opacity-60 mt-1">
+            {{ $t('config.virtual_sink_desc') }}
+          </div>
         </div>
 
         <!-- Install Steam Audio Drivers -->
-        <Checkbox class="mb-3"
-                  id="install_steam_audio_drivers"
-                  locale-prefix="config"
-                  v-model="config.install_steam_audio_drivers"
-                  default="true"
-        ></Checkbox>
+        <n-checkbox v-model:checked="installSteamDrivers" class="mb-3">
+          {{ $t('config.install_steam_audio_drivers') }}
+        </n-checkbox>
       </template>
     </PlatformLayout>
 
     <!-- Disable Audio -->
-    <Checkbox class="mb-3"
-              id="stream_audio"
-              locale-prefix="config"
-              v-model="config.stream_audio"
-              default="true"
-    ></Checkbox>
+    <n-checkbox v-model:checked="streamAudio" class="mb-3">
+      {{ $t('config.stream_audio') }}
+    </n-checkbox>
 
-    <AdapterNameSelector
-        :platform="platform"
-        :config="config"
-    />
+    <AdapterNameSelector />
 
-    <DisplayOutputSelector
-      :platform="platform"
-      :config="config"
-    />
+    <DisplayOutputSelector />
 
-    <DisplayDeviceOptions
-      :platform="platform"
-      :config="config"
-    />
+    <DisplayDeviceOptions />
 
     <!-- Display Modes -->
-    <DisplayModesSettings
-        :platform="platform"
-        :config="config"
-    />
-
+    <DisplayModesSettings />
   </div>
 </template>
 
-<style scoped>
-</style>
+<style scoped></style>

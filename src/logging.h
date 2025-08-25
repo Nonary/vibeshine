@@ -6,7 +6,10 @@
 
 // lib includes
 #include <boost/log/common.hpp>
+#include <boost/log/expressions.hpp>
 #include <boost/log/sinks.hpp>
+// Expose the severity attribute keyword to all translation units
+BOOST_LOG_ATTRIBUTE_KEYWORD(severity, "Severity", int)
 
 using text_sink = boost::log::sinks::asynchronous_sink<boost::log::sinks::text_ostream_backend>;
 
@@ -57,6 +60,16 @@ namespace logging {
   [[nodiscard]] std::unique_ptr<deinit_t> init(int min_log_level, const std::string &log_file);
 
   /**
+   * @brief Initialize the logging system in append mode.
+   * @param min_log_level The minimum log level to output.
+   * @param log_file The log file to write to.
+   * @return An object that will deinitialize the logging system when it goes out of scope.
+   * @details Opens the file with append semantics to avoid truncation races when multiple
+   *          processes write to the same log. Writes a UTF-8 BOM only if the file is empty.
+   */
+  [[nodiscard]] std::unique_ptr<deinit_t> init_append(int min_log_level, const std::string &log_file);
+
+  /**
    * @brief Setup AV logging.
    * @param min_log_level The log level.
    */
@@ -67,6 +80,9 @@ namespace logging {
    * @param min_log_level The log level.
    */
   void setup_libdisplaydevice_logging(int min_log_level);
+
+  // Reapply log filters and subsystem logging based on a new minimum level.
+  void reconfigure_min_log_level(int min_log_level);
 
   /**
    * @brief Flush the log.

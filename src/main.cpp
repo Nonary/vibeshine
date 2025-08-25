@@ -21,6 +21,9 @@
 #include "system_tray.h"
 #include "upnp.h"
 #include "video.h"
+#ifdef _WIN32
+  #include "src/platform/windows/playnite_integration.h"
+#endif
 
 extern "C" {
 #include "rswrapper.h"
@@ -118,6 +121,17 @@ int main(int argc, char *argv[]) {
   if (!log_deinit_guard) {
     BOOST_LOG(error) << "Logging failed to initialize"sv;
   }
+
+#ifndef SUNSHINE_EXTERNAL_PROCESS
+  // Setup third-party library logging
+  logging::setup_av_logging(config::sunshine.min_log_level);
+  logging::setup_libdisplaydevice_logging(config::sunshine.min_log_level);
+#endif
+
+#ifdef __ANDROID__
+  // Setup Android-specific logging
+  logging::setup_android_logging();
+#endif
 
   // logging can begin at this point
   // if anything is logged prior to this point, it will appear in stdout, but not in the log viewer in the UI
@@ -322,6 +336,11 @@ int main(int argc, char *argv[]) {
 
     return -1;
   }
+
+#ifdef _WIN32
+  // Start Playnite integration (IPC + handlers)
+  auto playnite_integration_guard = platf::playnite::start();
+#endif
 
   std::unique_ptr<platf::deinit_t> mDNS;
   auto sync_mDNS = std::async(std::launch::async, [&mDNS]() {

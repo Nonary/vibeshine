@@ -8,6 +8,7 @@
 #include <bitset>
 #include <chrono>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -18,6 +19,8 @@
 namespace config {
   // track modified config options
   inline std::unordered_map<std::string, std::string> modified_config_settings;
+  // when a stream is active, we defer some settings until all sessions end
+  inline std::unordered_map<std::string, std::string> pending_config_settings;
 
   struct video_t {
     // ffmpeg params
@@ -193,7 +196,6 @@ namespace config {
     bool ds4_back_as_touchpad_click;
     bool motion_as_ds4;
     bool touchpad_as_ds4;
-    bool ds5_inputtino_randomize_mac;
 
     bool keyboard;
     bool mouse;
@@ -257,6 +259,7 @@ namespace config {
     std::string log_file;
     bool notify_pre_releases;
     std::vector<prep_cmd_t> prep_cmds;
+    std::chrono::seconds session_token_ttl;  ///< Session token time-to-live (seconds)
   };
 
   extern video_t video;
@@ -268,4 +271,12 @@ namespace config {
 
   int parse(int argc, char *argv[]);
   std::unordered_map<std::string, std::string> parse_config(const std::string_view &file_content);
+
+  // Hot-reload helpers
+  void apply_config_now();
+  void mark_deferred_reload();
+  void maybe_apply_deferred();
+
+  // Gate helpers so session start/resume can hold a shared lock while apply holds a unique lock.
+  std::shared_lock<std::shared_mutex> acquire_apply_read_gate();
 }  // namespace config

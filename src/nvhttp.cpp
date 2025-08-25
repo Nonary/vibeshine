@@ -850,10 +850,12 @@ namespace nvhttp {
     }
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
+    // Prevent interleaving with hot-apply while we prep/start a session
+    auto _hot_apply_gate = config::acquire_apply_read_gate();
     auto launch_session = make_launch_session(host_audio, args);
 
+    // The display should be restored in case something fails as there are no other sessions.
     if (rtsp_stream::session_count() == 0) {
-      // The display should be restored in case something fails as there are no other sessions.
       revert_display_configuration = true;
 
       // We want to prepare display only if there are no active sessions at
@@ -954,6 +956,8 @@ namespace nvhttp {
     if (no_active_sessions && args.find("localAudioPlayMode"s) != std::end(args)) {
       host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     }
+    // Prevent interleaving with hot-apply while we prep/resume a session
+    auto _hot_apply_gate = config::acquire_apply_read_gate();
     const auto launch_session = make_launch_session(host_audio, args);
 
     if (no_active_sessions) {

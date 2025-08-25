@@ -19,9 +19,7 @@
     },
     {
       "name": "Steam Big Picture",
-      "detached": [
-        "setsid steam steam://open/bigpicture"
-      ],
+      "detached": ["setsid steam steam://open/bigpicture"],
       "prep-cmd": [
         {
           "do": "",

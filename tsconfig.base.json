@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "strict": true,
+    "jsx": "preserve",
+    "sourceMap": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "types": ["vite/client", "node"],
+    "baseUrl": "./",
+    "paths": {
+      // Map web asset alias first so IDE resolves imports like '@/stores/auth'
+      "@/*": ["src_assets/common/assets/web/*", "src/*"]
+    },
+    "allowJs": true,
+    "noEmit": true
+  }
+}

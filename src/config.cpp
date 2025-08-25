@@ -8,6 +8,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <set>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -20,11 +21,14 @@
 
 // local includes
 #include "config.h"
+#include "config_playnite.h"
 #include "entry_handler.h"
 #include "file_handler.h"
+#include "httpcommon.h"
 #include "logging.h"
 #include "nvhttp.h"
 #include "platform/common.h"
+#include "process.h"
 #include "rtsp.h"
 #include "utility.h"
 
@@ -578,6 +582,7 @@ namespace config {
     platf::appdata().string() + "/sunshine.log",  // log file
     false,  // notify_pre_releases
     {},  // prep commands
+    std::chrono::hours {2}  // session_token_ttl default 2h
   };
 
   bool endline(char ch) {
@@ -1168,6 +1173,10 @@ namespace config {
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
 
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, {"pc"sv, "lan"sv, "wan"sv});
+    // reflect origin ACL update immediately in HTTP layer
+    if (modified_config_settings.contains("origin_web_ui_allowed")) {
+      http::refresh_origin_acl();
+    }
 
     int to = -1;
     int_between_f(vars, "ping_timeout", to, {-1, std::numeric_limits<int>::max()});
@@ -1216,7 +1225,6 @@ namespace config {
     bool_f(vars, "ds4_back_as_touchpad_click", input.ds4_back_as_touchpad_click);
     bool_f(vars, "motion_as_ds4", input.motion_as_ds4);
     bool_f(vars, "touchpad_as_ds4", input.touchpad_as_ds4);
-    bool_f(vars, "ds5_inputtino_randomize_mac", input.ds5_inputtino_randomize_mac);
 
     bool_f(vars, "mouse", input.mouse);
     bool_f(vars, "keyboard", input.keyboard);
@@ -1292,11 +1300,23 @@ namespace config {
       }
     }
 
+    // Apply Playnite-specific configuration keys
+    config::apply_playnite(vars);
+
     auto it = vars.find("flags"s);
     if (it != std::end(vars)) {
       apply_flags(it->second.c_str());
 
       vars.erase(it);
+    }
+
+    // Parse session token TTL (seconds) if provided
+    {
+      int ttl_secs = -1;
+      int_between_f(vars, "session_token_ttl_seconds", ttl_secs, {1, std::numeric_limits<int>::max()});
+      if (ttl_secs > 0) {
+        sunshine.session_token_ttl = std::chrono::seconds {ttl_secs};
+      }
     }
 
     if (sunshine.min_log_level <= 3) {
@@ -1454,5 +1474,49 @@ namespace config {
 #endif
 
     return 0;
+  }
+
+  // Hot-reload manager
+  namespace {
+    std::atomic<bool> g_deferred_reload {false};
+    std::mutex g_apply_mutex;  // serialize apply_config_now()
+    std::shared_mutex g_apply_gate;  // writers=apply; readers=session start/resume
+  }  // namespace
+
+  // Acquire a shared lock while preparing/starting sessions.
+  std::shared_lock<std::shared_mutex> acquire_apply_read_gate() {
+    return std::shared_lock<std::shared_mutex>(g_apply_gate);
+  }
+
+  void apply_config_now() {
+    // Ensure only one apply runs at a time and block session start/resume while applying.
+    std::unique_lock<std::shared_mutex> write_gate(g_apply_gate);
+    std::unique_lock<std::mutex> apply_once(g_apply_mutex);
+    try {
+      auto vars = parse_config(file_handler::read_file(sunshine.config_file.c_str()));
+      // Track old logging params to adjust sinks if needed
+      const int old_min_level = sunshine.min_log_level;
+      const std::string old_log_file = sunshine.log_file;
+
+      apply_config(std::move(vars));
+
+      // If only the log level changed, we can reconfigure sinks in place.
+      if (sunshine.min_log_level != old_min_level && sunshine.log_file == old_log_file) {
+        logging::reconfigure_min_log_level(sunshine.min_log_level);
+      }
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Hot apply_config_now failed: "sv << e.what();
+    }
+  }
+
+  void mark_deferred_reload() {
+    g_deferred_reload.store(true, std::memory_order_release);
+  }
+
+  void maybe_apply_deferred() {
+    // Single-shot winner clears the flag and applies atomically.
+    if (rtsp_stream::session_count() == 0 && g_deferred_reload.exchange(false, std::memory_order_acq_rel)) {
+      apply_config_now();
+    }
   }
 }  // namespace config

@@ -60,11 +60,27 @@ else()
     set(NPM_INSTALL_FLAGS "")
 endif()
 
+string(TOUPPER "x${CMAKE_BUILD_TYPE}" BUILD_TYPE)
+
+if("${BUILD_TYPE}" STREQUAL "XDEBUG")
+    set(NPM_BUILD_COMMAND_RUN "run")
+    set(NPM_BUILD_COMMAND_ARG "build:debug")
+    # Ensure Vite produces full sourcemaps and unminified code for debug builds
+    set(NPM_BUILD_ENV "NODE_ENV=development")
+    # Some Node versions support enabling source-map support; keep empty if not needed
+    set(NPM_BUILD_NODE_OPTIONS "")
+else()
+    set(NPM_BUILD_COMMAND_RUN "run")
+    set(NPM_BUILD_COMMAND_ARG "build")
+    set(NPM_BUILD_ENV "")
+    set(NPM_BUILD_NODE_OPTIONS "")
+endif()
+
 add_custom_target(web-ui ALL
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         COMMENT "Installing NPM Dependencies and Building the Web UI"
         COMMAND "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" install ${NPM_INSTALL_FLAGS}
-        COMMAND "${CMAKE_COMMAND}" -E env "SUNSHINE_BUILD_HOMEBREW=${NPM_BUILD_HOMEBREW}" "SUNSHINE_SOURCE_ASSETS_DIR=${NPM_SOURCE_ASSETS_DIR}" "SUNSHINE_ASSETS_DIR=${NPM_ASSETS_DIR}" "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" run build  # cmake-lint: disable=C0301
+    COMMAND "${CMAKE_COMMAND}" -E env "SUNSHINE_BUILD_HOMEBREW=${NPM_BUILD_HOMEBREW}" "SUNSHINE_SOURCE_ASSETS_DIR=${NPM_SOURCE_ASSETS_DIR}" "SUNSHINE_ASSETS_DIR=${NPM_ASSETS_DIR}" "${NPM_BUILD_ENV}" "${NPM_BUILD_NODE_OPTIONS}" "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" ${NPM_BUILD_COMMAND_RUN} ${NPM_BUILD_COMMAND_ARG}  # cmake-lint: disable=C0301
         COMMAND_EXPAND_LISTS
         VERBATIM)
 
