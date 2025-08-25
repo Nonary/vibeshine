@@ -491,16 +491,14 @@
     "repair_button": "Repair Plugin",
     "reset_defaults": "Reset to defaults",
     "reset_done": "Section reset to defaults.",
-    "status_session_required": "Login Required",
-    "status_desktop_required": "Login Required",
+    
     "status_uninstalled": "Uninstalled",
     "status_not_running": "Playnite not running",
     "status_not_running_unknown": "Playnite not running — plugin status unknown",
     "status_unknown": "Playnite not detected",
-    "session_required": "A desktop session is required for Playnite integration. Please log into Windows (unlock the screen or connect to the console) to continue.",
-    "session_required_tooltip": "No active desktop session detected. Log into Windows to enable Playnite integration.",
+    
     "selects_disabled_hint": "Cannot modify without Playnite connectivity. Start Playnite to enable this.",
-    "selects_disabled_hint_session": "Cannot modify without Playnite connectivity. Start Playnite or log into this computer to enable this.",
+    
     "install_button": "Install Sunshine Plugin",
     "reinstall_button": "Reinstall Sunshine Plugin",
     "upgrade_button": "Upgrade Plugin",
@@ -541,7 +539,7 @@
     "focus_timeout_secs_help": "How long auto-focus runs while re-applying focus (0 to disable).",
     "focus_exit_on_first": "Stop auto-focus after first successful focus",
     "focus_exit_on_first_help": "Stop auto-focus after the first success; otherwise, re-apply until attempts or timeout elapse.",
-    "session_required_short": "A desktop session is required. Log into Windows to enable Playnite integration.",
+    
     "diagnostic_not_installed": "Playnite plugin is not installed in the Extensions directory.",
     "diagnostic_not_running": "Playnite is not running. Launch it to resume syncing.",
     "section_auto_sync": "Auto-sync",

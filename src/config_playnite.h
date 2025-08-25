@@ -17,20 +17,20 @@ namespace config {
 
   struct playnite_t {
     // Enabled flag removed; integration manager always runs (server up when plugin installed)
-    bool auto_sync = true;                  // enable automatic sync from Playnite
-    int recent_games = 10;                  // N most recent games
+    bool auto_sync = true;  // enable automatic sync from Playnite
+    int recent_games = 10;  // N most recent games
     // If > 0, only treat games whose last played time is within this many days
     // as "recent" for the purposes of recent-based auto-sync selection.
-    int recent_max_age_days = 30;           // 0 = no age limit
+    int recent_max_age_days = 30;  // 0 = no age limit
     // Runtime: category names to sync (matched against game.categories)
     std::vector<std::string> sync_categories;
     // Persisted/meta: selected categories with id+name (for offline labeling)
     std::vector<id_name_t> sync_categories_meta;
 
     // Focus behavior
-    int focus_attempts = 3;                 // Count of confirmed re-applies of focus
-    int focus_timeout_secs = 15;            // Total window to apply focus attempts
-    bool focus_exit_on_first = false;       // Stop after first confirmed focus
+    int focus_attempts = 3;  // Count of confirmed re-applies of focus
+    int focus_timeout_secs = 15;  // Total window to apply focus attempts
+    bool focus_exit_on_first = false;  // Stop after first confirmed focus
     // Runtime: excluded Playnite game IDs
     std::vector<std::string> exclude_games;
     // Persisted/meta: excluded games with id+name (for offline labeling)
@@ -55,4 +55,4 @@ namespace config {
 
   // Consume Playnite-related config vars from the provided map.
   void apply_playnite(std::unordered_map<std::string, std::string> &vars);
-}
+}  // namespace config

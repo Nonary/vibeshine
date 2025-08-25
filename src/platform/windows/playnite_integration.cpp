@@ -29,6 +29,9 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <ShlObj.h>
+#include <UserEnv.h>
+#include <WtsApi32.h>
+#include <winrt/base.h>
 #include <Shlwapi.h>
 #include <shellapi.h>
 #include <span>
@@ -50,6 +53,104 @@
 namespace platf::playnite {
 
   // Time parsing helper moved to platf::playnite::sync
+
+  // Acquire a primary user token suitable for per-user operations (HKCU view, KNOWNFOLDER paths, launching)
+  // Preference order:
+  // 1) Token from a running Playnite process (Desktop or Fullscreen)
+  // 2) Any WTSActive session's user token (RDP or console)
+  // 3) Fallback: console session token via platf::dxgi::retrieve_users_token(false)
+  static HANDLE acquire_preferred_user_token_for_playnite() {
+    // 1) If Playnite is running, use its process token
+    try {
+      auto d = platf::dxgi::find_process_ids_by_name(L"Playnite.DesktopApp.exe");
+      auto f = platf::dxgi::find_process_ids_by_name(L"Playnite.FullscreenApp.exe");
+      std::vector<DWORD> pids; pids.reserve(d.size() + f.size());
+      pids.insert(pids.end(), d.begin(), d.end());
+      pids.insert(pids.end(), f.begin(), f.end());
+      for (DWORD pid : pids) {
+        winrt::handle hProc {OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)};
+        if (!hProc) continue;
+        HANDLE raw = nullptr;
+        if (!OpenProcessToken(hProc.get(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY, &raw)) {
+          continue;
+        }
+        // Duplicate to a primary token to ensure broad compatibility (CreateProcessAsUser, registry overrides)
+        HANDLE dup = nullptr;
+        if (DuplicateTokenEx(raw, TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_IMPERSONATE | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID,
+                             nullptr, SecurityImpersonation, TokenPrimary, &dup)) {
+          CloseHandle(raw);
+          return dup;  // caller must CloseHandle
+        }
+        CloseHandle(raw);
+      }
+    } catch (...) {}
+
+    // 2) Any active interactive session (RDP or console)
+    WTS_SESSION_INFO *infos = nullptr; DWORD count = 0;
+    if (WTSEnumerateSessions(WTS_CURRENT_SERVER_HANDLE, 0, 1, &infos, &count)) {
+      for (DWORD i = 0; i < count; ++i) {
+        if (infos[i].State == WTSActive) {
+          HANDLE tok = nullptr;
+          if (WTSQueryUserToken(infos[i].SessionId, &tok)) {
+            // tok is a primary token
+            WTSFreeMemory(infos);
+            return tok;  // caller must CloseHandle
+          }
+        }
+      }
+      WTSFreeMemory(infos);
+    }
+
+    // 3) Fallback to console session
+    return platf::dxgi::retrieve_users_token(false);
+  }
+
+  // Launch specified executable under the provided user token (primary)
+  static bool launch_exe_as_token(HANDLE user_token, const std::wstring &exe_full_path, const std::wstring &start_dir) {
+    if (!user_token || exe_full_path.empty()) return false;
+    std::error_code ec;
+    HANDLE job = nullptr;
+    STARTUPINFOEXW si = platf::create_startup_info(nullptr, &job, ec);
+    if (ec) return false;
+    auto free_list = util::fail_guard([&]() { platf::free_proc_thread_attr_list(si.lpAttributeList); });
+
+    // Build user environment block
+    LPVOID env_block = nullptr;
+    if (!CreateEnvironmentBlock(&env_block, user_token, FALSE)) {
+      env_block = nullptr;  // proceed without custom env
+    }
+    auto free_env = util::fail_guard([&]() { if (env_block) DestroyEnvironmentBlock(env_block); });
+
+    std::wstring cmd = L"\"" + exe_full_path + L"\"";
+    std::vector<wchar_t> cmd_buf(cmd.begin(), cmd.end());
+    cmd_buf.push_back(L'\0');
+
+    DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_CONSOLE;
+
+    BOOL ok = FALSE;
+    PROCESS_INFORMATION pi{};
+    auto run = [&]() {
+      ok = CreateProcessAsUserW(user_token,
+                                nullptr,
+                                cmd_buf.data(),
+                                nullptr,
+                                nullptr,
+                                FALSE,
+                                flags,
+                                env_block,
+                                start_dir.empty() ? nullptr : start_dir.c_str(),
+                                reinterpret_cast<LPSTARTUPINFOW>(&si),
+                                &pi);
+    };
+    // Impersonate to ensure profile access/network shares during launch
+    (void) platf::impersonate_current_user(user_token, run);
+    if (ok) {
+      // We don't track the child here; close handles to prevent leaks
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+    }
+    return ok == TRUE;
+  }
 
   // Forward declaration: refresh config id/name fields using latest snapshots
   static void refresh_config_id_name_fields(const std::vector<platf::playnite::Category> &cats,
@@ -327,7 +428,7 @@ namespace platf::playnite {
   static bool query_assoc_for_playnite(std::wstring &outExe) {
     HANDLE user_token = nullptr;
     if (platf::dxgi::is_running_as_system()) {
-      user_token = platf::dxgi::retrieve_users_token(false);
+      user_token = acquire_preferred_user_token_for_playnite();
     }
     std::wstring exe;
     {
@@ -632,14 +733,15 @@ namespace platf::playnite {
   static bool resolve_playnite_exe_path(std::wstring &exe_path_out) {
     // Try the active user's LocalAppData path
     try {
-      platf::dxgi::safe_token user_token; user_token.reset(platf::dxgi::retrieve_users_token(false));
-      if (user_token.get()) {
+      HANDLE user_token = acquire_preferred_user_token_for_playnite();
+      if (user_token) {
         PWSTR local = nullptr;
-        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, user_token.get(), &local)) && local) {
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, user_token, &local)) && local) {
           std::filesystem::path p = std::filesystem::path(local) / L"Playnite" / L"Playnite.DesktopApp.exe";
           CoTaskMemFree(local);
-          if (std::filesystem::exists(p)) { exe_path_out = p.wstring(); return true; }
+          if (std::filesystem::exists(p)) { CloseHandle(user_token); exe_path_out = p.wstring(); return true; }
         }
+        CloseHandle(user_token);
       }
     } catch (...) {}
 
@@ -721,15 +823,33 @@ namespace platf::playnite {
     std::error_code ec_launch;
     // platf::run_command expects a boost::filesystem::path&
     boost::filesystem::path boostStartDir = boost::filesystem::path(startDir.wstring());
-    auto env = boost::this_process::environment();
-    auto child2 = platf::run_command(false, true, cmd, boostStartDir, env, nullptr, ec_launch, nullptr);
-    if (ec_launch) {
-      BOOST_LOG(warning) << "Playnite restart: launch failed: " << ec_launch.message();
-      return false;
+    if (platf::dxgi::is_running_as_system()) {
+      HANDLE tok = acquire_preferred_user_token_for_playnite();
+      if (tok) {
+        bool ok = launch_exe_as_token(tok, exe, startDir.wstring());
+        CloseHandle(tok);
+        if (!ok) {
+          BOOST_LOG(warning) << "Playnite restart: CreateProcessAsUser failed";
+          return false;
+        }
+        BOOST_LOG(info) << "Playnite restart: launched (token) " << cmd;
+        return true;
+      }
+      BOOST_LOG(warning) << "Playnite restart: no suitable user token found; falling back";
     }
-    child2.detach();
-    BOOST_LOG(info) << "Playnite restart: launched " << cmd;
-    return true;
+
+    // Non-SYSTEM or fallback path
+    {
+      auto env = boost::this_process::environment();
+      auto child2 = platf::run_command(false, true, cmd, boostStartDir, env, nullptr, ec_launch, nullptr);
+      if (ec_launch) {
+        BOOST_LOG(warning) << "Playnite restart: launch failed: " << ec_launch.message();
+        return false;
+      }
+      child2.detach();
+      BOOST_LOG(info) << "Playnite restart: launched " << cmd;
+      return true;
+    }
   }
 
   // explicit launch-only helper removed; use restart_playnite()

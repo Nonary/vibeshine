@@ -187,7 +187,16 @@ namespace platf::dxgi {
       }
     });
 
-    if (platf::dxgi::is_running_as_system()) {
+    if (_secdesc_builder) {
+      if (!_secdesc_builder(secDesc, &rawDacl)) {
+        BOOST_LOG(error) << "Custom security descriptor builder failed";
+        return nullptr;
+      }
+      secAttr.nLength = static_cast<DWORD>(sizeof(secAttr));
+      secAttr.lpSecurityDescriptor = &secDesc;
+      secAttr.bInheritHandle = FALSE;
+      pSecAttr = &secAttr;
+    } else if (platf::dxgi::is_running_as_system()) {
       if (!create_security_descriptor(secDesc, &rawDacl)) {
         BOOST_LOG(error) << "Failed to init security descriptor";
         return nullptr;
@@ -218,6 +227,10 @@ namespace platf::dxgi {
 
     auto pipeObj = std::make_unique<WinPipe>(std::move(hPipe), true);
     return pipeObj;
+  }
+
+  void NamedPipeFactory::set_security_descriptor_builder(SecurityDescriptorBuilder builder) {
+    _secdesc_builder = std::move(builder);
   }
 
   std::unique_ptr<INamedPipe> NamedPipeFactory::create_client(const std::string &pipeName) {
@@ -280,6 +293,10 @@ namespace platf::dxgi {
       return nullptr;
     }
     return handshake_client(std::move(first_pipe));
+  }
+
+  void AnonymousPipeFactory::set_security_descriptor_builder(NamedPipeFactory::SecurityDescriptorBuilder builder) {
+    _pipe_factory.set_security_descriptor_builder(std::move(builder));
   }
 
   std::unique_ptr<INamedPipe> AnonymousPipeFactory::handshake_server(std::unique_ptr<INamedPipe> pipe) {

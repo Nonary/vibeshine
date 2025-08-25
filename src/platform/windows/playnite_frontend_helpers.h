@@ -13,12 +13,11 @@ namespace platf::playnite::frontend {
    * Build the JSON payload returned by the Playnite status endpoint.
    * Inputs are provided explicitly to keep this function pure and unit-testable.
    */
-  inline nlohmann::json build_status_json(bool enabled, bool active, const std::filesystem::path &extensions_dir, bool session_required, bool installed, bool playnite_running) {
+  inline nlohmann::json build_status_json(bool enabled, bool active, const std::filesystem::path &extensions_dir, bool /*session_required_unused*/, bool installed, bool playnite_running) {
     nlohmann::json out;
     out["enabled"] = enabled;
     out["active"] = active;
     out["extensions_dir"] = extensions_dir.string();
-    out["session_required"] = session_required;
     out["installed"] = installed;
     out["playnite_running"] = playnite_running;
     return out;

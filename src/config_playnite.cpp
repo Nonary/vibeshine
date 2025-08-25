@@ -5,18 +5,17 @@
 
 #include "config_playnite.h"
 
+#include "src/logging.h"
+#include "src/platform/common.h"
+
 #include <algorithm>
+#include <boost/property_tree/json_parser.hpp>
+#include <boost/property_tree/ptree.hpp>
 #include <filesystem>
+#include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
 #include <vector>
-
-#include <boost/property_tree/json_parser.hpp>
-#include <boost/property_tree/ptree.hpp>
-#include <nlohmann/json.hpp>
-
-#include "src/platform/common.h"
-#include "src/logging.h"
 
 namespace fs = std::filesystem;
 using namespace std::literals;
@@ -26,13 +25,17 @@ namespace config {
   playnite_t playnite;
 
   static bool to_bool(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char) std::tolower(c); });
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+      return (char) std::tolower(c);
+    });
     return s == "true" || s == "yes" || s == "enable" || s == "enabled" || s == "on" || s == "1";
   }
 
   static void erase_take(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::string &out) {
     auto it = vars.find(name);
-    if (it == vars.end()) return;
+    if (it == vars.end()) {
+      return;
+    }
     out = std::move(it->second);
     vars.erase(it);
   }
@@ -40,7 +43,9 @@ namespace config {
   static void parse_list(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::vector<std::string> &out) {
     std::string raw;
     erase_take(vars, name, raw);
-    if (raw.empty()) return;
+    if (raw.empty()) {
+      return;
+    }
 
     // Accept JSON array or simple comma-separated list
     try {
@@ -63,20 +68,25 @@ namespace config {
     std::stringstream ss(raw);
     while (std::getline(ss, item, ',')) {
       // trim
-      item.erase(item.begin(), std::find_if(item.begin(), item.end(), [](unsigned char ch) { return !std::isspace(ch); }));
-      item.erase(std::find_if(item.rbegin(), item.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(), item.end());
-      if (!item.empty()) out.push_back(item);
+      item.erase(item.begin(), std::find_if(item.begin(), item.end(), [](unsigned char ch) {
+                   return !std::isspace(ch);
+                 }));
+      item.erase(std::find_if(item.rbegin(), item.rend(), [](unsigned char ch) {
+                   return !std::isspace(ch);
+                 }).base(),
+                 item.end());
+      if (!item.empty()) {
+        out.push_back(item);
+      }
     }
   }
 
-  static void parse_id_name_array(std::unordered_map<std::string, std::string> &vars,
-                                  const std::string &name,
-                                  std::vector<config::id_name_t> &out,
-                                  std::vector<std::string> *names_out = nullptr,
-                                  bool treat_strings_as_ids = false) {
+  static void parse_id_name_array(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::vector<config::id_name_t> &out, std::vector<std::string> *names_out = nullptr, bool treat_strings_as_ids = false) {
     std::string raw;
     erase_take(vars, name, raw);
-    if (raw.empty()) return;
+    if (raw.empty()) {
+      return;
+    }
     try {
       auto j = nlohmann::json::parse(raw);
       if (j.is_array()) {
@@ -88,16 +98,27 @@ namespace config {
             v.name = el.value("name", std::string());
             if (!v.id.empty() || !v.name.empty()) {
               out.emplace_back(v);
-              if (names_out) names_out->push_back(treat_strings_as_ids ? v.id : v.name);
+              if (names_out) {
+                names_out->push_back(treat_strings_as_ids ? v.id : v.name);
+              }
             }
           } else if (el.is_string()) {
             const std::string s = el.get<std::string>();
-            if (s.empty()) continue;
+            if (s.empty()) {
+              continue;
+            }
             config::id_name_t v;
-            if (treat_strings_as_ids) { v.id = s; v.name = std::string(); }
-            else { v.name = s; v.id = std::string(); }
+            if (treat_strings_as_ids) {
+              v.id = s;
+              v.name = std::string();
+            } else {
+              v.name = s;
+              v.id = std::string();
+            }
             out.emplace_back(std::move(v));
-            if (names_out) names_out->push_back(treat_strings_as_ids ? s : s);
+            if (names_out) {
+              names_out->push_back(treat_strings_as_ids ? s : s);
+            }
           }
         }
         return;
@@ -109,26 +130,41 @@ namespace config {
     out.clear();
     std::vector<std::string> tmp;
     {
-      std::string item; std::stringstream ss(raw);
+      std::string item;
+      std::stringstream ss(raw);
       while (std::getline(ss, item, ',')) {
-        item.erase(item.begin(), std::find_if(item.begin(), item.end(), [](unsigned char ch) { return !std::isspace(ch); }));
-        item.erase(std::find_if(item.rbegin(), item.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(), item.end());
-        if (!item.empty()) tmp.push_back(item);
+        item.erase(item.begin(), std::find_if(item.begin(), item.end(), [](unsigned char ch) {
+                     return !std::isspace(ch);
+                   }));
+        item.erase(std::find_if(item.rbegin(), item.rend(), [](unsigned char ch) {
+                     return !std::isspace(ch);
+                   }).base(),
+                   item.end());
+        if (!item.empty()) {
+          tmp.push_back(item);
+        }
       }
     }
     for (auto &s : tmp) {
       config::id_name_t v;
-      if (treat_strings_as_ids) { v.id = s; }
-      else { v.name = s; }
+      if (treat_strings_as_ids) {
+        v.id = s;
+      } else {
+        v.name = s;
+      }
       out.emplace_back(std::move(v));
-      if (names_out) names_out->push_back(s);
+      if (names_out) {
+        names_out->push_back(s);
+      }
     }
   }
 
   static void parse_path(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::string &target) {
     std::string raw;
     erase_take(vars, name, raw);
-    if (raw.empty()) return;
+    if (raw.empty()) {
+      return;
+    }
     fs::path p = raw;
     if (p.is_relative()) {
       p = platf::appdata() / p;
@@ -148,10 +184,14 @@ namespace config {
     // enabled flag removed; integration manager always runs and uses plugin install status
     tmp.clear();
     erase_take(vars, "playnite_auto_sync", tmp);
-    if (!tmp.empty()) playnite.auto_sync = to_bool(tmp);
+    if (!tmp.empty()) {
+      playnite.auto_sync = to_bool(tmp);
+    }
     tmp.clear();
     erase_take(vars, "playnite_autosync_require_replacement", tmp);
-    if (!tmp.empty()) playnite.autosync_require_replacement = to_bool(tmp);
+    if (!tmp.empty()) {
+      playnite.autosync_require_replacement = to_bool(tmp);
+    }
 
     // integers
     tmp.clear();
@@ -207,7 +247,9 @@ namespace config {
     // Exit on first confirmed focus
     tmp.clear();
     erase_take(vars, "playnite_focus_exit_on_first", tmp);
-    if (!tmp.empty()) playnite.focus_exit_on_first = to_bool(tmp);
+    if (!tmp.empty()) {
+      playnite.focus_exit_on_first = to_bool(tmp);
+    }
 
     // lists
     // Categories: accept JSON array of {id,name} or strings (names). Maintain runtime names list.

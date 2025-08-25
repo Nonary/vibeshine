@@ -386,6 +386,7 @@ namespace platf::dxgi {
 
   class NamedPipeFactory: public IAsyncPipeFactory {
   public:
+    using SecurityDescriptorBuilder = std::function<bool(SECURITY_DESCRIPTOR &desc, PACL *out_pacl)>;
     /**
      * @brief Creates a client named pipe.
      * @param pipe_name The name of the pipe to connect to.
@@ -399,6 +400,10 @@ namespace platf::dxgi {
      * @return Unique pointer to the created INamedPipe instance.
      */
     std::unique_ptr<INamedPipe> create_server(const std::string &pipe_name) override;
+
+    // Optional: inject a custom security descriptor builder used by create_server.
+    // If not set, defaults to existing behavior (SYSTEM-only SD, otherwise default security).
+    void set_security_descriptor_builder(SecurityDescriptorBuilder builder);
 
   private:
     /**
@@ -450,6 +455,8 @@ namespace platf::dxgi {
      * @return safe handle to the created client pipe.
      */
     winrt::file_handle create_client_pipe(const std::wstring &fullPipeName) const;
+
+    SecurityDescriptorBuilder _secdesc_builder;  // optional custom SD builder (Playnite can override)
   };
 
   class AnonymousPipeFactory: public IAsyncPipeFactory {
@@ -472,6 +479,9 @@ namespace platf::dxgi {
      * @return Unique pointer to the created INamedPipe instance.
      */
     std::unique_ptr<INamedPipe> create_client(const std::string &pipe_name) override;
+
+    // Forward a custom SD builder into the underlying NamedPipeFactory
+    void set_security_descriptor_builder(NamedPipeFactory::SecurityDescriptorBuilder builder);
 
   private:
     std::unique_ptr<INamedPipe> handshake_server(std::unique_ptr<INamedPipe> pipe);

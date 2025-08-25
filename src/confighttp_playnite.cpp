@@ -83,21 +83,10 @@ namespace confighttp {
     nlohmann::json out;
     // Active reflects current pipe/server connection only
     out["active"] = platf::playnite::is_active();
-    bool session_required = false;
     // Deprecated fields removed: playnite_running, installed_unknown
     std::string destPath;
     std::filesystem::path dest;
-    // If there is no active console desktop session, mark as session required.
-    try {
-      HANDLE tok = platf::dxgi::retrieve_users_token(false);
-      if (!tok) {
-        session_required = true;
-      } else {
-        CloseHandle(tok);
-      }
-    } catch (...) {
-      // If we cannot determine, leave as-is
-    }
+    // Session requirement removed: IPC is available during RDP/lock; rely on Playnite process presence instead.
     // Resolve the user's Playnite extensions directory via URL association.
     // Requires user impersonation when running as SYSTEM.
     if (platf::playnite::get_extension_target_dir(destPath)) {
@@ -109,14 +98,11 @@ namespace confighttp {
       out["installed"] = false;
       out["extensions_dir"] = std::string();
     }
-    out["session_required"] = session_required;
-    // For UI backwards-compatibility: expose user_session_active derived from session_required
-    out["user_session_active"] = !session_required;
+    // No session readiness flag; IPC works through RDP/lock. Frontend derives readiness from installed/active.
     // Reduce verbosity: this endpoint can be polled frequently by the UI.
     // Log at debug level instead of info to avoid log spam while still
     // keeping the line available when debugging.
     BOOST_LOG(debug) << "Playnite status: active=" << out["active"]
-                     << ", session_required=" << (session_required ? "true" : "false")
                      << ", dir=" << (dest.empty() ? std::string("(unknown)") : dest.string());
     send_response(response, out);
   }

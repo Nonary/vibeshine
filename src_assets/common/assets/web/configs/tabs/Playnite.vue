@@ -11,19 +11,16 @@
         <div class="text-sm grid md:grid-cols-3 gap-3">
           <div class="flex items-center gap-2">
             <b>{{ $t('playnite.status_overall') }}</b>
-            <n-tooltip v-if="statusKind === 'session' || statusKind === 'waiting'" trigger="hover">
+            <n-tooltip v-if="statusKind === 'waiting'" trigger="hover">
               <template #trigger>
                 <n-tag size="small" :type="statusType">{{ statusText }}</n-tag>
               </template>
-              <span>{{ statusKind === 'session' ? $t('playnite.session_required_tooltip') : $t('playnite.limited_tooltip') }}</span>
+              <span>{{ $t('playnite.limited_tooltip') }}</span>
             </n-tooltip>
             <n-tag v-else size="small" :type="statusType">{{ statusText }}</n-tag>
           </div>
           
         </div>
-        <n-alert v-if="statusKind === 'session'" type="warning" :show-icon="true">
-          {{ $t('playnite.session_required') }}
-        </n-alert>
         <n-alert v-if="pluginOutdated" type="warning" :show-icon="true">
           {{ $t('playnite.plugin_outdated', { installed: status.plugin_version || '?', latest: status.plugin_latest || '?' }) }}
         </n-alert>
@@ -370,13 +367,12 @@ const status = reactive<{
   installed: boolean;
   installed_unknown?: boolean;
   active: boolean;
-  user_session_active: boolean;
   enabled?: boolean;
   playnite_running?: boolean;
   extensions_dir: string;
   plugin_version?: string;
   plugin_latest?: string;
-}>({ installed: false, active: false, user_session_active: false, extensions_dir: '' });
+}>({ installed: false, active: false, extensions_dir: '' });
 const installing = ref(false);
 const launching = ref(false);
 const showInstallConfirm = ref(false);
@@ -452,10 +448,6 @@ async function refreshStatus() {
       const d = r.data as any;
       status.installed = !!d.installed;
       status.active = !!d.active;
-      // Support both user_session_active (new) and session_required (old) keys
-      status.user_session_active = typeof d.user_session_active === 'boolean'
-        ? !!d.user_session_active
-        : (typeof d.session_required === 'boolean' ? !d.session_required : status.user_session_active);
       // 'enabled' is no longer a config; presence is indicated by 'installed'
       if (typeof d.playnite_running === 'boolean') status.playnite_running = !!d.playnite_running;
       status.extensions_dir = d.extensions_dir || '';
@@ -467,8 +459,6 @@ async function refreshStatus() {
 
 const diagnosticText = computed<string | ''>(() => {
   switch (statusKind.value) {
-    case 'session':
-      return (t('playnite.session_required_short') as any) || 'Login required to enable Playnite integration.';
     case 'uninstalled':
       return (t('playnite.diagnostic_not_installed') as any) || 'Playnite plugin is not installed in the Extensions directory.';
     case 'waiting':
@@ -662,9 +652,7 @@ onUnmounted(() => {
   // nothing to unbind
 });
 
-const statusKind = computed<'active' | 'waiting' | 'session' | 'uninstalled' | 'unknown'>(() => {
-  // Prefer login/session requirement over unknown detection
-  if (!status.user_session_active) return 'session';
+const statusKind = computed<'active' | 'waiting' | 'uninstalled' | 'unknown'>(() => {
   if (!status.extensions_dir) return 'unknown';
   if (!status.installed) return 'uninstalled';
   return status.active ? 'active' : 'waiting';
@@ -673,7 +661,6 @@ const statusType = computed<'success' | 'warning' | 'error' | 'default'>(() => {
   switch (statusKind.value) {
     case 'active': return 'success';
     case 'waiting': return 'warning';
-    case 'session': return 'warning';
     case 'uninstalled': return 'error';
     case 'unknown': return 'default';
     default: return 'default';
@@ -683,7 +670,6 @@ const statusText = computed<string>(() => {
   switch (statusKind.value) {
     case 'active': return t('playnite.status_connected');
     case 'waiting': return t('playnite.status_waiting');
-    case 'session': return t('playnite.status_session_required');
     case 'uninstalled': return t('playnite.status_uninstalled');
     case 'unknown': return (t('playnite.status_unknown') as any) || t('playnite.status_not_running_unknown');
     default: return '';
@@ -710,7 +696,7 @@ const pluginOutdated = computed(() => {
   return cmpSemver(status.plugin_version, status.plugin_latest) < 0;
 });
 const canLaunch = computed(() => {
-  return !!(status.extensions_dir && status.installed && !status.active && status.user_session_active);
+  return !!(status.extensions_dir && status.installed && !status.active);
 });
 
 const statusTimer = ref<number | undefined>();
@@ -720,9 +706,6 @@ const autoSyncEnabled = computed<boolean>(() => !!config.value?.playnite_auto_sy
 // Disable category/game selection when Playnite is not fully connected
 const disablePlayniteSelection = computed<boolean>(() => statusKind.value !== 'active');
 const disabledHint = computed<string>(() => {
-  if (statusKind.value === 'session') {
-    return (t('playnite.selects_disabled_hint_session') as any) || 'Cannot modify without Playnite connectivity. Start Playnite or log into the computer to continue.';
-  }
   return (t('playnite.selects_disabled_hint') as any) || 'Cannot modify without Playnite connectivity. Start Playnite to continue.';
 });
 
