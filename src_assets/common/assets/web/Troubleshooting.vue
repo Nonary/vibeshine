@@ -1,5 +1,5 @@
 <template>
-  <div class="mx-auto max-w-6xl px-4 py-6">
+  <div class="px-4 py-6">
     <h1 class="mb-6 text-3xl font-semibold tracking-tight text-dark dark:text-light">
       {{ $t('troubleshooting.troubleshooting') }}
     </h1>
@@ -20,7 +20,7 @@
                 {{ $t('troubleshooting.force_close_desc') }}
               </p>
             </div>
-            <n-button type="warning" :disabled="closeAppPressed" @click="closeApp">
+            <n-button secondary :disabled="closeAppPressed" @click="closeApp">
               {{ $t('troubleshooting.force_close') }}
             </n-button>
           </header>
@@ -58,7 +58,7 @@
                 {{ $t('troubleshooting.restart_sunshine_desc') }}
               </p>
             </div>
-            <n-button type="warning" :disabled="restartPressed" @click="restart">
+            <n-button secondary :disabled="restartPressed" @click="restart">
               {{ $t('troubleshooting.restart_sunshine') }}
             </n-button>
           </header>
@@ -89,7 +89,7 @@
                 {{ $t('troubleshooting.dd_reset_desc') }}
               </p>
             </div>
-            <n-button type="warning" :disabled="ddResetPressed" @click="ddResetPersistence">
+            <n-button secondary :disabled="ddResetPressed" @click="ddResetPersistence">
               {{ $t('troubleshooting.dd_reset') }}
             </n-button>
           </header>

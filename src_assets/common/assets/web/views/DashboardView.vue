@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-8 max-w-6xl mx-auto px-2 md:px-4">
+  <div class="space-y-8 px-2 md:px-4">
     <!-- Hero / Intro -->
     <section
       class="rounded-xl border border-dark/10 dark:border-light/10 bg-light/70 dark:bg-surface/70 backdrop-blur p-5 md:p-6 shadow-sm"
@@ -16,16 +16,16 @@
         <div class="flex items-center gap-2 shrink-0">
           <RouterLink
             to="/settings"
-            class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/80 text-onPrimary shadow hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary/60 transition"
+            class="btn btn-primary"
           >
             <i class="fas fa-sliders" />
             <span>Settings</span>
           </RouterLink>
           <RouterLink
             to="/applications"
-            class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-dark/10 dark:border-light/10 hover:bg-dark/10 dark:hover:bg-light/10 transition"
+            class="btn btn-secondary"
           >
-            <i class="fas fa-grid-2" />
+            <i class="fas fa-th" />
             <span>Applications</span>
           </RouterLink>
         </div>
@@ -60,7 +60,7 @@
                 </ul>
                 <div>
                   <a
-                    class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-danger text-onDark hover:brightness-110 transition"
+                    class="btn btn-danger"
                     href="./troubleshooting#logs"
                   >
                     <i class="fas fa-file-lines" /> {{ $t('index.view_logs') || 'View Logs' }}

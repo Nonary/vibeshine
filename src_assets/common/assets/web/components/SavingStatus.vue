@@ -3,7 +3,7 @@
     v-if="visible"
     tertiary
     size="small"
-    class="flex items-center gap-2 text-xs select-none bg-transparent border-0 shadow-none hover:bg-transparent focus:outline-none"
+    class="flex items-center gap-2 text-xs select-none"
     :class="{ 'cursor-pointer': canSave }"
     :title="tooltip"
     @click="onClick"

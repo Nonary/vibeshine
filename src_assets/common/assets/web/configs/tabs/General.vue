@@ -52,7 +52,7 @@ function addCmd() {
   if (store.markManualDirty) store.markManualDirty('global_prep_cmd');
 }
 
-function removeCmd(index) {
+function removeCmd(index: number) {
   if (!config.value) return;
   const current = Array.isArray(config.value.global_prep_cmd)
     ? [...config.value.global_prep_cmd]
@@ -148,17 +148,17 @@ function removeCmd(index) {
             />
           </div>
           <div class="col-span-1 flex gap-2">
-            <n-button type="error" size="small" @click="removeCmd(i)">
+            <n-button secondary size="small" @click="removeCmd(i)">
               <i class="fas fa-trash" />
             </n-button>
-            <n-button type="success" size="small" @click="addCmd">
+            <n-button primary size="small" @click="addCmd">
               <i class="fas fa-plus" />
             </n-button>
           </div>
         </div>
       </div>
       <div class="mt-4">
-        <n-button type="success" @click="addCmd" class="mx-auto block">
+        <n-button primary @click="addCmd" class="mx-auto block">
           &plus; {{ $t('config.add') }}
         </n-button>
       </div>

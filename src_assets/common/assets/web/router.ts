@@ -9,7 +9,7 @@ import ClientManagementView from '@/views/ClientManagementView.vue';
 const routes = [
   { path: '/', component: DashboardView },
   { path: '/applications', component: ApplicationsView },
-  { path: '/settings', component: SettingsView },
+  { path: '/settings', component: SettingsView, meta: { container: 'full' } },
   { path: '/logs', component: DashboardView },
   { path: '/troubleshooting', component: TroubleshootingView },
   { path: '/clients', component: ClientManagementView },
