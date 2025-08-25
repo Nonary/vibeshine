@@ -74,7 +74,6 @@
             </n-button>
             <n-button
               v-if="status.extensions_dir && status.installed"
-              type="error"
               size="small"
               tertiary
               :loading="uninstalling"
@@ -137,7 +136,7 @@
                     :placeholder="$t('playnite.categories_placeholder') || 'All categories (default)'"
                     :loading="categoriesLoading"
                     :disabled="disablePlayniteSelection || !autoSyncEnabled"
-                    @focus="loadCategories"
+                    @focus="() => loadCategories()"
                     class="w-full"
                   />
                 </template>
@@ -310,7 +309,7 @@
       <template #footer>
         <div class="w-full flex items-center justify-center gap-3">
           <n-button tertiary @click="showUninstallConfirm = false">{{ $t('_common.cancel') }}</n-button>
-          <n-button type="error" :loading="uninstalling" @click="confirmUninstall">{{ $t('_common.continue') || 'Continue' }}</n-button>
+          <n-button secondary :loading="uninstalling" @click="confirmUninstall">{{ $t('_common.continue') || 'Continue' }}</n-button>
         </div>
       </template>
     </n-card>
@@ -336,7 +335,7 @@
           :disabled="disablePlayniteSelection"
           :placeholder="$t('playnite.add_exclusions_placeholder') || 'Search and select games'"
           class="w-full"
-          @focus="loadGames"
+          @focus="() => loadGames()"
         />
         <div class="text-[12px] opacity-70">
           {{ $t('playnite.add_exclusions_hint') || 'Pick one or more games to exclude from auto-sync.' }}
@@ -372,7 +371,6 @@ const status = reactive<{
   installed_unknown?: boolean;
   active: boolean;
   user_session_active: boolean;
-  enabled?: boolean;
   enabled?: boolean;
   playnite_running?: boolean;
   extensions_dir: string;
