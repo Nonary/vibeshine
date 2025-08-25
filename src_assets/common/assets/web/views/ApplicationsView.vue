@@ -5,7 +5,7 @@
       <div class="actions flex items-center gap-2 sm:flex-nowrap sm:justify-end w-full sm:w-auto flex-wrap">
         <!-- Windows + Playnite actions -->
         <template v-if="isWindows">
-          <n-button v-if="playniteEnabled" size="small" type="error" @click="purgeAutoSync">
+          <n-button v-if="playniteEnabled" size="small" secondary @click="purgeAutoSync">
             <i class="fas fa-trash" /> {{ $t('playnite.delete_all_autosync') || 'Delete All Auto-Sync' }}
           </n-button>
           <n-button
@@ -29,7 +29,7 @@
 
     <!-- Redesigned list view -->
   <div
-    class="rounded-2xl overflow-hidden border border-dark/10 dark:border-light/10 bg-light/80 dark:bg-surface/80 backdrop-blur max-w-3xl mx-auto"
+    class="rounded-2xl overflow-hidden border border-dark/10 dark:border-light/10 bg-light/80 dark:bg-surface/80 backdrop-blur"
   >
       <div v-if="apps && apps.length" class="divide-y divide-black/5 dark:divide-white/10">
         <button

@@ -1,5 +1,5 @@
 <template>
-  <div class="mx-auto max-w-4xl px-4">
+  <div class="px-4">
     <h1 class="text-2xl font-semibold my-6 flex items-center gap-3 text-brand">
       <i class="fas fa-users-cog" /> {{ $t('clients.title') }}
     </h1>
@@ -65,7 +65,7 @@
       <div class="flex items-center">
         <n-button
           class="ml-auto"
-          type="error"
+          secondary
           :disabled="unpairAllPressed || clients.length === 0"
           @click="askConfirmUnpairAll"
         >
@@ -90,7 +90,7 @@
             {{ client.name !== '' ? client.name : $t('troubleshooting.unpair_single_unknown') }}
           </div>
           <n-button
-            type="error"
+            secondary
             size="small"
             :disabled="removing[client.uuid] === true"
             aria-label="Remove"
@@ -128,7 +128,7 @@
         <template #footer>
           <div class="w-full flex items-center justify-center gap-3">
             <n-button tertiary @click="showConfirmRemove = false">{{ $t('cancel') }}</n-button>
-            <n-button type="error" @click="confirmRemove">{{ $t('clients.remove') }}</n-button>
+            <n-button secondary @click="confirmRemove">{{ $t('clients.remove') }}</n-button>
           </div>
         </template>
       </n-card>
@@ -147,7 +147,7 @@
         <template #footer>
           <div class="w-full flex items-center justify-center gap-3">
             <n-button tertiary @click="showConfirmUnpairAll = false">{{ $t('cancel') }}</n-button>
-            <n-button type="error" @click="confirmUnpairAll">{{
+            <n-button secondary @click="confirmUnpairAll">{{
               $t('troubleshooting.unpair_all')
             }}</n-button>
           </div>

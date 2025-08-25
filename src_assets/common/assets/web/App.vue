@@ -21,7 +21,7 @@
                     <i class="fas fa-gauge" /><span>{{ $t('navbar.home') }}</span>
                   </RouterLink>
                   <RouterLink to="/applications" :class="linkClass('/applications')">
-                    <i class="fas fa-grid-2" /><span>{{ $t('navbar.applications') }}</span>
+                    <i class="fas fa-th" /><span>{{ $t('navbar.applications') }}</span>
                   </RouterLink>
                   <RouterLink to="/clients" :class="linkClass('/clients')">
                     <i class="fas fa-users-cog" /><span>{{ $t('clients.nav') }}</span>
@@ -57,9 +57,15 @@
                 </div>
               </header>
 
-              <!-- Content -->
-              <main class="flex-1 overflow-auto p-4 md:p-6 space-y-6">
-                <router-view />
+              <!-- Content: single shared container around RouterView; width via route meta -->
+              <main class="flex-1 overflow-auto">
+                <RouterView v-slot="{ Component, route: r }">
+                  <div :class="containerClass(r)">
+                    <Transition name="fade-fast" mode="out-in">
+                      <component :is="Component" />
+                    </Transition>
+                  </div>
+                </RouterView>
               </main>
               <!-- Immediate background for login modal (no transition delay) -->
               <div v-if="loginOverlay" class="fixed inset-0 z-[110]">
@@ -132,6 +138,8 @@ import LoginModal from '@/components/LoginModal.vue';
 import OfflineOverlay from '@/components/OfflineOverlay.vue';
 import { http } from '@/http';
 import { useAuthStore } from './stores/auth';
+import { useConfigStore } from '@/stores/config';
+import { storeToRefs } from 'pinia';
 import { useConnectivityStore } from '@/stores/connectivity';
 
 // Sync Naive theme to existing dark mode class and pick colors from CSS vars
@@ -140,6 +148,10 @@ const naiveOverrides = useNaiveThemeOverrides();
 
 const route = useRoute();
 const router = useRouter();
+
+// Use config metadata as a fallback for container sizing when route meta isn't set
+const cfgStore = useConfigStore();
+const { metadata } = storeToRefs(cfgStore);
 
 const linkClass = (path: string) => {
   const base = 'inline-flex items-center gap-2 px-3 py-1 rounded-md text-brand';
@@ -210,7 +222,7 @@ const mobileMenuOptions = computed(() => {
   const icon = (cls: string) => () => h('i', { class: cls });
   return [
     { label: t('navbar.home'), key: '/', icon: icon('fas fa-gauge') },
-    { label: t('navbar.applications'), key: '/applications', icon: icon('fas fa-grid-2') },
+  { label: t('navbar.applications'), key: '/applications', icon: icon('fas fa-th') },
     { label: t('clients.nav'), key: '/clients', icon: icon('fas fa-users-cog') },
     { label: t('navbar.configuration'), key: '/settings', icon: icon('fas fa-sliders') },
     { label: t('navbar.troubleshoot'), key: '/troubleshooting', icon: icon('fas fa-bug') },
@@ -222,5 +234,20 @@ const mobileMenuOptions = computed(() => {
 function onMobileSelect(key: string | number) {
   if (key === '__logout') return logout();
   if (typeof key === 'string') router.push(key);
+}
+
+// Layout container sizing via route meta: { container: 'sm'|'md'|'lg'|'xl'|'full' }
+const base = 'mx-auto px-4 sm:px-6 lg:px-8 py-4 md:py-6';
+const sizes: Record<string, string> = {
+  sm: 'max-w-2xl',
+  md: 'max-w-3xl',
+  lg: 'max-w-5xl',
+  xl: 'max-w-7xl',
+  full: 'max-w-none px-0 sm:px-0 lg:px-0',
+};
+function containerClass(r: any) {
+  const routeSize = r?.meta?.container;
+  const size = routeSize ?? (metadata.value as any)?.container ?? 'lg';
+  return `${base} ${sizes[size] || sizes.lg}`;
 }
 </script>

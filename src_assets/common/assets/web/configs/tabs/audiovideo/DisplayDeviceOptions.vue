@@ -307,14 +307,14 @@ function removeRemappingEntry(idx) {
                     />
                   </div>
                   <div class="col-span-2 text-right">
-                    <n-button size="small" type="error" @click="removeRemappingEntry(idx)">
+                    <n-button size="small" secondary @click="removeRemappingEntry(idx)">
                       <i class="fas fa-trash" />
                     </n-button>
                   </div>
                 </div>
               </div>
               <div class="mt-2">
-                <n-button type="success" size="small" @click="addRemappingEntry()">
+                <n-button primary size="small" @click="addRemappingEntry()">
                   &plus; {{ $t('config.dd_mode_remapping_add') }}
                 </n-button>
               </div>

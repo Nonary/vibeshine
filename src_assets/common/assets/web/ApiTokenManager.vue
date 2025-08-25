@@ -307,7 +307,7 @@
         <template #footer>
           <div class="w-full flex items-center justify-center gap-3">
             <n-button tertiary @click="showRevoke = false">{{ $t('cancel') }}</n-button>
-            <n-button type="error" @click="confirmRevoke">{{ $t('auth.revoke') }}</n-button>
+            <n-button secondary @click="confirmRevoke">{{ $t('auth.revoke') }}</n-button>
           </div>
         </template>
       </n-card>

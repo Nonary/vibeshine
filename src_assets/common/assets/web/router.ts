@@ -9,7 +9,8 @@ import ClientManagementView from '@/views/ClientManagementView.vue';
 const routes = [
   { path: '/', component: DashboardView },
   { path: '/applications', component: ApplicationsView },
-  { path: '/settings', component: SettingsView },
+  // Full-bleed settings page
+  { path: '/settings', component: SettingsView, meta: { container: 'full' } },
   // Legacy paths (server still routes SPA shell); keep compatibility
   { path: '/config', redirect: '/settings' },
   { path: '/logs', component: DashboardView },

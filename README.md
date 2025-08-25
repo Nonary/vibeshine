@@ -1,172 +1,112 @@
-<div align="center">
-  <img src="sunshine.png" />
-  <h1 align="center">Sunshine</h1>
-  <h4 align="center">Self-hosted game stream host for Moonlight.</h4>
-</div>
+# Vibeshine
 
-<!-- badges removed -->
+**What is Vibeshine?**  
+Vibeshine is a windows only fork of *Sunshine* (with plans to also incorporate features from *Apollo*) that introduces a wide range of enhancements, including:
 
-## ℹ️ About
+- API token management  
+- Session-based authentication  
+- A fully redesigned frontend with full mobile support  
+- Playnite integration  
+- Windows Graphics Capture running in service mode  
+- Update notifications
+- Numerous bug fixes  
 
-Sunshine is a self-hosted game stream host for Moonlight.
-Offering low latency, cloud gaming server capabilities with support for AMD, Intel, and Nvidia GPUs for hardware
-encoding. Software encoding is also available. You can connect to Sunshine from any Moonlight client on a variety of
-devices. A web UI is provided to allow configuration, and client pairing, from your favorite web browser. Pair from
-the local server or any mobile device.
+Due to the scope and complexity of these changes, maintaining them within the original Sunshine repository became unmanageable. As a result, Vibeshine was created as a standalone project.  
 
-<!-- documentation links removed -->
+As of now, Vibeshine includes over **30,000** new lines of code, which is nearly the size of the original codebase.
 
-## 🖥️ System Requirements
+---
 
-@warning{These tables are a work in progress. Do not purchase hardware based on this information.}
+## Does this fork intend to replace Sunshine?
 
-<table>
-    <caption id="minimum_requirements">Minimum Requirements</caption>
-    <tr>
-        <th>Component</th>
-        <th>Requirement</th>
-    </tr>
-    <tr>
-        <td rowspan="3">GPU</td>
-        <td>AMD: VCE 1.0 or higher, see: <a href="https://github.com/obsproject/obs-amd-encoder/wiki/Hardware-Support">obs-amd hardware support</a></td>
-    </tr>
-    <tr>
-        <td>
-            Intel:<br>
-            &nbsp;&nbsp;Linux: VAAPI-compatible, see: <a href="https://www.intel.com/content/www/us/en/developer/articles/technical/linuxmedia-vaapi.html">VAAPI hardware support</a><br>
-            &nbsp;&nbsp;Windows: Skylake or newer with QuickSync encoding support
-        </td>
-    </tr>
-    <tr>
-        <td>Nvidia: NVENC enabled cards, see: <a href="https://developer.nvidia.com/video-encode-and-decode-gpu-support-matrix-new">nvenc support matrix</a></td>
-    </tr>
-    <tr>
-        <td rowspan="2">CPU</td>
-        <td>AMD: Ryzen 3 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: Core i3 or higher</td>
-    </tr>
-    <tr>
-        <td>RAM</td>
-        <td>4GB or more</td>
-    </tr>
-    <tr>
-        <td rowspan="5">OS</td>
-        <td>Windows: 10+ (Windows Server does not support virtual gamepads)</td>
-    </tr>
-    <tr>
-        <td>macOS: 14+</td>
-    </tr>
-    <tr>
-        <td>Linux/Debian: 13+ (trixie)</td>
-    </tr>
-    <tr>
-        <td>Linux/Fedora: 41+</td>
-    </tr>
-    <tr>
-        <td>Linux/Ubuntu: 22.04+ (jammy)</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Network</td>
-        <td>Host: 5GHz, 802.11ac</td>
-    </tr>
-    <tr>
-        <td>Client: 5GHz, 802.11ac</td>
-    </tr>
-</table>
+No. Vibeshine is a **complementary fork**. In the future, it will also incorporate functionality from *Apollo*.
 
-<table>
-    <caption id="4k_suggestions">4k Suggestions</caption>
-    <tr>
-        <th>Component</th>
-        <th>Requirement</th>
-    </tr>
-    <tr>
-        <td rowspan="3">GPU</td>
-        <td>AMD: Video Coding Engine 3.1 or higher</td>
-    </tr>
-    <tr>
-        <td>
-            Intel:<br>
-            &nbsp;&nbsp;Linux: HD Graphics 510 or higher<br>
-            &nbsp;&nbsp;Windows: Skylake or newer with QuickSync encoding support
-        </td>
-    </tr>
-    <tr>
-        <td>
-            Nvidia:<br>
-            &nbsp;&nbsp;Linux: GeForce RTX 2000 series or higher<br>
-            &nbsp;&nbsp;Windows: Geforce GTX 1080 or higher
-        </td>
-    </tr>
-    <tr>
-        <td rowspan="2">CPU</td>
-        <td>AMD: Ryzen 5 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: Core i5 or higher</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Network</td>
-        <td>Host: CAT5e ethernet or better</td>
-    </tr>
-    <tr>
-        <td>Client: CAT5e ethernet or better</td>
-    </tr>
-</table>
+---
 
-<table>
-    <caption id="hdr_suggestions">HDR Suggestions</caption>
-    <tr>
-        <th>Component</th>
-        <th>Requirement</th>
-    </tr>
-    <tr>
-        <td rowspan="3">GPU</td>
-        <td>AMD: Video Coding Engine 3.4 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: HD Graphics 730 or higher</td>
-    </tr>
-    <tr>
-        <td>Nvidia: Pascal-based GPU (GTX 10-series) or higher</td>
-    </tr>
-    <tr>
-        <td rowspan="2">CPU</td>
-        <td>AMD: Ryzen 5 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: Core i5 or higher</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Network</td>
-        <td>Host: CAT5e ethernet or better</td>
-    </tr>
-    <tr>
-        <td>Client: CAT5e ethernet or better</td>
-    </tr>
-</table>
+## Will these features be merged into Sunshine?
 
-<!-- Support section removed -->
+**Short answer:** Not at this time.  
 
-<!-- Funding and acknowledgements section removed -->
+Active contributions are currently paused due to unresolved governance issues in the Sunshine project.
 
-## 👥 Contributors
+### Conditions for Resuming Contributions
 
-Thank you to all the contributors who have helped make Sunshine better!
+Contributions may resume if **any one** of the following conditions is met:
 
-<!-- External contributor images removed -->
+**A.** The Sunshine repository is transferred to the Moonlight organization or co-owned by a Moonlight team member.  
+**B.** The repository owner is replaced.  
+**C.** The project adopts a more democratic governance model (e.g., documented governance, shared decision-making, and defined roles), rather than being led by a single decision-maker.
 
-<div class="section_buttons">
+---
 
-| Previous |                                       Next |
-|:---------|-------------------------------------------:|
-|          | [Getting Started](docs/getting_started.md) |
+## Rationale for Pausing Contributions
 
-</div>
+Below are factual examples of behaviors that have made collaboration challenging:
 
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>
+1. Pull requests from the owner are merged without independent review; problematic changes are not always reverted.  
+2. Contributors have been banned following disagreements, without any transparent review or appeals process.  
+3. The owner has described Sunshine as a personal project and expressed intent to run it unilaterally.  
+4. Repository structure (teams, permissions, branch names) has been changed without notice, hindering collaboration.  
+5. Policies (e.g., contributing guidelines, code of conduct) have been updated without community discussion.  
+6. PR approvals are limited to a small group, rather than being open and inclusive.  
+7. Comments disagreeing with the owner have been removed, with no clear rules for feedback.  
+8. Issue and label management is highly centralized, preventing most contributors from using them effectively.  
+9. Multiple incidents have resulted in contributors leaving or being banned from the project.
+
+I remain open to constructive discussion and practical reforms—such as a **documented review process, an appeals mechanism, shared administrative roles, or formal governance structures**. Addressing these issues would make collaboration far more viable.
+
+---
+
+## What About Apollo?
+
+Yes, some Vibeshine features will be ported to *Apollo*.  
+
+However, Apollo has diverged significantly from Sunshine, so integrating its features into Vibeshine will require time and effort.
+
+---
+
+## Why the Name *Vibeshine*?
+
+The name originated as a lighthearted suggestion from another developer, who questioned whether large-scale AI-generated code might eventually become unmanageable.  
+
+Since **~99% of Vibeshine’s code is AI-generated**, the name ended up fitting perfectly.
+
+---
+
+## Why Use AI to Generate Code? What About Technical Debt?
+
+AI accelerates development by handling implementation details, allowing me to focus on architecture and direction.  
+
+I’m not concerned about technical debt—because I guide the AI to generate code that is **structured, maintainable, and consistent**.
+
+In my professional background, I specialize in maintaining fragile, undocumented legacy systems. In comparison, AI-generated code is often **cleaner and easier to manage**. In many cases, I prefer it to what I’ve encountered in traditional enterprise codebases.
+
+The broader trend is clear: **AI-assisted development is the future**, and Vibeshine reflects that shift.
+
+---
+
+## What AI Models Does Vibeshine Use?
+
+- **GPT-5 (high/medium reasoning)** via Codex CLI on a ChatGPT Pro subscription  
+  - Most code is generated with medium reasoning  
+  - High reasoning is used for complex, difficult-to-implement features  
+
+- **GPT-5 mini** via Visual Studio Code
+  - Handles trivial changes like formatting or documentation
+  - Fast
+  - Unlimited usage on $10 plan of GitHub Copilot
+  - Can code almost as good as Claude Sonnet 4 (6% less on SWE Bench) and is significantly better than GPT 4.1
+
+
+Previously, I used **Claude Sonnet 4** extensively. While strong, it had drawbacks:
+- It often strayed off-topic  
+- It was overly agreeable, rarely challenging incorrect assumptions  
+
+In contrast, GPT-5:
+- Pushes back when I'm wrong  
+- Produces **large, coherent, and accurate code blocks**  
+- Analyzes the codebase holistically, often generating working code on the first attempt (~90% success rate)  
+- Reuses existing utilities intelligently instead of duplicating code  
+- Spends more time reasoning, resulting in better architectural decisions
+
+---

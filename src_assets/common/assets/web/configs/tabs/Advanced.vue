@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed } from 'vue';
 import PlatformLayout from '@/PlatformLayout.vue';
 import { useConfigStore } from '@/stores/config';
 import { storeToRefs } from 'pinia';
@@ -53,92 +53,11 @@ const encoderOptions = computed(() => {
   return opts;
 });
 
-// --- Playnite plugin uninstall (Windows only) ---
-const showUninstallConfirm = ref(false);
-const uninstalling = ref(false);
-const uninstallOk = ref(false);
-const uninstallErr = ref(false);
-const uninstallErrorMsg = ref('');
-const playniteInstalled = ref(false);
-const playniteExtensionsDir = ref('');
-const isWindows = computed(() => (platform.value || '').toLowerCase() === 'windows');
-
-async function refreshPlayniteStatus() {
-  if (!isWindows.value) return;
-  try {
-    const r = await http.get('/api/playnite/status', { validateStatus: () => true });
-    const d = (r && r.data) || {};
-    playniteInstalled.value = !!d.installed;
-    playniteExtensionsDir.value = d.extensions_dir || '';
-  } catch (_) {}
-}
-
-function openUninstallConfirm() {
-  showUninstallConfirm.value = true;
-}
-
-async function confirmUninstall() {
-  uninstalling.value = true;
-  showUninstallConfirm.value = false;
-  uninstallOk.value = false;
-  uninstallErr.value = false;
-  uninstallErrorMsg.value = '';
-  try {
-    // Backend may implement uninstall via install endpoint with a flag in future.
-    const r = await http.post(
-      '/api/playnite/uninstall',
-      { restart: true },
-      { validateStatus: () => true },
-    );
-    let ok = false;
-    let body = null;
-    try { body = r.data; } catch {}
-    ok = r.status >= 200 && r.status < 300 && body && body.status === true;
-    if (ok) {
-      uninstallOk.value = true;
-      await refreshPlayniteStatus();
-    } else {
-      uninstallErr.value = true;
-      uninstallErrorMsg.value = (body && body.error) || r.statusText || 'Unknown error';
-    }
-  } catch (e) {
-    uninstallErr.value = true;
-    uninstallErrorMsg.value = (e && e.message) || '';
-  }
-  uninstalling.value = false;
-}
-
-onMounted(() => {
-  refreshPlayniteStatus();
-});
+// Playnite uninstall removed from Advanced tab
 </script>
 
 <template>
   <div class="config-page">
-    <!-- Playnite Plugin (uninstall) -->
-    <div v-if="isWindows && playniteExtensionsDir" class="mb-6">
-      <label class="form-label flex items-center gap-2">
-        <i class="fas fa-plug" />
-        <span>{{ $t('navbar.playnite') }}</span>
-        <n-tag v-if="playniteInstalled" size="small" type="default">{{ $t('playnite.status_installed') }}</n-tag>
-      </label>
-      <div class="flex items-center gap-2">
-        <n-button
-          v-if="playniteInstalled"
-          size="small"
-          type="error"
-          secondary
-          :loading="uninstalling"
-          @click="openUninstallConfirm"
-        >
-          <i class="fas fa-trash" />
-          <span class="ml-2">{{ $t('playnite.uninstall_button') || 'Uninstall Plugin' }}</span>
-        </n-button>
-        <span v-if="uninstallOk" class="text-success text-xs">{{ $t('playnite.uninstall_success') || 'Plugin uninstalled.' }}</span>
-        <span v-if="uninstallErr" class="text-danger text-xs">{{ $t('playnite.uninstall_error') }}<template v-if="uninstallErrorMsg">: {{ uninstallErrorMsg }}</template></span>
-      </div>
-      <div class="form-text">{{ $t('playnite.extensions_dir') }}: <code class="break-all">{{ playniteExtensionsDir }}</code></div>
-    </div>
     <!-- FEC Percentage -->
     <div class="mb-6">
       <label for="fec_percentage" class="form-label">{{ $t('config.fec_percentage') }}</label>
@@ -218,26 +137,7 @@ onMounted(() => {
     </div>
   </div>
 
-  <!-- Uninstall confirmation -->
-  <n-modal :show="showUninstallConfirm" @update:show="(v) => (showUninstallConfirm = v)">
-    <n-card :bordered="false" style="max-width: 32rem; width: 100%">
-      <template #header>
-        <div class="flex items-center gap-2">
-          <i class="fas fa-trash" />
-          <span>{{ $t('playnite.uninstall_button') || 'Uninstall Plugin' }}</span>
-        </div>
-      </template>
-      <div class="text-sm">
-        {{ $t('playnite.uninstall_requires_restart') || 'This will remove the Sunshine Playnite plugin and restart Playnite. Continue?' }}
-      </div>
-      <template #footer>
-        <div class="w-full flex items-center justify-center gap-3">
-          <n-button tertiary @click="showUninstallConfirm = false">{{ $t('_common.cancel') }}</n-button>
-          <n-button type="error" :loading="uninstalling" @click="confirmUninstall">{{ $t('_common.continue') || 'Continue' }}</n-button>
-        </div>
-      </template>
-    </n-card>
-  </n-modal>
+  <!-- Playnite uninstall removed -->
 </template>
 
 <style scoped></style>

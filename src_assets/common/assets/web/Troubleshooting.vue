@@ -1,5 +1,5 @@
 <template>
-  <div class="mx-auto max-w-6xl px-4 py-6">
+  <div class="px-4 py-6">
     <h1 class="mb-6 text-3xl font-semibold tracking-tight text-dark dark:text-light">
       {{ $t('troubleshooting.troubleshooting') }}
     </h1>
@@ -18,7 +18,7 @@
                 {{ $t('troubleshooting.force_close_desc') }}
               </p>
             </div>
-            <n-button type="warning" :disabled="closeAppPressed" @click="closeApp">
+            <n-button secondary :disabled="closeAppPressed" @click="closeApp">
               {{ $t('troubleshooting.force_close') }}
             </n-button>
           </header>
@@ -48,7 +48,7 @@
                 {{ $t('troubleshooting.restart_sunshine_desc') }}
               </p>
             </div>
-            <n-button type="warning" :disabled="restartPressed" @click="restart">
+            <n-button secondary :disabled="restartPressed" @click="restart">
               {{ $t('troubleshooting.restart_sunshine') }}
             </n-button>
           </header>
@@ -73,7 +73,7 @@
                 {{ $t('troubleshooting.dd_reset_desc') }}
               </p>
             </div>
-            <n-button type="warning" :disabled="ddResetPressed" @click="ddResetPersistence">
+            <n-button secondary :disabled="ddResetPressed" @click="ddResetPersistence">
               {{ $t('troubleshooting.dd_reset') }}
             </n-button>
           </header>
@@ -103,7 +103,7 @@
                 {{ $t('troubleshooting.collect_playnite_logs_desc') || 'Export Playnite and plugin logs for troubleshooting.' }}
               </p>
             </div>
-            <n-button type="warning" @click="downloadPlayniteLogs">
+            <n-button secondary @click="downloadPlayniteLogs">
               {{ $t('troubleshooting.collect_playnite_logs') || 'Export Playnite Logs' }}
             </n-button>
           </header>
@@ -117,7 +117,7 @@
             <h2 id="unpair" class="text-lg font-medium text-dark dark:text-light mr-auto">
               {{ $t('troubleshooting.unpair_title') }}
             </h2>
-            <n-button type="error" :disabled="unpairAllPressed" @click="unpairAll">
+            <n-button secondary :disabled="unpairAllPressed" @click="unpairAll">
               {{ $t('troubleshooting.unpair_all') }}
             </n-button>
           </div>
@@ -133,7 +133,7 @@
           <div v-if="clients && clients.length" class="divide-y divide-dark/10 dark:divide-light/10">
             <div v-for="c in clients" :key="c.uuid" class="flex items-center gap-3 px-4 py-3">
               <div class="text-sm flex-1">{{ c.name !== '' ? c.name : $t('troubleshooting.unpair_single_unknown') }}</div>
-              <n-button size="small" type="error" @click="unpairSingle(c.uuid)"><i class="fas fa-trash" /></n-button>
+              <n-button size="small" secondary @click="unpairSingle(c.uuid)"><i class="fas fa-trash" /></n-button>
             </div>
           </div>
           <div v-else class="px-4 py-6 text-center text-sm opacity-60">
@@ -183,7 +183,7 @@
       <div class="relative">
         <!-- New logs banner (appears at bottom of viewport inside console) -->
         <transition name="slide-up">
-          <n-button v-if="newLogsAvailable" class="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full px-4 py-2 text-sm font-medium shadow-lg" type="warning" @click="jumpToLatest">
+          <n-button v-if="newLogsAvailable" class="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full px-4 py-2 text-sm font-medium shadow-lg" secondary @click="jumpToLatest">
             {{ $t('troubleshooting.new_logs_available') }}
             <span v-if="unseenLines > 0" class="ml-2 rounded bg-warning/20 px-2 py-0.5 text-xs">
               +{{ unseenLines }}

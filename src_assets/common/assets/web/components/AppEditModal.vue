@@ -127,7 +127,7 @@
                 <n-checkbox v-if="platform === 'windows'" v-model:checked="p.elevated" size="small">
                   Elev
                 </n-checkbox>
-                <n-button size="small" type="error" @click="form['prep-cmd'].splice(i, 1)">
+                <n-button size="small" secondary @click="form['prep-cmd'].splice(i, 1)">
                   <i class="fas fa-trash" />
                 </n-button>
               </div>
@@ -148,7 +148,7 @@
           <div v-else class="space-y-2">
             <div v-for="(d, i) in form.detached" :key="i" class="flex gap-2 items-start">
               <n-input v-model:value="form.detached[i]" class="font-mono flex-1" />
-              <n-button size="small" type="error" @click="form.detached.splice(i, 1)">
+              <n-button size="small" secondary @click="form.detached.splice(i, 1)">
                 <i class="fas fa-times" />
               </n-button>
             </div>
@@ -206,7 +206,7 @@
           <template #footer>
             <div class="w-full flex items-center justify-center gap-3">
               <n-button tertiary @click="showDeleteConfirm = false">{{ $t('_common.cancel') }}</n-button>
-              <n-button type="error" @click="del">{{ $t('apps.delete') }}</n-button>
+              <n-button secondary @click="del">{{ $t('apps.delete') }}</n-button>
             </div>
           </template>
         </n-card>
