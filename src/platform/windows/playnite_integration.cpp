@@ -143,7 +143,10 @@ namespace platf::playnite {
     }
 
     void ensure_started() {
-      if (server_ && server_->is_active()) return;
+      // Avoid hot-toggling: if a server exists and is already running (even if not
+      // yet connected), do not tear it down and recreate it. This prevents rapid
+      // restarts during the handshake window.
+      if (server_ && (server_->is_active() || server_->is_started())) return;
       BOOST_LOG(info) << "Playnite: starting IPC server (hot-toggle)";
       server_ = std::make_unique<platf::playnite::IpcServer>();
       server_->set_message_handler([this](std::span<const uint8_t> bytes) {

@@ -52,6 +52,11 @@ namespace platf::playnite {
       return active_.load();
     }
 
+    // Returns true if the server thread is running/listening (may not be connected yet)
+    bool is_started() const {
+      return running_.load();
+    }
+
     // Send a JSON line (UTF-8 + trailing \n) to the plugin if connected
     bool send_json_line(const std::string &json);
 

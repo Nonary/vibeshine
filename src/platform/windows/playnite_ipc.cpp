@@ -7,6 +7,8 @@
   #define WIN32_LEAN_AND_MEAN
 #endif
 #include "playnite_ipc.h"
+#include "src/platform/windows/misc.h"
+#include "src/utility.h"
 
 #include <chrono>
 #include <sddl.h>
@@ -19,6 +21,20 @@
 using namespace std::chrono_literals;
 
 namespace platf::playnite {
+  namespace {
+    // Local UTF-16 to UTF-8 converter to avoid linking extra objects into tools
+    static std::string to_utf8_local(const std::wstring &ws) {
+      if (ws.empty()) return std::string();
+      int size = WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, nullptr, 0, nullptr, nullptr);
+      if (size <= 0) return std::string();
+      std::string out;
+      out.resize(static_cast<size_t>(size - 1));
+      if (size > 1) {
+        WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, out.data(), size, nullptr, nullptr);
+      }
+      return out;
+    }
+  }
   // Well-known public control pipe name that the Playnite plugin connects to when using
   // the legacy static mode. Newer flows should pass a dynamic control name.
   inline constexpr char kControlPipeName[] = "sunshine_playnite_connector";
@@ -211,20 +227,39 @@ namespace platf::playnite {
     CloseHandle(tok);
     return true;
 #else
+    // Primary path: expected SID is the active user's token (works when running as SYSTEM)
     platf::dxgi::safe_token user_token;
     user_token.reset(platf::dxgi::retrieve_users_token(false));
-    if (!user_token) {
+    HANDLE tok = user_token.get();
+    if (!tok) {
+      // Fallback: when running as a regular user, WTSQueryUserToken often fails.
+      // In that case, use our own process token as the expected SID.
+      BOOST_LOG(debug) << "Playnite IPC: retrieve_users_token failed; falling back to current process token";
+      if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) {
+        BOOST_LOG(warning) << "Playnite IPC: OpenProcessToken fallback failed: " << GetLastError();
+        return false;
+      }
+    }
+    auto close_fallback = util::fail_guard([&]() {
+      // Only close the handle if it did not come from safe_token (fallback path)
+      if (!user_token && tok) CloseHandle(tok);
+    });
+
+    DWORD len = 0;
+    GetTokenInformation(tok, TokenUser, nullptr, 0, &len);
+    if (len == 0) {
+      BOOST_LOG(warning) << "Playnite IPC: GetTokenInformation length query failed: " << GetLastError();
       return false;
     }
-    DWORD len = 0;
-    GetTokenInformation(user_token.get(), TokenUser, nullptr, 0, &len);
     auto buf = std::make_unique<uint8_t[]>(len);
     auto tu = reinterpret_cast<TOKEN_USER *>(buf.get());
-    if (!GetTokenInformation(user_token.get(), TokenUser, tu, len, &len)) {
+    if (!GetTokenInformation(tok, TokenUser, tu, len, &len)) {
+      BOOST_LOG(warning) << "Playnite IPC: GetTokenInformation(TokenUser) failed: " << GetLastError();
       return false;
     }
     LPWSTR sidW = nullptr;
     if (!ConvertSidToStringSidW(tu->User.Sid, &sidW)) {
+      BOOST_LOG(warning) << "Playnite IPC: ConvertSidToStringSidW failed: " << GetLastError();
       return false;
     }
     sid.assign(sidW);
@@ -236,24 +271,30 @@ namespace platf::playnite {
   bool IpcServer::validate_client_and_get_expected_sid(platf::dxgi::WinPipe *wp) {
     DWORD pid = 0;
     if (!get_client_pid(wp, pid)) {
+      BOOST_LOG(warning) << "Playnite IPC: failed to obtain client PID; disconnecting";
       wp->disconnect();
       return false;
     }
     if (!is_playnite_process(pid)) {
+      BOOST_LOG(warning) << "Playnite IPC: rejecting non-Playnite client PID=" << pid;
       wp->disconnect();
       return false;
     }
     std::wstring client_sid;
     if (!get_client_sid(wp, client_sid)) {
+      BOOST_LOG(warning) << "Playnite IPC: failed to get client SID for PID=" << pid << "; disconnecting";
       wp->disconnect();
       return false;
     }
     std::wstring expected_sid;
     if (!get_expected_user_sid(expected_sid)) {
+      BOOST_LOG(warning) << "Playnite IPC: could not determine expected user SID; disconnecting";
       wp->disconnect();
       return false;
     }
     if (client_sid != expected_sid) {
+      BOOST_LOG(warning) << "Playnite IPC: SID mismatch; client=" << to_utf8_local(client_sid)
+                         << " expected=" << to_utf8_local(expected_sid) << "; disconnecting";
       wp->disconnect();
       return false;
     }
