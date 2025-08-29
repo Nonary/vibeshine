@@ -50,7 +50,6 @@
       @saved="reload"
       @deleted="reload"
     />
-    <!-- Playnite integration removed for now -->
   </div>
 </template>
 <script setup>
@@ -59,6 +58,7 @@ import AppEditModal from '@/components/AppEditModal.vue';
 import { useAppsStore } from '@/stores/apps';
 import { storeToRefs } from 'pinia';
 import { NButton } from 'naive-ui';
+import { useAuthStore } from '@/stores/auth';
 const appsStore = useAppsStore();
 const { apps } = storeToRefs(appsStore);
 const platform = ref('');
@@ -83,6 +83,12 @@ function appKey(app, index) {
   const id = app?.uuid || '';
   return `${app?.name || 'app'}|${id}|${index}`;
 }
+
+onMounted(async () => {
+  const auth = useAuthStore();
+  await auth.waitForAuthentication();
+  await reload();
+});
 </script>
 <style scoped>
 .main-btn {

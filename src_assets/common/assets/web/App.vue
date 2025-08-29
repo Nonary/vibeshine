@@ -21,7 +21,9 @@
                     <i class="fas fa-gauge" /><span>{{ $t('navbar.home') }}</span>
                   </RouterLink>
                   <RouterLink to="/applications" :class="linkClass('/applications')">
-                    <i class="fas fa-grid-2" /><span>{{ $t('navbar.applications') }}</span>
+                    <i class="fas fa-table-cells-large" /><span>{{
+                      $t('navbar.applications')
+                    }}</span>
                   </RouterLink>
                   <RouterLink to="/clients" :class="linkClass('/clients')">
                     <i class="fas fa-users-cog" /><span>{{ $t('clients.nav') }}</span>
@@ -206,9 +208,7 @@ async function logout() {
 }
 
 function refreshPage() {
-  try {
-    window.location.reload();
-  } catch {}
+  window.location.reload();
 }
 
 const { t } = useI18n();
@@ -216,7 +216,11 @@ const mobileMenuOptions = computed(() => {
   const icon = (cls: string) => () => h('i', { class: cls });
   return [
     { label: t('navbar.home'), key: '/', icon: icon('fas fa-gauge') },
-    { label: t('navbar.applications'), key: '/applications', icon: icon('fas fa-grid-2') },
+    {
+      label: t('navbar.applications'),
+      key: '/applications',
+      icon: icon('fas fa-table-cells-large'),
+    },
     { label: t('clients.nav'), key: '/clients', icon: icon('fas fa-users-cog') },
     { label: t('navbar.configuration'), key: '/settings', icon: icon('fas fa-sliders') },
     { label: t('navbar.troubleshoot'), key: '/troubleshooting', icon: icon('fas fa-bug') },

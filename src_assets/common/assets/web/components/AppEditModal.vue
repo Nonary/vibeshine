@@ -214,7 +214,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, watch, computed, ref } from 'vue';
+import { reactive, watch, computed, ref, toRefs } from 'vue';
 import { http } from '@/http';
 import { NModal, NCard, NButton, NInput, NInputNumber, NCheckbox } from 'naive-ui';
 const props = defineProps({
@@ -223,12 +223,13 @@ const props = defineProps({
   app: Object,
   index: { type: Number, default: -1 },
 });
+// Expose platform for template use (v-if="platform === 'windows'")
+const { platform } = toRefs(props);
 const emit = defineEmits(['update:modelValue', 'saved', 'deleted']);
 const open = computed(() => props.modelValue);
 function fresh() {
   return {
     name: '',
-    output: '',
     cmd: '',
     index: -1,
     'exclude-global-prep-cmd': false,
@@ -243,18 +244,13 @@ function fresh() {
   };
 }
 const form = reactive(fresh());
-// Normalize cmd to single string; if older data has array, join with spaces
-watch(
-  () => props.app,
-  (val) => {
-    if (!open.value) return;
-    const copy = JSON.parse(JSON.stringify(val || {}));
-    if (Array.isArray(copy.cmd)) copy.cmd = copy.cmd.join(' ');
-    Object.assign(form, fresh(), copy);
-    form.index = props.index ?? -1;
-  },
-  { immediate: true },
-);
+// Apply incoming props to local form state
+function applyFromProps() {
+  const copy = JSON.parse(JSON.stringify(props.app || {}));
+  if (Array.isArray(copy.cmd)) copy.cmd = copy.cmd.join(' ');
+  Object.assign(form, fresh(), copy);
+  form.index = props.index ?? -1;
+}
 const cmdText = computed({
   get() {
     return form.cmd || '';
@@ -263,16 +259,25 @@ const cmdText = computed({
     form.cmd = v;
   },
 });
-watch(open, (o) => {
-  if (o) {
-    const copy = JSON.parse(JSON.stringify(props.app || {}));
-    if (Array.isArray(copy.cmd)) copy.cmd = copy.cmd.join(' ');
-    Object.assign(form, fresh(), copy);
-    form.index = props.index ?? -1;
-    // Update scroll shadows after content paints
-    requestAnimationFrame(() => updateShadows());
-  }
-});
+watch(
+  open,
+  (o) => {
+    if (o) {
+      applyFromProps();
+      // Update scroll shadows after content paints
+      requestAnimationFrame(() => updateShadows());
+    }
+  },
+  { immediate: true },
+);
+// If the bound app changes while open, refresh the form
+watch(
+  () => props.app,
+  () => {
+    if (!open.value) return;
+    applyFromProps();
+  },
+);
 function close() {
   emit('update:modelValue', false);
 }
@@ -339,12 +344,14 @@ async function save() {
   saving.v = true;
   const payload = JSON.parse(JSON.stringify(form));
   try {
-    await http.post('./api/apps', payload, {
+    const res = await http.post('./api/apps', payload, {
       headers: { 'Content-Type': 'application/json' },
       validateStatus: () => true,
     });
-    emit('saved');
-    close();
+    if (res && res.status >= 200 && res.status < 300) {
+      emit('saved');
+      close();
+    }
   } finally {
     saving.v = false;
   }
@@ -352,9 +359,11 @@ async function save() {
 async function del() {
   saving.v = true;
   try {
-    await http.delete(`./api/apps/${form.index}`, { validateStatus: () => true });
-    emit('deleted');
-    close();
+    const res = await http.delete(`./api/apps/${form.index}`, { validateStatus: () => true });
+    if (res && res.status >= 200 && res.status < 300) {
+      emit('deleted');
+      close();
+    }
   } finally {
     saving.v = false;
   }
