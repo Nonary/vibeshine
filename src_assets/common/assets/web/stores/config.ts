@@ -207,7 +207,11 @@ export const useConfigStore = defineStore('config', () => {
   let flushInFlight = false;
   const autosaveIntervalMs = 3000;
   const nextFlushAt = ref<number | null>(null); // when the current timer will fire
-  const lastSaveResult = ref<{ appliedNow?: boolean; deferred?: boolean; restartRequired?: boolean } | null>(null);
+  const lastSaveResult = ref<{
+    appliedNow?: boolean;
+    deferred?: boolean;
+    restartRequired?: boolean;
+  } | null>(null);
 
   function buildWrapper() {
     const target: any = {};
@@ -446,7 +450,11 @@ export const useConfigStore = defineStore('config', () => {
         } catch {}
         savingState.value = 'saved';
         setTimeout(() => {
-          if (savingState.value === 'saved' && !manualDirty.value && Object.keys(patchQueue.value).length === 0) {
+          if (
+            savingState.value === 'saved' &&
+            !manualDirty.value &&
+            Object.keys(patchQueue.value).length === 0
+          ) {
             savingState.value = 'idle';
           }
         }, 3000);

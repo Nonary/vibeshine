@@ -2,9 +2,19 @@
   <n-modal :show="open" :mask-closable="true" @update:show="(v) => emit('update:modelValue', v)">
     <n-card
       :bordered="false"
-      :content-style="{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }"
+      :content-style="{
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        overflow: 'hidden',
+      }"
       class="overflow-hidden"
-      style="max-width: 56rem; width: 100%; height: min(85dvh, calc(100dvh - 2rem)); max-height: calc(100dvh - 2rem)"
+      style="
+        max-width: 56rem;
+        width: 100%;
+        height: min(85dvh, calc(100dvh - 2rem));
+        max-height: calc(100dvh - 2rem);
+      "
     >
       <template #header>
         <div class="flex items-center gap-3">
@@ -37,110 +47,134 @@
           @submit.prevent="save"
           @keydown.ctrl.enter.stop.prevent="save"
         >
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div class="space-y-1 md:col-span-2">
-            <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Name</label>
-            <n-input v-model:value="form.name" placeholder="Game or App Name" />
-          </div>
-          <div class="space-y-1 md:col-span-2">
-            <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Command</label>
-            <n-input
-              v-model:value="cmdText"
-              type="textarea"
-              :autosize="{ minRows: 4, maxRows: 8 }"
-              placeholder="Executable command line"
-            />
-            <p class="text-[11px] opacity-60">Enter the full command line (single string).</p>
-          </div>
-          <div class="space-y-1 md:col-span-1">
-            <label class="text-xs font-semibold uppercase tracking-wide opacity-70"
-              >Working Dir</label
-            >
-            <n-input v-model:value="form['working-dir']" class="font-mono" placeholder="C:/Games/App" />
-          </div>
-          <div class="space-y-1 md:col-span-1">
-            <label class="text-xs font-semibold uppercase tracking-wide opacity-70"
-              >Exit Timeout</label
-            >
-            <div class="flex items-center gap-2">
-              <n-input-number v-model:value="form['exit-timeout']" :min="0" class="w-28" />
-              <span class="text-xs opacity-60">seconds</span>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="space-y-1 md:col-span-2">
+              <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Name</label>
+              <n-input v-model:value="form.name" placeholder="Game or App Name" />
+            </div>
+            <div class="space-y-1 md:col-span-2">
+              <label class="text-xs font-semibold uppercase tracking-wide opacity-70"
+                >Command</label
+              >
+              <n-input
+                v-model:value="cmdText"
+                type="textarea"
+                :autosize="{ minRows: 4, maxRows: 8 }"
+                placeholder="Executable command line"
+              />
+              <p class="text-[11px] opacity-60">Enter the full command line (single string).</p>
+            </div>
+            <div class="space-y-1 md:col-span-1">
+              <label class="text-xs font-semibold uppercase tracking-wide opacity-70"
+                >Working Dir</label
+              >
+              <n-input
+                v-model:value="form['working-dir']"
+                class="font-mono"
+                placeholder="C:/Games/App"
+              />
+            </div>
+            <div class="space-y-1 md:col-span-1">
+              <label class="text-xs font-semibold uppercase tracking-wide opacity-70"
+                >Exit Timeout</label
+              >
+              <div class="flex items-center gap-2">
+                <n-input-number v-model:value="form['exit-timeout']" :min="0" class="w-28" />
+                <span class="text-xs opacity-60">seconds</span>
+              </div>
+            </div>
+            <div class="space-y-1 md:col-span-2">
+              <label class="text-xs font-semibold uppercase tracking-wide opacity-70"
+                >Image Path</label
+              >
+              <n-input
+                v-model:value="form['image-path']"
+                class="font-mono"
+                placeholder="/path/to/image.png"
+              />
+              <p class="text-[11px] opacity-60">
+                Optional; stored only and not fetched by Sunshine.
+              </p>
             </div>
           </div>
-          <div class="space-y-1 md:col-span-2">
-            <label class="text-xs font-semibold uppercase tracking-wide opacity-70"
-              >Image Path</label
-            >
-            <n-input v-model:value="form['image-path']" class="font-mono" placeholder="/path/to/image.png" />
-            <p class="text-[11px] opacity-60">Optional; stored only and not fetched by Sunshine.</p>
-          </div>
-        </div>
 
-        <div class="grid grid-cols-2 gap-3">
-          <n-checkbox v-model:checked="form['exclude-global-prep-cmd']" size="small">
-            Exclude Global Prep
-          </n-checkbox>
-          <n-checkbox v-model:checked="form['auto-detach']" size="small">
-            Auto Detach
-          </n-checkbox>
-          <n-checkbox v-model:checked="form['wait-all']" size="small">Wait All</n-checkbox>
-          <n-checkbox v-if="platform === 'windows'" v-model:checked="form.elevated" size="small">
-            Elevated
-          </n-checkbox>
-        </div>
-
-        <section class="space-y-3">
-          <div class="flex items-center justify-between">
-            <h3 class="text-xs font-semibold uppercase tracking-wider opacity-70">Prep Commands</h3>
-            <n-button size="small" type="primary" @click="addPrep">
-              <i class="fas fa-plus" /> Add
-            </n-button>
+          <div class="grid grid-cols-2 gap-3">
+            <n-checkbox v-model:checked="form['exclude-global-prep-cmd']" size="small">
+              Exclude Global Prep
+            </n-checkbox>
+            <n-checkbox v-model:checked="form['auto-detach']" size="small">
+              Auto Detach
+            </n-checkbox>
+            <n-checkbox v-model:checked="form['wait-all']" size="small">Wait All</n-checkbox>
+            <n-checkbox v-if="platform === 'windows'" v-model:checked="form.elevated" size="small">
+              Elevated
+            </n-checkbox>
           </div>
-          <div v-if="form['prep-cmd'].length === 0" class="text-[12px] opacity-60">None</div>
-          <div v-else class="space-y-2">
-            <div v-for="(p, i) in form['prep-cmd']" :key="i" class="grid md:grid-cols-12 gap-2">
-              <n-input v-model:value="p.do" placeholder="do" class="font-mono md:col-span-5" />
-              <n-input v-model:value="p.undo" placeholder="undo" class="font-mono md:col-span-5" />
-              <div class="flex items-center gap-2 md:col-span-2">
-                <n-checkbox v-if="platform === 'windows'" v-model:checked="p.elevated" size="small">
-                  Elev
-                </n-checkbox>
-                <n-button size="small" type="error" @click="form['prep-cmd'].splice(i, 1)">
-                  <i class="fas fa-trash" />
+
+          <section class="space-y-3">
+            <div class="flex items-center justify-between">
+              <h3 class="text-xs font-semibold uppercase tracking-wider opacity-70">
+                Prep Commands
+              </h3>
+              <n-button size="small" type="primary" @click="addPrep">
+                <i class="fas fa-plus" /> Add
+              </n-button>
+            </div>
+            <div v-if="form['prep-cmd'].length === 0" class="text-[12px] opacity-60">None</div>
+            <div v-else class="space-y-2">
+              <div v-for="(p, i) in form['prep-cmd']" :key="i" class="grid md:grid-cols-12 gap-2">
+                <n-input v-model:value="p.do" placeholder="do" class="font-mono md:col-span-5" />
+                <n-input
+                  v-model:value="p.undo"
+                  placeholder="undo"
+                  class="font-mono md:col-span-5"
+                />
+                <div class="flex items-center gap-2 md:col-span-2">
+                  <n-checkbox
+                    v-if="platform === 'windows'"
+                    v-model:checked="p.elevated"
+                    size="small"
+                  >
+                    Elev
+                  </n-checkbox>
+                  <n-button size="small" type="error" @click="form['prep-cmd'].splice(i, 1)">
+                    <i class="fas fa-trash" />
+                  </n-button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="space-y-3">
+            <div class="flex items-center justify-between">
+              <h3 class="text-xs font-semibold uppercase tracking-wider opacity-70">
+                Detached Commands
+              </h3>
+              <n-button size="small" type="primary" @click="addDetached">
+                <i class="fas fa-plus" /> Add
+              </n-button>
+            </div>
+            <div v-if="form.detached.length === 0" class="text-[12px] opacity-60">None</div>
+            <div v-else class="space-y-2">
+              <div v-for="(d, i) in form.detached" :key="i" class="flex gap-2 items-start">
+                <n-input v-model:value="form.detached[i]" class="font-mono flex-1" />
+                <n-button size="small" type="error" @click="form.detached.splice(i, 1)">
+                  <i class="fas fa-times" />
                 </n-button>
               </div>
             </div>
-          </div>
-        </section>
-
-        <section class="space-y-3">
-          <div class="flex items-center justify-between">
-            <h3 class="text-xs font-semibold uppercase tracking-wider opacity-70">
-              Detached Commands
-            </h3>
-            <n-button size="small" type="primary" @click="addDetached">
-              <i class="fas fa-plus" /> Add
-            </n-button>
-          </div>
-          <div v-if="form.detached.length === 0" class="text-[12px] opacity-60">None</div>
-          <div v-else class="space-y-2">
-            <div v-for="(d, i) in form.detached" :key="i" class="flex gap-2 items-start">
-              <n-input v-model:value="form.detached[i]" class="font-mono flex-1" />
-              <n-button size="small" type="error" @click="form.detached.splice(i, 1)">
-                <i class="fas fa-times" />
-              </n-button>
-            </div>
-          </div>
-        </section>
-        <section class="sr-only">
-          <!-- hidden submit to allow Enter to save within fields -->
-          <button type="submit" tabindex="-1" aria-hidden="true"></button>
-        </section>
+          </section>
+          <section class="sr-only">
+            <!-- hidden submit to allow Enter to save within fields -->
+            <button type="submit" tabindex="-1" aria-hidden="true"></button>
+          </section>
         </form>
       </div>
 
       <template #footer>
-        <div class="flex items-center justify-end w-full gap-2 border-t border-dark/10 dark:border-light/10 bg-light/80 dark:bg-surface/80 backdrop-blur px-2 py-2">
+        <div
+          class="flex items-center justify-end w-full gap-2 border-t border-dark/10 dark:border-light/10 bg-light/80 dark:bg-surface/80 backdrop-blur px-2 py-2"
+        >
           <n-button tertiary @click="close">{{ $t('_common.cancel') }}</n-button>
           <n-button
             v-if="form.index !== -1"
@@ -167,7 +201,9 @@
           </div>
           <template #footer>
             <div class="w-full flex items-center justify-center gap-3">
-              <n-button tertiary @click="showDeleteConfirm = false">{{ $t('_common.cancel') }}</n-button>
+              <n-button tertiary @click="showDeleteConfirm = false">{{
+                $t('_common.cancel')
+              }}</n-button>
               <n-button type="error" @click="del">{{ $t('apps.delete') }}</n-button>
             </div>
           </template>
@@ -329,12 +365,20 @@ async function del() {
   position: sticky;
   top: 0;
   height: 16px;
-  background: linear-gradient(to bottom, rgb(var(--color-light) / 0.9), rgb(var(--color-light) / 0));
+  background: linear-gradient(
+    to bottom,
+    rgb(var(--color-light) / 0.9),
+    rgb(var(--color-light) / 0)
+  );
   pointer-events: none;
   z-index: 1;
 }
 .dark .scroll-shadow-top {
-  background: linear-gradient(to bottom, rgb(var(--color-surface) / 0.9), rgb(var(--color-surface) / 0));
+  background: linear-gradient(
+    to bottom,
+    rgb(var(--color-surface) / 0.9),
+    rgb(var(--color-surface) / 0)
+  );
 }
 .scroll-shadow-bottom {
   position: sticky;
@@ -345,7 +389,11 @@ async function del() {
   z-index: 1;
 }
 .dark .scroll-shadow-bottom {
-  background: linear-gradient(to top, rgb(var(--color-surface) / 0.9), rgb(var(--color-surface) / 0));
+  background: linear-gradient(
+    to top,
+    rgb(var(--color-surface) / 0.9),
+    rgb(var(--color-surface) / 0)
+  );
 }
 .scroll-hint-below {
   position: sticky;

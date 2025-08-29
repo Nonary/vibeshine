@@ -73,7 +73,7 @@ function removeCmd(index) {
         id="locale"
         v-model:value="config.locale"
         :options="localeOptions"
-        :data-search-options="localeOptions.map(o => `${o.label}::${o.value ?? ''}`).join('|')"
+        :data-search-options="localeOptions.map((o) => `${o.label}::${o.value ?? ''}`).join('|')"
       />
       <div class="text-[11px] opacity-60 mt-1">
         {{ $t('config.locale_desc') }}
@@ -101,7 +101,7 @@ function removeCmd(index) {
         id="min_log_level"
         v-model:value="config.min_log_level"
         :options="logLevelOptions"
-        :data-search-options="logLevelOptions.map(o => `${o.label}::${o.value ?? ''}`).join('|')"
+        :data-search-options="logLevelOptions.map((o) => `${o.label}::${o.value ?? ''}`).join('|')"
       />
       <div class="text-[11px] opacity-60 mt-1">
         {{ $t('config.log_level_desc') }}

@@ -389,8 +389,8 @@ namespace proc {
   // Returns default image if image configuration is not set.
   // Returns http content-type header compatible image type.
   std::string proc_t::get_app_image(int app_id) {
-  std::scoped_lock lk(_apps_mutex);
-  auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto app) {
+    std::scoped_lock lk(_apps_mutex);
+    auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto app) {
       return app.id == std::to_string(app_id);
     });
     auto app_image_path = iter == _apps.end() ? std::string() : iter->image_path;
@@ -715,10 +715,7 @@ namespace proc {
         apps.emplace_back(std::move(ctx));
       }
 
-      return std::optional<proc::proc_t>(std::in_place,
-        std::move(this_env),
-        std::move(apps)
-      );
+      return std::optional<proc::proc_t>(std::in_place, std::move(this_env), std::move(apps));
     } catch (std::exception &e) {
       BOOST_LOG(error) << e.what();
     }

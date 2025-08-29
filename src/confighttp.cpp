@@ -771,15 +771,15 @@ namespace confighttp {
 
   /**
    * @brief Serve a specific application's cover image by UUID.
-  *        Looks for files named @c uuid with a supported image extension in the covers directory.
-  * @api_examples{/api/apps/@c uuid/cover| GET| null}
+   *        Looks for files named @c uuid with a supported image extension in the covers directory.
+   * @api_examples{/api/apps/@c uuid/cover| GET| null}
    */
 
   /**
    * @brief Upload or set a specific application's cover image by UUID.
    *        Accepts either a JSON body with {"url": "..."} (restricted to images.igdb.com) or {"data": base64}.
-  *        Saves to appdata/covers/@c uuid.@c ext where ext is derived from URL or defaults to .png for data.
-  * @api_examples{/api/apps/@c uuid/cover| POST| {"url":"https://images.igdb.com/.../abc.png"}}
+   *        Saves to appdata/covers/@c uuid.@c ext where ext is derived from URL or defaults to .png for data.
+   * @api_examples{/api/apps/@c uuid/cover| POST| {"url":"https://images.igdb.com/.../abc.png"}}
    */
 
   /**
@@ -889,7 +889,7 @@ namespace confighttp {
    * The body for the post request should be JSON serialized in the following format:
    * @code{.json}
    * {
-  *  "uuid": "@c uuid"
+   *  "uuid": "@c uuid"
    * }
    * @endcode
    *
@@ -1143,7 +1143,9 @@ namespace confighttp {
         // Remove key when explicitly null or empty string
         if (val.is_null() || (val.is_string() && val.get<std::string>().empty())) {
           auto curIt = current.find(key);
-          if (curIt != current.end()) current.erase(curIt);
+          if (curIt != current.end()) {
+            current.erase(curIt);
+          }
           continue;
         }
 
@@ -1600,9 +1602,9 @@ namespace confighttp {
     server.resource["^/api/apps$"]["POST"] = saveApp;
     server.resource["^/api/config$"]["GET"] = getConfig;
     server.resource["^/api/config$"]["POST"] = saveConfig;
-  // Partial updates for config settings; merges with existing file and
-  // removes keys when value is null or empty string.
-  server.resource["^/api/config$"]["PATCH"] = patchConfig;
+    // Partial updates for config settings; merges with existing file and
+    // removes keys when value is null or empty string.
+    server.resource["^/api/config$"]["PATCH"] = patchConfig;
     server.resource["^/api/metadata$"]["GET"] = getMetadata;
     server.resource["^/api/configLocale$"]["GET"] = getLocale;
     server.resource["^/api/restart$"]["POST"] = restart;

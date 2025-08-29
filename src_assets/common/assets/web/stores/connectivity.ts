@@ -106,7 +106,8 @@ export const useConnectivityStore = defineStore('connectivity', () => {
     intervalId = window.setInterval(() => {
       try {
         const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
-        const hasFocus = typeof document !== 'undefined' && document.hasFocus ? document.hasFocus() : true;
+        const hasFocus =
+          typeof document !== 'undefined' && document.hasFocus ? document.hasFocus() : true;
         if (isVisible && hasFocus) checkOnce();
       } catch {
         // fallback: still attempt

@@ -10,9 +10,9 @@
     </div>
 
     <!-- Redesigned list view -->
-  <div
-    class="rounded-2xl overflow-hidden border border-dark/10 dark:border-light/10 bg-light/80 dark:bg-surface/80 backdrop-blur max-w-3xl mx-auto"
-  >
+    <div
+      class="rounded-2xl overflow-hidden border border-dark/10 dark:border-light/10 bg-light/80 dark:bg-surface/80 backdrop-blur max-w-3xl mx-auto"
+    >
       <div v-if="apps && apps.length" class="divide-y divide-black/5 dark:divide-white/10">
         <button
           v-for="(app, i) in apps"
@@ -24,8 +24,8 @@
           @keydown.space.prevent="openEdit(app, i)"
         >
           <div
-        class="flex items-center justify-between px-4 py-3 hover:bg-dark/10 dark:hover:bg-light/10"
-      >
+            class="flex items-center justify-between px-4 py-3 hover:bg-dark/10 dark:hover:bg-light/10"
+          >
             <div class="min-w-0 flex-1">
               <div class="text-sm font-semibold truncate">{{ app.name || '(untitled)' }}</div>
               <div class="mt-0.5 text-[11px] opacity-60 truncate" v-if="app['working-dir']">

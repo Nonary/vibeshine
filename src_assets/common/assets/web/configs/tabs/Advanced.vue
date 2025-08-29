@@ -57,18 +57,14 @@ const encoderOptions = computed(() => {
     <!-- FEC Percentage -->
     <div class="mb-6">
       <label for="fec_percentage" class="form-label">{{ $t('config.fec_percentage') }}</label>
-      <n-input-number
-        id="fec_percentage"
-        v-model:value="config.fec_percentage"
-        :placeholder="20"
-      />
+      <n-input-number id="fec_percentage" v-model:value="config.fec_percentage" :placeholder="20" />
       <div class="form-text">{{ $t('config.fec_percentage_desc') }}</div>
     </div>
 
     <!-- Quantization Parameter -->
     <div class="mb-6">
       <label for="qp" class="form-label">{{ $t('config.qp') }}</label>
-  <n-input-number id="qp" v-model:value="config.qp" :placeholder="28" />
+      <n-input-number id="qp" v-model:value="config.qp" :placeholder="28" />
       <div class="form-text">{{ $t('config.qp_desc') }}</div>
     </div>
 
@@ -90,8 +86,8 @@ const encoderOptions = computed(() => {
       <n-select
         id="hevc_mode"
         v-model:value="config.hevc_mode"
-        :options="hevcModeOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
-        :data-search-options="hevcModeOptions.map(o => `${$t(o.labelKey)}::${o.value}`).join('|')"
+        :options="hevcModeOptions.map((o) => ({ label: $t(o.labelKey), value: o.value }))"
+        :data-search-options="hevcModeOptions.map((o) => `${$t(o.labelKey)}::${o.value}`).join('|')"
       />
       <div class="form-text">{{ $t('config.hevc_mode_desc') }}</div>
     </div>
@@ -102,8 +98,8 @@ const encoderOptions = computed(() => {
       <n-select
         id="av1_mode"
         v-model:value="config.av1_mode"
-        :options="av1ModeOptions.map(o => ({ label: $t(o.labelKey), value: o.value }))"
-        :data-search-options="av1ModeOptions.map(o => `${$t(o.labelKey)}::${o.value}`).join('|')"
+        :options="av1ModeOptions.map((o) => ({ label: $t(o.labelKey), value: o.value }))"
+        :data-search-options="av1ModeOptions.map((o) => `${$t(o.labelKey)}::${o.value}`).join('|')"
       />
       <div class="form-text">{{ $t('config.av1_mode_desc') }}</div>
     </div>
@@ -115,7 +111,7 @@ const encoderOptions = computed(() => {
         id="capture"
         v-model:value="config.capture"
         :options="captureOptions"
-        :data-search-options="captureOptions.map(o => `${o.label}::${o.value ?? ''}`).join('|')"
+        :data-search-options="captureOptions.map((o) => `${o.label}::${o.value ?? ''}`).join('|')"
       />
       <div class="form-text">{{ $t('config.capture_desc') }}</div>
     </div>
@@ -127,7 +123,7 @@ const encoderOptions = computed(() => {
         id="encoder"
         v-model:value="config.encoder"
         :options="encoderOptions"
-        :data-search-options="encoderOptions.map(o => `${o.label}::${o.value ?? ''}`).join('|')"
+        :data-search-options="encoderOptions.map((o) => `${o.label}::${o.value ?? ''}`).join('|')"
       />
       <div class="form-text">{{ $t('config.encoder_desc') }}</div>
     </div>

@@ -192,10 +192,16 @@ async function logout() {
   } catch (e) {
     console.error('Logout failed:', e);
   }
-  try { (authStore as any).logoutInitiated = true; } catch {}
-  try { authStore.setAuthenticated(false); } catch {}
+  try {
+    (authStore as any).logoutInitiated = true;
+  } catch {}
+  try {
+    authStore.setAuthenticated(false);
+  } catch {}
   // Stop background connectivity checks and any other background polling
-  try { connectivity.stop(); } catch {}
+  try {
+    connectivity.stop();
+  } catch {}
   loggedOut.value = true;
 }
 
