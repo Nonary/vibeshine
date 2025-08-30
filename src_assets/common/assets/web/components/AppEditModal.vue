@@ -39,9 +39,7 @@
         <!-- Scroll affordance shadows: appear when more content is available -->
         <div v-if="showTopShadow" class="scroll-shadow-top" aria-hidden="true"></div>
         <div v-if="showBottomShadow" class="scroll-shadow-bottom" aria-hidden="true"></div>
-        <div v-if="showBottomShadow" class="scroll-hint-below" aria-hidden="true">
-          <i class="fas fa-arrow-down mr-1" /> {{ $t('apps.more_fields_below') }}
-        </div>
+
         <form
           class="space-y-6 text-sm"
           @submit.prevent="save"
@@ -137,7 +135,7 @@
                   >
                     Elev
                   </n-checkbox>
-                  <n-button size="small" type="error" @click="form['prep-cmd'].splice(i, 1)">
+                  <n-button size="small" secondary @click="form['prep-cmd'].splice(i, 1)">
                     <i class="fas fa-trash" />
                   </n-button>
                 </div>
@@ -158,7 +156,7 @@
             <div v-else class="space-y-2">
               <div v-for="(d, i) in form.detached" :key="i" class="flex gap-2 items-start">
                 <n-input v-model:value="form.detached[i]" class="font-mono flex-1" />
-                <n-button size="small" type="error" @click="form.detached.splice(i, 1)">
+                <n-button size="small" secondary @click="form.detached.splice(i, 1)">
                   <i class="fas fa-times" />
                 </n-button>
               </div>
@@ -190,7 +188,12 @@
         </div>
       </template>
 
-      <n-modal :show="showDeleteConfirm" @update:show="(v) => (showDeleteConfirm = v)">
+      <n-modal
+        :show="showDeleteConfirm"
+        :z-index="3300"
+        :mask-style="{ backgroundColor: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(2px)' }"
+        @update:show="(v) => (showDeleteConfirm = v)"
+      >
         <n-card
           :title="$t('apps.confirm_delete_title_named', { name: form.name || '' })"
           :bordered="false"
@@ -204,7 +207,7 @@
               <n-button tertiary @click="showDeleteConfirm = false">{{
                 $t('_common.cancel')
               }}</n-button>
-              <n-button type="error" @click="del">{{ $t('apps.delete') }}</n-button>
+              <n-button secondary @click="del">{{ $t('apps.delete') }}</n-button>
             </div>
           </template>
         </n-card>
@@ -216,7 +219,8 @@
 <script setup lang="ts">
 import { reactive, watch, computed, ref, toRefs } from 'vue';
 import { http } from '@/http';
-import { NModal, NCard, NButton, NInput, NInputNumber, NCheckbox } from 'naive-ui';
+import { NModal, NCard, NButton, NInput, NInputNumber, NCheckbox, NSelect } from 'naive-ui';
+import { useConfigStore } from '@/stores/config';
 const props = defineProps({
   modelValue: Boolean,
   platform: String,
@@ -344,14 +348,12 @@ async function save() {
   saving.v = true;
   const payload = JSON.parse(JSON.stringify(form));
   try {
-    const res = await http.post('./api/apps', payload, {
+    await http.post('./api/apps', payload, {
       headers: { 'Content-Type': 'application/json' },
       validateStatus: () => true,
     });
-    if (res && res.status >= 200 && res.status < 300) {
-      emit('saved');
-      close();
-    }
+    emit('saved');
+    close();
   } finally {
     saving.v = false;
   }
@@ -370,6 +372,45 @@ async function del() {
 }
 </script>
 <style scoped>
+.mobile-only-hidden {
+  display: none;
+}
+
+/* Mobile-friendly modal sizing and sticky header/footer */
+@media (max-width: 640px) {
+  :deep(.n-modal .n-card) {
+    border-radius: 0 !important;
+    max-width: 100vw !important;
+    width: 100vw !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+  }
+  :deep(.n-modal .n-card .n-card__header),
+  :deep(.n-modal .n-card .n-card-header) {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    backdrop-filter: saturate(1.2) blur(8px);
+    background: rgb(var(--color-light) / 0.9);
+  }
+  :deep(.dark .n-modal .n-card .n-card__header),
+  :deep(.dark .n-modal .n-card .n-card-header) {
+    background: rgb(var(--color-surface) / 0.9);
+  }
+  :deep(.n-modal .n-card .n-card__footer),
+  :deep(.n-modal .n-card .n-card-footer) {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+    backdrop-filter: saturate(1.2) blur(8px);
+    background: rgb(var(--color-light) / 0.9);
+    padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem) !important;
+  }
+  :deep(.dark .n-modal .n-card .n-card__footer),
+  :deep(.dark .n-modal .n-card .n-card-footer) {
+    background: rgb(var(--color-surface) / 0.9);
+  }
+}
 .scroll-shadow-top {
   position: sticky;
   top: 0;
@@ -403,31 +444,6 @@ async function del() {
     rgb(var(--color-surface) / 0.9),
     rgb(var(--color-surface) / 0)
   );
-}
-.scroll-hint-below {
-  position: sticky;
-  bottom: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: auto;
-  margin-right: auto;
-  left: 0;
-  right: 0;
-  max-width: max-content;
-  padding: 4px 8px;
-  font-size: 11px;
-  border-radius: 8px;
-  color: rgba(0, 0, 0, 0.7);
-  background: rgba(255, 255, 255, 0.8);
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
-  pointer-events: none;
-  z-index: 2;
-}
-.dark .scroll-hint-below {
-  color: rgba(245, 249, 255, 0.85);
-  background: rgba(13, 16, 28, 0.75);
-  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.5);
 }
 .ui-input {
   width: 100%;
