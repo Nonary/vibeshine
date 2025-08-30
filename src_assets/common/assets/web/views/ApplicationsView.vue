@@ -55,7 +55,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import AppEditModal from '@/components/AppEditModal.vue';
-import { useAppsStore } from '@/stores/apps';
+import { useAppsStore, App } from '@/stores/apps';
 import { storeToRefs } from 'pinia';
 import { NButton } from 'naive-ui';
 import { useAuthStore } from '@/stores/auth';
@@ -63,7 +63,7 @@ const appsStore = useAppsStore();
 const { apps } = storeToRefs(appsStore);
 const platform = ref('');
 const showModal = ref(false);
-const currentApp = ref(null);
+const currentApp = ref<App | null>(null);
 const currentIndex = ref(-1);
 async function reload() {
   await appsStore.loadApps(true);
@@ -75,13 +75,12 @@ function openAdd(): void {
   showModal.value = true;
 }
 
-function openEdit(app: AppsListItem, i: number): void {
+function openEdit(app: App, i: number): void {
   currentApp.value = app;
   currentIndex.value = i;
   showModal.value = true;
 }
-// Playnite integration removed
-function appKey(app, index) {
+function appKey(app: App | null | undefined, index: number) {
   const id = app?.uuid || '';
   return `${app?.name || 'app'}|${id}|${index}`;
 }

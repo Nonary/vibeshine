@@ -15,7 +15,7 @@
     </span>
   </RouterLink>
 </template>
-<script setup>
+<script setup lang="ts">
 import { useRoute } from 'vue-router';
 import { computed } from 'vue';
 const props = defineProps({

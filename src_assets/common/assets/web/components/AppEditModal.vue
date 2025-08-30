@@ -30,7 +30,6 @@
               }}</span>
             </div>
           </div>
-          
         </div>
       </template>
 
@@ -94,15 +93,13 @@
                   class="font-mono flex-1"
                   placeholder="/path/to/image.png"
                 />
-                <n-button
-                  tertiary
-                  :disabled="!form.name"
-                  @click="openCoverFinder"
-                >
+                <n-button tertiary :disabled="!form.name" @click="openCoverFinder">
                   <i class="fas fa-image" /> Find Cover
                 </n-button>
               </div>
-              <p class="text-[11px] opacity-60">Optional; stored only and not fetched by Sunshine.</p>
+              <p class="text-[11px] opacity-60">
+                Optional; stored only and not fetched by Sunshine.
+              </p>
             </div>
           </div>
 
@@ -110,9 +107,7 @@
             <n-checkbox v-model:checked="form.excludeGlobalPrepCmd" size="small">
               Exclude Global Prep
             </n-checkbox>
-            <n-checkbox v-model:checked="form.autoDetach" size="small">
-              Auto Detach
-            </n-checkbox>
+            <n-checkbox v-model:checked="form.autoDetach" size="small"> Auto Detach </n-checkbox>
             <n-checkbox v-model:checked="form.waitAll" size="small">Wait All</n-checkbox>
             <n-checkbox v-if="isWindows" v-model:checked="form.elevated" size="small">
               Elevated
@@ -138,11 +133,7 @@
                 <div class="flex items-center justify-between gap-2 mb-2">
                   <div class="text-xs opacity-70">Step {{ i + 1 }}</div>
                   <div class="flex items-center gap-2">
-                    <n-checkbox
-                      v-if="isWindows"
-                      v-model:checked="p.elevated"
-                      size="small"
-                    >
+                    <n-checkbox v-if="isWindows" v-model:checked="p.elevated" size="small">
                       {{ $t('_common.elevated') }}
                     </n-checkbox>
                     <n-button size="small" secondary @click="form.prepCmd.splice(i, 1)">
@@ -210,12 +201,12 @@
           <n-button
             v-if="form.index !== -1"
             type="error"
-            :disabled="saving.v"
+            :disabled="saving"
             @click="showDeleteConfirm = true"
           >
             <i class="fas fa-trash" /> {{ $t('apps.delete') }}
           </n-button>
-          <n-button type="primary" :loading="saving.v" :disabled="saving.v" @click="save">
+          <n-button type="primary" :loading="saving" :disabled="saving" @click="save">
             <i class="fas fa-save" /> {{ $t('_common.save') }}
           </n-button>
         </div>
@@ -231,9 +222,7 @@
           <template #header>
             <div class="flex items-center justify-between w-full">
               <span class="font-semibold">Covers Found</span>
-              <n-button quaternary size="small" @click="showCoverModal = false">
-                Close
-              </n-button>
+              <n-button quaternary size="small" @click="showCoverModal = false"> Close </n-button>
             </div>
           </template>
           <div class="min-h-[160px]">
@@ -241,7 +230,9 @@
               <n-spin size="large">Loading…</n-spin>
             </div>
             <div v-else>
-              <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-[420px] overflow-auto pr-1">
+              <div
+                class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-[420px] overflow-auto pr-1"
+              >
                 <div
                   v-for="(cover, i) in coverCandidates"
                   :key="i"
@@ -263,7 +254,10 @@
                     {{ cover.name }}
                   </div>
                 </div>
-                <div v-if="!coverCandidates.length" class="col-span-full text-center opacity-70 py-8">
+                <div
+                  v-if="!coverCandidates.length"
+                  class="col-span-full text-center opacity-70 py-8"
+                >
                   No results. Try adjusting the app name.
                 </div>
               </div>
@@ -307,7 +301,11 @@ import { NModal, NCard, NButton, NInput, NInputNumber, NCheckbox, NSelect, NSpin
 import { useConfigStore } from '@/stores/config';
 
 // Types for form and server payload
-interface PrepCmd { do: string; undo: string; elevated?: boolean }
+interface PrepCmd {
+  do: string;
+  undo: string;
+  elevated?: boolean;
+}
 interface AppForm {
   index: number;
   name: string;
@@ -376,7 +374,11 @@ function fromServerApp(src?: ServerApp | null, idx: number = -1): AppForm {
   if (!src) return { ...base, index: idx };
   const cmdStr = Array.isArray(src.cmd) ? src.cmd.join(' ') : (src.cmd ?? '');
   const prep = Array.isArray(src['prep-cmd'])
-    ? src['prep-cmd'].map((p) => ({ do: String(p?.do ?? ''), undo: String(p?.undo ?? ''), elevated: !!p?.elevated }))
+    ? src['prep-cmd'].map((p) => ({
+        do: String(p?.do ?? ''),
+        undo: String(p?.undo ?? ''),
+        elevated: !!p?.elevated,
+      }))
     : [];
   return {
     index: idx,
@@ -391,7 +393,7 @@ function fromServerApp(src?: ServerApp | null, idx: number = -1): AppForm {
     waitAll: src['wait-all'] !== undefined ? !!src['wait-all'] : base.waitAll,
     exitTimeout: typeof src['exit-timeout'] === 'number' ? src['exit-timeout'] : base.exitTimeout,
     prepCmd: prep,
-    detached: Array.isArray(src.detached) ? src.detached.map((s) => String(s)) : []
+    detached: Array.isArray(src.detached) ? src.detached.map((s) => String(s)) : [],
   };
 }
 
@@ -407,7 +409,11 @@ function toServerPayload(f: AppForm): Record<string, any> {
     'auto-detach': !!f.autoDetach,
     'wait-all': !!f.waitAll,
     'exit-timeout': Number.isFinite(f.exitTimeout) ? f.exitTimeout : 5,
-    'prep-cmd': f.prepCmd.map((p) => ({ do: p.do, undo: p.undo, ...(isWindows.value ? { elevated: !!p.elevated } : {}) })),
+    'prep-cmd': f.prepCmd.map((p) => ({
+      do: p.do,
+      undo: p.undo,
+      ...(isWindows.value ? { elevated: !!p.elevated } : {}),
+    })),
     detached: Array.isArray(f.detached) ? f.detached : [],
   };
   return payload;
@@ -431,7 +437,6 @@ const cmdText = computed<string>({
 const nameSelectValue = ref<string>('');
 const nameOptions = ref<{ label: string; value: string }[]>([]);
 const nameSearchQuery = ref('');
-
 
 watch(open, (o) => {
   if (o) {
@@ -541,10 +546,9 @@ async function useCover(cover: CoverCandidate) {
 }
 
 const configStore = useConfigStore();
-const isWindows = computed(() => (configStore.metadata?.platform || '').toLowerCase() === 'windows');
-
-
-
+const isWindows = computed(
+  () => (configStore.metadata?.platform || '').toLowerCase() === 'windows',
+);
 
 function addDetached() {
   form.value.detached.push('');
@@ -591,8 +595,6 @@ onBeforeUnmount(() => {
   } catch {}
   ro = null;
 });
-
-
 
 async function save() {
   saving.value = true;
