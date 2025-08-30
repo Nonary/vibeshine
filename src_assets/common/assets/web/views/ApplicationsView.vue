@@ -32,7 +32,7 @@
 
     <!-- Redesigned list view -->
     <div
-      class="rounded-2xl overflow-hidden border border-dark/10 dark:border-light/10 bg-light/80 dark:bg-surface/80 backdrop-blur"
+      class="rounded-2xl overflow-hidden border border-dark/10 dark:border-light/10 bg-light/80 dark:bg-surface/80 backdrop-blur max-w-3xl mx-auto"
     >
       <div v-if="apps && apps.length" class="divide-y divide-black/5 dark:divide-white/10">
         <button
@@ -107,7 +107,6 @@
       @saved="reload"
       @deleted="reload"
     />
-    <!-- Playnite integration removed for now -->
   </div>
 </template>
 <script setup lang="ts">
@@ -118,6 +117,7 @@ import { storeToRefs } from 'pinia';
 import { NButton } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
 import { http } from '@/http';
+import { useAuthStore } from '@/stores/auth';
 const appsStore = useAppsStore();
 const { apps } = storeToRefs(appsStore);
 const configStore = useConfigStore();
@@ -158,6 +158,7 @@ function appKey(app, index) {
   const id = app?.uuid || '';
   return `${app?.name || 'app'}|${id}|${index}`;
 }
+
 async function purgeAutoSync() {
   if (typeof window !== 'undefined') {
     const ok = window.confirm('Delete all Playnite auto-synced apps?');
@@ -187,6 +188,8 @@ function gotoPlaynite() {
   } catch (_) {}
 }
 onMounted(async () => {
+  const authStore = useAuthStore();
+  await authStore.waitForAuthentication();
   // Ensure metadata/config present for platform + playnite detection
   try {
     await configStore.fetchConfig?.();

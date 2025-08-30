@@ -249,7 +249,7 @@ const encryptionModeOptionsWan = [
         v-model:value="config.ping_timeout"
         :min="0"
         :step="100"
-        :placeholder="'10000'"
+        placeholder="10000"
       />
       <div class="text-[11px] opacity-60 mt-1">
         {{ $t('config.ping_timeout_desc') }}

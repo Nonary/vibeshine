@@ -63,7 +63,11 @@ onMounted(() => {
 
 <template>
   <n-dropdown trigger="click" :options="options" @select="onSelect">
-    <n-button tertiary size="small" class="flex items-center gap-2">
+    <n-button
+      tertiary
+      size="small"
+      class="flex items-center gap-2 bg-transparent border-0 shadow-none hover:bg-transparent focus:outline-none"
+    >
       <span class="theme-icon-active"><i :class="activeIcon" /></span>
       <span>{{ $t('navbar.toggle_theme') }}</span>
     </n-button>

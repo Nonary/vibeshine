@@ -1905,8 +1905,7 @@ namespace confighttp {
 
     // Start a background task to clean up expired session tokens every hour
     std::jthread cleanup_thread([shutdown_event]() {
-      while (!shutdown_event->peek()) {
-        std::this_thread::sleep_for(std::chrono::hours(1));
+      while (!shutdown_event->view(std::chrono::hours(1))) {
         session_token_manager.cleanup_expired_session_tokens();
       }
     });
