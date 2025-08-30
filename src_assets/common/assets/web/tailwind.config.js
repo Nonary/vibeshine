@@ -1,7 +1,13 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   darkMode: 'class',
-  content: ['./src_assets/common/assets/web/**/*.{html,js,ts,vue}'],
+  // Paths are relative to this config file's directory
+  content: [
+    './index.html',
+    './**/*.{html,js,ts,vue}',
+    '!./node_modules/**',
+    '!./dist/**',
+  ],
   theme: {
     extend: {
       colors: {
