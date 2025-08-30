@@ -17,17 +17,20 @@
       "
     >
       <template #header>
-        <div class="flex items-center gap-3">
-          <div
-            class="h-14 w-14 rounded-full bg-gradient-to-br from-primary/20 to-primary/10 text-primary flex items-center justify-center shadow-inner"
-          >
-            <i class="fas fa-window-restore text-xl" />
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <div
+              class="h-14 w-14 rounded-full bg-gradient-to-br from-primary/20 to-primary/10 text-primary flex items-center justify-center shadow-inner"
+            >
+              <i class="fas fa-window-restore text-xl" />
+            </div>
+            <div class="flex flex-col">
+              <span class="text-xl font-semibold">{{
+                form.index === -1 ? 'Add Application' : 'Edit Application'
+              }}</span>
+            </div>
           </div>
-          <div class="flex flex-col">
-            <span class="text-xl font-semibold">{{
-              form.index === -1 ? 'Add Application' : 'Edit Application'
-            }}</span>
-          </div>
+          
         </div>
       </template>
 
@@ -67,7 +70,7 @@
                 >Working Dir</label
               >
               <n-input
-                v-model:value="form['working-dir']"
+                v-model:value="form.workingDir"
                 class="font-mono"
                 placeholder="C:/Games/App"
               />
@@ -77,7 +80,7 @@
                 >Exit Timeout</label
               >
               <div class="flex items-center gap-2">
-                <n-input-number v-model:value="form['exit-timeout']" :min="0" class="w-28" />
+                <n-input-number v-model:value="form.exitTimeout" :min="0" class="w-28" />
                 <span class="text-xs opacity-60">seconds</span>
               </div>
             </div>
@@ -85,26 +88,33 @@
               <label class="text-xs font-semibold uppercase tracking-wide opacity-70"
                 >Image Path</label
               >
-              <n-input
-                v-model:value="form['image-path']"
-                class="font-mono"
-                placeholder="/path/to/image.png"
-              />
-              <p class="text-[11px] opacity-60">
-                Optional; stored only and not fetched by Sunshine.
-              </p>
+              <div class="flex items-center gap-2">
+                <n-input
+                  v-model:value="form.imagePath"
+                  class="font-mono flex-1"
+                  placeholder="/path/to/image.png"
+                />
+                <n-button
+                  tertiary
+                  :disabled="!form.name"
+                  @click="openCoverFinder"
+                >
+                  <i class="fas fa-image" /> Find Cover
+                </n-button>
+              </div>
+              <p class="text-[11px] opacity-60">Optional; stored only and not fetched by Sunshine.</p>
             </div>
           </div>
 
           <div class="grid grid-cols-2 gap-3">
-            <n-checkbox v-model:checked="form['exclude-global-prep-cmd']" size="small">
+            <n-checkbox v-model:checked="form.excludeGlobalPrepCmd" size="small">
               Exclude Global Prep
             </n-checkbox>
-            <n-checkbox v-model:checked="form['auto-detach']" size="small">
+            <n-checkbox v-model:checked="form.autoDetach" size="small">
               Auto Detach
             </n-checkbox>
-            <n-checkbox v-model:checked="form['wait-all']" size="small">Wait All</n-checkbox>
-            <n-checkbox v-if="platform === 'windows'" v-model:checked="form.elevated" size="small">
+            <n-checkbox v-model:checked="form.waitAll" size="small">Wait All</n-checkbox>
+            <n-checkbox v-if="isWindows" v-model:checked="form.elevated" size="small">
               Elevated
             </n-checkbox>
           </div>
@@ -118,26 +128,49 @@
                 <i class="fas fa-plus" /> Add
               </n-button>
             </div>
-            <div v-if="form['prep-cmd'].length === 0" class="text-[12px] opacity-60">None</div>
+            <div v-if="form.prepCmd.length === 0" class="text-[12px] opacity-60">None</div>
             <div v-else class="space-y-2">
-              <div v-for="(p, i) in form['prep-cmd']" :key="i" class="grid md:grid-cols-12 gap-2">
-                <n-input v-model:value="p.do" placeholder="do" class="font-mono md:col-span-5" />
-                <n-input
-                  v-model:value="p.undo"
-                  placeholder="undo"
-                  class="font-mono md:col-span-5"
-                />
-                <div class="flex items-center gap-2 md:col-span-2">
-                  <n-checkbox
-                    v-if="platform === 'windows'"
-                    v-model:checked="p.elevated"
-                    size="small"
-                  >
-                    Elev
-                  </n-checkbox>
-                  <n-button size="small" secondary @click="form['prep-cmd'].splice(i, 1)">
-                    <i class="fas fa-trash" />
-                  </n-button>
+              <div
+                v-for="(p, i) in form.prepCmd"
+                :key="i"
+                class="rounded-md border border-dark/10 dark:border-light/10 p-2"
+              >
+                <div class="flex items-center justify-between gap-2 mb-2">
+                  <div class="text-xs opacity-70">Step {{ i + 1 }}</div>
+                  <div class="flex items-center gap-2">
+                    <n-checkbox
+                      v-if="isWindows"
+                      v-model:checked="p.elevated"
+                      size="small"
+                    >
+                      {{ $t('_common.elevated') }}
+                    </n-checkbox>
+                    <n-button size="small" secondary @click="form.prepCmd.splice(i, 1)">
+                      <i class="fas fa-trash" />
+                    </n-button>
+                  </div>
+                </div>
+                <div class="grid grid-cols-1 gap-2">
+                  <div>
+                    <label class="text-[11px] opacity-60">{{ $t('_common.do_cmd') }}</label>
+                    <n-input
+                      v-model:value="p.do"
+                      type="textarea"
+                      :autosize="{ minRows: 1, maxRows: 3 }"
+                      class="font-mono"
+                      placeholder="Command to run before start"
+                    />
+                  </div>
+                  <div>
+                    <label class="text-[11px] opacity-60">{{ $t('_common.undo_cmd') }}</label>
+                    <n-input
+                      v-model:value="p.undo"
+                      type="textarea"
+                      :autosize="{ minRows: 1, maxRows: 3 }"
+                      class="font-mono"
+                      placeholder="Command to run on stop"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -154,9 +187,9 @@
             </div>
             <div v-if="form.detached.length === 0" class="text-[12px] opacity-60">None</div>
             <div v-else class="space-y-2">
-              <div v-for="(d, i) in form.detached" :key="i" class="flex gap-2 items-start">
+              <div v-for="(d, i) in form.detached" :key="i" class="flex gap-2 items-center">
                 <n-input v-model:value="form.detached[i]" class="font-mono flex-1" />
-                <n-button size="small" secondary @click="form.detached.splice(i, 1)">
+                <n-button secondary @click="form.detached.splice(i, 1)">
                   <i class="fas fa-times" />
                 </n-button>
               </div>
@@ -189,6 +222,57 @@
       </template>
 
       <n-modal
+        :show="showCoverModal"
+        :z-index="3300"
+        :mask-style="{ backgroundColor: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(2px)' }"
+        @update:show="(v) => (showCoverModal = v)"
+      >
+        <n-card :bordered="false" style="max-width: 48rem; width: 100%">
+          <template #header>
+            <div class="flex items-center justify-between w-full">
+              <span class="font-semibold">Covers Found</span>
+              <n-button quaternary size="small" @click="showCoverModal = false">
+                Close
+              </n-button>
+            </div>
+          </template>
+          <div class="min-h-[160px]">
+            <div v-if="coverSearching" class="flex items-center justify-center py-10">
+              <n-spin size="large">Loading…</n-spin>
+            </div>
+            <div v-else>
+              <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-[420px] overflow-auto pr-1">
+                <div
+                  v-for="(cover, i) in coverCandidates"
+                  :key="i"
+                  class="cursor-pointer group"
+                  @click="useCover(cover)"
+                >
+                  <div
+                    class="relative rounded overflow-hidden aspect-[3/4] bg-black/5 dark:bg-white/5"
+                  >
+                    <img :src="cover.url" class="absolute inset-0 w-full h-full object-cover" />
+                    <div
+                      v-if="coverBusy"
+                      class="absolute inset-0 bg-black/20 dark:bg-white/10 flex items-center justify-center"
+                    >
+                      <n-spin size="small" />
+                    </div>
+                  </div>
+                  <div class="mt-1 text-xs text-center truncate" :title="cover.name">
+                    {{ cover.name }}
+                  </div>
+                </div>
+                <div v-if="!coverCandidates.length" class="col-span-full text-center opacity-70 py-8">
+                  No results. Try adjusting the app name.
+                </div>
+              </div>
+            </div>
+          </div>
+        </n-card>
+      </n-modal>
+
+      <n-modal
         :show="showDeleteConfirm"
         :z-index="3300"
         :mask-style="{ backgroundColor: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(2px)' }"
@@ -217,87 +301,253 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, watch, computed, ref, toRefs } from 'vue';
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { http } from '@/http';
-import { NModal, NCard, NButton, NInput, NInputNumber, NCheckbox, NSelect } from 'naive-ui';
+import { NModal, NCard, NButton, NInput, NInputNumber, NCheckbox, NSelect, NSpin } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
-const props = defineProps({
-  modelValue: Boolean,
-  platform: String,
-  app: Object,
-  index: { type: Number, default: -1 },
-});
-// Expose platform for template use (v-if="platform === 'windows'")
-const { platform } = toRefs(props);
-const emit = defineEmits(['update:modelValue', 'saved', 'deleted']);
-const open = computed(() => props.modelValue);
-function fresh() {
+
+// Types for form and server payload
+interface PrepCmd { do: string; undo: string; elevated?: boolean }
+interface AppForm {
+  index: number;
+  name: string;
+  output: string;
+  cmd: string;
+  workingDir: string;
+  imagePath: string;
+  excludeGlobalPrepCmd: boolean;
+  elevated: boolean;
+  autoDetach: boolean;
+  waitAll: boolean;
+  exitTimeout: number;
+  prepCmd: PrepCmd[];
+  detached: string[];
+}
+interface ServerApp {
+  name?: string;
+  output?: string;
+  cmd?: string | string[];
+  uuid?: string;
+  'working-dir'?: string;
+  'image-path'?: string;
+  'exclude-global-prep-cmd'?: boolean;
+  elevated?: boolean;
+  'auto-detach'?: boolean;
+  'wait-all'?: boolean;
+  'exit-timeout'?: number;
+  'prep-cmd'?: Array<{ do?: string; undo?: string; elevated?: boolean }>;
+  detached?: string[];
+}
+
+interface AppEditModalProps {
+  modelValue: boolean;
+  app?: ServerApp | null;
+  index?: number;
+}
+
+const props = defineProps<AppEditModalProps>();
+const emit = defineEmits<{
+  (e: 'update:modelValue', v: boolean): void;
+  (e: 'saved'): void;
+  (e: 'deleted'): void;
+}>();
+const open = computed<boolean>(() => !!props.modelValue);
+function fresh(): AppForm {
   return {
+    index: -1,
     name: '',
     cmd: '',
-    index: -1,
-    'exclude-global-prep-cmd': false,
+    workingDir: '',
+    imagePath: '',
+    excludeGlobalPrepCmd: false,
     elevated: false,
-    'auto-detach': true,
-    'wait-all': true,
-    'exit-timeout': 5,
-    'prep-cmd': [],
+    autoDetach: true,
+    waitAll: true,
+    exitTimeout: 5,
+    prepCmd: [],
     detached: [],
-    'image-path': '',
-    'working-dir': '',
+    output: '',
   };
 }
-const form = reactive(fresh());
-// Apply incoming props to local form state
-function applyFromProps() {
-  const copy = JSON.parse(JSON.stringify(props.app || {}));
-  if (Array.isArray(copy.cmd)) copy.cmd = copy.cmd.join(' ');
-  Object.assign(form, fresh(), copy);
-  form.index = props.index ?? -1;
+const form = ref<AppForm>(fresh());
+
+function fromServerApp(src?: ServerApp | null, idx: number = -1): AppForm {
+  const base = fresh();
+  if (!src) return { ...base, index: idx };
+  const cmdStr = Array.isArray(src.cmd) ? src.cmd.join(' ') : (src.cmd ?? '');
+  const prep = Array.isArray(src['prep-cmd'])
+    ? src['prep-cmd'].map((p) => ({ do: String(p?.do ?? ''), undo: String(p?.undo ?? ''), elevated: !!p?.elevated }))
+    : [];
+  return {
+    index: idx,
+    name: String(src.name ?? ''),
+    output: String(src.output ?? ''),
+    cmd: String(cmdStr ?? ''),
+    workingDir: String(src['working-dir'] ?? ''),
+    imagePath: String(src['image-path'] ?? ''),
+    excludeGlobalPrepCmd: !!src['exclude-global-prep-cmd'],
+    elevated: !!src.elevated,
+    autoDetach: src['auto-detach'] !== undefined ? !!src['auto-detach'] : base.autoDetach,
+    waitAll: src['wait-all'] !== undefined ? !!src['wait-all'] : base.waitAll,
+    exitTimeout: typeof src['exit-timeout'] === 'number' ? src['exit-timeout'] : base.exitTimeout,
+    prepCmd: prep,
+    detached: Array.isArray(src.detached) ? src.detached.map((s) => String(s)) : []
+  };
 }
-const cmdText = computed({
-  get() {
-    return form.cmd || '';
-  },
-  set(v) {
-    form.cmd = v;
-  },
-});
+
+function toServerPayload(f: AppForm): Record<string, any> {
+  const payload: Record<string, any> = {
+    name: f.name,
+    output: f.output,
+    cmd: f.cmd,
+    'working-dir': f.workingDir,
+    'image-path': String(f.imagePath || '').replace(/\"/g, ''),
+    'exclude-global-prep-cmd': !!f.excludeGlobalPrepCmd,
+    elevated: !!f.elevated,
+    'auto-detach': !!f.autoDetach,
+    'wait-all': !!f.waitAll,
+    'exit-timeout': Number.isFinite(f.exitTimeout) ? f.exitTimeout : 5,
+    'prep-cmd': f.prepCmd.map((p) => ({ do: p.do, undo: p.undo, ...(isWindows.value ? { elevated: !!p.elevated } : {}) })),
+    detached: Array.isArray(f.detached) ? f.detached : [],
+  };
+  return payload;
+}
+// Normalize cmd to single string; rehydrate typed form when props.app changes while open
 watch(
-  open,
-  (o) => {
-    if (o) {
-      applyFromProps();
-      // Update scroll shadows after content paints
-      requestAnimationFrame(() => updateShadows());
-    }
+  () => props.app,
+  (val) => {
+    if (!open.value) return;
+    form.value = fromServerApp(val as ServerApp | undefined, props.index ?? -1);
   },
   { immediate: true },
 );
-// If the bound app changes while open, refresh the form
-watch(
-  () => props.app,
-  () => {
-    if (!open.value) return;
-    applyFromProps();
+const cmdText = computed<string>({
+  get: () => form.value.cmd || '',
+  set: (v: string) => {
+    form.value.cmd = v;
   },
-);
+});
+// Unified name combobox state (supports Playnite suggestions + free-form)
+const nameSelectValue = ref<string>('');
+const nameOptions = ref<{ label: string; value: string }[]>([]);
+const nameSearchQuery = ref('');
+
+
+watch(open, (o) => {
+  if (o) {
+    form.value = fromServerApp(props.app ?? undefined, props.index ?? -1);
+    // Update scroll shadows after content paints
+    requestAnimationFrame(() => updateShadows());
+  }
+});
 function close() {
   emit('update:modelValue', false);
 }
 function addPrep() {
-  form['prep-cmd'].push({
+  form.value.prepCmd.push({
     do: '',
     undo: '',
-    ...(props.platform === 'windows' ? { elevated: false } : {}),
+    ...(isWindows.value ? { elevated: false } : {}),
   });
   requestAnimationFrame(() => updateShadows());
 }
-const saving = reactive({ v: false });
+const saving = ref(false);
 const showDeleteConfirm = ref(false);
 
+// Cover finder state (disabled for Playnite-managed apps)
+type CoverCandidate = { name: string; key: string; url: string; saveUrl: string };
+const showCoverModal = ref(false);
+const coverSearching = ref(false);
+const coverBusy = ref(false);
+const coverCandidates = ref<CoverCandidate[]>([]);
+
+function getSearchBucket(name: string) {
+  const prefix = (name || '')
+    .substring(0, Math.min((name || '').length, 2))
+    .toLowerCase()
+    .replace(/[^a-z\d]/g, '');
+  return prefix || '@';
+}
+
+async function searchCovers(name: string): Promise<CoverCandidate[]> {
+  if (!name) return [];
+  const searchName = name.replace(/\s+/g, '.').toLowerCase();
+  // Use raw.githubusercontent.com to avoid CORS issues
+  const dbUrl = 'https://raw.githubusercontent.com/LizardByte/GameDB/gh-pages';
+  const bucket = getSearchBucket(name);
+  const res = await fetch(`${dbUrl}/buckets/${bucket}.json`);
+  if (!res.ok) return [];
+  const maps = await res.json();
+  const ids = Object.keys(maps || {});
+  const promises = ids.map(async (id) => {
+    const item = maps[id];
+    if (!item?.name) return null;
+    if (String(item.name).replace(/\s+/g, '.').toLowerCase().startsWith(searchName)) {
+      try {
+        const r = await fetch(`${dbUrl}/games/${id}.json`);
+        return await r.json();
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+  const results = (await Promise.all(promises)).filter(Boolean) as any[];
+  return results
+    .filter((item) => item && item.cover && item.cover.url)
+    .map((game) => {
+      const thumb: string = game.cover.url;
+      const dotIndex = thumb.lastIndexOf('.');
+      const slashIndex = thumb.lastIndexOf('/');
+      if (dotIndex < 0 || slashIndex < 0) return null as any;
+      const slug = thumb.substring(slashIndex + 1, dotIndex);
+      return {
+        name: game.name,
+        key: `igdb_${game.id}`,
+        url: `https://images.igdb.com/igdb/image/upload/t_cover_big/${slug}.jpg`,
+        saveUrl: `https://images.igdb.com/igdb/image/upload/t_cover_big_2x/${slug}.png`,
+      } as CoverCandidate;
+    })
+    .filter(Boolean);
+}
+
+async function openCoverFinder() {
+  coverCandidates.value = [];
+  showCoverModal.value = true;
+  coverSearching.value = true;
+  try {
+    coverCandidates.value = await searchCovers(String(form.value.name || ''));
+  } finally {
+    coverSearching.value = false;
+  }
+}
+
+async function useCover(cover: CoverCandidate) {
+  if (!cover || coverBusy.value) return;
+  coverBusy.value = true;
+  try {
+    const r = await http.post(
+      './api/covers/upload',
+      { key: cover.key, url: cover.saveUrl },
+      { headers: { 'Content-Type': 'application/json' }, validateStatus: () => true },
+    );
+    if (r.status >= 200 && r.status < 300 && r.data && (r.data as any).path) {
+      form.value.imagePath = String((r.data as any).path || '');
+      showCoverModal.value = false;
+    }
+  } finally {
+    coverBusy.value = false;
+  }
+}
+
+const configStore = useConfigStore();
+const isWindows = computed(() => (configStore.metadata?.platform || '').toLowerCase() === 'windows');
+
+
+
+
 function addDetached() {
-  form.detached.push('');
+  form.value.detached.push('');
   requestAnimationFrame(() => updateShadows());
 }
 
@@ -319,7 +569,6 @@ function onBodyScroll() {
   updateShadows();
 }
 
-import { onMounted, onBeforeUnmount } from 'vue';
 let ro: ResizeObserver | null = null;
 onMounted(() => {
   const el = bodyRef.value;
@@ -343,11 +592,13 @@ onBeforeUnmount(() => {
   ro = null;
 });
 
-// Cover preview logic removed; Sunshine no longer fetches or proxies images
+
+
 async function save() {
-  saving.v = true;
-  const payload = JSON.parse(JSON.stringify(form));
+  saving.value = true;
   try {
+    // If on Windows and name exactly matches a Playnite game, auto-link it
+    const payload = toServerPayload(form.value);
     await http.post('./api/apps', payload, {
       headers: { 'Content-Type': 'application/json' },
       validateStatus: () => true,
@@ -355,19 +606,18 @@ async function save() {
     emit('saved');
     close();
   } finally {
-    saving.v = false;
+    saving.value = false;
   }
 }
+
 async function del() {
-  saving.v = true;
+  saving.value = true;
   try {
-    const res = await http.delete(`./api/apps/${form.index}`, { validateStatus: () => true });
-    if (res && res.status >= 200 && res.status < 300) {
-      emit('deleted');
-      close();
-    }
+    await http.delete(`./api/apps/${form.value.index}`, { validateStatus: () => true });
+    emit('deleted');
+    close();
   } finally {
-    saving.v = false;
+    saving.value = false;
   }
 }
 </script>

@@ -1,12 +1,14 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   darkMode: 'class',
-  // Paths are relative to this config file's directory
+  // Limit scanning to source files; avoid node_modules for performance
   content: [
     './index.html',
-    './**/*.{html,js,ts,vue}',
-    '!./node_modules/**',
-    '!./dist/**',
+    './*.{vue,js,ts,html}',
+    './components/**/*.{vue,js,ts}',
+    './views/**/*.{vue,js,ts}',
+    './configs/**/*.{vue,js,ts}',
+    './stores/**/*.{js,ts}',
   ],
   theme: {
     extend: {

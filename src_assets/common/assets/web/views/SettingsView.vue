@@ -151,7 +151,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, markRaw } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, markRaw, defineAsyncComponent } from 'vue';
 import { NInput, NButton } from 'naive-ui';
 import { useRoute, useRouter } from 'vue-router';
 import General from '@/configs/tabs/General.vue';

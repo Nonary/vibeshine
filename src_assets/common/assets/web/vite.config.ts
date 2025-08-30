@@ -1,9 +1,11 @@
 import fs from 'fs';
 import { resolve } from 'path';
-import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
+import Components from 'unplugin-vue-components/vite';
+import { NaiveUiResolver } from 'unplugin-vue-components/resolvers';
 import vue from '@vitejs/plugin-vue';
 import { ViteEjsPlugin } from 'vite-plugin-ejs';
+import { fileURLToPath } from 'url';
 
 // Resolve directory of this config file (works even if the folder was moved)
 const CONFIG_DIR = fileURLToPath(new URL('.', import.meta.url));
@@ -71,7 +73,20 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: { '@': resolve(assetsSrcPath) },
     },
-    plugins: [vue(), ViteEjsPlugin({ header })],
+    // Help Rollup/ESBuild drop unused Vue features for smaller bundles
+    define: {
+      __VUE_OPTIONS_API__: false,
+      __VUE_PROD_DEVTOOLS__: false,
+    },
+    plugins: [
+      vue(),
+      Components({
+        // Auto-import only used Naive UI components to minimize bundle
+        resolvers: [NaiveUiResolver()],
+        dts: false,
+      }),
+      ViteEjsPlugin({ header }),
+    ],
     css: {
       // Include CSS sources in sourcemaps during debug
       devSourcemap: isDebug,

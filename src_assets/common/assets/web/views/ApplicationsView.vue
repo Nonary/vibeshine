@@ -52,7 +52,7 @@
     />
   </div>
 </template>
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import AppEditModal from '@/components/AppEditModal.vue';
 import { useAppsStore } from '@/stores/apps';
@@ -68,12 +68,14 @@ const currentIndex = ref(-1);
 async function reload() {
   await appsStore.loadApps(true);
 }
-function openAdd() {
+
+function openAdd(): void {
   currentApp.value = null;
   currentIndex.value = -1;
   showModal.value = true;
 }
-function openEdit(app, i) {
+
+function openEdit(app: AppsListItem, i: number): void {
   currentApp.value = app;
   currentIndex.value = i;
   showModal.value = true;
