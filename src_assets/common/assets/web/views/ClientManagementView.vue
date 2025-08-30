@@ -55,12 +55,7 @@
           <n-alert v-if="pairStatus === true" type="success">{{ $t('pin.pair_success') }}</n-alert>
           <n-alert v-if="pairStatus === false" type="error">{{ $t('pin.pair_failure') }}</n-alert>
         </div>
-        <n-alert
-          type="warning"
-          class="text-sm"
-          :show-icon="true"
-          :title="$t('_common.warning')"
-        >
+        <n-alert type="warning" class="text-sm" :show-icon="true" :title="$t('_common.warning')">
           {{ $t('pin.warning_msg') }}
         </n-alert>
       </div>

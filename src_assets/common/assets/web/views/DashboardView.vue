@@ -14,17 +14,11 @@
           </p>
         </div>
         <div class="flex items-center gap-2 shrink-0">
-          <RouterLink
-            to="/settings"
-            class="btn btn-primary"
-          >
+          <RouterLink to="/settings" class="btn btn-primary">
             <i class="fas fa-sliders" />
             <span>Settings</span>
           </RouterLink>
-          <RouterLink
-            to="/applications"
-            class="btn btn-secondary"
-          >
+          <RouterLink to="/applications" class="btn btn-secondary">
             <i class="fas fa-th" />
             <span>Applications</span>
           </RouterLink>
@@ -59,10 +53,7 @@
                   </li>
                 </ul>
                 <div>
-                  <a
-                    class="btn btn-danger"
-                    href="./troubleshooting#logs"
-                  >
+                  <a class="btn btn-danger" href="./troubleshooting#logs">
                     <i class="fas fa-file-lines" /> {{ $t('index.view_logs') || 'View Logs' }}
                   </a>
                 </div>
