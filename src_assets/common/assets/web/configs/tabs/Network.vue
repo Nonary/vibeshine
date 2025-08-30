@@ -67,7 +67,7 @@ const encryptionModeOptionsWan = [
         v-model:value="config.port"
         :min="1029"
         :max="65514"
-        :placeholder="defaultMoonlightPort"
+        :placeholder="String(defaultMoonlightPort)"
       />
       <div class="text-[11px] opacity-60 mt-1">
         {{ $t('config.port_desc') }}
@@ -243,7 +243,7 @@ const encryptionModeOptionsWan = [
         v-model:value="config.ping_timeout"
         :min="0"
         :step="100"
-        :placeholder="10000"
+        placeholder="10000"
       />
       <div class="text-[11px] opacity-60 mt-1">
         {{ $t('config.ping_timeout_desc') }}

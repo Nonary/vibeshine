@@ -134,21 +134,20 @@
         <div v-if="restarted" class="text-success">Restart triggered.</div>
       </transition>
     </div>
-  </main>
-
-  <transition name="slide-fade">
-    <div
-      v-if="(dirty && !autoSave) || store.manualDirty === true"
-      class="fixed bottom-4 right-6 z-30"
-    >
+    <transition name="slide-fade">
       <div
-        class="bg-light/90 dark:bg-surface/90 backdrop-blur rounded-lg shadow border border-dark/10 dark:border-light/10 px-4 py-2 flex items-center gap-3"
+        v-if="(dirty && !autoSave) || store.manualDirty === true"
+        class="fixed bottom-4 right-6 z-30"
       >
-        <span class="text-[11px] font-medium">Unsaved changes</span>
-        <n-button :disabled="saveState === 'saving'" @click="save">Save</n-button>
+        <div
+          class="bg-light/90 dark:bg-surface/90 backdrop-blur rounded-lg shadow border border-dark/10 dark:border-light/10 px-4 py-2 flex items-center gap-3"
+        >
+          <span class="text-[11px] font-medium">Unsaved changes</span>
+          <n-button :disabled="saveState === 'saving'" @click="save">Save</n-button>
+        </div>
       </div>
-    </div>
-  </transition>
+    </transition>
+  </main>
 </template>
 
 <script setup>
