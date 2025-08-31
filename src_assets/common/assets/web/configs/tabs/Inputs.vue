@@ -99,18 +99,18 @@ const gamepadOptions = computed(() => {
                 >
                   <!-- Gamepad with motion-capability as DS4(Windows)/DS5(Linux) -->
                   <Checkbox
-                    class="mb-3"
                     id="motion_as_ds4"
-                    locale-prefix="config"
                     v-model="config.motion_as_ds4"
+                    class="mb-3"
+                    locale-prefix="config"
                     default="true"
                   ></Checkbox>
                   <!-- Gamepad with touch-capability as DS4(Windows)/DS5(Linux) -->
                   <Checkbox
-                    class="mb-3"
                     id="touchpad_as_ds4"
-                    locale-prefix="config"
                     v-model="config.touchpad_as_ds4"
+                    class="mb-3"
+                    locale-prefix="config"
                     default="true"
                   ></Checkbox>
                 </template>
@@ -122,10 +122,10 @@ const gamepadOptions = computed(() => {
                   "
                 >
                   <Checkbox
-                    class="mb-3"
                     id="ds4_back_as_touchpad_click"
-                    locale-prefix="config"
                     v-model="config.ds4_back_as_touchpad_click"
+                    class="mb-3"
+                    locale-prefix="config"
                     default="true"
                   ></Checkbox>
                 </template>
@@ -136,10 +136,10 @@ const gamepadOptions = computed(() => {
                   "
                 >
                   <Checkbox
-                    class="mb-3"
                     id="ds5_inputtino_randomize_mac"
-                    locale-prefix="config"
                     v-model="config.ds5_inputtino_randomize_mac"
+                    class="mb-3"
+                    locale-prefix="config"
                     default="true"
                   ></Checkbox>
                 </template>

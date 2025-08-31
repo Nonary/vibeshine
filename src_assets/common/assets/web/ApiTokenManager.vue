@@ -421,9 +421,7 @@ function addScope(): void {
   const existingIdx = scopes.value.findIndex((s) => s.path === draft.path);
   if (existingIdx !== -1) {
     // Merge and de-duplicate
-    const merged = Array.from(
-      new Set([...scopes.value[existingIdx].methods, ...methods]),
-    ) as string[];
+    const merged = Array.from(new Set([...scopes.value[existingIdx].methods, ...methods]));
     scopes.value[existingIdx] = { path: draft.path, methods: merged };
   } else {
     scopes.value.push({ path: draft.path, methods });

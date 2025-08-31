@@ -281,7 +281,7 @@ async function refreshLogs() {
       // Count new lines before replacing
       const prev = logs.value || '';
       const prevCount = prev ? prev.split('\n').length : 0;
-      const nextText = r.data as string;
+      const nextText = r.data;
       const nextCount = nextText ? nextText.split('\n').length : 0;
 
       logs.value = nextText;

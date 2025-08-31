@@ -323,7 +323,7 @@ export const useConfigStore = defineStore('config', () => {
 
   function updateOption(key: string, value: any) {
     if (!config.value) return;
-    (config.value as any)[key] = value; // triggers setter (handles manual/auto)
+    config.value[key] = value; // triggers setter (handles manual/auto)
   }
 
   // Explicitly mark a manual-dirty change (e.g., when mutating nested fields)
@@ -398,7 +398,7 @@ export const useConfigStore = defineStore('config', () => {
       try {
         const mr = await http.get('/api/metadata');
         if (mr.status === 200 && mr.data) {
-          const m = { ...(mr.data as any) } as MetaInfo;
+          const m = { ...mr.data } as MetaInfo;
           // Normalize platform identifiers across build/runtime variations
           const raw = String((m as any).platform || '').toLowerCase();
           let norm = raw;

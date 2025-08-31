@@ -258,7 +258,6 @@ async function runVersionChecks() {
         'https://api.github.com/repos/LizardByte/Sunshine/releases/latest',
       ).then((r) => r.json());
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.warn('[Dashboard] latest release fetch failed', e);
     }
     try {
@@ -268,7 +267,6 @@ async function runVersionChecks() {
       const pre = Array.isArray(releases) ? releases.find((r) => r.prerelease) : null;
       if (pre) preReleaseRelease.value = pre;
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.warn('[Dashboard] releases list fetch failed', e);
     }
 
@@ -307,7 +305,6 @@ async function runVersionChecks() {
           }
         }
       } catch (e) {
-        // eslint-disable-next-line no-console
         console.warn('Compare API failed', e);
       } finally {
         compareChecked.value = true;
@@ -317,14 +314,12 @@ async function runVersionChecks() {
       compareChecked.value = true;
     }
   } catch (e) {
-    // eslint-disable-next-line no-console
     console.error('[Dashboard] version checks failed', e);
   }
   try {
     // logs only after auth
     logs.value = await fetch('./api/logs').then((r) => r.text());
   } catch (e) {
-    // eslint-disable-next-line no-console
     console.error('[Dashboard] logs fetch failed', e);
   }
   loading.value = false;

@@ -166,7 +166,7 @@ function removeCmd(index: number) {
         </div>
       </div>
       <div class="mt-4">
-        <n-button primary @click="addCmd" class="mx-auto block">
+        <n-button primary class="mx-auto block" @click="addCmd">
           &plus; {{ $t('config.add') }}
         </n-button>
       </div>

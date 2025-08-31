@@ -28,7 +28,7 @@
           >
             <div class="min-w-0 flex-1">
               <div class="text-sm font-semibold truncate">{{ app.name || '(untitled)' }}</div>
-              <div class="mt-0.5 text-[11px] opacity-60 truncate" v-if="app['working-dir']">
+              <div v-if="app['working-dir']" class="mt-0.5 text-[11px] opacity-60 truncate">
                 {{ app['working-dir'] }}
               </div>
             </div>

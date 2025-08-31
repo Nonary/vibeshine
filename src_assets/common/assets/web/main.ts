@@ -59,7 +59,7 @@ initApp(app, async () => {
     watch(
       () => configStore.config?.locale,
       async (loc) => {
-        const locale = (loc as any) ?? 'en';
+        const locale = loc ?? 'en';
         await ensureLocaleLoaded(locale);
       },
       { immediate: true },

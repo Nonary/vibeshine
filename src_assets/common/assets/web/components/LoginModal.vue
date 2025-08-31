@@ -133,7 +133,6 @@ async function submit() {
     ) {
       anyAuth.loggingIn.value = state;
     } else if (import.meta.env && (import.meta as any).env && (import.meta as any).env.DEV) {
-      // eslint-disable-next-line no-console
       console.warn('[LoginModal] auth.loggingIn ref missing; skipping toggle');
     }
   };

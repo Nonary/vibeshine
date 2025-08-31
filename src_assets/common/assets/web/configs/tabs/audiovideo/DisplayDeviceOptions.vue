@@ -55,8 +55,8 @@ function isRemapping(obj: unknown): obj is DdModeRemapping {
 }
 
 function getRemapping(): DdModeRemapping | null {
-  const v = (config.value as any)?.dd_mode_remapping;
-  return isRemapping(v) ? (v as DdModeRemapping) : null;
+  const v = config.value?.dd_mode_remapping;
+  return isRemapping(v) ? v : null;
 }
 
 function canBeRemapped(): boolean {

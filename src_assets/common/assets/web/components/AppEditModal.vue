@@ -497,7 +497,7 @@ async function searchCovers(name: string): Promise<CoverCandidate[]> {
     }
     return null;
   });
-  const results = (await Promise.all(promises)).filter(Boolean) as any[];
+  const results = (await Promise.all(promises)).filter(Boolean);
   return results
     .filter((item) => item && item.cover && item.cover.url)
     .map((game) => {
@@ -536,8 +536,8 @@ async function useCover(cover: CoverCandidate) {
       { key: cover.key, url: cover.saveUrl },
       { headers: { 'Content-Type': 'application/json' }, validateStatus: () => true },
     );
-    if (r.status >= 200 && r.status < 300 && r.data && (r.data as any).path) {
-      form.value.imagePath = String((r.data as any).path || '');
+    if (r.status >= 200 && r.status < 300 && r.data && r.data.path) {
+      form.value.imagePath = String(r.data.path || '');
       showCoverModal.value = false;
     }
   } finally {
