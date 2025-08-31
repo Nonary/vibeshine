@@ -26,8 +26,8 @@ function findRepoRoot(startDir: string): string {
 function resolveAssetsSrcPath(): string {
   let src = CONFIG_DIR; // default to the folder containing this config
 
-  if (!process.env.SUNSHINE_BUILD_HOMEBREW && process.env.SUNSHINE_SOURCE_ASSETS_DIR) {
-    const override = fs.realpathSync(process.env.SUNSHINE_SOURCE_ASSETS_DIR);
+  if (!process.env['SUNSHINE_BUILD_HOMEBREW'] && process.env['SUNSHINE_SOURCE_ASSETS_DIR']) {
+    const override = fs.realpathSync(process.env['SUNSHINE_SOURCE_ASSETS_DIR'] as string);
     // If override points directly to a folder with index.html, use it
     if (fs.existsSync(resolve(override, 'index.html'))) {
       src = override;
@@ -51,9 +51,9 @@ function resolveAssetsDstPath(): string {
   const repoRoot = findRepoRoot(CONFIG_DIR);
   let dst = resolve(repoRoot, 'build/assets/web');
 
-  if (!process.env.SUNSHINE_BUILD_HOMEBREW && process.env.SUNSHINE_ASSETS_DIR) {
+  if (!process.env['SUNSHINE_BUILD_HOMEBREW'] && process.env['SUNSHINE_ASSETS_DIR']) {
     // Keep legacy behavior: env points to install root, append assets/web
-    dst = resolve(fs.realpathSync(process.env.SUNSHINE_ASSETS_DIR), 'assets/web');
+    dst = resolve(fs.realpathSync(process.env['SUNSHINE_ASSETS_DIR'] as string), 'assets/web');
   }
 
   return dst;

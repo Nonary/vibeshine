@@ -420,8 +420,9 @@ function addScope(): void {
   const methods = Array.from(new Set(draft.selectedMethods.map((m) => m.toUpperCase())));
   const existingIdx = scopes.value.findIndex((s) => s.path === draft.path);
   if (existingIdx !== -1) {
-    // Merge and de-duplicate
-    const merged = Array.from(new Set([...scopes.value[existingIdx].methods, ...methods]));
+    // Merge and de-duplicate (guard against undefined index access)
+    const cur = scopes.value[existingIdx];
+    const merged = Array.from(new Set([...(cur?.methods ?? []), ...methods]));
     scopes.value[existingIdx] = { path: draft.path, methods: merged };
   } else {
     scopes.value.push({ path: draft.path, methods });
@@ -440,9 +441,10 @@ function getEffectiveScopes(): Scope[] {
     const methods = Array.from(new Set(draft.selectedMethods.map((m) => m.toUpperCase())));
     const idx = s.findIndex((x) => x.path === draft.path);
     if (idx !== -1) {
+      const cur = s[idx];
       s[idx] = {
         path: draft.path,
-        methods: Array.from(new Set([...(s[idx].methods || []), ...methods])),
+        methods: Array.from(new Set([...(cur?.methods ?? []), ...methods])),
       };
     } else {
       s.push({ path: draft.path, methods });

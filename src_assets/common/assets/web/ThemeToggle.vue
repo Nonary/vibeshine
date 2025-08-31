@@ -35,7 +35,7 @@ const activeIcon = computed(() => {
     dark: 'fa-solid fa-moon',
     auto: 'fa-solid fa-circle-half-stroke',
   } as Record<string, string>;
-  return m[current.value] || m.auto;
+  return m[current.value] || m['auto'];
 });
 
 type ThemeKey = 'light' | 'dark' | 'auto';

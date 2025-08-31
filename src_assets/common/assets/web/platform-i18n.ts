@@ -13,7 +13,8 @@ class PlatformMessageI18n {
 
   getMessageUsingPlatform(key: string, defaultMsg?: string): string {
     const realKey = this.getPlatformKey(key, this.platform);
-    const i18n = inject('i18n');
+    const i18n = inject<{ t: (k: string) => string } | undefined>('i18n');
+    if (!i18n || typeof i18n.t !== 'function') return defaultMsg ?? realKey;
     let message = i18n.t(realKey);
 
     if (message !== realKey) {

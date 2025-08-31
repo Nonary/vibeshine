@@ -179,7 +179,11 @@
             <div v-if="form.detached.length === 0" class="text-[12px] opacity-60">None</div>
             <div v-else class="space-y-2">
               <div v-for="(d, i) in form.detached" :key="i" class="flex gap-2 items-center">
-                <n-input v-model:value="form.detached[i]" class="font-mono flex-1" />
+                <n-input
+                  :value="form.detached[i] ?? ''"
+                  @update:value="(v) => (form.detached[i] = String(v))"
+                  class="font-mono flex-1"
+                />
                 <n-button secondary @click="form.detached.splice(i, 1)">
                   <i class="fas fa-times" />
                 </n-button>

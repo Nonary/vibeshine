@@ -241,8 +241,11 @@ const mobileMenuOptions = computed(() => {
   ];
 });
 
-function onMobileSelect(key: string | number) {
-  if (key === '__logout') return logout();
+function onMobileSelect(key: string | number): void {
+  if (key === '__logout') {
+    void logout();
+    return;
+  }
   if (typeof key === 'string') router.push(key);
 }
 
@@ -258,6 +261,6 @@ const sizes: Record<string, string> = {
 function containerClass(r: any) {
   const routeSize = r?.meta?.container;
   const size = routeSize ?? (metadata.value as any)?.container ?? 'lg';
-  return `${base} ${sizes[size] || sizes.lg}`;
+  return `${base} ${sizes[size] || sizes['lg']}`;
 }
 </script>

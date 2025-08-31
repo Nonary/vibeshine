@@ -380,10 +380,11 @@ const fancyLogs = computed(() => {
   const rawLogLines = logs.value.split(regex).splice(1);
   const logLines = [];
   for (let i = 0; i < rawLogLines.length; i += 2) {
+    const val = rawLogLines[i + 1] ?? '';
     logLines.push({
       timestamp: rawLogLines[i],
-      level: rawLogLines[i + 1].split(':')[0],
-      value: rawLogLines[i + 1],
+      level: val.split(':')[0],
+      value: val,
     });
   }
   return logLines;

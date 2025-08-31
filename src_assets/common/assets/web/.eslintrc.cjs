@@ -95,12 +95,10 @@ module.exports = {
               },
               object: { message: 'Use a specific object type.' },
               null: {
-                message:
-                  'Avoid `null` types; model absence with optional props or ADTs.',
+                message: 'Avoid `null` types; model absence with optional props or ADTs.',
               },
               undefined: {
-                message:
-                  'Avoid `undefined` types; use optionals or domain types.',
+                message: 'Avoid `undefined` types; use optionals or domain types.',
               },
             },
           },
@@ -117,8 +115,7 @@ module.exports = {
           },
           {
             selector: 'TSUnionType > TSUndefinedKeyword',
-            message:
-              'Do not use `undefined` in union types. Prefer optional props (foo?: T).',
+            message: 'Do not use `undefined` in union types. Prefer optional props (foo?: T).',
           },
           {
             selector: 'TSAsExpression > TSAnyKeyword',
@@ -127,8 +124,7 @@ module.exports = {
           {
             selector:
               "TSAsExpression[right.type='TSTypeReference'] > TSAsExpression > TSUnknownKeyword",
-            message:
-              'Do not double-assert via `unknown`. Fix the types instead.',
+            message: 'Do not double-assert via `unknown`. Fix the types instead.',
           },
         ],
 
