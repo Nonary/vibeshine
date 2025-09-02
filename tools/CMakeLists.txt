@@ -41,10 +41,8 @@ target_link_libraries(sunshine_display_helper
         ${Boost_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
         libdisplaydevice::display_device
-        ${FFMPEG_LIBRARIES}
         user32
         wtsapi32
         advapi32
         ${PLATFORM_LIBRARIES})
 target_compile_options(sunshine_display_helper PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
-target_include_directories(sunshine_display_helper PRIVATE ${FFMPEG_INCLUDE_DIRS})
