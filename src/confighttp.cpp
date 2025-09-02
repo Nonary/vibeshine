@@ -25,7 +25,6 @@
 #include "confighttp.h"
 #include "crypto.h"
 #include "display_device.h"
-#include <display_device/json.h>
 #include "file_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
@@ -36,6 +35,8 @@
 #include "process.h"
 #include "utility.h"
 #include "uuid.h"
+
+#include <display_device/json.h>
 
 using namespace std::literals;
 
@@ -130,8 +131,6 @@ namespace confighttp {
     response->write(SimpleWeb::StatusCode::redirection_temporary_redirect, headers);
   }
 
-  
-
   /**
    * @brief Authenticate the user.
    * @param response The HTTP response object.
@@ -201,7 +200,7 @@ namespace confighttp {
     } catch (const std::exception &e) {
       nlohmann::json tree;
       tree["status"] = false;
-      tree["error"] = std::string{"Failed to enumerate display devices: "} + e.what();
+      tree["error"] = std::string {"Failed to enumerate display devices: "} + e.what();
       send_response(response, tree);
     }
   }
