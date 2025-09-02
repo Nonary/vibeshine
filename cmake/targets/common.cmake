@@ -27,6 +27,14 @@ endif()
 
 target_link_libraries(sunshine ${SUNSHINE_EXTERNAL_LIBRARIES} ${EXTRA_LIBS})
 target_compile_definitions(sunshine PUBLIC ${SUNSHINE_DEFINITIONS})
+
+# Logging integration flags
+target_compile_definitions(sunshine PRIVATE SETUP_AV_LOGGING=1)
+if (NOT ANDROID)
+    target_compile_definitions(sunshine PRIVATE
+            SETUP_LIBDISPLAYDEVICE_LOGGING=1
+            SUNSHINE_USE_DISPLAYDEVICE_LOGGING=1)
+endif()
 set_target_properties(sunshine PROPERTIES CXX_STANDARD 23
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR})
