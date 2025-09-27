@@ -357,10 +357,8 @@ onMounted(() => {
       >
         <div class="text-[13px] font-medium">{{ t('rtss.sync_limiter_help_heading') }}</div>
         <div class="mt-1 opacity-80">{{ t('rtss.sync_limiter_help_blurb') }}</div>
-        <div class="mt-2 text-[11px] opacity-70 sm:hidden">
-          💡 Swipe left/right to view all columns
-        </div>
-        <div class="mt-3 sync-limiter-help-table">
+        <!-- Desktop: Table layout -->
+        <div class="mt-3 hidden sm:block">
           <n-table size="small" :single-line="false" :bordered="false" class="min-w-full text-left">
             <thead>
               <tr class="border-b border-primary/30 text-[11px] uppercase tracking-wide opacity-70">
@@ -402,6 +400,45 @@ onMounted(() => {
             </tbody>
           </n-table>
         </div>
+
+        <!-- Mobile: Card layout -->
+        <div class="mt-3 space-y-3 sm:hidden">
+          <div
+            v-for="row in syncLimiterHelpRows"
+            :key="row.id"
+            class="rounded-lg border border-primary/20 bg-primary/5 p-3"
+          >
+            <h5 class="font-semibold text-[13px] mb-2">{{ row.label }}</h5>
+            <div class="space-y-2 text-[12px]">
+              <div class="flex justify-between">
+                <span class="opacity-70">{{ t('rtss.sync_limiter_help_latency') }}:</span>
+                <span>{{ row.latency }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="opacity-70">{{ t('rtss.sync_limiter_help_stutter') }}:</span>
+                <span>{{ row.stutter }}</span>
+              </div>  
+              <div class="border-t border-primary/20 pt-2">
+                <div class="mb-1">
+                  <span class="opacity-70 font-medium">{{ t('rtss.sync_limiter_help_advantages') }}:</span>
+                </div>
+                <div class="text-[11px]">{{ row.advantages }}</div>
+              </div>
+              <div>
+                <div class="mb-1">
+                  <span class="opacity-70 font-medium">{{ t('rtss.sync_limiter_help_disadvantages') }}:</span>
+                </div>
+                <div class="text-[11px]">{{ row.disadvantages }}</div>
+              </div>
+              <div class="border-t border-primary/20 pt-2">
+                <div class="mb-1">
+                  <span class="opacity-70 font-medium">{{ t('rtss.sync_limiter_help_usage') }}:</span>
+                </div>
+                <div class="text-[11px] font-medium">{{ row.use }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
         <div v-if="showSyncLimiterSelect" class="mt-4 space-y-2">
           <label class="form-label" for="rtss_frame_limit_type">{{
             t('frameLimiter.syncLimiterLabel')
@@ -429,25 +466,6 @@ onMounted(() => {
   :deep(legend) {
     padding-left: 0.5rem !important;
     padding-right: 0.5rem !important;
-  }
-
-  /* Make help table horizontally scrollable on mobile */
-  .sync-limiter-help-table {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  /* Ensure table maintains minimum width for readability */
-  .sync-limiter-help-table :deep(table) {
-    min-width: 800px;
-  }
-
-  /* Reduce table cell padding on mobile */
-  .sync-limiter-help-table :deep(th),
-  .sync-limiter-help-table :deep(td) {
-    padding-left: 0.5rem !important;
-    padding-right: 0.5rem !important;
-    font-size: 11px !important;
   }
 
   /* Stack form controls vertically with better spacing */
