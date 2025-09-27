@@ -552,27 +552,32 @@ watch(searchQuery, (q) => {
     .map((x) => x.it);
 });
 function jumpFirstResult() {
-  if (searchResults.value.length) goTo(searchResults.value[0]);
+  if (searchResults.value.length) void goTo(searchResults.value[0]);
 }
-function goTo(item) {
+async function goTo(item) {
   searchOpen.value = false;
-  if (item?.sectionId) goSection(item.sectionId);
-  setTimeout(() => {
-    try {
-      // Prefer flashing the visual wrapper for Naive UI controls
-      let target = item.el;
+  if (item?.sectionId) {
+    // Update route for consistency
+    goSection(item.sectionId);
+    // Directly ensure section is expanded and scroll to element
+    await scrollToOpen(item.sectionId);
+    setTimeout(() => {
       try {
-        const wrapper = target?.closest?.(
-          '.n-input, .n-select, .n-input-number, .n-checkbox, .n-switch, .form-control',
-        );
-        if (wrapper) target = wrapper;
-      } catch {}
-      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      flash(target || item.el);
-    } catch (err) {
-      console.warn('goTo: scroll/flash failed', err);
-    }
-  }, 250);
+        // Prefer flashing the visual wrapper for Naive UI controls
+        let target = item.el;
+        try {
+          const wrapper = target?.closest?.(
+            '.n-input, .n-select, .n-input-number, .n-checkbox, .n-switch, .form-control',
+          );
+          if (wrapper) target = wrapper;
+        } catch {}
+        target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        flash(target || item.el);
+      } catch (err) {
+        console.warn('goTo: scroll/flash failed', err);
+      }
+    }, 250);
+  }
 }
 function flash(el) {
   // Flash on wrapper if available so the ring isn't hidden by internal structure
