@@ -263,16 +263,17 @@ onMounted(() => {
     <div class="space-y-4">
       <div
         v-if="status || statusError"
-        :class="['rounded-lg px-4 py-3 text-[12px]', statusBadgeClass]"
+        :class="['rounded-lg px-4 py-3 text-[12px] mobile-status-badge', statusBadgeClass]"
       >
-        <div class="flex items-center justify-between gap-3">
+        <div class="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
           <div class="flex items-center gap-2">
             <i :class="statusIcon" />
             <span class="font-medium leading-tight">{{ statusMessage }}</span>
           </div>
           <n-button size="tiny" type="default" strong :loading="loading" @click="refreshStatus">
             <i class="fas fa-sync" />
-            <span class="ml-1">{{ t('frameLimiter.actions.refresh') }}</span>
+            <span class="ml-1 hidden sm:inline">{{ t('frameLimiter.actions.refresh') }}</span>
+            <span class="ml-1 sm:hidden">{{ t('frameLimiter.actions.refresh') }}</span>
           </n-button>
         </div>
         <p
@@ -291,7 +292,7 @@ onMounted(() => {
         <p v-if="statusError" class="mt-2 text-xs text-warning">{{ statusError }}</p>
       </div>
 
-      <div class="grid gap-4 md:grid-cols-2">
+      <div class="grid gap-4 md:grid-cols-2 mobile-form-grid">
         <div class="space-y-2">
           <label class="form-label" for="frame_limiter_enable">{{
             t('frameLimiter.enable')
@@ -356,7 +357,10 @@ onMounted(() => {
       >
         <div class="text-[13px] font-medium">{{ t('rtss.sync_limiter_help_heading') }}</div>
         <div class="mt-1 opacity-80">{{ t('rtss.sync_limiter_help_blurb') }}</div>
-        <div class="mt-3 overflow-x-auto">
+        <div class="mt-2 text-[11px] opacity-70 sm:hidden">
+          💡 Swipe left/right to view all columns
+        </div>
+        <div class="mt-3 sync-limiter-help-table">
           <n-table size="small" :single-line="false" :bordered="false" class="min-w-full text-left">
             <thead>
               <tr class="border-b border-primary/30 text-[11px] uppercase tracking-wide opacity-70">
@@ -414,4 +418,54 @@ onMounted(() => {
   </fieldset>
 </template>
 
-<style scoped></style>
+<style scoped>
+/* Mobile-responsive styles for Frame Limiter section */
+@media (max-width: 640px) {
+  /* Compact fieldset padding on mobile */
+  :deep(fieldset) {
+    padding: 0.75rem !important;
+  }
+
+  :deep(legend) {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+  }
+
+  /* Make help table horizontally scrollable on mobile */
+  .sync-limiter-help-table {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Ensure table maintains minimum width for readability */
+  .sync-limiter-help-table :deep(table) {
+    min-width: 800px;
+  }
+
+  /* Reduce table cell padding on mobile */
+  .sync-limiter-help-table :deep(th),
+  .sync-limiter-help-table :deep(td) {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+    font-size: 11px !important;
+  }
+
+  /* Stack form controls vertically with better spacing */
+  .mobile-form-grid {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 1rem !important;
+  }
+
+  /* Compact status badge on mobile */
+  .mobile-status-badge {
+    padding: 0.5rem !important;
+  }
+
+  /* Make buttons stack and take full width on mobile */
+  .mobile-status-badge .n-button {
+    margin-top: 0.5rem;
+    width: 100%;
+  }
+}
+</style>
