@@ -170,6 +170,11 @@ namespace platf {
     return "00:00:00:00:00:00"s;
   }
 
+  // TODO: return actual IP
+  std::string get_local_ip_for_gateway() {
+    return "";
+  }
+
   bp::child run_command(bool elevated, bool interactive, const std::string &cmd, boost::filesystem::path &working_dir, const bp::environment &env, FILE *file, std::error_code &ec, bp::group *group) {
     // clang-format off
     if (!group) {
@@ -529,6 +534,18 @@ namespace platf {
 
   std::unique_ptr<high_precision_timer> create_high_precision_timer() {
     return std::make_unique<macos_high_precision_timer>();
+  }
+
+  std::string
+  get_clipboard() {
+    // Placeholder
+    return "";
+  }
+
+  bool
+  set_clipboard(const std::string& content) {
+    // Placeholder
+    return false;
   }
 }  // namespace platf
 

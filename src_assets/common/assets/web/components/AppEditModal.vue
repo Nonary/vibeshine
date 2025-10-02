@@ -133,6 +133,18 @@
                 placeholder="C:/Games/App"
               />
             </div>
+            <div v-if="!isMac" class="space-y-1 md:col-span-1">
+              <label class="text-xs font-semibold uppercase tracking-wide opacity-70">
+                {{ $t('config.gamepad') }}
+              </label>
+              <n-select
+                v-model:value="form.gamepad"
+                :options="gamepadOptions"
+                size="small"
+                :clearable="true"
+              />
+              <p class="text-[11px] opacity-60">{{ $t('config.gamepad_desc') }}</p>
+            </div>
             <div class="space-y-1 md:col-span-1">
               <label class="text-xs font-semibold uppercase tracking-wide opacity-70"
                 >Exit Timeout</label
@@ -162,22 +174,44 @@
             </div>
           </div>
 
-          <div class="grid grid-cols-2 gap-3">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <n-checkbox v-model:checked="form.excludeGlobalPrepCmd" size="small">
-              Exclude Global Prep
+              {{ $t('apps.global_prep_name') || 'Exclude Global Prep' }}
+            </n-checkbox>
+            <n-checkbox v-model:checked="form.excludeGlobalStateCmd" size="small">
+              {{ $t('apps.global_state_name') || 'Exclude Global State' }}
             </n-checkbox>
             <n-checkbox v-if="!isPlaynite" v-model:checked="form.autoDetach" size="small">
-              Auto Detach
+              {{ $t('apps.auto_detach') || 'Auto Detach' }}
             </n-checkbox>
-            <n-checkbox v-if="!isPlaynite" v-model:checked="form.waitAll" size="small"
-              >Wait All</n-checkbox
+            <n-checkbox v-if="!isPlaynite" v-model:checked="form.waitAll" size="small">
+              {{ $t('apps.wait_all') || 'Wait All' }}
+            </n-checkbox>
+            <n-checkbox v-model:checked="form.allowClientCommands" size="small">
+              {{ $t('apps.allow_client_commands') || 'Allow Client Commands' }}
+            </n-checkbox>
+            <n-checkbox v-model:checked="form.terminateOnPause" size="small">
+              {{ $t('apps.terminate_on_pause') || 'Terminate on Pause' }}
+            </n-checkbox>
+            <n-checkbox v-if="isWindows" v-model:checked="form.virtualDisplay" size="small">
+              {{ $t('apps.virtual_display') || 'Use Virtual Display' }}
+            </n-checkbox>
+            <n-checkbox v-model:checked="form.useAppIdentity" size="small">
+              {{ $t('apps.use_app_identity') || 'Use App Identity' }}
+            </n-checkbox>
+            <n-checkbox
+              v-if="form.useAppIdentity"
+              v-model:checked="form.perClientAppIdentity"
+              size="small"
             >
+              {{ $t('apps.per_client_app_identity') || 'Per-client App Identity' }}
+            </n-checkbox>
             <n-checkbox
               v-if="isWindows && !isPlaynite"
               v-model:checked="form.elevated"
               size="small"
             >
-              Elevated
+              {{ $t('_common.elevated') || 'Elevated' }}
             </n-checkbox>
             <n-checkbox
               v-if="isWindows"
@@ -191,8 +225,7 @@
                   >For DLSS3, FSR3, NVIDIA Smooth Motion, and Lossless Scaling. Requires Windows Graphics Capture (WGC),
                   a display capable of 240 Hz or higher (virtual display driver recommended), and
                   RTSS installed. Configure Display Device to activate only that monitor during
-                  streams.</span
-                >
+                  streams.</span>
               </div>
             </n-checkbox>
             <n-checkbox
@@ -206,10 +239,23 @@
                 <span class="text-[11px] opacity-60"
                   >For DLSS 4 with 2nd generation frame generation. Forces NVIDIA Control Panel
                   frame limiter. Requires Windows Graphics Capture (WGC) and a high refresh rate
-                  display.</span
-                >
+                  display.</span>
               </div>
             </n-checkbox>
+          </div>
+          <div class="space-y-1 mt-2 text-[11px] opacity-60">
+            <p>{{ $t('apps.allow_client_commands_desc') }}</p>
+            <p>{{ $t('apps.terminate_on_pause_desc') }}</p>
+            <p v-if="isWindows">{{ $t('apps.virtual_display_desc') }}</p>
+          </div>
+          <div v-if="isWindows" class="space-y-2 mt-4">
+            <label class="text-xs font-semibold uppercase tracking-wide opacity-70">
+              {{ $t('apps.resolution_scale_factor') }}: {{ form.scaleFactor }}%
+            </label>
+            <n-slider v-model:value="form.scaleFactor" :step="1" :min="20" :max="200" />
+            <p class="text-[11px] opacity-60">
+              {{ $t('apps.resolution_scale_factor_desc') }}
+            </p>
           </div>
           <p v-if="isWindows" class="text-[11px] opacity-60">
             Frame generation capture fixes configure limiters to resolve issues with games being
@@ -517,6 +563,62 @@
             </div>
           </section>
 
+          <section class="space-y-3">
+            <div class="flex items-center justify-between">
+              <h3 class="text-xs font-semibold uppercase tracking-wider opacity-70">
+                {{ $t('apps.cmd_state_name') || 'State Commands' }}
+              </h3>
+              <n-button size="small" type="primary" @click="addState">
+                <i class="fas fa-plus" /> {{ $t('apps.add_cmds') || 'Add' }}
+              </n-button>
+            </div>
+            <div class="text-[11px] opacity-60">
+              {{ $t('apps.cmd_state_desc') }}
+            </div>
+            <div v-if="form.stateCmd.length === 0" class="text-[12px] opacity-60">None</div>
+            <div v-else class="space-y-2">
+              <div
+                v-for="(s, i) in form.stateCmd"
+                :key="`state-${i}`"
+                class="rounded-md border border-dark/10 dark:border-light/10 p-2"
+              >
+                <div class="flex items-center justify-between gap-2 mb-2">
+                  <div class="text-xs opacity-70">Step {{ i + 1 }}</div>
+                  <div class="flex items-center gap-2">
+                    <n-checkbox v-if="isWindows" v-model:checked="s.elevated" size="small">
+                      {{ $t('_common.elevated') }}
+                    </n-checkbox>
+                    <n-button size="small" type="error" strong @click="form.stateCmd.splice(i, 1)">
+                      <i class="fas fa-trash" />
+                    </n-button>
+                  </div>
+                </div>
+                <div class="grid grid-cols-1 gap-2">
+                  <div>
+                    <label class="text-[11px] opacity-60">{{ $t('_common.do_cmd') }}</label>
+                    <n-input
+                      v-model:value="s.do"
+                      type="textarea"
+                      :autosize="{ minRows: 1, maxRows: 3 }"
+                      class="font-mono"
+                      placeholder="Command to run after start"
+                    />
+                  </div>
+                  <div>
+                    <label class="text-[11px] opacity-60">{{ $t('_common.undo_cmd') }}</label>
+                    <n-input
+                      v-model:value="s.undo"
+                      type="textarea"
+                      :autosize="{ minRows: 1, maxRows: 3 }"
+                      class="font-mono"
+                      placeholder="Command to run on pause/stop"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <section v-if="!isPlaynite" class="space-y-3">
             <div class="flex items-center justify-between">
               <h3 class="text-xs font-semibold uppercase tracking-wider opacity-70">
@@ -526,7 +628,77 @@
                 <i class="fas fa-plus" /> Add
               </n-button>
             </div>
+            <div v-if="form.detached.length === 0" class="text-[12px] opacity-60">
+              {{ $t('apps.detached_cmds_desc') }}
+            </div>
+            <div v-else class="space-y-2">
+              <div
+                v-for="(cmd, i) in form.detached"
+                :key="`detached-${i}`"
+                class="flex items-center gap-2"
+              >
+                <n-input
+                  v-model:value="form.detached[i]"
+                  class="font-mono flex-1"
+                  placeholder="Detached command"
+                />
+                <n-button size="small" type="error" strong @click="removeDetached(i)">
+                  <i class="fas fa-trash" />
+                </n-button>
+                <n-button size="small" type="default" @click="insertDetached(i)">
+                  <i class="fas fa-plus" />
+                </n-button>
+              </div>
+            </div>
+            <div class="flex justify-start">
+              <n-button size="small" type="primary" @click="addDetached">
+                <i class="fas fa-plus" /> {{ $t('apps.detached_cmds_add') || 'Add Command' }}
+              </n-button>
+            </div>
+            <p class="text-[11px] opacity-60">
+              {{ $t('apps.detached_cmds_desc') }}
+            </p>
+            <p class="text-[11px] opacity-60">
+              {{ $t('apps.detached_cmds_note') }}
+            </p>
           </section>
+          <div class="mt-4 space-y-3 rounded-md border border-dark/10 dark:border-light/10 p-3">
+            <div>
+              <div class="text-xs font-semibold uppercase tracking-wide opacity-70">
+                {{ $t('apps.env_vars_about') }}
+              </div>
+              <p class="text-[11px] opacity-60">{{ $t('apps.env_vars_desc') }}</p>
+            </div>
+            <table class="w-full text-left text-[11px] opacity-80">
+              <tbody>
+                <tr>
+                  <th class="pb-1 text-left">{{ $t('apps.env_var_name') }}</th>
+                  <th class="pb-1 text-left">{{ $t('_common.description') || 'Description' }}</th>
+                </tr>
+                <tr v-for="row in envVarHints" :key="row.name" class="align-top">
+                  <td class="font-mono pr-4">{{ row.name }}</td>
+                  <td>{{ $t(row.desc) }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-if="envExample" class="space-y-1 text-[11px]">
+              <div class="font-semibold">{{ $t(envExample.label) }}</div>
+              <pre class="rounded bg-dark/5 dark:bg-light/10 p-2 font-mono text-[11px] overflow-x-auto">{{ envExample.command }}</pre>
+            </div>
+            <div class="text-[11px]">
+              <a
+                href="https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2app__examples.html"
+                target="_blank"
+                rel="noreferrer"
+                class="text-primary hover:underline"
+              >
+                {{ $t('_common.see_more') }}
+              </a>
+            </div>
+          </div>
+          <div class="mt-3 text-[11px] opacity-70">
+            {{ $t('apps.env_sunshine_compatibility') }}
+          </div>
           <section class="sr-only">
             <!-- hidden submit to allow Enter to save within fields -->
             <button type="submit" tabindex="-1" aria-hidden="true"></button>
@@ -656,6 +828,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useMessage } from 'naive-ui';
 import { http } from '@/http';
 import {
@@ -671,6 +844,7 @@ import {
   NRadioGroup,
   NRadio,
   NAlert,
+  NSlider,
 } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
 
@@ -818,12 +992,14 @@ interface AppForm {
   workingDir: string;
   imagePath: string;
   excludeGlobalPrepCmd: boolean;
+  excludeGlobalStateCmd: boolean;
   elevated: boolean;
   autoDetach: boolean;
   waitAll: boolean;
   frameGenLimiterFix: boolean;
   exitTimeout: number;
   prepCmd: PrepCmd[];
+  stateCmd: PrepCmd[];
   detached: string[];
   gen1FramegenFix: boolean;
   gen2FramegenFix: boolean;
@@ -834,6 +1010,13 @@ interface AppForm {
   losslessScalingRtssTouched: boolean;
   losslessScalingProfile: LosslessProfileKey;
   losslessScalingProfiles: Record<LosslessProfileKey, LosslessProfileOverrides>;
+  allowClientCommands: boolean;
+  terminateOnPause: boolean;
+  virtualDisplay: boolean;
+  useAppIdentity: boolean;
+  perClientAppIdentity: boolean;
+  scaleFactor: number;
+  gamepad: string;
   // With exactOptionalPropertyTypes, allow explicit undefined when clearing selection
   playniteId?: string | undefined;
   playniteManaged?: 'manual' | string | undefined;
@@ -846,12 +1029,15 @@ interface ServerApp {
   'working-dir'?: string;
   'image-path'?: string;
   'exclude-global-prep-cmd'?: boolean;
+   'exclude-global-state-cmd'?: boolean;
   elevated?: boolean;
   'auto-detach'?: boolean;
   'wait-all'?: boolean;
+  'allow-client-commands'?: boolean;
   'frame-gen-limiter-fix'?: boolean;
   'exit-timeout'?: number;
   'prep-cmd'?: Array<{ do?: string; undo?: string; elevated?: boolean }>;
+  'state-cmd'?: Array<{ do?: string; undo?: string; elevated?: boolean }>;
   detached?: string[];
   'playnite-id'?: string | undefined;
   'playnite-managed'?: 'manual' | string | undefined;
@@ -865,6 +1051,12 @@ interface ServerApp {
   'lossless-scaling-profile'?: string;
   'lossless-scaling-recommended'?: Record<string, unknown>;
   'lossless-scaling-custom'?: Record<string, unknown>;
+  'terminate-on-pause'?: boolean;
+  'virtual-display'?: boolean;
+  'use-app-identity'?: boolean;
+  'per-client-app-identity'?: boolean;
+  'scale-factor'?: number | string;
+  gamepad?: string;
 }
 
 interface AppEditModalProps {
@@ -888,12 +1080,14 @@ function fresh(): AppForm {
     workingDir: '',
     imagePath: '',
     excludeGlobalPrepCmd: false,
+    excludeGlobalStateCmd: false,
     elevated: false,
     autoDetach: true,
     waitAll: true,
     frameGenLimiterFix: false,
     exitTimeout: 5,
     prepCmd: [],
+    stateCmd: [],
     detached: [],
     gen1FramegenFix: false,
     gen2FramegenFix: false,
@@ -905,6 +1099,13 @@ function fresh(): AppForm {
     losslessScalingRtssTouched: false,
     losslessScalingProfile: 'custom',
     losslessScalingProfiles: emptyLosslessProfileState(),
+    allowClientCommands: true,
+    terminateOnPause: false,
+    virtualDisplay: false,
+    useAppIdentity: false,
+    perClientAppIdentity: false,
+    scaleFactor: 100,
+    gamepad: '',
   };
 }
 const form = ref<AppForm>(fresh());
@@ -1019,6 +1220,13 @@ function fromServerApp(src?: ServerApp | null, idx: number = -1): AppForm {
         elevated: !!p?.elevated,
       }))
     : [];
+  const state = Array.isArray(src['state-cmd'])
+    ? src['state-cmd'].map((p) => ({
+        do: String(p?.do ?? ''),
+        undo: String(p?.undo ?? ''),
+        elevated: !!p?.elevated,
+      }))
+    : [];
   const isPlayniteLinked = !!src['playnite-id'];
   const derivedExitTimeout =
     typeof src['exit-timeout'] === 'number'
@@ -1033,6 +1241,7 @@ function fromServerApp(src?: ServerApp | null, idx: number = -1): AppForm {
   const losslessProfiles = emptyLosslessProfileState();
   losslessProfiles.recommended = parseLosslessOverrides(src['lossless-scaling-recommended']);
   losslessProfiles.custom = parseLosslessOverrides(src['lossless-scaling-custom']);
+  const scaleFactor = parseNumeric(src['scale-factor']);
   return {
     index: idx,
     name: String(src.name ?? ''),
@@ -1041,6 +1250,7 @@ function fromServerApp(src?: ServerApp | null, idx: number = -1): AppForm {
     workingDir: String(src['working-dir'] ?? ''),
     imagePath: String(src['image-path'] ?? ''),
     excludeGlobalPrepCmd: !!src['exclude-global-prep-cmd'],
+    excludeGlobalStateCmd: !!src['exclude-global-state-cmd'],
     elevated: !!src.elevated,
     autoDetach: src['auto-detach'] !== undefined ? !!src['auto-detach'] : base.autoDetach,
     waitAll: src['wait-all'] !== undefined ? !!src['wait-all'] : base.waitAll,
@@ -1050,6 +1260,7 @@ function fromServerApp(src?: ServerApp | null, idx: number = -1): AppForm {
         : base.frameGenLimiterFix,
     exitTimeout: derivedExitTimeout,
     prepCmd: prep,
+    stateCmd: state,
     detached: Array.isArray(src.detached) ? src.detached.map((s) => String(s)) : [],
     gen1FramegenFix: !!(src['gen1-framegen-fix'] ?? src['dlss-framegen-capture-fix']),
     gen2FramegenFix: !!src['gen2-framegen-fix'],
@@ -1062,6 +1273,28 @@ function fromServerApp(src?: ServerApp | null, idx: number = -1): AppForm {
     losslessScalingRtssTouched: lsLimit !== null,
     losslessScalingProfile: profileKey,
     losslessScalingProfiles: losslessProfiles,
+    allowClientCommands:
+      src['allow-client-commands'] !== undefined
+        ? !!src['allow-client-commands']
+        : base.allowClientCommands,
+    terminateOnPause:
+      src['terminate-on-pause'] !== undefined
+        ? !!src['terminate-on-pause']
+        : base.terminateOnPause,
+    virtualDisplay:
+      src['virtual-display'] !== undefined
+        ? !!src['virtual-display']
+        : base.virtualDisplay,
+    useAppIdentity:
+      src['use-app-identity'] !== undefined
+        ? !!src['use-app-identity']
+        : base.useAppIdentity,
+    perClientAppIdentity:
+      src['per-client-app-identity'] !== undefined
+        ? !!src['per-client-app-identity']
+        : base.perClientAppIdentity,
+    scaleFactor: scaleFactor !== null ? scaleFactor : base.scaleFactor,
+    gamepad: String(src.gamepad ?? ''),
   };
 }
 
@@ -1075,9 +1308,11 @@ function toServerPayload(f: AppForm): Record<string, any> {
     'working-dir': f.workingDir,
     'image-path': String(f.imagePath || '').replace(/\"/g, ''),
     'exclude-global-prep-cmd': !!f.excludeGlobalPrepCmd,
+    'exclude-global-state-cmd': !!f.excludeGlobalStateCmd,
     elevated: !!f.elevated,
     'auto-detach': !!f.autoDetach,
     'wait-all': !!f.waitAll,
+    'allow-client-commands': !!f.allowClientCommands,
     'gen1-framegen-fix': !!f.gen1FramegenFix,
     'gen2-framegen-fix': !!f.gen2FramegenFix,
     'exit-timeout': Number.isFinite(f.exitTimeout) ? f.exitTimeout : 5,
@@ -1086,7 +1321,18 @@ function toServerPayload(f: AppForm): Record<string, any> {
       undo: p.undo,
       ...(isWindows.value ? { elevated: !!p.elevated } : {}),
     })),
+    'state-cmd': f.stateCmd.map((p) => ({
+      do: p.do,
+      undo: p.undo,
+      ...(isWindows.value ? { elevated: !!p.elevated } : {}),
+    })),
     detached: Array.isArray(f.detached) ? f.detached : [],
+    'terminate-on-pause': !!f.terminateOnPause,
+    'virtual-display': !!f.virtualDisplay,
+    'use-app-identity': !!f.useAppIdentity,
+    'per-client-app-identity': f.useAppIdentity ? !!f.perClientAppIdentity : false,
+    'scale-factor': Number.isFinite(f.scaleFactor) ? Math.round(f.scaleFactor) : 100,
+    gamepad: f.gamepad,
   };
   if (f.playniteId) payload['playnite-id'] = f.playniteId;
   if (f.playniteManaged) payload['playnite-managed'] = f.playniteManaged;
@@ -1208,6 +1454,36 @@ watch(
     }
     if (!form.value.losslessScalingRtssTouched) {
       form.value.losslessScalingRtssLimit = defaultRtssFromTarget(normalized);
+    }
+  },
+);
+watch(
+  () => form.value.useAppIdentity,
+  (enabled) => {
+    if (!enabled) {
+      form.value.perClientAppIdentity = false;
+    }
+  },
+);
+watch(
+  () => form.value.scaleFactor,
+  (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      form.value.scaleFactor = 100;
+      return;
+    }
+    const clamped = Math.min(200, Math.max(20, Math.round(numeric)));
+    if (clamped !== numeric) {
+      form.value.scaleFactor = clamped;
+    }
+  },
+);
+watch(
+  () => form.value.gamepad,
+  (value) => {
+    if (value === null || value === undefined) {
+      form.value.gamepad = '';
     }
   },
 );
@@ -1477,6 +1753,14 @@ function addPrep() {
   });
   requestAnimationFrame(() => updateShadows());
 }
+function addState() {
+  form.value.stateCmd.push({
+    do: '',
+    undo: '',
+    ...(isWindows.value ? { elevated: false } : {}),
+  });
+  requestAnimationFrame(() => updateShadows());
+}
 const saving = ref(false);
 const showDeleteConfirm = ref(false);
 
@@ -1569,8 +1853,15 @@ async function useCover(cover: CoverCandidate) {
 
 // Platform + Playnite detection
 const configStore = useConfigStore();
+const { t } = useI18n();
 const isWindows = computed(
   () => (configStore.metadata?.platform || '').toLowerCase() === 'windows',
+);
+const isLinux = computed(
+  () => (configStore.metadata?.platform || '').toLowerCase() === 'linux',
+);
+const isMac = computed(
+  () => (configStore.metadata?.platform || '').toLowerCase() === 'macos',
 );
 const ddConfigOption = computed(
   () => (configStore.config as any)?.dd_configuration_option ?? 'disabled',
@@ -1578,6 +1869,66 @@ const ddConfigOption = computed(
 const captureMethod = computed(() => (configStore.config as any)?.capture ?? '');
 const playniteInstalled = ref(false);
 const isNew = computed(() => form.value.index === -1);
+const gamepadOptions = computed(() => {
+  const options = [
+    { label: t('_common.default_global') || 'Use Global Default', value: '' },
+    { label: t('_common.disabled') || 'Disabled', value: 'disabled' },
+    { label: t('_common.auto') || 'Auto', value: 'auto' },
+  ];
+  if (isLinux.value) {
+    options.push(
+      { label: t('config.gamepad_ds5') || 'DualSense', value: 'ds5' },
+      { label: t('config.gamepad_switch') || 'Switch', value: 'switch' },
+      { label: t('config.gamepad_xone') || 'Xbox One', value: 'xone' },
+    );
+  }
+  if (isWindows.value) {
+    options.push(
+      { label: t('config.gamepad_ds4') || 'DualShock 4', value: 'ds4' },
+      { label: t('config.gamepad_x360') || 'Xbox 360', value: 'x360' },
+    );
+  }
+  return options;
+});
+const envVarHints = [
+  { name: 'APOLLO_APP_ID', desc: 'apps.env_app_id' },
+  { name: 'APOLLO_APP_NAME', desc: 'apps.env_app_name' },
+  { name: 'APOLLO_APP_UUID', desc: 'apps.env_app_uuid' },
+  { name: 'APOLLO_APP_STATUS', desc: 'apps.env_app_status' },
+  { name: 'APOLLO_CLIENT_UUID', desc: 'apps.env_client_uuid' },
+  { name: 'APOLLO_CLIENT_NAME', desc: 'apps.env_client_name' },
+  { name: 'APOLLO_CLIENT_WIDTH', desc: 'apps.env_client_width' },
+  { name: 'APOLLO_CLIENT_HEIGHT', desc: 'apps.env_client_height' },
+  { name: 'APOLLO_CLIENT_FPS', desc: 'apps.env_client_fps' },
+  { name: 'APOLLO_CLIENT_HDR', desc: 'apps.env_client_hdr' },
+  { name: 'APOLLO_CLIENT_GCMAP', desc: 'apps.env_client_gcmap' },
+  { name: 'APOLLO_CLIENT_HOST_AUDIO', desc: 'apps.env_client_host_audio' },
+  { name: 'APOLLO_CLIENT_ENABLE_SOPS', desc: 'apps.env_client_enable_sops' },
+  { name: 'APOLLO_CLIENT_AUDIO_CONFIGURATION', desc: 'apps.env_client_audio_config' },
+] as const;
+const envExample = computed(() => {
+  if (isWindows.value) {
+    return {
+      label: 'apps.env_rtss_cli_example',
+      command: 'cmd /C \\path\\to\\rtss-cli.exe limit:set %APOLLO_CLIENT_FPS%',
+    };
+  }
+  if (isLinux.value) {
+    return {
+      label: 'apps.env_xrandr_example',
+      command:
+        'sh -c "xrandr --output HDMI-1 --mode \"${APOLLO_CLIENT_WIDTH}x${APOLLO_CLIENT_HEIGHT}\" --rate ${APOLLO_CLIENT_FPS}"',
+    };
+  }
+  if (isMac.value) {
+    return {
+      label: 'apps.env_displayplacer_example',
+      command:
+        'sh -c "displayplacer \"id:<screenId> res:${APOLLO_CLIENT_WIDTH}x${APOLLO_CLIENT_HEIGHT} hz:${APOLLO_CLIENT_FPS} scaling:on origin:(0,0) degree:0\""',
+    };
+  }
+  return null;
+});
 // New app source: 'custom' or 'playnite' (Windows only)
 const newAppSource = ref<'custom' | 'playnite'>('custom');
 
@@ -1749,6 +2100,14 @@ watch(
 );
 function addDetached() {
   form.value.detached.push('');
+  requestAnimationFrame(() => updateShadows());
+}
+function removeDetached(index: number) {
+  form.value.detached.splice(index, 1);
+  requestAnimationFrame(() => updateShadows());
+}
+function insertDetached(index: number) {
+  form.value.detached.splice(index + 1, 0, '');
   requestAnimationFrame(() => updateShadows());
 }
 

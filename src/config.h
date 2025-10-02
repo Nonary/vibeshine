@@ -23,6 +23,9 @@ namespace config {
   inline std::unordered_map<std::string, std::string> pending_config_settings;
 
   struct video_t {
+    bool headless_mode;
+    bool limit_framerate;
+    bool double_refreshrate;
     // ffmpeg params
     int qp;  // higher == more compression and less quality
 
@@ -147,6 +150,10 @@ namespace config {
 
     int max_bitrate;  // Maximum bitrate, sets ceiling in kbps for bitrate requested from client
     double minimum_fps_target;  ///< Lowest framerate that will be used when streaming. Range 0-1000, 0 = half of client's requested framerate.
+
+    std::string fallback_mode;
+    bool isolated_virtual_display_option;
+    bool ignore_encoder_probe_failure;
   };
 
   struct audio_t {
@@ -154,6 +161,8 @@ namespace config {
     std::string virtual_sink;
     bool stream;
     bool install_steam_drivers;
+    bool keep_default;
+    bool auto_capture;
   };
 
   constexpr int ENCRYPTION_MODE_NEVER = 0;  // Never use video encryption, even if the client supports it
@@ -210,6 +219,9 @@ namespace config {
 
     bool high_resolution_scrolling;
     bool native_pen_touch;
+
+    bool enable_input_only_mode;
+    bool forward_rumble;
   };
 
   struct frame_limiter_t {
@@ -266,7 +278,22 @@ namespace config {
     bool elevated;
   };
 
+  struct server_cmd_t {
+    server_cmd_t(std::string &&cmd_name, std::string &&cmd_val, bool &&elevated):
+        cmd_name(std::move(cmd_name)),
+        cmd_val(std::move(cmd_val)),
+        elevated(std::move(elevated)) {
+    }
+    std::string cmd_name;
+    std::string cmd_val;
+    bool elevated;
+  };
+
   struct sunshine_t {
+    bool hide_tray_controls;
+    bool enable_pairing;
+    bool enable_discovery;
+    bool envvar_compatibility_mode;
     std::string locale;
     int min_log_level;
     std::bitset<flag::FLAG_SIZE> flags;
@@ -289,8 +316,11 @@ namespace config {
 
     std::string log_file;
     bool notify_pre_releases;
+    bool legacy_ordering;
     bool system_tray;
     std::vector<prep_cmd_t> prep_cmds;
+    std::vector<prep_cmd_t> state_cmds;
+    std::vector<server_cmd_t> server_cmds;
     std::chrono::seconds session_token_ttl;  ///< Session token time-to-live (seconds)
     // Interval in seconds between automatic update checks (0 disables periodic checks)
     int update_check_interval_seconds {86400};

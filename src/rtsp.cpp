@@ -618,6 +618,31 @@ namespace rtsp_stream {
       clear();
     }
 
+    std::shared_ptr<stream::session_t>
+    find_session(const std::string_view& uuid) {
+      auto lg = _session_slots.lock();
+
+      for (auto &slot : *_session_slots) {
+        if (slot && stream::session::uuid_match(*slot, uuid)) {
+          return slot;
+        }
+      }
+
+      return nullptr;
+    }
+
+    std::list<std::string>
+    get_all_session_uuids() {
+      std::list<std::string> uuids;
+      auto lg = _session_slots.lock();
+      for (auto &slot : *_session_slots) {
+        if (slot) {
+          uuids.push_back(stream::session::uuid(*slot));
+        }
+      }
+      return uuids;
+    }
+
   private:
     std::unordered_map<std::string_view, cmd_func_t> _map_cmd_cb;
 
@@ -645,6 +670,14 @@ namespace rtsp_stream {
     server.clear(false);
 
     return server.session_count();
+  }
+
+  std::shared_ptr<stream::session_t> find_session(const std::string_view& uuid) {
+    return server.find_session(uuid);
+  }
+
+  std::list<std::string> get_all_session_uuids() {
+    return server.get_all_session_uuids();
   }
 
   void terminate_sessions() {
@@ -1017,7 +1050,47 @@ namespace rtsp_stream {
       config.monitor.chromaSamplingType = util::from_view(args.at("x-ss-video[0].chromaSamplingType"sv));
       config.monitor.enableIntraRefresh = util::from_view(args.at("x-ss-video[0].intraRefresh"sv));
 
+      if (config::video.limit_framerate) {
+        config.monitor.encodingFramerate = session.fps;
+      } else {
+        if (config.monitor.framerate > 1000) {
+          config.monitor.encodingFramerate = config.monitor.framerate;
+        } else {
+          config.monitor.encodingFramerate = config.monitor.framerate * 1000;
+        }
+      }
+
+      // When fractional refresh rate requested from client side, it should be well above 1000fps
+      // 4000fps is when Warp2 Mode is enabled on the client, requested framerate can be actual * 4
+      if (config.monitor.framerate > 4000) {
+        config.monitor.framerate = std::round((float)config.monitor.framerate / 1000);
+      }
+
+      config.monitor.input_only = session.input_only;
+
       configuredBitrateKbps = util::from_view(args.at("x-ml-video.configuredBitrateKbps"sv));
+
+      if (!configuredBitrateKbps) {
+        configuredBitrateKbps = config.monitor.bitrate;
+      }
+
+      BOOST_LOG(info) << "Client Requested bitrate is [" << configuredBitrateKbps << "kbps]";
+
+      if (config::video.max_bitrate > 0) {
+        if (config::video.max_bitrate < configuredBitrateKbps) {
+          configuredBitrateKbps = config::video.max_bitrate;
+        }
+      }
+
+      BOOST_LOG(info) << "Host Streaming bitrate is [" << configuredBitrateKbps << "kbps]";
+
+      // Hack: Restore bitrate for warp mode
+      size_t warp_factor = std::round((float)config.monitor.framerate * 1000 / session.fps);
+      if (config::video.limit_framerate && warp_factor >= 2) {
+        configuredBitrateKbps *= warp_factor;
+        BOOST_LOG(info) << "Warp factor [" << warp_factor << "] engaged";
+      }
+
     } catch (std::out_of_range &) {
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return;
@@ -1057,6 +1130,8 @@ namespace rtsp_stream {
       }
       config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
     }
+
+    config.audio.input_only = session.input_only;
 
     // If the client sent a configured bitrate, we will choose the actual bitrate ourselves
     // by using FEC percentage and audio quality settings. If the calculated bitrate ends up

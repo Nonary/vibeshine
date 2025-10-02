@@ -24,11 +24,14 @@
 
 #define WEB_DIR SUNSHINE_ASSETS_DIR "/web/"
 
+using namespace std::chrono_literals;
+
 namespace confighttp {
   using resp_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response>;
   using req_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request>;
 
   constexpr auto PORT_HTTPS = 1;
+  constexpr auto SESSION_EXPIRE_DURATION = 24h * 15;
   void start();
 
   // Token scopes for API tokens used by tests and UI

@@ -3,6 +3,8 @@
  * @brief Handles collecting audio device information from Windows.
  */
 #define INITGUID
+#include "src/utility.h"
+#include "utils.h"
 
 // platform includes
 #include <Audioclient.h>
@@ -13,11 +15,6 @@
 #include <roapi.h>
 #include <synchapi.h>
 
-// lib includes
-#include <boost/locale.hpp>
-
-// local includes
-#include "src/utility.h"
 
 DEFINE_PROPERTYKEY(PKEY_Device_DeviceDesc, 0xa45c254e, 0xdf1c, 0x4efd, 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0, 2);  // DEVPROP_TYPE_STRING
 DEFINE_PROPERTYKEY(PKEY_Device_FriendlyName, 0xa45c254e, 0xdf1c, 0x4efd, 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0, 14);  // DEVPROP_TYPE_STRING
@@ -208,20 +205,27 @@ namespace audio {
       // so we can take the first match as the current format to display.
       auto audio_client = make_audio_client(device, format);
       if (audio_client) {
-        current_format = boost::locale::conv::utf_to_utf<wchar_t>(format.name.data());
+        current_format = from_utf8(format.name);
         break;
       }
     }
 
-    std::wcout
-      << L"===== Device ====="sv << std::endl
-      << L"Device ID          : "sv << wstring.get() << std::endl
-      << L"Device name        : "sv << no_null((LPWSTR) device_friendly_name.prop.pszVal) << std::endl
-      << L"Adapter name       : "sv << no_null((LPWSTR) adapter_friendly_name.prop.pszVal) << std::endl
-      << L"Device description : "sv << no_null((LPWSTR) device_desc.prop.pszVal) << std::endl
-      << L"Device state       : "sv << device_state_string << std::endl
-      << L"Current format     : "sv << current_format << std::endl
-      << std::endl;
+    wprintf(
+      L"===== Device =====\n"
+      L"Device ID          : %ls\n"
+      L"Device name        : %ls\n"
+      L"Adapter name       : %ls\n"
+      L"Device description : %ls\n"
+      L"Device state       : %ls\n"
+      L"Current format     : %ls\n\n",
+      wstring.get(),
+      no_null((LPWSTR)device_friendly_name.prop.pszVal),
+      no_null((LPWSTR)adapter_friendly_name.prop.pszVal),
+      no_null((LPWSTR)device_desc.prop.pszVal),
+      device_state_string.c_str(),
+      current_format.c_str()
+    );
+
   }
 }  // namespace audio
 
@@ -242,6 +246,9 @@ int main(int argc, char *argv[]) {
   if (argc > 1) {
     device_state_filter = 0;
   }
+
+  // Set the locale to support wide characters
+  std::setlocale(LC_ALL, "");
 
   for (auto x = 1; x < argc; ++x) {
     for (auto p = argv[x]; *p != '\0'; ++p) {
@@ -304,6 +311,8 @@ int main(int argc, char *argv[]) {
 
     audio::print_device(device);
   }
+
+  system("pause");
 
   return 0;
 }

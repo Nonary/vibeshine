@@ -31,10 +31,12 @@
 #include "platform/common.h"
 #include "process.h"
 #include "rtsp.h"
+#include "video.h"
 #include "utility.h"
 
 #ifdef _WIN32
   #include <shellapi.h>
+  #include "platform/windows/utils.h"
 #endif
 
 #if !defined(__ANDROID__) && !defined(__APPLE__)
@@ -55,7 +57,7 @@ namespace config {
 
   namespace nv {
 
-    nvenc::nvenc_two_pass twopass_from_view(const std::string_view &preset) {
+    nvenc::nvenc_two_pass twopass_from_view(const ::std::string_view &preset) {
       if (preset == "disabled") {
         return nvenc::nvenc_two_pass::disabled;
       }
@@ -192,7 +194,7 @@ namespace config {
     };
 
     template<class T>
-    std::optional<int> quality_from_view(const std::string_view &quality_type, const std::optional<int>(&original)) {
+    ::std::optional<int> quality_from_view(const ::std::string_view &quality_type, const ::std::optional<int>(&original)) {
 #define _CONVERT_(x) \
   if (quality_type == #x##sv) \
   return (int) T::x
@@ -204,7 +206,7 @@ namespace config {
     }
 
     template<class T>
-    std::optional<int> rc_from_view(const std::string_view &rc, const std::optional<int>(&original)) {
+    ::std::optional<int> rc_from_view(const ::std::string_view &rc, const ::std::optional<int>(&original)) {
 #define _CONVERT_(x) \
   if (rc == #x##sv) \
   return (int) T::x
@@ -217,7 +219,7 @@ namespace config {
     }
 
     template<class T>
-    std::optional<int> usage_from_view(const std::string_view &usage, const std::optional<int>(&original)) {
+    ::std::optional<int> usage_from_view(const ::std::string_view &usage, const ::std::optional<int>(&original)) {
 #define _CONVERT_(x) \
   if (usage == #x##sv) \
   return (int) T::x
@@ -230,7 +232,7 @@ namespace config {
       return original;
     }
 
-    int coder_from_view(const std::string_view &coder) {
+    int coder_from_view(const ::std::string_view &coder) {
       if (coder == "auto"sv) {
         return _auto;
       }
@@ -262,7 +264,7 @@ namespace config {
       disabled = false  ///< Disabled
     };
 
-    std::optional<int> preset_from_view(const std::string_view &preset) {
+    ::std::optional<int> preset_from_view(const ::std::string_view &preset) {
 #define _CONVERT_(x) \
   if (preset == #x##sv) \
   return x
@@ -277,7 +279,7 @@ namespace config {
       return std::nullopt;
     }
 
-    std::optional<int> coder_from_view(const std::string_view &coder) {
+    ::std::optional<int> coder_from_view(const ::std::string_view &coder) {
       if (coder == "auto"sv) {
         return _auto;
       }
@@ -300,7 +302,7 @@ namespace config {
       cavlc  ///< CAVLC
     };
 
-    int coder_from_view(const std::string_view &coder) {
+    int coder_from_view(const ::std::string_view &coder) {
       if (coder == "auto"sv) {
         return _auto;
       }
@@ -314,7 +316,7 @@ namespace config {
       return -1;
     }
 
-    int allow_software_from_view(const std::string_view &software) {
+    int allow_software_from_view(const ::std::string_view &software) {
       if (software == "allowed"sv || software == "forced") {
         return 1;
       }
@@ -322,7 +324,7 @@ namespace config {
       return 0;
     }
 
-    int force_software_from_view(const std::string_view &software) {
+    int force_software_from_view(const ::std::string_view &software) {
       if (software == "forced") {
         return 1;
       }
@@ -330,7 +332,7 @@ namespace config {
       return 0;
     }
 
-    int rt_from_view(const std::string_view &rt) {
+    int rt_from_view(const ::std::string_view &rt) {
       if (rt == "disabled" || rt == "off" || rt == "0") {
         return 0;
       }
@@ -341,7 +343,7 @@ namespace config {
   }  // namespace vt
 
   namespace sw {
-    int svtav1_preset_from_view(const std::string_view &preset) {
+    int svtav1_preset_from_view(const ::std::string_view &preset) {
 #define _CONVERT_(x, y) \
   if (preset == #x##sv) \
   return y
@@ -360,7 +362,7 @@ namespace config {
   }  // namespace sw
 
   namespace dd {
-    video_t::dd_t::config_option_e config_option_from_view(const std::string_view value) {
+    video_t::dd_t::config_option_e config_option_from_view(const ::std::string_view value) {
 #define _CONVERT_(x) \
   if (value == #x##sv) \
   return video_t::dd_t::config_option_e::x
@@ -373,7 +375,7 @@ namespace config {
       return video_t::dd_t::config_option_e::disabled;  // Default to this if value is invalid
     }
 
-    video_t::dd_t::resolution_option_e resolution_option_from_view(const std::string_view value) {
+    video_t::dd_t::resolution_option_e resolution_option_from_view(const ::std::string_view value) {
 #define _CONVERT_2_ARG_(str, val) \
   if (value == #str##sv) \
   return video_t::dd_t::resolution_option_e::val
@@ -386,7 +388,7 @@ namespace config {
       return video_t::dd_t::resolution_option_e::disabled;  // Default to this if value is invalid
     }
 
-    video_t::dd_t::refresh_rate_option_e refresh_rate_option_from_view(const std::string_view value) {
+    video_t::dd_t::refresh_rate_option_e refresh_rate_option_from_view(const ::std::string_view value) {
 #define _CONVERT_2_ARG_(str, val) \
   if (value == #str##sv) \
   return video_t::dd_t::refresh_rate_option_e::val
@@ -400,7 +402,7 @@ namespace config {
       return video_t::dd_t::refresh_rate_option_e::disabled;  // Default to this if value is invalid
     }
 
-    video_t::dd_t::hdr_option_e hdr_option_from_view(const std::string_view value) {
+    video_t::dd_t::hdr_option_e hdr_option_from_view(const ::std::string_view value) {
 #define _CONVERT_2_ARG_(str, val) \
   if (value == #str##sv) \
   return video_t::dd_t::hdr_option_e::val
@@ -412,7 +414,7 @@ namespace config {
       return video_t::dd_t::hdr_option_e::disabled;  // Default to this if value is invalid
     }
 
-    video_t::dd_t::mode_remapping_t mode_remapping_from_view(const std::string_view value) {
+    video_t::dd_t::mode_remapping_t mode_remapping_from_view(const ::std::string_view value) {
       const auto parse_entry_list {[](const auto &entry_list, auto &output_field) {
         for (auto &[_, entry] : entry_list) {
           auto requested_resolution = entry.template get_optional<std::string>("requested_resolution"s);
@@ -441,6 +443,10 @@ namespace config {
   }  // namespace dd
 
   video_t video {
+    false, // headless_mode
+    true, // limit_framerate
+    false, // double_refreshrate
+
     28,  // qp
 
     0,  // hevc_mode
@@ -511,7 +517,11 @@ namespace config {
     },  // display_device
 
     0,  // max_bitrate
-    20  // minimum_fps_target (0 = framerate)
+    0,  // minimum_fps_target (0 = framerate)
+
+    "1920x1080x60",  // fallback_mode
+    false,  // isolated Display
+    false  // ignore_encoder_probe_failure
   };
 
   audio_t audio {
@@ -519,6 +529,8 @@ namespace config {
     {},  // virtual_sink
     true,  // stream audio
     true,  // install_steam_drivers
+    true, // keep_sink_default
+    true, // auto_capture
   };
 
   stream_t stream {
@@ -568,6 +580,8 @@ namespace config {
     true,  // always send scancodes
     true,  // high resolution scrolling
     true,  // native pen/touch support
+    false, // enable input only mode
+    true, // forward_rumble
   };
 
   frame_limiter_t frame_limiter {
@@ -587,6 +601,10 @@ namespace config {
   };
 
   sunshine_t sunshine {
+    false, // hide_tray_controls
+    true, // enable_pairing
+    true, // enable_discovery
+    false, // envvar_compatibility_mode
     "en",  // locale
     2,  // min_log_level
     0,  // flags
@@ -600,8 +618,11 @@ namespace config {
     "ipv4",  // Address family
     platf::appdata().string() + "/sunshine.log",  // log file
     false,  // notify_pre_releases
+    false,  // legacy_ordering
     true,  // system_tray
     {},  // prep commands
+    {},  // state commands
+    {},  // server commands
     std::chrono::hours {2},  // session_token_ttl default 2h
     86400  // update_check_interval_seconds default 24h
   };
@@ -687,9 +708,9 @@ namespace config {
   }
 
   std::pair<
-    std::string_view::const_iterator,
-    std::optional<std::pair<std::string, std::string>>>
-    parse_option(std::string_view::const_iterator begin, std::string_view::const_iterator end) {
+    ::std::string_view::const_iterator,
+    ::std::optional<std::pair<std::string, std::string>>>
+    parse_option(::std::string_view::const_iterator begin, ::std::string_view::const_iterator end) {
     begin = std::find_if_not(begin, end, whitespace);
     auto endl = std::find_if(begin, end, endline);
     auto endc = std::find(begin, endl, '#');
@@ -727,7 +748,7 @@ namespace config {
     );
   }
 
-  std::unordered_map<std::string, std::string> parse_config(const std::string_view &file_content) {
+  std::unordered_map<std::string, std::string> parse_config(const ::std::string_view &file_content) {
     std::unordered_map<std::string, std::string> vars;
 
     auto pos = std::begin(file_content);
@@ -772,7 +793,7 @@ namespace config {
     }
   }
 
-  void string_restricted_f(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::string &input, const std::vector<std::string_view> &allowed_vals) {
+  void string_restricted_f(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::string &input, const std::vector<::std::string_view> &allowed_vals) {
     std::string temp;
     string_f(vars, name, temp);
 
@@ -823,7 +844,7 @@ namespace config {
       return;
     }
 
-    std::string_view val = it->second;
+    ::std::string_view val = it->second;
 
     // If value is something like: "756" instead of 756
     if (val.size() >= 2 && val[0] == '"') {
@@ -840,14 +861,14 @@ namespace config {
     vars.erase(it);
   }
 
-  void int_f(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::optional<int> &input) {
+  void int_f(std::unordered_map<std::string, std::string> &vars, const std::string &name, ::std::optional<int> &input) {
     auto it = vars.find(name);
 
     if (it == std::end(vars)) {
       return;
     }
 
-    std::string_view val = it->second;
+    ::std::string_view val = it->second;
 
     // If value is something like: "756" instead of 756
     if (val.size() >= 2 && val[0] == '"') {
@@ -874,7 +895,7 @@ namespace config {
   }
 
   template<class F>
-  void int_f(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::optional<int> &input, F &&f) {
+  void int_f(std::unordered_map<std::string, std::string> &vars, const std::string &name, ::std::optional<int> &input, F &&f) {
     std::string tmp;
     string_f(vars, name, tmp);
     if (!tmp.empty()) {
@@ -1011,6 +1032,32 @@ namespace config {
     }
   }
 
+  void list_server_cmd_f(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::vector<server_cmd_t> &input) {
+    std::string string;
+    string_f(vars, name, string);
+
+    std::stringstream jsonStream;
+
+    // check if string is empty, i.e. when the value doesn't exist in the config file
+    if (string.empty()) {
+      return;
+    }
+
+    // We need to add a wrapping object to make it valid JSON, otherwise ptree cannot parse it.
+    jsonStream << "{\"server_cmd\":" << string << "}";
+
+    boost::property_tree::ptree jsonTree;
+    boost::property_tree::read_json(jsonStream, jsonTree);
+
+    for (auto &[_, prep_cmd] : jsonTree.get_child("server_cmd"s)) {
+      auto cmd_name = prep_cmd.get_optional<std::string>("name"s);
+      auto cmd_val = prep_cmd.get_optional<std::string>("cmd"s);
+      auto elevated = prep_cmd.get_optional<bool>("elevated"s);
+
+      input.emplace_back(cmd_name.value_or(""), cmd_val.value_or(""), elevated.value_or(false));
+    }
+  }
+
   void list_int_f(std::unordered_map<std::string, std::string> &vars, const std::string &name, std::vector<int> &input) {
     std::vector<std::string> list;
     list_string_f(vars, name, list);
@@ -1025,7 +1072,7 @@ namespace config {
     // That is, if you set only 30 fps in the configuration file, it will not work because by default, during initialization the list includes 10, 30, 60, 90 and 120 fps.
     input.clear();
     for (auto &el : list) {
-      std::string_view val = el;
+      ::std::string_view val = el;
 
       // If value is something like: "756" instead of 756
       if (val.size() >= 2 && val[0] == '"') {
@@ -1090,9 +1137,9 @@ namespace config {
     return ret;
   }
 
-  std::vector<std::string_view> &get_supported_gamepad_options() {
+  std::vector<::std::string_view> &get_supported_gamepad_options() {
     const auto options = platf::supported_gamepads(nullptr);
-    static std::vector<std::string_view> opts {};
+    static std::vector<::std::string_view> opts {};
     opts.reserve(options.size());
     for (auto &opt : options) {
       opts.emplace_back(opt.name);
@@ -1110,10 +1157,17 @@ namespace config {
 #endif
 
     for (auto &[name, val] : vars) {
-      BOOST_LOG(info) << "config: '"sv << name << "' = "sv << val;
+    #ifdef _WIN32
+      BOOST_LOG(info) << "config: ["sv << name << "] -- ["sv << utf8ToAcp(val) << ']';
+    #else
+      BOOST_LOG(info) << "config: ["sv << name << "] -- ["sv << val << ']';
+    #endif
       modified_config_settings[name] = val;
     }
 
+    bool_f(vars, "headless_mode", video.headless_mode);
+    bool_f(vars, "limit_framerate", video.limit_framerate);
+    bool_f(vars, "double_refreshrate", video.double_refreshrate);
     int_f(vars, "qp", video.qp);
     int_between_f(vars, "hevc_mode", video.hevc_mode, {0, 3});
     int_between_f(vars, "av1_mode", video.av1_mode, {0, 3});
@@ -1129,6 +1183,7 @@ namespace config {
     bool_f(vars, "nvenc_spatial_aq", video.nv.adaptive_quantization);
     generic_f(vars, "nvenc_twopass", video.nv.two_pass, nv::twopass_from_view);
     bool_f(vars, "nvenc_h264_cavlc", video.nv.h264_cavlc);
+    bool_f(vars, "nvenc_intra_refresh", video.nv.intra_refresh);
     bool_f(vars, "nvenc_realtime_hags", video.nv_realtime_hags);
     bool_f(vars, "nvenc_opengl_vulkan_on_dxgi", video.nv_opengl_vulkan_on_dxgi);
     bool_f(vars, "nvenc_latency_over_power", video.nv_sunshine_high_power_mode);
@@ -1218,6 +1273,10 @@ namespace config {
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
 
+    string_f(vars, "fallback_mode", video.fallback_mode);
+    bool_f(vars, "isolated_virtual_display_option", video.isolated_virtual_display_option);
+    bool_f(vars, "ignore_encoder_probe_failure", video.ignore_encoder_probe_failure);
+
     // Windows-only frame limiter options
     bool_f(vars, "frame_limiter_enable", frame_limiter.enable);
     string_f(vars, "frame_limiter_provider", frame_limiter.provider);
@@ -1245,6 +1304,8 @@ namespace config {
 
     string_f(vars, "external_ip", nvhttp.external_ip);
     list_prep_cmd_f(vars, "global_prep_cmd", config::sunshine.prep_cmds);
+    list_prep_cmd_f(vars, "global_state_cmd", config::sunshine.state_cmds);
+    list_server_cmd_f(vars, "server_cmd", config::sunshine.server_cmds);
 
     int_f(vars, "update_check_interval", config::sunshine.update_check_interval_seconds);
 
@@ -1252,6 +1313,8 @@ namespace config {
     string_f(vars, "virtual_sink", audio.virtual_sink);
     bool_f(vars, "stream_audio", audio.stream);
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
+    bool_f(vars, "keep_sink_default", audio.keep_default);
+    bool_f(vars, "auto_capture_sink", audio.auto_capture);
 
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, {"pc"sv, "lan"sv, "wan"sv});
     // reflect origin ACL update immediately in HTTP layer
@@ -1315,9 +1378,16 @@ namespace config {
 
     bool_f(vars, "high_resolution_scrolling", input.high_resolution_scrolling);
     bool_f(vars, "native_pen_touch", input.native_pen_touch);
+    bool_f(vars, "enable_input_only_mode", input.enable_input_only_mode);
 
-    bool_f(vars, "notify_pre_releases", sunshine.notify_pre_releases);
     bool_f(vars, "system_tray", sunshine.system_tray);
+    bool_f(vars, "hide_tray_controls", sunshine.hide_tray_controls);
+    bool_f(vars, "enable_pairing", sunshine.enable_pairing);
+    bool_f(vars, "enable_discovery", sunshine.enable_discovery);
+    bool_f(vars, "envvar_compatibility_mode", sunshine.envvar_compatibility_mode);
+    bool_f(vars, "notify_pre_releases", sunshine.notify_pre_releases);
+    bool_f(vars, "legacy_ordering", sunshine.legacy_ordering);
+    bool_f(vars, "forward_rumble", input.forward_rumble);
 
     int port = sunshine.port;
     int_between_f(vars, "port"s, port, {1024 + nvhttp::PORT_HTTPS, 65535 - rtsp_stream::RTSP_SETUP_PORT});
@@ -1408,6 +1478,9 @@ namespace config {
         std::cout << "Warning: Unrecognized configurable option ["sv << var << ']' << std::endl;
       }
     }
+
+    ::video::active_hevc_mode = video.hevc_mode;
+    ::video::active_av1_mode = video.av1_mode;
   }
 
   int parse(int argc, char *argv[]) {
@@ -1475,7 +1548,10 @@ namespace config {
 
       // Create empty config file if it does not exist
       if (!fs::exists(sunshine.config_file)) {
-        std::ofstream {sunshine.config_file};
+        auto cfg_file = std::ofstream {sunshine.config_file};
+      #ifdef _WIN32
+        cfg_file << "server_cmd = [{\"name\":\"Bubbles\",\"cmd\":\"bubbles.scr\",\"elevated\":false}]\n";
+      #endif
       }
 
       // Read config file
@@ -1504,7 +1580,7 @@ namespace config {
     // so that service instance will do the work instead.
 
     if (!config_loaded && !shortcut_launch) {
-      BOOST_LOG(fatal) << "To relaunch Sunshine successfully, use the shortcut in the Start Menu. Do not run Sunshine.exe manually."sv;
+      BOOST_LOG(fatal) << "To relaunch Apollo successfully, use the shortcut in the Start Menu. Do not run sunshine.exe manually."sv;
       std::this_thread::sleep_for(10s);
 #else
     if (!config_loaded) {

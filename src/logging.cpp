@@ -5,6 +5,7 @@
 // standard includes
 #include <filesystem>
 #include <fstream>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 
@@ -156,6 +157,21 @@ namespace logging {
     if (sink) {
       // Deinitialize the logging system before reinitializing it. This can probably only ever be hit in tests.
       deinit();
+    }
+
+    // Check if the log file exists and handle backup
+    std::string backup_log_file = log_file + ".backup";
+    if (std::filesystem::exists(log_file)) {
+      try {
+        // If the backup file exists, remove it
+        if (std::filesystem::exists(backup_log_file)) {
+          std::filesystem::remove(backup_log_file);
+        }
+        // Rename the current log file to the backup name
+        std::filesystem::rename(log_file, backup_log_file);
+      } catch (std::exception& e) {
+        std::cout << "Failed to rotate log file: " << e.what() << std::endl;
+      }
     }
 
 #ifndef __ANDROID__

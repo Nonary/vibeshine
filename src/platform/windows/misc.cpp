@@ -12,10 +12,16 @@
 #include <sstream>
 #include <vector>
 
+#ifndef BOOST_PROCESS_VERSION
+  #define BOOST_PROCESS_VERSION 1
+#endif
+
 // lib includes
 #include <boost/algorithm/string.hpp>
 #include <boost/asio/ip/address.hpp>
-#include <boost/process/v1.hpp>
+#include <boost/process/v1/child.hpp>
+#include <boost/process/v1/environment.hpp>
+#include <boost/process/v1/group.hpp>
 #include <boost/program_options/parsers.hpp>
 
 // prevent clang format from "optimizing" the header include order
@@ -50,6 +56,7 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/utility.h"
+#include "utils.h"
 
 // UDP_SEND_MSG_SIZE was added in the Windows 10 20H1 SDK
 #ifndef UDP_SEND_MSG_SIZE
@@ -98,6 +105,10 @@ namespace {
 }  // namespace
 
 namespace bp = boost::process;
+
+static std::string ensureCrLf(const std::string &utf8Str);
+static std::wstring getClipboardData();
+static int setClipboardData(const std::wstring &utf16Str);
 
 using namespace std::literals;
 
@@ -184,7 +195,7 @@ namespace platf {
         }
       }
     }
-    BOOST_LOG(warning) << "Unable to find MAC address for "sv << address;
+    BOOST_LOG(debug) << "Unable to find MAC address for "sv << address << ", is this a virtual network adapter?";
     return "00:00:00:00:00:00"s;
   }
 
@@ -209,6 +220,61 @@ namespace platf {
       }
     }
     return true;
+  }
+
+  std::string get_local_ip_for_gateway() {
+    PIP_ADAPTER_INFO pAdapterInfo;
+    PIP_ADAPTER_INFO pAdapter = nullptr;
+    DWORD dwRetVal = 0;
+    ULONG ulOutBufLen = sizeof(IP_ADAPTER_INFO);
+
+    pAdapterInfo = (IP_ADAPTER_INFO *) malloc(sizeof(IP_ADAPTER_INFO));
+    if (pAdapterInfo == nullptr) {
+      BOOST_LOG(warning) << "Error allocating memory needed to call GetAdaptersInfo";
+      return "";
+    }
+
+    // Make an initial call to GetAdaptersInfo to get the necessary size into the ulOutBufLen variable
+    if (GetAdaptersInfo(pAdapterInfo, &ulOutBufLen) == ERROR_BUFFER_OVERFLOW) {
+      free(pAdapterInfo);
+      pAdapterInfo = (IP_ADAPTER_INFO *) malloc(ulOutBufLen);
+      if (pAdapterInfo == nullptr) {
+        BOOST_LOG(warning) << "Error allocating memory needed to call GetAdaptersInfo";
+        return "";
+      }
+    }
+
+    if ((dwRetVal = GetAdaptersInfo(pAdapterInfo, &ulOutBufLen)) != NO_ERROR) {
+      if (pAdapterInfo) {
+        free(pAdapterInfo);
+      }
+      BOOST_LOG(warning) << "GetAdaptersInfo failed with error: " + std::to_string(dwRetVal);
+      return "";
+    }
+
+    pAdapter = pAdapterInfo;
+    std::string local_ip;
+
+    // Iterate through the list of adapters
+    while (pAdapter) {
+      IP_ADDR_STRING *pGateway = &pAdapter->GatewayList;
+      if (pGateway && pGateway->IpAddress.String[0] != '\0') {
+        // This adapter has a default gateway, use its IP address
+        local_ip = pAdapter->IpAddressList.IpAddress.String;
+        break;
+      }
+      pAdapter = pAdapter->Next;
+    }
+
+    if (pAdapterInfo) {
+      free(pAdapterInfo);
+    }
+
+    if (local_ip.empty()) {
+      BOOST_LOG(warning) << "No associated IP address found for the default gateway";
+    }
+
+    return local_ip;
   }
 
   HDESK syncThreadDesktop() {
@@ -711,39 +777,29 @@ namespace platf {
     }
 
     auto raw_target = raw_cmd_parts.at(0);
-    std::wstring lookup_string;
-    HRESULT res;
-
     if (PathIsURLW(raw_target.c_str())) {
-      std::array<WCHAR, 128> scheme;
-
-      DWORD out_len = scheme.size();
-      res = UrlGetPartW(raw_target.c_str(), scheme.data(), &out_len, URL_PART_SCHEME, 0);
-      if (res != S_OK) {
-        BOOST_LOG(warning) << "Failed to extract URL scheme from URL: "sv << raw_target << " ["sv << util::hex(res).to_string_view() << ']';
-        return from_utf8(raw_cmd);
-      }
-
-      // If the target is a URL, the class is found using the URL scheme (prior to and not including the ':')
-      lookup_string = scheme.data();
-    } else {
-      // If the target is not a URL, assume it's a regular file path
-      auto extension = PathFindExtensionW(raw_target.c_str());
-      if (extension == nullptr || *extension == 0) {
-        // If the file has no extension, assume it's a command and allow CreateProcess()
-        // to try to find it via PATH
-        return from_utf8(raw_cmd);
-      } else if (boost::iequals(extension, L".exe")) {
-        // If the file has an .exe extension, we will bypass the resolution here and
-        // directly pass the unmodified command string to CreateProcess(). The argument
-        // escaping rules are subtly different between CreateProcess() and ShellExecute(),
-        // and we want to preserve backwards compatibility with older configs.
-        return from_utf8(raw_cmd);
-      }
-
-      // For regular files, the class is found using the file extension (including the dot)
-      lookup_string = extension;
+      // If the target is a URL, handle it directly with rundll32.exe
+      std::wstring cmd = L"rundll32.exe url.dll,FileProtocolHandler " + raw_target;
+      return cmd;
     }
+
+    // If the target is not a URL, assume it's a regular file path
+    auto extension = PathFindExtensionW(raw_target.c_str());
+    if (extension == nullptr || *extension == 0) {
+      // If the file has no extension, assume it's a command and allow CreateProcess()
+      // to try to find it via PATH
+      return from_utf8(raw_cmd);
+    } else if (boost::iequals(extension, L".exe")) {
+      // If the file has an .exe extension, we will bypass the resolution here and
+      // directly pass the unmodified command string to CreateProcess(). The argument
+      // escaping rules are subtly different between CreateProcess() and ShellExecute(),
+      // and we want to preserve backwards compatibility with older configs.
+      return from_utf8(raw_cmd);
+    }
+
+    // For regular files, the class is found using the file extension (including the dot)
+    std::wstring lookup_string = extension;
+    HRESULT res;
 
     std::array<WCHAR, MAX_PATH> shell_command_string;
     bool needs_cmd_escaping = false;
@@ -1789,14 +1845,14 @@ namespace platf {
     return {};
   }
 
-  std::wstring from_utf8(const std::string &string) {
+  std::wstring from_utf8(const std::string_view &string) {
     // No conversion needed if the string is empty
     if (string.empty()) {
       return {};
     }
 
     // Get the output size required to store the string
-    auto output_size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, string.data(), string.size(), nullptr, 0);
+    auto output_size = MultiByteToWideChar(CP_UTF8, 0, string.data(), string.size(), nullptr, 0);
     if (output_size == 0) {
       auto winerr = GetLastError();
       BOOST_LOG(error) << "Failed to get UTF-16 buffer size: "sv << winerr;
@@ -1805,7 +1861,7 @@ namespace platf {
 
     // Perform the conversion
     std::wstring output(output_size, L'\0');
-    output_size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, string.data(), string.size(), output.data(), output.size());
+    output_size = MultiByteToWideChar(CP_UTF8, 0, string.data(), string.size(), output.data(), output.size());
     if (output_size == 0) {
       auto winerr = GetLastError();
       BOOST_LOG(error) << "Failed to convert string to UTF-16: "sv << winerr;
@@ -1815,7 +1871,7 @@ namespace platf {
     return output;
   }
 
-  std::string to_utf8(const std::wstring &string) {
+  std::string to_utf8(const std::wstring_view &string) {
     // No conversion needed if the string is empty
     if (string.empty()) {
       return {};
@@ -2017,4 +2073,107 @@ namespace platf {
   std::unique_ptr<high_precision_timer> create_high_precision_timer() {
     return std::make_unique<win32_high_precision_timer>();
   }
+
+  std::string
+    get_clipboard() {
+    std::string currentClipboard = to_utf8(getClipboardData());
+    return currentClipboard;
+  }
+
+  bool
+    set_clipboard(const std::string &content) {
+    std::wstring cpContent = from_utf8(ensureCrLf(content));
+    return !setClipboardData(cpContent);
+  }
 }  // namespace platf
+
+static std::string ensureCrLf(const std::string &utf8Str) {
+  std::string result;
+  result.reserve(utf8Str.size() + utf8Str.size() / 2);  // Reserve extra space
+
+  for (size_t i = 0; i < utf8Str.size(); ++i) {
+    if (utf8Str[i] == '\n' && (i == 0 || utf8Str[i - 1] != '\r')) {
+      result += '\r';  // Add \r before \n if not present
+    }
+    result += utf8Str[i];  // Always add the current character
+  }
+
+  return result;
+}
+
+static std::wstring getClipboardData() {
+  if (!OpenClipboard(nullptr)) {
+    BOOST_LOG(warning) << "Failed to open clipboard.";
+    return L"";
+  }
+
+  HANDLE hData = GetClipboardData(CF_UNICODETEXT);
+  if (hData == nullptr) {
+    BOOST_LOG(warning) << "No text data in clipboard or failed to get data.";
+    CloseClipboard();
+    return L"";
+  }
+
+  wchar_t *pszText = static_cast<wchar_t *>(GlobalLock(hData));
+  if (pszText == nullptr) {
+    BOOST_LOG(warning) << "Failed to lock clipboard data.";
+    CloseClipboard();
+    return L"";
+  }
+
+  std::wstring ret = pszText;
+
+  GlobalUnlock(hData);
+  CloseClipboard();
+
+  return ret;
+}
+
+static int setClipboardData(const std::wstring &utf16Str) {
+  if (!OpenClipboard(nullptr)) {
+    BOOST_LOG(warning) << "Failed to open clipboard.";
+    return 1;
+  }
+
+  if (!EmptyClipboard()) {
+    BOOST_LOG(warning) << "Failed to empty clipboard.";
+    CloseClipboard();
+    return 1;
+  }
+
+  // Allocate global memory for the clipboard text
+  HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, utf16Str.size() * 2 + 2);
+  if (hGlobal == nullptr) {
+    BOOST_LOG(warning) << "Failed to allocate global memory.";
+    CloseClipboard();
+    return 1;
+  }
+
+  // Lock the global memory and copy the text
+  char *pGlobal = static_cast<char *>(GlobalLock(hGlobal));
+  if (pGlobal == nullptr) {
+    BOOST_LOG(warning) << "Failed to lock global memory.";
+    GlobalFree(hGlobal);
+    CloseClipboard();
+    return 1;
+  }
+
+  memcpy(pGlobal, utf16Str.c_str(), utf16Str.size() * 2 + 2);
+  GlobalUnlock(hGlobal);
+
+  // Set the clipboard data
+  if (SetClipboardData(CF_UNICODETEXT, hGlobal) == nullptr) {
+    BOOST_LOG(warning) << "Failed to set clipboard data.";
+    GlobalFree(hGlobal);
+    CloseClipboard();
+    return 1;
+  }
+
+  CloseClipboard();
+
+  return 0;
+}
+
+#ifdef BOOST_PROCESS_VERSION
+  #undef BOOST_PROCESS_VERSION
+#endif

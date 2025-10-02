@@ -46,6 +46,28 @@
         </n-alert>
       </section>
 
+      <section class="troubleshoot-card">
+        <div class="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h2 class="text-base font-semibold text-dark dark:text-light">
+              {{ $t('troubleshooting.quit_apollo') }}
+            </h2>
+            <p class="text-xs opacity-70 leading-snug">
+              {{ $t('troubleshooting.quit_apollo_desc') }}
+            </p>
+          </div>
+          <n-button type="warning" strong :disabled="serverQuitting || restartPressed" @click="quit">
+            {{ $t('troubleshooting.quit_apollo') }}
+          </n-button>
+        </div>
+        <n-alert v-if="serverQuitting" type="info" class="mt-3">
+          {{ $t('troubleshooting.quit_apollo_success_ongoing') }}
+        </n-alert>
+        <n-alert v-else-if="serverQuit" type="success" class="mt-3">
+          {{ $t('troubleshooting.quit_apollo_success') }}
+        </n-alert>
+      </section>
+
       <section v-if="platform === 'windows'" class="troubleshoot-card">
         <div class="flex items-start justify-between gap-4 flex-wrap">
           <div>
@@ -64,6 +86,7 @@
           </n-button>
         </div>
       </section>
+
     </div>
 
     <section class="troubleshoot-card space-y-4">
@@ -133,12 +156,14 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { NButton, NInput, NAlert, NScrollbar } from 'naive-ui';
 import type { ScrollbarInst } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
 import { useAuthStore } from '@/stores/auth';
 import { http } from '@/http';
 
+const { t } = useI18n();
 const store = useConfigStore();
 const authStore = useAuthStore();
 const platform = computed(() => store.metadata.platform);
@@ -146,6 +171,8 @@ const platform = computed(() => store.metadata.platform);
 const closeAppPressed = ref(false);
 const closeAppStatus = ref(null as null | boolean);
 const restartPressed = ref(false);
+const serverQuitting = ref(false);
+const serverQuit = ref(false);
 
 const logs = ref('Loading...');
 const logFilter = ref('');
@@ -283,6 +310,29 @@ function restart() {
   setTimeout(() => (restartPressed.value = false), 5000);
   http.post('./api/restart', {}, { validateStatus: () => true });
 }
+
+async function quit() {
+  if (serverQuitting.value) return;
+  if (typeof window !== 'undefined') {
+    const confirmed = window.confirm(t('troubleshooting.quit_apollo_confirm'));
+    if (!confirmed) return;
+  }
+  serverQuitting.value = true;
+  serverQuit.value = false;
+  try {
+    const r = await http.post('./api/quit', {}, { validateStatus: () => true });
+    serverQuit.value = r.status === 200;
+  } catch {
+    serverQuit.value = true;
+  } finally {
+    serverQuitting.value = false;
+    setTimeout(() => {
+      serverQuit.value = false;
+    }, 5000);
+  }
+}
+
+
 
 onMounted(async () => {
   loginDisposer = authStore.onLogin(() => {

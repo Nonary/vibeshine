@@ -10,13 +10,14 @@
 // local includes
 #include "platform/common.h"
 #include "thread_safe.h"
+#include "crypto.h"
 
 namespace input {
   struct input_t;
 
   void print(void *input);
   void reset(std::shared_ptr<input_t> &input);
-  void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&input_data);
+  void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&input_data, const crypto::PERM& permission);
 
   [[nodiscard]] std::unique_ptr<platf::deinit_t> init();
 

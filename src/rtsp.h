@@ -8,10 +8,21 @@
 #include <atomic>
 #include <optional>
 #include <string>
+#include <memory>
+#include <list>
 
 // local includes
 #include "crypto.h"
 #include "thread_safe.h"
+
+#ifdef _WIN32
+  #include <windows.h>
+#endif
+
+// Resolve circular dependencies
+namespace stream {
+  struct session_t;
+}
 
 namespace rtsp_stream {
   constexpr auto RTSP_SETUP_PORT = 21;
@@ -25,13 +36,16 @@ namespace rtsp_stream {
     std::string av_ping_payload;
     uint32_t control_connect_data;
 
-    bool host_audio;
+    std::string device_name;
     std::string unique_id;
+    crypto::PERM perm;
+
+    bool input_only;
+    bool host_audio;
     int width;
     int height;
     int fps;
     int gcmap;
-    int appid;
     int surround_info;
     std::string surround_params;
     bool enable_hdr;
@@ -42,10 +56,19 @@ namespace rtsp_stream {
     std::string frame_generation_provider;
     std::optional<int> lossless_scaling_target_fps;
     std::optional<int> lossless_scaling_rtss_limit;
+    bool virtual_display;
+    uint32_t scale_factor;
 
     std::optional<crypto::cipher::gcm_t> rtsp_cipher;
     std::string rtsp_url_scheme;
     uint32_t rtsp_iv_counter;
+
+    std::list<crypto::command_entry_t> client_do_cmds;
+    std::list<crypto::command_entry_t> client_undo_cmds;
+
+  #ifdef _WIN32
+    GUID display_guid{};
+  #endif
   };
 
   void launch_session_raise(std::shared_ptr<launch_session_t> launch_session);
@@ -61,6 +84,12 @@ namespace rtsp_stream {
    * @return Count of active sessions.
    */
   int session_count();
+
+  std::shared_ptr<stream::session_t>
+  find_session(const std::string_view& uuid);
+
+  std::list<std::string>
+  get_all_session_uuids();
 
   /**
    * @brief Terminates all running streaming sessions.

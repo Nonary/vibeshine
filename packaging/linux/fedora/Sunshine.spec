@@ -211,15 +211,13 @@ xvfb-run ./tests/test_sunshine
 cd %{_builddir}/Sunshine/build
 %make_install
 
-# Add modules-load configuration
-# load the uhid module in initramfs even if it doesn't detect the module as being used during dracut
-# which must be run every time a new kernel is installed
-install -D -m 0644 /dev/stdin %{buildroot}/usr/lib/modules-load.d/uhid.conf <<EOF
-uhid
-EOF
-
 %post
 # Note: this is copied from the postinst script
+
+# Load uhid (DS5 emulation)
+echo "Loading uhid kernel module for DS5 emulation."
+modprobe uhid
+
 # Check if we're in an rpm-ostree environment
 if [ ! -x "$(command -v rpm-ostree)" ]; then
   echo "Not in an rpm-ostree environment, proceeding with post install steps."
@@ -239,10 +237,6 @@ else
   echo "rpm-ostree environment detected, skipping post install steps. Restart to apply the changes."
 fi
 
-%preun
-# Remove modules-load configuration
-rm -f /usr/lib/modules-load.d/uhid.conf
-
 %files
 # Executables
 %caps(cap_sys_admin+p) %{_bindir}/sunshine
@@ -255,14 +249,14 @@ rm -f /usr/lib/modules-load.d/uhid.conf
 %{_udevrulesdir}/*-sunshine.rules
 
 # Modules-load configuration
-%{_modulesloaddir}/uhid.conf
+%{_modulesloaddir}/*-sunshine.conf
 
 # Desktop entries
 %{_datadir}/applications/*.desktop
 
 # Icons
-%{_datadir}/icons/hicolor/scalable/apps/sunshine.svg
-%{_datadir}/icons/hicolor/scalable/status/sunshine*.svg
+%{_datadir}/icons/hicolor/scalable/apps/apollo.svg
+%{_datadir}/icons/hicolor/scalable/status/apollo*.svg
 
 # Metainfo
 %{_datadir}/metainfo/*.metainfo.xml

@@ -31,7 +31,7 @@ namespace platf {
    * @param string The UTF-8 string.
    * @return The converted UTF-16 wide string.
    */
-  std::wstring from_utf8(const std::string &string);
+  std::wstring from_utf8(const std::string_view &string);
 
   /**
    * @brief Convert a UTF-16 wide string into a UTF-8 string.

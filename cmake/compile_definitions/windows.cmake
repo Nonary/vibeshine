@@ -33,9 +33,9 @@ file(GLOB NVPREFS_FILES CONFIGURE_DEPENDS
 # vigem
 include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include")
 
-# sunshine icon
-if(NOT DEFINED SUNSHINE_ICON_PATH)
-    set(SUNSHINE_ICON_PATH "${CMAKE_SOURCE_DIR}/sunshine.ico")
+# apollo icon
+if(NOT DEFINED PROJECT_ICON_PATH)
+    set(PROJECT_ICON_PATH "${CMAKE_SOURCE_DIR}/apollo.ico")
 endif()
 
 # Create a separate object library for the RC file with minimal includes
@@ -44,7 +44,7 @@ add_library(sunshine_rc_object OBJECT "${CMAKE_SOURCE_DIR}/src/platform/windows/
 # Set minimal properties for RC compilation - only what's needed for the resource file
 # Otherwise compilation can fail due to "line too long" errors
 set_target_properties(sunshine_rc_object PROPERTIES
-    COMPILE_DEFINITIONS "PROJECT_ICON_PATH=${SUNSHINE_ICON_PATH};PROJECT_NAME=${PROJECT_NAME};PROJECT_VENDOR=${SUNSHINE_PUBLISHER_NAME};PROJECT_VERSION=${PROJECT_VERSION};PROJECT_VERSION_MAJOR=${PROJECT_VERSION_MAJOR};PROJECT_VERSION_MINOR=${PROJECT_VERSION_MINOR};PROJECT_VERSION_PATCH=${PROJECT_VERSION_PATCH}"  # cmake-lint: disable=C0301
+    COMPILE_DEFINITIONS "PROJECT_ICON_PATH=${PROJECT_ICON_PATH};PROJECT_NAME=${PROJECT_NAME};PROJECT_VENDOR=${SUNSHINE_PUBLISHER_NAME};PROJECT_VERSION=${PROJECT_VERSION};PROJECT_VERSION_MAJOR=${PROJECT_VERSION_MAJOR};PROJECT_VERSION_MINOR=${PROJECT_VERSION_MINOR};PROJECT_VERSION_PATCH=${PROJECT_VERSION_PATCH}"  # cmake-lint: disable=C0301
     INCLUDE_DIRECTORIES ""
 )
 
@@ -89,6 +89,12 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/rtss_integration.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/ipc_session.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/ipc_session.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/utils.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/utils.cpp"
+        "${CMAKE_SOURCE_DIR}/third-party/sudovda/sudovda-ioctl.h"
+        "${CMAKE_SOURCE_DIR}/third-party/sudovda/sudovda.h"
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/src/ViGEmClient.cpp"
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Client.h"
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Common.h"

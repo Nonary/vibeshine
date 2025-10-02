@@ -1,16 +1,25 @@
 <script setup lang="ts">
-import Checkbox from '@/Checkbox.vue';
-import { ref, computed } from 'vue';
-import { useConfigStore } from '@/stores/config';
+import { computed, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
-import { NSelect, NInput, NButton, NInputNumber, NCheckbox } from 'naive-ui';
 import { useI18n } from 'vue-i18n';
+import {
+  NButton,
+  NInput,
+  NInputNumber,
+  NSelect,
+  NCheckbox,
+} from 'naive-ui';
+import Checkbox from '@/Checkbox.vue';
+import { useConfigStore } from '@/stores/config';
 
 const store = useConfigStore();
 const { config, metadata } = storeToRefs(store);
-const platform = computed(() => metadata.value?.platform || '');
+const { t } = useI18n();
 
-// Select options
+const platform = computed(
+  () => (metadata.value?.platform || config.value?.platform || '').toString().toLowerCase(),
+);
+
 const localeOptions = [
   { label: 'Български (Bulgarian)', value: 'bg' },
   { label: 'Čeština (Czech)', value: 'cs' },
@@ -34,225 +43,186 @@ const localeOptions = [
   { label: '繁體中文 (Chinese Traditional)', value: 'zh_TW' },
 ];
 
-const { t } = useI18n();
 const logLevelOptions = computed(() =>
   [0, 1, 2, 3, 4, 5, 6].map((v) => ({ label: t(`config.min_log_level_${v}`), value: v })),
 );
 
-function addCmd() {
-  const template = {
-    do: '',
-    undo: '',
-    ...(platform.value === 'windows' ? { elevated: false } : {}),
-  };
-  if (!config.value) return;
-  const current = Array.isArray(config.value.global_prep_cmd) ? config.value.global_prep_cmd : [];
-  const next = [...current, template];
-  store.updateOption('global_prep_cmd', next);
-  if (store.markManualDirty) store.markManualDirty('global_prep_cmd');
+function ensureCommandArray<T extends Record<string, any>>(key: 'global_prep_cmd' | 'global_state_cmd' | 'server_cmd'): T[] {
+  if (!config.value) return [] as T[];
+  const current = (config.value as any)[key];
+  if (!Array.isArray(current)) {
+    (config.value as any)[key] = [];
+    return (config.value as any)[key];
+  }
+  return current;
 }
 
-function removeCmd(index: number) {
+function addPrepCommand() {
   if (!config.value) return;
-  const current = Array.isArray(config.value.global_prep_cmd)
-    ? [...config.value.global_prep_cmd]
-    : [];
-  if (index < 0 || index >= current.length) return;
-  current.splice(index, 1);
-  store.updateOption('global_prep_cmd', current);
-  if (store.markManualDirty) store.markManualDirty('global_prep_cmd');
+  const arr = ensureCommandArray('global_prep_cmd');
+  arr.push({
+    do: '',
+    undo: '',
+    elevated: platform.value === 'windows' ? false : !!arr[0]?.elevated,
+  });
+  store.markManualDirty?.('global_prep_cmd');
 }
+
+function removePrepCommand(index: number) {
+  if (!config.value) return;
+  const arr = ensureCommandArray('global_prep_cmd');
+  if (index < 0 || index >= arr.length) return;
+  arr.splice(index, 1);
+  store.markManualDirty?.('global_prep_cmd');
+}
+
+function addStateCommand() {
+  if (!config.value) return;
+  const arr = ensureCommandArray('global_state_cmd');
+  arr.push({
+    do: '',
+    undo: '',
+    elevated: platform.value === 'windows' ? false : !!arr[0]?.elevated,
+  });
+  store.markManualDirty?.('global_state_cmd');
+}
+
+function removeStateCommand(index: number) {
+  if (!config.value) return;
+  const arr = ensureCommandArray('global_state_cmd');
+  if (index < 0 || index >= arr.length) return;
+  arr.splice(index, 1);
+  store.markManualDirty?.('global_state_cmd');
+}
+
+function addServerCommand() {
+  if (!config.value) return;
+  const arr = ensureCommandArray('server_cmd');
+  arr.push({
+    name: '',
+    cmd: '',
+    elevated: platform.value === 'windows' ? false : !!arr[0]?.elevated,
+  });
+  store.markManualDirty?.('server_cmd');
+}
+
+function removeServerCommand(index: number) {
+  if (!config.value) return;
+  const arr = ensureCommandArray('server_cmd');
+  if (index < 0 || index >= arr.length) return;
+  arr.splice(index, 1);
+  store.markManualDirty?.('server_cmd');
+}
+
+function markManual(key: 'global_prep_cmd' | 'global_state_cmd' | 'server_cmd') {
+  store.markManualDirty?.(key);
+}
+
+onMounted(() => {
+  ensureCommandArray('global_prep_cmd');
+  ensureCommandArray('global_state_cmd');
+  ensureCommandArray('server_cmd');
+});
 </script>
 
 <template>
-  <div id="general" class="config-page">
-    <!-- Locale -->
-    <div class="mb-6">
-      <label for="locale" class="form-label">{{ $t('config.locale') }}</label>
+  <div class="config-page space-y-6">
+    <section class="space-y-4">
+      <div>
+        <label for="locale" class="form-label">{{ $t('config.locale') }}</label>
+        <n-select
+          id="locale"
+          v-model:value="config.locale"
+          :options="localeOptions"
+          :data-search-options="localeOptions.map((o) => `${o.label}::${o.value ?? ''}`).join('|')"
+        />
+        <p class="text-[11px] opacity-60 mt-1">{{ $t('config.locale_desc') }}</p>
+      </div>
 
-      <n-select
-        id="locale"
-        v-model:value="config.locale"
-        :options="localeOptions"
-        :data-search-options="localeOptions.map((o) => `${o.label}::${o.value ?? ''}`).join('|')"
+      <div>
+        <label for="sunshine_name" class="form-label">{{ $t('config.sunshine_name') }}</label>
+        <n-input id="sunshine_name" v-model:value="config.sunshine_name" type="text" placeholder="Sunshine" />
+        <p class="text-[11px] opacity-60 mt-1">{{ $t('config.sunshine_name_desc') }}</p>
+      </div>
+
+      <div>
+        <label for="min_log_level" class="form-label">{{ $t('config.min_log_level') }}</label>
+        <n-select
+          id="min_log_level"
+          v-model:value="config.min_log_level"
+          :options="logLevelOptions.map((o) => ({ ...o, label: $t(`config.min_log_level_${o.value}`) }))"
+          :data-search-options="logLevelOptions.map((o) => `${$t(`config.min_log_level_${o.value}`)}::${o.value}`).join('|')"
+        />
+        <p class="text-[11px] opacity-60 mt-1">{{ $t('config.min_log_level_desc') }}</p>
+      </div>
+
+      <div>
+        <label for="session_token_ttl_seconds" class="form-label">{{
+          $t('config.session_token_ttl_seconds')
+        }}</label>
+        <n-input-number
+          id="session_token_ttl_seconds"
+          v-model:value="config.session_token_ttl_seconds"
+          :min="60"
+          :step="60"
+        />
+        <p class="text-[11px] opacity-60 mt-1">{{ $t('config.session_token_ttl_seconds_desc') }}</p>
+      </div>
+
+      <div>
+        <label for="update_check_interval" class="form-label">{{
+          $t('config.update_check_interval')
+        }}</label>
+        <n-input-number
+          id="update_check_interval"
+          v-model:value="config.update_check_interval"
+          :min="0"
+          :step="60"
+        />
+        <p class="text-[11px] opacity-60 mt-1">{{ $t('config.update_check_interval_desc') }}</p>
+      </div>
+    </section>
+
+    <section class="space-y-4">
+      <Checkbox id="notify_pre_releases" v-model="config.notify_pre_releases" locale-prefix="config" default="false" />
+      <Checkbox id="system_tray" v-model="config.system_tray" locale-prefix="config" default="true" />
+      <Checkbox
+        id="hide_tray_controls"
+        v-model="config.hide_tray_controls"
+        locale-prefix="config"
+        default="false"
       />
-      <div class="text-[11px] opacity-60 mt-1">
-        {{ $t('config.locale_desc') }}
-      </div>
+      <Checkbox id="enable_pairing" v-model="config.enable_pairing" locale-prefix="config" default="true" />
+      <Checkbox id="enable_discovery" v-model="config.enable_discovery" locale-prefix="config" default="true" />
+    </section>
 
-      <select id="locale" class="form-select" v-model="config.locale">
-        <option value="bg">Български (Bulgarian)</option>
-        <option value="cs">Čeština (Czech)</option>
-        <option value="de">Deutsch (German)</option>
-        <option value="en">English</option>
-        <option value="en_GB">English, UK</option>
-        <option value="en_US">English, US</option>
-        <option value="es">Español (Spanish)</option>
-        <option value="fr">Français (French)</option>
-        <option value="hu">Magyar (Hungarian)</option>
-        <option value="it">Italiano (Italian)</option>
-        <option value="ja">日本語 (Japanese)</option>
-        <option value="ko">한국어 (Korean)</option>
-        <option value="pl">Polski (Polish)</option>
-        <option value="pt">Português (Portuguese)</option>
-        <option value="pt_BR">Português, Brasileiro (Portuguese, Brazilian)</option>
-        <option value="ru">Русский (Russian)</option>
-        <option value="sv">svenska (Swedish)</option>
-        <option value="tr">Türkçe (Turkish)</option>
-        <option value="uk">Українська (Ukranian)</option>
-        <option value="vi">Tiếng Việt (Vietnamese)</option>
-        <option value="zh">简体中文 (Chinese Simplified)</option>
-        <option value="zh_TW">繁體中文 (Chinese Traditional)</option>
-      </select>
-      <div class="form-text">{{ $t('config.locale_desc') }}</div>
-    </div>
-
-    <!-- Sunshine Name -->
-    <div class="mb-6">
-      <label for="sunshine_name" class="form-label">{{ $t('config.sunshine_name') }}</label>
-      <n-input
-        id="sunshine_name"
-        v-model:value="config.sunshine_name"
-        type="text"
-        placeholder="Sunshine"
-      />
-      <div class="text-[11px] opacity-60 mt-1">
-        {{ $t('config.sunshine_name_desc') }}
-      </div>
-    </div>
-
-    <!-- Log Level -->
-    <div class="mb-6">
-      <label for="min_log_level" class="form-label">{{ $t('config.min_log_level') }}</label>
-      <n-select
-        id="min_log_level"
-        v-model:value="config.min_log_level"
-        :options="
-          logLevelOptions.map((o) => ({ ...o, label: $t(`config.min_log_level_${o.value}`) }))
-        "
-        :data-search-options="logLevelOptions.map((o) => `${o.label}::${o.value ?? ''}`).join('|')"
-      />
-      <div class="text-[11px] opacity-60 mt-1">
-        {{ $t('config.min_log_level_desc') }}
-      </div>
-    </div>
-
-    <!-- Global Prep Commands -->
-    <div id="global_prep_cmd" class="mb-6 flex flex-col">
-      <label class="block text-sm font-medium mb-1 text-dark dark:text-light">{{
-        $t('config.global_prep_cmd')
-      }}</label>
-      <div class="text-[11px] opacity-60 mt-1">
-        {{ $t('config.global_prep_cmd_desc') }}
-      </div>
-      <div v-if="config.global_prep_cmd.length > 0" class="mt-3 space-y-3">
+    <section class="space-y-3">
+      <header class="space-y-1">
+        <h3 class="text-sm font-semibold">{{ $t('config.global_prep_cmd') }}</h3>
+        <p class="text-[11px] opacity-60">{{ $t('config.global_prep_cmd_desc') }}</p>
+      </header>
+      <div v-if="ensureCommandArray('global_prep_cmd').length" class="space-y-3">
         <div
-          v-for="(c, i) in config.global_prep_cmd"
-          :key="i"
-          class="rounded-md border border-dark/10 dark:border-light/10 p-2"
+          v-for="(entry, index) in ensureCommandArray('global_prep_cmd')"
+          :key="index"
+          class="rounded-lg border border-dark/10 dark:border-light/10 p-3 space-y-3"
         >
-          <div class="flex items-center justify-between gap-2 mb-2">
-            <div class="text-xs opacity-70">Step {{ i + 1 }}</div>
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs opacity-70">Step {{ index + 1 }}</span>
             <div class="flex items-center gap-2">
               <n-checkbox
                 v-if="platform === 'windows'"
-                v-model:checked="c.elevated"
                 size="small"
-                @update:checked="store.markManualDirty()"
+                v-model:checked="entry.elevated"
+                @update:checked="markManual('global_prep_cmd')"
               >
                 {{ $t('_common.elevated') }}
               </n-checkbox>
-              <n-button secondary size="small" @click="removeCmd(i)">
+              <n-button size="small" quaternary @click="removePrepCommand(index)">
                 <i class="fas fa-trash" />
               </n-button>
-              <n-button primary size="small" @click="addCmd">
-                <i class="fas fa-plus" />
-              </n-button>
             </div>
           </div>
-          <div class="grid grid-cols-1 gap-2">
+          <div class="grid md:grid-cols-2 gap-3">
             <div>
-              <label class="text-[11px] opacity-60">{{ $t('_common.do_cmd') }}</label>
-              <n-input
-                v-model:value="c.do"
-                type="textarea"
-                :autosize="{ minRows: 1, maxRows: 3 }"
-                class="monospace"
-                @update:value="store.markManualDirty()"
-              />
-            </div>
-            <div>
-              <label class="text-[11px] opacity-60">{{ $t('_common.undo_cmd') }}</label>
-              <n-input
-                v-model:value="c.undo"
-                type="textarea"
-                :autosize="{ minRows: 1, maxRows: 3 }"
-                class="monospace"
-                @update:value="store.markManualDirty()"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="mt-4">
-        <n-button primary class="mx-auto block" @click="addCmd">
-          &plus; {{ $t('config.add') }}
-        </n-button>
-      </div>
-    </div>
-
-    <!-- Session Token TTL -->
-    <div class="mb-6">
-      <label
-        for="session_token_ttl_seconds"
-        class="block text-sm font-medium mb-1 text-dark dark:text-light"
-        >{{ $t('config.session_token_ttl_seconds') }}</label
-      >
-      <n-input-number
-        id="session_token_ttl_seconds"
-        v-model:value="config.session_token_ttl_seconds"
-        :min="60"
-        :step="60"
-      />
-      <div class="text-[11px] opacity-60 mt-1">
-        {{ $t('config.session_token_ttl_seconds_desc') }}
-      </div>
-    </div>
-
-    <!-- Update Check Interval (seconds) -->
-    <div class="mb-6">
-      <label for="update_check_interval" class="form-label">{{
-        $t('config.update_check_interval')
-      }}</label>
-      <n-input-number
-        id="update_check_interval"
-        v-model:value="config.update_check_interval"
-        :min="0"
-        :step="60"
-      />
-      <div class="text-[11px] opacity-60 mt-1">
-        {{ $t('config.update_check_interval_desc') }}
-      </div>
-    </div>
-
-    <!-- Notify Pre-Releases -->
-    <Checkbox
-      id="notify_pre_releases"
-      v-model="config.notify_pre_releases"
-      class="mb-3"
-      locale-prefix="config"
-      default="false"
-    />
-
-    <!-- Enable system tray -->
-    <Checkbox
-      id="system_tray"
-      v-model="config.system_tray"
-      class="mb-3"
-      locale-prefix="config"
-      default="true"
-    />
-  </div>
-</template>
-
-<style scoped></style>
+              <span class="text-[11px] opacity-60">{{ 

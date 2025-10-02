@@ -20,16 +20,28 @@
                   <RouterLink to="/" :class="linkClass('/')">
                     <i class="fas fa-gauge" /><span>{{ $t('navbar.home') }}</span>
                   </RouterLink>
+                  <RouterLink
+                    :to="{ path: '/clients', hash: '#PIN' }"
+                    :class="linkClass('/clients', { hash: '#PIN' })"
+                  >
+                    <i class="fas fa-unlock" /><span>{{ $t('navbar.pin') }}</span>
+                  </RouterLink>
                   <RouterLink to="/applications" :class="linkClass('/applications')">
                     <i class="fas fa-table-cells-large" /><span>{{
                       $t('navbar.applications')
                     }}</span>
                   </RouterLink>
-                  <RouterLink to="/clients" :class="linkClass('/clients')">
+                  <RouterLink
+                    to="/clients"
+                    :class="linkClass('/clients', { excludeHash: '#PIN' })"
+                  >
                     <i class="fas fa-users-cog" /><span>{{ $t('clients.nav') }}</span>
                   </RouterLink>
                   <RouterLink to="/settings" :class="linkClass('/settings')">
                     <i class="fas fa-sliders" /><span>{{ $t('navbar.configuration') }}</span>
+                  </RouterLink>
+                  <RouterLink to="/password" :class="linkClass('/password')">
+                    <i class="fas fa-user-shield" /><span>{{ $t('navbar.password') }}</span>
                   </RouterLink>
                   <RouterLink to="/troubleshooting" :class="linkClass('/troubleshooting')">
                     <i class="fas fa-bug" /><span>{{ $t('navbar.troubleshoot') }}</span>
@@ -157,9 +169,16 @@ const router = useRouter();
 const cfgStore = useConfigStore();
 const { metadata } = storeToRefs(cfgStore);
 
-const linkClass = (path: string) => {
+interface LinkOptions {
+  hash?: string;
+  excludeHash?: string;
+}
+
+const linkClass = (path: string, opts: LinkOptions = {}) => {
   const base = 'inline-flex items-center gap-2 px-3 py-1 rounded-md text-brand';
-  const active = route.path === path;
+  let active = route.path === path;
+  if (opts.hash) active = active && route.hash === opts.hash;
+  if (opts.excludeHash) active = active && route.hash !== opts.excludeHash;
   if (active) return base + ' font-semibold bg-primary/20 text-brand';
   return base + ' hover:bg-primary/10';
 };
@@ -181,6 +200,7 @@ watch(
       '/logs': 'navbar.troubleshoot',
       '/troubleshooting': 'navbar.troubleshoot',
       '/clients': 'clients.nav',
+      '/password': 'navbar.password',
     };
     const v = map[p] || 'Sunshine';
     pageTitle.value = v;
@@ -230,6 +250,7 @@ const mobileMenuOptions = computed(() => {
   const icon = (cls: string) => () => h('i', { class: cls });
   return [
     { label: t('navbar.home'), key: '/', icon: icon('fas fa-gauge') },
+    { label: t('navbar.pin'), key: '/clients#PIN', icon: icon('fas fa-unlock') },
     {
       label: t('navbar.applications'),
       key: '/applications',
@@ -237,6 +258,7 @@ const mobileMenuOptions = computed(() => {
     },
     { label: t('clients.nav'), key: '/clients', icon: icon('fas fa-users-cog') },
     { label: t('navbar.configuration'), key: '/settings', icon: icon('fas fa-sliders') },
+    { label: t('navbar.password'), key: '/password', icon: icon('fas fa-user-shield') },
     { label: t('navbar.troubleshoot'), key: '/troubleshooting', icon: icon('fas fa-bug') },
     { type: 'divider' as const },
     { label: t('navbar.logout'), key: '__logout', icon: icon('fas fa-sign-out-alt') },
@@ -246,6 +268,10 @@ const mobileMenuOptions = computed(() => {
 function onMobileSelect(key: string | number): void {
   if (key === '__logout') {
     void logout();
+    return;
+  }
+  if (key === '/clients#PIN') {
+    router.push({ path: '/clients', hash: '#PIN' });
     return;
   }
   if (typeof key === 'string') router.push(key);

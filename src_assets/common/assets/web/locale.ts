@@ -12,7 +12,7 @@ type MessageSchema = typeof en;
 
 export default async function (): Promise<any> {
   const r: LocaleResponse = await http
-    .get('./api/configLocale', { validateStatus: () => true })
+    .get('./api/configLocale', { validateStatus: () => true, withCredentials: true })
     .then((r) => (r.status === 200 ? r.data : {}))
     .catch(() => ({}));
   const locale = r.locale ?? 'en';
@@ -23,7 +23,7 @@ export default async function (): Promise<any> {
   try {
     if (locale !== 'en') {
       const r = await http
-        .get(`/assets/locale/${locale}.json`, { validateStatus: () => true })
+        .get(`/assets/locale/${locale}.json`, { validateStatus: () => true, withCredentials: true })
         .then((r) => (r.status === 200 ? r.data : null));
       if (r) messages[locale] = r;
     }

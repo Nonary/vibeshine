@@ -23,7 +23,7 @@
 #include "src/platform/common.h"
 
 #ifdef __MINGW32__
-DECLARE_HANDLE(HSYNTHETICPOINTERDEVICE);
+// DECLARE_HANDLE(HSYNTHETICPOINTERDEVICE);
 WINUSERAPI HSYNTHETICPOINTERDEVICE WINAPI CreateSyntheticPointerDevice(POINTER_INPUT_TYPE pointerType, ULONG maxCount, POINTER_FEEDBACK_MODE mode);
 WINUSERAPI BOOL WINAPI InjectSyntheticPointerInput(HSYNTHETICPOINTERDEVICE device, CONST POINTER_TYPE_INFO *pointerInfo, UINT32 count);
 WINUSERAPI VOID WINAPI DestroySyntheticPointerDevice(HSYNTHETICPOINTERDEVICE device);
@@ -327,6 +327,11 @@ namespace platf {
      * @param smallMotor The small motor.
      */
     void rumble(target_t::pointer target, std::uint8_t largeMotor, std::uint8_t smallMotor) {
+      // config::input.forward_rumble - Default is true so ignore rumble messages when false
+      if( config::input.forward_rumble == false ) {
+        // Do nothing; just return
+        return;
+      }
       for (int x = 0; x < gamepads.size(); ++x) {
         auto &gamepad = gamepads[x];
 

@@ -40,9 +40,15 @@ const defaultGroups = [
       sunshine_name: '',
       min_log_level: 2,
       global_prep_cmd: [],
+      global_state_cmd: [],
+      server_cmd: [],
       notify_pre_releases: 'disabled',
       update_check_interval: 86400,
       session_token_ttl_seconds: 86400,
+      system_tray: 'enabled',
+      hide_tray_controls: 'disabled',
+      enable_pairing: 'enabled',
+      enable_discovery: 'enabled',
     },
   },
   {
@@ -54,6 +60,7 @@ const defaultGroups = [
       ds4_back_as_touchpad_click: 'enabled',
       motion_as_ds4: 'enabled',
       touchpad_as_ds4: 'enabled',
+      ds5_inputtino_randomize_mac: 'enabled',
       back_button_timeout: -1,
       keyboard: 'enabled',
       key_repeat_delay: 500,
@@ -63,6 +70,8 @@ const defaultGroups = [
       mouse: 'enabled',
       high_resolution_scrolling: 'enabled',
       native_pen_touch: 'enabled',
+      enable_input_only_mode: 'disabled',
+      forward_rumble: 'enabled',
       keybindings: '[0x10,0xA0,0x11,0xA2,0x12,0xA4]',
     },
   },
@@ -72,7 +81,10 @@ const defaultGroups = [
     options: {
       audio_sink: '',
       virtual_sink: '',
+      stream_audio: 'enabled',
       install_steam_audio_drivers: 'enabled',
+      keep_sink_default: 'enabled',
+      auto_capture_sink: 'enabled',
       adapter_name: '',
       output_name: '',
       dd_configuration_option: 'disabled',
@@ -86,6 +98,10 @@ const defaultGroups = [
       dd_mode_remapping: { mixed: [], resolution_only: [], refresh_rate_only: [] },
       dd_wa_hdr_toggle: false,
       dd_wa_dummy_plug_hdr10: false,
+      fallback_mode: '',
+      headless_mode: 'disabled',
+      double_refreshrate: 'disabled',
+      isolated_virtual_display_option: 'disabled',
       max_bitrate: 0,
       minimum_fps_target: 20,
       lossless_scaling_path: '',
@@ -143,6 +159,10 @@ const defaultGroups = [
       fec_percentage: 20,
       qp: 28,
       min_threads: 2,
+      limit_framerate: 'enabled',
+      envvar_compatibility_mode: 'disabled',
+      legacy_ordering: 'disabled',
+      ignore_encoder_probe_failure: 'disabled',
       hevc_mode: 0,
       av1_mode: 0,
       capture: '',
@@ -172,6 +192,7 @@ const defaultGroups = [
       nvenc_latency_over_power: 'enabled',
       nvenc_opengl_vulkan_on_dxgi: 'enabled',
       nvenc_h264_cavlc: 'disabled',
+      nvenc_intra_refresh: 'disabled',
     },
   },
   {
@@ -242,6 +263,8 @@ export const useConfigStore = defineStore('config', () => {
   // Track keys that should require manual save (no autosave)
   const manualSaveKeys = new Set<string>([
     'global_prep_cmd',
+    'global_state_cmd',
+    'server_cmd',
     'dd_configuration_option',
     'dd_resolution_option',
     'dd_manual_resolution',
@@ -349,7 +372,7 @@ export const useConfigStore = defineStore('config', () => {
     _data.value = obj ? JSON.parse(JSON.stringify(obj)) : {};
 
     // decode known JSON string fields
-    const specialOptions = ['dd_mode_remapping', 'global_prep_cmd'];
+    const specialOptions = ['dd_mode_remapping', 'global_prep_cmd', 'global_state_cmd', 'server_cmd'];
     for (const key of specialOptions) {
       if (
         _data.value &&
@@ -362,6 +385,46 @@ export const useConfigStore = defineStore('config', () => {
           /* ignore */
         }
       }
+    }
+
+    // Ensure command arrays are always materialized for editor UIs
+    if (_data.value) {
+      const normalizeCommandList = (key: string, fields: string[]) => {
+        const raw = (_data.value as any)[key];
+        if (!Array.isArray(raw)) {
+          (_data.value as any)[key] = [];
+          return;
+        }
+        (_data.value as any)[key] = raw
+          .map((entry: any) => (typeof entry === 'object' && entry ? { ...entry } : {}))
+          .map((entry: any) => {
+            const normalized: Record<string, any> = {};
+            for (const f of fields) {
+              const val = entry[f];
+              normalized[f] = typeof val === 'string' ? val : '';
+            }
+            normalized.elevated = !!entry.elevated;
+            return normalized;
+          });
+      };
+      const normalizeServerList = (key: string) => {
+        const raw = (_data.value as any)[key];
+        if (!Array.isArray(raw)) {
+          (_data.value as any)[key] = [];
+          return;
+        }
+        (_data.value as any)[key] = raw
+          .map((entry: any) => (typeof entry === 'object' && entry ? { ...entry } : {}))
+          .map((entry: any) => ({
+            name: typeof entry.name === 'string' ? entry.name : '',
+            cmd: typeof entry.cmd === 'string' ? entry.cmd : '',
+            elevated: !!entry.elevated,
+          }));
+      };
+
+      normalizeCommandList('global_prep_cmd', ['do', 'undo']);
+      normalizeCommandList('global_state_cmd', ['do', 'undo']);
+      normalizeServerList('server_cmd');
     }
 
     // Coerce primitive types based on defaults so UI widgets match options.

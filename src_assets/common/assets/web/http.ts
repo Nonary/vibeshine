@@ -36,7 +36,7 @@ function initAuthHandling(): void {
         return Promise.reject(err);
       }
       const allowWhenLoggedOut =
-        /(\s*\/api\/auth\/(login|status)\b|\s*\/api\/password\b|\s*\/api\/configLocale\b)/.test(
+        /(\s*\/api\/auth\/(login|status)\b|\s*\/api\/password\b|\s*\/api\/configLocale\b|\s*\/assets\/locale\/)/.test(
           path,
         );
       if (!auth.isAuthenticated && !allowWhenLoggedOut) {

@@ -17,7 +17,6 @@ namespace system_tray {
    * @param item The tray menu item.
    */
   void tray_open_ui_cb([[maybe_unused]] struct tray_menu *item);
-
   /**
    * @brief Generic notification helper (stacking). Title/text copied immediately; callback optional.
    * @param title Notification title
@@ -75,11 +74,16 @@ namespace system_tray {
    */
   void update_tray_stopped(std::string app_name);
 
+  void update_tray_launch_error(const std::string &app_name, int exit_code);
+
   /**
    * @brief Spawns a notification for PIN Pairing. Clicking it opens the PIN Web UI Page
    */
   void update_tray_require_pin();
 
+  void update_tray_paired(const std::string &device_name);
+
+  void update_tray_client_connected(const std::string &client_name);
   /**
    * @brief Spawns a notification when ViGEm is missing.
    * Clicking it opens the Web UI Dashboard for more information.

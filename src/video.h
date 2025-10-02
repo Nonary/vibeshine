@@ -21,6 +21,9 @@ namespace video {
 
   /* Encoding configuration requested by remote client */
   struct config_t {
+    // DO NOT CHANGE ORDER OR ADD FIELDS IN THE MIDDLE!!!!!
+    // ONLY APPEND NEW FIELD AFTERWARDS!!!!!!!!!
+    // BIG F WORD to Sunshine!!!!!!!!!
     int width;  // Video width in pixels
     int height;  // Video height in pixels
     int framerate;  // Requested framerate, used in individual frame bitrate budget calculation
@@ -42,6 +45,9 @@ namespace video {
     int chromaSamplingType;  // 0 - 4:2:0, 1 - 4:4:4
 
     int enableIntraRefresh;  // 0 - disabled, 1 - enabled
+
+    int encodingFramerate; // Requested display framerate
+    bool input_only;
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);
@@ -342,6 +348,12 @@ namespace video {
   );
 
   bool validate_encoder(encoder_t &encoder, bool expect_failure);
+
+  /**
+   * @brief Check if we can allow probing for the encoders.
+   * @return True if there should be no issues with the probing, false if we should prevent it.
+   */
+  bool allow_encoder_probing();
 
   /**
    * @brief Probe encoders and select the preferred encoder.

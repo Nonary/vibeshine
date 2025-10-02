@@ -14,8 +14,10 @@
 // lib includes
 #include <boost/core/noncopyable.hpp>
 #ifndef _WIN32
-  #include <boost/asio.hpp>
-  #include <boost/process.hpp>
+  #include <boost/asio/ip/address.hpp>
+  #include <boost/process/v1/child.hpp>
+  #include <boost/process/v1/group.hpp>
+  #include <boost/process/v1/environment.hpp>
 #endif
 
 // local includes
@@ -576,6 +578,8 @@ namespace platf {
 
   std::string get_mac_address(const std::string_view &address);
 
+  std::string get_local_ip_for_gateway();
+
   std::string from_sockaddr(const sockaddr *const);
   std::pair<std::uint16_t, std::string> from_sockaddr_ex(const sockaddr *const);
 
@@ -824,7 +828,7 @@ namespace platf {
    */
   platform_caps::caps_t get_capabilities();
 
-#define SERVICE_NAME "Sunshine"
+#define SERVICE_NAME "Apollo"
 #define SERVICE_TYPE "_nvstream._tcp"
 
   namespace publish {
@@ -868,5 +872,11 @@ namespace platf {
    * @return A unique pointer to timer
    */
   std::unique_ptr<high_precision_timer> create_high_precision_timer();
+
+  std::string
+  get_clipboard();
+
+  bool
+  set_clipboard(const std::string& content);
 
 }  // namespace platf

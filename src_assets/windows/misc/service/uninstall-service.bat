@@ -1,22 +1,22 @@
 @echo off
 setlocal enabledelayedexpansion
 
-set "SERVICE_CONFIG_DIR=%LOCALAPPDATA%\LizardByte\Sunshine"
+set "SERVICE_CONFIG_DIR=%LOCALAPPDATA%\SudoMaker\Apollo"
 set "SERVICE_CONFIG_FILE=%SERVICE_CONFIG_DIR%\service_start_type.txt"
 
 rem Save the current service start type to a file if the service exists
-sc qc SunshineService >nul 2>&1
+sc qc ApolloService >nul 2>&1
 if %ERRORLEVEL%==0 (
     if not exist "%SERVICE_CONFIG_DIR%\" mkdir "%SERVICE_CONFIG_DIR%\"
 
     rem Get the start type
-    for /f "tokens=3" %%i in ('sc qc SunshineService ^| findstr /C:"START_TYPE"') do (
+    for /f "tokens=3" %%i in ('sc qc ApolloService ^| findstr /C:"START_TYPE"') do (
         set "CURRENT_START_TYPE=%%i"
     )
 
     rem Set the content to write
     if "!CURRENT_START_TYPE!"=="2" (
-        sc qc SunshineService | findstr /C:"(DELAYED)" >nul
+        sc qc ApolloService | findstr /C:"(DELAYED)" >nul
         if !ERRORLEVEL!==0 (
             set "CONTENT=2-delayed"
         ) else (
@@ -41,21 +41,6 @@ for /L %%i in (1,1,15) do (
 :legacy_stopped
 sc delete sunshinesvc >nul 2>&1
 
-rem Stop SunshineService and wait for it to fully stop
-net stop SunshineService >nul 2>&1
-for /L %%i in (1,1,30) do (
-  sc query SunshineService | findstr /C:"STATE" | findstr /C:"STOPPED" >nul 2>&1 && goto :svc_stopped
-  timeout /t 1 >nul
-)
-
-rem As a fallback, terminate any process still holding the service (if any)
-taskkill /F /FI "SERVICES eq SunshineService" >nul 2>&1
-
-:svc_stopped
-rem Proactively terminate known Sunshine binaries that may still hold file locks
-taskkill /F /IM sunshine.exe >nul 2>&1
-taskkill /F /IM sunshinesvc.exe >nul 2>&1
-taskkill /F /IM sunshine_wgc_capture.exe >nul 2>&1
-
-rem Delete the service definition
-sc delete SunshineService >nul 2>&1
+rem Stop and delete the new ApolloService service
+net stop ApolloService
+sc delete ApolloService

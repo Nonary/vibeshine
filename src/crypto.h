@@ -8,10 +8,12 @@
 #include <array>
 
 // lib includes
+#include <list>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 #include <openssl/x509.h>
+#include <nlohmann/json.hpp>
 
 // local includes
 #include "utility.h"
@@ -36,6 +38,78 @@ namespace crypto {
   using pkey_t = util::safe_ptr<EVP_PKEY, EVP_PKEY_free>;
   using pkey_ctx_t = util::safe_ptr<EVP_PKEY_CTX, EVP_PKEY_CTX_free>;
   using bignum_t = util::safe_ptr<BIGNUM, BN_free>;
+
+  /**
+   * @brief The permissions of a client.
+   */
+  enum class PERM: uint32_t {
+    _reserved        = 1,
+
+    _input           = _reserved << 8,   // Input permission group
+    input_controller = _input << 0,      // Allow controller input
+    input_touch      = _input << 1,      // Allow touch input
+    input_pen        = _input << 2,      // Allow pen input
+    input_mouse      = _input << 3,      // Allow mouse input
+    input_kbd        = _input << 4,      // Allow keyboard input
+    _all_inputs      = input_controller | input_touch | input_pen | input_mouse | input_kbd,
+
+    _operation       = _input << 8,      // Operation permission group
+    clipboard_set    = _operation << 0,  // Allow set clipboard from client
+    clipboard_read   = _operation << 1,  // Allow read clipboard from host
+    file_upload      = _operation << 2,  // Allow upload files to host
+    file_dwnload     = _operation << 3,  // Allow download files from host
+    server_cmd       = _operation << 4,  // Allow execute server cmd
+    _all_opeiations  = clipboard_set | clipboard_read | file_upload | file_dwnload | server_cmd,
+
+    _action          = _operation << 8,  // Action permission group
+    list             = _action << 0,     // Allow list apps
+    view             = _action << 1,     // Allow view streams
+    launch           = _action << 2,     // Allow launch apps
+    _allow_view      = view | launch,    // If no view permission is granted, disconnect the device upon permission update
+    _all_actions     = list | view | launch,
+
+    _default         = view | list,      // Default permissions for new clients
+    _no              = 0,                // No permissions are granted
+    _all             = _all_inputs | _all_opeiations | _all_actions, // All current permissions
+  };
+
+  inline constexpr PERM
+  operator&(PERM x, PERM y) {
+    return static_cast<PERM>(static_cast<uint32_t>(x) & static_cast<uint32_t>(y));
+  }
+
+  inline constexpr bool
+  operator!(PERM p) {
+    return static_cast<uint32_t>(p) == 0;
+  }
+
+  struct command_entry_t {
+    std::string cmd;
+    bool elevated;
+
+    // Serialize method using nlohmann::json
+    static inline nlohmann::json serialize(const command_entry_t& entry) {
+      nlohmann::json node;
+      node["cmd"] = entry.cmd;
+      node["elevated"] = entry.elevated;
+      return node;
+    }
+  };
+
+  struct named_cert_t {
+    std::string name;
+    std::string uuid;
+    std::string cert;
+    std::string display_mode;
+    std::list<command_entry_t> do_cmds;
+    std::list<command_entry_t> undo_cmds;
+    PERM perm;
+    bool enable_legacy_ordering;
+    bool allow_client_commands;
+    bool always_use_virtual_display;
+  };
+
+  using p_named_cert_t = std::shared_ptr<named_cert_t>;
 
   /**
    * @brief Hashes the given plaintext using SHA-256.
@@ -64,14 +138,14 @@ namespace crypto {
   public:
     KITTY_DECL_CONSTR(cert_chain_t)
 
-    void add(x509_t &&cert);
+    void add(p_named_cert_t& named_cert_p);
 
     void clear();
 
-    const char *verify(x509_t::element_type *cert);
+    const char *verify(x509_t::element_type *cert, p_named_cert_t& named_cert_out);
 
   private:
-    std::vector<std::pair<x509_t, x509_store_t>> _certs;
+    std::vector<std::pair<p_named_cert_t, x509_store_t>> _certs;
     x509_store_ctx_t _cert_ctx;
   };
 

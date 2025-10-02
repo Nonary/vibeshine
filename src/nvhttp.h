@@ -7,6 +7,8 @@
 
 // standard includes
 #include <string>
+#include <chrono>
+#include <list>
 
 // lib includes
 #include <boost/property_tree/ptree.hpp>
@@ -15,12 +17,18 @@
 
 // local includes
 #include "crypto.h"
+#include "rtsp.h"
 #include "thread_safe.h"
+
+using namespace std::chrono_literals;
 
 /**
  * @brief Contains all the functions and variables related to the nvhttp (GameStream) server.
  */
 namespace nvhttp {
+
+  using args_t = SimpleWeb::CaseInsensitiveMultimap;
+  using cmd_list_t = std::list<crypto::command_entry_t>;
 
   /**
    * @brief The protocol version.
@@ -44,6 +52,8 @@ namespace nvhttp {
    */
   constexpr auto PORT_HTTPS = -5;
 
+  constexpr auto OTP_EXPIRE_DURATION = 180s;
+
   /**
    * @brief Start the nvhttp server.
    * @examples
@@ -51,6 +61,16 @@ namespace nvhttp {
    * @examples_end
    */
   void start();
+
+  std::string
+  get_arg(const args_t &args, const char *name, const char *default_value = nullptr);
+
+  // Helper function to extract command entries
+  cmd_list_t
+  extract_command_entries(const nlohmann::json& j, const std::string& key);
+
+  std::shared_ptr<rtsp_stream::launch_session_t>
+  make_launch_session(bool host_audio, bool input_only, const args_t &args, const crypto::named_cert_t* named_cert_p);
 
   /**
    * @brief Setup the nvhttp server.
@@ -162,7 +182,7 @@ namespace nvhttp {
    * Then using the client certificate public key we should be able to verify that
    * the client secret has been signed by Moonlight
    */
-  void clientpairingsecret(pair_session_t &sess, std::shared_ptr<safe::queue_t<crypto::x509_t>> &add_cert, boost::property_tree::ptree &tree, const std::string &client_pairing_secret);
+  void clientpairingsecret(pair_session_t &sess, boost::property_tree::ptree &tree, const std::string &client_pairing_secret);
 
   /**
    * @brief Compare the user supplied pin to the Moonlight pin.
@@ -174,6 +194,8 @@ namespace nvhttp {
    * @examples_end
    */
   bool pin(std::string pin, std::string name);
+
+  std::string request_otp(const std::string& passphrase, const std::string& deviceName);
 
   /**
    * @brief Remove single client.
@@ -206,4 +228,64 @@ namespace nvhttp {
    * @note Exposed so subsystems (e.g. update) can trigger a save after mutating persisted fields.
    */
   void save_state();
+  
+  /** 
+   * @brief      Stops a session.
+   *
+   * @param      session   The session
+   * @param[in]  graceful  Whether to stop gracefully
+   */
+  void stop_session(stream::session_t& session, bool graceful);
+
+  /**
+   * @brief      Finds and stop session.
+   *
+   * @param[in]  uuid      The uuid string
+   * @param[in]  graceful  Whether to stop gracefully
+   */
+  bool find_and_stop_session(const std::string& uuid, bool graceful);
+
+  /**
+   * @brief      Update device info associated to the session
+   *
+   * @param      session  The session
+   * @param[in]  name     New name
+   * @param[in]  newPerm  New permission
+   */
+  void update_session_info(stream::session_t& session, const std::string& name, const crypto::PERM newPerm);
+
+  /**
+   * @brief      Finds and udpate session information.
+   *
+   * @param[in]  uuid     The uuid string
+   * @param[in]  name     New name
+   * @param[in]  newPerm  New permission
+   */
+  bool find_and_udpate_session_info(const std::string& uuid, const std::string& name, const crypto::PERM newPerm);
+
+  /**
+   * @brief      Update device info
+   *
+   * @param[in]  uuid       The uuid string
+   * @param[in]  name       New name
+   * @param[in]  do_cmds    The do commands
+   * @param[in]  undo_cmds  The undo commands
+   * @param[in]  newPerm    New permission
+   * @param[in]  enable_legacy_ordering  Enable legacy ordering
+   * @param[in]  allow_client_commands  Allow client commands
+   * @param[in]  always_use_virtual_display  Always use virtual display
+   * 
+   * @return     Whether the update is successful
+   */
+  bool update_device_info(
+    const std::string& uuid,
+    const std::string& name,
+    const std::string& display_mode,
+    const cmd_list_t& do_cmds,
+    const cmd_list_t& undo_cmds,
+    const crypto::PERM newPerm,
+    const bool enable_legacy_ordering,
+    const bool allow_client_commands,
+    const bool always_use_virtual_display
+  );
 }  // namespace nvhttp

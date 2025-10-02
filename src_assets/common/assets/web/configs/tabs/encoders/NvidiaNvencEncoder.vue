@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { computed } from 'vue';
 import Checkbox from '@/Checkbox.vue';
 import { useConfigStore } from '@/stores/config';
 import { useI18n } from 'vue-i18n';
@@ -155,6 +155,22 @@ const twopassOptions = [
           locale-prefix="config"
           default="false"
         />
+        <div class="space-y-1">
+          <label for="nvenc_intra_refresh" class="form-label">{{ $t('config.nvenc_intra_refresh') }}</label>
+          <n-select
+            id="nvenc_intra_refresh"
+            v-model:value="config.nvenc_intra_refresh"
+            :options="[
+              { label: $t('_common.disabled'), value: 'disabled' },
+              { label: $t('_common.enabled'), value: 'enabled' },
+            ]"
+            :data-search-options="[
+              `${$t('_common.disabled')}::disabled`,
+              `${$t('_common.enabled')}::enabled`,
+            ].join('|')"
+          />
+          <p class="text-[11px] opacity-60">{{ $t('config.nvenc_intra_refresh_desc') }}</p>
+        </div>
       </div>
     </div>
   </div>

@@ -55,6 +55,12 @@ namespace audio {
     stream_params_t customStreamParams;
 
     std::bitset<MAX_FLAGS> flags;
+
+    // Who TF knows what Sunshine did
+    // putting input_only at the end of flags will always be over written to true
+    uint64_t __padding;
+
+    bool input_only;
   };
 
   struct audio_ctx_t {

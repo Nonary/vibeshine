@@ -35,7 +35,6 @@
 #include "process.h"
 #include "rtsp.h"
 #include "utility.h"
-#include "uuid.h"
 
 #ifdef _WIN32
   #include <wincrypt.h>
@@ -204,6 +203,7 @@ namespace http {
   bool user_creds_exist(const std::string &file);
 
   std::string unique_id;
+  uuid_util::uuid_t uuid;
   net::net_e origin_web_ui_allowed;
 
   int init() {
@@ -212,7 +212,8 @@ namespace http {
     origin_web_ui_allowed = net::from_enum_string(config::nvhttp.origin_web_ui_allowed);
 
     if (clean_slate) {
-      unique_id = uuid_util::uuid_t::generate().string();
+      uuid = uuid_util::uuid_t::generate();
+      unique_id = uuid.string();
       auto dir = std::filesystem::temp_directory_path() / "Sunshine"sv;
       config::nvhttp.cert = (dir / ("cert-"s + unique_id)).string();
       config::nvhttp.pkey = (dir / ("pkey-"s + unique_id)).string();
@@ -371,12 +372,14 @@ namespace http {
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, fwrite);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-
+    curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
+#ifdef _WIN32
+    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
     CURLcode result = curl_easy_perform(curl);
     if (result != CURLE_OK) {
       BOOST_LOG(error) << "Couldn't download ["sv << url << ", code:" << result << ']';
     }
-
     curl_easy_cleanup(curl);
     fclose(fp);
     return result == CURLE_OK;

@@ -10,7 +10,7 @@ if(APPLE)
     endif()
 elseif(UNIX)
     # configure the .desktop file
-    set(SUNSHINE_DESKTOP_ICON "sunshine")
+    set(SUNSHINE_DESKTOP_ICON "apollo.svg")
     if(${SUNSHINE_BUILD_APPIMAGE})
         configure_file(packaging/linux/AppImage/${PROJECT_FQDN}.desktop ${PROJECT_FQDN}.desktop @ONLY)
     elseif(${SUNSHINE_BUILD_FLATPAK})

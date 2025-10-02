@@ -9,20 +9,21 @@
     #define WIN32_LEAN_AND_MEAN
     #include <accctrl.h>
     #include <aclapi.h>
-    #define TRAY_ICON WEB_DIR "images/sunshine.ico"
-    #define TRAY_ICON_PLAYING WEB_DIR "images/sunshine-playing.ico"
-    #define TRAY_ICON_PAUSING WEB_DIR "images/sunshine-pausing.ico"
-    #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked.ico"
+    #include "platform/windows/utils.h"
+    #define TRAY_ICON WEB_DIR "images/apollo.ico"
+    #define TRAY_ICON_PLAYING WEB_DIR "images/apollo-playing.ico"
+    #define TRAY_ICON_PAUSING WEB_DIR "images/apollo-pausing.ico"
+    #define TRAY_ICON_LOCKED WEB_DIR "images/apollo-locked.ico"
   #elif defined(__linux__) || defined(linux) || defined(__linux)
     #define TRAY_ICON SUNSHINE_TRAY_PREFIX "-tray"
     #define TRAY_ICON_PLAYING SUNSHINE_TRAY_PREFIX "-playing"
     #define TRAY_ICON_PAUSING SUNSHINE_TRAY_PREFIX "-pausing"
     #define TRAY_ICON_LOCKED SUNSHINE_TRAY_PREFIX "-locked"
   #elif defined(__APPLE__) || defined(__MACH__)
-    #define TRAY_ICON WEB_DIR "images/logo-sunshine-16.png"
-    #define TRAY_ICON_PLAYING WEB_DIR "images/sunshine-playing-16.png"
-    #define TRAY_ICON_PAUSING WEB_DIR "images/sunshine-pausing-16.png"
-    #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked-16.png"
+    #define TRAY_ICON WEB_DIR "images/logo-apollo-16.png"
+    #define TRAY_ICON_PLAYING WEB_DIR "images/apollo-playing-16.png"
+    #define TRAY_ICON_PAUSING WEB_DIR "images/apollo-pausing-16.png"
+    #define TRAY_ICON_LOCKED WEB_DIR "images/apollo-locked-16.png"
     #include <dispatch/dispatch.h>
   #endif
 
@@ -38,10 +39,12 @@
   #include <tray/src/tray.h>
 
   // local includes
+  #include "config.h"
   #include "confighttp.h"
   #include "logging.h"
   #include "platform/common.h"
   #include "process.h"
+  #include "network.h"
   #include "src/entry_handler.h"
   #include "update.h"
 
@@ -59,11 +62,14 @@ namespace system_tray {
   void tray_restart_cb([[maybe_unused]] struct tray_menu *item) {
     BOOST_LOG(info) << "Restarting from system tray"sv;
 
+    proc::proc.terminate();
     platf::restart();
   }
 
   void tray_quit_cb([[maybe_unused]] struct tray_menu *item) {
     BOOST_LOG(info) << "Quitting from system tray"sv;
+
+    proc::proc.terminate();
 
   #ifdef _WIN32
     // If we're running in a service, return a special status to
@@ -84,7 +90,7 @@ namespace system_tray {
     .menu =
       (struct tray_menu[]) {
         // todo - use boost/locale to translate menu strings
-        {.text = "Open Sunshine", .cb = tray_open_ui_cb},
+        {.text = "Open Apollo", .cb = tray_open_ui_cb},
         {.text = "-"},
         {.text = "Check for Update", .cb = [](tray_menu *) {
            BOOST_LOG(info) << "Manual update check requested from tray"sv;
@@ -214,6 +220,7 @@ namespace system_tray {
     tray.notification_cb = nullptr;
     tray.notification_icon = nullptr;
     tray.icon = TRAY_ICON_PLAYING;
+
     tray_update(&tray);
     tray.icon = TRAY_ICON_PLAYING;
     tray.notification_title = "Stream Started";
@@ -222,6 +229,7 @@ namespace system_tray {
     tray.notification_text = s_notification_text.c_str();
     tray.tooltip = s_tooltip.c_str();
     tray.notification_icon = TRAY_ICON_PLAYING;
+    tray.tooltip = PROJECT_NAME;
     tray_update(&tray);
   }
 
@@ -242,6 +250,7 @@ namespace system_tray {
     tray.notification_text = s_notification_text.c_str();
     tray.tooltip = s_notification_text.c_str();
     tray.notification_icon = TRAY_ICON_PAUSING;
+    tray.tooltip = PROJECT_NAME;
     tray_update(&tray);
   }
 
@@ -261,6 +270,37 @@ namespace system_tray {
     tray.notification_icon = TRAY_ICON;
     tray.notification_title = "Application Stopped";
     tray.notification_text = s_notification_text.c_str();
+    tray.tooltip = PROJECT_NAME;
+    tray_update(&tray);
+  }
+
+  void update_tray_launch_error(const std::string &app_name, int exit_code) {
+    if (!tray_initialized) {
+      return;
+    }
+
+    tray.notification_title = nullptr;
+    tray.notification_text = nullptr;
+    tray.notification_cb = nullptr;
+    tray.notification_icon = nullptr;
+    tray.icon = TRAY_ICON;
+    tray_update(&tray);
+
+    std::string message = "Application " + app_name + " exited too fast with code " + std::to_string(exit_code) + ". Click here to terminate the stream.";
+#ifdef _WIN32
+    s_notification_text = utf8ToAcp(message);
+#else
+    s_notification_text = std::move(message);
+#endif
+
+    tray.icon = TRAY_ICON;
+    tray.notification_icon = TRAY_ICON;
+    tray.notification_title = "Launch Error";
+    tray.notification_text = s_notification_text.c_str();
+    tray.notification_cb = []() {
+      BOOST_LOG(info) << "Force stop from notification"sv;
+      proc::proc.terminate();
+    };
     tray.tooltip = PROJECT_NAME;
     tray_update(&tray);
   }
@@ -311,6 +351,57 @@ namespace system_tray {
     tray_update(&tray);
   }
 
+  void update_tray_paired(const std::string &device_name) {
+    if (!tray_initialized) {
+      return;
+    }
+
+    tray.notification_title = nullptr;
+    tray.notification_text = nullptr;
+    tray.notification_cb = nullptr;
+    tray.notification_icon = nullptr;
+    tray_update(&tray);
+
+    std::string message = "Device " + device_name + " paired successfully. Please make sure you have access to the device.";
+#ifdef _WIN32
+    s_notification_text = utf8ToAcp(message);
+#else
+    s_notification_text = std::move(message);
+#endif
+
+    tray.notification_title = "Device Paired Successfully";
+    tray.notification_text = s_notification_text.c_str();
+    tray.notification_icon = TRAY_ICON;
+    tray.tooltip = PROJECT_NAME;
+    tray_update(&tray);
+  }
+
+  void update_tray_client_connected(const std::string &client_name) {
+    if (!tray_initialized) {
+      return;
+    }
+
+    tray.notification_title = nullptr;
+    tray.notification_text = nullptr;
+    tray.notification_cb = nullptr;
+    tray.notification_icon = nullptr;
+    tray.icon = TRAY_ICON;
+    tray_update(&tray);
+
+    std::string message = client_name + " has connected to the session.";
+#ifdef _WIN32
+    s_notification_text = utf8ToAcp(message);
+#else
+    s_notification_text = std::move(message);
+#endif
+
+    tray.notification_title = "Client Connected";
+    tray.notification_text = s_notification_text.c_str();
+    tray.notification_icon = TRAY_ICON;
+    tray.tooltip = PROJECT_NAME;
+    tray_update(&tray);
+  }
+
   void tray_notify(const char *title, const char *text, void (*cb)()) {
     if (!tray_initialized) {
       return;
@@ -334,4 +425,9 @@ namespace system_tray {
   }
 
 }  // namespace system_tray
+
+  #ifdef BOOST_PROCESS_VERSION
+    #undef BOOST_PROCESS_VERSION 1
+  #endif
+
 #endif

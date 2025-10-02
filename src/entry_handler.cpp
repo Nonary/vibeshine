@@ -91,6 +91,8 @@ namespace lifetime {
 #else
     std::raise(SIGTRAP);
 #endif
+    // If debug trap still doesn't work, abort
+    abort();
   }
 
   char **get_argv() {
@@ -135,7 +137,7 @@ namespace service_ctrl {
         return;
       }
 
-      service_handle = OpenServiceA(scm_handle, "SunshineService", service_desired_access);
+      service_handle = OpenServiceA(scm_handle, "ApolloService", service_desired_access);
       if (!service_handle) {
         auto winerr = GetLastError();
         BOOST_LOG(error) << "OpenService() failed: "sv << winerr;

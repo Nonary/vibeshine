@@ -10,6 +10,7 @@
 // local includes
 #include "network.h"
 #include "thread_safe.h"
+#include "uuid.h"
 
 namespace http {
 
@@ -31,6 +32,7 @@ namespace http {
   std::string cookie_unescape(const std::string &value);
 
   extern std::string unique_id;
+  extern uuid_util::uuid_t uuid;
   extern net::net_e origin_web_ui_allowed;
 
   // Update origin ACL from current config

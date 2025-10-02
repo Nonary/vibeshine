@@ -20,10 +20,18 @@
 #include "system_tray.h"
 #include "update.h"
 #include "upnp.h"
+#include "uuid.h"
 #include "video.h"
 #ifdef _WIN32
   #include "src/platform/windows/playnite_integration.h"
 #endif
+
+#ifdef _WIN32
+  #include "platform/windows/misc.h"
+  #include "platform/windows/virtual_display.h"
+#endif
+
+#define PROBE_DISPLAY_UUID "38F72B96-B00C-4F21-8B6C-E1BFF1602B0E"
 
 extern "C" {
 #include "rswrapper.h"
@@ -107,7 +115,9 @@ int main(int argc, char *argv[]) {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   // Use UTF-8 conversion for the default C++ locale (used by boost::log)
-  std::locale::global(std::locale(std::locale(), new std::codecvt_utf8<wchar_t>));
+  std::locale utf8_locale(std::locale(), new std::codecvt_utf8<wchar_t>);
+  std::locale::global(utf8_locale);
+  boost::filesystem::path::imbue(utf8_locale);
 #pragma GCC diagnostic pop
 
   mail::man = std::make_shared<safe::mail_raw_t>();
@@ -284,6 +294,9 @@ int main(int argc, char *argv[]) {
       logging::log_flush();
       lifetime::debug_trap();
     };
+
+    proc::proc.terminate();
+
     force_shutdown = task_pool.pushDelayed(task, 10s).task_id;
 
     shutdown_event->raise(true);
@@ -330,14 +343,54 @@ int main(int argc, char *argv[]) {
   }
 
   if (video::probe_encoders()) {
-    BOOST_LOG(error) << "Video failed to find working encoder"sv;
+#ifdef _WIN32
+    bool allow_probing = video::allow_encoder_probing();
+    // Create a temporary virtual display for encoder capability probing
+    if (proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
+      std::string probe_uuid_str = PROBE_DISPLAY_UUID;
+      auto probe_uuid = uuid_util::uuid_t::parse(probe_uuid_str);
+      auto* probe_guid = (GUID*)(void*)&probe_uuid;
+
+      BOOST_LOG(info) << "Creating a temporary virtual display to probe for encoders..."sv;
+
+      if (!config::video.adapter_name.empty()) {
+        VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name));
+      }
+
+      VDISPLAY::createVirtualDisplay(
+        probe_uuid_str.c_str(),
+        "Probe",
+        800,
+        600,
+        60,
+        *probe_guid
+      );
+
+      std::this_thread::sleep_for(500ms);
+
+      // Probe again anyways
+      if (video::probe_encoders()) {
+        if (allow_probing) {
+          BOOST_LOG(error) << "Video failed to find working encoder: allow probing but failed"sv;
+        } else {
+          BOOST_LOG(error) << "Video failed to find working encoder even after attempted with a virtual display"sv;
+        }
+      }
+
+      VDISPLAY::removeVirtualDisplay(*probe_guid);
+    } else if (!allow_probing) {
+      BOOST_LOG(error) << "Video failed to find working encoder: probe failed and virtual display driver isn't initialized"sv;
+    }
+#else
+    BOOST_LOG(error) << "Video failed to find working encoder: probing failed."sv;
+#endif
   }
 
   if (http::init()) {
     BOOST_LOG(fatal) << "HTTP interface failed to initialize"sv;
 
 #ifdef _WIN32
-    BOOST_LOG(fatal) << "To relaunch Sunshine successfully, use the shortcut in the Start Menu. Do not run Sunshine.exe manually."sv;
+    BOOST_LOG(fatal) << "To relaunch Apollo successfully, use the shortcut in the Start Menu. Do not run sunshine.exe manually."sv;
     std::this_thread::sleep_for(10s);
 #endif
 
@@ -351,7 +404,9 @@ int main(int argc, char *argv[]) {
 
   std::unique_ptr<platf::deinit_t> mDNS;
   auto sync_mDNS = std::async(std::launch::async, [&mDNS]() {
-    mDNS = platf::publish::start();
+    if (config::sunshine.enable_discovery) {
+      mDNS = platf::publish::start();
+    }
   });
 
   std::unique_ptr<platf::deinit_t> upnp_unmap;
@@ -371,8 +426,8 @@ int main(int argc, char *argv[]) {
 #ifdef _WIN32
   // If we're using the default port and GameStream is enabled, warn the user
   if (config::sunshine.port == 47989 && is_gamestream_enabled()) {
-    BOOST_LOG(fatal) << "GameStream is still enabled in GeForce Experience! This *will* cause streaming problems with Sunshine!"sv;
-    BOOST_LOG(fatal) << "Disable GameStream on the SHIELD tab in GeForce Experience or change the Port setting on the Advanced tab in the Sunshine Web UI."sv;
+    BOOST_LOG(fatal) << "GameStream is still enabled in GeForce Experience! This *will* cause streaming problems with Apollo!"sv;
+    BOOST_LOG(fatal) << "Disable GameStream on the SHIELD tab in GeForce Experience or change the Port setting on the Advanced tab in the Apollo Web UI."sv;
   }
 #endif
 

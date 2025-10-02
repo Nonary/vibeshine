@@ -14,9 +14,11 @@
 #include <format>
 #include <fstream>
 #include <mutex>
+#include <numeric>
 #include <set>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 // lib includes
 #include <boost/algorithm/string.hpp>
@@ -107,9 +109,11 @@ namespace confighttp {
     } catch (...) {}
   }
 
-  bool refresh_client_apps_cache(nlohmann::json &file_tree) {
+  bool refresh_client_apps_cache(nlohmann::json &file_tree, bool sort_by_name = false) {
     try {
-      sort_apps_by_name(file_tree);
+      if (sort_by_name) {
+        sort_apps_by_name(file_tree);
+      }
       file_handler::write_file(config::stream.file_apps.c_str(), file_tree.dump(4));
       proc::refresh(config::stream.file_apps);
       return true;
@@ -825,6 +829,98 @@ namespace confighttp {
     }
   }
 
+  void reorderApps(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      std::stringstream ss;
+      ss << request->content.rdbuf();
+      nlohmann::json input_tree = nlohmann::json::parse(ss.str());
+
+      if (!input_tree.contains("order") || !input_tree["order"].is_array()) {
+        bad_request(response, request, "Missing order array");
+        return;
+      }
+
+      std::vector<std::string> order;
+      order.reserve(input_tree["order"].size());
+      std::unordered_set<std::string> seen;
+      for (const auto &item : input_tree["order"]) {
+        if (!item.is_string()) {
+          continue;
+        }
+        auto uuid = item.get<std::string>();
+        if (uuid.empty()) {
+          continue;
+        }
+        if (seen.insert(uuid).second) {
+          order.push_back(std::move(uuid));
+        }
+      }
+
+      std::string file = file_handler::read_file(config::stream.file_apps.c_str());
+      nlohmann::json file_tree = nlohmann::json::parse(file);
+
+      if (!file_tree.contains("apps") || !file_tree["apps"].is_array()) {
+        bad_request(response, request, "Apps file is missing an array of applications");
+        return;
+      }
+
+      auto &apps_node = file_tree["apps"];
+      const auto app_count = static_cast<std::size_t>(apps_node.size());
+      std::vector<bool> used(app_count, false);
+      nlohmann::json reordered = nlohmann::json::array();
+      reordered.reserve(app_count);
+
+      auto match_uuid = [&](const std::string &uuid) {
+        for (std::size_t i = 0; i < app_count; ++i) {
+          if (used[i]) {
+            continue;
+          }
+          try {
+            if (apps_node[i].contains("uuid") && apps_node[i]["uuid"].is_string()) {
+              if (apps_node[i]["uuid"].get<std::string>() == uuid) {
+                reordered.push_back(apps_node[i]);
+                used[i] = true;
+                return true;
+              }
+            }
+          } catch (...) {
+          }
+        }
+        return false;
+      };
+
+      for (const auto &uuid : order) {
+        match_uuid(uuid);
+      }
+
+      for (std::size_t i = 0; i < app_count; ++i) {
+        if (!used[i]) {
+          reordered.push_back(apps_node[i]);
+          used[i] = true;
+        }
+      }
+
+      file_tree["apps"] = reordered;
+      refresh_client_apps_cache(file_tree);
+
+      nlohmann::json output_tree;
+      output_tree["status"] = true;
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "reorderApps: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
   /**
    * @brief Serve a specific application's cover image by UUID.
    *        Looks for files named @c uuid with a supported image extension in the covers directory.
@@ -837,6 +933,63 @@ namespace confighttp {
    *        Saves to appdata/covers/@c uuid.@c ext where ext is derived from URL or defaults to .png for data.
    * @api_examples{/api/apps/@c uuid/cover| POST| {"url":"https://images.igdb.com/.../abc.png"}}
    */
+
+  /**
+   * @brief Launch an application by UUID via the config API.
+   * @api_examples{/api/apps/launch| POST| {"uuid":"aaaa-bbbb"}}
+   */
+  void launchApp(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      std::stringstream ss;
+      ss << request->content.rdbuf();
+      nlohmann::json input_tree = nlohmann::json::parse(ss.str());
+
+      if (!input_tree.contains("uuid") || !input_tree["uuid"].is_string()) {
+        bad_request(response, request, "Missing or invalid uuid in request body");
+        return;
+      }
+      std::string uuid = input_tree["uuid"].get<std::string>();
+
+      nlohmann::json output_tree;
+      const auto &apps = proc::proc.get_apps();
+      for (const auto &app : apps) {
+        if (app.uuid == uuid) {
+          crypto::named_cert_t named_cert {
+            .name = "",
+            .uuid = http::unique_id,
+            .perm = crypto::PERM::_all,
+          };
+          BOOST_LOG(info) << "Launching app ["sv << app.name << "] from web UI"sv;
+          auto launch_session = nvhttp::make_launch_session(true, false, request->parse_query_string(), &named_cert);
+          auto err = proc::proc.execute(app, launch_session);
+          if (err) {
+            bad_request(response, request, err == 503 ?
+                                  "Failed to initialize video capture/encoding. Is a display connected and turned on?" :
+                                  "Failed to start the specified application");
+            return;
+          }
+          output_tree["status"] = true;
+          send_response(response, output_tree);
+          return;
+        }
+      }
+
+      BOOST_LOG(error) << "Couldn't find app with uuid ["sv << uuid << ']';
+      bad_request(response, request, "Cannot find requested application");
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "LaunchApp: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
 
   /**
    * @brief Close the currently running application.
@@ -1018,6 +1171,34 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "Unpair: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Disconnect an active streaming session by UUID.
+   * @api_examples{/api/clients/disconnect| POST| {"uuid":"1234"}}
+   */
+  void disconnect(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      std::stringstream ss;
+      ss << request->content.rdbuf();
+      nlohmann::json input_tree = nlohmann::json::parse(ss.str());
+      nlohmann::json output_tree;
+      std::string uuid = input_tree.value("uuid", "");
+      output_tree["status"] = nvhttp::find_and_stop_session(uuid, true);
+      send_response(response, output_tree);
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Disconnect: "sv << e.what();
       bad_request(response, request, e.what());
     }
   }
@@ -2036,6 +2217,8 @@ namespace confighttp {
     server.resource["^/api/apps$"]["GET"] = getApps;
     server.resource["^/api/logs$"]["GET"] = getLogs;
     server.resource["^/api/apps$"]["POST"] = saveApp;
+    server.resource["^/api/apps/reorder$"]["POST"] = reorderApps;
+    server.resource["^/api/apps/launch$"]["POST"] = launchApp;
     server.resource["^/api/config$"]["GET"] = getConfig;
     server.resource["^/api/config$"]["POST"] = saveConfig;
     // Partial updates for config settings; merges with existing file and
@@ -2059,6 +2242,7 @@ namespace confighttp {
     server.resource["^/api/clients/unpair-all$"]["POST"] = unpairAll;
     server.resource["^/api/clients/list$"]["GET"] = getClients;
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
+    server.resource["^/api/clients/disconnect$"]["POST"] = disconnect;
     server.resource["^/api/apps/close$"]["POST"] = closeApp;
     server.resource["^/api/session/status$"]["GET"] = getSessionStatus;
     // Keep legacy cover upload endpoint present in upstream master

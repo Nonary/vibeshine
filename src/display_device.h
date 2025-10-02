@@ -35,6 +35,9 @@ namespace display_device {
    */
   [[nodiscard]] std::string map_output_name(const std::string &output_name);
 
+  [[nodiscard]] std::string
+  map_display_name(const std::string &display_name);
+
   /**
    * @brief A tag structure indicating that configuration parsing has failed.
    */
