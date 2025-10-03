@@ -34,6 +34,7 @@
 #include "config.h"
 #include "confighttp.h"
 #include "crypto.h"
+#include "entry_handler.h"
 #include "file_handler.h"
 #include "globals.h"
 #include "http_auth.h"
@@ -762,6 +763,13 @@ namespace confighttp {
       BOOST_LOG(info) << file;
       nlohmann::json file_tree = nlohmann::json::parse(file);
 
+      if (!file_tree.contains("apps") || file_tree["apps"].is_null()) {
+        file_tree["apps"] = nlohmann::json::array();
+      } else if (!file_tree["apps"].is_array()) {
+        bad_request(response, request, "Apps file is malformed: 'apps' must be an array");
+        return;
+      }
+
       if (input_tree["prep-cmd"].empty()) {
         input_tree.erase("prep-cmd");
       }
@@ -874,8 +882,10 @@ namespace confighttp {
       std::string file = file_handler::read_file(config::stream.file_apps.c_str());
       nlohmann::json file_tree = nlohmann::json::parse(file);
 
-      if (!file_tree.contains("apps") || !file_tree["apps"].is_array()) {
-        bad_request(response, request, "Apps file is missing an array of applications");
+      if (!file_tree.contains("apps") || file_tree["apps"].is_null()) {
+        file_tree["apps"] = nlohmann::json::array();
+      } else if (!file_tree["apps"].is_array()) {
+        bad_request(response, request, "Apps file is malformed: 'apps' must be an array");
         return;
       }
 
@@ -1941,6 +1951,46 @@ namespace confighttp {
     }
   }
 
+  void getOTP(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+
+    try {
+      const nlohmann::json input_tree = nlohmann::json::parse(ss.str());
+      const std::string passphrase = input_tree.value("passphrase", "");
+      if (passphrase.empty()) {
+        bad_request(response, request, "Passphrase not provided!");
+        return;
+      }
+      if (passphrase.size() < 4) {
+        bad_request(response, request, "Passphrase too short!");
+        return;
+      }
+
+      const std::string device_name = input_tree.value("deviceName", "");
+
+      nlohmann::json output_tree;
+      output_tree["otp"] = nvhttp::request_otp(passphrase, device_name);
+      output_tree["ip"] = platf::get_local_ip_for_gateway();
+      output_tree["name"] = config::nvhttp.sunshine_name;
+      output_tree["status"] = true;
+      output_tree["message"] = "OTP created, effective within 3 minutes.";
+      send_response(response, output_tree);
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "OTP creation failed: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
   /**
    * @brief Send a pin code to the host. The pin is generated from the Moonlight client during the pairing process.
    * @param response The HTTP response object.
@@ -2153,6 +2203,33 @@ namespace confighttp {
     platf::restart();
   }
 
+  void quit(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    BOOST_LOG(warning) << "Requested quit from config page!"sv;
+
+    proc::proc.terminate();
+
+#ifdef _WIN32
+    if (GetConsoleWindow() == NULL) {
+      lifetime::exit_sunshine(ERROR_SHUTDOWN_IN_PROGRESS, true);
+    } else
+#endif
+    {
+      lifetime::exit_sunshine(0, true);
+    }
+
+    std::thread write_resp([response] {
+      std::this_thread::sleep_for(std::chrono::seconds(5));
+      response->write();
+    });
+    write_resp.detach();
+  }
+
   /**
    * @brief Generate a new API token with specified scopes.
    * @param response The HTTP response object.
@@ -2281,6 +2358,7 @@ namespace confighttp {
     server.resource["^/welcome/?$"]["GET"] = getSpaEntry;
     server.resource["^/login/?$"]["GET"] = getSpaEntry;
     server.resource["^/troubleshooting/?$"]["GET"] = getSpaEntry;
+    server.resource["^/api/otp$"]["POST"] = getOTP;
     server.resource["^/api/pin$"]["POST"] = savePin;
     server.resource["^/api/apps$"]["GET"] = getApps;
     server.resource["^/api/logs$"]["GET"] = getLogs;
@@ -2295,6 +2373,7 @@ namespace confighttp {
     server.resource["^/api/metadata$"]["GET"] = getMetadata;
     server.resource["^/api/configLocale$"]["GET"] = getLocale;
     server.resource["^/api/restart$"]["POST"] = restart;
+    server.resource["^/api/quit$"]["POST"] = quit;
     server.resource["^/api/reset-display-device-persistence$"]["POST"] = resetDisplayDevicePersistence;
 #if defined(_WIN32)
     server.resource["^/api/display/export_golden$"]["POST"] = postExportGoldenDisplay;
