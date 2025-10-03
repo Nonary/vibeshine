@@ -62,6 +62,23 @@ namespace proc {
   using namespace std::literals;
   namespace pt = boost::property_tree;
 
+#ifdef _WIN32
+  VDISPLAY::DRIVER_STATUS vDisplayDriverStatus = VDISPLAY::DRIVER_STATUS::UNKNOWN;
+
+  namespace {
+    void initVDisplayDriver() {
+      if (vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
+        return;
+      }
+      vDisplayDriverStatus = VDISPLAY::openVDisplayDevice();
+      if (vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
+        BOOST_LOG(warning) << "Virtual display driver initialization failed with status "
+                           << static_cast<int>(vDisplayDriverStatus);
+      }
+    }
+  }
+#endif
+
   namespace {
     constexpr const char *LOSSLESS_PROFILE_RECOMMENDED = "recommended";
     constexpr const char *LOSSLESS_PROFILE_CUSTOM = "custom";
@@ -372,6 +389,10 @@ namespace proc {
   }  // namespace
 
   proc_t proc;
+  int input_only_app_id = 0;
+  std::string input_only_app_id_str;
+  int terminate_app_id = 0;
+  std::string terminate_app_id_str;
 
   // Custom move operations to allow global proc replacement if ever needed
   proc_t::proc_t(proc_t &&other) noexcept:
@@ -556,7 +577,7 @@ namespace proc {
       // Restore to user defined output name
       config::video.output_name = this->initial_display;
       terminate();
-      display_device::revert_configuration();
+      display_helper_integration::revert();
     });
 
     if (!app.gamepad.empty()) {
@@ -670,17 +691,19 @@ namespace proc {
       }
     }
 
-    display_device::configure_display(config::video, *launch_session);
+    if (!display_helper_integration::apply_from_session(config::video, *launch_session)) {
+      BOOST_LOG(debug) << "Display helper APPLY request skipped or failed; continuing without helper adjustments.";
+    }
 
     // We should not preserve display state when using virtual display.
     // It is already handled by Windows properly.
     if (this->virtual_display) {
-      display_device::reset_persistence();
+      display_helper_integration::reset_persistence();
     }
 
 #else
 
-    display_device::configure_display(config::video, *launch_session);
+    (void) launch_session;
 
 #endif
 
@@ -1376,13 +1399,12 @@ namespace proc {
     // Since terminate() is always run when a new app has started
     if (proc::proc.get_last_run_app_name().length() > 0 && has_run) {
       if (used_virtual_display) {
-        display_device::reset_persistence();
-      } else {
-        display_device::revert_configuration();
+        display_helper_integration::reset_persistence();
       }
+      display_helper_integration::revert();
 #else
     if (proc::proc.get_last_run_app_name().length() > 0 && has_run) {
-      display_device::revert_configuration();
+      // Display helper is Windows-only; nothing to revert here on other platforms.
 #endif
 
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
@@ -1849,7 +1871,8 @@ namespace proc {
     std::vector<proc::ctx_t> apps;
     int i = 0;
 
-    size_t fail_count = 0;
+    try {
+      size_t fail_count = 0;
     do {
       // Read the JSON file into a tree.
       nlohmann::json tree;
@@ -2161,8 +2184,8 @@ namespace proc {
       apps.emplace_back(std::move(ctx));
     }
 
-    return std::optional<proc::proc_t>(std::in_place, std::move(this_env), std::move(apps));
-  } catch (std::exception &e) {
+      return std::optional<proc::proc_t>(std::in_place, std::move(this_env), std::move(apps));
+    } catch (std::exception &e) {
     BOOST_LOG(error) << e.what();
   }
 
@@ -2174,7 +2197,7 @@ namespace proc {
 
   void refresh(const std::string &file_name, bool needs_terminate) {
     if (needs_terminate) {
-      proc.terminate(false, false);
+      proc::proc.terminate(false, false);
     }
 
   #ifdef _WIN32
@@ -2200,14 +2223,14 @@ namespace proc {
     // Replacing it would drop tracking state and cause the active stream loop
     // to think no app is running, prematurely terminating the session.
     // Instead, update only the applications list to reflect the latest config.
-    if (proc.running() > 0) {
+    if (proc::proc.running() > 0) {
       // Move the parsed apps list and environment into the existing proc instance
       // Use proc.update_apps(...) which safely replaces the app list and env
-      proc.update_apps(proc_opt->release_apps(), proc_opt->release_env());
+      proc::proc.update_apps(proc_opt->release_apps(), proc_opt->release_env());
 
     } else {
       // No app running: safe to refresh full state (env + apps)
-      proc = std::move(*proc_opt);
+      proc::proc = std::move(*proc_opt);
     }
   }
 

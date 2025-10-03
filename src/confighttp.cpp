@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <numeric>
 #include <set>
@@ -55,12 +56,17 @@
 
   #include <windows.h>
 #endif
+
 #if defined(_WIN32)
   #include "platform/windows/misc.h"
 
   #include <KnownFolders.h>
   #include <ShlObj.h>
   #include <windows.h>
+#endif
+
+#ifdef uuid_t
+  #undef uuid_t
 #endif
 #include "display_helper_integration.h"
 #include "process.h"
@@ -109,7 +115,7 @@ namespace confighttp {
     } catch (...) {}
   }
 
-  bool refresh_client_apps_cache(nlohmann::json &file_tree, bool sort_by_name = false) {
+  bool refresh_client_apps_cache(nlohmann::json &file_tree, bool sort_by_name) {
     try {
       if (sort_by_name) {
         sort_apps_by_name(file_tree);
@@ -877,7 +883,6 @@ namespace confighttp {
       const auto app_count = static_cast<std::size_t>(apps_node.size());
       std::vector<bool> used(app_count, false);
       nlohmann::json reordered = nlohmann::json::array();
-      reordered.reserve(app_count);
 
       auto match_uuid = [&](const std::string &uuid) {
         for (std::size_t i = 0; i < app_count; ++i) {
@@ -963,13 +968,12 @@ namespace confighttp {
       const auto &apps = proc::proc.get_apps();
       for (const auto &app : apps) {
         if (app.uuid == uuid) {
-          crypto::named_cert_t named_cert {
-            .name = "",
-            .uuid = http::unique_id,
-            .perm = crypto::PERM::_all,
-          };
+          auto named_cert = std::make_shared<crypto::named_cert_t>();
+          named_cert->name = "";
+          named_cert->uuid = http::unique_id;
+          named_cert->perm = crypto::PERM::_all;
           BOOST_LOG(info) << "Launching app ["sv << app.name << "] from web UI"sv;
-          auto launch_session = nvhttp::make_launch_session(true, false, request->parse_query_string(), &named_cert);
+          auto launch_session = nvhttp::make_launch_session(true, false, request->parse_query_string(), named_cert);
           auto err = proc::proc.execute(app, launch_session);
           if (err) {
             bad_request(response, request, err == 503 ?

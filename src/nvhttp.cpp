@@ -8,7 +8,9 @@
 // standard includes
 #include <filesystem>
 #include <format>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 // lib includes
@@ -52,6 +54,9 @@ namespace nvhttp {
 
   using p_named_cert_t = crypto::p_named_cert_t;
   using PERM = crypto::PERM;
+
+  static std::mutex request_cert_mutex;
+  static std::unordered_map<const void *, p_named_cert_t> request_cert_map;
 
   struct client_t {
     std::vector<p_named_cert_t> named_devices;
@@ -388,7 +393,7 @@ namespace nvhttp {
     }
   }
 
-  std::shared_ptr<rtsp_stream::launch_session_t> make_launch_session(bool host_audio, bool input_only, const args_t &args, const crypto::named_cert_t* named_cert_p) {
+  std::shared_ptr<rtsp_stream::launch_session_t> make_launch_session(bool host_audio, bool input_only, const args_t &args, const crypto::p_named_cert_t &named_cert_p) {
     auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
 
     launch_session->id = ++session_id_counter;
@@ -694,8 +699,15 @@ namespace nvhttp {
     static auto constexpr to_string = "NONE"sv;
   };
 
-  inline crypto::named_cert_t* get_verified_cert(req_https_t request) {
-    return (crypto::named_cert_t*)request->userp.get();
+  inline p_named_cert_t get_verified_cert(req_https_t request) {
+    std::lock_guard<std::mutex> lock(request_cert_mutex);
+    auto it = request_cert_map.find(request.get());
+    if (it == request_cert_map.end()) {
+      return {};
+    }
+    auto cert = it->second;
+    request_cert_map.erase(it);
+    return cert;
   }
 
   template <class T>
@@ -1316,7 +1328,9 @@ namespace nvhttp {
         }
 
         if (no_active_sessions && !proc::proc.virtual_display) {
-          display_device::configure_display(config::video, *launch_session);
+          if (!display_helper_integration::apply_from_session(config::video, *launch_session)) {
+            BOOST_LOG(debug) << "Display helper APPLY request skipped or failed while resuming app.";
+          }
           if (video::probe_encoders()) {
             tree.put("root.resume", 0);
             tree.put("root.<xmlattr>.status_code", 503);
@@ -1445,7 +1459,9 @@ namespace nvhttp {
       // We want to prepare display only if there are no active sessions
       // and the current session isn't virtual display at the moment.
       // This should be done before probing encoders as it could change the active displays.
-      display_device::configure_display(config::video, *launch_session);
+      if (!display_helper_integration::apply_from_session(config::video, *launch_session)) {
+        BOOST_LOG(debug) << "Display helper APPLY request skipped or failed while preparing for resume.";
+      }
 
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
@@ -1728,7 +1744,10 @@ namespace nvhttp {
       }
 
       verified = true;
-      req->userp = named_cert_p;
+      {
+        std::lock_guard<std::mutex> lock(request_cert_mutex);
+        request_cert_map[req.get()] = named_cert_p;
+      }
 
       return true;
     };

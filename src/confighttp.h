@@ -58,8 +58,8 @@ namespace confighttp {
   void getSpaEntry(resp_https_t response, req_https_t request);
 
   // Writes the apps file and refreshes the client-visible app cache/list
-  // Sorts entries by name for a stable UI.
-  bool refresh_client_apps_cache(nlohmann::json &file_tree);
+  // Sorts entries by name for a stable UI when requested.
+  bool refresh_client_apps_cache(nlohmann::json &file_tree, bool sort_by_name = false);
 
   // Authentication functions
   AuthResult check_auth(const req_https_t &request);

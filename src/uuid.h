@@ -8,6 +8,10 @@
 #include <random>
 #include <cstdio>
 
+#ifdef uuid_t
+  #undef uuid_t
+#endif
+
 /**
  * @brief UUID utilities.
  */

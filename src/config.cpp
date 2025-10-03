@@ -53,27 +53,6 @@ using namespace std::literals;
 
 #define APPS_JSON_PATH platf::appdata().string() + "/apps.json"
 
-namespace config {
-
-  namespace nv {
-
-    nvenc::nvenc_two_pass twopass_from_view(const ::std::string_view &preset) {
-      if (preset == "disabled") {
-        return nvenc::nvenc_two_pass::disabled;
-      }
-      if (preset == "quarter_res") {
-        return nvenc::nvenc_two_pass::quarter_resolution;
-      }
-      if (preset == "full_res") {
-        return nvenc::nvenc_two_pass::full_resolution;
-      }
-      BOOST_LOG(warning) << "config: unknown nvenc_twopass value: " << preset;
-      return nvenc::nvenc_two_pass::quarter_resolution;
-    }
-
-  }  // namespace nv
-
-  namespace amd {
 #if !defined(_WIN32) || defined(DOXYGEN)
   // values accurate as of 27/12/2022, but aren't strictly necessary for MacOS build
   #define AMF_VIDEO_ENCODER_AV1_QUALITY_PRESET_SPEED 100
@@ -123,6 +102,29 @@ namespace config {
   #include <AMF/components/VideoEncoderHEVC.h>
   #include <AMF/components/VideoEncoderVCE.h>
 #endif
+
+namespace config {
+
+  namespace nv {
+
+    nvenc::nvenc_two_pass twopass_from_view(const ::std::string_view &preset) {
+      if (preset == "disabled") {
+        return nvenc::nvenc_two_pass::disabled;
+      }
+      if (preset == "quarter_res") {
+        return nvenc::nvenc_two_pass::quarter_resolution;
+      }
+      if (preset == "full_res") {
+        return nvenc::nvenc_two_pass::full_resolution;
+      }
+      BOOST_LOG(warning) << "config: unknown nvenc_twopass value: " << preset;
+      return nvenc::nvenc_two_pass::quarter_resolution;
+    }
+
+  }  // namespace nv
+
+
+  namespace amd {
 
     enum class quality_av1_e : int {
       speed = AMF_VIDEO_ENCODER_AV1_QUALITY_PRESET_SPEED,  ///< Speed preset

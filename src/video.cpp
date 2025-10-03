@@ -10,6 +10,7 @@
 
 // lib includes
 #include <boost/pointer_cast.hpp>
+#include <display_device/json.h>
 
 extern "C" {
 #include <libavutil/imgutils.h>
@@ -22,6 +23,7 @@ extern "C" {
 #include "cbs.h"
 #include "config.h"
 #include "display_device.h"
+#include "display_helper_integration.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -47,23 +49,28 @@ namespace video {
      * @brief Check if we can allow probing for the encoders.
      * @return True if there should be no issues with the probing, false if we should prevent it.
      */
-    bool allow_encoder_probing() {
-      // Always allow probing; previous in-process display checks removed.
-      const auto devices {display_device::enumerate_devices()};
+    bool allow_encoder_probing_impl() {
+#if defined(_WIN32)
+      display_device::EnumeratedDeviceList devices;
+      bool have_enumeration = false;
 
-      // // If there are no devices, then either the API is not working correctly or OS does not support the lib.
-      // // Either way we should not block the probing in this case as we can't tell what's wrong.
-      // if (devices.empty()) {
-      //   return true;
-      // }
+      if (display_helper_integration::suppress_fallback()) {
+        const auto json = display_helper_integration::enumerate_devices_json();
+        have_enumeration = display_device::fromJson(json, devices);
+        if (!have_enumeration) {
+          devices.clear();
+        }
+      }
+
+      if (!have_enumeration) {
+        return true;
+      }
 
       if (devices.empty()) {
-#ifdef _WIN32
         // We'll create a temporary virtual display for probing anyways.
         if (proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
           return false;
         }
-#endif
         return true;
       }
 
@@ -81,17 +88,20 @@ namespace video {
 
       BOOST_LOG(error) << "No display devices are active at the moment! Cannot probe the encoders.";
       return false;
+#else
+      return true;
+#endif
     }
 
-    void free_ctx(AVCodecContext *ctx) {
+    void free_ctx_impl(AVCodecContext *ctx) {
       avcodec_free_context(&ctx);
     }
 
-    void free_frame(AVFrame *frame) {
+    void free_frame_impl(AVFrame *frame) {
       av_frame_free(&frame);
     }
 
-    void free_buffer(AVBufferRef *ref) {
+    void free_buffer_impl(AVBufferRef *ref) {
       av_buffer_unref(&ref);
     }
 
@@ -130,7 +140,7 @@ namespace video {
 
     }  // namespace qsv
 
-    util::Either<avcodec_buffer_t, int> dxgi_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *);
+    extern util::Either<avcodec_buffer_t, int> dxgi_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *);
     util::Either<avcodec_buffer_t, int> vaapi_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *);
     util::Either<avcodec_buffer_t, int> cuda_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *);
     util::Either<avcodec_buffer_t, int> vt_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *);
@@ -476,10 +486,10 @@ namespace video {
       encode_session_ctx_queue_t encode_session_ctx_queue {30};
     };
 
-    int start_capture_sync(capture_thread_sync_ctx_t &ctx);
-    void end_capture_sync(capture_thread_sync_ctx_t &ctx);
-    int start_capture_async(capture_thread_async_ctx_t &ctx);
-    void end_capture_async(capture_thread_async_ctx_t &ctx);
+    extern int start_capture_sync(capture_thread_sync_ctx_t &ctx);
+    extern void end_capture_sync(capture_thread_sync_ctx_t &ctx);
+    extern int start_capture_async(capture_thread_async_ctx_t &ctx);
+    extern void end_capture_async(capture_thread_async_ctx_t &ctx);
 
     // Keep a reference counter to ensure the capture thread only runs when other threads have a reference to the capture thread
     auto capture_thread_async = safe::make_shared<capture_thread_async_ctx_t>(start_capture_async, end_capture_async);
@@ -1054,14 +1064,6 @@ namespace video {
     };
 
     static encoder_t *chosen_encoder;
-    int active_hevc_mode;
-    int active_av1_mode;
-    bool last_encoder_probe_supported_ref_frames_invalidation = false;
-    std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {
-      true,
-      true,
-      true
-    };
 
     void reset_display(std::shared_ptr<platf::display_t> &disp, const platf::mem_type_e &type, const std::string &display_name, const config_t &config) {
       // We try this twice, in case we still get an error on reinitialization
@@ -2432,7 +2434,7 @@ namespace video {
       }
     }
 
-    void capture(
+    void capture_impl(
       safe::mail_t mail,
       config_t config,
       void *channel_data
@@ -2521,7 +2523,7 @@ namespace video {
     static thread_local std::shared_ptr<platf::display_t> cached_probe_display;
     static thread_local platf::mem_type_e cached_display_type = platf::mem_type_e::system;
 
-    bool validate_encoder(encoder_t &encoder, bool expect_failure) {
+    bool validate_encoder_impl(encoder_t &encoder, bool expect_failure) {
       // During encoder probing, always use the current active display and do not
       // attempt to select/swap displays based on configured output_name. Display
       // swaps are now handled externally when a stream starts.
@@ -2717,7 +2719,7 @@ namespace video {
       return true;
     }
 
-    int probe_encoders() {
+    int probe_encoders_impl() {
       if (!allow_encoder_probing()) {
         // Error already logged
         return -1;
@@ -2766,7 +2768,7 @@ namespace video {
 
           if (encoder->name == config::video.encoder) {
             // Remove the encoder from the list entirely if it fails validation
-            if (!validate_encoder(*encoder, previous_encoder && previous_encoder != encoder)) {
+            if (!validate_encoder_impl(*encoder, previous_encoder && previous_encoder != encoder)) {
               pos = encoder_list.erase(pos);
               break;
             }
@@ -2794,7 +2796,7 @@ namespace video {
           auto encoder = *pos;
 
           // Remove the encoder from the list entirely if it fails validation
-          if (!validate_encoder(*encoder, previous_encoder && previous_encoder != encoder)) {
+          if (!validate_encoder_impl(*encoder, previous_encoder && previous_encoder != encoder)) {
             pos = encoder_list.erase(pos);
             continue;
           }
@@ -2831,7 +2833,7 @@ namespace video {
           // If we've used a previous encoder and it's not this one, we expect this encoder to
           // fail to validate. It will use a slightly different order of checks to more quickly
           // eliminate failing encoders.
-          if (!validate_encoder(*encoder, previous_encoder && previous_encoder != encoder)) {
+          if (!validate_encoder_impl(*encoder, previous_encoder && previous_encoder != encoder)) {
             pos = encoder_list.erase(pos);
             continue;
           }
@@ -2964,12 +2966,9 @@ namespace video {
     }
 
 #ifdef _WIN32
-  }
+    void do_nothing(void *) {
+    }
 
-  void do_nothing(void *) {
-  }
-
-  namespace video {
     util::Either<avcodec_buffer_t, int> dxgi_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *encode_device) {
       avcodec_buffer_t ctx_buf {av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D11VA)};
       auto ctx = (AVD3D11VADeviceContext *) ((AVHWDeviceContext *) ctx_buf->data)->hwctx;
@@ -3027,45 +3026,83 @@ namespace video {
 
     void end_capture_sync(capture_thread_sync_ctx_t &ctx) {
     }
+  }  // anonymous namespace
 
-    platf::mem_type_e map_base_dev_type(AVHWDeviceType type) {
-      switch (type) {
-        case AV_HWDEVICE_TYPE_D3D11VA:
-          return platf::mem_type_e::dxgi;
-        case AV_HWDEVICE_TYPE_VAAPI:
-          return platf::mem_type_e::vaapi;
-        case AV_HWDEVICE_TYPE_CUDA:
-          return platf::mem_type_e::cuda;
-        case AV_HWDEVICE_TYPE_NONE:
-          return platf::mem_type_e::system;
-        case AV_HWDEVICE_TYPE_VIDEOTOOLBOX:
-          return platf::mem_type_e::videotoolbox;
-        default:
-          return platf::mem_type_e::unknown;
-      }
+  int active_hevc_mode = 0;
+  int active_av1_mode = 0;
+  bool last_encoder_probe_supported_ref_frames_invalidation = false;
+  std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {true, true, true};
 
-      return platf::mem_type_e::unknown;
+  bool allow_encoder_probing() {
+    return allow_encoder_probing_impl();
+  }
+
+  void free_ctx(AVCodecContext *ctx) {
+    free_ctx_impl(ctx);
+  }
+
+  void free_frame(AVFrame *frame) {
+    free_frame_impl(frame);
+  }
+
+  void free_buffer(AVBufferRef *ref) {
+    free_buffer_impl(ref);
+  }
+
+  int probe_encoders() {
+    return probe_encoders_impl();
+  }
+
+  void capture(
+    safe::mail_t mail,
+    config_t config,
+    void *channel_data
+  ) {
+    capture_impl(std::move(mail), config, channel_data);
+  }
+
+  bool validate_encoder(encoder_t &encoder, bool expect_failure) {
+    return validate_encoder_impl(encoder, expect_failure);
+  }
+
+  platf::mem_type_e map_base_dev_type(AVHWDeviceType type) {
+    switch (type) {
+      case AV_HWDEVICE_TYPE_D3D11VA:
+        return platf::mem_type_e::dxgi;
+      case AV_HWDEVICE_TYPE_VAAPI:
+        return platf::mem_type_e::vaapi;
+      case AV_HWDEVICE_TYPE_CUDA:
+        return platf::mem_type_e::cuda;
+      case AV_HWDEVICE_TYPE_NONE:
+        return platf::mem_type_e::system;
+      case AV_HWDEVICE_TYPE_VIDEOTOOLBOX:
+        return platf::mem_type_e::videotoolbox;
+      default:
+        return platf::mem_type_e::unknown;
     }
 
-    platf::pix_fmt_e map_pix_fmt(AVPixelFormat fmt) {
-      switch (fmt) {
-        case AV_PIX_FMT_VUYX:
-          return platf::pix_fmt_e::ayuv;
-        case AV_PIX_FMT_XV30:
-          return platf::pix_fmt_e::y410;
-        case AV_PIX_FMT_YUV420P10:
-          return platf::pix_fmt_e::yuv420p10;
-        case AV_PIX_FMT_YUV420P:
-          return platf::pix_fmt_e::yuv420p;
-        case AV_PIX_FMT_NV12:
-          return platf::pix_fmt_e::nv12;
-        case AV_PIX_FMT_P010:
-          return platf::pix_fmt_e::p010;
-        default:
-          return platf::pix_fmt_e::unknown;
-      }
+    return platf::mem_type_e::unknown;
+  }
 
-      return platf::pix_fmt_e::unknown;
+  platf::pix_fmt_e map_pix_fmt(AVPixelFormat fmt) {
+    switch (fmt) {
+      case AV_PIX_FMT_VUYX:
+        return platf::pix_fmt_e::ayuv;
+      case AV_PIX_FMT_XV30:
+        return platf::pix_fmt_e::y410;
+      case AV_PIX_FMT_YUV420P10:
+        return platf::pix_fmt_e::yuv420p10;
+      case AV_PIX_FMT_YUV420P:
+        return platf::pix_fmt_e::yuv420p;
+      case AV_PIX_FMT_NV12:
+        return platf::pix_fmt_e::nv12;
+      case AV_PIX_FMT_P010:
+        return platf::pix_fmt_e::p010;
+      default:
+        return platf::pix_fmt_e::unknown;
     }
 
-  }  // namespace video
+    return platf::pix_fmt_e::unknown;
+  }
+
+}  // namespace video

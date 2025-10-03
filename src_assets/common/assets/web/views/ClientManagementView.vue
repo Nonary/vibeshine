@@ -390,6 +390,7 @@
       <div v-else class="p-6 text-center italic opacity-70">
         {{ $t('troubleshooting.unpair_single_no_devices') }}
       </div>
+    </n-card>
     <n-modal :show="showConfirmRemove" @update:show="(v) => (showConfirmRemove = v)">
       <n-card
         :title="

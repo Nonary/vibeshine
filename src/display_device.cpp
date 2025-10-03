@@ -643,4 +643,8 @@ namespace display_device {
 
     return config;
   }
+
+  std::string map_display_name(const std::string &display_name) {
+    return display_name;
+  }
 }  // namespace display_device
