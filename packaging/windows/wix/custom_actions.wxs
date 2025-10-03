@@ -5,6 +5,7 @@
     - Reset ACLs on install dir
     - Update PATH (add/remove)
     - Migrate config files
+    - Install the SudoVDA virtual display driver
     - Add/remove firewall rules
     - Install/uninstall Virtual Gamepad (ViGEm) via PowerShell helper
     - Install/uninstall Sunshine service and autostart configuration
@@ -74,6 +75,7 @@
 
   <Fragment>
     <CustomAction Id="ResetAcls" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
+    <CustomAction Id="InstallVirtualDisplayDriver" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
     <CustomAction Id="MigrateConfig" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
     <CustomAction Id="InstallGamepad" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
 
@@ -97,58 +99,63 @@
     <!-- Immediate property setters to pass commands to deferred QuietExec actions -->
     <CustomAction Id="SetResetAcls"
                  Property="ResetAcls"
-                 Value="&quot;[SystemFolder]icacls.exe&quot; &quot;[INSTALL_ROOT].&quot; /reset"/>
+                 Value="&quot;[System64Folder]icacls.exe&quot; &quot;[INSTALL_ROOT].&quot; /reset"/>
+
+    <CustomAction Id="SetInstallVirtualDisplayDriver"
+                 Property="InstallVirtualDisplayDriver"
+                 Value="&quot;[System64Folder]cmd.exe&quot; /C &quot;&quot;[INSTALL_ROOT]drivers\sudovda\install.bat&quot;&quot;"/>
+
 
     <CustomAction Id="SetMigrateConfig"
                  Property="MigrateConfig"
-                 Value="&quot;[SystemFolder]cmd.exe&quot; /C &quot;&quot;[INSTALL_ROOT]scripts\migrate-config.bat&quot;&quot;"/>
+                 Value="&quot;[System64Folder]cmd.exe&quot; /C &quot;&quot;[INSTALL_ROOT]scripts\migrate-config.bat&quot;&quot;"/>
 
 
     <CustomAction Id="SetInstallGamepad"
                  Property="InstallGamepad"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]scripts\install-gamepad.ps1&quot;"/>
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]scripts\install-gamepad.ps1&quot;"/>
 
     <!-- Immediate setter for pruning installed web assets directory before file copy -->
     <CustomAction Id="SetPruneWebDir"
                  Property="PruneWebDir"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$p='[INSTALL_ROOT]assets\web'; if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[System64Folder]cmd.exe&quot; /C &quot;if exist \&quot;[INSTALL_ROOT]assets\web\&quot; ( rmdir /S /Q \&quot;[INSTALL_ROOT]assets\web\&quot; ) &amp; exit /B 0&quot;"/>
 
 
     <!-- Guard NV prefs restore on uninstall: only run if sunshine.exe still exists -->
     <CustomAction Id="SetRestoreNvPrefsUndo"
                  Property="RestoreNvPrefsUndo"
-                 Value="&quot;[SystemFolder]cmd.exe&quot; /C if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; ( &quot;[INSTALL_ROOT]sunshine.exe&quot; --restore-nvprefs-undo ) else ( exit /b 0 )"/>
+                 Value="&quot;[System64Folder]cmd.exe&quot; /C if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; ( &quot;[INSTALL_ROOT]sunshine.exe&quot; --restore-nvprefs-undo ) else ( exit /b 0 )"/>
 
 
     <CustomAction Id="AskRemoveGamepad" BinaryKey="AskRmGamepadVbs" VBScriptCall="AskRemoveGamepad" Execute="immediate" Return="check" />
     <CustomAction Id="SetUninstallGamepad"
                  Property="UninstallGamepad"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]scripts\uninstall-gamepad.ps1&quot;"/>
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]scripts\uninstall-gamepad.ps1&quot;"/>
 
     <CustomAction Id="AskDeleteInstallDir" BinaryKey="AskDelInstDirVbs" VBScriptCall="AskDeleteInstallDir" Execute="immediate" Return="check" />
     <CustomAction Id="SetDeleteInstallDir"
                  Property="DeleteInstallDir"
-                 Value="&quot;[SystemFolder]cmd.exe&quot; /C rmdir /S /Q &quot;[INSTALL_ROOT].&quot;"/>
+                 Value="&quot;[System64Folder]cmd.exe&quot; /C rmdir /S /Q &quot;[INSTALL_ROOT].&quot;"/>
     <!-- Immediate setter for quiet stop service -->
     <CustomAction Id="SetStopSvcQuiet"
                  Property="StopSvcQuiet"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { $svc = Get-Service -Name 'SunshineService' -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name 'SunshineService' -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } }&quot;"/>
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { $svc = Get-Service -Name 'SunshineService' -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name 'SunshineService' -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } }&quot;"/>
     <!-- Immediate setter to prune everything except the config directory -->
     <CustomAction Id="SetPruneButConfig"
                  Property="PruneButConfig"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$r='[INSTALL_ROOT]'; Get-ChildItem -LiteralPath $r -Force | Where-Object Name -ne 'config' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue&quot;"/>
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$r='[INSTALL_ROOT]'; Get-ChildItem -LiteralPath $r -Force | Where-Object Name -ne 'config' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue&quot;"/>
 
     <!-- Immediate setter for quiet start service -->
     <CustomAction Id="SetStartSvcQuiet"
                  Property="StartSvcQuiet"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { $svc = Get-Service -Name 'SunshineService' -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Running') { Start-Service -Name 'SunshineService' -ErrorAction SilentlyContinue; $svc.WaitForStatus('Running','00:00:20') } } }&quot;"/>
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { $svc = Get-Service -Name 'SunshineService' -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Running') { Start-Service -Name 'SunshineService' -ErrorAction SilentlyContinue; $svc.WaitForStatus('Running','00:00:20') } } }&quot;"/>
     <!-- Immediate setters for quiet process kill and service removal on manual uninstall -->
     <CustomAction Id="SetKillProcsQuiet"
                  Property="KillProcsQuiet"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetRemoveServiceQuiet"
                  Property="RemoveServiceQuiet"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>
 
     <!-- UI-only prompt at end of a successful Repair to inform no reboot is required -->
     <CustomAction Id="RepairCompletePrompt" BinaryKey="RepairCompleteVbs" VBScriptCall="ShowRepairComplete" Execute="immediate" Return="ignore" />
@@ -166,6 +173,13 @@
                      Part="last"
                      Permanent="no"
                      Value="[INSTALL_ROOT]" />
+        <Environment Id="EnvPathSunshineTools"
+                     Name="PATH"
+                     Action="set"
+                     System="yes"
+                     Part="last"
+                     Permanent="no"
+                     Value="[INSTALL_ROOT]tools" />
       </Component>
       <Component Id="Fw_Exceptions" Guid="{2A7E0C83-2F3D-4C0C-9D5D-7C0B1A2E3F45}">
         <CreateFolder />

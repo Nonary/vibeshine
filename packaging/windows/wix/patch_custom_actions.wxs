@@ -36,7 +36,9 @@
       <!-- Post-install chores -->
       <Custom Action="SetResetAcls" After="InstallFiles">NOT REMOVE</Custom>
       <Custom Action="ResetAcls" After="SetResetAcls">NOT REMOVE</Custom>
-      <Custom Action="SetMigrateConfig" After="ResetAcls">NOT REMOVE</Custom>
+      <Custom Action="SetInstallVirtualDisplayDriver" After="ResetAcls">NOT REMOVE</Custom>
+      <Custom Action="InstallVirtualDisplayDriver" After="SetInstallVirtualDisplayDriver">NOT REMOVE</Custom>
+      <Custom Action="SetMigrateConfig" After="InstallVirtualDisplayDriver">NOT REMOVE</Custom>
       <Custom Action="MigrateConfig" After="SetMigrateConfig">NOT REMOVE</Custom>
       <Custom Action="SetInstallGamepad" After="MigrateConfig">NOT REMOVE AND NOT VIGEMBUS_PRESENT</Custom>
       <Custom Action="InstallGamepad" After="SetInstallGamepad">NOT REMOVE AND NOT VIGEMBUS_PRESENT</Custom>
