@@ -62,7 +62,7 @@
           type="default"
           strong
           class="h-10 px-3"
-          :disabled="!canAlphabetize || reorderBusy || !localApps.length"
+          :disabled="!canAlphabetize || reorderBusy || !hasVisibleApps"
           @click="alphabetize"
         >
           <i class="fas fa-sort-alpha-down mr-2" />{{ $t('apps.alphabetize') || 'Alphabetize' }}
@@ -88,24 +88,24 @@
     <div
       class="rounded-2xl border border-dark/10 dark:border-light/10 bg-light/80 dark:bg-surface/80 backdrop-blur divide-y divide-black/5 dark:divide-white/10"
     >
-      <template v-if="localApps.length">
-        <div
-          v-for="(item, index) in localApps"
-          :key="rowKey(item, index)"
-          v-if="!item.isPlaceholder"
-          class="flex items-center gap-4 px-5 py-4 transition-colors"
-          :class="{
-            'bg-primary/10 dark:bg-primary/15': isRunning(item),
-            'ring-2 ring-primary/40 rounded-xl': item.dragover,
-          }"
-          :draggable="!showModal"
-          @dragstart="onDragStart(index, $event)"
-          @dragenter.prevent="onDragEnter(index)"
-          @dragover.prevent="onDragOver"
-          @dragleave.prevent="onDragLeave(index)"
-          @drop.prevent="onDrop(index)"
-          @dragend="onDragEnd"
-        >
+      <template v-if="hasVisibleApps">
+        <template v-for="(item, index) in localApps">
+          <div
+            v-if="!item.isPlaceholder"
+            :key="rowKey(item, index)"
+            class="flex items-center gap-4 px-5 py-4 transition-colors"
+            :class="{
+              'bg-primary/10 dark:bg-primary/15': isRunning(item),
+              'ring-2 ring-primary/40 rounded-xl': item.dragover,
+            }"
+            :draggable="!showModal"
+            @dragstart="onDragStart(index, $event)"
+            @dragenter.prevent="onDragEnter(index)"
+            @dragover.prevent="onDragOver"
+            @dragleave.prevent="onDragLeave(index)"
+            @drop.prevent="onDrop(index)"
+            @dragend="onDragEnd"
+          >
           <button
             type="button"
             class="shrink-0 w-6 h-10 flex items-center justify-center text-sm text-dark/40 dark:text-light/50 cursor-grab"
@@ -172,15 +172,17 @@
               </n-button>
             </n-dropdown>
           </div>
-        </div>
-        <div
-          v-else
-          class="mx-5 my-4 h-12 border-2 border-dashed border-primary/40 rounded-xl"
-          @dragenter.prevent="onDragEnter(index)"
-          @dragover.prevent="onDragOver"
-          @dragleave.prevent="onDragLeave(index)"
-          @drop.prevent="onDrop(index)"
-        ></div>
+          </div>
+          <div
+            v-else
+            :key="`${rowKey(item, index)}-placeholder`"
+            class="mx-5 my-4 h-12 border-2 border-dashed border-primary/40 rounded-xl"
+            @dragenter.prevent="onDragEnter(index)"
+            @dragover.prevent="onDragOver"
+            @dragleave.prevent="onDragLeave(index)"
+            @drop.prevent="onDrop(index)"
+          ></div>
+        </template>
       </template>
       <div v-else class="py-12 text-center text-sm opacity-60">No applications configured.</div>
     </div>
@@ -259,9 +261,9 @@ const rowMenuOptions = computed<DropdownOption[]>(() => [
   },
 ]);
 
-const canAlphabetize = computed(
-  () => localApps.value.filter((item) => !item.isPlaceholder).length > 1,
-);
+const visibleApps = computed(() => localApps.value.filter((item) => !item.isPlaceholder));
+const hasVisibleApps = computed(() => visibleApps.value.length > 0);
+const canAlphabetize = computed(() => visibleApps.value.length > 1);
 
 watch(
   apps,

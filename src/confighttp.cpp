@@ -1136,6 +1136,70 @@ namespace confighttp {
     send_response(response, output_tree);
   }
 
+  /**
+   * @brief Update client information.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/clients/update| POST| {"uuid":"...","name":"ipad"}}
+   */
+  void updateClient(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+
+    try {
+      const nlohmann::json input_tree = nlohmann::json::parse(ss.str());
+      const std::string uuid = input_tree.value("uuid", "");
+      if (uuid.empty()) {
+        bad_request(response, request, "Missing uuid in request body");
+        return;
+      }
+
+      const std::string name = input_tree.value("name", "");
+      const std::string display_mode = input_tree.value("display_mode", "");
+      const auto do_cmds = nvhttp::extract_command_entries(input_tree, "do");
+      const auto undo_cmds = nvhttp::extract_command_entries(input_tree, "undo");
+      const auto perm_raw = util::get_non_string_json_value<uint32_t>(
+        input_tree,
+        "perm",
+        static_cast<uint32_t>(crypto::PERM::_no)
+      );
+      const crypto::PERM perm = static_cast<crypto::PERM>(perm_raw & static_cast<uint32_t>(crypto::PERM::_all));
+      const bool enable_legacy_ordering = util::get_non_string_json_value<bool>(input_tree, "enable_legacy_ordering", true);
+      const bool allow_client_commands = util::get_non_string_json_value<bool>(input_tree, "allow_client_commands", true);
+      const bool always_use_virtual_display = util::get_non_string_json_value<bool>(input_tree, "always_use_virtual_display", false);
+
+      nlohmann::json output_tree;
+      output_tree["status"] = nvhttp::update_device_info(
+        uuid,
+        name,
+        display_mode,
+        do_cmds,
+        undo_cmds,
+        perm,
+        enable_legacy_ordering,
+        allow_client_commands,
+        always_use_virtual_display
+      );
+      if (!output_tree["status"].get<bool>()) {
+        output_tree["message"] = "Failed to update client";
+      }
+      send_response(response, output_tree);
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Update client: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
 #ifdef _WIN32
   // removed unused forward declaration for default_playnite_ext_dir()
 #endif
@@ -2245,6 +2309,7 @@ namespace confighttp {
     server.resource["^/api/apps/([0-9]+)$"]["DELETE"] = deleteApp;
     server.resource["^/api/clients/unpair-all$"]["POST"] = unpairAll;
     server.resource["^/api/clients/list$"]["GET"] = getClients;
+    server.resource["^/api/clients/update$"]["POST"] = updateClient;
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/clients/disconnect$"]["POST"] = disconnect;
     server.resource["^/api/apps/close$"]["POST"] = closeApp;
