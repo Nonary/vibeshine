@@ -2,9 +2,7 @@
   <div class="mt-4 space-y-4 rounded-md border border-dark/10 p-3 dark:border-light/10">
     <div class="flex items-center justify-between gap-3">
       <div>
-        <div class="text-xs font-semibold uppercase tracking-wide opacity-70">
-          Lossless Scaling
-        </div>
+        <div class="text-xs font-semibold uppercase tracking-wide opacity-70">Lossless Scaling</div>
         <p class="text-[11px] opacity-60">
           Enable Lossless Scaling for upscaling or to prepare Lossless frame generation.
         </p>
@@ -55,8 +53,8 @@
         </div>
         <p class="text-[11px] opacity-70">
           Lossless Scaling <strong>downscales</strong> the game using the resolution scale, then
-          <strong>upscales</strong> back to the original resolution using the selected filter. This can
-          improve performance but may reduce visual quality.
+          <strong>upscales</strong> back to the original resolution using the selected filter. This
+          can improve performance but may reduce visual quality.
         </p>
       </div>
 
@@ -126,7 +124,8 @@
         size="small"
         class="text-xs"
       >
-        <strong>Performance Note:</strong> Only use upscaling if the game lacks native FSR/DLSS support.
+        <strong>Performance Note:</strong> Only use upscaling if the game lacks native FSR/DLSS
+        support.
       </n-alert>
 
       <div v-if="showLosslessSharpening" class="space-y-1">
@@ -163,9 +162,7 @@
         >
           <div>
             <div class="text-xs font-semibold uppercase tracking-wide opacity-70">VRS</div>
-            <p class="text-[11px] opacity-60">
-              Enable Variable Rate Shading where supported.
-            </p>
+            <p class="text-[11px] opacity-60">Enable Variable Rate Shading where supported.</p>
           </div>
           <n-switch v-model:value="losslessAnimeVrsModel" size="small" />
         </div>
@@ -190,13 +187,7 @@
         :clearable="false"
       />
 
-      <n-alert
-        v-if="isNvidiaFrameGen"
-        type="info"
-        :show-icon="true"
-        size="small"
-        class="text-xs"
-      >
+      <n-alert v-if="isNvidiaFrameGen" type="info" :show-icon="true" size="small" class="text-xs">
         <div class="space-y-1">
           <p>
             <strong>Requirements:</strong> NVIDIA GeForce RTX 40xx or 50xx series GPU with driver
@@ -269,9 +260,7 @@
       class="flex items-center justify-between gap-3 rounded-md border border-dark/10 px-3 py-2 dark:border-light/10"
     >
       <div>
-        <div class="text-xs font-semibold uppercase tracking-wide opacity-70">
-          Performance Mode
-        </div>
+        <div class="text-xs font-semibold uppercase tracking-wide opacity-70">Performance Mode</div>
         <p class="text-[11px] opacity-60">Reduces GPU usage with minimal quality impact.</p>
       </div>
       <n-switch v-model:value="losslessPerformanceModeModel" size="small" />
@@ -379,14 +368,12 @@ const resolutionFactorModel = computed<number>({
     const normalized = Math.min(10, Math.max(1, factor || 1));
     const percent = Math.min(
       LOSSLESS_RESOLUTION_MAX,
-      Math.max(LOSSLESS_RESOLUTION_MIN, Math.round((100 / normalized) / 5) * 5),
+      Math.max(LOSSLESS_RESOLUTION_MIN, Math.round(100 / normalized / 5) * 5),
     );
     resolutionPercentModel.value = percent;
   },
 });
 
-const resolutionPercentDisplay = computed(() =>
-  resolutionPercentModel.value.toFixed(0),
-);
+const resolutionPercentDisplay = computed(() => resolutionPercentModel.value.toFixed(0));
 const resolutionFactorDisplay = computed(() => resolutionFactorModel.value.toFixed(2));
 </script>

@@ -84,9 +84,7 @@
           <i class="fas fa-image" /> Find Cover
         </n-button>
       </div>
-      <p class="text-[11px] opacity-60">
-        Optional; stored only and not fetched by Sunshine.
-      </p>
+      <p class="text-[11px] opacity-60">Optional; stored only and not fetched by Sunshine.</p>
     </div>
   </div>
 </template>

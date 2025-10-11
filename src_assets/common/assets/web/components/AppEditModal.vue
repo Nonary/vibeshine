@@ -109,11 +109,11 @@
               <div class="flex flex-col">
                 <span>1st Gen Frame Generation Capture Fix</span>
                 <span class="text-[11px] opacity-60"
-                  >Required for DLSS3, FSR3, NVIDIA Smooth Motion (frame gen), and Lossless Scaling (frame gen). 
-                  Not needed if only using Lossless Scaling for upscaling. Requires Windows Graphics Capture (WGC),
-                  a display capable of 240 Hz or higher (virtual display driver recommended), and
-                  RTSS installed. Configure Display Device to activate only that monitor during
-                  streams.</span
+                  >Required for DLSS3, FSR3, NVIDIA Smooth Motion (frame gen), and Lossless Scaling
+                  (frame gen). Not needed if only using Lossless Scaling for upscaling. Requires
+                  Windows Graphics Capture (WGC), a display capable of 240 Hz or higher (virtual
+                  display driver recommended), and RTSS installed. Configure Display Device to
+                  activate only that monitor during streams.</span
                 >
               </div>
             </n-checkbox>
@@ -173,6 +173,28 @@
                 <i class="fas fa-plus" /> Add
               </n-button>
             </div>
+            <div v-if="form.detached.length === 0" class="text-[12px] opacity-60">None</div>
+            <div v-else class="space-y-2">
+              <div
+                v-for="(cmd, i) in form.detached"
+                :key="i"
+                class="rounded-md border border-dark/10 dark:border-light/10 p-2"
+              >
+                <div class="flex items-center justify-between gap-2 mb-2">
+                  <div class="text-xs opacity-70">Command {{ i + 1 }}</div>
+                  <n-button size="small" type="error" strong @click="removeDetached(i)">
+                    <i class="fas fa-trash" />
+                  </n-button>
+                </div>
+                <n-input
+                  v-model:value="form.detached[i]"
+                  type="textarea"
+                  :autosize="{ minRows: 1, maxRows: 3 }"
+                  class="font-mono"
+                  placeholder="Command to run detached"
+                />
+              </div>
+            </div>
           </section>
           <section class="sr-only">
             <!-- hidden submit to allow Enter to save within fields -->
@@ -223,7 +245,7 @@
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useMessage } from 'naive-ui';
 import { http } from '@/http';
-import { NModal, NCard, NButton, NCheckbox } from 'naive-ui';
+import { NModal, NCard, NButton, NCheckbox, NInput } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
 import type {
   AppForm,
@@ -461,8 +483,7 @@ const frameGenerationSelection = computed<FrameGenerationMode>({
       return 'nvidia-smooth-motion';
     }
     const hasLosslessFrameGen =
-      form.value.losslessScalingTargetFps !== null ||
-      form.value.losslessScalingRtssLimit !== null;
+      form.value.losslessScalingTargetFps !== null || form.value.losslessScalingRtssLimit !== null;
     return hasLosslessFrameGen ? 'lossless-scaling' : 'off';
   },
   set: (mode) => {
@@ -723,7 +744,7 @@ watch(
     if (mode === 'off' && !losslessFrameGenEnabled.value) {
       form.value.losslessScalingEnabled = false;
     }
-  }
+  },
 );
 
 const hasActiveLosslessOverrides = computed<boolean>(() => {
@@ -1118,6 +1139,10 @@ watch(
 );
 function addDetached() {
   form.value.detached.push('');
+  requestAnimationFrame(() => updateShadows());
+}
+function removeDetached(index: number) {
+  form.value.detached.splice(index, 1);
   requestAnimationFrame(() => updateShadows());
 }
 
