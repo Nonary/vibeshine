@@ -48,22 +48,6 @@
       </div>
     </div>
 
-    <div v-if="!isPlaynite" class="space-y-1 md:col-span-2">
-      <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Command</label>
-      <n-input
-        v-model:value="cmdText"
-        type="textarea"
-        :autosize="{ minRows: 4, maxRows: 8 }"
-        placeholder="Executable command line"
-      />
-      <p class="text-[11px] opacity-60">Enter the full command line (single string).</p>
-    </div>
-
-    <div v-if="!isPlaynite" class="space-y-1 md:col-span-1">
-      <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Working Dir</label>
-      <n-input v-model:value="form.workingDir" class="font-mono" placeholder="C:/Games/App" />
-    </div>
-
     <div class="space-y-1 md:col-span-1">
       <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Exit Timeout</label>
       <div class="flex items-center gap-2">

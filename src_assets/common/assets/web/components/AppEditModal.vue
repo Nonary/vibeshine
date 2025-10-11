@@ -83,6 +83,99 @@
             @open-cover-finder="openCoverFinder"
           />
 
+          <section v-if="!isPlaynite" class="space-y-3">
+            <div class="flex items-center justify-between">
+              <h3 class="text-xs font-semibold uppercase tracking-wider opacity-70">
+                Application Command
+              </h3>
+            </div>
+            <div class="space-y-3">
+              <n-radio-group v-model:value="commandType" name="commandType">
+                <div class="space-y-2">
+                  <n-radio value="command" class="w-full">
+                    <div class="flex flex-col">
+                      <span class="font-medium">Command</span>
+                      <span class="text-[11px] opacity-60"
+                        >Waits for the process to close, then ends the stream</span
+                      >
+                    </div>
+                  </n-radio>
+                  <n-radio value="detached" class="w-full">
+                    <div class="flex flex-col">
+                      <span class="font-medium">Detached Command</span>
+                      <span class="text-[11px] opacity-60"
+                        >Fire and forget - does not end the stream when the program exits</span
+                      >
+                    </div>
+                  </n-radio>
+                </div>
+              </n-radio-group>
+
+              <div v-if="commandType === 'command'" class="space-y-2">
+                <n-input
+                  v-model:value="form.cmd"
+                  type="textarea"
+                  :autosize="{ minRows: 2, maxRows: 6 }"
+                  class="font-mono"
+                  placeholder="Executable command line"
+                />
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <div class="space-y-1">
+                    <label class="text-[11px] opacity-60">Working Directory</label>
+                    <n-input
+                      v-model:value="form.workingDir"
+                      class="font-mono"
+                      placeholder="C:/Games/App"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div v-else-if="commandType === 'detached'" class="space-y-2">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-[11px] opacity-60">Detached commands to run</span>
+                  <n-button size="small" type="primary" @click="addDetached">
+                    <i class="fas fa-plus" /> Add
+                  </n-button>
+                </div>
+                <div v-if="form.detached.length === 0" class="text-[12px] opacity-60">
+                  No detached commands
+                </div>
+                <div v-else class="space-y-2">
+                  <div
+                    v-for="(cmd, i) in form.detached"
+                    :key="i"
+                    class="rounded-md border border-dark/10 dark:border-light/10 p-2"
+                  >
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                      <div class="text-xs opacity-70">Detached {{ i + 1 }}</div>
+                      <n-button size="small" type="error" strong @click="removeDetached(i)">
+                        <i class="fas fa-trash" />
+                      </n-button>
+                    </div>
+                    <n-input
+                      v-model:value="form.detached[i]"
+                      type="textarea"
+                      :autosize="{ minRows: 1, maxRows: 3 }"
+                      class="font-mono"
+                      placeholder="Command to run detached"
+                    />
+                  </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <div class="space-y-1">
+                    <label class="text-[11px] opacity-60">Working Directory</label>
+                    <n-input
+                      v-model:value="form.workingDir"
+                      class="font-mono"
+                      placeholder="C:/Games/App"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <div class="grid grid-cols-2 gap-3">
             <n-checkbox v-model:checked="form.excludeGlobalPrepCmd" size="small">
               Exclude Global Prep
@@ -164,38 +257,6 @@
             @add-prep="addPrep"
           />
 
-          <section v-if="!isPlaynite" class="space-y-3">
-            <div class="flex items-center justify-between">
-              <h3 class="text-xs font-semibold uppercase tracking-wider opacity-70">
-                Detached Commands
-              </h3>
-              <n-button size="small" type="primary" @click="addDetached">
-                <i class="fas fa-plus" /> Add
-              </n-button>
-            </div>
-            <div v-if="form.detached.length === 0" class="text-[12px] opacity-60">None</div>
-            <div v-else class="space-y-2">
-              <div
-                v-for="(cmd, i) in form.detached"
-                :key="i"
-                class="rounded-md border border-dark/10 dark:border-light/10 p-2"
-              >
-                <div class="flex items-center justify-between gap-2 mb-2">
-                  <div class="text-xs opacity-70">Command {{ i + 1 }}</div>
-                  <n-button size="small" type="error" strong @click="removeDetached(i)">
-                    <i class="fas fa-trash" />
-                  </n-button>
-                </div>
-                <n-input
-                  v-model:value="form.detached[i]"
-                  type="textarea"
-                  :autosize="{ minRows: 1, maxRows: 3 }"
-                  class="font-mono"
-                  placeholder="Command to run detached"
-                />
-              </div>
-            </div>
-          </section>
           <section class="sr-only">
             <!-- hidden submit to allow Enter to save within fields -->
             <button type="submit" tabindex="-1" aria-hidden="true"></button>
@@ -245,7 +306,7 @@
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useMessage } from 'naive-ui';
 import { http } from '@/http';
-import { NModal, NCard, NButton, NCheckbox, NInput } from 'naive-ui';
+import { NModal, NCard, NButton, NCheckbox, NInput, NRadioGroup, NRadio } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
 import type {
   AppForm,
@@ -320,6 +381,34 @@ function fresh(): AppForm {
   };
 }
 const form = ref<AppForm>(fresh());
+
+// Command type selection: 'command' (waits for exit) or 'detached' (fire and forget)
+const commandType = ref<'command' | 'detached'>('command');
+
+// Watch commandType to clear the opposite field when switching
+watch(commandType, (newType) => {
+  if (newType === 'command') {
+    // When switching to command mode, clear detached commands
+    form.value.detached = [];
+  } else if (newType === 'detached') {
+    // When switching to detached mode, clear main command
+    form.value.cmd = '';
+  }
+});
+
+// Sync commandType based on form data (when loading an app)
+watch(
+  () => [form.value.cmd, form.value.detached.length] as const,
+  ([cmd, detachedCount]) => {
+    // Determine command type based on which field has data
+    if (detachedCount > 0 && !cmd) {
+      commandType.value = 'detached';
+    } else {
+      commandType.value = 'command';
+    }
+  },
+  { immediate: true },
+);
 
 watch(
   () => form.value.playniteId,
