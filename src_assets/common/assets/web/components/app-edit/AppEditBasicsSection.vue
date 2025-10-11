@@ -48,6 +48,61 @@
       </div>
     </div>
 
+    <div v-if="!isPlaynite" class="space-y-1 md:col-span-2">
+      <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Command</label>
+      <n-input
+        v-model:value="cmdText"
+        type="textarea"
+        :autosize="{ minRows: 4, maxRows: 8 }"
+        placeholder="Executable command line"
+      />
+      <p class="text-[11px] opacity-60">
+        The main command that Sunshine waits for. When this process closes, the stream ends.
+      </p>
+    </div>
+
+    <div v-if="!isPlaynite" class="space-y-1 md:col-span-2">
+      <div class="flex items-center justify-between">
+        <label class="text-xs font-semibold uppercase tracking-wide opacity-70"
+          >Detached Commands</label
+        >
+        <n-button size="small" type="primary" @click="emit('add-detached')">
+          <i class="fas fa-plus" /> Add
+        </n-button>
+      </div>
+      <p class="text-[11px] opacity-60">
+        Fire-and-forget commands that don't end the stream when they exit. These are executed before
+        the main command.
+      </p>
+      <div v-if="form.detached.length === 0" class="text-[12px] opacity-60">None</div>
+      <div v-else class="space-y-2">
+        <div
+          v-for="(cmd, i) in form.detached"
+          :key="i"
+          class="rounded-md border border-dark/10 dark:border-light/10 p-2"
+        >
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <div class="text-xs opacity-70">Detached {{ i + 1 }}</div>
+            <n-button size="small" type="error" strong @click="emit('remove-detached', i)">
+              <i class="fas fa-trash" />
+            </n-button>
+          </div>
+          <n-input
+            v-model:value="form.detached[i]"
+            type="textarea"
+            :autosize="{ minRows: 1, maxRows: 3 }"
+            class="font-mono"
+            placeholder="Command to run detached"
+          />
+        </div>
+      </div>
+    </div>
+
+    <div v-if="!isPlaynite" class="space-y-1 md:col-span-1">
+      <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Working Dir</label>
+      <n-input v-model:value="form.workingDir" class="font-mono" placeholder="C:/Games/App" />
+    </div>
+
     <div class="space-y-1 md:col-span-1">
       <label class="text-xs font-semibold uppercase tracking-wide opacity-70">Exit Timeout</label>
       <div class="flex items-center gap-2">
@@ -107,6 +162,8 @@ const emit = defineEmits<{
   (e: 'pick-playnite', id: string): void;
   (e: 'unlock-playnite'): void;
   (e: 'open-cover-finder'): void;
+  (e: 'add-detached'): void;
+  (e: 'remove-detached', index: number): void;
 }>();
 
 // Two-way bindings
