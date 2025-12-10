@@ -600,13 +600,11 @@ namespace rtsp_stream {
      * @brief Runs an iteration of the RTSP server loop
      */
     void iterate() {
-      // If we have a session, we will return to the server loop every
-      // 500ms to allow session cleanup to happen.
-      if (session_count() > 0) {
-        io_context.run_one_for(500ms);
-      } else {
-        io_context.run_one();
-      }
+      // Always use a timeout to avoid busy looping if the io_context has no work pending.
+      // This can happen after an accept error or in edge cases where async operations
+      // are not queued. Without a timeout, run_one() returns immediately when there's
+      // no work, causing high CPU usage.
+      io_context.run_one_for(500ms);
     }
 
     /**
