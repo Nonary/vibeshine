@@ -37,22 +37,15 @@ set(SUDOVDA_DRIVER_FILES
     "${SUDOVDA_SOURCE_DIR}/nefconc.exe"
 )
 
-set(SUDOVDA_DRIVER_PRESENT true)
-set(SUDOVDA_DRIVER_MISSING_FILES "")
 foreach(_sudovda_file IN LISTS SUDOVDA_DRIVER_FILES)
     if (NOT EXISTS "${_sudovda_file}")
-        set(SUDOVDA_DRIVER_PRESENT false)
-        list(APPEND SUDOVDA_DRIVER_MISSING_FILES "${_sudovda_file}")
+        message(FATAL_ERROR "Required SudoVDA driver artifact missing: ${_sudovda_file}")
     endif()
 endforeach()
 
-if(SUDOVDA_DRIVER_PRESENT)
-    install(FILES ${SUDOVDA_DRIVER_FILES}
-            DESTINATION "drivers/sudovda"
-            COMPONENT sudovda)
-else()
-    message(WARNING "SudoVDA driver artifacts missing; skipping bundling the Virtual Display driver. Missing files: ${SUDOVDA_DRIVER_MISSING_FILES}")
-endif()
+install(FILES ${SUDOVDA_DRIVER_FILES}
+        DESTINATION "drivers/sudovda"
+        COMPONENT sudovda)
 
 # Mandatory scripts
 install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/service/"
@@ -126,12 +119,10 @@ set(CPACK_COMPONENT_ASSETS_GROUP "Core")
 set(CPACK_COMPONENT_ASSETS_REQUIRED true)
 
 # drivers
-if(SUDOVDA_DRIVER_PRESENT)
-    set(CPACK_COMPONENT_SUDOVDA_DISPLAY_NAME "SudoVDA")
-    set(CPACK_COMPONENT_SUDOVDA_DESCRIPTION "Driver required for Virtual Display to function.")
-    set(CPACK_COMPONENT_SUDOVDA_GROUP "Drivers")
-    set(CPACK_COMPONENT_SUDOVDA_REQUIRED true)
-endif()
+set(CPACK_COMPONENT_SUDOVDA_DISPLAY_NAME "SudoVDA")
+set(CPACK_COMPONENT_SUDOVDA_DESCRIPTION "Driver required for Virtual Display to function.")
+set(CPACK_COMPONENT_SUDOVDA_GROUP "Drivers")
+set(CPACK_COMPONENT_SUDOVDA_REQUIRED true)
 
 # audio tool
 set(CPACK_COMPONENT_AUDIO_DISPLAY_NAME "audio-info")

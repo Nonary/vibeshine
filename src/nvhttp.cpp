@@ -223,7 +223,7 @@ namespace nvhttp {
     std::string virtual_display_mode_override;
     std::string virtual_display_layout_override;
     bool always_use_virtual_display = false;
-    bool prefer_10bit_sdr = true;
+    std::optional<bool> prefer_10bit_sdr;
   };
 
   struct client_t {
@@ -305,8 +305,8 @@ namespace nvhttp {
       if (named_cert.always_use_virtual_display) {
         named_cert_node.put("always_use_virtual_display"s, true);
       }
-      if (!named_cert.prefer_10bit_sdr) {
-        named_cert_node.put("prefer_10bit_sdr"s, false);
+      if (named_cert.prefer_10bit_sdr.has_value()) {
+        named_cert_node.put("prefer_10bit_sdr"s, *named_cert.prefer_10bit_sdr);
       }
       named_cert_nodes.push_back(std::make_pair(""s, named_cert_node));
     }
@@ -441,7 +441,11 @@ namespace nvhttp {
           named_cert.virtual_display_mode_override = el.get<std::string>("virtual_display_mode", "");
           named_cert.virtual_display_layout_override = el.get<std::string>("virtual_display_layout", "");
           named_cert.always_use_virtual_display = el.get<bool>("always_use_virtual_display", false);
-          named_cert.prefer_10bit_sdr = el.get<bool>("prefer_10bit_sdr", true);
+          if (auto prefer_10bit_sdr = el.get_optional<bool>("prefer_10bit_sdr")) {
+            named_cert.prefer_10bit_sdr = *prefer_10bit_sdr;
+          } else {
+            named_cert.prefer_10bit_sdr.reset();
+          }
           client.named_devices.emplace_back(named_cert);
         }
       }
@@ -467,7 +471,7 @@ namespace nvhttp {
     named_cert.virtual_display_mode_override.clear();
     named_cert.virtual_display_layout_override.clear();
     named_cert.always_use_virtual_display = false;
-    named_cert.prefer_10bit_sdr = true;
+    named_cert.prefer_10bit_sdr.reset();
     client.named_devices.emplace_back(named_cert);
 
     if (!config::sunshine.flags[config::flag::FRESH_STATE]) {
@@ -1205,7 +1209,9 @@ namespace nvhttp {
       named_cert_node["virtual_display_mode"] = named_cert.virtual_display_mode_override;
       named_cert_node["virtual_display_layout"] = named_cert.virtual_display_layout_override;
       named_cert_node["always_use_virtual_display"] = named_cert.always_use_virtual_display;
-      named_cert_node["prefer_10bit_sdr"] = named_cert.prefer_10bit_sdr;
+      if (named_cert.prefer_10bit_sdr.has_value()) {
+        named_cert_node["prefer_10bit_sdr"] = *named_cert.prefer_10bit_sdr;
+      }
 
       bool connected = false;
       if (!connected_uuids.empty()) {
@@ -2081,7 +2087,7 @@ namespace nvhttp {
     const bool always_use_virtual_display,
     const std::string &virtual_display_mode,
     const std::string &virtual_display_layout,
-    const bool prefer_10bit_sdr
+    const std::optional<bool> prefer_10bit_sdr
   ) {
     if (uuid.empty()) {
       return false;
@@ -2118,15 +2124,14 @@ namespace nvhttp {
     return rtsp_stream::disconnect_client_sessions(uuid);
   }
 
-  bool get_client_prefer_10bit_sdr(const std::string &uuid) {
+  std::optional<bool> get_client_prefer_10bit_sdr_override(const std::string &uuid) {
     client_t &client = client_root;
     for (auto &named_cert : client.named_devices) {
       if (named_cert.uuid == uuid) {
         return named_cert.prefer_10bit_sdr;
       }
     }
-    // Default to true when client not found to preserve global behavior.
-    return true;
+    return std::nullopt;
   }
 
   // (Windows-only) display_helper_integration is included above

@@ -199,11 +199,18 @@
               </div>
 
               <n-form-item :label="t('config.prefer_10bit_sdr')">
-                <n-checkbox v-model:checked="client.editPrefer10BitSdr">
-                  {{ t('config.prefer_10bit_sdr') }}
-                </n-checkbox>
+                <n-select
+                  v-model:value="client.editPrefer10BitSdr"
+                  :options="prefer10BitSdrOptions"
+                  clearable
+                  :placeholder="t('config.prefer_10bit_sdr_follow_global')"
+                />
                 <template #feedback>
                   <span class="text-xs opacity-70">{{ t('config.prefer_10bit_sdr_desc') }}</span>
+                  <span v-if="client.editPrefer10BitSdr === null" class="text-xs opacity-70 block">
+                    {{ t('config.prefer_10bit_sdr_follow_global') }}
+                    ({{ globalPrefer10BitSdr ? t('_common.enabled') : t('_common.disabled') }})
+                  </span>
                 </template>
               </n-form-item>
             </n-form>
@@ -280,7 +287,6 @@ import {
   NAlert,
   NButton,
   NCard,
-  NCheckbox,
   NForm,
   NFormItem,
   NInput,
@@ -305,6 +311,7 @@ type ClientVirtualDisplayLayout =
   | 'extended_isolated'
   | 'extended_primary_isolated'
   | null;
+type ClientPrefer10BitSdrOverride = 'enabled' | 'disabled' | null;
 
 interface ClientApiEntry {
   uuid?: string;
@@ -315,7 +322,7 @@ interface ClientApiEntry {
   always_use_virtual_display?: boolean | string | number;
   virtual_display_mode?: string;
   virtual_display_layout?: string;
-  prefer_10bit_sdr?: boolean | string | number;
+  prefer_10bit_sdr?: boolean | string | number | null;
 }
 
 interface ClientsListResponse {
@@ -331,7 +338,7 @@ interface ClientViewModel {
   displayMode: string;
   outputOverride: string;
   alwaysUseVirtualDisplay: boolean;
-  prefer10BitSdr: boolean;
+  prefer10BitSdr: ClientPrefer10BitSdrOverride;
   virtualDisplayMode: ClientVirtualDisplayMode;
   virtualDisplayLayout: ClientVirtualDisplayLayout;
 
@@ -342,7 +349,7 @@ interface ClientViewModel {
   editPhysicalOutputOverride: string | null;
   editVirtualDisplayMode: ClientVirtualDisplayMode;
   editVirtualDisplayLayout: ClientVirtualDisplayLayout;
-  editPrefer10BitSdr: boolean;
+  editPrefer10BitSdr: ClientPrefer10BitSdrOverride;
 }
 
 interface DisplayDevice {
@@ -355,6 +362,13 @@ interface DisplayDevice {
 const { t } = useI18n();
 const message = useMessage();
 const configStore = useConfigStore();
+const globalPrefer10BitSdr = computed<boolean>(() =>
+  toBool((configStore.config as any)?.prefer_10bit_sdr, false),
+);
+const prefer10BitSdrOptions = computed(() => [
+  { label: t('_common.enabled'), value: 'enabled' },
+  { label: t('_common.disabled'), value: 'disabled' },
+]);
 
 const clients = ref<ClientViewModel[]>([]);
 const platform = ref<string>('');
@@ -419,7 +433,12 @@ function createClientViewModel(entry: ClientApiEntry): ClientViewModel {
   const displayMode = entry.display_mode ?? '';
   const outputOverride = entry.output_name_override ?? '';
   const alwaysVirtual = toBool(entry.always_use_virtual_display, false);
-  const prefer10 = toBool(entry.prefer_10bit_sdr, true);
+  const prefer10: ClientPrefer10BitSdrOverride =
+    entry.prefer_10bit_sdr === undefined || entry.prefer_10bit_sdr === null
+      ? null
+      : toBool(entry.prefer_10bit_sdr, false)
+        ? 'enabled'
+        : 'disabled';
   const virtualMode = parseClientVirtualDisplayMode(entry.virtual_display_mode ?? '');
   const virtualLayout = parseClientVirtualDisplayLayout(entry.virtual_display_layout ?? '');
   const selection: ClientDisplaySelection = alwaysVirtual ? 'virtual' : 'physical';
@@ -612,7 +631,7 @@ async function saveClient(client: ClientViewModel): Promise<void> {
   if (saving.value[client.uuid]) return;
   saving.value = { ...saving.value, [client.uuid]: true };
   try {
-    const payload = {
+    const payload: any = {
       uuid: client.uuid,
       name: (client.editName || '').trim(),
       display_mode: (client.editDisplayMode || '').trim(),
@@ -623,8 +642,10 @@ async function saveClient(client: ClientViewModel): Promise<void> {
       always_use_virtual_display: client.editDisplaySelection === 'virtual',
       virtual_display_mode: client.editVirtualDisplayMode ?? '',
       virtual_display_layout: client.editVirtualDisplayLayout ?? '',
-      prefer_10bit_sdr: !!client.editPrefer10BitSdr,
     };
+    if (client.editPrefer10BitSdr !== null) {
+      payload.prefer_10bit_sdr = client.editPrefer10BitSdr === 'enabled';
+    }
 
     const r = await http.post('./api/clients/update', payload, { validateStatus: () => true });
     const ok = r && r.status >= 200 && r.status < 300 && r.data?.status === true;
@@ -639,7 +660,8 @@ async function saveClient(client: ClientViewModel): Promise<void> {
     client.alwaysUseVirtualDisplay = payload.always_use_virtual_display;
     client.virtualDisplayMode = parseClientVirtualDisplayMode(payload.virtual_display_mode);
     client.virtualDisplayLayout = parseClientVirtualDisplayLayout(payload.virtual_display_layout);
-    client.prefer10BitSdr = payload.prefer_10bit_sdr;
+    client.prefer10BitSdr =
+      payload.prefer_10bit_sdr === undefined ? null : payload.prefer_10bit_sdr ? 'enabled' : 'disabled';
 
     resetClientEdits(client);
     client.editing = false;

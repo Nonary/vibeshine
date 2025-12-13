@@ -1122,8 +1122,9 @@ namespace rtsp_stream {
       config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
     }
 
-    const bool client_prefer_10bit_sdr = nvhttp::get_client_prefer_10bit_sdr(session.client_uuid);
-    if (config::video.prefer_10bit_sdr && client_prefer_10bit_sdr && !session.enable_hdr && config.monitor.dynamicRange == 0) {
+    const auto client_prefer_10bit_sdr_override = nvhttp::get_client_prefer_10bit_sdr_override(session.client_uuid);
+    const bool prefer_10bit_sdr = client_prefer_10bit_sdr_override.value_or(config::video.prefer_10bit_sdr);
+    if (prefer_10bit_sdr && !session.enable_hdr && config.monitor.dynamicRange == 0) {
       const bool hevc_main10 = config.monitor.videoFormat == 1 && video::active_hevc_mode >= 3;
       const bool av1_main10 = config.monitor.videoFormat == 2 && video::active_av1_mode >= 3;
       if (hevc_main10 || av1_main10) {

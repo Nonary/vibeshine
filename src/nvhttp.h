@@ -7,6 +7,7 @@
 
 // standard includes
 #include <string>
+#include <optional>
 
 // lib includes
 #include <boost/property_tree/ptree.hpp>
@@ -205,7 +206,7 @@ namespace nvhttp {
     bool always_use_virtual_display,
     const std::string &virtual_display_mode,
     const std::string &virtual_display_layout,
-    bool prefer_10bit_sdr
+    std::optional<bool> prefer_10bit_sdr
   );
 
   /**
@@ -215,9 +216,9 @@ namespace nvhttp {
   bool disconnect_client(const std::string &uuid);
 
   /**
-   * @brief Get a client's prefer_10bit_sdr setting.
+   * @brief Get a client's prefer_10bit_sdr override.
    */
-  bool get_client_prefer_10bit_sdr(const std::string &uuid);
+  std::optional<bool> get_client_prefer_10bit_sdr_override(const std::string &uuid);
 
   /**
    * @brief Remove all paired clients.

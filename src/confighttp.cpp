@@ -1122,7 +1122,12 @@ namespace confighttp {
       const bool always_use_virtual_display = input_tree.value("always_use_virtual_display", false);
       const std::string virtual_display_mode = input_tree.value("virtual_display_mode", "");
       const std::string virtual_display_layout = input_tree.value("virtual_display_layout", "");
-      const bool prefer_10bit_sdr = input_tree.value("prefer_10bit_sdr", true);
+      std::optional<bool> prefer_10bit_sdr;
+      if (input_tree.contains("prefer_10bit_sdr") && !input_tree["prefer_10bit_sdr"].is_null()) {
+        prefer_10bit_sdr = input_tree["prefer_10bit_sdr"].get<bool>();
+      } else {
+        prefer_10bit_sdr.reset();
+      }
 
       output_tree["status"] = nvhttp::update_device_info(
         uuid,
