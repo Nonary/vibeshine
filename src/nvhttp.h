@@ -194,6 +194,32 @@ namespace nvhttp {
   nlohmann::json get_all_clients();
 
   /**
+   * @brief Update stored settings for a paired client.
+   * @return True if the client was found and updated.
+   */
+  bool update_device_info(
+    const std::string &uuid,
+    const std::string &name,
+    const std::string &display_mode,
+    const std::string &output_name_override,
+    bool always_use_virtual_display,
+    const std::string &virtual_display_mode,
+    const std::string &virtual_display_layout,
+    bool prefer_10bit_sdr
+  );
+
+  /**
+   * @brief Disconnect any active sessions for a paired client.
+   * @return True if one or more sessions were stopped.
+   */
+  bool disconnect_client(const std::string &uuid);
+
+  /**
+   * @brief Get a client's prefer_10bit_sdr setting.
+   */
+  bool get_client_prefer_10bit_sdr(const std::string &uuid);
+
+  /**
    * @brief Remove all paired clients.
    * @examples
    * nvhttp::erase_all_clients();

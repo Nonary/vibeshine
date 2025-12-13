@@ -1087,12 +1087,87 @@ namespace confighttp {
     nlohmann::json output_tree;
     output_tree["named_certs"] = named_certs;
     output_tree["status"] = true;
+    output_tree["platform"] = SUNSHINE_PLATFORM;
     send_response(response, output_tree);
   }
 
 #ifdef _WIN32
   // removed unused forward declaration for default_playnite_ext_dir()
 #endif
+
+  /**
+   * @brief Update stored settings for a paired client.
+   */
+  void updateClient(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+
+    try {
+      const nlohmann::json input_tree = nlohmann::json::parse(ss);
+      nlohmann::json output_tree;
+
+      const std::string uuid = input_tree.value("uuid", "");
+      const std::string name = input_tree.value("name", "");
+      const std::string display_mode = input_tree.value("display_mode", "");
+      const std::string output_name_override = input_tree.value("output_name_override", "");
+      const bool always_use_virtual_display = input_tree.value("always_use_virtual_display", false);
+      const std::string virtual_display_mode = input_tree.value("virtual_display_mode", "");
+      const std::string virtual_display_layout = input_tree.value("virtual_display_layout", "");
+      const bool prefer_10bit_sdr = input_tree.value("prefer_10bit_sdr", true);
+
+      output_tree["status"] = nvhttp::update_device_info(
+        uuid,
+        name,
+        display_mode,
+        output_name_override,
+        always_use_virtual_display,
+        virtual_display_mode,
+        virtual_display_layout,
+        prefer_10bit_sdr
+      );
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "UpdateClient: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Disconnect a client session without unpairing it.
+   */
+  void disconnectClient(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+
+    try {
+      const nlohmann::json input_tree = nlohmann::json::parse(ss);
+      nlohmann::json output_tree;
+      const std::string uuid = input_tree.value("uuid", "");
+      output_tree["status"] = nvhttp::disconnect_client(uuid);
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "DisconnectClient: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
 
   /**
    * @brief Unpair a client.
@@ -2182,7 +2257,9 @@ namespace confighttp {
     server.resource["^/api/apps/([0-9]+)$"]["DELETE"] = deleteApp;
     server.resource["^/api/clients/unpair-all$"]["POST"] = unpairAll;
     server.resource["^/api/clients/list$"]["GET"] = getClients;
+    server.resource["^/api/clients/update$"]["POST"] = updateClient;
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
+    server.resource["^/api/clients/disconnect$"]["POST"] = disconnectClient;
     server.resource["^/api/apps/close$"]["POST"] = closeApp;
     server.resource["^/api/session/status$"]["GET"] = getSessionStatus;
     // Keep legacy cover upload endpoint present in upstream master
