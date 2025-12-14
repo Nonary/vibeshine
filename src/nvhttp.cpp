@@ -596,6 +596,12 @@ namespace nvhttp {
       launch_session->client_uuid = get_client_uuid_from_request(request, &launch_session->client_name);
     }
 
+    // Some launch paths may not provide a peer certificate (e.g. non-TLS resume).
+    // Fall back to the client-provided unique ID so per-client settings still apply.
+    if (launch_session->client_uuid.empty()) {
+      launch_session->client_uuid = get_arg(args, "uniqueid", "");
+    }
+
     auto client_name_arg = get_arg(args, "clientName", "");
     if (!client_name_arg.empty()) {
       launch_session->device_name = client_name_arg;
