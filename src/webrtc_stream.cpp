@@ -1068,6 +1068,7 @@ namespace webrtc_stream {
       std::atomic<bool> active {true};
       std::atomic<bool> mouse_move_seq_initialized {false};
       std::atomic<std::uint16_t> last_mouse_move_seq {0};
+      std::atomic<std::int64_t> last_mouse_move_at_ms {0};
     };
 
     struct SessionPeerContext {
@@ -2137,6 +2138,7 @@ namespace webrtc_stream {
 
     constexpr std::uint8_t kInputBinaryMouseMove = 1;
     constexpr std::size_t kInputBinaryMouseMoveSize = 1 + 2 + 2 + 2;
+    constexpr auto kMouseMoveSeqResetIdle = std::chrono::milliseconds {1000};
 
     bool seq_newer_u16(std::uint16_t seq, std::uint16_t last) {
       return static_cast<std::int16_t>(seq - last) > 0;
@@ -2170,17 +2172,28 @@ namespace webrtc_stream {
                                   (static_cast<std::uint16_t>(buffer[4]) << 8);
       const std::uint16_t y_u16 = static_cast<std::uint16_t>(buffer[5]) |
                                   (static_cast<std::uint16_t>(buffer[6]) << 8);
+      const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+      ).count();
 
       const bool initialized = ctx->mouse_move_seq_initialized.load(std::memory_order_acquire);
       if (initialized) {
         const std::uint16_t last = ctx->last_mouse_move_seq.load(std::memory_order_acquire);
         if (!seq_newer_u16(seq, last)) {
-          return;
+          const auto last_ms = ctx->last_mouse_move_at_ms.load(std::memory_order_acquire);
+          if (last_ms > 0) {
+            const auto elapsed_ms = now_ms - last_ms;
+            if (elapsed_ms >= 0 && elapsed_ms < kMouseMoveSeqResetIdle.count()) {
+              return;
+            }
+          }
+          ctx->mouse_move_seq_initialized.store(true, std::memory_order_release);
         }
       } else {
         ctx->mouse_move_seq_initialized.store(true, std::memory_order_release);
       }
       ctx->last_mouse_move_seq.store(seq, std::memory_order_release);
+      ctx->last_mouse_move_at_ms.store(now_ms, std::memory_order_release);
 
       input::passthrough(input_ctx, make_abs_mouse_move_packet(unit_from_u16(x_u16), unit_from_u16(y_u16)));
     }
@@ -2232,6 +2245,7 @@ namespace webrtc_stream {
         if (it->second.data_channel_context) {
           it->second.data_channel_context->mouse_move_seq_initialized.store(false, std::memory_order_release);
           it->second.data_channel_context->last_mouse_move_seq.store(0, std::memory_order_release);
+          it->second.data_channel_context->last_mouse_move_at_ms.store(0, std::memory_order_release);
         }
         lwrtc_data_channel_register_observer(channel, nullptr, &on_data_channel_message, ctx);
       }
