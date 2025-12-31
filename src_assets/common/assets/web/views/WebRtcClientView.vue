@@ -1215,7 +1215,35 @@ const onFullscreenChange = () => {
   if (!isFullscreen.value) {
     cancelEscHold();
   }
+  // Reset audio element to flush jitter buffer on fullscreen change.
+  // Browser fullscreen transitions can cause momentary playback pauses,
+  // leading to audio buffer accumulation and delayed playback.
+  resetAudioElement();
 };
+
+function resetAudioElement(): void {
+  if (!audioEl.value || !audioStream) return;
+  const tracks = audioStream.getAudioTracks();
+  if (!tracks.length) return;
+  // Store current state
+  const wasPlaying = !audioEl.value.paused;
+  // Briefly detach and re-attach the stream to flush the jitter buffer
+  audioEl.value.srcObject = null;
+  // Use a microtask to ensure the browser processes the detachment
+  queueMicrotask(() => {
+    if (!audioEl.value || !audioStream) return;
+    audioEl.value.srcObject = audioStream;
+    audioEl.value.muted = false;
+    if (wasPlaying || audioAutoplayRequested) {
+      const playPromise = audioEl.value.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch(() => {
+          /* ignore autoplay restrictions */
+        });
+      }
+    }
+  });
+}
 const onOverlayHotkey = (event: KeyboardEvent) => {
   if (!event.ctrlKey || !event.altKey || !event.shiftKey) return;
   if (event.code !== 'KeyS') return;
@@ -1226,6 +1254,13 @@ const onOverlayHotkey = (event: KeyboardEvent) => {
 
 const onPageHide = () => {
   void client.disconnect({ keepalive: true });
+};
+
+const onVisibilityChange = () => {
+  // Reset audio when tab becomes visible to flush any accumulated buffer
+  if (document.visibilityState === 'visible') {
+    resetAudioElement();
+  }
 };
 
 const onFullscreenEscapeDown = (event: KeyboardEvent) => {
@@ -1651,6 +1686,7 @@ onBeforeUnmount(() => {
   setWebRtcActive(false);
   document.removeEventListener('fullscreenchange', onFullscreenChange);
   document.removeEventListener('webkitfullscreenchange', onFullscreenChange as EventListener);
+  document.removeEventListener('visibilitychange', onVisibilityChange);
   window.removeEventListener('keydown', onOverlayHotkey, true);
   window.removeEventListener('keydown', onFullscreenEscapeDown, true);
   window.removeEventListener('keyup', onFullscreenEscapeUp, true);
@@ -1668,6 +1704,7 @@ onBeforeUnmount(() => {
 onMounted(async () => {
   document.addEventListener('fullscreenchange', onFullscreenChange);
   document.addEventListener('webkitfullscreenchange', onFullscreenChange as EventListener);
+  document.addEventListener('visibilitychange', onVisibilityChange);
   window.addEventListener('keydown', onOverlayHotkey, true);
   window.addEventListener('keydown', onFullscreenEscapeDown, true);
   window.addEventListener('keyup', onFullscreenEscapeUp, true);
