@@ -84,6 +84,7 @@
 
 namespace webrtc_stream {
   namespace {
+    #ifdef _WIN32
     std::atomic_uint64_t g_paused_display_cleanup_generation {0};
 
     void schedule_paused_display_cleanup(std::chrono::seconds timeout, std::string reason) {
@@ -111,6 +112,7 @@ namespace webrtc_stream {
         }
       }).detach();
     }
+#endif
   }  // namespace
 
   bool add_local_candidate(std::string_view id, std::string mid, int mline_index, std::string candidate);
@@ -1460,6 +1462,7 @@ namespace webrtc_stream {
       return payload.dump();
     }
 
+    #ifdef SUNSHINE_ENABLE_WEBRTC
     void send_gamepad_feedback_payload(const std::string &payload) {
       std::lock_guard lg {session_mutex};
       for (auto &[_, session] : sessions) {
@@ -1477,7 +1480,9 @@ namespace webrtc_stream {
         );
       }
     }
+#endif
 
+    #ifdef SUNSHINE_ENABLE_WEBRTC
     void feedback_thread_main(safe::mail_raw_t::queue_t<platf::gamepad_feedback_msg_t> queue) {
       using namespace std::chrono_literals;
       while (!webrtc_capture.feedback_shutdown.load(std::memory_order_acquire)) {
@@ -1492,6 +1497,7 @@ namespace webrtc_stream {
         send_gamepad_feedback_payload(*payload);
       }
     }
+#endif
 
     void request_keyframe(std::string_view reason) {
       auto mail = current_capture_mail();
@@ -1919,6 +1925,7 @@ namespace webrtc_stream {
       return result;
     }
 
+    #ifdef SUNSHINE_ENABLE_WEBRTC
     const char *lwrtc_codec_name(lwrtc_video_codec_t codec) {
       switch (codec) {
         case LWRTC_VIDEO_CODEC_H264:
@@ -1931,6 +1938,7 @@ namespace webrtc_stream {
           return "Unknown";
       }
     }
+#endif
 
     video::config_t build_video_config(const SessionOptions &options) {
       video::config_t config {};
@@ -2420,10 +2428,12 @@ namespace webrtc_stream {
       webrtc_capture.app_id = effective_app_id > 0 ? std::optional<int> {effective_app_id} : std::nullopt;
       webrtc_capture.config_key = desired_key;
       webrtc_capture.feedback_shutdown.store(false, std::memory_order_release);
+      #ifdef SUNSHINE_ENABLE_WEBRTC
       webrtc_capture.feedback_queue = mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback);
       webrtc_capture.feedback_thread = std::thread([queue = webrtc_capture.feedback_queue]() {
         feedback_thread_main(queue);
       });
+#endif
       webrtc_capture.active.store(true, std::memory_order_release);
 
       webrtc_capture.video_thread = std::thread([mail, video_config]() mutable {

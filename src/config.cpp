@@ -1703,8 +1703,10 @@ namespace config {
       }
     }
 
+#ifdef _WIN32
     // Apply Playnite-specific configuration keys
     config::apply_playnite(vars);
+#endif
 
     auto it = vars.find("flags"s);
     if (it != std::end(vars)) {
