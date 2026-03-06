@@ -1714,7 +1714,7 @@ namespace proc {
         const bool provider_auto = config::frame_limiter.provider.empty() ||
                                    boost::iequals(config::frame_limiter.provider, "auto");
         const bool provider_rtss = boost::iequals(config::frame_limiter.provider, "rtss");
-        const bool should_wait_rtss = platf::rtss_is_configured() && (provider_auto || provider_rtss || _app.gen1_framegen_fix);
+        const bool should_wait_rtss = platf::rtss_is_configured() && (provider_auto || provider_rtss || _app.gen1_framegen_fix || _app.gen2_framegen_fix);
         if (should_wait_rtss) {
           const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
           bool running = false;
@@ -2460,8 +2460,10 @@ namespace proc {
         ctx.wait_all = wait_all.value_or(true);
         // Default graceful-exit timeout: 10s (Playnite-managed apps are written with this value)
         ctx.exit_timeout = std::chrono::seconds {exit_timeout.value_or(10)};
-        ctx.gen1_framegen_fix = gen1_framegen_fix.value_or(false);
-        ctx.gen2_framegen_fix = gen2_framegen_fix.value_or(false);
+        const bool frame_generation_capture_fix_enabled =
+          gen1_framegen_fix.value_or(false) || gen2_framegen_fix.value_or(false);
+        ctx.gen1_framegen_fix = frame_generation_capture_fix_enabled;
+        ctx.gen2_framegen_fix = false;
         if (!ctx.lossless_scaling_framegen) {
           ctx.lossless_scaling_target_fps.reset();
           ctx.lossless_scaling_rtss_limit.reset();

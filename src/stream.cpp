@@ -553,6 +553,7 @@ namespace stream {
     bool gen1_framegen_fix = false;
     bool gen2_framegen_fix = false;
     std::optional<int> lossless_rtss_limit;
+    std::string frame_generation_provider;
     bool smooth_motion = false;
   };
 
@@ -613,6 +614,7 @@ namespace stream {
       deferred->gen1_framegen_fix,
       deferred->gen2_framegen_fix,
       deferred->lossless_rtss_limit,
+      deferred->frame_generation_provider,
       deferred->smooth_motion
     );
     platf::streaming_will_start();
@@ -2270,6 +2272,7 @@ namespace stream {
             .gen1_framegen_fix = session.config.gen1_framegen_fix,
             .gen2_framegen_fix = session.config.gen2_framegen_fix,
             .lossless_rtss_limit = lossless_rtss_limit,
+            .frame_generation_provider = session.config.frame_generation_provider,
             .smooth_motion = using_smooth_motion,
           };
           defer_stream_start_actions(std::move(deferred));
@@ -2280,6 +2283,7 @@ namespace stream {
             session.config.gen1_framegen_fix,
             session.config.gen2_framegen_fix,
             lossless_rtss_limit,
+            session.config.frame_generation_provider,
             using_smooth_motion
           );
           platf::streaming_will_start();
