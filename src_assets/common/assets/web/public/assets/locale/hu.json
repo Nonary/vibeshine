@@ -291,6 +291,7 @@
     "nvenc_opengl_vulkan_on_dxgi_desc": "A Sunshine nem tudja teljes képkocka sebességgel rögzíteni a teljes képernyős OpenGL és Vulkan programokat, hacsak nem jelennek meg DXGI-n keresztül. Ez rendszerszintű beállítás, ami a Sunshine kilépésekor visszaáll.",
     "nvenc_preset": "Teljesítmény preset",
     "nvenc_preset_1": "(leggyorsabb, alapértelmezett)",
+    "nvenc_preset_4": "(kiegyensúlyozott minőség)",
     "nvenc_preset_7": "(leglassabb)",
     "nvenc_preset_desc": "A magasabb számok javítják a tömörítést (minőség adott bitrátán) a megnövekedett kódolási késleltetés árán. Csak akkor ajánlott változtatni, ha a hálózat vagy dekódoló korlátozza, különben hasonló hatás érhető el a bitráta növelésével.",
     "nvenc_realtime_hags": "Valós idejű prioritás használata hardveresen gyorsított GPU-ütemezésben",

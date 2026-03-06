@@ -291,6 +291,7 @@
     "nvenc_opengl_vulkan_on_dxgi_desc": "Ánh sáng mặt trời không thể ghi lại các chương trình OpenGL và Vulkan toàn màn hình ở tốc độ khung hình đầy đủ trừ khi chúng được hiển thị trên DXGI. Đây là cài đặt hệ thống và sẽ được khôi phục lại sau khi chương trình Ánh sáng mặt trời kết thúc.",
     "nvenc_preset": "Cài đặt sẵn hiệu suất",
     "nvenc_preset_1": "(nhanh nhất, mặc định)",
+    "nvenc_preset_4": "(chất lượng cân bằng)",
     "nvenc_preset_7": "(chậm nhất)",
     "nvenc_preset_desc": "Các giá trị cao hơn cải thiện tỷ lệ nén (chất lượng ở cùng bitrate) nhưng làm tăng độ trễ mã hóa. Nên thay đổi chỉ khi bị giới hạn bởi mạng hoặc bộ giải mã, nếu không, hiệu quả tương tự có thể đạt được bằng cách tăng bitrate.",
     "nvenc_realtime_hags": "Sử dụng ưu tiên thời gian thực trong lịch trình GPU được tăng tốc phần cứng.",

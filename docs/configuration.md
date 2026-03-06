@@ -2783,7 +2783,7 @@ They appear in the Frame Limiter section of the settings UI.
     <tr>
         <td rowspan="7">Choices</td>
         <td>1</td>
-        <td>P1 (fastest)</td>
+        <td>P1 (fastest, default)</td>
     </tr>
     <tr>
         <td>2</td>
@@ -2795,7 +2795,7 @@ They appear in the Frame Limiter section of the settings UI.
     </tr>
     <tr>
         <td>4</td>
-        <td>P4</td>
+        <td>P4 (balanced quality)</td>
     </tr>
     <tr>
         <td>5</td>
