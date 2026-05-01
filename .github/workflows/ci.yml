@@ -4,311 +4,93 @@ permissions: {}
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - vibe
+      - main
+      - master
+    tags:
+      - '*'
+  pull_request:
+    branches:
+      - vibe
+      - main
+      - master
 
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
   cancel-in-progress: true
 
 jobs:
-  github-env:
-    name: GitHub Env Debug
+  build-windows:
+    name: Windows
     permissions:
       contents: read
-    uses: LizardByte/.github/.github/workflows/__call-github-env.yml@master
+    uses: ./.github/workflows/ci-windows.yml
+    with:
+      release_commit: ${{ github.sha }}
+      release_version: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '0.0.0' }}
 
-  release-setup:
-    name: Release Setup
-    outputs:
-      publish_release: ${{ steps.release-setup.outputs.publish_release }}
-      release_body: ${{ steps.release-setup.outputs.release_body }}
-      release_commit: ${{ steps.release-setup.outputs.release_commit }}
-      release_generate_release_notes: ${{ steps.release-setup.outputs.release_generate_release_notes }}
-      release_tag: ${{ steps.release-setup.outputs.release_tag }}
-      release_version: ${{ steps.release-setup.outputs.release_version }}
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - build-windows
     permissions:
+      actions: read
       contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
-      - name: Release Setup
-        id: release-setup
-        uses: LizardByte/actions/actions/release_setup@6be4ea62064b64957aa880252fe353cd65bcdef7  # v2026.214.14019
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
-  build-docker:
-    name: Docker
-    needs: release-setup
-    permissions:
-      contents: read
-      packages: write
-    uses: LizardByte/.github/.github/workflows/__call-docker.yml@master
-    with:
-      docker_hub_username: ${{ vars.DOCKER_HUB_USERNAME }}
-      gh_bot_name: ${{ vars.GH_BOT_NAME }}
-      maximize_build_space: true
-      publish_release: ${{ needs.release-setup.outputs.publish_release }}
-      release_commit: ${{ needs.release-setup.outputs.release_commit }}
-      release_tag: ${{ needs.release-setup.outputs.release_tag }}
-      release_version: ${{ needs.release-setup.outputs.release_version }}
-    secrets:
-      DOCKER_HUB_PASSWORD: ${{ secrets.DOCKER_HUB_PASSWORD }}
-      DOCKER_HUB_ACCESS_TOKEN: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
-      GH_BOT_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-freebsd:
-    name: FreeBSD
-    needs: release-setup
-    permissions:
-      contents: read
-    uses: ./.github/workflows/ci-freebsd.yml
-    with:
-      release_commit: ${{ needs.release-setup.outputs.release_commit }}
-      release_version: ${{ needs.release-setup.outputs.release_version }}
-
-  build-homebrew:
-    name: Homebrew
-    needs: release-setup
-    permissions:
-      contents: read
-    uses: ./.github/workflows/ci-homebrew.yml
-    with:
-      git_username: ${{ vars.GH_BOT_NAME }}
-      publish_release: ${{ needs.release-setup.outputs.publish_release }}
-      release_commit: ${{ needs.release-setup.outputs.release_commit }}
-      release_tag: ${{ needs.release-setup.outputs.release_tag }}
-      release_version: ${{ needs.release-setup.outputs.release_version }}
-    secrets:
-      GH_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
-      GIT_EMAIL: ${{ secrets.GH_BOT_EMAIL }}
-
-  build-linux:
-    name: Linux
-    needs: release-setup
-    permissions:
-      contents: read
-    uses: ./.github/workflows/ci-linux.yml
-    with:
-      release_commit: ${{ needs.release-setup.outputs.release_commit }}
-      release_version: ${{ needs.release-setup.outputs.release_version }}
-
-  build-archlinux:
-    name: Archlinux
-    needs: release-setup
-    permissions:
-      contents: read
-    uses: ./.github/workflows/ci-archlinux.yml
-    with:
-      release_commit: ${{ needs.release-setup.outputs.release_commit }}
-      release_version: ${{ needs.release-setup.outputs.release_version }}
-
-  build-linux-copr:
-    name: Linux Copr
-    if: github.event_name != 'push'  # releases are handled directly in ci-copr.yml
-    needs: release-setup
-    permissions:
-      contents: write  # needed to update releases
-    uses: ./.github/workflows/ci-copr.yml
-    secrets:
-      COPR_BETA_WEBHOOK_TOKEN: ${{ secrets.COPR_BETA_WEBHOOK_TOKEN }}
-      COPR_STABLE_WEBHOOK_TOKEN: ${{ secrets.COPR_STABLE_WEBHOOK_TOKEN }}
-      COPR_CLI_CONFIG: ${{ secrets.COPR_CLI_CONFIG }}
-
-  build-linux-flatpak:
-    name: Linux Flatpak
-    needs: release-setup
-    permissions:
-      contents: read
-    uses: ./.github/workflows/ci-flatpak.yml
-    with:
-      release_commit: ${{ needs.release-setup.outputs.release_commit }}
-      release_version: ${{ needs.release-setup.outputs.release_version }}
-
-  build-windows:
-    name: Windows
-    needs: release-setup
-    permissions:
-      contents: read
-    uses: ./.github/workflows/ci-windows.yml
-    with:
-      release_commit: ${{ needs.release-setup.outputs.release_commit }}
-      release_version: ${{ needs.release-setup.outputs.release_version }}
-
-  bundle-analysis:
-    name: Bundle Analysis
-    needs: release-setup
-    permissions:
-      contents: read
-    uses: ./.github/workflows/ci-bundle.yml
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-  coverage:
-    name: Coverage-${{ matrix.name }}
-    if: >-
-      always() &&
-      !cancelled() &&
-      startsWith(github.repository, 'LizardByte/')
-    needs:
-      - build-freebsd
-      - build-linux
-      - build-archlinux
-      - build-linux-flatpak
-      - build-homebrew
-      - build-windows
-    permissions:
-      contents: read
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: FreeBSD-14.3-amd64
-            coverage: true
-            pr: true
-          - name: FreeBSD-14.3-aarch64
-            coverage: true
-            pr: false
-          - name: Linux-AppImage
-            coverage: true
-            pr: true
-          - name: Archlinux
-            coverage: true
-            pr: true
-          - name: Homebrew-macos-14
-            coverage: false
-            pr: true
-          - name: Homebrew-macos-15
-            coverage: false
-            pr: true
-          - name: Homebrew-macos-26
-            coverage: false
-            pr: true
-          - name: Homebrew-ubuntu-22.04
-            coverage: true
-            pr: true
-          - name: Windows-AMD64
-            coverage: true
-            pr: true
-          - name: Windows-ARM64
-            coverage: true
-            pr: true
-    steps:
-      - name: Should run
-        id: should_run
+      - name: Resolve release notes
+        id: release-notes
+        env:
+          TAG_NAME: ${{ github.ref_name }}
         run: |
-          should_run="false"
-          if [ "${GITHUB_EVENT_NAME}" != "pull_request" ] || [ ${{ matrix.pr }} == "true" ]; then
-            should_run="true"
+          set -euo pipefail
+
+          if [[ "${TAG_NAME}" == v* ]]; then
+            echo "::error::Release tags should not include a v prefix. Use '${TAG_NAME#v}' instead of '${TAG_NAME}'."
+            exit 1
           fi
-          echo "SHOULD_RUN=${should_run}" >> "${GITHUB_OUTPUT}"
 
-      - name: Checkout
-        if: steps.should_run.outputs.SHOULD_RUN == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+          notes_file="release_notes/${TAG_NAME}.md"
+          if [[ -f "${notes_file}" ]]; then
+            echo "Using release notes: ${notes_file}"
+            echo "notes_file=${notes_file}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
 
-      - name: Download coverage artifact
-        if: steps.should_run.outputs.SHOULD_RUN == 'true'
+          echo "::error::Release notes file not found: ${notes_file}"
+          exit 1
+
+      - name: Download Windows artifacts
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
         with:
-          name: coverage-${{ matrix.name }}
-          path: _coverage
-
-      - name: Upload test coverage
-        if: |
-          steps.should_run.outputs.SHOULD_RUN == 'true'  &&
-          matrix.coverage != false
-        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de  # v5.5.2
-        with:
-          disable_search: true
-          fail_ci_if_error: true
-          files: ./_coverage/coverage.xml
-          report_type: coverage
-          flags: ${{ matrix.name }}
-          token: ${{ secrets.CODECOV_TOKEN }}
-          verbose: true
-
-      - name: Upload test results
-        if: steps.should_run.outputs.SHOULD_RUN == 'true'
-        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de  # v5.5.2
-        with:
-          disable_search: true
-          fail_ci_if_error: true
-          files: ./_coverage/tests/test_results.xml
-          report_type: test_results
-          flags: ${{ matrix.name }}
-          token: ${{ secrets.CODECOV_TOKEN }}
-          verbose: true
-
-  release:
-    name: Release
-    if:
-      needs.release-setup.outputs.publish_release == 'true' &&
-      startsWith(github.repository, 'LizardByte/')
-    needs:
-      - release-setup
-      - build-archlinux
-      - build-docker
-      - build-freebsd
-      - build-homebrew
-      - build-linux
-      - build-linux-flatpak
-      - build-windows
-    permissions:
-      contents: read
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
-        with:
+          name: build-Windows
           path: artifacts
-          pattern: build-*
-          merge-multiple: true
 
       - name: Debug artifacts
         run: ls -l artifacts
 
-      - name: Create/Update GitHub Release
-        uses: LizardByte/actions/actions/release_create@6be4ea62064b64957aa880252fe353cd65bcdef7  # v2026.214.14019
-        with:
-          allowUpdates: false
-          body: ${{ needs.release-setup.outputs.release_body }}
-          generateReleaseNotes: ${{ needs.release-setup.outputs.release_generate_release_notes }}
-          name: ${{ needs.release-setup.outputs.release_tag }}
-          prerelease: true
-          tag: ${{ needs.release-setup.outputs.release_tag }}
-          token: ${{ secrets.GH_BOT_TOKEN }}
-          virustotal_api_key: ${{ secrets.VIRUSTOTAL_API_KEY }}
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTES_FILE: ${{ steps.release-notes.outputs.notes_file }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          release_title="v${TAG_NAME}"
 
-  release-homebrew-beta:
-    name: Release Homebrew Beta
-    if:
-      needs.release-setup.outputs.publish_release == 'true' &&
-      startsWith(github.repository, 'LizardByte/')
-    needs:
-      - release-setup
-      - build-homebrew
-      - release
-    permissions:
-      contents: read
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download homebrew artifacts
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
-        with:
-          name: beta-Homebrew
-          path: homebrew
-
-      - name: Upload Homebrew Beta Formula
-        uses: LizardByte/actions/actions/release_homebrew@6be4ea62064b64957aa880252fe353cd65bcdef7  # v2026.214.14019
-        with:
-          actionlint_config: "---\n# empty config"
-          formula_file: ${{ github.workspace }}/homebrew/sunshine-beta.rb
-          git_email: ${{ secrets.GH_BOT_EMAIL }}
-          git_username: ${{ vars.GH_BOT_NAME }}
-          publish: true
-          token: ${{ secrets.GH_BOT_TOKEN }}
-          validate: false
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release edit "${TAG_NAME}" \
+              --title "${release_title}" \
+              --notes-file "${NOTES_FILE}"
+            gh release upload "${TAG_NAME}" artifacts/* --clobber
+          else
+            gh release create "${TAG_NAME}" artifacts/* \
+              --title "${release_title}" \
+              --notes-file "${NOTES_FILE}"
+          fi
