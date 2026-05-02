@@ -4,6 +4,9 @@
  */
 #pragma once
 #ifdef _WIN32
+  // platform includes
+  #include <WinSock2.h>
+
   // standard includes
   #include <comdef.h>
   #include <d3d11.h>
