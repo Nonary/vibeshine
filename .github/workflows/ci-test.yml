@@ -1,0 +1,25 @@
+---
+name: CI Test
+permissions: {}
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci_test
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Windows build test
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-windows.yml
+    with:
+      release_commit: ${{ github.sha }}
+      release_version: '0.0.0'
+      symbol_product_name: Vibeshine
+      symbol_release_prefix: shine
