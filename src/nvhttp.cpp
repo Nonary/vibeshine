@@ -1814,7 +1814,7 @@ namespace nvhttp {
     for (auto &proc : proc::proc.get_apps()) {
       pt::ptree app;
 
-      app.put("IsHdrSupported"s, video::active_hevc_mode == 3 ? 1 : 0);
+      app.put("IsHdrSupported"s, (video::active_hevc_mode == 3 || video::active_av1_mode == 3) ? 1 : 0);
       app.put("AppTitle"s, proc.name);
       app.put("ID", proc.id);
 
