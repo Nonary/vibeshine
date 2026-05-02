@@ -416,6 +416,11 @@ foreach ($path in @($vsToolchainPath, $setupToolchainPath)) {
   }
   $content = Get-Content $path -Raw
   $updated = $content -replace "SDK_VERSION = '([^']*)'", "SDK_VERSION = '$winSdkVersion'"
+  if ($path -eq $setupToolchainPath) {
+    $updated = $updated.Replace("env['INCLUDE'].split(';')", "env.get('INCLUDE', os.environ.get('INCLUDE', '')).split(';')")
+    $updated = $updated.Replace("env['LIB'].split(';')", "env.get('LIB', os.environ.get('LIB', '')).split(';')")
+    $updated = $updated.Replace("env['LIBPATH'].split(';')", "env.get('LIBPATH', os.environ.get('LIBPATH', '')).split(';')")
+  }
   if ($updated -ne $content) {
     Set-Content -Path $path -Value $updated -Encoding ASCII
   }
