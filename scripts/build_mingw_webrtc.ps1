@@ -271,6 +271,34 @@ if ($WinSdkDir) {
   $env:WINDOWSSDKDIR = $env:WINDOWSSDKDIR
 }
 
+$vsRoot = if ($VisualStudioPath) { $VisualStudioPath } elseif ($env:VSINSTALLDIR) { $env:VSINSTALLDIR } else { "" }
+if ($vsRoot) {
+  $msvcToolsRoot = Join-Path $vsRoot "VC\Tools\MSVC"
+  if (Test-Path $msvcToolsRoot) {
+    $msvcToolsDir = Get-ChildItem -Path $msvcToolsRoot -Directory |
+      Sort-Object Name -Descending |
+      Select-Object -First 1
+    if ($msvcToolsDir) {
+      $msvcBinDir = Join-Path $msvcToolsDir.FullName "bin\Hostx64\x64"
+      Prepend-EnvList -Name "PATH" -Entries @($msvcBinDir)
+    }
+  }
+}
+
+$sdkBinEntries = @()
+if ($env:WINDOWSSDKDIR) {
+  $sdkBinRoot = Join-Path $env:WINDOWSSDKDIR "bin"
+  if (Test-Path $sdkBinRoot) {
+    $sdkBinVersionDir = Get-ChildItem -Path $sdkBinRoot -Directory |
+      Sort-Object Name -Descending |
+      Select-Object -First 1
+    if ($sdkBinVersionDir) {
+      $sdkBinEntries += Join-Path $sdkBinVersionDir.FullName "x64"
+    }
+  }
+}
+Prepend-EnvList -Name "PATH" -Entries $sdkBinEntries
+
 Set-Location $BuildDir
 
 Write-Step "Initializing depot_tools"
