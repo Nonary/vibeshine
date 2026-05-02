@@ -128,6 +128,16 @@ function Import-BatchEnvironment {
   }
 }
 
+function ConvertTo-PythonSingleQuotedString {
+  param([string]$Value)
+
+  if (-not $Value) {
+    return "''"
+  }
+
+  return "'" + ($Value.Replace("\", "\\").Replace("'", "\'")) + "'"
+}
+
 function Patch-WebrtcToolchain {
   param(
     [string]$ToolchainPath,
@@ -417,9 +427,16 @@ foreach ($path in @($vsToolchainPath, $setupToolchainPath)) {
   $content = Get-Content $path -Raw
   $updated = $content -replace "SDK_VERSION = '([^']*)'", "SDK_VERSION = '$winSdkVersion'"
   if ($path -eq $setupToolchainPath) {
-    $updated = $updated.Replace("env['INCLUDE'].split(';')", "env.get('INCLUDE', os.environ.get('INCLUDE', '')).split(';')")
-    $updated = $updated.Replace("env['LIB'].split(';')", "env.get('LIB', os.environ.get('LIB', '')).split(';')")
-    $updated = $updated.Replace("env['LIBPATH'].split(';')", "env.get('LIBPATH', os.environ.get('LIBPATH', '')).split(';')")
+    $pythonInclude = ConvertTo-PythonSingleQuotedString $env:INCLUDE
+    $pythonLib = ConvertTo-PythonSingleQuotedString $env:LIB
+    $pythonLibPath = ConvertTo-PythonSingleQuotedString $env:LIBPATH
+
+    $updated = $updated.Replace("env['INCLUDE'].split(';')", "env.get('INCLUDE', $pythonInclude).split(';')")
+    $updated = $updated.Replace("env['LIB'].split(';')", "env.get('LIB', $pythonLib).split(';')")
+    $updated = $updated.Replace("env['LIBPATH'].split(';')", "env.get('LIBPATH', $pythonLibPath).split(';')")
+    $updated = [regex]::Replace($updated, "env\.get\('INCLUDE', .*?\)\.split\(';'\)", "env.get('INCLUDE', $pythonInclude).split(';')")
+    $updated = [regex]::Replace($updated, "env\.get\('LIB', .*?\)\.split\(';'\)", "env.get('LIB', $pythonLib).split(';')")
+    $updated = [regex]::Replace($updated, "env\.get\('LIBPATH', .*?\)\.split\(';'\)", "env.get('LIBPATH', $pythonLibPath).split(';')")
   }
   if ($updated -ne $content) {
     Set-Content -Path $path -Value $updated -Encoding ASCII
