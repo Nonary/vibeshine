@@ -22,8 +22,189 @@ on:
         required: false
 
 jobs:
+  build_webrtc:
+    name: WebRTC / ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    env:
+      VIBESHINE_DEPS_DIR: ${{ github.workspace }}\.vibeshine-deps
+      WEBRTC_ROOT: ${{ github.workspace }}\.vibeshine-deps\libwebrtc\out
+    defaults:
+      run:
+        shell: pwsh
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-2022
+            arch: x86_64
+            msystem: ucrt64
+            toolchain: ucrt-x86_64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          submodules: false
+
+      - name: Checkout libwebrtc wrapper
+        run: |
+          git submodule sync -- third-party/libwebrtc
+          git submodule update --init --recursive --depth 1 third-party/libwebrtc
+
+      - name: Setup WebRTC MSYS2 tools
+        id: setup-msys2
+        uses: msys2/setup-msys2@4f806de0a5a7294ffabaff804b38a9b435a73bda  # v2.30.0
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          install: >-
+            git
+            mingw-w64-${{ matrix.toolchain }}-binutils
+            mingw-w64-${{ matrix.toolchain }}-ninja
+            mingw-w64-${{ matrix.toolchain }}-tools
+            wget
+
+      - name: Resolve WebRTC toolchain
+        shell: pwsh
+        env:
+          MATRIX_MSYSTEM: ${{ matrix.msystem }}
+          MSYS2_LOCATION: ${{ steps.setup-msys2.outputs.msys2-location }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere)) {
+            throw "vswhere.exe was not found at $vswhere"
+          }
+
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ([string]::IsNullOrWhiteSpace($vsPath) -or -not (Test-Path -LiteralPath $vsPath)) {
+            throw 'Visual Studio with the VC toolchain was not found.'
+          }
+
+          $kitsRoot = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' -Name KitsRoot10).KitsRoot10
+          if ([string]::IsNullOrWhiteSpace($kitsRoot) -or -not (Test-Path -LiteralPath $kitsRoot)) {
+            throw 'Windows SDK KitsRoot10 was not found.'
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:MSYS2_LOCATION) -or -not (Test-Path -LiteralPath $env:MSYS2_LOCATION)) {
+            throw "MSYS2 location was not found: $($env:MSYS2_LOCATION)"
+          }
+
+          $msys2Bin = Join-Path $env:MSYS2_LOCATION "$($env:MATRIX_MSYSTEM)\bin"
+          if (-not (Test-Path -LiteralPath $msys2Bin)) {
+            throw "MSYS2 bin directory was not found: $msys2Bin"
+          }
+
+          "WEBRTC_VS_PATH=$vsPath" >> $env:GITHUB_ENV
+          "WEBRTC_WINSDK_DIR=$kitsRoot" >> $env:GITHUB_ENV
+          "WEBRTC_MSYS2_BIN=$msys2Bin" >> $env:GITHUB_ENV
+
+      - name: Restore WebRTC source cache
+        id: restore-webrtc-source
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: |
+            .vibeshine-deps/libwebrtc/src
+          key: webrtc-source-${{ runner.os }}-${{ matrix.toolchain }}-${{ hashFiles('.gitmodules', 'third-party/libwebrtc/**') }}
+          restore-keys: |
+            webrtc-source-${{ runner.os }}-${{ matrix.toolchain }}-
+
+      - name: Sync WebRTC sources
+        if: steps.restore-webrtc-source.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_mingw_webrtc.ps1 `
+            -RootDir $PWD `
+            -BuildDir (Join-Path $env:VIBESHINE_DEPS_DIR 'libwebrtc\src') `
+            -OutDir $env:WEBRTC_ROOT `
+            -Configuration Release `
+            -Msys2Bin $env:WEBRTC_MSYS2_BIN `
+            -VisualStudioPath $env:WEBRTC_VS_PATH `
+            -WinSdkDir $env:WEBRTC_WINSDK_DIR `
+            -Stage Sync
+
+      - name: Save WebRTC source cache
+        if: steps.restore-webrtc-source.outputs.cache-hit != 'true'
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: |
+            .vibeshine-deps/libwebrtc/src
+          key: ${{ steps.restore-webrtc-source.outputs.cache-primary-key }}
+
+      - name: Restore WebRTC output cache
+        id: restore-webrtc-output
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: |
+            .vibeshine-deps/libwebrtc/out
+          key: webrtc-output-${{ runner.os }}-${{ matrix.toolchain }}-${{ hashFiles('.gitmodules', 'third-party/libwebrtc/**', 'scripts/build_mingw_webrtc.ps1') }}
+
+      - name: Build WebRTC artifacts
+        shell: pwsh
+        env:
+          WEBRTC_OUTPUT_CACHE_HIT: ${{ steps.restore-webrtc-output.outputs.cache-hit }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $webrtcRoot = $env:WEBRTC_ROOT
+          $include = Join-Path $webrtcRoot 'include\libwebrtc.h'
+          $dll = Join-Path $webrtcRoot 'lib\libwebrtc.dll'
+          $importLib = Join-Path $webrtcRoot 'lib\libwebrtc.dll.a'
+
+          if ($env:WEBRTC_OUTPUT_CACHE_HIT -eq 'true' -and
+              (Test-Path -LiteralPath $include) -and
+              (Test-Path -LiteralPath $dll) -and
+              (Test-Path -LiteralPath $importLib)) {
+            Write-Host "Using cached WebRTC artifacts from $webrtcRoot"
+            exit 0
+          }
+
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_mingw_webrtc.ps1 `
+            -RootDir $PWD `
+            -BuildDir (Join-Path $env:VIBESHINE_DEPS_DIR 'libwebrtc\src') `
+            -OutDir $webrtcRoot `
+            -Configuration Release `
+            -Msys2Bin $env:WEBRTC_MSYS2_BIN `
+            -VisualStudioPath $env:WEBRTC_VS_PATH `
+            -WinSdkDir $env:WEBRTC_WINSDK_DIR `
+            -Stage Build
+
+          if (-not (Test-Path -LiteralPath $include)) {
+            throw "WebRTC include was not produced: $include"
+          }
+          if (-not (Test-Path -LiteralPath $dll)) {
+            throw "WebRTC runtime DLL was not produced: $dll"
+          }
+          if (-not (Test-Path -LiteralPath $importLib)) {
+            throw "WebRTC MinGW import library was not produced: $importLib"
+          }
+
+      - name: Save WebRTC output cache
+        if: steps.restore-webrtc-output.outputs.cache-hit != 'true'
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: |
+            .vibeshine-deps/libwebrtc/out
+          key: ${{ steps.restore-webrtc-output.outputs.cache-primary-key }}
+
+
+      - name: Upload WebRTC artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: webrtc-${{ matrix.name }}
+          path: .vibeshine-deps/libwebrtc/out/
+          if-no-files-found: error
+          retention-days: 1
+
+
   build_windows:
     name: ${{ matrix.name }}
+    needs: build_webrtc
     runs-on: ${{ matrix.os }}
     env:
       VIBESHINE_DEPS_DIR: ${{ github.workspace }}\.vibeshine-deps
@@ -43,6 +224,7 @@ jobs:
             msystem: ucrt64
             toolchain: ucrt-x86_64
     steps:
+
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
@@ -236,116 +418,12 @@ jobs:
           "WEBRTC_WINSDK_DIR=$kitsRoot" >> $env:GITHUB_ENV
           "WEBRTC_MSYS2_BIN=$msys2Bin" >> $env:GITHUB_ENV
 
-      - name: Restore WebRTC source cache
-        id: restore-webrtc-source
-        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+
+      - name: Download WebRTC artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
         with:
-          path: |
-            .vibeshine-deps/libwebrtc/src
-          key: webrtc-source-${{ runner.os }}-${{ matrix.toolchain }}-${{ hashFiles('.gitmodules', 'third-party/libwebrtc/**') }}
-          restore-keys: |
-            webrtc-source-${{ runner.os }}-${{ matrix.toolchain }}-
-
-      - name: Sync WebRTC sources
-        if: steps.restore-webrtc-source.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_mingw_webrtc.ps1 `
-            -RootDir $PWD `
-            -BuildDir (Join-Path $env:VIBESHINE_DEPS_DIR 'libwebrtc\src') `
-            -OutDir $env:WEBRTC_ROOT `
-            -Configuration Release `
-            -Msys2Bin $env:WEBRTC_MSYS2_BIN `
-            -VisualStudioPath $env:WEBRTC_VS_PATH `
-            -WinSdkDir $env:WEBRTC_WINSDK_DIR `
-            -Stage Sync
-
-      - name: Save WebRTC source cache
-        if: steps.restore-webrtc-source.outputs.cache-hit != 'true'
-        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
-        with:
-          path: |
-            .vibeshine-deps/libwebrtc/src
-          key: ${{ steps.restore-webrtc-source.outputs.cache-primary-key }}
-
-      - name: Restore WebRTC output cache
-        id: restore-webrtc-output
-        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
-        with:
-          path: |
-            .vibeshine-deps/libwebrtc/out
-          key: webrtc-output-${{ runner.os }}-${{ matrix.toolchain }}-${{ hashFiles('.gitmodules', 'third-party/libwebrtc/**', 'scripts/build_mingw_webrtc.ps1') }}
-          restore-keys: |
-            webrtc-output-${{ runner.os }}-${{ matrix.toolchain }}-
-
-      - name: Build WebRTC artifacts
-        shell: pwsh
-        env:
-          WEBRTC_OUTPUT_CACHE_HIT: ${{ steps.restore-webrtc-output.outputs.cache-hit }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $webrtcRoot = $env:WEBRTC_ROOT
-          $include = Join-Path $webrtcRoot 'include\libwebrtc.h'
-          $dll = Join-Path $webrtcRoot 'lib\libwebrtc.dll'
-          $importLib = Join-Path $webrtcRoot 'lib\libwebrtc.dll.a'
-
-          if ($env:WEBRTC_OUTPUT_CACHE_HIT -eq 'true' -and
-              (Test-Path -LiteralPath $include) -and
-              (Test-Path -LiteralPath $dll) -and
-              (Test-Path -LiteralPath $importLib)) {
-            Write-Host "Using cached WebRTC artifacts from $webrtcRoot"
-            exit 0
-          }
-
-          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_mingw_webrtc.ps1 `
-            -RootDir $PWD `
-            -BuildDir (Join-Path $env:VIBESHINE_DEPS_DIR 'libwebrtc\src') `
-            -OutDir $webrtcRoot `
-            -Configuration Release `
-            -Msys2Bin $env:WEBRTC_MSYS2_BIN `
-            -VisualStudioPath $env:WEBRTC_VS_PATH `
-            -WinSdkDir $env:WEBRTC_WINSDK_DIR `
-            -Stage Build
-
-          if (-not (Test-Path -LiteralPath $include)) {
-            throw "WebRTC include was not produced: $include"
-          }
-          if (-not (Test-Path -LiteralPath $dll)) {
-            throw "WebRTC runtime DLL was not produced: $dll"
-          }
-          if (-not (Test-Path -LiteralPath $importLib)) {
-            throw "WebRTC MinGW import library was not produced: $importLib"
-          }
-
-      - name: Save WebRTC output cache
-        if: steps.restore-webrtc-output.outputs.cache-hit != 'true'
-        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
-        with:
-          path: |
-            .vibeshine-deps/libwebrtc/out
-          key: ${{ steps.restore-webrtc-output.outputs.cache-primary-key }}
-
-      - name: Install cv2pdb
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
-        env:
-          CV2PDB_VERSION: "0.54"
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $cv2pdbDir = Join-Path $env:RUNNER_TEMP 'cv2pdb'
-          $cv2pdbZip = Join-Path $env:RUNNER_TEMP 'cv2pdb.zip'
-          $cv2pdbUrl = "https://github.com/rainers/cv2pdb/releases/download/v${env:CV2PDB_VERSION}/cv2pdb-${env:CV2PDB_VERSION}.zip"
-
-          Invoke-WebRequest -Uri $cv2pdbUrl -OutFile $cv2pdbZip
-          Expand-Archive -Path $cv2pdbZip -DestinationPath $cv2pdbDir -Force
-          $cv2pdbExe = Get-ChildItem -Path $cv2pdbDir -Recurse -Filter cv2pdb64.exe -File | Select-Object -First 1
-          if (-not $cv2pdbExe) {
-            throw 'cv2pdb64.exe was not found in the downloaded archive.'
-          }
-          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path $cv2pdbExe.FullName -Parent)
+          name: webrtc-${{ matrix.name }}
+          path: .vibeshine-deps/libwebrtc/out
 
       - name: Build Windows
         shell: msys2 {0}
@@ -390,6 +468,61 @@ jobs:
           echo "::add-matcher::.github/matchers/gcc.json"
           ninja -C build
           echo "::remove-matcher owner=gcc::"
+
+      - name: Run tests
+        id: test
+        shell: msys2 {0}
+        working-directory: build/tests
+        run: ./test_sunshine.exe --gtest_color=yes --gtest_output=xml:test_results.xml
+
+      - name: Generate gcov report
+        id: test_report
+        # any except canceled or skipped
+        if: >-
+          always() &&
+          (steps.test.outcome == 'success' || steps.test.outcome == 'failure')
+        shell: msys2 {0}
+        working-directory: build
+        run: |
+          ${{ steps.python-path.outputs.python-path }} -m pip install gcovr
+          ${{ steps.python-path.outputs.python-path }} -m gcovr . -r ../src \
+            --exclude-noncode-lines \
+            --exclude-throw-branches \
+            --exclude-unreachable-branches \
+            --verbose \
+            --xml-pretty \
+            -o coverage.xml
+
+      - name: Upload coverage artifact
+        if: >-
+          always() &&
+          (steps.test_report.outcome == 'success')
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: coverage-${{ matrix.name }}
+          path: |
+            build/coverage.xml
+            build/tests/test_results.xml
+          if-no-files-found: error
+
+      - name: Install cv2pdb
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          CV2PDB_VERSION: "0.54"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cv2pdbDir = Join-Path $env:RUNNER_TEMP 'cv2pdb'
+          $cv2pdbZip = Join-Path $env:RUNNER_TEMP 'cv2pdb.zip'
+          $cv2pdbUrl = "https://github.com/rainers/cv2pdb/releases/download/v${env:CV2PDB_VERSION}/cv2pdb-${env:CV2PDB_VERSION}.zip"
+
+          Invoke-WebRequest -Uri $cv2pdbUrl -OutFile $cv2pdbZip
+          Expand-Archive -Path $cv2pdbZip -DestinationPath $cv2pdbDir -Force
+          $cv2pdbExe = Get-ChildItem -Path $cv2pdbDir -Recurse -Filter cv2pdb64.exe -File | Select-Object -First 1
+          if (-not $cv2pdbExe) {
+            throw 'cv2pdb64.exe was not found in the downloaded archive.'
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path $cv2pdbExe.FullName -Parent)
 
       - name: Generate Windows PDB
         if: startsWith(github.ref, 'refs/tags/')
@@ -524,42 +657,6 @@ jobs:
           } else {
             Write-Host "WiX log was not found: $log"
           }
-
-      - name: Run tests
-        id: test
-        shell: msys2 {0}
-        working-directory: build/tests
-        run: ./test_sunshine.exe --gtest_color=yes --gtest_output=xml:test_results.xml
-
-      - name: Generate gcov report
-        id: test_report
-        # any except canceled or skipped
-        if: >-
-          always() &&
-          (steps.test.outcome == 'success' || steps.test.outcome == 'failure')
-        shell: msys2 {0}
-        working-directory: build
-        run: |
-          ${{ steps.python-path.outputs.python-path }} -m pip install gcovr
-          ${{ steps.python-path.outputs.python-path }} -m gcovr . -r ../src \
-            --exclude-noncode-lines \
-            --exclude-throw-branches \
-            --exclude-unreachable-branches \
-            --verbose \
-            --xml-pretty \
-            -o coverage.xml
-
-      - name: Upload coverage artifact
-        if: >-
-          always() &&
-          (steps.test_report.outcome == 'success')
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
-        with:
-          name: coverage-${{ matrix.name }}
-          path: |
-            build/coverage.xml
-            build/tests/test_results.xml
-          if-no-files-found: error
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
