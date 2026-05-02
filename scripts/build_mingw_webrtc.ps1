@@ -102,6 +102,30 @@ function Prepend-EnvList {
   Set-Item -Path "Env:$Name" -Value ($combinedEntries -join ';')
 }
 
+function Import-BatchEnvironment {
+  param(
+    [string]$BatchFile,
+    [string[]]$Arguments = @()
+  )
+
+  if (-not (Test-Path $BatchFile)) {
+    throw "Batch environment file not found: $BatchFile"
+  }
+
+  $argumentString = ($Arguments | Where-Object { $_ }) -join " "
+  $command = "`"$BatchFile`" $argumentString >nul && set"
+  $environmentLines = & cmd.exe /s /c $command
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to import environment from $BatchFile"
+  }
+
+  foreach ($line in $environmentLines) {
+    if ($line -match '^([^=][^=]*)=(.*)$') {
+      Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
+    }
+  }
+}
+
 function Patch-WebrtcToolchain {
   param(
     [string]$ToolchainPath,
@@ -273,6 +297,12 @@ if ($WinSdkDir) {
 
 $vsRoot = if ($VisualStudioPath) { $VisualStudioPath } elseif ($env:VSINSTALLDIR) { $env:VSINSTALLDIR } else { "" }
 if ($vsRoot) {
+  $vcvars64 = Join-Path $vsRoot "VC\Auxiliary\Build\vcvars64.bat"
+  if (Test-Path $vcvars64) {
+    Write-Step "Importing Visual Studio vcvars64 environment"
+    Import-BatchEnvironment -BatchFile $vcvars64
+  }
+
   $msvcToolsRoot = Join-Path $vsRoot "VC\Tools\MSVC"
   if (Test-Path $msvcToolsRoot) {
     $msvcToolsDir = Get-ChildItem -Path $msvcToolsRoot -Directory |
