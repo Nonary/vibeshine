@@ -236,22 +236,54 @@ jobs:
           "WEBRTC_WINSDK_DIR=$kitsRoot" >> $env:GITHUB_ENV
           "WEBRTC_MSYS2_BIN=$msys2Bin" >> $env:GITHUB_ENV
 
-      - name: Cache WebRTC artifacts
-        id: cache-webrtc
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+      - name: Restore WebRTC source cache
+        id: restore-webrtc-source
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: |
+            .vibeshine-deps/libwebrtc/src
+          key: webrtc-source-${{ runner.os }}-${{ matrix.toolchain }}-${{ hashFiles('.gitmodules', 'third-party/libwebrtc/**') }}
+          restore-keys: |
+            webrtc-source-${{ runner.os }}-${{ matrix.toolchain }}-
+
+      - name: Sync WebRTC sources
+        if: steps.restore-webrtc-source.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_mingw_webrtc.ps1 `
+            -RootDir $PWD `
+            -BuildDir (Join-Path $env:VIBESHINE_DEPS_DIR 'libwebrtc\src') `
+            -OutDir $env:WEBRTC_ROOT `
+            -Configuration Release `
+            -Msys2Bin $env:WEBRTC_MSYS2_BIN `
+            -VisualStudioPath $env:WEBRTC_VS_PATH `
+            -WinSdkDir $env:WEBRTC_WINSDK_DIR `
+            -Stage Sync
+
+      - name: Save WebRTC source cache
+        if: steps.restore-webrtc-source.outputs.cache-hit != 'true'
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: |
+            .vibeshine-deps/libwebrtc/src
+          key: ${{ steps.restore-webrtc-source.outputs.cache-primary-key }}
+
+      - name: Restore WebRTC output cache
+        id: restore-webrtc-output
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
         with:
           path: |
             .vibeshine-deps/libwebrtc/out
-            .vibeshine-deps/libwebrtc/src/depot_tools
-            .vibeshine-deps/libwebrtc/src/git-cache
-          key: webrtc-${{ runner.os }}-${{ matrix.toolchain }}-${{ hashFiles('third-party/libwebrtc/**', 'scripts/build_mingw_webrtc.ps1') }}
+          key: webrtc-output-${{ runner.os }}-${{ matrix.toolchain }}-${{ hashFiles('.gitmodules', 'third-party/libwebrtc/**', 'scripts/build_mingw_webrtc.ps1') }}
           restore-keys: |
-            webrtc-${{ runner.os }}-${{ matrix.toolchain }}-
+            webrtc-output-${{ runner.os }}-${{ matrix.toolchain }}-
 
-      - name: Build WebRTC
+      - name: Build WebRTC artifacts
         shell: pwsh
         env:
-          WEBRTC_CACHE_HIT: ${{ steps.cache-webrtc.outputs.cache-hit }}
+          WEBRTC_OUTPUT_CACHE_HIT: ${{ steps.restore-webrtc-output.outputs.cache-hit }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -260,7 +292,7 @@ jobs:
           $dll = Join-Path $webrtcRoot 'lib\libwebrtc.dll'
           $importLib = Join-Path $webrtcRoot 'lib\libwebrtc.dll.a'
 
-          if ($env:WEBRTC_CACHE_HIT -eq 'true' -and
+          if ($env:WEBRTC_OUTPUT_CACHE_HIT -eq 'true' -and
               (Test-Path -LiteralPath $include) -and
               (Test-Path -LiteralPath $dll) -and
               (Test-Path -LiteralPath $importLib)) {
@@ -275,7 +307,8 @@ jobs:
             -Configuration Release `
             -Msys2Bin $env:WEBRTC_MSYS2_BIN `
             -VisualStudioPath $env:WEBRTC_VS_PATH `
-            -WinSdkDir $env:WEBRTC_WINSDK_DIR
+            -WinSdkDir $env:WEBRTC_WINSDK_DIR `
+            -Stage Build
 
           if (-not (Test-Path -LiteralPath $include)) {
             throw "WebRTC include was not produced: $include"
@@ -286,6 +319,14 @@ jobs:
           if (-not (Test-Path -LiteralPath $importLib)) {
             throw "WebRTC MinGW import library was not produced: $importLib"
           }
+
+      - name: Save WebRTC output cache
+        if: steps.restore-webrtc-output.outputs.cache-hit != 'true'
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: |
+            .vibeshine-deps/libwebrtc/out
+          key: ${{ steps.restore-webrtc-output.outputs.cache-primary-key }}
 
       - name: Install cv2pdb
         if: startsWith(github.ref, 'refs/tags/')

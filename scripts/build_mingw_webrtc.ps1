@@ -15,6 +15,8 @@ param(
   [string]$DepotToolsDir = "",
   [string]$GitCachePath = "",
   [int]$GclientJobs = 0,
+  [ValidateSet("All", "Sync", "Build")]
+  [string]$Stage = "All",
   [string]$CMakeCache = ""
 )
 
@@ -338,14 +340,15 @@ cmd /c gclient
 cmd /c gclient
 Pop-Location
 
-if (Test-Path (Join-Path $BuildDir "src\\build\\.git")) {
-  Write-Step "Cleaning src\\build before sync"
-  git -C (Join-Path $BuildDir "src\\build") reset --hard | Out-Null
-  git -C (Join-Path $BuildDir "src\\build") clean -fdx | Out-Null
-}
+if ($Stage -eq "All" -or $Stage -eq "Sync") {
+  if (Test-Path (Join-Path $BuildDir "src\\build\\.git")) {
+    Write-Step "Cleaning src\\build before sync"
+    git -C (Join-Path $BuildDir "src\\build") reset --hard | Out-Null
+    git -C (Join-Path $BuildDir "src\\build") clean -fdx | Out-Null
+  }
 
-Write-Step "Writing .gclient"
-@" 
+  Write-Step "Writing .gclient"
+  @"
 solutions = [
   {
     "name"        : 'src',
@@ -360,11 +363,19 @@ solutions = [
 target_os  = ['win']
 "@ | Set-Content -Path (Join-Path $BuildDir ".gclient") -Encoding ASCII
 
-Write-Step "Syncing WebRTC sources"
-$syncJobs = if ($GclientJobs -gt 0) { $GclientJobs } else { 16 }
-gclient sync --jobs $syncJobs
-if ($LASTEXITCODE -ne 0) {
-  throw "gclient sync failed"
+  Write-Step "Syncing WebRTC sources"
+  $syncJobs = if ($GclientJobs -gt 0) { $GclientJobs } else { 16 }
+  gclient sync --jobs $syncJobs
+  if ($LASTEXITCODE -ne 0) {
+    throw "gclient sync failed"
+  }
+
+  if ($Stage -eq "Sync") {
+    Write-Step "WebRTC source sync complete."
+    return
+  }
+} elseif (-not (Test-Path (Join-Path $BuildDir "src\BUILD.gn"))) {
+  throw "WebRTC sources not found under $BuildDir. Run with -Stage Sync first."
 }
 
 $sdkRoot = if ($env:WINDOWSSDKDIR) { $env:WINDOWSSDKDIR } else { $WinSdkDir }
