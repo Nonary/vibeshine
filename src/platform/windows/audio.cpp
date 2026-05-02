@@ -11,6 +11,7 @@
 #include <unordered_map>
 
 // platform includes
+#include <WinSock2.h>
 #include <Audioclient.h>
 #include <avrt.h>
 #include <mmdeviceapi.h>
