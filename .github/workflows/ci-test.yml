@@ -56,6 +56,7 @@ jobs:
 
           release_notes="Draft CI test release for ${GITHUB_REPOSITORY}@${GITHUB_SHA}."
           release_args=(
+            --repo "${GITHUB_REPOSITORY}"
             --title "${RELEASE_TITLE}"
             --notes "${release_notes}"
             --draft
@@ -71,7 +72,7 @@ jobs:
 
           if [[ -n "${release_id}" ]]; then
             gh release edit "${RELEASE_TAG}" "${release_args[@]}"
-            gh release upload "${RELEASE_TAG}" artifacts/* --clobber
+            gh release upload "${RELEASE_TAG}" artifacts/* --repo "${GITHUB_REPOSITORY}" --clobber
           else
             gh release create "${RELEASE_TAG}" artifacts/* "${release_args[@]}"
           fi
