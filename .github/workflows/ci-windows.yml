@@ -682,9 +682,6 @@ jobs:
           if ($prerelease) {
             $releaseArgs += '--prerelease'
           }
-          if ($draft) {
-            $releaseArgs += '--draft'
-          }
 
           function Get-ReleaseId([string] $Repo, [string] $Tag) {
             $jqTag = $Tag.Replace('\', '\\').Replace('"', '\"')

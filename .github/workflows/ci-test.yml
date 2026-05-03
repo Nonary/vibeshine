@@ -23,7 +23,6 @@ jobs:
       release_commit: ${{ github.sha }}
       release_version: '0.0.0'
       symbol_product_name: Vibeshine
-      symbol_release_draft: true
       symbol_release_prefix: shine
       symbol_release_tag: shine_test_ci
     secrets:
@@ -55,42 +54,58 @@ jobs:
           ls -l artifacts
 
           release_notes="Draft CI test release for ${GITHUB_REPOSITORY}@${GITHUB_SHA}."
-          release_args=(
-            --repo "${GITHUB_REPOSITORY}"
-            --title "${RELEASE_TITLE}"
-            --notes "${release_notes}"
-            --draft
-            --prerelease
-            --target "${GITHUB_SHA}"
-          )
-
           release_id="$(
             gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
-              --jq ".[] | select(.tag_name == \"${RELEASE_TAG}\") | .id" |
+              --jq ".[] | select((.tag_name == \"${RELEASE_TAG}\") or (.name == \"${RELEASE_TITLE}\")) | .id" |
               head -n 1
           )"
 
           if [[ -n "${release_id}" ]]; then
-            gh release edit "${RELEASE_TAG}" "${release_args[@]}"
-            gh release upload "${RELEASE_TAG}" artifacts/* --repo "${GITHUB_REPOSITORY}" --clobber
+            gh api \
+              --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              -f tag_name="${RELEASE_TAG}" \
+              -f target_commitish="${GITHUB_SHA}" \
+              -f name="${RELEASE_TITLE}" \
+              -f body="${release_notes}" \
+              -F draft=true \
+              -F prerelease=true \
+              >/dev/null
           else
-            gh release create "${RELEASE_TAG}" artifacts/* "${release_args[@]}"
+            release_id="$(
+              gh api \
+                --method POST \
+                "repos/${GITHUB_REPOSITORY}/releases" \
+                -f tag_name="${RELEASE_TAG}" \
+                -f target_commitish="${GITHUB_SHA}" \
+                -f name="${RELEASE_TITLE}" \
+                -f body="${release_notes}" \
+                -F draft=true \
+                -F prerelease=true \
+                --jq .id
+            )"
           fi
 
-          release_id="$(
-            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
-              --jq ".[] | select(.tag_name == \"${RELEASE_TAG}\") | .id" |
-              head -n 1
-          )"
           if [[ -z "${release_id}" ]]; then
             echo "::error::Failed to resolve release id for ${RELEASE_TAG}."
             exit 1
           fi
 
-          gh api \
-            --method PATCH \
-            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
-            -F draft=true \
-            -F prerelease=true \
-            -f target_commitish="${GITHUB_SHA}" \
-            >/dev/null
+          for asset in artifacts/*; do
+            asset_name="$(basename "${asset}")"
+            existing_asset_ids="$(
+              gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" \
+                --jq ".[] | select(.name == \"${asset_name}\") | .id"
+            )"
+            while IFS= read -r asset_id; do
+              [[ -z "${asset_id}" ]] && continue
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >/dev/null
+            done <<< "${existing_asset_ids}"
+
+            gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${asset_name}" \
+              -H "Content-Type: application/octet-stream" \
+              --input "${asset}" \
+              >/dev/null
+          done
