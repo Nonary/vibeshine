@@ -242,27 +242,9 @@ jobs:
 
           $buildVersion = $env:INPUT_RELEASE_VERSION
 
-          if ([string]::IsNullOrWhiteSpace($buildVersion) -or $buildVersion -eq '0.0.0') {
+          if ([string]::IsNullOrWhiteSpace($buildVersion)) {
             if ($env:GITHUB_REF_VALUE -like 'refs/tags/*' -and -not [string]::IsNullOrWhiteSpace($env:GITHUB_REF_NAME_VALUE)) {
               $buildVersion = $env:GITHUB_REF_NAME_VALUE
-            } else {
-              $tagPatterns = @(
-                '^v?[0-9]{1,3}\.[0-9]+\.[0-9]+$',
-                '^v?[0-9]{1,3}\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'
-              )
-
-              $tags = git tag --merged HEAD --sort=-version:refname
-              foreach ($tagPattern in $tagPatterns) {
-                foreach ($tagCandidate in $tags) {
-                  if ($tagCandidate -match $tagPattern) {
-                    $buildVersion = $tagCandidate
-                    break
-                  }
-                }
-                if (-not [string]::IsNullOrWhiteSpace($buildVersion) -and $buildVersion -ne '0.0.0') {
-                  break
-                }
-              }
             }
           }
 
