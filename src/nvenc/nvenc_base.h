@@ -4,6 +4,11 @@
  */
 #pragma once
 
+// platform includes
+#ifdef _WIN32
+  #include <WinSock2.h>
+#endif
+
 // lib includes
 #include <ffnvcodec/nvEncodeAPI.h>
 
