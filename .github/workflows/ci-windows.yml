@@ -336,32 +336,6 @@ jobs:
             pacman -Syu --noconfirm "${dependencies[@]}"
           fi
 
-      - name: Install Doxygen
-        # GCC compiled doxygen has issues when running graphviz
-        env:
-          DOXYGEN_VERSION: "1.11.0"
-        shell: pwsh
-        run: |
-          # Set version variables
-          $doxy_ver = $env:DOXYGEN_VERSION
-          $_doxy_ver = $doxy_ver.Replace(".", "_")
-
-          # Download the Doxygen installer
-          Invoke-WebRequest -Uri `
-            "https://github.com/doxygen/doxygen/releases/download/Release_${_doxy_ver}/doxygen-${doxy_ver}-setup.exe" `
-            -OutFile "doxygen-setup.exe"
-
-          # Run the installer
-          Start-Process `
-            -FilePath .\doxygen-setup.exe `
-            -ArgumentList `
-              '/VERYSILENT' `
-          -Wait `
-          -NoNewWindow
-
-          # Clean up
-          Remove-Item -Path doxygen-setup.exe
-
       - name: Setup dotnet  # needed for wix
         uses: actions/setup-dotnet@baa11fbfe1d6520db94683bd5c7a3818018e4309  # v5.1.0
         with:
@@ -461,6 +435,7 @@ jobs:
             -S . \
             -DBUILD_WERROR=ON \
             -DBUILD_TESTS=OFF \
+            -DBUILD_DOCS=OFF \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DSUNSHINE_ENABLE_WEBRTC=ON \
             -DWEBRTC_ROOT="$(cygpath -u "${WEBRTC_ROOT}")" \
