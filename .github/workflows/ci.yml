@@ -32,6 +32,7 @@ jobs:
       release_commit: ${{ github.sha }}
       release_version: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '0.0.0' }}
       symbol_product_name: Vibeshine
+      symbol_release_draft: true
       symbol_release_prefix: shine
     secrets:
       symbol_token: ${{ secrets.SYMBOL_TOKEN }}
