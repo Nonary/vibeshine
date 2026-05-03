@@ -19,7 +19,77 @@ jobs:
       contents: read
     uses: ./.github/workflows/ci-windows.yml
     with:
+      publish_symbols: true
       release_commit: ${{ github.sha }}
       release_version: '0.0.0'
       symbol_product_name: Vibeshine
+      symbol_release_draft: true
       symbol_release_prefix: shine
+      symbol_release_tag: shine_test_ci
+    secrets:
+      symbol_token: ${{ secrets.SYMBOL_TOKEN }}
+
+  release-test:
+    name: Draft test release
+    needs:
+      - build-windows
+    permissions:
+      actions: read
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: build-Windows
+          path: artifacts
+
+      - name: Create or update draft test release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: test_ci
+          RELEASE_TITLE: Vibeshine CI Test
+        run: |
+          set -euo pipefail
+
+          ls -l artifacts
+
+          release_notes="Draft CI test release for ${GITHUB_REPOSITORY}@${GITHUB_SHA}."
+          release_args=(
+            --title "${RELEASE_TITLE}"
+            --notes "${release_notes}"
+            --draft
+            --prerelease
+            --target "${GITHUB_SHA}"
+          )
+
+          release_id="$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
+              --jq ".[] | select(.tag_name == \"${RELEASE_TAG}\") | .id" |
+              head -n 1
+          )"
+
+          if [[ -n "${release_id}" ]]; then
+            gh release edit "${RELEASE_TAG}" "${release_args[@]}"
+            gh release upload "${RELEASE_TAG}" artifacts/* --clobber
+          else
+            gh release create "${RELEASE_TAG}" artifacts/* "${release_args[@]}"
+          fi
+
+          release_id="$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
+              --jq ".[] | select(.tag_name == \"${RELEASE_TAG}\") | .id" |
+              head -n 1
+          )"
+          if [[ -z "${release_id}" ]]; then
+            echo "::error::Failed to resolve release id for ${RELEASE_TAG}."
+            exit 1
+          fi
+
+          gh api \
+            --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            -F draft=true \
+            -F prerelease=true \
+            -f target_commitish="${GITHUB_SHA}" \
+            >/dev/null

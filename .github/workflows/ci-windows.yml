@@ -17,6 +17,22 @@ on:
       symbol_release_prefix:
         required: true
         type: string
+      publish_symbols:
+        required: false
+        type: boolean
+        default: false
+      symbol_release_repo:
+        required: false
+        type: string
+        default: Nonary/vibeshine_symbols
+      symbol_release_tag:
+        required: false
+        type: string
+        default: ''
+      symbol_release_draft:
+        required: false
+        type: boolean
+        default: false
     secrets:
       symbol_token:
         required: false
@@ -453,7 +469,7 @@ jobs:
           echo "::remove-matcher owner=gcc::"
 
       - name: Install cv2pdb
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish_symbols
         shell: pwsh
         env:
           CV2PDB_VERSION: "0.54"
@@ -472,7 +488,7 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value (Split-Path $cv2pdbExe.FullName -Parent)
 
       - name: Generate Windows PDB
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish_symbols
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -500,7 +516,7 @@ jobs:
           }
 
       - name: Package Windows Symbols
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish_symbols
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ inputs.release_version }}
@@ -613,14 +629,16 @@ jobs:
           if-no-files-found: error
 
       - name: Publish private symbols release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish_symbols
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.symbol_token }}
           RELEASE_TAG: ${{ inputs.release_version }}
+          SYMBOL_RELEASE_DRAFT: ${{ inputs.symbol_release_draft }}
           SYMBOL_RELEASE_PREFIX: ${{ inputs.symbol_release_prefix }}
+          SYMBOL_RELEASE_TAG: ${{ inputs.symbol_release_tag }}
           SYMBOL_PRODUCT_NAME: ${{ inputs.symbol_product_name }}
-          SYMBOLS_REPO: Nonary/vibeshine_symbols
+          SYMBOLS_REPO: ${{ inputs.symbol_release_repo }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -634,16 +652,23 @@ jobs:
             $releaseVersion = $Matches[1]
           }
 
-          if ($releaseVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+((-(alpha|beta|rc)([.-][0-9A-Za-z.-]+)?)|-stable)?$') {
-            throw "Unsupported release tag '$sourceReleaseTag'. Expected a release tag like v1.15.2-beta.2."
+          if ([string]::IsNullOrWhiteSpace($env:SYMBOL_RELEASE_TAG)) {
+            if ($releaseVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+((-(alpha|beta|rc)([.-][0-9A-Za-z.-]+)?)|-stable)?$') {
+              throw "Unsupported release tag '$sourceReleaseTag'. Expected a release tag like v1.15.2-beta.2."
+            }
+
+            if ($env:SYMBOL_RELEASE_PREFIX -notmatch '^(shine|polo)$') {
+              throw "Unsupported symbol release prefix '$($env:SYMBOL_RELEASE_PREFIX)'. Expected 'shine' or 'polo'."
+            }
+
+            $symbolReleaseTag = "$($env:SYMBOL_RELEASE_PREFIX)_$releaseVersion"
+            $prerelease = ($releaseVersion -match '-(alpha|beta|rc)([.-][0-9A-Za-z.-]+)?$')
+          } else {
+            $symbolReleaseTag = $env:SYMBOL_RELEASE_TAG
+            $prerelease = $true
           }
 
-          if ($env:SYMBOL_RELEASE_PREFIX -notmatch '^(shine|polo)$') {
-            throw "Unsupported symbol release prefix '$($env:SYMBOL_RELEASE_PREFIX)'. Expected 'shine' or 'polo'."
-          }
-
-          $symbolReleaseTag = "$($env:SYMBOL_RELEASE_PREFIX)_$releaseVersion"
-          $prerelease = ($releaseVersion -match '-(alpha|beta|rc)([.-][0-9A-Za-z.-]+)?$')
+          $draft = ($env:SYMBOL_RELEASE_DRAFT -eq 'true')
           $symbolPack = Join-Path (Join-Path $PWD 'symbols') "$($env:SYMBOL_PRODUCT_NAME)Symbols-$releaseVersion-windows-x64.7z"
 
           if (-not (Test-Path -LiteralPath $symbolPack)) {
@@ -657,12 +682,20 @@ jobs:
           if ($prerelease) {
             $releaseArgs += '--prerelease'
           }
+          if ($draft) {
+            $releaseArgs += '--draft'
+          }
 
-          $oldNativeCommandPreference = $PSNativeCommandUseErrorActionPreference
-          $PSNativeCommandUseErrorActionPreference = $false
-          & gh release view $symbolReleaseTag --repo $env:SYMBOLS_REPO *> $null
-          $releaseExists = ($LASTEXITCODE -eq 0)
-          $PSNativeCommandUseErrorActionPreference = $oldNativeCommandPreference
+          function Get-ReleaseId([string] $Repo, [string] $Tag) {
+            $jqTag = $Tag.Replace('\', '\\').Replace('"', '\"')
+            $ids = @(& gh api --paginate "repos/$Repo/releases" --jq ".[] | select(.tag_name == `"$jqTag`") | .id")
+            if ($LASTEXITCODE -ne 0) { throw "Failed to list releases for '$Repo'." }
+            if ($ids.Count -eq 0) { return $null }
+            return $ids[0]
+          }
+
+          $releaseId = Get-ReleaseId -Repo $env:SYMBOLS_REPO -Tag $symbolReleaseTag
+          $releaseExists = -not [string]::IsNullOrWhiteSpace($releaseId)
 
           if ($releaseExists) {
             & gh release edit $symbolReleaseTag @releaseArgs
@@ -674,12 +707,13 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Failed to create private symbols release '$symbolReleaseTag'." }
           }
 
-          $releaseId = & gh api "repos/$($env:SYMBOLS_REPO)/releases/tags/$symbolReleaseTag" --jq .id
-          if ($LASTEXITCODE -ne 0) { throw "Failed to resolve private symbols release id for '$symbolReleaseTag'." }
+          $releaseId = Get-ReleaseId -Repo $env:SYMBOLS_REPO -Tag $symbolReleaseTag
+          if ([string]::IsNullOrWhiteSpace($releaseId)) { throw "Failed to resolve private symbols release id for '$symbolReleaseTag'." }
           $prereleaseValue = if ($prerelease) { 'true' } else { 'false' }
           & gh api `
             --method PATCH `
             "repos/$($env:SYMBOLS_REPO)/releases/$releaseId" `
             -F "prerelease=$prereleaseValue" `
+            -F "draft=$($draft.ToString().ToLowerInvariant())" `
             *> $null
-          if ($LASTEXITCODE -ne 0) { throw "Failed to set private symbols release prerelease state for '$symbolReleaseTag'." }
+          if ($LASTEXITCODE -ne 0) { throw "Failed to set private symbols release state for '$symbolReleaseTag'." }
