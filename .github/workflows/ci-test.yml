@@ -4,9 +4,6 @@ permissions: {}
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - ci_test
 
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
