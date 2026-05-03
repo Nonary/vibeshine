@@ -23,8 +23,10 @@ jobs:
       release_commit: ${{ github.sha }}
       release_version: '0.0.0'
       symbol_product_name: Vibeshine
+      symbol_release_draft: true
       symbol_release_prefix: shine
       symbol_release_tag: shine_test_ci
+      upload_symbols_artifact: true
     secrets:
       symbol_token: ${{ secrets.SYMBOL_TOKEN }}
 
@@ -61,16 +63,18 @@ jobs:
           )"
 
           if [[ -n "${release_id}" ]]; then
-            gh api \
-              --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
-              -f tag_name="${RELEASE_TAG}" \
-              -f target_commitish="${GITHUB_SHA}" \
-              -f name="${RELEASE_TITLE}" \
-              -f body="${release_notes}" \
-              -F draft=true \
-              -F prerelease=true \
-              >/dev/null
+            release_id="$(
+              gh api \
+                --method PATCH \
+                "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+                -f tag_name="${RELEASE_TAG}" \
+                -f target_commitish="${GITHUB_SHA}" \
+                -f name="${RELEASE_TITLE}" \
+                -f body="${release_notes}" \
+                -F draft=true \
+                -F prerelease=true \
+                --jq .id
+            )"
           else
             release_id="$(
               gh api \
@@ -91,7 +95,17 @@ jobs:
             exit 1
           fi
 
+          upload_url="$(
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              --jq '.upload_url | split("{")[0]'
+          )"
+          if [[ -z "${upload_url}" ]]; then
+            echo "::error::Failed to resolve release upload URL for ${RELEASE_TAG}."
+            exit 1
+          fi
+
           for asset in artifacts/*; do
+            [[ -f "${asset}" ]] || continue
             asset_name="$(basename "${asset}")"
             existing_asset_ids="$(
               gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" \
@@ -104,8 +118,9 @@ jobs:
 
             gh api \
               --method POST \
-              "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${asset_name}" \
+              "${upload_url}" \
               -H "Content-Type: application/octet-stream" \
+              -f "name=${asset_name}" \
               --input "${asset}" \
               >/dev/null
           done

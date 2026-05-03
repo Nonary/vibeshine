@@ -33,6 +33,10 @@ on:
         required: false
         type: boolean
         default: false
+      upload_symbols_artifact:
+        required: false
+        type: boolean
+        default: false
     secrets:
       symbol_token:
         required: false
@@ -610,6 +614,28 @@ jobs:
           # docs expect those names.
           cp "${installer_exe}" "../artifacts/${installer_name}"
 
+      - name: Include symbols in build artifact
+        if: inputs.upload_symbols_artifact
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          SYMBOL_PRODUCT_NAME: ${{ inputs.symbol_product_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $releaseVersion = $env:RELEASE_VERSION
+          if ($releaseVersion -match '^v(.+)$') {
+            $releaseVersion = $Matches[1]
+          }
+
+          $symbolPack = Join-Path (Join-Path $PWD 'symbols') "$($env:SYMBOL_PRODUCT_NAME)Symbols-$releaseVersion-windows-x64.7z"
+          if (-not (Test-Path -LiteralPath $symbolPack)) {
+            Get-ChildItem -Path symbols -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
+            throw "Private symbol pack not found: $symbolPack"
+          }
+
+          Copy-Item -LiteralPath $symbolPack -Destination (Join-Path $PWD 'artifacts') -Force
+
       - name: Debug wix
         if: always() && steps.package-windows.outcome == 'failure'
         shell: pwsh
@@ -678,39 +704,79 @@ jobs:
 
           $releaseTitle = "$($env:SYMBOL_PRODUCT_NAME) symbols v$releaseVersion"
           $releaseNotes = "Private Windows debug symbols for $($env:SYMBOL_PRODUCT_NAME) v$releaseVersion (source release $sourceReleaseTag)."
-          $releaseArgs = @('--repo', $env:SYMBOLS_REPO, '--title', $releaseTitle, '--notes', $releaseNotes)
-          if ($prerelease) {
-            $releaseArgs += '--prerelease'
+
+          function ConvertTo-JqStringLiteral([string] $Value) {
+            return $Value.Replace('\', '\\').Replace('"', '\"')
           }
 
-          function Get-ReleaseId([string] $Repo, [string] $Tag) {
-            $jqTag = $Tag.Replace('\', '\\').Replace('"', '\"')
-            $ids = @(& gh api --paginate "repos/$Repo/releases" --jq ".[] | select(.tag_name == `"$jqTag`") | .id")
+          function Find-Release([string] $Repo, [string] $Tag, [string] $Name) {
+            $jqTag = ConvertTo-JqStringLiteral $Tag
+            $releaseJson = @(& gh api --paginate "repos/$Repo/releases" --jq ".[] | select(.tag_name == `"$jqTag`") | @json")
             if ($LASTEXITCODE -ne 0) { throw "Failed to list releases for '$Repo'." }
-            if ($ids.Count -eq 0) { return $null }
-            return $ids[0]
+
+            if ($releaseJson.Count -eq 0) {
+              $jqName = ConvertTo-JqStringLiteral $Name
+              $releaseJson = @(& gh api --paginate "repos/$Repo/releases" --jq ".[] | select(.draft == true and .name == `"$jqName`") | @json")
+              if ($LASTEXITCODE -ne 0) { throw "Failed to list draft releases for '$Repo'." }
+            }
+
+            if ($releaseJson.Count -eq 0) { return $null }
+            return ($releaseJson[0] | ConvertFrom-Json)
           }
 
-          $releaseId = Get-ReleaseId -Repo $env:SYMBOLS_REPO -Tag $symbolReleaseTag
-          $releaseExists = -not [string]::IsNullOrWhiteSpace($releaseId)
+          $draftValue = $draft.ToString().ToLowerInvariant()
+          $prereleaseValue = $prerelease.ToString().ToLowerInvariant()
+          $release = Find-Release -Repo $env:SYMBOLS_REPO -Tag $symbolReleaseTag -Name $releaseTitle
 
-          if ($releaseExists) {
-            & gh release edit $symbolReleaseTag @releaseArgs
+          if ($null -ne $release) {
+            $releaseJson = & gh api `
+              --method PATCH `
+              "repos/$($env:SYMBOLS_REPO)/releases/$($release.id)" `
+              -f "tag_name=$symbolReleaseTag" `
+              -f 'target_commitish=main' `
+              -f "name=$releaseTitle" `
+              -f "body=$releaseNotes" `
+              -F "draft=$draftValue" `
+              -F "prerelease=$prereleaseValue"
             if ($LASTEXITCODE -ne 0) { throw "Failed to update private symbols release '$symbolReleaseTag'." }
-            & gh release upload $symbolReleaseTag $symbolPack --repo $env:SYMBOLS_REPO --clobber
-            if ($LASTEXITCODE -ne 0) { throw "Failed to upload private symbol pack '$symbolPack'." }
           } else {
-            & gh release create $symbolReleaseTag $symbolPack @releaseArgs
+            $releaseJson = & gh api `
+              --method POST `
+              "repos/$($env:SYMBOLS_REPO)/releases" `
+              -f "tag_name=$symbolReleaseTag" `
+              -f 'target_commitish=main' `
+              -f "name=$releaseTitle" `
+              -f "body=$releaseNotes" `
+              -F "draft=$draftValue" `
+              -F "prerelease=$prereleaseValue"
             if ($LASTEXITCODE -ne 0) { throw "Failed to create private symbols release '$symbolReleaseTag'." }
           }
 
-          $releaseId = Get-ReleaseId -Repo $env:SYMBOLS_REPO -Tag $symbolReleaseTag
+          $release = $releaseJson | ConvertFrom-Json
+          $releaseId = $release.id
           if ([string]::IsNullOrWhiteSpace($releaseId)) { throw "Failed to resolve private symbols release id for '$symbolReleaseTag'." }
-          $prereleaseValue = if ($prerelease) { 'true' } else { 'false' }
+
+          $uploadUrl = [string] $release.upload_url
+          if ([string]::IsNullOrWhiteSpace($uploadUrl)) { throw "Failed to resolve private symbols upload URL for '$symbolReleaseTag'." }
+          $uploadUrl = $uploadUrl -replace '\{.*$', ''
+
+          $assetName = Split-Path -Leaf $symbolPack
+          $assetsJson = & gh api "repos/$($env:SYMBOLS_REPO)/releases/$releaseId/assets"
+          if ($LASTEXITCODE -ne 0) { throw "Failed to list private symbols assets for '$symbolReleaseTag'." }
+
+          $assetIds = @($assetsJson | ConvertFrom-Json | Where-Object { $_.name -eq $assetName } | Select-Object -ExpandProperty id)
+          foreach ($assetId in $assetIds) {
+            & gh api --method DELETE "repos/$($env:SYMBOLS_REPO)/releases/assets/$assetId" *> $null
+            if ($LASTEXITCODE -ne 0) { throw "Failed to delete existing private symbol asset '$assetName'." }
+          }
+
+          $encodedAssetName = [System.Uri]::EscapeDataString($assetName)
           & gh api `
-            --method PATCH `
-            "repos/$($env:SYMBOLS_REPO)/releases/$releaseId" `
-            -F "prerelease=$prereleaseValue" `
-            -F "draft=$($draft.ToString().ToLowerInvariant())" `
+            --method POST `
+            "${uploadUrl}?name=${encodedAssetName}" `
+            -H 'Content-Type: application/octet-stream' `
+            --input $symbolPack `
             *> $null
-          if ($LASTEXITCODE -ne 0) { throw "Failed to set private symbols release state for '$symbolReleaseTag'." }
+          if ($LASTEXITCODE -ne 0) { throw "Failed to upload private symbol pack '$symbolPack'." }
+
+          Write-Host "Uploaded $assetName to $($env:SYMBOLS_REPO) release $symbolReleaseTag (id $releaseId)."
