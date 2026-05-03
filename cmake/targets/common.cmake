@@ -83,7 +83,7 @@ set(NPM_BUILD_NODE_OPTIONS "")
 add_custom_target(web-ui ALL
     WORKING_DIRECTORY "${WEB_UI_DIR}"
     COMMENT "Installing NPM dependencies and building the Web UI"
-    COMMAND "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" ci ${NPM_INSTALL_FLAGS}
+    COMMAND "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" install ${NPM_INSTALL_FLAGS}
     COMMAND "${CMAKE_COMMAND}" -E env
             "SUNSHINE_BUILD_HOMEBREW=${NPM_BUILD_HOMEBREW}"
             "SUNSHINE_SOURCE_ASSETS_DIR=${NPM_SOURCE_ASSETS_DIR}"
