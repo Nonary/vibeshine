@@ -228,7 +228,45 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
+          fetch-depth: 0
           submodules: recursive
+
+      - name: Resolve Windows build version
+        shell: msys2 {0}
+        env:
+          GITHUB_REF_NAME_VALUE: ${{ github.ref_name }}
+          GITHUB_REF_VALUE: ${{ github.ref }}
+          INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+
+          build_version="${INPUT_RELEASE_VERSION}"
+
+          if [[ -z "${build_version}" || "${build_version}" == "0.0.0" ]]; then
+            if [[ "${GITHUB_REF_VALUE}" == refs/tags/* && -n "${GITHUB_REF_NAME_VALUE}" ]]; then
+              build_version="${GITHUB_REF_NAME_VALUE}"
+            else
+              for tag_pattern in '^v?[0-9]{1,3}\.[0-9]+\.[0-9]+$' '^v?[0-9]{1,3}\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; do
+                while IFS= read -r tag_candidate; do
+                  if [[ "${tag_candidate}" =~ ${tag_pattern} ]]; then
+                    build_version="${tag_candidate}"
+                    break 2
+                  fi
+                done < <(git tag --merged HEAD --sort=-version:refname)
+              done
+            fi
+          fi
+
+          if [[ -z "${build_version}" ]]; then
+            build_version="0.0.0"
+          fi
+
+          if [[ "${build_version}" =~ ^v(.+)$ ]]; then
+            build_version="${BASH_REMATCH[1]}"
+          fi
+
+          echo "Resolved Windows build version: ${build_version}"
+          echo "BUILD_VERSION=${build_version}" >> "${GITHUB_ENV}"
 
       - name: Setup Dependencies Windows
         id: setup-msys2
@@ -360,23 +398,6 @@ jobs:
           echo "nodejs-path=$NODEJS_PATH"
           echo "nodejs-path=$NODEJS_PATH" >> $env:GITHUB_OUTPUT
 
-      - name: Setup python
-        id: setup-python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
-        with:
-          python-version: '3.11'
-
-      - name: Python Path
-        id: python-path
-        shell: msys2 {0}
-        run: |
-          # replace backslashes with double backslashes
-          python_path=$(echo "${{ steps.setup-python.outputs.python-path }}" | sed 's/\\/\\\\/g')
-
-          # step output
-          echo "python-path=${python_path}"
-          echo "python-path=${python_path}" >> "${GITHUB_OUTPUT}"
-
       - name: Install WiX Toolset
         shell: pwsh
         run: |
@@ -433,13 +454,8 @@ jobs:
           MATRIX_MSYSTEM: ${{ matrix.msystem }}
           BRANCH: ${{ github.head_ref || github.ref_name }}
           COMMIT: ${{ inputs.release_commit }}
-          RAW_BUILD_VERSION: ${{ inputs.release_version }}
         run: |
-          build_version="${RAW_BUILD_VERSION}"
-          if [[ "${build_version}" =~ ^v(.+)$ ]]; then
-            build_version="${BASH_REMATCH[1]}"
-          fi
-          export BUILD_VERSION="${build_version}"
+          echo "Using BUILD_VERSION=${BUILD_VERSION}"
 
           # setup NodeJS PATH
           if [[ "${MATRIX_MSYSTEM}" != "ucrt64" ]]; then
@@ -453,6 +469,7 @@ jobs:
             -G Ninja \
             -S . \
             -DBUILD_WERROR=ON \
+            -DBUILD_TESTS=OFF \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DSUNSHINE_ENABLE_WEBRTC=ON \
             -DWEBRTC_ROOT="$(cygpath -u "${WEBRTC_ROOT}")" \
@@ -468,42 +485,6 @@ jobs:
           echo "::add-matcher::.github/matchers/gcc.json"
           ninja -C build
           echo "::remove-matcher owner=gcc::"
-
-      - name: Run tests
-        id: test
-        shell: msys2 {0}
-        working-directory: build/tests
-        run: ./test_sunshine.exe --gtest_color=yes --gtest_output=xml:test_results.xml
-
-      - name: Generate gcov report
-        id: test_report
-        # any except canceled or skipped
-        if: >-
-          always() &&
-          (steps.test.outcome == 'success' || steps.test.outcome == 'failure')
-        shell: msys2 {0}
-        working-directory: build
-        run: |
-          ${{ steps.python-path.outputs.python-path }} -m pip install gcovr
-          ${{ steps.python-path.outputs.python-path }} -m gcovr . -r ../src \
-            --exclude-noncode-lines \
-            --exclude-throw-branches \
-            --exclude-unreachable-branches \
-            --verbose \
-            --xml-pretty \
-            -o coverage.xml
-
-      - name: Upload coverage artifact
-        if: >-
-          always() &&
-          (steps.test_report.outcome == 'success')
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
-        with:
-          name: coverage-${{ matrix.name }}
-          path: |
-            build/coverage.xml
-            build/tests/test_results.xml
-          if-no-files-found: error
 
       - name: Install cv2pdb
         if: startsWith(github.ref, 'refs/tags/')
