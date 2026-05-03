@@ -232,41 +232,50 @@ jobs:
           submodules: recursive
 
       - name: Resolve Windows build version
-        shell: msys2 {0}
+        shell: pwsh
         env:
           GITHUB_REF_NAME_VALUE: ${{ github.ref_name }}
           GITHUB_REF_VALUE: ${{ github.ref }}
           INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = 'Stop'
 
-          build_version="${INPUT_RELEASE_VERSION}"
+          $buildVersion = $env:INPUT_RELEASE_VERSION
 
-          if [[ -z "${build_version}" || "${build_version}" == "0.0.0" ]]; then
-            if [[ "${GITHUB_REF_VALUE}" == refs/tags/* && -n "${GITHUB_REF_NAME_VALUE}" ]]; then
-              build_version="${GITHUB_REF_NAME_VALUE}"
-            else
-              for tag_pattern in '^v?[0-9]{1,3}\.[0-9]+\.[0-9]+$' '^v?[0-9]{1,3}\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; do
-                while IFS= read -r tag_candidate; do
-                  if [[ "${tag_candidate}" =~ ${tag_pattern} ]]; then
-                    build_version="${tag_candidate}"
-                    break 2
-                  fi
-                done < <(git tag --merged HEAD --sort=-version:refname)
-              done
-            fi
-          fi
+          if ([string]::IsNullOrWhiteSpace($buildVersion) -or $buildVersion -eq '0.0.0') {
+            if ($env:GITHUB_REF_VALUE -like 'refs/tags/*' -and -not [string]::IsNullOrWhiteSpace($env:GITHUB_REF_NAME_VALUE)) {
+              $buildVersion = $env:GITHUB_REF_NAME_VALUE
+            } else {
+              $tagPatterns = @(
+                '^v?[0-9]{1,3}\.[0-9]+\.[0-9]+$',
+                '^v?[0-9]{1,3}\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'
+              )
 
-          if [[ -z "${build_version}" ]]; then
-            build_version="0.0.0"
-          fi
+              $tags = git tag --merged HEAD --sort=-version:refname
+              foreach ($tagPattern in $tagPatterns) {
+                foreach ($tagCandidate in $tags) {
+                  if ($tagCandidate -match $tagPattern) {
+                    $buildVersion = $tagCandidate
+                    break
+                  }
+                }
+                if (-not [string]::IsNullOrWhiteSpace($buildVersion) -and $buildVersion -ne '0.0.0') {
+                  break
+                }
+              }
+            }
+          }
 
-          if [[ "${build_version}" =~ ^v(.+)$ ]]; then
-            build_version="${BASH_REMATCH[1]}"
-          fi
+          if ([string]::IsNullOrWhiteSpace($buildVersion)) {
+            $buildVersion = '0.0.0'
+          }
 
-          echo "Resolved Windows build version: ${build_version}"
-          echo "BUILD_VERSION=${build_version}" >> "${GITHUB_ENV}"
+          if ($buildVersion -match '^v(.+)$') {
+            $buildVersion = $Matches[1]
+          }
+
+          "Resolved Windows build version: $buildVersion"
+          "BUILD_VERSION=$buildVersion" >> $env:GITHUB_ENV
 
       - name: Setup Dependencies Windows
         id: setup-msys2
