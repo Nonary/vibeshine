@@ -1816,6 +1816,7 @@ namespace nvhttp {
 
       app.put("IsHdrSupported"s, (video::active_hevc_mode == 3 || video::active_av1_mode == 3) ? 1 : 0);
       app.put("AppTitle"s, proc.name);
+      app.put("UUID", proc.uuid);
       app.put("ID", proc.id);
 
       apps.push_back(std::make_pair("App", std::move(app)));

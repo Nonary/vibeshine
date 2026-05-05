@@ -98,6 +98,7 @@ namespace proc {
      */
     std::vector<std::string> detached;
 
+    std::string uuid;
     std::string name;
     std::string cmd;
     std::string working_dir;
@@ -224,10 +225,10 @@ namespace proc {
   };
 
   /**
-   * @brief Calculate a stable id based on name and image data
+   * @brief Calculate a stable id based on UUID when present, otherwise legacy name and image data.
    * @return Tuple of id calculated without index (for use if no collision) and one with.
    */
-  std::tuple<std::string, std::string> calculate_app_id(const std::string &app_name, std::string app_image_path, int index);
+  std::tuple<std::string, std::string> calculate_app_id(const std::string &app_name, const std::string &app_uuid, std::string app_image_path, int index);
 
   bool check_valid_png(const std::filesystem::path &path);
   std::string validate_app_image_path(std::string app_image_path);
