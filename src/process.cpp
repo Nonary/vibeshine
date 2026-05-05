@@ -2194,19 +2194,25 @@ namespace proc {
     return result.checksum();
   }
 
-  std::tuple<std::string, std::string> calculate_app_id(const std::string &app_name, std::string app_image_path, int index) {
-    // Generate id by hashing name with image data if present
+  std::tuple<std::string, std::string> calculate_app_id(const std::string &app_name, const std::string &app_uuid, std::string app_image_path, int index) {
+    // Prefer the persistent app UUID for stable client-facing IDs. Artwork can be
+    // refreshed by Playnite sync, so image bytes must not affect launch identity.
     std::vector<std::string> to_hash;
-    to_hash.push_back(app_name);
-    auto file_path = validate_app_image_path(app_image_path);
-    if (file_path != DEFAULT_APP_IMAGE_PATH) {
-      auto file_hash = calculate_sha256(file_path);
-      if (file_hash) {
-        to_hash.push_back(file_hash.value());
-      } else {
-        BOOST_LOG(info) << "Playnite URI launch started";
-        // Fallback to just hashing image path
-        to_hash.push_back(file_path);
+    if (!app_uuid.empty()) {
+      to_hash.push_back(app_uuid);
+    } else {
+      // Legacy fallback for app entries that predate UUID normalization.
+      to_hash.push_back(app_name);
+      auto file_path = validate_app_image_path(app_image_path);
+      if (file_path != DEFAULT_APP_IMAGE_PATH) {
+        auto file_hash = calculate_sha256(file_path);
+        if (file_hash) {
+          to_hash.push_back(file_hash.value());
+        } else {
+          BOOST_LOG(warning) << "Failed to compute SHA256 for image ["sv << file_path << "], falling back to path for app ID hash";
+          // Fallback to just hashing image path
+          to_hash.push_back(file_path);
+        }
       }
     }
 
@@ -2280,6 +2286,7 @@ namespace proc {
         auto exclude_global_prep = app_node.get_optional<bool>("exclude-global-prep-cmd"s);
         auto output = app_node.get_optional<std::string>("output"s);
         auto name = parse_env_val(this_env, app_node.get<std::string>("name"s));
+        auto uuid = app_node.get_optional<std::string>("uuid"s);
         auto cmd = app_node.get_optional<std::string>("cmd"s);
         auto image_path = app_node.get_optional<std::string>("image-path"s);
         auto working_dir = app_node.get_optional<std::string>("working-dir"s);
@@ -2449,6 +2456,10 @@ namespace proc {
           ctx.image_path = parse_env_val(this_env, *image_path);
         }
 
+        if (uuid) {
+          ctx.uuid = parse_env_val(this_env, *uuid);
+        }
+
         if (playnite_id) {
           ctx.playnite_id = parse_env_val(this_env, *playnite_id);
         }
@@ -2506,7 +2517,7 @@ namespace proc {
           ctx.lossless_scaling_rtss_limit.reset();
         }
 
-        auto possible_ids = calculate_app_id(name, ctx.image_path, i++);
+        auto possible_ids = calculate_app_id(name, ctx.uuid, ctx.image_path, i++);
         if (ids.count(std::get<0>(possible_ids)) == 0) {
           // Avoid using index to generate id if possible
           ctx.id = std::get<0>(possible_ids);
