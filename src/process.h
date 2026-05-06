@@ -9,13 +9,16 @@
 #endif
 
 // standard includes
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 // lib includes
 #include "boost_process_shim.h"
@@ -105,6 +108,9 @@ namespace proc {
     std::string output;
     std::string image_path;
     std::string id;
+    // App IDs previously advertised to clients. These keep cached Moonlight
+    // app lists launchable after the primary ID calculation changes.
+    std::vector<std::string> legacy_ids;
     // When present, this app should be launched via Playnite instead of direct cmd.
     std::string playnite_id;
     // When true, launch Playnite in fullscreen mode via the helper.
@@ -134,6 +140,10 @@ namespace proc {
     // Per-application overrides for global config keys (raw config-file value representation).
     // These are applied at runtime and are not persisted to the global config file.
     std::unordered_map<std::string, std::string> config_overrides;
+
+    [[nodiscard]] bool matches_id(const std::string &candidate_id) const {
+      return id == candidate_id || std::find(legacy_ids.begin(), legacy_ids.end(), candidate_id) != legacy_ids.end();
+    }
   };
 
   class proc_t {
