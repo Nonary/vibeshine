@@ -69,6 +69,21 @@ namespace platf::dxgi {
     capture_e acquire(std::chrono::milliseconds timeout, winrt::com_ptr<ID3D11Texture2D> &gpu_tex_out, uint64_t &frame_qpc_out);
 
     /**
+     * @brief Wait for a new frame event without taking the shared keyed mutex.
+     * @param timeout Maximum time to wait for a frame.
+     * @return Capture result enum indicating success, timeout, or failure.
+     */
+    capture_e wait_for_frame(std::chrono::milliseconds timeout);
+
+    /**
+     * @brief Lock the latest shared frame after wait_for_frame() succeeds.
+     * @param gpu_tex_out Output ComPtr for the GPU texture (set on success).
+     * @param frame_qpc_out Output for the frame QPC timestamp (`0` if unavailable).
+     * @return Capture result enum indicating success, timeout, or failure.
+     */
+    capture_e lock_frame(winrt::com_ptr<ID3D11Texture2D> &gpu_tex_out, uint64_t &frame_qpc_out);
+
+    /**
      * @brief Release the keyed mutex.
      */
     void release();
@@ -113,6 +128,21 @@ namespace platf::dxgi {
       return _initialized;
     }
 
+    /**
+     * @brief Read the static descriptor of the shared texture without acquiring the keyed mutex.
+     * The shared texture is created once at session setup and its descriptor never changes for
+     * the lifetime of the session, so it is safe to read at any time.
+     * @param[out] desc_out Populated on success.
+     * @return `true` if the shared texture is available; `false` otherwise.
+     */
+    bool peek_shared_texture_desc(D3D11_TEXTURE2D_DESC &desc_out) const {
+      if (!_shared_texture) {
+        return false;
+      }
+      _shared_texture->GetDesc(&desc_out);
+      return true;
+    }
+
   private:
     /**
      * @brief Set up shared texture and frame signaling handles by duplicating them from the helper.
@@ -126,13 +156,6 @@ namespace platf::dxgi {
      * @param msg The message data received from the helper process.
      */
     void handle_desktop_switch_message(std::span<const uint8_t> msg);
-
-    /**
-     * @brief Wait for a new frame event or until timeout expires.
-     * @param timeout Maximum duration to wait for a frame.
-     * @return Capture result enum indicating success, timeout, reinit, or failure.
-     */
-    capture_e wait_for_frame(std::chrono::milliseconds timeout);
 
     /**
      * @brief Retrieve the adapter LUID for the current D3D11 device.
@@ -161,6 +184,9 @@ namespace platf::dxgi {
     std::atomic<bool> _initialized {false};  ///< True once the most recent initialization attempt succeeded.
     std::atomic<bool> _should_swap_to_dxgi {false};  ///< True if capture should fallback.
     std::atomic<bool> _force_reinit {false};  ///< True if reinit required due to errors.
+    std::atomic<uint64_t> _frames_acquired {0};  ///< Count of consumed IPC frames for sampled diagnostics.
+    std::atomic<uint64_t> _slow_event_waits {0};  ///< Count of sampled/slow frame-ready waits.
+    std::atomic<uint64_t> _slow_mutex_waits {0};  ///< Count of slow keyed mutex waits.
     UINT _width = 0;  ///< Shared texture width.
     UINT _height = 0;  ///< Shared texture height.
     ::video::config_t _config;  ///< Cached video config.

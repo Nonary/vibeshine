@@ -65,12 +65,29 @@ namespace platf::dxgi {
    * @param log_level Logging level.
    * @param display_name Display name (wide string, max 32 chars).
    * @param adapter_luid LUID of the DXGI adapter to use for D3D11 device creation.
+   * @param min_update_interval_100ns Requested WGC minimum update interval in 100ns ticks.
+   *   Sunshine keeps this low and stable so WGC can produce compositor updates quickly;
+   *   the main capture loop remains responsible for stream pacing.
+   * @param target_fps Requested stream frame rate used for helper diagnostics/tuning.
+   * @param initial_frame_buffer_size Initial WGC frame pool buffer count.
+   * @param max_frame_buffer_size Maximum WGC frame pool buffer count for adaptive growth.
+   * @param flags Bitmask of wgc_ipc_config_flags_e values.
    */
+  enum wgc_ipc_config_flags_e : uint32_t {
+    WGC_IPC_FLAG_DRAIN_TO_LATEST = 1u << 0,
+    WGC_IPC_FLAG_ALLOW_BUFFER_DECREASE = 1u << 1,
+  };
+
   struct config_data_t {
     int dynamic_range;
     int log_level;
     wchar_t display_name[32];
     LUID adapter_luid;
+    int64_t min_update_interval_100ns;
+    int32_t target_fps;
+    uint32_t initial_frame_buffer_size;
+    uint32_t max_frame_buffer_size;
+    uint32_t flags;
   };
 
   /**

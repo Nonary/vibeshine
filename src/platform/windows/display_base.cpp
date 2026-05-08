@@ -3,6 +3,7 @@
  * @brief Definitions for the Windows display base code.
  */
 // standard includes
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -51,6 +52,27 @@ namespace platf::dxgi {
     std::mutex g_adapter_luid_mutex;
     std::optional<LUID> g_last_wgc_adapter_luid;
     std::optional<LUID> g_dxgi_adapter_luid_override;
+
+    void sleep_until_capture_target(high_precision_timer *timer, const std::chrono::steady_clock::time_point &sleep_target) {
+      using namespace std::chrono_literals;
+
+      constexpr auto spin_guard = 300us;
+      constexpr auto yield_guard = 100us;
+
+      auto now = std::chrono::steady_clock::now();
+      auto sleep_period = sleep_target - now;
+      if (sleep_period > spin_guard) {
+        timer->sleep_for(sleep_period - spin_guard);
+      }
+
+      while ((now = std::chrono::steady_clock::now()) < sleep_target) {
+        if (sleep_target - now > yield_guard) {
+          std::this_thread::yield();
+        } else {
+          YieldProcessor();
+        }
+      }
+    }
 
     bool luid_equal(const LUID &lhs, const LUID &rhs) {
       return lhs.HighPart == rhs.HighPart && lhs.LowPart == rhs.LowPart;
@@ -283,11 +305,22 @@ namespace platf::dxgi {
   capture_e display_base_t::capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) {
     auto adjust_client_frame_rate = [&]() -> DXGI_RATIONAL {
       // Use exactly the requested rate if the client sent an X100 value
-      if (client_frame_rate_strict.Numerator > 0) {
+      if (client_frame_rate_strict.Numerator > 0 && client_frame_rate_strict.Denominator > 0) {
         return client_frame_rate_strict;
       }
+
+      int adjusted_client_frame_rate = client_frame_rate;
+      const bool valid_display_refresh_rate =
+        display_refresh_rate.Numerator > 0 &&
+        display_refresh_rate.Denominator > 0 &&
+        display_refresh_rate_rounded > 0;
+
+      if (valid_display_refresh_rate && adjusted_client_frame_rate > display_refresh_rate_rounded) {
+        adjusted_client_frame_rate = display_refresh_rate_rounded;
+      }
+
       // Adjust capture frame interval when display refresh rate is not integral but very close to requested fps.
-      if (display_refresh_rate.Denominator > 1 && client_frame_rate > 0 && display_refresh_rate_rounded > 0) {
+      if (valid_display_refresh_rate && display_refresh_rate.Denominator > 1 && adjusted_client_frame_rate > 0) {
         DXGI_RATIONAL candidate = display_refresh_rate;
         auto safe_mod = [](int a, int b) -> int {
           return b > 0 ? a % b : -1;
@@ -295,20 +328,20 @@ namespace platf::dxgi {
         auto safe_div = [](int a, int b) -> int {
           return b > 0 ? a / b : 0;
         };
-        if (safe_mod(client_frame_rate, display_refresh_rate_rounded) == 0) {
-          candidate.Numerator *= safe_div(client_frame_rate, display_refresh_rate_rounded);
-        } else if (safe_mod(display_refresh_rate_rounded, client_frame_rate) == 0) {
-          candidate.Denominator *= safe_div(display_refresh_rate_rounded, client_frame_rate);
+        if (safe_mod(adjusted_client_frame_rate, display_refresh_rate_rounded) == 0) {
+          candidate.Numerator *= safe_div(adjusted_client_frame_rate, display_refresh_rate_rounded);
+        } else if (safe_mod(display_refresh_rate_rounded, adjusted_client_frame_rate) == 0) {
+          candidate.Denominator *= safe_div(display_refresh_rate_rounded, adjusted_client_frame_rate);
         }
         double candidate_rate = (double) candidate.Numerator / candidate.Denominator;
         // Can only decrease requested fps, otherwise client may start accumulating frames and suffer increased latency.
-        if (client_frame_rate > candidate_rate && candidate_rate / client_frame_rate > 0.99) {
+        if (adjusted_client_frame_rate > candidate_rate && candidate_rate / adjusted_client_frame_rate > 0.99) {
           BOOST_LOG(info) << "Adjusted capture rate to " << candidate_rate << "fps to better match display";
           return candidate;
         }
       }
 
-      return {(uint32_t) client_frame_rate, 1};
+      return {static_cast<UINT>(std::max(0, adjusted_client_frame_rate)), 1};
     };
 
     DXGI_RATIONAL client_frame_rate_adjusted = adjust_client_frame_rate();
@@ -356,7 +389,7 @@ namespace platf::dxgi {
             frame_pacing_group_frames = 0;
             status = capture_e::timeout;
           } else {
-            timer->sleep_for(sleep_period);
+            sleep_until_capture_target(timer.get(), sleep_target);
             sleep_overshoot_logger.first_point(sleep_target);
             sleep_overshoot_logger.second_point_now_and_log();
 
@@ -377,10 +410,10 @@ namespace platf::dxgi {
         status = snapshot(pull_free_image_cb, img_out, 200ms, *cursor);
 
         if (status == capture_e::ok && img_out) {
-          frame_pacing_group_start = img_out->frame_timestamp;
+          frame_pacing_group_start = img_out->capture_pacing_timestamp ? img_out->capture_pacing_timestamp : img_out->frame_timestamp;
 
           if (!frame_pacing_group_start) {
-            BOOST_LOG(warning) << "snapshot() provided image without timestamp";
+            BOOST_LOG(warning) << "snapshot() provided image without pacing timestamp";
             frame_pacing_group_start = std::chrono::steady_clock::now();
           }
 
@@ -556,6 +589,15 @@ namespace platf::dxgi {
     // Get rectangle of full desktop for absolute mouse coordinates
     env_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
     env_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+    display_refresh_rate = {0, 1};
+    display_refresh_rate_rounded = 0;
+    client_frame_rate = config.framerate;
+    client_frame_rate_strict = {0, 0};
+    if (config.framerateX100 > 0) {
+      AVRational fps = ::video::framerateX100_to_rational(config.framerateX100);
+      client_frame_rate_strict = DXGI_RATIONAL {static_cast<UINT>(fps.num), static_cast<UINT>(fps.den)};
+    }
 
     HRESULT status;
 
@@ -811,13 +853,6 @@ namespace platf::dxgi {
       if (FAILED(status)) {
         BOOST_LOG(warning) << "Failed to set maximum frame latency [0x"sv << util::hex(status).to_string_view() << ']';
       }
-    }
-
-    client_frame_rate = config.framerate;
-    client_frame_rate_strict = {0, 0};
-    if (config.framerateX100 > 0) {
-      AVRational fps = ::video::framerateX100_to_rational(config.framerateX100);
-      client_frame_rate_strict = DXGI_RATIONAL {static_cast<UINT>(fps.num), static_cast<UINT>(fps.den)};
     }
 
     dxgi::output6_t output6 {};
