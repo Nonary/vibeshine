@@ -163,18 +163,18 @@
                  Value="&quot;[SystemFolder]cmd.exe&quot; /C rd &quot;[INSTALL_ROOT].&quot; 2&gt;nul || exit /b 0"/>
     <!-- Immediate setter for quiet stop service -->
     <CustomAction Id="SetStopSvcQuietImmediate"
-                 Property="StopSvcQuietImmediate"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','VibeshineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
+                 Property="QtExecCmdLine"
+                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','VibeshineService','sunshinesvc')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
     <CustomAction Id="SetStopSvcQuiet"
                  Property="StopSvcQuiet"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','VibeshineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
+                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','VibeshineService','sunshinesvc')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
     <!-- Immediate setter for quiet start service -->
     <CustomAction Id="SetStartSvcQuiet"
                  Property="StartSvcQuiet"
                  Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','VibeshineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Running') { Start-Service -Name $name -ErrorAction SilentlyContinue; $svc.WaitForStatus('Running','00:00:20') } } } }&quot;"/>
     <!-- Immediate setters for quiet process kill and service removal on manual uninstall -->
     <CustomAction Id="SetKillProcsQuietImmediate"
-                 Property="KillProcsQuietImmediate"
+                 Property="QtExecCmdLine"
                  Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetKillProcsQuiet"
                  Property="KillProcsQuiet"

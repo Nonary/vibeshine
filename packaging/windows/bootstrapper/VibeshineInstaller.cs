@@ -2171,7 +2171,9 @@ namespace VibeshineInstaller {
     };
     private static readonly string[] RelatedProcessNames = {
       "sunshine",
-      "sunshinesvc"
+      "sunshinesvc",
+      "sunshine_wgc_capture",
+      "playnite_launcher"
     };
 
     internal sealed class InstalledProductInfo {
@@ -2950,6 +2952,9 @@ namespace VibeshineInstaller {
         "REBOOT=ReallySuppress",
         "SUPPRESSMSGBOXES=1"
       };
+
+      AppendInstallerLogMessage(logPath, "Quiescing Vibeshine/Sunshine services and helper processes before MSI install attempt.");
+      TryStopRelatedServicesAndProcesses(logPath);
 
       var exitCode = RunMsiexec(args, true, false);
       if (exitCode == 0 && competingProductsRequireRestart) {
@@ -3909,6 +3914,9 @@ namespace VibeshineInstaller {
         cliArgs.Add("SKIP_REMOVE_CONFLICTING_PRODUCTS=1");
       }
 
+      AppendInstallerLogMessage(logPath, "Quiescing Vibeshine/Sunshine services and helper processes before CLI MSI operation.");
+      TryStopRelatedServicesAndProcesses(logPath);
+
       var exitCode = RunMsiexec(cliArgs, arguments.IsCliQuietMode(), true);
       if (!string.IsNullOrWhiteSpace(injectedMsiPath)
           && ShouldRetryInstallWithFreshPayload(arguments, injectedMsiPath, new InstallerResult {
@@ -4113,6 +4121,8 @@ namespace VibeshineInstaller {
             "REBOOT=ReallySuppress",
             "SUPPRESSMSGBOXES=1"
           };
+          AppendInstallerLogMessage(logPath, "Quiescing Vibeshine/Sunshine services and helper processes before MSI uninstall attempt.");
+          TryStopRelatedServicesAndProcesses(logPath);
           code = RunMsiexec(args, hiddenWindow, requestElevationIfNeeded);
         } else {
           // Never elevate non-MSI uninstall commands sourced from HKCU since
@@ -4186,6 +4196,9 @@ namespace VibeshineInstaller {
           "REBOOT=ReallySuppress",
           "SUPPRESSMSGBOXES=1"
         };
+
+        AppendInstallerLogMessage(logPath, "Quiescing Vibeshine/Sunshine services and helper processes before MSI uninstall attempt.");
+        TryStopRelatedServicesAndProcesses(logPath);
 
         var code = RunMsiexec(args, hiddenWindow, requestElevationIfNeeded);
         if (factoryResetAppData && (code == 0 || code == 3010 || code == 1605)) {

@@ -244,12 +244,42 @@ if(PROJECT_VERSION_NUMERIC MATCHES "([0-9]+)\\.([0-9]+)\\.([0-9]+)")
     set(CMAKE_PROJECT_VERSION_PATCH "${CMAKE_MATCH_3}")
 endif()
 
-# Split PROJECT_VERSION_PATCH for RC file (Windows VERSIONINFO requires values <= 65535)
-# PROJECT_VERSION_PATCH can be 0-245959, so we split it into two parts:
-# - Last 2 digits for RC_VERSION_REVISION
-# - Leading digits for RC_VERSION_BUILD (0 if original is <= 99)
-math(EXPR RC_VERSION_BUILD "${PROJECT_VERSION_PATCH} / 100")
-math(EXPR RC_VERSION_REVISION "${PROJECT_VERSION_PATCH} % 100")
+# Windows VERSIONINFO fixed file versions drive MSI file replacement.  Keep the
+# visible string version unchanged, but encode prerelease ordering in the fourth
+# numeric field so same-base prerelease upgrades replace versioned EXEs.
+if(PROJECT_VERSION_PATCH GREATER 65534)
+    math(EXPR RC_VERSION_BUILD "${PROJECT_VERSION_PATCH} / 100")
+    math(EXPR RC_VERSION_REVISION "${PROJECT_VERSION_PATCH} % 100")
+else()
+    set(RC_VERSION_BUILD "${PROJECT_VERSION_PATCH}")
+    if(PROJECT_VERSION_PRERELEASE STREQUAL "")
+        set(RC_VERSION_REVISION 65534)
+    else()
+        set(RC_VERSION_PRERELEASE_BASE 1)
+        set(RC_VERSION_PRERELEASE_NUMBER 0)
+        set(RC_VERSION_POST_TAG_COMMITS 0)
+
+        if(PROJECT_VERSION_PRERELEASE MATCHES "alpha\\.([0-9]+)")
+            set(RC_VERSION_PRERELEASE_BASE 1000)
+            set(RC_VERSION_PRERELEASE_NUMBER "${CMAKE_MATCH_1}")
+        elseif(PROJECT_VERSION_PRERELEASE MATCHES "beta\\.([0-9]+)")
+            set(RC_VERSION_PRERELEASE_BASE 2000)
+            set(RC_VERSION_PRERELEASE_NUMBER "${CMAKE_MATCH_1}")
+        elseif(PROJECT_VERSION_PRERELEASE MATCHES "rc\\.([0-9]+)")
+            set(RC_VERSION_PRERELEASE_BASE 3000)
+            set(RC_VERSION_PRERELEASE_NUMBER "${CMAKE_MATCH_1}")
+        endif()
+
+        if(PROJECT_VERSION_PRERELEASE MATCHES "-([0-9]+)-g[0-9a-f]+")
+            set(RC_VERSION_POST_TAG_COMMITS "${CMAKE_MATCH_1}")
+        endif()
+
+        math(EXPR RC_VERSION_REVISION "${RC_VERSION_PRERELEASE_BASE} + ${RC_VERSION_PRERELEASE_NUMBER} + ${RC_VERSION_POST_TAG_COMMITS}")
+        if(RC_VERSION_REVISION GREATER 65533)
+            set(RC_VERSION_REVISION 65533)
+        endif()
+    endif()
+endif()
 
 message("PROJECT_NAME: ${PROJECT_NAME}")
 message("PROJECT_VERSION_FULL: ${PROJECT_VERSION_FULL}")

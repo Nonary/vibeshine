@@ -56,3 +56,18 @@ endfunction()
 _vibeshine_generate_sortable_product_guid(_vibeshine_product_guid)
 set(CPACK_WIX_PRODUCT_GUID "${_vibeshine_product_guid}")
 message(STATUS "CPACK_WIX_PRODUCT_GUID = ${CPACK_WIX_PRODUCT_GUID} (sortable per-package ProductCode)")
+
+# CPack's WiX generator reuses its staging tree between invocations.  That is
+# unsafe for same-numeric-version prerelease builds because MSI replacement
+# decisions depend on the VERSIONINFO fixed file version embedded in staged
+# EXEs.  Clear only the generator's transient staging directory so every MSI is
+# built from the current CMake install output.
+if(DEFINED CPACK_PACKAGE_DIRECTORY AND DEFINED CPACK_SYSTEM_NAME AND DEFINED CPACK_GENERATOR)
+  set(_vibeshine_wix_stage
+    "${CPACK_PACKAGE_DIRECTORY}/_CPack_Packages/${CPACK_SYSTEM_NAME}/${CPACK_GENERATOR}"
+  )
+  if(EXISTS "${_vibeshine_wix_stage}")
+    file(REMOVE_RECURSE "${_vibeshine_wix_stage}")
+    message(STATUS "Removed stale CPack WiX staging directory: ${_vibeshine_wix_stage}")
+  endif()
+endif()
