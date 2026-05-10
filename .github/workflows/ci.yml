@@ -176,6 +176,7 @@ jobs:
       release_commit: ${{ needs.release-candidate.outputs.release_commit || github.sha }}
       release_version: ${{ needs.release-candidate.outputs.release_version || '0.0.0' }}
       symbol_product_name: Vibeshine
+      publish_symbols: ${{ needs.release-candidate.outputs.should_release == 'true' }}
       symbol_release_draft: true
       symbol_release_prefix: shine
     secrets:
