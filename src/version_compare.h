@@ -92,6 +92,11 @@ namespace version_compare {
     return ascii_lower(std::get<std::string>(version.prerelease.front())) == "stable";
   }
 
+  inline bool is_prerelease_channel(std::string_view version) {
+    const auto parsed = parse_semver(version);
+    return !parsed.prerelease.empty() && !is_stable_channel(parsed);
+  }
+
   inline int compare_identifier_lists(
     const std::vector<prerelease_identifier_t> &lhs,
     const std::vector<prerelease_identifier_t> &rhs,
