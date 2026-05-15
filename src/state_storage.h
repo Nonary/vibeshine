@@ -1,5 +1,6 @@
 #pragma once
 
+#include <boost/property_tree/ptree_fwd.hpp>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -11,6 +12,15 @@ namespace statefile {
   const std::string &vibeshine_state_path();
 
   std::mutex &state_mutex();
+
+  /**
+   * @brief Write a property-tree JSON file through a temporary file and atomic replace.
+   *
+   * Callers that are updating shared Sunshine/Vibeshine state should still hold state_mutex()
+   * around their read/modify/write transaction; this helper only prevents partial or
+   * interleaved on-disk writes from leaving malformed JSON behind.
+   */
+  void write_json_atomic(const std::string &path, const boost::property_tree::ptree &tree);
 
   void migrate_recent_state_keys();
 

@@ -679,6 +679,7 @@ namespace nvhttp {
   // uniqueID, session
   std::unordered_map<std::string, pair_session_t> map_id_sess;
   client_t client_root;
+  std::mutex client_mutex;
   std::atomic<uint32_t> session_id_counter;
 
   using args_t = SimpleWeb::CaseInsensitiveMultimap;
@@ -691,6 +692,11 @@ namespace nvhttp {
     ADD,  ///< Add certificate
     REMOVE  ///< Remove certificate
   };
+
+  client_t client_root_snapshot() {
+    std::lock_guard<std::mutex> lock(client_mutex);
+    return client_root;
+  }
 
   std::string get_arg(const args_t &args, const char *name, const char *default_value = nullptr) {
     auto it = args.find(name);
@@ -708,6 +714,7 @@ namespace nvhttp {
     statefile::migrate_recent_state_keys();
     const auto &sunshine_path = statefile::sunshine_state_path();
     const auto &vibeshine_path = statefile::vibeshine_state_path();
+    const client_t client = client_root_snapshot();
 
     std::lock_guard<std::mutex> state_lock(statefile::state_mutex());
 
@@ -728,10 +735,9 @@ namespace nvhttp {
     }
 
     root_node.put("uniqueid", http::unique_id);
-    client_t &client = client_root;
 
     pt::ptree named_cert_nodes;
-    for (auto &named_cert : client.named_devices) {
+    for (const auto &named_cert : client.named_devices) {
       pt::ptree named_cert_node;
       named_cert_node.put("name"s, named_cert.name);
       named_cert_node.put("cert"s, named_cert.cert);
@@ -773,7 +779,7 @@ namespace nvhttp {
     root.put_child("root", root_node);
 
     try {
-      pt::write_json(sunshine_path, root);
+      statefile::write_json_atomic(sunshine_path, root);
     } catch (std::exception &e) {
       BOOST_LOG(error) << "Couldn't write "sv << sunshine_path << ": "sv << e.what();
       return;
@@ -809,7 +815,7 @@ namespace nvhttp {
 #endif
       {
         pt::ptree last_seen_nodes;
-        for (const auto &named_cert : client_root.named_devices) {
+        for (const auto &named_cert : client.named_devices) {
           if (!named_cert.last_seen.has_value()) {
             continue;
           }
@@ -819,7 +825,7 @@ namespace nvhttp {
       }
 
       try {
-        pt::write_json(vibeshine_path, vibeshine_tree);
+        statefile::write_json_atomic(vibeshine_path, vibeshine_tree);
       } catch (std::exception &e) {
         BOOST_LOG(error) << "Couldn't write "sv << vibeshine_path << ": "sv << e.what();
       }
@@ -935,17 +941,19 @@ namespace nvhttp {
       }
     }
 
-    // Empty certificate chain and import certs from file
-    cert_chain.clear();
-    for (auto &named_cert : client.named_devices) {
-      cert_chain.add(crypto::x509(named_cert.cert));
-    }
+    {
+      std::lock_guard<std::mutex> lock(client_mutex);
+      // Empty certificate chain and import certs from file
+      cert_chain.clear();
+      for (auto &named_cert : client.named_devices) {
+        cert_chain.add(crypto::x509(named_cert.cert));
+      }
 
-    client_root = client;
+      client_root = std::move(client);
+    }
   }
 
   void add_authorized_client(const std::string &name, std::string &&cert) {
-    client_t &client = client_root;
     named_cert_t named_cert;
     named_cert.name = name;
     named_cert.cert = std::move(cert);
@@ -959,7 +967,10 @@ namespace nvhttp {
     named_cert.prefer_10bit_sdr.reset();
     named_cert.last_seen.reset();
     named_cert.config_overrides.clear();
-    client.named_devices.emplace_back(named_cert);
+    {
+      std::lock_guard<std::mutex> lock(client_mutex);
+      client_root.named_devices.emplace_back(std::move(named_cert));
+    }
 
     if (!config::sunshine.flags[config::flag::FRESH_STATE]) {
       save_state();
@@ -977,8 +988,8 @@ namespace nvhttp {
 
     auto client_cert_signature = crypto::signature(const_cast<X509 *>(client_cert.get()));
 
-    client_t &client = client_root;
-    for (auto &named_cert : client.named_devices) {
+    std::lock_guard<std::mutex> lock(client_mutex);
+    for (const auto &named_cert : client_root.named_devices) {
       auto stored_x509 = crypto::x509(named_cert.cert);
       if (stored_x509) {
         auto stored_signature = crypto::signature(stored_x509.get());
@@ -1001,18 +1012,18 @@ namespace nvhttp {
     return get_client_uuid_from_peer_cert(tl_peer_certificate, client_name_out);
   }
 
-  named_cert_t *get_named_cert_by_uuid(const std::string &uuid) {
+  std::optional<named_cert_t> get_named_cert_by_uuid(const std::string &uuid) {
     if (uuid.empty()) {
-      return nullptr;
+      return std::nullopt;
     }
 
-    client_t &client = client_root;
-    for (auto &named_cert : client.named_devices) {
+    std::lock_guard<std::mutex> lock(client_mutex);
+    for (const auto &named_cert : client_root.named_devices) {
       if (named_cert.uuid == uuid) {
-        return &named_cert;
+        return named_cert;
       }
     }
-    return nullptr;
+    return std::nullopt;
   }
 
   std::optional<config::video_t::virtual_display_mode_e> parse_virtual_display_mode_override(const std::string &value) {
@@ -1106,7 +1117,7 @@ namespace nvhttp {
     std::copy(rikey.cbegin(), rikey.cend(), std::back_inserter(launch_session->gcm_key));
 
     launch_session->host_audio = host_audio;
-    named_cert_t *client_settings = get_named_cert_by_uuid(launch_session->client_uuid);
+    auto client_settings = get_named_cert_by_uuid(launch_session->client_uuid);
     auto parse_mode_string = [&](const std::string &mode_str) -> bool {
       std::stringstream mode(mode_str);
       int x = 0;
@@ -1721,9 +1732,9 @@ namespace nvhttp {
 
   nlohmann::json get_all_clients() {
     nlohmann::json named_cert_nodes = nlohmann::json::array();
-    client_t &client = client_root;
+    const client_t client = client_root_snapshot();
     std::list<std::string> connected_uuids = rtsp_stream::get_all_session_client_uuids();
-    for (auto &named_cert : client.named_devices) {
+    for (const auto &named_cert : client.named_devices) {
       nlohmann::json named_cert_node;
       named_cert_node["name"] = named_cert.name;
       named_cert_node["uuid"] = named_cert.uuid;
@@ -1776,21 +1787,25 @@ namespace nvhttp {
       return;
     }
 
-    client_t &client = client_root;
-    for (auto &named_cert : client.named_devices) {
-      if (named_cert.uuid != uuid) {
-        continue;
-      }
+    bool changed = false;
+    {
+      std::lock_guard<std::mutex> lock(client_mutex);
+      for (auto &named_cert : client_root.named_devices) {
+        if (named_cert.uuid != uuid) {
+          continue;
+        }
 
-      const auto now = now_seconds();
-      if (named_cert.last_seen.has_value() && *named_cert.last_seen == now) {
-        return;
+        const auto now = now_seconds();
+        if (named_cert.last_seen.has_value() && *named_cert.last_seen == now) {
+          return;
+        }
+        named_cert.last_seen = now;
+        changed = true;
+        break;
       }
-      named_cert.last_seen = now;
-      if (!config::sunshine.flags[config::flag::FRESH_STATE]) {
-        save_state();
-      }
-      return;
+    }
+    if (changed && !config::sunshine.flags[config::flag::FRESH_STATE]) {
+      save_state();
     }
   }
 
@@ -1917,7 +1932,7 @@ namespace nvhttp {
         if (client_uuid.empty()) {
           client_uuid = get_arg(args, "uniqueid", "");
         }
-        if (auto *client_settings = get_named_cert_by_uuid(client_uuid)) {
+        if (auto client_settings = get_named_cert_by_uuid(client_uuid)) {
           for (const auto &[k, v] : client_settings->config_overrides) {
             overrides.insert_or_assign(k, v);
           }
@@ -2461,17 +2476,21 @@ namespace nvhttp {
         BOOST_LOG(verbose) << subject_name << " -- "sv << (verified ? "verified"sv : "denied"sv);
       });
 
-      while (add_cert->peek()) {
-        char subject_name[256];
+      const char *err_str = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(client_mutex);
+        while (add_cert->peek()) {
+          char subject_name[256];
 
-        auto cert = add_cert->pop();
-        X509_NAME_oneline(X509_get_subject_name(cert.get()), subject_name, sizeof(subject_name));
+          auto cert = add_cert->pop();
+          X509_NAME_oneline(X509_get_subject_name(cert.get()), subject_name, sizeof(subject_name));
 
-        BOOST_LOG(verbose) << "Added cert ["sv << subject_name << ']';
-        cert_chain.add(std::move(cert));
+          BOOST_LOG(verbose) << "Added cert ["sv << subject_name << ']';
+          cert_chain.add(std::move(cert));
+        }
+
+        err_str = cert_chain.verify(x509_verify.get());
       }
-
-      auto err_str = cert_chain.verify(x509_verify.get());
       if (err_str) {
         BOOST_LOG(warning) << "SSL Verification error :: "sv << err_str;
 
@@ -2557,9 +2576,11 @@ namespace nvhttp {
   }
 
   void erase_all_clients() {
-    client_t client;
-    client_root = client;
-    cert_chain.clear();
+    {
+      std::lock_guard<std::mutex> lock(client_mutex);
+      client_root = client_t {};
+      cert_chain.clear();
+    }
     save_state();
   }
 
@@ -2585,30 +2606,36 @@ namespace nvhttp {
     const auto trimmed_vd_mode = boost::algorithm::trim_copy(virtual_display_mode);
     const auto trimmed_vd_layout = boost::algorithm::trim_copy(virtual_display_layout);
 
-    client_t &client = client_root;
-    for (auto &named_cert : client.named_devices) {
-      if (named_cert.uuid != uuid) {
-        continue;
-      }
+    bool updated = false;
+    {
+      std::lock_guard<std::mutex> lock(client_mutex);
+      for (auto &named_cert : client_root.named_devices) {
+        if (named_cert.uuid != uuid) {
+          continue;
+        }
 
-      named_cert.name = trimmed_name;
-      named_cert.display_mode = trimmed_display_mode;
-      named_cert.always_use_virtual_display = always_use_virtual_display;
-      named_cert.output_name_override = always_use_virtual_display ? "" : trimmed_output_override;
-      named_cert.virtual_display_mode_override = trimmed_vd_mode;
-      named_cert.virtual_display_layout_override = trimmed_vd_layout;
-      named_cert.prefer_10bit_sdr = prefer_10bit_sdr;
-      if (config_overrides) {
-        named_cert.config_overrides = std::move(*config_overrides);
+        named_cert.name = trimmed_name;
+        named_cert.display_mode = trimmed_display_mode;
+        named_cert.always_use_virtual_display = always_use_virtual_display;
+        named_cert.output_name_override = always_use_virtual_display ? "" : trimmed_output_override;
+        named_cert.virtual_display_mode_override = trimmed_vd_mode;
+        named_cert.virtual_display_layout_override = trimmed_vd_layout;
+        named_cert.prefer_10bit_sdr = prefer_10bit_sdr;
+        if (config_overrides) {
+          named_cert.config_overrides = std::move(*config_overrides);
+        }
+        if (hdr_profile.has_value()) {
+          named_cert.hdr_profile = boost::algorithm::trim_copy(*hdr_profile);
+        }
+        updated = true;
+        break;
       }
-      if (hdr_profile.has_value()) {
-        named_cert.hdr_profile = boost::algorithm::trim_copy(*hdr_profile);
-      }
-      save_state();
-      return true;
     }
 
-    return false;
+    if (updated) {
+      save_state();
+    }
+    return updated;
   }
 
   bool set_client_hdr_profile(const std::string &uuid, const std::string &hdr_profile) {
@@ -2618,18 +2645,24 @@ namespace nvhttp {
 
     const auto trimmed_hdr_profile = boost::algorithm::trim_copy(hdr_profile);
 
-    client_t &client = client_root;
-    for (auto &named_cert : client.named_devices) {
-      if (named_cert.uuid != uuid) {
-        continue;
-      }
+    bool updated = false;
+    {
+      std::lock_guard<std::mutex> lock(client_mutex);
+      for (auto &named_cert : client_root.named_devices) {
+        if (named_cert.uuid != uuid) {
+          continue;
+        }
 
-      named_cert.hdr_profile = trimmed_hdr_profile;
-      save_state();
-      return true;
+        named_cert.hdr_profile = trimmed_hdr_profile;
+        updated = true;
+        break;
+      }
     }
 
-    return false;
+    if (updated) {
+      save_state();
+    }
+    return updated;
   }
 
   bool disconnect_client(const std::string &uuid) {
@@ -2637,8 +2670,8 @@ namespace nvhttp {
   }
 
   std::optional<bool> get_client_prefer_10bit_sdr_override(const std::string &uuid) {
-    client_t &client = client_root;
-    for (auto &named_cert : client.named_devices) {
+    std::lock_guard<std::mutex> lock(client_mutex);
+    for (const auto &named_cert : client_root.named_devices) {
       if (named_cert.uuid == uuid) {
         return named_cert.prefer_10bit_sdr;
       }
@@ -2650,13 +2683,15 @@ namespace nvhttp {
 
   bool unpair_client(const std::string_view uuid) {
     bool removed = false;
-    client_t &client = client_root;
-    for (auto it = client.named_devices.begin(); it != client.named_devices.end();) {
-      if ((*it).uuid == uuid) {
-        it = client.named_devices.erase(it);
-        removed = true;
-      } else {
-        ++it;
+    {
+      std::lock_guard<std::mutex> lock(client_mutex);
+      for (auto it = client_root.named_devices.begin(); it != client_root.named_devices.end();) {
+        if ((*it).uuid == uuid) {
+          it = client_root.named_devices.erase(it);
+          removed = true;
+        } else {
+          ++it;
+        }
       }
     }
 
