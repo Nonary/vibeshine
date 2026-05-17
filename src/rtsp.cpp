@@ -683,6 +683,40 @@ namespace rtsp_stream {
       clear();
     }
 
+    std::shared_ptr<stream::session_t>
+      find_session(const std::string_view &uuid) {
+      auto lg = _session_state.lock();
+
+      for (auto &session : _session_state->sessions) {
+        if (stream::session::uuid_match(*session, uuid)) {
+          return session;
+        }
+      }
+
+      return nullptr;
+    }
+
+    std::list<std::string>
+      get_all_session_uuids() {
+      std::list<std::string> uuids;
+      auto lg = _session_state.lock();
+      for (auto &session : _session_state->sessions) {
+        uuids.push_back(stream::session::uuid(*session));
+      }
+      return uuids;
+    }
+
+    std::vector<std::shared_ptr<stream::session_t>>
+      get_sessions_snapshot() {
+      std::vector<std::shared_ptr<stream::session_t>> sessions;
+      auto lg = _session_state.lock();
+      sessions.reserve(_session_state->sessions.size());
+      for (auto &session : _session_state->sessions) {
+        sessions.push_back(session);
+      }
+      return sessions;
+    }
+
   private:
     std::unordered_map<std::string_view, cmd_func_t> _map_cmd_cb;
 
@@ -715,6 +749,18 @@ namespace rtsp_stream {
     server.clear(false);
 
     return server.session_count();
+  }
+
+  std::shared_ptr<stream::session_t> find_session(const std::string_view &uuid) {
+    return server.find_session(uuid);
+  }
+
+  std::list<std::string> get_all_session_uuids() {
+    return server.get_all_session_uuids();
+  }
+
+  std::vector<std::shared_ptr<stream::session_t>> get_sessions_snapshot() {
+    return server.get_sessions_snapshot();
   }
 
   void terminate_sessions() {
@@ -1091,6 +1137,7 @@ namespace rtsp_stream {
       config.monitor.framerate = (int) util::from_view(args.at("x-nv-video[0].maxFPS"sv));
       config.monitor.framerateX100 = (int) util::from_view(args.at("x-nv-video[0].clientRefreshRateX100"sv));
       config.monitor.bitrate = (int) util::from_view(args.at("x-nv-vqos[0].bw.maximumBitrateKbps"sv));
+      config.monitor.client_requested_bitrate = config.monitor.bitrate;
       config.monitor.slicesPerFrame = (int) util::from_view(args.at("x-nv-video[0].videoEncoderSlicesPerFrame"sv));
       config.monitor.numRefFrames = (int) util::from_view(args.at("x-nv-video[0].maxNumReferenceFrames"sv));
       config.monitor.encoderCscMode = (int) util::from_view(args.at("x-nv-video[0].encoderCscMode"sv));
@@ -1098,6 +1145,18 @@ namespace rtsp_stream {
       config.monitor.dynamicRange = (int) util::from_view(args.at("x-nv-video[0].dynamicRangeMode"sv));
       config.monitor.chromaSamplingType = (int) util::from_view(args.at("x-ss-video[0].chromaSamplingType"sv));
       config.monitor.enableIntraRefresh = (int) util::from_view(args.at("x-ss-video[0].intraRefresh"sv));
+
+      if (config.monitor.framerate > 1000) {
+        config.monitor.encodingFramerate = config.monitor.framerate;
+      } else {
+        config.monitor.encodingFramerate = config.monitor.framerate * 1000;
+      }
+
+      // When fractional refresh rate requested from client side, it should be well above 1000fps.
+      // 4000fps is when Warp2 Mode is enabled on the client, requested framerate can be actual * 4.
+      if (config.monitor.framerate > 4000) {
+        config.monitor.framerate = std::round((float) config.monitor.framerate / 1000);
+      }
 
       // Validate that clientRefreshRateX100 is consistent with maxFPS.
       // Some clients send a stale or incorrect clientRefreshRateX100 (e.g. 6000 = 60fps)
@@ -1177,6 +1236,10 @@ namespace rtsp_stream {
     // down to nearly nothing.
     if (configuredBitrateKbps) {
       BOOST_LOG(debug) << "Client configured bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
+
+      // Preserve the original wire-bandwidth budget the client asked for so the
+      // UI can show it alongside the post-adjustment encoder bitrate.
+      config.monitor.client_requested_bitrate = static_cast<int>(configuredBitrateKbps);
 
       // If the FEC percentage isn't too high, adjust the configured bitrate to ensure video
       // traffic doesn't exceed the user's selected bitrate when the FEC shards are included.

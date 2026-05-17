@@ -6,9 +6,13 @@
 
 // standard includes
 #include <atomic>
+#include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 // lib includes
 #include <boost/asio.hpp>
@@ -19,10 +23,55 @@
 #include "thread_safe.h"
 #include "video.h"
 
+namespace rtsp_stream {
+  struct launch_session_t;
+}
+
 namespace stream {
   constexpr auto VIDEO_STREAM_PORT = 9;
   constexpr auto CONTROL_PORT = 10;
   constexpr auto AUDIO_STREAM_PORT = 11;
+
+  constexpr std::string_view video_format_name(int video_format) {
+    switch (video_format) {
+      case 0:
+        return "H.264";
+      case 1:
+        return "HEVC";
+      case 2:
+        return "AV1";
+      default:
+        return "Unknown";
+    }
+  }
+
+  inline std::string canonical_codec_name(std::string_view codec) {
+    if (codec.empty()) {
+      return {};
+    }
+
+    std::string lowered;
+    lowered.reserve(codec.size());
+    for (char ch : codec) {
+      if (ch >= 'A' && ch <= 'Z') {
+        lowered.push_back(static_cast<char>(ch - 'A' + 'a'));
+      } else {
+        lowered.push_back(ch);
+      }
+    }
+
+    if (lowered == "h264" || lowered == "h.264") {
+      return "H.264";
+    }
+    if (lowered == "h265" || lowered == "hevc") {
+      return "HEVC";
+    }
+    if (lowered == "av1") {
+      return "AV1";
+    }
+
+    return std::string(codec);
+  }
 
   struct session_t;
 
@@ -59,6 +108,8 @@ namespace stream {
     };
 
     std::shared_ptr<session_t> alloc(config_t &config, rtsp_stream::launch_session_t &launch_session);
+    std::string uuid(const session_t &session);
+    bool uuid_match(const session_t &session, const std::string_view &uuid);
     int start(session_t &session, const std::string &addr_string);
     void stop(session_t &session);
     void join(session_t &session);
@@ -66,5 +117,44 @@ namespace stream {
   }  // namespace session
 
   void cancel_paused_display_cleanup();
+
+  struct session_info_t {
+    std::string uuid;
+    std::string device_name;
+    int width;
+    int height;
+    int fps;
+    int encoder_bitrate_kbps;
+    int requested_bitrate_kbps;  // Original client-requested wire bitrate (== encoder_bitrate_kbps for clients that don't send maximumBitrateKbps)
+    int video_format;  // 0=H.264, 1=HEVC, 2=AV1
+    int dynamic_range;  // 0=SDR 8-bit, 1=HDR 10-bit
+    bool yuv444;
+    int audio_channels;
+    std::string stream_gpu_model;
+    std::string state;
+
+    // Real-time performance counters
+    std::uint64_t frames_sent;
+    std::uint64_t packets_sent;
+    std::uint64_t bytes_sent;
+    std::uint32_t idr_requests;
+    std::uint32_t invalidate_ref_count;
+    std::int64_t client_reported_losses;
+    double encode_latency_ms;  // last frame encode latency in ms
+    std::int64_t last_frame_index;
+    double uptime_seconds;
+  };
+
+  struct control_packet_view_t {
+    std::uint16_t type = 0;
+    std::string_view payload;
+  };
+
+#ifdef SUNSHINE_TESTS
+  std::optional<control_packet_view_t> decode_control_packet_for_tests(std::string_view packet_bytes);
+#endif
+
+  std::vector<session_info_t> get_all_session_info();
+
   void request_idr_for_all_sessions();
 }  // namespace stream

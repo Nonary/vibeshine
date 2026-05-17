@@ -38,16 +38,16 @@ function removeCmd(index: number) {
 
 <template>
   <div id="general" class="config-page">
-    <ConfigFieldRenderer setting-key="locale" v-model="config.locale" class="mb-6" />
+    <ConfigFieldRenderer v-model="config.locale" setting-key="locale" class="mb-6" />
 
     <ConfigFieldRenderer
-      setting-key="sunshine_name"
       v-model="config.sunshine_name"
+      setting-key="sunshine_name"
       class="mb-6"
       placeholder="Vibeshine"
     />
 
-    <ConfigFieldRenderer setting-key="min_log_level" v-model="config.min_log_level" class="mb-6" />
+    <ConfigFieldRenderer v-model="config.min_log_level" setting-key="min_log_level" class="mb-6" />
 
     <div id="global_prep_cmd" class="mb-6 flex flex-col">
       <label class="block text-sm font-medium mb-1 text-dark dark:text-light">
@@ -117,30 +117,48 @@ function removeCmd(index: number) {
     </div>
 
     <ConfigFieldRenderer
-      setting-key="session_token_ttl_seconds"
       v-model="config.session_token_ttl_seconds"
+      setting-key="session_token_ttl_seconds"
       class="mb-6"
     />
 
     <ConfigFieldRenderer
-      setting-key="remember_me_refresh_token_ttl_seconds"
       v-model="config.remember_me_refresh_token_ttl_seconds"
+      setting-key="remember_me_refresh_token_ttl_seconds"
       class="mb-6"
     />
 
     <ConfigFieldRenderer
-      setting-key="update_check_interval"
       v-model="config.update_check_interval"
+      setting-key="update_check_interval"
       class="mb-6"
     />
 
     <ConfigFieldRenderer
-      setting-key="notify_pre_releases"
-      v-model="config.notify_pre_releases"
+      v-model="config.session_history_enabled"
+      setting-key="session_history_enabled"
       class="mb-3"
     />
 
-    <ConfigFieldRenderer setting-key="system_tray" v-model="config.system_tray" class="mb-3" />
+    <ConfigFieldRenderer
+      v-model="config.session_history_ttl_days"
+      setting-key="session_history_ttl_days"
+      class="mb-6"
+    />
+
+    <ConfigFieldRenderer
+      v-model="config.session_history_db_size_limit_mb"
+      setting-key="session_history_db_size_limit_mb"
+      class="mb-6"
+    />
+
+    <ConfigFieldRenderer
+      v-model="config.notify_pre_releases"
+      setting-key="notify_pre_releases"
+      class="mb-3"
+    />
+
+    <ConfigFieldRenderer v-model="config.system_tray" setting-key="system_tray" class="mb-3" />
   </div>
 </template>
 

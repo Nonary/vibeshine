@@ -6,6 +6,7 @@
 
 // standard includes
 #include <functional>
+#include <vector>
 
 // local includes
 #include "platform/common.h"
@@ -17,6 +18,10 @@ namespace input {
   void print(void *input);
   void reset(std::shared_ptr<input_t> &input);
   void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&input_data);
+
+#ifdef SUNSHINE_TESTS
+  bool validate_packet_for_tests(const std::vector<std::uint8_t> &input_data);
+#endif
 
   [[nodiscard]] std::unique_ptr<platf::deinit_t> init();
 

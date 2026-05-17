@@ -46,6 +46,13 @@ namespace video {
     int chromaSamplingType;  // 0 - 4:2:0, 1 - 4:4:4
 
     int enableIntraRefresh;  // 0 - disabled, 1 - enabled
+
+    int encodingFramerate = 0;  // Requested display framerate
+    bool input_only = false;
+    // Original client-requested wire-bandwidth budget in Kbps, before Sunshine
+    // subtracts FEC/audio/control overhead from `bitrate` for the encoder.
+    // Same as `bitrate` for clients that don't send maximumBitrateKbps.
+    int client_requested_bitrate = 0;
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);

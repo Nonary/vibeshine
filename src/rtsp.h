@@ -13,12 +13,18 @@
 #include <cstdint>
 #include <list>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 // local includes
 #include "crypto.h"
 #include "thread_safe.h"
+
+namespace stream {
+  struct session_t;
+}
 
 namespace rtsp_stream {
   constexpr auto RTSP_SETUP_PORT = 21;
@@ -105,6 +111,15 @@ namespace rtsp_stream {
    * @return Count of active sessions.
    */
   int session_count();
+
+  std::shared_ptr<stream::session_t>
+    find_session(const std::string_view &uuid);
+
+  std::list<std::string>
+    get_all_session_uuids();
+
+  std::vector<std::shared_ptr<stream::session_t>>
+    get_sessions_snapshot();
 
   /**
    * @brief Terminates all running streaming sessions.
