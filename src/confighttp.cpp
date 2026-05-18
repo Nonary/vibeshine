@@ -216,6 +216,35 @@ namespace confighttp {
       return token_route_catalog;
     }
 
+    bool has_active_stream_sessions() {
+      return rtsp_stream::session_count() > 0 || webrtc_stream::has_active_sessions();
+    }
+
+    bool can_hot_apply_during_session(const std::set<std::string> &keys) {
+      if (keys.empty()) {
+        return false;
+      }
+
+      for (const auto &key : keys) {
+        if (key.rfind("playnite_", 0) == 0) {
+          continue;
+        }
+
+        if (key == "session_history_enabled") {
+          return false;
+        }
+
+        if (key == "session_history_ttl_days" ||
+            key == "session_history_db_size_limit_mb") {
+          continue;
+        }
+
+        return false;
+      }
+
+      return true;
+    }
+
   }  // namespace
 
   // Forward declaration for error helper implemented later
@@ -2158,7 +2187,9 @@ namespace confighttp {
       std::stringstream config_stream;
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
+      std::set<std::string> changed_keys;
       for (const auto &[k, v] : input_tree.items()) {
+        changed_keys.insert(k);
         if (v.is_null() || (v.is_string() && v.get<std::string>().empty())) {
           continue;
         }
@@ -2178,7 +2209,7 @@ namespace confighttp {
         "cert"
       };
       bool restart_required = false;
-      for (const auto &[k, _] : input_tree.items()) {
+      for (const auto &k : changed_keys) {
         if (restart_required_keys.count(k)) {
           restart_required = true;
           break;
@@ -2189,7 +2220,7 @@ namespace confighttp {
       bool deferred = false;
 
       if (!restart_required) {
-        if (rtsp_stream::session_count() == 0) {
+        if (can_hot_apply_during_session(changed_keys) || !has_active_stream_sessions()) {
           // Apply immediately
           config::apply_config_now();
           applied_now = true;
@@ -2292,16 +2323,7 @@ namespace confighttp {
       bool applied_now = false;
       bool deferred = false;
       if (!restart_required) {
-        // Determine if only Playnite-related keys were changed; these are safe to hot-apply
-        // even when a streaming session is active.
-        bool only_playnite = !changed_keys.empty();
-        for (const auto &k : changed_keys) {
-          if (k.rfind("playnite_", 0) != 0) {
-            only_playnite = false;
-            break;
-          }
-        }
-        if (only_playnite || rtsp_stream::session_count() == 0) {
+        if (can_hot_apply_during_session(changed_keys) || !has_active_stream_sessions()) {
           // Apply immediately
           config::apply_config_now();
           applied_now = true;
@@ -3339,8 +3361,14 @@ namespace confighttp {
           if (newPassword.empty() || newPassword != confirmPassword) {
             errors.emplace_back("Password Mismatch");
           } else {
-            http::save_user_creds(config::sunshine.credentials_file, newUsername, newPassword);
-            http::reload_user_creds(config::sunshine.credentials_file);
+            if (http::save_user_creds(config::sunshine.credentials_file, newUsername, newPassword)) {
+              service_unavailable(response, "Unable to write credentials file");
+              return;
+            }
+            if (http::reload_user_creds(config::sunshine.credentials_file)) {
+              service_unavailable(response, "Unable to reload credentials file");
+              return;
+            }
             output_tree["status"] = true;
           }
         } else {
