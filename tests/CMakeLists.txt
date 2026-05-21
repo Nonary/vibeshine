@@ -3,6 +3,13 @@ cmake_minimum_required(VERSION 3.13)
 
 project(test_sunshine)
 
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT DEFINED CMAKE_CUDA_STANDARD)
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+endif()
+
 include_directories("${CMAKE_SOURCE_DIR}")
 
 enable_testing()
@@ -79,6 +86,11 @@ list(APPEND TEST_DEFINITIONS SUNSHINE_TESTS)
 list(APPEND TEST_DEFINITIONS SUNSHINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 list(APPEND TEST_DEFINITIONS SUNSHINE_TEST_BIN_DIR="${CMAKE_CURRENT_BINARY_DIR}")
 
+# Override SUNSHINE_ASSETS_DIR to use a writable temp directory for tests
+# Remove the existing definition from SUNSHINE_DEFINITIONS to avoid redefinition error
+list(FILTER SUNSHINE_DEFINITIONS EXCLUDE REGEX "^SUNSHINE_ASSETS_DIR=")
+list(APPEND TEST_DEFINITIONS SUNSHINE_ASSETS_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_assets")
+
 if(NOT WIN32)
     find_package(Udev 255)  # we need 255+ for udevadm verify
     message(STATUS "UDEV_FOUND: ${UDEV_FOUND}")
@@ -90,6 +102,12 @@ endif()
 file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_SOURCE_DIR}/tests/*.h
         ${CMAKE_SOURCE_DIR}/tests/*.cpp)
+# Add macOS-specific test files only when building tests for macOS
+if (APPLE)
+    file(GLOB_RECURSE MACOS_TEST_SOURCES CONFIGURE_DEPENDS
+            ${CMAKE_SOURCE_DIR}/tests/*.mm)
+    list(APPEND TEST_SOURCES ${MACOS_TEST_SOURCES})
+endif ()
 
 set(SUNSHINE_SOURCES
         ${SUNSHINE_TARGET_FILES})
@@ -138,8 +156,6 @@ endforeach()
 
 # Ensure locale files are synchronized before building the test executable
 add_dependencies(${PROJECT_NAME} sync_locale_files)
-
-set_target_properties(${PROJECT_NAME} PROPERTIES CXX_STANDARD 23)
 
 # Build the list of libraries to link
 set(TEST_LINK_LIBRARIES

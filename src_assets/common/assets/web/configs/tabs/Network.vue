@@ -118,6 +118,12 @@ const effectivePort = computed(() => Number(config.port ?? defaultMoonlightPort)
     />
 
     <ConfigFieldRenderer
+      setting-key="csrf_allowed_origins"
+      v-model="config.csrf_allowed_origins"
+      class="mb-6"
+    />
+
+    <ConfigFieldRenderer
       setting-key="external_ip"
       v-model="config.external_ip"
       class="mb-6"

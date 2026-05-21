@@ -27,6 +27,7 @@
 #include "src/utility.h"
 #include "src/video.h"
 #include "vaapi.h"
+#include "vulkan_encode.h"
 #include "wayland.h"
 
 using namespace std::literals;
@@ -60,7 +61,8 @@ namespace platf {
 
     class wrapper_fb {
     public:
-      wrapper_fb(drmModeFB *fb):
+      wrapper_fb(uint32_t card_fd, drmModeFB *fb):
+          card_fd {card_fd},
           fb {fb},
           fb_id {fb->fb_id},
           width {fb->width},
@@ -74,7 +76,8 @@ namespace platf {
         pitches[0] = fb->pitch;
       }
 
-      wrapper_fb(drmModeFB2 *fb2):
+      wrapper_fb(uint32_t card_fd, drmModeFB2 *fb2):
+          card_fd {card_fd},
           fb2 {fb2},
           fb_id {fb2->fb_id},
           width {fb2->width},
@@ -88,6 +91,15 @@ namespace platf {
       }
 
       ~wrapper_fb() {
+        std::ranges::for_each(handles, [&](auto &handle) {
+          if (handle) {
+            struct drm_gem_close close_args = {};
+            close_args.handle = handle;
+
+            drmIoctl(card_fd, DRM_IOCTL_GEM_CLOSE, &close_args);
+          }
+        });
+
         if (fb) {
           drmModeFreeFB(fb);
         } else if (fb2) {
@@ -95,6 +107,7 @@ namespace platf {
         }
       }
 
+      uint32_t card_fd;
       drmModeFB *fb = nullptr;
       drmModeFB2 *fb2 = nullptr;
       uint32_t fb_id;
@@ -284,14 +297,20 @@ namespace platf {
     struct cursor_t {
       // Public properties used during blending
       bool visible = false;
-      std::int32_t x, y;
-      std::uint32_t dst_w, dst_h;
-      std::uint32_t src_w, src_h;
+      std::int32_t x;
+      std::int32_t y;
+      std::uint32_t dst_w;
+      std::uint32_t dst_h;
+      std::uint32_t src_w;
+      std::uint32_t src_h;
       std::vector<std::uint8_t> pixels;
       unsigned long serial;
 
       // Private properties used for tracking cursor changes
-      std::uint64_t prop_src_x, prop_src_y, prop_src_w, prop_src_h;
+      std::uint64_t prop_src_x;
+      std::uint64_t prop_src_y;
+      std::uint64_t prop_src_w;
+      std::uint64_t prop_src_h;
       std::uint32_t fb_id;
     };
 
@@ -359,12 +378,12 @@ namespace platf {
 
         auto fb2 = drmModeGetFB2(fd.el, plane->fb_id);
         if (fb2) {
-          return std::make_unique<wrapper_fb>(fb2);
+          return std::make_unique<wrapper_fb>(fd.el, fb2);
         }
 
         auto fb = drmModeGetFB(fd.el, plane->fb_id);
         if (fb) {
-          return std::make_unique<wrapper_fb>(fb);
+          return std::make_unique<wrapper_fb>(fd.el, fb);
         }
 
         return nullptr;
@@ -942,10 +961,7 @@ namespace platf {
         } else if (plane->fb_id != captured_cursor.fb_id) {
           BOOST_LOG(debug) << "Refreshing cursor image after FB changed"sv;
           cursor_dirty = true;
-        } else if (*prop_src_x != captured_cursor.prop_src_x ||
-                   *prop_src_y != captured_cursor.prop_src_y ||
-                   *prop_src_w != captured_cursor.prop_src_w ||
-                   *prop_src_h != captured_cursor.prop_src_h) {
+        } else if (*prop_src_x != captured_cursor.prop_src_x || *prop_src_y != captured_cursor.prop_src_y || *prop_src_w != captured_cursor.prop_src_w || *prop_src_h != captured_cursor.prop_src_h) {
           BOOST_LOG(debug) << "Refreshing cursor image after source dimensions changed"sv;
           cursor_dirty = true;
         }
@@ -1121,8 +1137,10 @@ namespace platf {
 
       std::chrono::nanoseconds delay;
 
-      int img_width, img_height;
-      int img_offset_x, img_offset_y;
+      int img_width;
+      int img_height;
+      int img_offset_x;
+      int img_offset_y;
 
       int plane_id;
       int crtc_id;
@@ -1305,7 +1323,8 @@ namespace platf {
         gl::ctx.BindTexture(GL_TEXTURE_2D, rgb->tex[0]);
 
         // Don't remove these lines, see https://github.com/LizardByte/Sunshine/issues/453
-        int w, h;
+        int h;
+        int w;
         gl::ctx.GetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &w);
         gl::ctx.GetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &h);
         BOOST_LOG(debug) << "width and height: w "sv << w << " h "sv << h;
@@ -1355,6 +1374,12 @@ namespace platf {
 #ifdef SUNSHINE_BUILD_VAAPI
         if (mem_type == mem_type_e::vaapi) {
           return va::make_avcodec_encode_device(width, height, dup(card.render_fd.el), img_offset_x, img_offset_y, true);
+        }
+#endif
+
+#ifdef SUNSHINE_BUILD_VULKAN
+        if (mem_type == mem_type_e::vulkan) {
+          return vk::make_avcodec_encode_device_vram(width, height, img_offset_x, img_offset_y);
         }
 #endif
 
@@ -1503,7 +1528,7 @@ namespace platf {
   }  // namespace kms
 
   std::shared_ptr<display_t> kms_display(mem_type_e hwdevice_type, const std::string &display_name, const ::video::config_t &config) {
-    if (hwdevice_type == mem_type_e::vaapi || hwdevice_type == mem_type_e::cuda) {
+    if (hwdevice_type == mem_type_e::vaapi || hwdevice_type == mem_type_e::cuda || hwdevice_type == mem_type_e::vulkan) {
       auto disp = std::make_shared<kms::display_vram_t>(hwdevice_type);
 
       if (!disp->init(display_name, config)) {
@@ -1660,14 +1685,9 @@ namespace platf {
 
         if (!fb->handles[0]) {
           BOOST_LOG(error) << "Couldn't get handle for DRM Framebuffer ["sv << plane->fb_id << "]: Probably not permitted"sv;
-          BOOST_LOG((config::video.capture == "kms") ? fatal : error)
 #if defined(SUNSHINE_BUILD_FLATPAK) || defined(SUNSHINE_BUILD_APPIMAGE)
+          BOOST_LOG((config::video.capture == "kms") ? fatal : error)
             << "AppImage and Flatpak do not support KMS capture. Use another capture method."sv;
-#else
-            << "You must use the 'sunshine-kms' service instead of the 'sunshine' service for KMS capture.\n"sv
-            << "Please refer to the official documentation:\n"sv
-            << "  stable: https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2getting__started.html#linux-1"sv
-            << "  beta: https://docs.lizardbyte.dev/projects/sunshine/master/md_docs_2getting__started.html#linux-1"sv;
 #endif
           break;
         }

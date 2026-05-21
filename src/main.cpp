@@ -190,9 +190,7 @@ int main(int argc, char *argv[]) {
   log_publisher_data();
 
   // Log modified_config_settings
-  for (auto &[name, val] : config::modified_config_settings) {
-    BOOST_LOG(info) << "config: '"sv << name << "' = "sv << val;
-  }
+  config::log_config_settings(config::modified_config_settings, false);
   config::modified_config_settings.clear();
 
 #ifdef _WIN32
@@ -395,6 +393,11 @@ int main(int argc, char *argv[]) {
 
     // Break out of the main loop
     shutdown_event->raise(true);
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+    if (config::sunshine.system_tray) {
+      system_tray::end_tray();
+    }
+#endif
   });
 
   on_signal(SIGTERM, [&force_shutdown, shutdown_event]() {
@@ -409,6 +412,11 @@ int main(int argc, char *argv[]) {
 
     // Break out of the main loop
     shutdown_event->raise(true);
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+    if (config::sunshine.system_tray) {
+      system_tray::end_tray();
+    }
+#endif
   });
 
 #ifdef _WIN32

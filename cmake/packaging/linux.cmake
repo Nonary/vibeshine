@@ -16,12 +16,8 @@ if(${SUNSHINE_BUILD_APPIMAGE} OR ${SUNSHINE_BUILD_FLATPAK})
             DESTINATION "${SUNSHINE_ASSETS_DIR}/udev/rules.d")
     install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-sunshine.conf"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/modules-load.d")
-    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/sunshine.service"
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/app-${PROJECT_FQDN}.service"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/systemd/user")
-    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/sunshine-kms.service"
-            DESTINATION "${SUNSHINE_ASSETS_DIR}/systemd/user")
-    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/00-sunshine-kms.preset"
-            DESTINATION "${SUNSHINE_ASSETS_DIR}/systemd/user-preset")
 else()
     find_package(Systemd)
     find_package(Udev)
@@ -31,12 +27,8 @@ else()
                 DESTINATION "${UDEV_RULES_INSTALL_DIR}")
     endif()
     if(SYSTEMD_FOUND)
-        install(FILES "${CMAKE_CURRENT_BINARY_DIR}/sunshine.service"
+        install(FILES "${CMAKE_CURRENT_BINARY_DIR}/app-${PROJECT_FQDN}.service"
                 DESTINATION "${SYSTEMD_USER_UNIT_INSTALL_DIR}")
-        install(FILES "${CMAKE_CURRENT_BINARY_DIR}/sunshine-kms.service"
-                DESTINATION "${SYSTEMD_USER_UNIT_INSTALL_DIR}")
-        install(FILES "${CMAKE_CURRENT_BINARY_DIR}/00-sunshine-kms.preset"
-                DESTINATION "${SYSTEMD_USER_PRESET_INSTALL_DIR}")
         install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-sunshine.conf"
                 DESTINATION "${SYSTEMD_MODULES_LOAD_DIR}")
     endif()
@@ -72,7 +64,7 @@ endif()
 
 # Apply setcap for RPM
 # https://github.com/coreos/rpm-ostree/discussions/5036#discussioncomment-10291071
-set(CPACK_RPM_USER_FILELIST "%caps(cap_sys_admin+p) ${SUNSHINE_EXECUTABLE_PATH}")
+set(CPACK_RPM_USER_FILELIST "%caps(cap_sys_admin,cap_sys_nice+p) ${SUNSHINE_EXECUTABLE_PATH}")
 
 # Dependencies
 set(CPACK_DEB_COMPONENT_INSTALL ON)
@@ -143,42 +135,24 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 set(CPACK_RPM_PACKAGE_AUTOREQ ON)
 
 # application icon
-if(NOT ${SUNSHINE_BUILD_FLATPAK})
-    install(FILES "${CMAKE_SOURCE_DIR}/sunshine.svg"
-            DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps")
-else()
-    install(FILES "${CMAKE_SOURCE_DIR}/sunshine.svg"
-            DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps"
-            RENAME "${PROJECT_FQDN}.svg")
-endif()
+install(FILES "${CMAKE_SOURCE_DIR}/sunshine.svg"
+        DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps"
+        RENAME "${PROJECT_FQDN}.svg")
 
 # tray icon
 if(${SUNSHINE_TRAY} STREQUAL 1)
-    if(NOT ${SUNSHINE_BUILD_FLATPAK})
-        install(FILES "${CMAKE_SOURCE_DIR}/sunshine.svg"
-                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
-                RENAME "sunshine-tray.svg")
-        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/sunshine-playing.svg"
-                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status")
-        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/sunshine-pausing.svg"
-                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status")
-        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/sunshine-locked.svg"
-                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status")
-    else()
-        # flatpak icons must be prefixed with the app id or they will not be included in the flatpak
-        install(FILES "${CMAKE_SOURCE_DIR}/sunshine.svg"
-                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
-                RENAME "${PROJECT_FQDN}-tray.svg")
-        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/sunshine-playing.svg"
-                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
-                RENAME "${PROJECT_FQDN}-playing.svg")
-        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/sunshine-pausing.svg"
-                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
-                RENAME "${PROJECT_FQDN}-pausing.svg")
-        install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/sunshine-locked.svg"
-                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
-                RENAME "${PROJECT_FQDN}-locked.svg")
-    endif()
+    install(FILES "${CMAKE_SOURCE_DIR}/sunshine.svg"
+            DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
+            RENAME "${PROJECT_FQDN}-tray.svg")
+    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/sunshine-playing.svg"
+            DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
+            RENAME "${PROJECT_FQDN}-playing.svg")
+    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/sunshine-pausing.svg"
+            DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
+            RENAME "${PROJECT_FQDN}-pausing.svg")
+    install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/public/images/sunshine-locked.svg"
+            DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/status"
+            RENAME "${PROJECT_FQDN}-locked.svg")
 
     set(CPACK_DEBIAN_PACKAGE_DEPENDS "\
                     ${CPACK_DEBIAN_PACKAGE_DEPENDS}, \
@@ -199,6 +173,10 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_FQDN}.desktop"
 if(NOT ${SUNSHINE_BUILD_APPIMAGE} AND NOT ${SUNSHINE_BUILD_FLATPAK})
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_FQDN}.terminal.desktop"
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/applications")
+    if(${SUNSHINE_ENABLE_KWIN})
+        install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_FQDN}.kwin.desktop"
+                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/applications")
+    endif()
 endif()
 
 # metadata file

@@ -894,6 +894,98 @@ namespace confighttp {
     response->write(client_error_bad_request, error.dump(), headers);
   }
 
+  struct csrf_token_t {
+    std::string token;
+    std::chrono::steady_clock::time_point expiration;
+  };
+
+  std::map<std::string, csrf_token_t, std::less<>> csrf_tokens;
+  std::mutex csrf_tokens_mutex;
+  constexpr auto CSRF_TOKEN_SIZE = 32;
+  constexpr auto CSRF_TOKEN_LIFETIME = std::chrono::hours(1);
+
+  std::string get_client_id(const req_https_t &request) {
+    if (const auto auth = request->header.find("authorization"); auth != request->header.end()) {
+      return auth->second;
+    }
+    return net::addr_to_normalized_string(request->remote_endpoint().address());
+  }
+
+  std::string generate_csrf_token(const std::string &client_id) {
+    std::string token = crypto::rand_alphabet(CSRF_TOKEN_SIZE);
+    const auto now = std::chrono::steady_clock::now();
+    std::scoped_lock lock(csrf_tokens_mutex);
+    std::erase_if(csrf_tokens, [&now](const auto &entry) {
+      return entry.second.expiration < now;
+    });
+    csrf_tokens[client_id] = csrf_token_t {token, now + CSRF_TOKEN_LIFETIME};
+    return token;
+  }
+
+  bool validate_stored_csrf_token(const resp_https_t &response, const req_https_t &request, std::string_view client_id, std::string_view provided_token) {
+    std::scoped_lock lock(csrf_tokens_mutex);
+    auto token_it = csrf_tokens.find(client_id);
+    if (token_it == csrf_tokens.end()) {
+      bad_request(response, request, "Invalid CSRF token");
+      return false;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (token_it->second.expiration < now) {
+      csrf_tokens.erase(token_it);
+      bad_request(response, request, "CSRF token expired");
+      return false;
+    }
+    if (token_it->second.token != provided_token) {
+      bad_request(response, request, "Invalid CSRF token");
+      return false;
+    }
+    return true;
+  }
+
+  bool validate_csrf_token(const resp_https_t &response, const req_https_t &request, const std::string &client_id) {
+    auto is_allowed_origin = [](std::string_view url) {
+      return std::ranges::any_of(config::sunshine.csrf_allowed_origins, [&url](const std::string &allowed_origin) {
+        if (url.rfind(allowed_origin, 0) != 0) {
+          return false;
+        }
+        const size_t len = allowed_origin.length();
+        return url.length() == len || url[len] == ':' || url[len] == '/';
+      });
+    };
+
+    const auto origin_it = request->header.find("Origin");
+    if (origin_it != request->header.end() && is_allowed_origin(origin_it->second)) {
+      return true;
+    }
+    const auto referer_it = request->header.find("Referer");
+    if (referer_it != request->header.end() && is_allowed_origin(referer_it->second)) {
+      return true;
+    }
+    if (origin_it == request->header.end() && referer_it == request->header.end()) {
+      return true;
+    }
+
+    if (const auto header_it = request->header.find("X-CSRF-Token"); header_it != request->header.end()) {
+      return validate_stored_csrf_token(response, request, client_id, header_it->second);
+    }
+    auto query_params = request->parse_query_string();
+    if (const auto query_it = query_params.find("csrf_token"); query_it != query_params.end()) {
+      return validate_stored_csrf_token(response, request, client_id, query_it->second);
+    }
+
+    bad_request(response, request, "Missing CSRF token");
+    return false;
+  }
+
+  void getCSRFToken(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    nlohmann::json output_tree;
+    output_tree["csrf_token"] = generate_csrf_token(get_client_id(request));
+    send_response(response, output_tree);
+  }
+
   void service_unavailable(resp_https_t response, const std::string &error_message) {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "application/json; charset=utf-8");
@@ -1846,7 +1938,7 @@ namespace confighttp {
         }
       }
 
-      const bool has_extended_fields =
+      const bool has_device_fields =
         input_tree.contains("name") ||
         input_tree.contains("display_mode") ||
         input_tree.contains("output_name_override") ||
@@ -1855,11 +1947,21 @@ namespace confighttp {
         input_tree.contains("virtual_display_layout") ||
         input_tree.contains("config_overrides") ||
         input_tree.contains("prefer_10bit_sdr");
+      const bool has_extended_fields = has_device_fields || input_tree.contains("enabled");
 
       if (!has_extended_fields) {
         output_tree["status"] = nvhttp::set_client_hdr_profile(uuid, hdr_profile.value_or(""));
         send_response(response, output_tree);
         return;
+      }
+
+      if (input_tree.contains("enabled")) {
+        output_tree["enabled_updated"] = nvhttp::set_client_enabled(uuid, input_tree.value("enabled", true));
+        if (!has_device_fields && !hdr_profile.has_value()) {
+          output_tree["status"] = output_tree["enabled_updated"];
+          send_response(response, output_tree);
+          return;
+        }
       }
 
       const std::string name = input_tree.value("name", "");
@@ -4232,6 +4334,125 @@ namespace confighttp {
     send_response(response, output_tree);
   }
 
+  bool is_browsable_executable(const std::filesystem::directory_entry &entry, const std::filesystem::file_status &status) {
+    if (!std::filesystem::is_regular_file(status)) {
+      return false;
+    }
+#ifdef _WIN32
+    auto ext = entry.path().extension().string();
+    boost::to_lower(ext);
+    return ext == ".exe" || ext == ".bat" || ext == ".cmd" || ext == ".ps1";
+#else
+    const auto perms = status.permissions();
+    return (perms & std::filesystem::perms::owner_exec) != std::filesystem::perms::none ||
+           (perms & std::filesystem::perms::group_exec) != std::filesystem::perms::none ||
+           (perms & std::filesystem::perms::others_exec) != std::filesystem::perms::none;
+#endif
+  }
+
+  nlohmann::json build_browse_entries(const std::filesystem::path &dir_path, const std::string &type_str) {
+    nlohmann::json entries = nlohmann::json::array();
+    std::error_code iter_ec;
+    for (auto it = std::filesystem::directory_iterator(dir_path, std::filesystem::directory_options::skip_permission_denied, iter_ec);
+         !iter_ec && it != std::filesystem::directory_iterator();
+         it.increment(iter_ec)) {
+      std::error_code status_ec;
+      const auto status = it->status(status_ec);
+      if (status_ec) {
+        continue;
+      }
+      const bool is_dir = std::filesystem::is_directory(status);
+      const bool is_file = std::filesystem::is_regular_file(status);
+      const bool include =
+        is_dir ||
+        type_str == "any" ||
+        (type_str == "file" && is_file) ||
+        (type_str == "executable" && is_browsable_executable(*it, status));
+      if (!include) {
+        continue;
+      }
+
+      entries.push_back({
+        {"name", it->path().filename().string()},
+        {"path", it->path().string()},
+        {"type", is_dir ? "directory" : "file"}
+      });
+    }
+
+    std::sort(entries.begin(), entries.end(), [](const nlohmann::json &a, const nlohmann::json &b) {
+      const bool a_dir = a["type"] == "directory";
+      const bool b_dir = b["type"] == "directory";
+      if (a_dir != b_dir) {
+        return a_dir;
+      }
+      auto a_name = a["name"].get<std::string>();
+      auto b_name = b["name"].get<std::string>();
+      boost::to_lower(a_name);
+      boost::to_lower(b_name);
+      return a_name < b_name;
+    });
+    return entries;
+  }
+
+#ifdef _WIN32
+  nlohmann::json get_windows_drives() {
+    nlohmann::json drives = nlohmann::json::array();
+    const DWORD mask = GetLogicalDrives();
+    for (char letter = 'A'; letter <= 'Z'; ++letter) {
+      if ((mask & (1u << (letter - 'A'))) == 0) {
+        continue;
+      }
+      std::string path {letter, ':', '\\'};
+      drives.push_back({{"name", path}, {"type", "directory"}, {"path", path}});
+    }
+    return drives;
+  }
+#endif
+
+  void browseDirectory(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    try {
+      auto query_params = request->parse_query_string();
+      const auto type_it = query_params.find("type");
+      const std::string type_str = type_it == query_params.end() ? "any" : type_it->second;
+      const auto path_it = query_params.find("path");
+      std::filesystem::path dir_path = path_it == query_params.end() ? std::filesystem::path {} : std::filesystem::path {path_it->second};
+
+#ifdef _WIN32
+      if (dir_path.empty() || dir_path == "\\" || dir_path == "/") {
+        send_response(response, {{"path", ""}, {"parent", ""}, {"entries", get_windows_drives()}});
+        return;
+      }
+#else
+      if (dir_path.empty()) {
+        dir_path = "/";
+      }
+#endif
+
+      if (std::filesystem::is_regular_file(dir_path)) {
+        dir_path = dir_path.parent_path();
+      }
+      while (!dir_path.empty() && !std::filesystem::exists(dir_path)) {
+        dir_path = dir_path.parent_path();
+      }
+      if (dir_path.empty() || !std::filesystem::is_directory(dir_path)) {
+        bad_request(response, request, "Directory does not exist");
+        return;
+      }
+
+      nlohmann::json output_tree;
+      output_tree["path"] = dir_path.string();
+      output_tree["parent"] = dir_path.parent_path().empty() ? dir_path.string() : dir_path.parent_path().string();
+      output_tree["entries"] = build_browse_entries(dir_path, type_str);
+      send_response(response, output_tree);
+    } catch (const std::exception &e) {
+      bad_request(response, request, e.what());
+    }
+  }
+
   void start() {
     platf::set_thread_name("confighttp");
     auto shutdown_event = mail::man->event<bool>(mail::shutdown);
@@ -4269,13 +4490,24 @@ namespace confighttp {
     server.resource["^/troubleshooting/?$"]["GET"] = getSpaEntry;
     clear_token_route_catalog();
     auto register_api_route = [&](const char *pattern, const char *method, const auto &handler) {
-      server.resource[pattern][method] = handler;
+      server.resource[pattern][method] = [method, handler](resp_https_t response, req_https_t request) {
+        const std::string_view verb {method};
+        if (verb == "POST" || verb == "PATCH" || verb == "PUT" || verb == "DELETE") {
+          const auto client_id = get_client_id(request);
+          if (!validate_csrf_token(response, request, client_id)) {
+            return;
+          }
+        }
+        handler(std::move(response), std::move(request));
+      };
       record_token_route(normalize_route_pattern(pattern), method);
     };
 
     register_api_route("^/api/pin$", "POST", savePin);
     register_api_route("^/api/apps$", "GET", getApps);
     register_api_route("^/api/logs$", "GET", getLogs);
+    register_api_route("^/api/browse$", "GET", browseDirectory);
+    register_api_route("^/api/csrf-token$", "GET", getCSRFToken);
     register_api_route("^/api/apps$", "POST", saveApp);
     register_api_route("^/api/config$", "GET", getConfig);
     register_api_route("^/api/config$", "POST", saveConfig);

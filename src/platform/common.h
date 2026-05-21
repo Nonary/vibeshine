@@ -546,7 +546,7 @@ namespace platf {
   public:
     virtual int set_sink(const std::string &sink) = 0;
 
-    virtual std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, bool continuous) = 0;
+    virtual std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, bool continuous, bool host_audio_enabled) = 0;
 
     /**
      * @brief Check if the audio sink is available in the system.
@@ -837,8 +837,8 @@ namespace platf {
    */
   platform_caps::caps_t get_capabilities();
 
-#define SERVICE_NAME "Sunshine"
-#define SERVICE_TYPE "_nvstream._tcp"
+  inline constexpr std::string_view SERVICE_NAME = "Sunshine";
+  inline constexpr std::string_view SERVICE_TYPE = "_nvstream._tcp";
 
   namespace publish {
     [[nodiscard]] std::unique_ptr<deinit_t> start();
@@ -947,5 +947,8 @@ namespace platf {
    */
   std::unique_ptr<host_stats_provider_t>
     create_host_stats_provider();
+
+  bool has_elevated_privileges();
+  void drop_elevated_privileges();
 
 }  // namespace platf

@@ -8,7 +8,7 @@ It is recommended to use one of the following compilers:
 
 | Compiler    | Version |
 |:------------|:--------|
-| GCC         | 13+     |
+| GCC         | 14+     |
 | Clang       | 17+     |
 | Apple Clang | 15+     |
 
@@ -59,7 +59,7 @@ from source and using the binary directly, this will also work:
 
 ```bash
 sudo cp build/sunshine /tmp
-sudo setcap cap_sys_admin+p /tmp/sunshine
+sudo setcap cap_sys_admin,cap_sys_nice+p /tmp/sunshine
 sudo getcap /tmp/sunshine
 sudo mv /tmp/sunshine build/sunshine
 ```
@@ -69,7 +69,7 @@ Sunshine requires CUDA Toolkit for NVFBC capture. There are two caveats to CUDA:
 
 1. The version installed depends on the version of GCC.
 2. The version of CUDA you use will determine compatibility with various GPU generations.
-   At the time of writing, the recommended version to use is CUDA ~12.9.
+   At the time of writing, the recommended version to use is CUDA ~13.1.
    See [CUDA compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/index.html) for more info.
 
 > [!NOTE]

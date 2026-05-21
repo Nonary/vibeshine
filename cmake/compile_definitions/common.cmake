@@ -180,6 +180,8 @@ include_directories(
         ${WEBRTC_INCLUDE_DIRS}
         ${SQLITE3_INCLUDE_DIRS}
         ${SUNSHINE_FFMPEG_INCLUDE_DIRS}
+        ${OPENSSL_INCLUDE_DIR}
+        ${Opus_INCLUDE_DIR}
         ${Boost_INCLUDE_DIRS}  # has to be the last, or we get runtime error on macOS ffmpeg encoder
 )
 
@@ -190,7 +192,7 @@ list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
         enet
         libdisplaydevice::display_device
         nlohmann_json::nlohmann_json
-        opus
+        ${Opus_LIBRARY}
         ${FFMPEG_LIBRARIES}
         ${Boost_LIBRARIES}
         ${OPENSSL_LIBRARIES}

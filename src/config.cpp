@@ -114,7 +114,7 @@ namespace config {
     }
 
     nvenc::split_encode_mode split_encode_mode_from_view(const std::string_view &value) {
-      if (value == "auto") {
+      if (value == "auto" || value == "driver_decides") {
         return nvenc::split_encode_mode::auto_mode;
       }
       if (value == "enabled") {
@@ -1426,6 +1426,16 @@ namespace config {
     return opts;
   }
 
+  void log_config_settings(const std::unordered_map<std::string, std::string> &vars, bool save) {
+    for (auto &[name, val] : vars) {
+      bool is_redacted = std::ranges::find(config::redacted_config, name) != config::redacted_config.end();
+      BOOST_LOG(info) << "config: '"sv << name << "' = "sv << (is_redacted ? "[redacted]" : val);
+      if (save) {
+        modified_config_settings[name] = val;
+      }
+    }
+  }
+
   void apply_config(std::unordered_map<std::string, std::string> &&vars) {
     reset_runtime_config_to_defaults();
 #ifndef __ANDROID__
@@ -1436,11 +1446,7 @@ namespace config {
 #endif
 
     nv::normalize_split_encode_alias(vars);
-
-    for (auto &[name, val] : vars) {
-      BOOST_LOG(info) << "config: '"sv << name << "' = "sv << val;
-      modified_config_settings[name] = val;
-    }
+    log_config_settings(vars, true);
 
     int_f(vars, "qp", video.qp);
     int_between_f(vars, "hevc_mode", video.hevc_mode, {0, 3});
@@ -1619,6 +1625,28 @@ namespace config {
     // reflect origin ACL update immediately in HTTP layer
     if (modified_config_settings.contains("origin_web_ui_allowed")) {
       http::refresh_origin_acl();
+    }
+
+    std::vector<std::string> user_csrf_origins;
+    list_string_f(vars, "csrf_allowed_origins", user_csrf_origins);
+
+    sunshine.csrf_allowed_origins = {
+      "https://localhost",
+      "https://127.0.0.1",
+      "https://[::1]"
+    };
+
+    bool csrf_invalid_config = false;
+    for (const auto &origin : user_csrf_origins) {
+      if (origin.size() > 8 && origin.starts_with("https://")) {
+        sunshine.csrf_allowed_origins.push_back(origin);
+      } else if (!origin.empty()) {
+        csrf_invalid_config = true;
+        BOOST_LOG(warning) << "Invalid 'csrf_allowed_origins' entry rejected: "sv << origin;
+      }
+    }
+    if (csrf_invalid_config) {
+      BOOST_LOG(warning) << "csrf_allowed_origins entries must be https:// origins.";
     }
 
     int to = -1;

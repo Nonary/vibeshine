@@ -35,12 +35,12 @@ See [Docker](../DOCKER_README.md) for more information.
 
    | Architecture  | Package                                                                                                                                |
    |---------------|----------------------------------------------------------------------------------------------------------------------------------------|
-   | amd64/x86_64  | [Sunshine-FreeBSD-14.3-amd64.pkg](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-FreeBSD-14.3-amd64.pkg)     |
-   | arm64/aarch64 | [Sunshine-FreeBSD-14.3-aarch64.pkg](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-FreeBSD-14.3-aarch64.pkg) |
+   | amd64/x86_64  | [Sunshine-FreeBSD-14.4-amd64.pkg](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-FreeBSD-14.3-amd64.pkg)     |
+   | arm64/aarch64 | [Sunshine-FreeBSD-14.4-aarch64.pkg](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-FreeBSD-14.3-aarch64.pkg) |
 
 2. Open terminal and run the following command.
    ```sh
-   sudo pkg install ./Sunshine-FreeBSD-14.3-{arch}.pkg
+   sudo pkg install ./Sunshine-FreeBSD-14.4-{arch}.pkg
    ```
 
 #### Uninstall
@@ -68,8 +68,8 @@ CUDA is used for NVFBC capture.
         <th>Package</th>
     </tr>
     <tr>
-        <td rowspan="8">12.9.1</td>
-        <td rowspan="8">575.57.08</td>
+        <td rowspan="8">13.1.1</td>
+        <td rowspan="8">590.48.01</td>
         <td rowspan="8">50;52;60;61;62;70;72;75;80;86;87;89;90;100;101;103;120;121</td>
         <td>sunshine.AppImage</td>
     </tr>
@@ -308,6 +308,25 @@ brew uninstall sunshine
 > [!IMPORTANT]
 > Sunshine on macOS is experimental. Gamepads do not work.
 
+#### DMG
+
+##### Install
+
+1. Download and install based on your architecture:
+
+   | Architecture          | Package                                                                                                                |
+   |-----------------------|------------------------------------------------------------------------------------------------------------------------|
+   | arm64 (Apple Silicon) | [Sunshine-macOS-arm64.dmg](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-macOS-arm64.dmg)   |
+   | x86_64 (Intel)        | [Sunshine-macOS-x86_64.dmg](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-macOS-x86_64.dmg) |
+
+2. Open the downloaded `.dmg` file.
+3. Drag `Sunshine.app` into the `Applications` folder.
+4. Eject the disk image.
+
+##### Uninstall
+1. Quit Sunshine if it is running.
+2. Open `Finder`, navigate to `Applications`, and drag `Sunshine.app` to the Trash.
+
 #### Homebrew
 This package requires that you have [Homebrew](https://docs.brew.sh/Installation) installed.
 
@@ -428,27 +447,30 @@ After adding yourself to the group, log out and log back in for the changes to t
 
 #### Services
 
-> [!NOTE]
-> Two service unit files are available. Pick "sunshine" for unprivileged XDG Portal or X11 capture, otherwise
-> pick "sunshine-kms" for privileged KMS capture.
-
 **Start once**
 ```bash
-systemctl --user start sunshine
+systemctl --user start app-dev.lizardbyte.app.Sunshine
 ```
 
-**Start on boot (unprivileged; swap logic for KMS)**
+**Start on boot**
 ```bash
-systemctl --user --now disable sunshine-kms
-systemctl --user --now enable sunshine
+systemctl --user --now enable app-dev.lizardbyte.app.Sunshine
 ```
+
+> [!NOTE]
+> The service has been renamed to "app-dev.lizardbyte.app.Sunshine" in order to increase compatibility with
+> XDG Desktop Portal, but it is also aliased to "sunshine.service" for convenience.
 
 ### macOS
 The first time you start Sunshine, you will be asked to grant access to screen recording and your microphone.
 
-Sunshine can only access microphones on macOS due to system limitations. To stream system audio use
+Sunshine supports native system audio capture on macOS 14.0 (Sonoma) and newer via Apple’s Audio Tap API.
+To use it, simply leave the **Audio Sink** setting blank.
+
+If you prefer to manage your own loopback device, you can still use
 [Soundflower](https://github.com/mattingalls/Soundflower) or
-[BlackHole](https://github.com/ExistentialAudio/BlackHole).
+[BlackHole](https://github.com/ExistentialAudio/BlackHole)
+and enter its device name in the [audio_sink](configuration.md#audio_sink) field.
 
 > [!NOTE]
 > Command Keys are not forwarded by Moonlight. Right Option-Key is mapped to CMD-Key.

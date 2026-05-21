@@ -34,7 +34,7 @@ jobs:
           matrix='{
             "include": [
               {
-                "bsd_release": "14.3",
+                "bsd_release": "14.4",
                 "arch": "x86_64",
                 "cmake_processor": "amd64",
                 "runner": "ubuntu-latest"
@@ -45,7 +45,7 @@ jobs:
           # Add aarch64 build only if not a pull request event
           if [[ "${{ github.event_name }}" != "pull_request" ]]; then
             matrix=$(echo "$matrix" | jq '.include += [{
-              "bsd_release": "14.3",
+              "bsd_release": "14.4",
               "arch": "aarch64",
               "cmake_processor": "aarch64",
               "runner": "ubuntu-latest"
@@ -63,7 +63,7 @@ jobs:
           echo "$matrix" | jq .
 
   build_freebsd:
-    name: ${{ matrix.cmake_processor }}-${{ matrix.bsd_release }}
+    name: ${{ matrix.cmake_processor }}
     runs-on: ubuntu-latest
     needs: setup-matrix
     permissions:
@@ -86,7 +86,7 @@ jobs:
           echo "PROCESSOR_COUNT: $PROCESSOR_COUNT"
 
       - name: Setup FreeBSD
-        uses: vmactions/freebsd-vm@c9f815bc7aa0d34c9fdd0619b034a32d6ca7b57e  # v1.4.2
+        uses: vmactions/freebsd-vm@d1e65811565151536c0c894fff74f06351ed26e6  # v1.4.5
         with:
           arch: ${{ matrix.arch }}
           cpu: ${{ steps.processor_count.outputs.PROCESSOR_COUNT }}
@@ -113,8 +113,11 @@ jobs:
               devel/pkgconf \
               ftp/curl \
               graphics/libdrm \
+              graphics/shaderc \
+              graphics/vulkan-headers \
+              graphics/vulkan-loader \
               graphics/wayland \
-              lang/python312 \
+              lang/python314 \
               multimedia/libva \
               multimedia/pipewire \
               net/miniupnpc \
@@ -133,13 +136,13 @@ jobs:
             ln -s /usr/local/bin/bash /bin/bash
 
             # setup python
-            ln -s /usr/local/bin/python3.12 /usr/local/bin/python
+            ln -s /usr/local/bin/python3.14 /usr/local/bin/python
             python -m ensurepip
           release: ${{ matrix.bsd_release }}
           run: |
             set -e
-            # install gcvor
-            python -m pip install gcovr
+            # install glad deps and gcvor
+            python -m pip install ".[glad,test]"
 
             # fix git safe.directory issues
             git config --global --add safe.directory "*"
@@ -170,6 +173,7 @@ jobs:
             -DSUNSHINE_EXECUTABLE_PATH=/usr/local/bin/sunshine \
             -DSUNSHINE_ENABLE_CUDA=OFF \
             -DSUNSHINE_ENABLE_DRM=OFF \
+            -DSUNSHINE_ENABLE_KWIN=ON \
             -DSUNSHINE_ENABLE_PORTAL=ON \
             -DSUNSHINE_ENABLE_WAYLAND=ON \
             -DSUNSHINE_ENABLE_X11=ON \
@@ -260,17 +264,17 @@ jobs:
         if: >-
           always() &&
           (steps.test_report.outcome == 'success')
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: coverage-FreeBSD-${{ matrix.bsd_release }}-${{ matrix.cmake_processor }}
+          name: coverage-FreeBSD-${{ matrix.cmake_processor }}
           path: |
             build/coverage.xml
             build/tests/test_results.xml
           if-no-files-found: error
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: build-FreeBSD-${{ matrix.bsd_release }}-${{ matrix.cmake_processor }}
+          name: build-FreeBSD-${{ matrix.cmake_processor }}
           path: artifacts/
           if-no-files-found: error

@@ -51,7 +51,9 @@ BuildRequires: which
 # Fedora-specific BuildRequires
 BuildRequires: appstream
 # BuildRequires: boost-devel >= 1.86.0
+BuildRequires: glslc
 BuildRequires: libappstream-glib
+BuildRequires: vulkan-loader-devel
 %if 0%{fedora} > 43
 # needed for npm from nvm
 BuildRequires: libatomic
@@ -67,6 +69,8 @@ BuildRequires: nodejs-npm
 BuildRequires: numactl-devel
 BuildRequires: opus-devel
 BuildRequires: pulseaudio-libs-devel
+BuildRequires: python3-jinja2
+BuildRequires: python3-setuptools
 BuildRequires: systemd-udev
 %{?sysusers_requires_compat}
 # for unit tests
@@ -86,7 +90,16 @@ BuildRequires: libnuma-devel
 BuildRequires: libopus-devel
 BuildRequires: libpulse-devel
 BuildRequires: npm
+BuildRequires: python311
+BuildRequires: python311-Jinja2
+BuildRequires: python311-setuptools
+%if !0%{?sle_version}
+BuildRequires: shaderc
+%endif
 BuildRequires: udev
+%if !0%{?sle_version}
+BuildRequires: vulkan-devel
+%endif
 # for unit tests
 BuildRequires: xvfb-run
 %endif
@@ -99,21 +112,27 @@ BuildRequires: gcc13-c++
 %global gcc_version 13
 %global cuda_version 12.9.1
 %global cuda_build 575.57.08
-%elif %{?fedora} >= 42
+%elif 0%{?fedora} >= 42 && 0%{?fedora} <= 43
 BuildRequires: gcc14
 BuildRequires: gcc14-c++
 %global gcc_version 14
 %global cuda_version 12.9.1
 %global cuda_build 575.57.08
+%elif 0%{?fedora} >= 44
+BuildRequires: gcc15
+BuildRequires: gcc15-c++
+%global gcc_version 15
+%global cuda_version 13.1.1
+%global cuda_build 590.48.01
 %endif
 %endif
 
 %if 0%{?suse_version}
 %if 0%{?suse_version} <= 1699
 # OpenSUSE Leap 15.x
-BuildRequires: gcc13
-BuildRequires: gcc13-c++
-%global gcc_version 13
+BuildRequires: gcc14
+BuildRequires: gcc14-c++
+%global gcc_version 14
 %global cuda_version 12.9.1
 %global cuda_build 575.57.08
 %else
@@ -146,6 +165,7 @@ Requires: libX11 >= 1.7.3.1
 Requires: numactl-libs >= 2.0.14
 Requires: openssl >= 3.0.2
 Requires: pulseaudio-libs >= 10.0
+Requires: vulkan-loader
 %endif
 
 %if 0%{?suse_version}
@@ -162,6 +182,9 @@ Requires: libX11-6
 Requires: libnuma1
 Requires: libopenssl3
 Requires: libpulse0
+%if !0%{?sle_version}
+Requires: libvulkan1
+%endif
 %endif
 
 %description
@@ -196,6 +219,7 @@ cmake_args=(
   "-DSUNSHINE_ASSETS_DIR=%{_datadir}/sunshine"
   "-DSUNSHINE_EXECUTABLE_PATH=%{_bindir}/sunshine"
   "-DSUNSHINE_ENABLE_DRM=ON"
+  "-DSUNSHINE_ENABLE_KWIN=ON"
   "-DSUNSHINE_ENABLE_PORTAL=ON"
   "-DSUNSHINE_ENABLE_WAYLAND=ON"
   "-DSUNSHINE_ENABLE_X11=ON"
@@ -239,18 +263,29 @@ function install_cuda() {
     --toolkitpath="%{cuda_dir}"
   rm "%{_builddir}/cuda.run"
 
-  # we need to patch math_functions.h on fedora 42+
+  # we need to patch math_functions.h depending on the CUDA major version
   # see https://forums.developer.nvidia.com/t/error-exception-specification-is-incompatible-for-cospi-sinpi-cospif-sinpif-with-glibc-2-41/323591/3
-  if [ "%{?fedora}" -ge 42 ]; then
-    echo "Original math_functions.h:"
-    find "%{cuda_dir}" -name math_functions.h -exec cat {} \;
+  local cuda_major
+  cuda_major=$(echo "%{cuda_version}" | cut -d. -f1)
+  local patch_file=""
+  if [ "${cuda_major}" -eq 12 ]; then
+    # CUDA 12.x: the extern declarations lack noexcept(true); add it to match glibc 2.41.
+    patch_file="cuda-12-math_functions.patch"
+  elif [ "${cuda_major}" -eq 13 ]; then
+    # CUDA 13.x: the extern declarations already have noexcept(true), but the __func__()
+    # macro invocations at the bottom still lack it, causing a redeclaration conflict.
+    patch_file="cuda-13-math_functions.patch"
+  else
+    echo "Warning: no math_functions.h patch available for CUDA ${cuda_major}.x, skipping."
+  fi
 
-    # Apply the patch
+  if [ -n "${patch_file}" ]; then
+    echo "Applying CUDA patch: ${patch_file}"
     patch -p2 \
       --backup \
       --directory="%{cuda_dir}" \
       --verbose \
-      < "%{_builddir}/Sunshine/packaging/linux/patches/${architecture}/01-math_functions.patch"
+      < "%{_builddir}/Sunshine/packaging/linux/patches/${architecture}/${patch_file}"
   fi
 }
 
@@ -300,6 +335,11 @@ export PATH="$(dirname ${NODE_PATH}):${PATH}"
 export BRANCH=%{branch}
 export BUILD_VERSION=v%{build_version}
 export COMMIT=%{commit}
+
+# Disable Vulkan on openSUSE Leap (shaderc/glslang not in official repos)
+%if 0%{?sle_version}
+cmake_args+=("-DSUNSHINE_ENABLE_VULKAN=OFF")
+%endif
 
 # cmake
 cd %{_builddir}/Sunshine
@@ -365,13 +405,10 @@ fi
 
 %files
 # Executables
-%caps(cap_sys_admin+p) %{_bindir}/sunshine
-%caps(cap_sys_admin+p) %{_bindir}/sunshine-*
+%caps(cap_sys_admin,cap_sys_nice+p) %{_bindir}/sunshine
 
-# Systemd unit/preset files for user services
-%{_userunitdir}/sunshine.service
-%{_userunitdir}/sunshine-kms.service
-%{_userpresetdir}/00-sunshine-kms.preset
+# Systemd unit files for user services
+%{_userunitdir}/*.service
 
 # Udev rules
 %{_udevrulesdir}/*-sunshine.rules
@@ -383,8 +420,8 @@ fi
 %{_datadir}/applications/*.desktop
 
 # Icons
-%{_datadir}/icons/hicolor/scalable/apps/sunshine.svg
-%{_datadir}/icons/hicolor/scalable/status/sunshine*.svg
+%{_datadir}/icons/hicolor/scalable/apps/*.Sunshine.svg
+%{_datadir}/icons/hicolor/scalable/status/*.Sunshine-*.svg
 
 # Metainfo
 %{_datadir}/metainfo/*.metainfo.xml

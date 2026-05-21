@@ -1,4 +1,4 @@
-{
+﻿{
   "_common": {
     "all": "Alla",
     "apply": "Tillämpa",
@@ -206,6 +206,8 @@
     "encoder_software": "Programvara",
     "external_ip": "Extern IP",
     "external_ip_desc": "Om ingen extern IP-adress anges, kommer Vibeshine automatiskt upptäcka extern IP",
+    "csrf_allowed_origins": "CSRF Allowed Origins",
+    "csrf_allowed_origins_desc": "Comma-separated list of additional origins allowed for CSRF protection. Only add origins you trust, including protocol and host, for example https://example.com.",
     "fec_percentage": "FEC Procent",
     "fec_percentage_desc": "Procent av felkorrigering av paket per datapaket i varje videoram. Högre värden kan korrigera för mer förlust av nätverkspaket, men på bekostnad av ökad bandbreddsanvändning.",
     "ffmpeg_auto": "auto – låt ffmpeg bestämma (standard)",

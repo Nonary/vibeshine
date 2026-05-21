@@ -1,4 +1,4 @@
-{
+﻿{
   "_common": {
     "all": "所有的",
     "apply": "应用",
@@ -206,6 +206,8 @@
     "encoder_software": "软件",
     "external_ip": "外部 IP",
     "external_ip_desc": "如果没有指定外部 IP 地址，Vibeshine 将自动检测外部 IP",
+    "csrf_allowed_origins": "CSRF Allowed Origins",
+    "csrf_allowed_origins_desc": "Comma-separated list of additional origins allowed for CSRF protection. Only add origins you trust, including protocol and host, for example https://example.com.",
     "fec_percentage": "FEC (前向纠错) 参数",
     "fec_percentage_desc": "每个视频帧中的错误纠正数据包百分比。较高的值可纠正更多的网络数据包丢失，但代价是增加带宽使用量。",
     "ffmpeg_auto": "auto -- 由 ffmpeg 决定（默认）",

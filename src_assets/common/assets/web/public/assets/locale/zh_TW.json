@@ -1,4 +1,4 @@
-{
+﻿{
   "_common": {
     "all": "全部",
     "apply": "套用",
@@ -206,6 +206,8 @@
     "encoder_software": "軟體",
     "external_ip": "外部 IP",
     "external_ip_desc": "如果未提供外部 IP 位址，Vibeshine 會自動偵測外部 IP 位址。",
+    "csrf_allowed_origins": "CSRF Allowed Origins",
+    "csrf_allowed_origins_desc": "Comma-separated list of additional origins allowed for CSRF protection. Only add origins you trust, including protocol and host, for example https://example.com.",
     "fec_percentage": "FEC 比例",
     "fec_percentage_desc": "每個視訊影格中每個資料封包的錯誤修正封包百分比。較高的值可以修正更多的網路封包遺失，但代價是增加頻寬使用量。",
     "ffmpeg_auto": "auto—由 ffmpeg 決定（預設）",

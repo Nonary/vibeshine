@@ -1,4 +1,4 @@
-{
+﻿{
   "_common": {
     "all": "Alle",
     "apply": "Übernehmen",
@@ -206,6 +206,8 @@
     "encoder_software": "Software",
     "external_ip": "Externe IP",
     "external_ip_desc": "Wenn keine externe IP-Adresse angegeben ist, erkennt Vibeshine automatisch externe IP",
+    "csrf_allowed_origins": "CSRF Allowed Origins",
+    "csrf_allowed_origins_desc": "Comma-separated list of additional origins allowed for CSRF protection. Only add origins you trust, including protocol and host, for example https://example.com.",
     "fec_percentage": "Prozentsatz FEC",
     "fec_percentage_desc": "Prozentsatz der Fehlerkorrektur von Paketen pro Datenpaket in jedem Videobild. Höhere Werte können für mehr Netzwerk-Paketverlust korrigieren, aber auf Kosten einer erhöhten Bandbreitennutzung.",
     "ffmpeg_auto": "auto -- ffmpeg entscheiden lassen (Standard)",

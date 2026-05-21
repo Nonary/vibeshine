@@ -14,6 +14,9 @@
 	path = third-party/doxyconfig
 	url = https://github.com/LizardByte/doxyconfig.git
 	branch = master
+[submodule "third-party/glad"]
+	path = third-party/glad
+	url = https://github.com/Dav1dde/glad.git
 [submodule "third-party/googletest"]
 	path = third-party/googletest
 	url = https://github.com/google/googletest.git
@@ -42,6 +45,14 @@
 	path = third-party/nvapi-open-source-sdk
 	url = https://github.com/LizardByte/nvapi-open-source-sdk.git
 	branch = sdk
+[submodule "third-party/nvapi"]
+	path = third-party/nvapi
+	url = https://github.com/NVIDIA/nvapi.git
+	branch = main
+[submodule "third-party/plasma-wayland-protocols"]
+	path = third-party/plasma-wayland-protocols
+	url = https://github.com/KDE/plasma-wayland-protocols.git
+	branch = master
 [submodule "third-party/Simple-Web-Server"]
 	path = third-party/Simple-Web-Server
 	url = https://github.com/LizardByte-infrastructure/Simple-Web-Server.git

@@ -658,6 +658,7 @@ namespace nvhttp {
     std::string virtual_display_mode_override;
     std::string virtual_display_layout_override;
     bool always_use_virtual_display = false;
+    bool enabled = true;
     std::optional<bool> prefer_10bit_sdr;
     std::optional<std::int64_t> last_seen;
     std::unordered_map<std::string, std::string> config_overrides;
@@ -742,6 +743,7 @@ namespace nvhttp {
       named_cert_node.put("name"s, named_cert.name);
       named_cert_node.put("cert"s, named_cert.cert);
       named_cert_node.put("uuid"s, named_cert.uuid);
+      named_cert_node.put("enabled"s, named_cert.enabled);
       if (!named_cert.hdr_profile.empty()) {
         named_cert_node.put("hdr_profile"s, named_cert.hdr_profile);
       }
@@ -917,6 +919,7 @@ namespace nvhttp {
           named_cert.virtual_display_mode_override = el.get<std::string>("virtual_display_mode", "");
           named_cert.virtual_display_layout_override = el.get<std::string>("virtual_display_layout", "");
           named_cert.always_use_virtual_display = el.get<bool>("always_use_virtual_display", false);
+          named_cert.enabled = el.get<bool>("enabled", true);
           if (auto prefer_10bit_sdr = el.get_optional<bool>("prefer_10bit_sdr")) {
             named_cert.prefer_10bit_sdr = *prefer_10bit_sdr;
           } else {
@@ -964,6 +967,7 @@ namespace nvhttp {
     named_cert.virtual_display_mode_override.clear();
     named_cert.virtual_display_layout_override.clear();
     named_cert.always_use_virtual_display = false;
+    named_cert.enabled = true;
     named_cert.prefer_10bit_sdr.reset();
     named_cert.last_seen.reset();
     named_cert.config_overrides.clear();
@@ -1738,6 +1742,7 @@ namespace nvhttp {
       nlohmann::json named_cert_node;
       named_cert_node["name"] = named_cert.name;
       named_cert_node["uuid"] = named_cert.uuid;
+      named_cert_node["enabled"] = named_cert.enabled;
       named_cert_node["hdr_profile"] = named_cert.hdr_profile;
       named_cert_node["display_mode"] = named_cert.display_mode;
       named_cert_node["output_name_override"] = named_cert.output_name_override;
@@ -2490,6 +2495,19 @@ namespace nvhttp {
         }
 
         err_str = cert_chain.verify(x509_verify.get());
+        if (!err_str) {
+          const auto client_signature = crypto::signature(x509_verify.get());
+          for (const auto &named_cert : client_root.named_devices) {
+            auto stored_x509 = crypto::x509(named_cert.cert);
+            if (!stored_x509 || crypto::signature(stored_x509.get()) != client_signature) {
+              continue;
+            }
+            if (!named_cert.enabled) {
+              err_str = "Client is disabled";
+            }
+            break;
+          }
+        }
       }
       if (err_str) {
         BOOST_LOG(warning) << "SSL Verification error :: "sv << err_str;
@@ -2663,6 +2681,34 @@ namespace nvhttp {
       save_state();
     }
     return updated;
+  }
+
+  bool set_client_enabled(std::string_view uuid, bool enabled) {
+    bool updated = false;
+    {
+      std::lock_guard<std::mutex> lock(client_mutex);
+      for (auto &named_cert : client_root.named_devices) {
+        if (named_cert.uuid == uuid) {
+          named_cert.enabled = enabled;
+          updated = true;
+          break;
+        }
+      }
+    }
+    if (updated) {
+      save_state();
+    }
+    return updated;
+  }
+
+  std::string get_cert_by_uuid(std::string_view uuid) {
+    std::lock_guard<std::mutex> lock(client_mutex);
+    for (const auto &named_cert : client_root.named_devices) {
+      if (named_cert.uuid == uuid) {
+        return named_cert.cert;
+      }
+    }
+    return {};
   }
 
   bool disconnect_client(const std::string &uuid) {

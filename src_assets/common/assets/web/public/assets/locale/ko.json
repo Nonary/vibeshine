@@ -1,4 +1,4 @@
-{
+﻿{
   "_common": {
     "all": "모두",
     "apply": "적용",
@@ -206,6 +206,8 @@
     "encoder_software": "소프트웨어",
     "external_ip": "외부 IP",
     "external_ip_desc": "외부 IP 주소가 지정되지 않은 경우 Vibeshine은 자동으로 외부 IP를 감지합니다.",
+    "csrf_allowed_origins": "CSRF Allowed Origins",
+    "csrf_allowed_origins_desc": "Comma-separated list of additional origins allowed for CSRF protection. Only add origins you trust, including protocol and host, for example https://example.com.",
     "fec_percentage": "FEC 백분율",
     "fec_percentage_desc": "각 비디오 프레임의 데이터 패킷당 오류를 수정하는 패킷의 백분율입니다. 값이 높을수록 더 많은 네트워크 패킷 손실을 보정할 수 있지만 대역폭 사용량이 증가합니다.",
     "ffmpeg_auto": "자동 -- FFMPEG 결정에 맡김(기본값)",

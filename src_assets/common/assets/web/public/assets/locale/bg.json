@@ -1,4 +1,4 @@
-{
+﻿{
   "_common": {
     "all": "Всички",
     "apply": "Прилагане",
@@ -211,6 +211,8 @@
     "encoder_software": "Софтуерно",
     "external_ip": "Външен IP адрес",
     "external_ip_desc": "Ако не е зададен външен IP адрес, Vibeshine автоматично ще открие какъв е той",
+    "csrf_allowed_origins": "CSRF Allowed Origins",
+    "csrf_allowed_origins_desc": "Comma-separated list of additional origins allowed for CSRF protection. Only add origins you trust, including protocol and host, for example https://example.com.",
     "fec_percentage": "Процент на FEC",
     "fec_percentage_desc": "Процент на пакетите за коригиране на грешки от всеки пакет данни за всеки видео кадър. По-високите стойности могат да коригират по-голяма загуба на мрежови пакети, но за сметка на увеличаване на данните предавани по мрежата.",
     "ffmpeg_auto": "auto – нека ffmpeg реши (по подразбиране)",

@@ -1,4 +1,4 @@
-{
+﻿{
   "_common": {
     "all": "Tümü",
     "apply": "Uygula",
@@ -206,6 +206,8 @@
     "encoder_software": "Yazılım",
     "external_ip": "Harici IP",
     "external_ip_desc": "Harici IP adresi verilmezse, Vibeshine harici IP'yi otomatik olarak algılar",
+    "csrf_allowed_origins": "CSRF Allowed Origins",
+    "csrf_allowed_origins_desc": "Comma-separated list of additional origins allowed for CSRF protection. Only add origins you trust, including protocol and host, for example https://example.com.",
     "fec_percentage": "FEC Yüzdesi",
     "fec_percentage_desc": "Her video karesindeki veri paketi başına hata düzeltme paketlerinin yüzdesi. Daha yüksek değerler daha fazla ağ paketi kaybını düzeltebilir, ancak bant genişliği kullanımını artırma pahasına.",
     "ffmpeg_auto": "auto -- ffmpeg'in karar vermesine izin ver (varsayılan)",

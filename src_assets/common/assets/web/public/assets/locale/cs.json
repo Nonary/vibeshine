@@ -1,4 +1,4 @@
-{
+﻿{
   "_common": {
     "all": "Vše",
     "apply": "Použít",
@@ -344,6 +344,8 @@
     "encoder_software": "Software",
     "external_ip": "Externí IP",
     "external_ip_desc": "Pokud není zadána žádná externí IP adresa, Vibeshine automaticky zjistí externí IP adresu",
+    "csrf_allowed_origins": "CSRF Allowed Origins",
+    "csrf_allowed_origins_desc": "Comma-separated list of additional origins allowed for CSRF protection. Only add origins you trust, including protocol and host, for example https://example.com.",
     "fec_percentage": "Procento FEC",
     "fec_percentage_desc": "Procento paketů pro opravu chyb v každém datovém paketu v každém videosnímku. Vyšší hodnoty mohou korigovat větší ztráty síťových paketů, ale za cenu zvýšení využití šířky pásma.",
     "frame_limiter_fps_limit": "Omezovač rámečku FPS limit",

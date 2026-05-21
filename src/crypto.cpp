@@ -35,8 +35,6 @@ namespace crypto {
       // Expired or not-yet-valid certificates are fine. Sometimes Moonlight is running on embedded devices
       // that don't have accurate clocks (or haven't yet synchronized by the time Moonlight first runs).
       // This behavior also matches what GeForce Experience does.
-      // TODO: Checking for X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY is a temporary workaround to get moonlight-embedded to work on the raspberry pi
-      case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY:
       case X509_V_ERR_CERT_NOT_YET_VALID:
       case X509_V_ERR_CERT_HAS_EXPIRED:
         return 1;
@@ -161,7 +159,8 @@ namespace crypto {
 
       plaintext.resize(round_to_pkcs7_padded(cipher.size()));
 
-      int update_outlen, final_outlen;
+      int final_outlen;
+      int update_outlen;
 
       if (EVP_DecryptUpdate(decrypt_ctx.get(), plaintext.data(), &update_outlen, (const std::uint8_t *) cipher.data(), (int) cipher.size()) != 1) {
         return -1;
@@ -195,7 +194,8 @@ namespace crypto {
         return -1;
       }
 
-      int update_outlen, final_outlen;
+      int final_outlen;
+      int update_outlen;
 
       // Encrypt into the caller's buffer
       if (EVP_EncryptUpdate(encrypt_ctx.get(), ciphertext, &update_outlen, (const std::uint8_t *) plaintext.data(), (int) plaintext.size()) != 1) {
@@ -232,7 +232,8 @@ namespace crypto {
       EVP_CIPHER_CTX_set_padding(decrypt_ctx.get(), padding);
       plaintext.resize(round_to_pkcs7_padded(cipher.size()));
 
-      int update_outlen, final_outlen;
+      int final_outlen;
+      int update_outlen;
 
       if (EVP_DecryptUpdate(decrypt_ctx.get(), plaintext.data(), &update_outlen, (const std::uint8_t *) cipher.data(), (int) cipher.size()) != 1) {
         return -1;
@@ -259,7 +260,8 @@ namespace crypto {
       EVP_CIPHER_CTX_set_padding(encrypt_ctx.get(), padding);
       cipher.resize(round_to_pkcs7_padded(plaintext.size()));
 
-      int update_outlen, final_outlen;
+      int final_outlen;
+      int update_outlen;
 
       // Encrypt into the caller's buffer
       if (EVP_EncryptUpdate(encrypt_ctx.get(), cipher.data(), &update_outlen, (const std::uint8_t *) plaintext.data(), (int) plaintext.size()) != 1) {
@@ -290,7 +292,8 @@ namespace crypto {
         return false;
       }
 
-      int update_outlen, final_outlen;
+      int final_outlen;
+      int update_outlen;
 
       // Encrypt into the caller's buffer
       if (EVP_EncryptUpdate(encrypt_ctx.get(), cipher, &update_outlen, (const std::uint8_t *) plaintext.data(), (int) plaintext.size()) != 1) {

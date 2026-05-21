@@ -159,19 +159,49 @@ If the input is still not working, you may need to add your user to the `input` 
 sudo usermod -aG input $USER
 ```
 
-### KMS Streaming fails
-If screencasting fails with KMS, you may be using the unprivileged sunshine service unit. Switch to the privileged
-sunshine-kms service:
+#### Multiseat
+
+If you run multiple concurrent Wayland sessions on separate logind seats (e.g. `seat0`, `seat1`),
+your compositor may ignore injected input unless Sunshine's virtual devices are assigned to the correct seat.
+
+Sunshine determines its target seat from `XDG_SEAT`, which is typically set automatically by your display manager.
+If needed, you can override it manually in your systemd service file or shell environment before starting Sunshine.
+
+When the seat is not `seat0`, Sunshine appends the seat name to its virtual device names, for example:
+
+- Keyboard passthrough (seat1)
+- Sunshine PS5 (virtual) pad (seat1)
+
+Sunshine creates two mouse devices: a relative one and an absolute one.
+
+To assign Sunshine's virtual devices to the correct seat, create this udev rules file
+(/etc/udev/rules.d/72-sunshine-virtual-seat.rules):
+```udev
+SUBSYSTEM=="input", KERNEL=="input*", ATTR{name}=="*(seat1)*", TAG+="seat", ENV{ID_SEAT}="seat1"
+```
+
+Then reload udev:
 
 ```bash
-systemctl --user --now disable sunshine
-systemctl --user --now enable sunshine-kms
+sudo udevadm control --reload-rules && sudo udevadm trigger -s input
+```
+
+### KMS Streaming fails
+KMS screencasting requires elevated privileges which are not allowed for Flatpak or AppImage packages.
+This means that you must install Sunshine using the native package format of your distribution, if available.
+KMS capture will soon be phased out in favour of XDG Portal Capture (which works with all package types).
+
+### KMS Streaming; some windows flicker/disappear on KDE Plasma 6.5+
+KWin's overlay support interferes with KMS capture. As of KWin 6.5 this is not yet set by default, but
+for future versions that enables this by default, you may be able to disable again via a special
+[environment variable](https://invent.kde.org/plasma/kwin/-/wikis/Environment-Variables#kwin_use_overlays):
+
+```bash
+export KWIN_USE_OVERLAYS=0
 ```
 
 > [!NOTE]
-> The above commands will not work with the AppImage or Flatpak packages, as KMS screencasting
-> requires elevated privileges which are not allowed by their respective packaging security policies.
-> As an alternative, XDG Portal capture is recommended.
+> Disabling overlays will reduce KWin's rendering efficiency. Consider using XDG Portal Capture instead.
 
 ### KMS streaming fails on Nvidia GPUs
 If KMS screen capture results in a black screen being streamed, you may need to
