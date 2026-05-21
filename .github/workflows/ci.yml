@@ -182,6 +182,7 @@ jobs:
     with:
       release_commit: ${{ needs.release-candidate.outputs.release_commit || github.sha }}
       release_version: ${{ needs.release-candidate.outputs.release_version || '0.0.0' }}
+      release_tag: ${{ needs.release-candidate.outputs.tag_name }}
       symbol_product_name: Vibeshine
       publish_symbols: ${{ needs.release-candidate.outputs.should_release == 'true' }}
       symbol_release_draft: true
