@@ -88,6 +88,9 @@ jobs:
 
             return (major, minor, patch, suffix_rank, suffix_num, suffix)
 
+          def is_prerelease_key(key):
+            return key[3] < 40
+
           def release_notes_for(tag, commit):
             match = VERSION_RE.match(tag)
             if not match:
@@ -109,8 +112,8 @@ jobs:
             return None
 
           event_name = os.environ["EVENT_NAME"]
-          if event_name != "push":
-            skip("Release gate only applies to push events.")
+          if event_name not in {"push", "workflow_dispatch"}:
+            skip("Release gate only applies to push and manual workflow_dispatch events.")
 
           run("git", "fetch", "--force", "--tags")
 
@@ -119,7 +122,6 @@ jobs:
           ).splitlines()))
           release_versions = [version_key(tag) for tag in release_tags]
           release_versions = [key for key in release_versions if key is not None]
-          current_release_version = max(release_versions) if release_versions else None
 
           candidate_tags = run("git", "tag", "--list").splitlines()
 
@@ -131,6 +133,11 @@ jobs:
             if tag in release_tags:
               print(f"Skipping {tag}: release already exists.")
               continue
+            comparable_releases = [
+              release_key for release_key in release_versions
+              if is_prerelease_key(release_key) == is_prerelease_key(key)
+            ]
+            current_release_version = max(comparable_releases) if comparable_releases else None
             if current_release_version is not None and key <= current_release_version:
               print(f"Skipping {tag}: not newer than the current release.")
               continue
@@ -141,7 +148,7 @@ jobs:
               stdout=subprocess.DEVNULL,
               stderr=subprocess.DEVNULL,
             ).returncode != 0:
-              print(f"Skipping {tag}: tag commit {release_commit} is not reachable from this push.")
+              print(f"Skipping {tag}: tag commit {release_commit} is not reachable from this run ref.")
               continue
             notes_file = release_notes_for(tag, release_commit)
             if notes_file is None:
