@@ -269,6 +269,14 @@ const defaultGroups = [
     },
   },
   {
+    id: 'vulkan',
+    name: 'Vulkan Encoder',
+    options: {
+      vk_tune: 2,
+      vk_rc_mode: 2,
+    },
+  },
+  {
     id: 'sw',
     name: 'Software Encoder',
     options: {

@@ -412,6 +412,9 @@ namespace video {
   util::Either<avcodec_buffer_t, int> vaapi_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *);
   util::Either<avcodec_buffer_t, int> cuda_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *);
   util::Either<avcodec_buffer_t, int> vt_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *);
+#ifdef SUNSHINE_BUILD_VULKAN
+  util::Either<avcodec_buffer_t, int> vulkan_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *);
+#endif
 
   class avcodec_software_encode_device_t: public platf::avcodec_encode_device_t {
   public:
@@ -1373,6 +1376,74 @@ namespace video {
   };
 #endif
 
+#ifdef SUNSHINE_BUILD_VULKAN
+  encoder_t vulkan {
+    "vulkan"sv,
+    std::make_unique<encoder_platform_formats_avcodec>(
+      AV_HWDEVICE_TYPE_VULKAN,
+      AV_HWDEVICE_TYPE_NONE,
+      AV_PIX_FMT_VULKAN,
+      AV_PIX_FMT_NV12,
+      AV_PIX_FMT_P010,
+      AV_PIX_FMT_NONE,
+      AV_PIX_FMT_NONE,
+      vulkan_init_avcodec_hardware_input_buffer
+    ),
+    {
+      // Common options
+      {
+        {"idr_interval"s, std::numeric_limits<int>::max()},
+        {"tune"s, &config::video.vk.tune},
+        {"rc_mode"s, &config::video.vk.rc_mode},
+        {"units"s, 0},
+        {"usage"s, "stream"s},
+        {"content"s, "rendered"s},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "av1_vulkan"s,
+    },
+    {
+      // Common options
+      {
+        {"idr_interval"s, std::numeric_limits<int>::max()},
+        {"tune"s, &config::video.vk.tune},
+        {"rc_mode"s, &config::video.vk.rc_mode},
+        {"units"s, 0},
+        {"usage"s, "stream"s},
+        {"content"s, "rendered"s},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "hevc_vulkan"s,
+    },
+    {
+      // Common options
+      {
+        {"idr_interval"s, std::numeric_limits<int>::max()},
+        {"tune"s, &config::video.vk.tune},
+        {"rc_mode"s, &config::video.vk.rc_mode},
+        {"units"s, 0},
+        {"usage"s, "stream"s},
+        {"content"s, "rendered"s},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "h264_vulkan"s,
+    },
+    LIMITED_GOP_SIZE | PARALLEL_ENCODING
+  };
+#endif
+
   static const std::vector<encoder_t *> encoders {
 #ifndef __APPLE__
     &nvenc,
@@ -1383,6 +1454,9 @@ namespace video {
     &mediafoundation,
 #endif
 #if defined(__linux__) || defined(linux) || defined(__linux) || defined(__FreeBSD__)
+  #ifdef SUNSHINE_BUILD_VULKAN
+    &vulkan,
+  #endif
     &vaapi,
 #endif
 #ifdef __APPLE__
@@ -3560,6 +3634,31 @@ namespace video {
 
     return hw_device_buf;
   }
+
+#ifdef SUNSHINE_BUILD_VULKAN
+  typedef int (*vulkan_init_avcodec_hardware_input_buffer_fn)(platf::avcodec_encode_device_t *encode_device, AVBufferRef **hw_device_buf);
+
+  util::Either<avcodec_buffer_t, int> vulkan_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *encode_device) {
+    avcodec_buffer_t hw_device_buf;
+
+    if (encode_device && encode_device->data) {
+      if (((vulkan_init_avcodec_hardware_input_buffer_fn) encode_device->data)(encode_device, &hw_device_buf)) {
+        return -1;
+      }
+      return hw_device_buf;
+    }
+
+    auto render_device = config::video.adapter_name.empty() ? nullptr : config::video.adapter_name.c_str();
+    auto status = av_hwdevice_ctx_create(&hw_device_buf, AV_HWDEVICE_TYPE_VULKAN, render_device, nullptr, 0);
+    if (status < 0) {
+      char string[AV_ERROR_MAX_STRING_SIZE];
+      BOOST_LOG(error) << "Failed to create a Vulkan device: "sv << av_make_error_string(string, AV_ERROR_MAX_STRING_SIZE, status);
+      return -1;
+    }
+
+    return hw_device_buf;
+  }
+#endif
 
   util::Either<avcodec_buffer_t, int> cuda_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *encode_device) {
     avcodec_buffer_t hw_device_buf;
