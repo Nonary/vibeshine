@@ -1477,6 +1477,27 @@ namespace video {
     return encoder_probe_attempted.load(std::memory_order_acquire);
   }
 
+  advertised_encoder_capabilities_t advertised_encoder_capabilities(bool probe_before_negative) {
+    auto snapshot = []() {
+      return advertised_encoder_capabilities_t {
+        .hevc_mode = active_hevc_mode,
+        .av1_mode = active_av1_mode,
+        .yuv444_for_codec = last_encoder_probe_supported_yuv444_for_codec,
+      };
+    };
+
+    auto caps = snapshot();
+    if (probe_before_negative && !has_attempted_encoder_probe() && caps.hevc_mode < 3 && caps.av1_mode < 3) {
+      BOOST_LOG(info) << "Encoder capabilities are unprobed before advertising no HDR; probing encoders now.";
+      if (probe_encoders()) {
+        BOOST_LOG(warning) << "Encoder probe failed before HTTP capability advertisement; reporting current encoder capabilities.";
+      }
+      caps = snapshot();
+    }
+
+    return caps;
+  }
+
   void reset_display(std::shared_ptr<platf::display_t> &disp, const platf::mem_type_e &type, const std::string &display_name, const config_t &config) {
     // After a recent display-helper APPLY (topology change), the display subsystem
     // may need time to settle. Use more retries with progressive delays.

@@ -1764,33 +1764,35 @@ namespace nvhttp {
       tree.put("root.LocalIP", net::addr_to_normalized_string(local_endpoint.address()));
     }
 
-    tree.put("root.MaxLumaPixelsHEVC", video::active_hevc_mode > 1 ? "1869449984" : "0");
+    const auto advertised_video = video::advertised_encoder_capabilities(true);
+
+    tree.put("root.MaxLumaPixelsHEVC", advertised_video.hevc_mode > 1 ? "1869449984" : "0");
 
     uint32_t codec_mode_flags = SCM_H264;
-    if (video::last_encoder_probe_supported_yuv444_for_codec[0]) {
+    if (advertised_video.yuv444_for_codec[0]) {
       codec_mode_flags |= SCM_H264_HIGH8_444;
     }
-    if (video::active_hevc_mode >= 2) {
+    if (advertised_video.hevc_mode >= 2) {
       codec_mode_flags |= SCM_HEVC;
-      if (video::last_encoder_probe_supported_yuv444_for_codec[1]) {
+      if (advertised_video.yuv444_for_codec[1]) {
         codec_mode_flags |= SCM_HEVC_REXT8_444;
       }
     }
-    if (video::active_hevc_mode >= 3) {
+    if (advertised_video.hevc_mode >= 3) {
       codec_mode_flags |= SCM_HEVC_MAIN10;
-      if (video::last_encoder_probe_supported_yuv444_for_codec[1]) {
+      if (advertised_video.yuv444_for_codec[1]) {
         codec_mode_flags |= SCM_HEVC_REXT10_444;
       }
     }
-    if (video::active_av1_mode >= 2) {
+    if (advertised_video.av1_mode >= 2) {
       codec_mode_flags |= SCM_AV1_MAIN8;
-      if (video::last_encoder_probe_supported_yuv444_for_codec[2]) {
+      if (advertised_video.yuv444_for_codec[2]) {
         codec_mode_flags |= SCM_AV1_HIGH8_444;
       }
     }
-    if (video::active_av1_mode >= 3) {
+    if (advertised_video.av1_mode >= 3) {
       codec_mode_flags |= SCM_AV1_MAIN10;
-      if (video::last_encoder_probe_supported_yuv444_for_codec[2]) {
+      if (advertised_video.yuv444_for_codec[2]) {
         codec_mode_flags |= SCM_AV1_HIGH10_444;
       }
     }
@@ -1905,10 +1907,12 @@ namespace nvhttp {
 
     apps.put("<xmlattr>.status_code", 200);
 
+    const auto advertised_video = video::advertised_encoder_capabilities(true);
+
     for (auto &proc : proc::proc.get_apps()) {
       pt::ptree app;
 
-      app.put("IsHdrSupported"s, (video::active_hevc_mode == 3 || video::active_av1_mode == 3) ? 1 : 0);
+      app.put("IsHdrSupported"s, (advertised_video.hevc_mode == 3 || advertised_video.av1_mode == 3) ? 1 : 0);
       app.put("AppTitle"s, proc.name);
       app.put("UUID", proc.uuid);
       app.put("ID", proc.id);

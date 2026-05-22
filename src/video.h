@@ -10,6 +10,9 @@
 #include "thread_safe.h"
 #include "video_colorspace.h"
 
+// standard includes
+#include <array>
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
@@ -358,6 +361,14 @@ namespace video {
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
 
   bool has_attempted_encoder_probe();
+
+  struct advertised_encoder_capabilities_t {
+    int hevc_mode = 0;
+    int av1_mode = 0;
+    std::array<bool, 3> yuv444_for_codec {};
+  };
+
+  advertised_encoder_capabilities_t advertised_encoder_capabilities(bool probe_before_negative = false);
 
   void capture(
     safe::mail_t mail,
