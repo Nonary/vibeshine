@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 // lib includes
@@ -1454,7 +1455,6 @@ namespace nvhttp {
       tree.put("root.paired", 0);
     }
 
-    remove_session(sess);
     tree.put("root.<xmlattr>.status_code", 200);
   }
 
@@ -1511,6 +1511,40 @@ namespace nvhttp {
   }
 
   template<class T>
+  void unpair(std::shared_ptr<typename SimpleWeb::ServerBase<T>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request) {
+    print_req<T>(request);
+
+    pt::ptree tree;
+
+    auto fg = util::fail_guard([&]() {
+      std::ostringstream data;
+
+      pt::write_xml(data, tree);
+      response->write(data.str());
+      response->close_connection_after_response = true;
+    });
+
+    auto args = request->parse_query_string();
+    auto unique_id = get_arg(args, "uniqueid", "");
+
+    const bool cleaned_pending_pair = !unique_id.empty() && map_id_sess.erase(unique_id) > 0;
+    bool removed = false;
+
+    if constexpr (std::is_same_v<T, SunshineHTTPS>) {
+      if (auto uuid = get_client_uuid_from_request(request); !uuid.empty()) {
+        removed = unpair_client(uuid);
+      }
+    }
+
+    tree.put("root.unpaired", removed ? 1 : 0);
+    tree.put("root.<xmlattr>.status_code", 200);
+
+    if (cleaned_pending_pair) {
+      BOOST_LOG(info) << "Cleaned pending pairing session during unpair request";
+    }
+  }
+
+  template<class T>
   void pair(std::shared_ptr<safe::queue_t<crypto::x509_t>> &add_cert, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request) {
     print_req<T>(request);
 
@@ -1543,7 +1577,12 @@ namespace nvhttp {
         sess.client.cert = util::from_hex_vec(get_arg(args, "clientcert"), true);
 
         BOOST_LOG(verbose) << sess.client.cert;
-        auto ptr = map_id_sess.emplace(sess.client.uniqueID, std::move(sess)).first;
+        auto session_id = sess.client.uniqueID;
+        if (auto existing = map_id_sess.find(session_id); existing != map_id_sess.end()) {
+          BOOST_LOG(info) << "Replacing stale pending pairing session for uniqueid=" << session_id;
+          map_id_sess.erase(existing);
+        }
+        auto ptr = map_id_sess.emplace(std::move(session_id), std::move(sess)).first;
 
         ptr->second.async_insert_pin.salt = std::move(get_arg(args, "salt"));
         if (config::sunshine.flags[config::flag::PIN_STDIN]) {
@@ -1595,6 +1634,7 @@ namespace nvhttp {
   bool pin(std::string pin, std::string name) {
     pt::ptree tree;
     if (map_id_sess.empty()) {
+      BOOST_LOG(warning) << "PIN submitted but no pending pairing session exists";
       return false;
     }
 
@@ -1617,20 +1657,54 @@ namespace nvhttp {
       return false;
     }
 
-    auto &sess = std::begin(map_id_sess)->second;
+    const auto now = std::chrono::steady_clock::now();
+    constexpr auto pairing_session_expiry = std::chrono::minutes(10);
+    std::erase_if(map_id_sess, [now, pairing_session_expiry](const auto &entry) {
+      const auto &sess = entry.second;
+      return sess.last_phase == PAIR_PHASE::NONE && now - sess.created_at > pairing_session_expiry;
+    });
+
+    auto sess_it = map_id_sess.end();
+    for (auto it = map_id_sess.begin(); it != map_id_sess.end(); ++it) {
+      if (it->second.last_phase != PAIR_PHASE::NONE) {
+        continue;
+      }
+      if (sess_it == map_id_sess.end() || sess_it->second.created_at < it->second.created_at) {
+        sess_it = it;
+      }
+    }
+
+    if (sess_it == map_id_sess.end()) {
+      BOOST_LOG(warning) << "PIN submitted but no active pending pairing session is ready";
+      return false;
+    }
+
+    auto &sess = sess_it->second;
+    if (sess.async_insert_pin.salt.size() < 32) {
+      BOOST_LOG(warning) << "PIN submitted but pending pairing session has an invalid salt";
+      remove_session(sess);
+      return false;
+    }
+
     getservercert(sess, tree, pin);
-    sess.client.name = name;
+
+    if (!name.empty()) {
+      sess.client.name = name;
+    }
 
     // response to the request for pin
     std::ostringstream data;
     pt::write_xml(data, tree);
 
     auto &async_response = sess.async_insert_pin.response;
+    // Keep Content-Length on this delayed response; Moonlight waits for a complete body.
     if (async_response.has_left() && async_response.left()) {
       async_response.left()->write(data.str());
     } else if (async_response.has_right() && async_response.right()) {
       async_response.right()->write(data.str());
     } else {
+      BOOST_LOG(warning) << "PIN submitted but pending pairing session has no response channel";
+      remove_session(sess);
       return false;
     }
 
@@ -2536,10 +2610,16 @@ namespace nvhttp {
     };
 
     https_server.default_resource["GET"] = not_found<SunshineHTTPS>;
+    https_server.default_resource["POST"] = not_found<SunshineHTTPS>;
     https_server.resource["^/serverinfo$"]["GET"] = serverinfo<SunshineHTTPS>;
-    https_server.resource["^/pair$"]["GET"] = [&add_cert](auto resp, auto req) {
+    https_server.resource["^/pair/?$"]["GET"] = [&add_cert](auto resp, auto req) {
       pair<SunshineHTTPS>(add_cert, resp, req);
     };
+    https_server.resource["^/pair/?$"]["POST"] = [&add_cert](auto resp, auto req) {
+      pair<SunshineHTTPS>(add_cert, resp, req);
+    };
+    https_server.resource["^/unpair/?$"]["GET"] = unpair<SunshineHTTPS>;
+    https_server.resource["^/unpair/?$"]["POST"] = unpair<SunshineHTTPS>;
     https_server.resource["^/applist$"]["GET"] = applist;
     https_server.resource["^/appasset$"]["GET"] = appasset;
     https_server.resource["^/launch$"]["GET"] = [&host_audio](auto resp, auto req) {
@@ -2555,10 +2635,16 @@ namespace nvhttp {
     https_server.config.port = port_https;
 
     http_server.default_resource["GET"] = not_found<SimpleWeb::HTTP>;
+    http_server.default_resource["POST"] = not_found<SimpleWeb::HTTP>;
     http_server.resource["^/serverinfo$"]["GET"] = serverinfo<SimpleWeb::HTTP>;
-    http_server.resource["^/pair$"]["GET"] = [&add_cert](auto resp, auto req) {
+    http_server.resource["^/pair/?$"]["GET"] = [&add_cert](auto resp, auto req) {
       pair<SimpleWeb::HTTP>(add_cert, resp, req);
     };
+    http_server.resource["^/pair/?$"]["POST"] = [&add_cert](auto resp, auto req) {
+      pair<SimpleWeb::HTTP>(add_cert, resp, req);
+    };
+    http_server.resource["^/unpair/?$"]["GET"] = unpair<SimpleWeb::HTTP>;
+    http_server.resource["^/unpair/?$"]["POST"] = unpair<SimpleWeb::HTTP>;
 
     http_server.config.reuse_address = true;
     http_server.config.address = net::get_bind_address(address_family);

@@ -6,6 +6,7 @@
 #pragma once
 
 // standard includes
+#include <chrono>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -83,6 +84,8 @@ namespace nvhttp {
   };
 
   struct pair_session_t {
+    std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
+
     struct {
       std::string uniqueID = {};
       std::string cert = {};

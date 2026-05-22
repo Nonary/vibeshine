@@ -3535,6 +3535,9 @@ namespace confighttp {
       }
 
       output_tree["status"] = nvhttp::pin(pin, name);
+      if (!output_tree["status"].get<bool>()) {
+        BOOST_LOG(warning) << "SavePin: no pending Moonlight pairing request accepted the submitted PIN";
+      }
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "SavePin: "sv << e.what();
