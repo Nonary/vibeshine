@@ -265,6 +265,15 @@ function selectVirtualDisplayLayout(v: unknown) {
                 {{ $t('config.virtual_display_mode_shared') }}
               </n-radio>
             </n-radio-group>
+            <PlatformLayout>
+              <template #windows>
+                <ConfigFieldRenderer
+                  setting-key="dd_vdd_static_monitor_count"
+                  v-model="config.dd_vdd_static_monitor_count"
+                  class="mt-4"
+                />
+              </template>
+            </PlatformLayout>
             <div v-if="virtualDisplayMode === 'disabled'" class="mt-3">
               <DisplayOutputSelector />
             </div>
