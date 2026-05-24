@@ -205,6 +205,15 @@ namespace nvhttp {
       return has_any_active_display();
     }
 
+    video::advertised_encoder_capabilities_t advertised_encoder_capabilities_for_http() {
+      auto ensure_result = VDISPLAY::ensure_display();
+      const auto caps = video::advertised_encoder_capabilities(true);
+      if (ensure_result.tracks_temporary_for_probe) {
+        BOOST_LOG(debug) << "Retaining temporary virtual display created for HTTP encoder capability probing.";
+      }
+      return caps;
+    }
+
     void cleanup_virtual_display_state() {
       if (!has_active_virtual_display()) {
         BOOST_LOG(debug) << "Skipping virtual display cleanup after cancel because no active virtual display exists.";
@@ -1756,7 +1765,11 @@ namespace nvhttp {
       tree.put("root.LocalIP", net::addr_to_normalized_string(local_endpoint.address()));
     }
 
+#ifdef _WIN32
+    const auto advertised_video = advertised_encoder_capabilities_for_http();
+#else
     const auto advertised_video = video::advertised_encoder_capabilities(true);
+#endif
 
     tree.put("root.MaxLumaPixelsHEVC", advertised_video.hevc_mode > 1 ? "1869449984" : "0");
 
@@ -1899,7 +1912,11 @@ namespace nvhttp {
 
     apps.put("<xmlattr>.status_code", 200);
 
+#ifdef _WIN32
+    const auto advertised_video = advertised_encoder_capabilities_for_http();
+#else
     const auto advertised_video = video::advertised_encoder_capabilities(true);
+#endif
 
     for (auto &proc : proc::proc.get_apps()) {
       pt::ptree app;
@@ -2133,7 +2150,7 @@ namespace nvhttp {
           BOOST_LOG(warning) << "Timed out waiting for a display to become active before retrying encoder probe.";
         }
       }
-      VDISPLAY::cleanup_ensure_display(ensure_result, !encoder_probe_failed);
+      VDISPLAY::cleanup_ensure_display(ensure_result, !encoder_probe_failed, false);
 #endif
 
       if (encoder_probe_failed) {
@@ -2375,7 +2392,7 @@ namespace nvhttp {
           BOOST_LOG(warning) << "Timed out waiting for a display to become active before retrying resume encoder probe.";
         }
       }
-      VDISPLAY::cleanup_ensure_display(ensure_result, !encoder_probe_failed);
+      VDISPLAY::cleanup_ensure_display(ensure_result, !encoder_probe_failed, false);
 #endif
 
       if (encoder_probe_failed) {
