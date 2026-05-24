@@ -195,6 +195,7 @@ namespace display_helper_integration::helpers {
       // Set to minimum fps as a Rational
       value = display_device::Rational {static_cast<unsigned int>(minimum_fps), 1u};
     }
+
   }  // namespace
 
   SessionDisplayConfigurationHelper::SessionDisplayConfigurationHelper(const config::video_t &video_config, const rtsp_stream::launch_session_t &session):
