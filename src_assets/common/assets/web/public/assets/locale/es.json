@@ -1,4 +1,4 @@
-﻿{
+{
   "_common": {
     "all": "Todos",
     "apply": "Aplicar",
@@ -195,7 +195,7 @@
     "dd_resolution_option_disabled": "No cambiar resolución",
     "dd_resolution_option_manual": "Usar resolución introducida manualmente",
     "dd_resolution_option_manual_desc": "Introduzca la resolución a usar",
-    "dd_wa_hdr_toggle_delay_desc_1": "Cuando se utiliza un dispositivo de visualización virtual (VDD) para el streaming, podría mostrar incorrectamente el color HDR. Vibeshine puede tratar de mitigar este problema, apagando el HDR y encendiendo de nuevo.",
+    "dd_wa_hdr_toggle_delay_desc_1": "Cuando se utiliza un dispositivo de visualización virtual para el streaming, podría mostrar incorrectamente el color HDR. Vibeshine puede tratar de mitigar este problema, apagando el HDR y encendiendo de nuevo.",
     "dd_wa_hdr_toggle_delay_desc_2": "Si el valor se establece en 0, la solución temporal está deshabilitada (por defecto). Si el valor está entre 0 y 3000 milisegundos, Vibeshine desactivará HDR, espera la cantidad de tiempo especificada y luego enciende HDR de nuevo. El retraso recomendado es de unos 500 milisegundos en la mayoría de los casos.",
     "dd_wa_hdr_toggle_delay_desc_3": "NO use esta solución a menos que realmente tenga problemas con HDR ya que afecta directamente el tiempo de inicio de la secuencia!",
     "dd_wa_hdr_toggle_delay": "Solución de alto contraste para HDR",

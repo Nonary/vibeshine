@@ -201,7 +201,7 @@
     "dd_resolution_option_disabled": "Ne változtassa meg a felbontást",
     "dd_resolution_option_manual": "Kézzel megadott felbontás használata",
     "dd_resolution_option_ogs_desc": "A \"Játékbeállítások optimalizálása\" opciónak engedélyezve kell lennie a Moonlight-kliensben, hogy ez működjön.",
-    "dd_wa_hdr_toggle_delay_desc_1": "Amikor virtuális kijelző eszközt (VDD) használsz a streameleshez, az helytelenül jelenítheti meg a HDR színeket. A Sunshine megpróbálhatja enyhíteni ezt a problémát a HDR ki, majd bekapcsolásával.",
+    "dd_wa_hdr_toggle_delay_desc_1": "Amikor virtuális kijelző eszközt használsz a streameleshez, az helytelenül jelenítheti meg a HDR színeket. A Sunshine megpróbálhatja enyhíteni ezt a problémát a HDR ki, majd bekapcsolásával.",
     "dd_wa_hdr_toggle_delay_desc_2": "Ha az érték 0, a megkerülés ki van kapcsolva (alapértelmezett). Ha az érték 0 és 3000 ezredmásodperc között van, a Sunshine kikapcsolja a HDR-t, megvárja a megadott időt, majd újra bekapcsolja a HDR-t. Az ajánlott késleltetési idő a legtöbb esetben körülbelül 500 ezredmásodperc.",
     "dd_wa_hdr_toggle_delay_desc_3": "NE használd ezt a megkerülést, hacsak nincs problémád a HDR-rel, mivel közvetlenül befolyásolja a stream indítási időt!",
     "dd_wa_hdr_toggle_delay": "Magas kontrasztú megoldás a HDR-hez",

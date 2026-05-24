@@ -201,7 +201,7 @@
     "dd_resolution_option_disabled": "Không thay đổi độ phân giải",
     "dd_resolution_option_manual": "Sử dụng độ phân giải được nhập thủ công",
     "dd_resolution_option_ogs_desc": "Tùy chọn \"Tối ưu hóa cài đặt trò chơi\" phải được bật trên ứng dụng Moonlight để tính năng này hoạt động.",
-    "dd_wa_hdr_toggle_delay_desc_1": "Khi sử dụng thiết bị hiển thị ảo (VDD) cho việc phát trực tuyến, màu HDR có thể hiển thị không chính xác. Sunshine có thể thử khắc phục vấn đề này bằng cách tắt HDR và sau đó bật lại.",
+    "dd_wa_hdr_toggle_delay_desc_1": "Khi sử dụng thiết bị hiển thị ảo cho việc phát trực tuyến, màu HDR có thể hiển thị không chính xác. Sunshine có thể thử khắc phục vấn đề này bằng cách tắt HDR và sau đó bật lại.",
     "dd_wa_hdr_toggle_delay_desc_2": "Nếu giá trị được đặt là 0, tính năng khắc phục sự cố sẽ bị vô hiệu hóa (mặc định). Nếu giá trị nằm trong khoảng từ 0 đến 3000 mili giây, Sunshine sẽ tắt HDR, chờ trong khoảng thời gian đã chỉ định và sau đó bật HDR lại. Thời gian chờ khuyến nghị là khoảng 500 mili giây trong hầu hết các trường hợp.",
     "dd_wa_hdr_toggle_delay_desc_3": "KHÔNG sử dụng giải pháp tạm thời này trừ khi bạn thực sự gặp vấn đề với HDR, vì nó ảnh hưởng trực tiếp đến thời gian bắt đầu phát trực tiếp!",
     "dd_wa_hdr_toggle_delay": "Giải pháp thay thế cho HDR có độ tương phản cao",

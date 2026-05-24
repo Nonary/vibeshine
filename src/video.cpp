@@ -79,16 +79,15 @@ namespace video {
 
       if (auto runtime_output_name = config::runtime_output_name_override()) {
         if (!runtime_output_name->empty()) {
-          return boost::iequals(*runtime_output_name, VDISPLAY::SUDOVDA_VIRTUAL_DISPLAY_SELECTION) ||
-                 VDISPLAY::is_virtual_display_output(*runtime_output_name);
+          return VDISPLAY::is_virtual_display_output(*runtime_output_name);
         }
       }
 
-      if (!VDISPLAY::isSudaVDADriverInstalled()) {
+      if (!VDISPLAY::isVirtualDisplayDriverInstalled()) {
         return false;
       }
 
-      auto virtual_displays = VDISPLAY::enumerateSudaVDADisplays();
+      auto virtual_displays = VDISPLAY::enumerateVirtualDisplays();
       if (virtual_displays.empty()) {
         return false;
       }
@@ -96,8 +95,7 @@ namespace video {
       const auto active_output_name = config::get_active_output_name();
       const bool runtime_targets_virtual =
         !active_output_name.empty() &&
-        (active_output_name == VDISPLAY::SUDOVDA_VIRTUAL_DISPLAY_SELECTION ||
-         VDISPLAY::is_virtual_display_output(active_output_name));
+        VDISPLAY::is_virtual_display_output(active_output_name);
       if (runtime_targets_virtual) {
         return true;
       }
@@ -111,7 +109,7 @@ namespace video {
       const bool any_active = std::any_of(
         virtual_displays.begin(),
         virtual_displays.end(),
-        [](const VDISPLAY::SudaVDADisplayInfo &info) {
+        [](const VDISPLAY::VirtualDisplayInfo &info) {
           return info.is_active;
         }
       );
@@ -128,7 +126,7 @@ namespace video {
     }
 
     std::optional<std::string> active_virtual_display_dxgi_name() {
-      auto virtual_displays = VDISPLAY::enumerateSudaVDADisplays();
+      auto virtual_displays = VDISPLAY::enumerateVirtualDisplays();
       auto is_dxgi_display_name = [](const std::string &name) {
         static const std::string prefix = "\\\\.\\DISPLAY";
         if (name.size() < prefix.size()) {

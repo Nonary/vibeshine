@@ -1,4 +1,4 @@
-﻿{
+{
   "_common": {
     "all": "Tümü",
     "apply": "Uygula",
@@ -195,7 +195,7 @@
     "dd_resolution_option_disabled": "Çözünürlüğü değiştirmeyin",
     "dd_resolution_option_manual": "El ile girilen çözünürlüğü kullanın",
     "dd_resolution_option_manual_desc": "Kullanılacak çözünürlüğü girin",
-    "dd_wa_hdr_toggle_delay_desc_1": "Akış için sanal görüntüleme cihazı (VDD) kullanırken, HDR rengini yanlış görüntüleyebilir. Vibeshine, HDR'yi kapatıp tekrar açarak bu sorunu azaltmayı deneyebilir.",
+    "dd_wa_hdr_toggle_delay_desc_1": "Akış için sanal görüntüleme cihazı kullanırken, HDR rengini yanlış görüntüleyebilir. Vibeshine, HDR'yi kapatıp tekrar açarak bu sorunu azaltmayı deneyebilir.",
     "dd_wa_hdr_toggle_delay_desc_2": "Değer 0 olarak ayarlanırsa geçici çözüm devre dışı bırakılır (varsayılan). Değer 0 ile 3000 milisaniye arasındaysa, Vibeshine HDR'yi kapatır, belirtilen süre kadar bekler ve ardından HDR'yi tekrar açar. Önerilen gecikme süresi çoğu durumda yaklaşık 500 milisaniyedir.",
     "dd_wa_hdr_toggle_delay_desc_3": "Akış başlangıç süresini doğrudan etkilediği için HDR ile ilgili gerçekten sorunlarınız yoksa bu geçici çözümü KULLANMAYIN!",
     "dd_wa_hdr_toggle_delay": "HDR için yüksek kontrastlı geçici çözüm",

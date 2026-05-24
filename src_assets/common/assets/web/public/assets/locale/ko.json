@@ -1,4 +1,4 @@
-﻿{
+{
   "_common": {
     "all": "모두",
     "apply": "적용",
@@ -195,7 +195,7 @@
     "dd_resolution_option_disabled": "해상도 변경 금지",
     "dd_resolution_option_manual": "수동으로 입력한 해상도 사용",
     "dd_resolution_option_manual_desc": "사용할 해상도를 입력합니다.",
-    "dd_wa_hdr_toggle_delay_desc_1": "스트리밍에 가상 디스플레이 장치(VDD)를 사용하는 경우 HDR 색상이 잘못 표시될 수 있습니다. HDR을 껐다가 다시 켜면 이 문제를 완화할 수 있습니다.",
+    "dd_wa_hdr_toggle_delay_desc_1": "스트리밍에 가상 디스플레이 장치를 사용하는 경우 HDR 색상이 잘못 표시될 수 있습니다. HDR을 껐다가 다시 켜면 이 문제를 완화할 수 있습니다.",
     "dd_wa_hdr_toggle_delay_desc_2": "값을 0으로 설정하면 해결 방법이 비활성화됩니다(기본값). 값이 0에서 3000밀리초 사이인 경우, Vibeshine은 HDR을 끄고 지정된 시간 동안 기다린 다음 HDR을 다시 켭니다. 대부분의 경우 권장되는 지연 시간은 약 500밀리초입니다.",
     "dd_wa_hdr_toggle_delay_desc_3": "이 해결 방법은 스트림 시작 시간에 직접적인 영향을 미치므로 실제로 HDR에 문제가 없는 한 사용하지 마세요!",
     "dd_wa_hdr_toggle_delay": "HDR을 위한 고대비 해결 방법",

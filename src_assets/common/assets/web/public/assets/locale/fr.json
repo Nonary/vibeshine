@@ -1,4 +1,4 @@
-﻿{
+{
   "_common": {
     "all": "Tous",
     "apply": "Appliquer",
@@ -195,7 +195,7 @@
     "dd_resolution_option_disabled": "Ne pas modifier la résolution",
     "dd_resolution_option_manual": "Utiliser la résolution saisie manuellement",
     "dd_resolution_option_manual_desc": "Entrez la résolution à utiliser",
-    "dd_wa_hdr_toggle_delay_desc_1": "Lorsque vous utilisez un périphérique d'affichage virtuel (VDD) pour le streaming, il se peut qu'il affiche incorrectement la couleur HDR. Vibeshine peut essayer d'atténuer ce problème, en désactivant le HDR puis en le réactivant à nouveau.",
+    "dd_wa_hdr_toggle_delay_desc_1": "Lorsque vous utilisez un périphérique d'affichage virtuel pour le streaming, il se peut qu'il affiche incorrectement la couleur HDR. Vibeshine peut essayer d'atténuer ce problème, en désactivant le HDR puis en le réactivant à nouveau.",
     "dd_wa_hdr_toggle_delay_desc_2": "Si la valeur est définie à 0, le contournement est désactivé (par défaut). Si la valeur est comprise entre 0 et 3000 millisecondes, Vibeshine désactivera le HDR, attendra le temps spécifié, puis réactivera le HDR. Le délai recommandé est d'environ 500 millisecondes dans la plupart des cas.",
     "dd_wa_hdr_toggle_delay_desc_3": "N'UTILISEZ PAS cette solution de contournement à moins que vous n'ayez des problèmes avec le HDR, car elle a un impact direct sur le temps de démarrage du stream !",
     "dd_wa_hdr_toggle_delay": "Activer la solution de contournement à haut contraste pour HDR",
