@@ -1022,6 +1022,19 @@ namespace nvhttp {
     return get_client_uuid_from_peer_cert(tl_peer_certificate, client_name_out);
   }
 
+  struct resolved_client_identity_t {
+    std::string uuid;
+    std::string name;
+  };
+
+  resolved_client_identity_t resolve_client_identity_from_request(req_https_t request) {
+    resolved_client_identity_t identity;
+    if (request) {
+      identity.uuid = get_client_uuid_from_request(request, &identity.name);
+    }
+    return identity;
+  }
+
   std::optional<named_cert_t> get_named_cert_by_uuid(const std::string &uuid) {
     if (uuid.empty()) {
       return std::nullopt;
@@ -1082,7 +1095,8 @@ namespace nvhttp {
     bool host_audio,
     const args_t &args,
     req_https_t request = nullptr,
-    bool allow_display_changes = true
+    bool allow_display_changes = true,
+    const resolved_client_identity_t *resolved_client_identity = nullptr
   ) {
     auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
 
@@ -1108,7 +1122,10 @@ namespace nvhttp {
     launch_session->virtual_display_failed = false;
     launch_session->hdr_profile.reset();
 
-    if (request) {
+    if (resolved_client_identity && !resolved_client_identity->uuid.empty()) {
+      launch_session->client_uuid = resolved_client_identity->uuid;
+      launch_session->client_name = resolved_client_identity->name;
+    } else if (request) {
       launch_session->client_uuid = get_client_uuid_from_request(request, &launch_session->client_name);
     }
 
@@ -1984,6 +2001,7 @@ namespace nvhttp {
 
     const bool no_active_sessions =
       (rtsp_stream::session_count() == 0) && !webrtc_stream::has_active_sessions();
+    const auto request_client_identity = resolve_client_identity_from_request(request);
     // Runtime overrides are global process state. Do not reapply them while
     // another RTSP session is active, otherwise a second client can mutate
     // active stream limits (e.g. fps/encoding-related settings) mid-session.
@@ -2021,10 +2039,7 @@ namespace nvhttp {
           overrides = it->config_overrides;
         }
 
-        std::string client_uuid;
-        if (request) {
-          client_uuid = get_client_uuid_from_request(request);
-        }
+        std::string client_uuid = request_client_identity.uuid;
         if (client_uuid.empty()) {
           client_uuid = get_arg(args, "uniqueid", "");
         }
@@ -2059,7 +2074,7 @@ namespace nvhttp {
 #endif
 
     const bool allow_display_changes = true;
-    auto launch_session = make_launch_session(host_audio, args, request, allow_display_changes);
+    auto launch_session = make_launch_session(host_audio, args, request, allow_display_changes, &request_client_identity);
     std::optional<std::string> pending_output_override;
     auto output_override_guard = util::fail_guard([&]() {
       if (pending_output_override) {
@@ -2291,7 +2306,8 @@ namespace nvhttp {
       (void) display_helper_integration::disarm_pending_restore();
     }
 #endif
-    const auto launch_session = make_launch_session(host_audio, args, request, allow_display_changes);
+    const auto request_client_identity = resolve_client_identity_from_request(request);
+    const auto launch_session = make_launch_session(host_audio, args, request, allow_display_changes, &request_client_identity);
     std::optional<std::string> pending_output_override;
     auto output_override_guard = util::fail_guard([&]() {
       if (pending_output_override) {
