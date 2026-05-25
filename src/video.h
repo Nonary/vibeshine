@@ -361,6 +361,7 @@ namespace video {
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
 
   bool has_attempted_encoder_probe();
+  bool has_successful_encoder_probe();
 
   struct advertised_encoder_capabilities_t {
     int hevc_mode = 0;
