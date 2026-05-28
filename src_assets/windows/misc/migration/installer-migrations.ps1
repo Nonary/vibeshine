@@ -333,7 +333,7 @@ $candidateJsonFiles = @(
 
 $changedAny = $false
 if (Update-SunshineVirtualDriverPreference -RootDir $rootDir -InstallVirtualDisplayDriver $InstallVirtualDisplayDriver) {
-    Write-Output 'Updated Sunshine virtual driver preference from installer selection.'
+    Write-Output 'Updated Vibeshine Display Driver preference from installer selection.'
     $changedAny = $true
 }
 

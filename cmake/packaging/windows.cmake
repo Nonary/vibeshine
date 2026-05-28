@@ -63,7 +63,7 @@ install(FILES ${SUDOVDA_DRIVER_FILES}
         DESTINATION "drivers/sudovda"
         COMPONENT sudovda)
 
-# Drivers (experimental Sunshine virtual display)
+# Drivers (experimental Vibeshine Display Driver)
 set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/sunshine")
 set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT "${CMAKE_SOURCE_DIR}/packaging/windows/virtual_display_driver/refresh_driver_package.ps1")
 set(SUNSHINE_LIBVIRTUALDISPLAY_PREBUILT_DIR "" CACHE PATH "Path to a prebuilt libvirtualdisplay package root with driver/ and tools/")
@@ -85,11 +85,11 @@ unset(_sunshine_driver_optional_file)
 
 foreach(_sunshine_driver_file IN LISTS SUNSHINE_VIRTUAL_DISPLAY_DRIVER_FILES)
     if (NOT EXISTS "${_sunshine_driver_file}")
-        message(FATAL_ERROR "Required Sunshine virtual display driver artifact missing: ${_sunshine_driver_file}")
+        message(FATAL_ERROR "Required Vibeshine Display Driver artifact missing: ${_sunshine_driver_file}")
     endif()
     file(SIZE "${_sunshine_driver_file}" _sunshine_driver_file_size)
     if (_sunshine_driver_file_size EQUAL 0)
-        message(FATAL_ERROR "Required Sunshine virtual display driver artifact is empty (0 bytes): ${_sunshine_driver_file}")
+        message(FATAL_ERROR "Required Vibeshine Display Driver artifact is empty (0 bytes): ${_sunshine_driver_file}")
     endif()
 endforeach()
 unset(_sunshine_driver_file_size)
@@ -105,7 +105,7 @@ if(EXISTS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}")
                 -PackageDir "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR}"
         DEPENDS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}"
                 ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_FILES}
-        COMMENT "Validating Sunshine virtual display driver package assets"
+        COMMENT "Validating Vibeshine Display Driver package assets"
         VERBATIM)
 
     add_custom_target(refresh_sunshine_virtual_display_driver_assets
@@ -116,7 +116,7 @@ if(EXISTS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}")
                 -PrebuiltPackageDir "${SUNSHINE_LIBVIRTUALDISPLAY_PREBUILT_DIR}"
                 -PackageDir "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR}"
         DEPENDS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}"
-        COMMENT "Building and refreshing Sunshine virtual display driver package assets"
+        COMMENT "Building and refreshing Vibeshine Display Driver package assets"
         VERBATIM)
 
     if(TARGET package_msi)
@@ -217,7 +217,7 @@ set(CPACK_COMPONENT_SUDOVDA_DESCRIPTION "Default virtual display driver.")
 set(CPACK_COMPONENT_SUDOVDA_GROUP "Drivers")
 set(CPACK_COMPONENT_SUDOVDA_REQUIRED true)
 
-set(CPACK_COMPONENT_VIRTUAL_DISPLAY_DRIVER_DISPLAY_NAME "Sunshine Virtual Display Driver")
+set(CPACK_COMPONENT_VIRTUAL_DISPLAY_DRIVER_DISPLAY_NAME "Vibeshine Display Driver")
 set(CPACK_COMPONENT_VIRTUAL_DISPLAY_DRIVER_DESCRIPTION "Experimental opt-in virtual display driver.")
 set(CPACK_COMPONENT_VIRTUAL_DISPLAY_DRIVER_GROUP "Drivers")
 set(CPACK_COMPONENT_VIRTUAL_DISPLAY_DRIVER_REQUIRED true)

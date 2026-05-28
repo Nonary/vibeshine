@@ -480,12 +480,12 @@ namespace VibeshineInstaller {
       _installPathGrid.Children.Add(_browseButton);
 
       _installVirtualDisplayCheckBox = new CheckBox {
-        Content = "Install experimental Sunshine virtual display driver",
+        Content = "Install experimental Vibeshine Display Driver",
         FontSize = 13,
         Foreground = new SolidColorBrush(Color.FromRgb(226, 235, 250)),
         Margin = new Thickness(0, 12, 0, 4),
         IsChecked = false,
-        ToolTip = "Experimental opt-in for the new Sunshine virtual display driver. SudoVDA remains the default."
+        ToolTip = "Experimental opt-in that may improve performance and smoothness on virtual displays. SudoVDA remains the default."
       };
 
       var installVirtualDisplayHintText = new TextBlock {
@@ -2126,7 +2126,7 @@ namespace VibeshineInstaller {
       Console.WriteLine();
       Console.WriteLine("Supported MSI properties:");
       Console.WriteLine("  INSTALL_ROOT=<path>  Install to a custom directory (default: %ProgramFiles%\\Sunshine)");
-      Console.WriteLine("  INSTALL_VIRTUAL_DISPLAY_DRIVER=1  Install the Sunshine virtual display driver");
+      Console.WriteLine("  INSTALL_VIRTUAL_DISPLAY_DRIVER=1  Install the experimental Vibeshine Display Driver");
       Console.WriteLine();
       Console.WriteLine("Examples:");
       Console.WriteLine("  VibeshineSetup.exe /qn");
