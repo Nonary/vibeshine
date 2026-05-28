@@ -818,6 +818,7 @@ namespace config {
 #else
       0,  // snapshot_restore_hotkey_modifiers
 #endif
+      false,  // use_sunshine_virtual_display_driver
       false,  // activate_virtual_display
       0,  // virtual_display_permanent_count
       false,  // virtual_display_permanent_count_configured
@@ -1559,6 +1560,7 @@ namespace config {
       video.dd.paused_virtual_display_timeout_secs = std::max(0, value);
     }
     bool_f(vars, "dd_always_restore_from_golden", video.dd.always_restore_from_golden);
+    bool_f(vars, "dd_use_sunshine_virtual_display_driver", video.dd.use_sunshine_virtual_display_driver);
     bool_f(vars, "dd_activate_virtual_display", video.dd.activate_virtual_display);
     {
       auto it = vars.find("dd_virtual_display_permanent_count");
@@ -2108,6 +2110,7 @@ namespace config {
         "dd_snapshot_exclude_devices",
         "dd_snapshot_restore_hotkey",
         "dd_snapshot_restore_hotkey_modifiers",
+        "dd_use_sunshine_virtual_display_driver",
         "dd_activate_virtual_display",
         "dd_virtual_display_permanent_count",
         "dd_mode_remapping",
@@ -2337,6 +2340,7 @@ namespace config {
       const auto prev_dd_revert_delay = video.dd.config_revert_delay;
       const auto prev_dd_revert_on_disconnect = video.dd.config_revert_on_disconnect;
       const auto prev_dd_paused_virtual_display_timeout_secs = video.dd.paused_virtual_display_timeout_secs;
+      const auto prev_dd_use_sunshine_virtual_display_driver = video.dd.use_sunshine_virtual_display_driver;
       const auto prev_dd_activate_virtual_display = video.dd.activate_virtual_display;
       const auto prev_dd_virtual_display_permanent_count = video.dd.virtual_display_permanent_count;
       const auto prev_dd_virtual_display_permanent_count_configured = video.dd.virtual_display_permanent_count_configured;
@@ -2394,6 +2398,7 @@ namespace config {
                                      (prev_dd_revert_delay != video.dd.config_revert_delay) ||
                                      (prev_dd_revert_on_disconnect != video.dd.config_revert_on_disconnect) ||
                                      (prev_dd_paused_virtual_display_timeout_secs != video.dd.paused_virtual_display_timeout_secs) ||
+                                     (prev_dd_use_sunshine_virtual_display_driver != video.dd.use_sunshine_virtual_display_driver) ||
                                      (prev_dd_activate_virtual_display != video.dd.activate_virtual_display) ||
                                      (prev_dd_virtual_display_permanent_count != video.dd.virtual_display_permanent_count) ||
                                      (prev_dd_virtual_display_permanent_count_configured != video.dd.virtual_display_permanent_count_configured) ||

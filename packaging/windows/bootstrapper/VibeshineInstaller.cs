@@ -103,6 +103,9 @@ namespace VibeshineInstaller {
   internal sealed class InstallerWindow : Window {
     private readonly InstallerArguments _arguments;
     private readonly Border _installSection;
+    private readonly TextBlock _installLocationTitleText;
+    private readonly TextBlock _installLocationHintText;
+    private readonly Grid _installPathGrid;
     private readonly TextBox _installPathTextBox;
     private readonly CheckBox _installVirtualDisplayCheckBox;
     private readonly TextBlock _statusText;
@@ -169,9 +172,9 @@ namespace VibeshineInstaller {
       var displayVersion = GetTargetVersionText();
       Title = (BuildFlavor.IsUninstallOnly ? "Vibeshine Uninstaller v" : "Vibeshine Installer v") + displayVersion;
       Width = 720;
-      Height = showInstallOptions ? 560 : 460;
+      Height = showInstallOptions ? 560 : 500;
       MinWidth = 690;
-      MinHeight = showInstallOptions ? 520 : 430;
+      MinHeight = showInstallOptions ? 520 : 470;
       WindowStartupLocation = WindowStartupLocation.CenterScreen;
       ResizeMode = ResizeMode.CanMinimize;
       WindowStyle = WindowStyle.None;
@@ -422,26 +425,28 @@ namespace VibeshineInstaller {
       };
       _installSection.Child = installStack;
 
-      installStack.Children.Add(new TextBlock {
+      _installLocationTitleText = new TextBlock {
         Text = "Install Location",
         FontSize = 14,
         FontWeight = FontWeights.SemiBold,
         Foreground = Brushes.White,
         Margin = new Thickness(0, 0, 0, 4)
-      });
+      };
+      installStack.Children.Add(_installLocationTitleText);
 
-      installStack.Children.Add(new TextBlock {
+      _installLocationHintText = new TextBlock {
         Text = "Choose where Vibeshine will be installed. The default is recommended.",
         FontSize = 12.5,
         Foreground = new SolidColorBrush(Color.FromRgb(209, 222, 241)),
         Margin = new Thickness(0, 0, 0, 10),
         TextWrapping = TextWrapping.Wrap
-      });
+      };
+      installStack.Children.Add(_installLocationHintText);
 
-      var pathGrid = new Grid();
-      pathGrid.ColumnDefinitions.Add(new ColumnDefinition());
-      pathGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-      installStack.Children.Add(pathGrid);
+      _installPathGrid = new Grid();
+      _installPathGrid.ColumnDefinitions.Add(new ColumnDefinition());
+      _installPathGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+      installStack.Children.Add(_installPathGrid);
 
       _installPathTextBox = new TextBox {
         FontSize = 13,
@@ -455,7 +460,7 @@ namespace VibeshineInstaller {
         CaretBrush = new SolidColorBrush(Color.FromRgb(245, 249, 255)),
         ToolTip = "Used when installing or updating Vibeshine"
       };
-      pathGrid.Children.Add(_installPathTextBox);
+      _installPathGrid.Children.Add(_installPathTextBox);
 
       _browseButton = new Button {
         Content = "_Browse...",
@@ -472,25 +477,24 @@ namespace VibeshineInstaller {
       _browseButton.Click += BrowseClicked;
       ApplyFlatButtonTemplate(_browseButton, 7);
       Grid.SetColumn(_browseButton, 1);
-      pathGrid.Children.Add(_browseButton);
+      _installPathGrid.Children.Add(_browseButton);
 
       _installVirtualDisplayCheckBox = new CheckBox {
-        Content = "Install virtual display driver",
+        Content = "Install experimental Sunshine virtual display driver",
         FontSize = 13,
         Foreground = new SolidColorBrush(Color.FromRgb(226, 235, 250)),
         Margin = new Thickness(0, 12, 0, 4),
-        IsChecked = true,
-        ToolTip = "Recommended for headless streaming or virtual monitor setups"
+        IsChecked = false,
+        ToolTip = "Experimental opt-in for the new Sunshine virtual display driver instead of an existing SudoVDA setup"
       };
-      installStack.Children.Add(_installVirtualDisplayCheckBox);
 
-      installStack.Children.Add(new TextBlock {
-        Text = "Disable only if you already use another virtual display driver or do not need virtual monitors.",
+      var installVirtualDisplayHintText = new TextBlock {
+        Text = "Experimental opt-in. Existing SudoVDA or MttVDD drivers are left installed.",
         FontSize = 12,
         Foreground = new SolidColorBrush(Color.FromRgb(190, 208, 236)),
         Margin = new Thickness(24, 0, 0, 0),
         TextWrapping = TextWrapping.Wrap
-      });
+      };
 
       var tipsSection = new Border {
         CornerRadius = new CornerRadius(10),
@@ -553,6 +557,14 @@ namespace VibeshineInstaller {
         Margin = new Thickness(0, 0, 0, 0),
         TextWrapping = TextWrapping.Wrap
       });
+
+      tipsStack.Children.Add(new System.Windows.Shapes.Rectangle {
+        Height = 1,
+        Fill = new SolidColorBrush(Color.FromArgb(100, 88, 104, 124)),
+        Margin = new Thickness(0, 2, 0, 0)
+      });
+      tipsStack.Children.Add(_installVirtualDisplayCheckBox);
+      tipsStack.Children.Add(installVirtualDisplayHintText);
 
       var divider = new System.Windows.Shapes.Rectangle {
         Height = 1,
@@ -1406,11 +1418,15 @@ namespace VibeshineInstaller {
       }
 
       var allowInstallInputs = !_isBusy;
-      _installPathTextBox.IsEnabled = allowInstallInputs;
-      _installVirtualDisplayCheckBox.IsEnabled = allowInstallInputs;
-      _browseButton.IsEnabled = allowInstallInputs;
       var hasInstalledProduct = _installedProduct != null;
-      _installSection.Visibility = hasInstalledProduct ? Visibility.Collapsed : Visibility.Visible;
+      var showInstallLocation = !hasInstalledProduct;
+      _installLocationTitleText.Visibility = showInstallLocation ? Visibility.Visible : Visibility.Collapsed;
+      _installLocationHintText.Visibility = showInstallLocation ? Visibility.Visible : Visibility.Collapsed;
+      _installPathGrid.Visibility = showInstallLocation ? Visibility.Visible : Visibility.Collapsed;
+      _installPathTextBox.IsEnabled = allowInstallInputs && showInstallLocation;
+      _installVirtualDisplayCheckBox.IsEnabled = allowInstallInputs;
+      _browseButton.IsEnabled = allowInstallInputs && showInstallLocation;
+      _installSection.Visibility = Visibility.Visible;
       _uninstallButton.Visibility = hasInstalledProduct ? Visibility.Visible : Visibility.Collapsed;
       _continueButton.Visibility = Visibility.Visible;
       _continueButton.Content = BuildInstallButtonLabel();
@@ -1992,7 +2008,7 @@ namespace VibeshineInstaller {
     public List<string> ForwardedArguments { get; private set; }
 
     public InstallerArguments() {
-      InternalInstallVirtualDisplay = true;
+      InternalInstallVirtualDisplay = false;
       ForwardedArguments = new List<string>();
     }
 
@@ -2110,13 +2126,13 @@ namespace VibeshineInstaller {
       Console.WriteLine();
       Console.WriteLine("Supported MSI properties:");
       Console.WriteLine("  INSTALL_ROOT=<path>  Install to a custom directory (default: %ProgramFiles%\\Sunshine)");
-      Console.WriteLine("  INSTALL_VIRTUAL_DISPLAY_DRIVER=0  Skip virtual display driver installation");
+      Console.WriteLine("  INSTALL_VIRTUAL_DISPLAY_DRIVER=1  Install the Sunshine virtual display driver");
       Console.WriteLine();
       Console.WriteLine("Examples:");
       Console.WriteLine("  VibeshineSetup.exe /qn");
       Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_ROOT=\"D:\\Vibeshine\"");
       Console.WriteLine("  VibeshineSetup.exe /x {PRODUCT-CODE} /qn");
-      Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_VIRTUAL_DISPLAY_DRIVER=0");
+      Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_VIRTUAL_DISPLAY_DRIVER=1");
       Console.WriteLine("  VibeshineSetup.exe /uninstall");
       Console.WriteLine("  VibeshineSetup.exe /uninstall /quiet");
       Console.WriteLine("  VibeshineSetup.exe --msi C:\\temp\\Vibeshine.msi /passive");
