@@ -5117,6 +5117,7 @@ namespace VibeshineInstaller {
           || line.IndexOf("Failed to", StringComparison.OrdinalIgnoreCase) >= 0
           || line.IndexOf("Unable to", StringComparison.OrdinalIgnoreCase) >= 0
           || line.IndexOf("Required driver artifact", StringComparison.OrdinalIgnoreCase) >= 0
+          || line.IndexOf("Exception calling", StringComparison.OrdinalIgnoreCase) >= 0
           || line.IndexOf("invalid", StringComparison.OrdinalIgnoreCase) >= 0;
         if (!looksRelevant) {
           continue;
