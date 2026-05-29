@@ -108,7 +108,7 @@ Private Function IsTargetProduct(displayName)
     Dim nameUpper
     nameUpper = UCase(Trim(displayName))
     IsTargetProduct = (Left(nameUpper, 8) = "SUNSHINE") _
-        Or (Left(nameUpper, 6) = "APOLLO") _
+        Or (nameUpper = "APOLLO") _
         Or (Left(nameUpper, 9) = "VIBEPOLLO")
 End Function
 
