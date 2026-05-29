@@ -226,10 +226,18 @@ namespace nvhttp {
       (void) platf::virtual_display_cleanup::run("cancel", config::video.dd.config_revert_on_disconnect);
     }
 
+    bool has_active_or_stopping_stream_session() {
+      // RTSP removes STOPPING sessions from session_count() before stream::session::join()
+      // returns; the worker count keeps display-helper work away from teardown-owned displays.
+      return rtsp_stream::session_count() > 0 ||
+             stream::session::running_sessions.load(std::memory_order_acquire) != 0 ||
+             webrtc_stream::has_active_sessions();
+    }
+
     void cleanup_virtual_display_if_idle() {
       try {
-        if (rtsp_stream::session_count() > 0 || webrtc_stream::has_active_sessions()) {
-          BOOST_LOG(info) << "Skipping virtual display cleanup because a streaming session is active.";
+        if (has_active_or_stopping_stream_session()) {
+          BOOST_LOG(info) << "Skipping virtual display cleanup because a streaming session is active or stopping.";
           return;
         }
 
@@ -1999,8 +2007,7 @@ namespace nvhttp {
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
 
-    const bool no_active_sessions =
-      (rtsp_stream::session_count() == 0) && !webrtc_stream::has_active_sessions();
+    const bool no_active_sessions = !has_active_or_stopping_stream_session();
     const auto request_client_identity = resolve_client_identity_from_request(request);
     // Runtime overrides are global process state. Do not reapply them while
     // another RTSP session is active, otherwise a second client can mutate
@@ -2019,7 +2026,7 @@ namespace nvhttp {
       config::clear_runtime_config_overrides();
 
       // Restore global config immediately when safe; otherwise defer.
-      if (rtsp_stream::session_count() == 0) {
+      if (!has_active_or_stopping_stream_session()) {
         config::apply_config_now();
       } else {
         config::mark_deferred_reload();
@@ -2093,7 +2100,7 @@ namespace nvhttp {
     prepare_virtual_display_for_session(launch_session, no_active_sessions, allow_display_changes, pending_output_override);
 
     auto virtual_display_teardown_guard = util::fail_guard([&]() {
-      if (rtsp_stream::session_count() > 0 || webrtc_stream::has_active_sessions()) {
+      if (has_active_or_stopping_stream_session()) {
         return;
       }
 
@@ -2281,9 +2288,7 @@ namespace nvhttp {
     // Newer Moonlight clients send localAudioPlayMode on /resume too,
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
-    const bool no_active_sessions {
-      (rtsp_stream::session_count() == 0) && !webrtc_stream::has_active_sessions()
-    };
+    const bool no_active_sessions = !has_active_or_stopping_stream_session();
     const bool allow_display_changes = config::video.dd.config_revert_on_disconnect;
     if (no_active_sessions && allow_display_changes) {
       config::set_runtime_output_name_override(std::nullopt);
@@ -2319,7 +2324,7 @@ namespace nvhttp {
     prepare_virtual_display_for_session(launch_session, no_active_sessions, allow_display_changes, pending_output_override);
 
     auto virtual_display_teardown_guard = util::fail_guard([&]() {
-      if (rtsp_stream::session_count() > 0 || webrtc_stream::has_active_sessions()) {
+      if (has_active_or_stopping_stream_session()) {
         return;
       }
 
