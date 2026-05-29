@@ -9,7 +9,7 @@ import DisplayOutputSelector from '@/configs/tabs/audiovideo/DisplayOutputSelect
 import DisplayDeviceOptions from '@/configs/tabs/audiovideo/DisplayDeviceOptions.vue';
 import DisplayModesSettings from '@/configs/tabs/audiovideo/DisplayModesSettings.vue';
 import FrameLimiterStep from '@/configs/tabs/audiovideo/FrameLimiterStep.vue';
-import { NSwitch, NRadioGroup, NRadio } from 'naive-ui';
+import { NCheckbox, NSwitch, NRadioGroup, NRadio } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
 import { storeToRefs } from 'pinia';
 
@@ -298,15 +298,6 @@ function selectVirtualDisplayLayout(v: unknown) {
                 {{ $t('config.virtual_display_mode_shared') }}
               </n-radio>
             </n-radio-group>
-            <PlatformLayout>
-              <template #windows>
-                <ConfigFieldRenderer
-                  setting-key="dd_virtual_display_permanent_count"
-                  v-model="config.dd_virtual_display_permanent_count"
-                  class="mt-4"
-                />
-              </template>
-            </PlatformLayout>
             <div v-if="virtualDisplayMode === 'disabled'" class="mt-3">
               <DisplayOutputSelector />
             </div>
@@ -395,6 +386,23 @@ function selectVirtualDisplayLayout(v: unknown) {
                 <template #unchecked>{{ $t('_common.disabled') }}</template>
               </n-switch>
             </div>
+
+            <PlatformLayout>
+              <template #windows>
+                <div class="mt-4 border-t border-dark/5 pt-4 dark:border-light/5">
+                  <n-checkbox v-model:checked="sunshineVirtualDriverEnabled">
+                    <div class="flex flex-col">
+                      <span class="text-sm font-medium">
+                        {{ $t('config.dd_use_sunshine_virtual_display_driver') }}
+                      </span>
+                      <span class="mt-1 text-[11px] leading-snug opacity-70">
+                        {{ $t('config.dd_use_sunshine_virtual_display_driver_desc') }}
+                      </span>
+                    </div>
+                  </n-checkbox>
+                </div>
+              </template>
+            </PlatformLayout>
           </fieldset>
 
           <div class="my-4 border-t border-dark/5 dark:border-light/5" />
@@ -414,26 +422,6 @@ function selectVirtualDisplayLayout(v: unknown) {
           <div class="my-4 border-t border-dark/5 dark:border-light/5" />
 
           <FrameLimiterStep :step-label="frameLimiterStepLabel" />
-
-          <PlatformLayout>
-            <template #windows>
-              <div class="mt-4 border-t border-dark/5 pt-4 dark:border-light/5">
-                <div
-                  class="flex flex-col gap-3 rounded-md border border-dark/10 bg-surface/20 p-3 dark:border-light/10 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <div>
-                    <div class="text-sm font-medium">
-                      {{ $t('config.dd_use_sunshine_virtual_display_driver') }}
-                    </div>
-                    <p class="mt-1 text-[11px] leading-snug opacity-70">
-                      {{ $t('config.dd_use_sunshine_virtual_display_driver_desc') }}
-                    </p>
-                  </div>
-                  <n-switch v-model:value="sunshineVirtualDriverEnabled" />
-                </div>
-              </div>
-            </template>
-          </PlatformLayout>
         </div>
       </div>
     </section>
