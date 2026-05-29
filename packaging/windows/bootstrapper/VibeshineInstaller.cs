@@ -103,6 +103,7 @@ namespace VibeshineInstaller {
   internal sealed class InstallerWindow : Window {
     private readonly InstallerArguments _arguments;
     private readonly Border _installSection;
+    private readonly Border _installVirtualDisplaySection;
     private readonly TextBlock _installLocationTitleText;
     private readonly TextBlock _installLocationHintText;
     private readonly Grid _installPathGrid;
@@ -145,6 +146,8 @@ namespace VibeshineInstaller {
     private InstallerRunner.PayloadMsiInfo _payloadMsiInfo;
     private readonly string _licenseText;
     private readonly string _preferredInstallDirectory;
+    private readonly bool _installVirtualDisplayDriverEnabledInConfig;
+    private readonly bool _showInstallVirtualDisplayOption;
     private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
     private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
     private const uint SWP_NOMOVE = 0x0002;
@@ -167,14 +170,17 @@ namespace VibeshineInstaller {
       // already-installed products.
       _payloadMsiInfo = InstallerRunner.TryGetPayloadMsiInfo(_arguments);
       _preferredInstallDirectory = ResolvePreferredInstallDirectory();
+      _installVirtualDisplayDriverEnabledInConfig = IsSunshineVirtualDisplayDriverEnabledInConfiguration(_preferredInstallDirectory);
       _uninstallUiRequested = BuildFlavor.IsUninstallOnly || arguments.UninstallUiRequested;
-      var showInstallOptions = !BuildFlavor.IsUninstallOnly && _installedProduct == null;
+      var showInstallLocation = !BuildFlavor.IsUninstallOnly && _installedProduct == null;
+      _showInstallVirtualDisplayOption = !BuildFlavor.IsUninstallOnly && !(_installedProduct != null && _installVirtualDisplayDriverEnabledInConfig);
+      var showInstallOptions = showInstallLocation || _showInstallVirtualDisplayOption;
       var displayVersion = GetTargetVersionText();
       Title = (BuildFlavor.IsUninstallOnly ? "Vibeshine Uninstaller v" : "Vibeshine Installer v") + displayVersion;
       Width = 720;
-      Height = showInstallOptions ? 560 : 500;
+      Height = showInstallOptions ? 620 : 500;
       MinWidth = 690;
-      MinHeight = showInstallOptions ? 520 : 470;
+      MinHeight = showInstallOptions ? 580 : 470;
       WindowStartupLocation = WindowStartupLocation.CenterScreen;
       ResizeMode = ResizeMode.CanMinimize;
       WindowStyle = WindowStyle.None;
@@ -484,7 +490,7 @@ namespace VibeshineInstaller {
         FontSize = 13,
         Foreground = new SolidColorBrush(Color.FromRgb(226, 235, 250)),
         Margin = new Thickness(0, 0, 0, 6),
-        IsChecked = false,
+        IsChecked = _installVirtualDisplayDriverEnabledInConfig,
         ToolTip = "Experimental opt-in that may improve performance and smoothness on virtual displays. You can switch back to SudoVDA in options."
       };
 
@@ -558,7 +564,7 @@ namespace VibeshineInstaller {
         TextWrapping = TextWrapping.Wrap
       });
 
-      var driverSection = new Border {
+      _installVirtualDisplaySection = new Border {
         CornerRadius = new CornerRadius(10),
         Padding = new Thickness(16),
         Margin = new Thickness(0, 0, 0, 10),
@@ -566,12 +572,12 @@ namespace VibeshineInstaller {
         BorderBrush = new SolidColorBrush(Color.FromArgb(112, 128, 133, 255)),
         BorderThickness = new Thickness(1)
       };
-      contentStack.Children.Add(driverSection);
+      contentStack.Children.Add(_installVirtualDisplaySection);
 
       var driverStack = new StackPanel {
         Orientation = Orientation.Vertical
       };
-      driverSection.Child = driverStack;
+      _installVirtualDisplaySection.Child = driverStack;
       driverStack.Children.Add(_installVirtualDisplayCheckBox);
       driverStack.Children.Add(installVirtualDisplayHintText);
 
@@ -1026,13 +1032,17 @@ namespace VibeshineInstaller {
       }
 
       await RunOperationAsync(async () => {
-        var installVirtualDisplayDriver = _installVirtualDisplayCheckBox.IsChecked == true;
+        var installVirtualDisplayDriver = ShouldInstallVirtualDisplayDriver();
         return await Task.Run(() => InstallerRunner.RunInteractiveInstall(
           _arguments,
           selectedPath,
           installVirtualDisplayDriver,
           false));
       }, "Install", "Installing or updating Vibeshine...", "Vibeshine installation completed.");
+    }
+
+    private bool ShouldInstallVirtualDisplayDriver() {
+      return _installVirtualDisplayDriverEnabledInConfig || _installVirtualDisplayCheckBox.IsChecked == true;
     }
 
     private async Task RunUninstallFlow() {
@@ -1341,6 +1351,72 @@ namespace VibeshineInstaller {
       return InstallerRunner.DefaultInstallDirectory;
     }
 
+    private static bool IsSunshineVirtualDisplayDriverEnabledInConfiguration(string installDirectory) {
+      foreach (var configPath in BuildSunshineConfigPathCandidates(installDirectory)) {
+        bool enabled;
+        if (TryReadSunshineVirtualDisplayDriverEnabled(configPath, out enabled)) {
+          return enabled;
+        }
+      }
+
+      return false;
+    }
+
+    private static IEnumerable<string> BuildSunshineConfigPathCandidates(string installDirectory) {
+      if (!string.IsNullOrWhiteSpace(installDirectory)) {
+        yield return Path.Combine(installDirectory, "config", "sunshine.conf");
+        yield return Path.Combine(installDirectory, "sunshine.conf");
+      }
+
+      var roaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+      if (!string.IsNullOrWhiteSpace(roaming)) {
+        yield return Path.Combine(roaming, "Sunshine", "sunshine.conf");
+        yield return Path.Combine(roaming, "Sunshine", "config", "sunshine.conf");
+      }
+    }
+
+    private static bool TryReadSunshineVirtualDisplayDriverEnabled(string configPath, out bool enabled) {
+      enabled = false;
+      if (string.IsNullOrWhiteSpace(configPath) || !File.Exists(configPath)) {
+        return false;
+      }
+
+      try {
+        foreach (var rawLine in File.ReadLines(configPath)) {
+          var line = rawLine.Trim();
+          if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal) || line.StartsWith(";", StringComparison.Ordinal)) {
+            continue;
+          }
+
+          var equalsIndex = line.IndexOf('=');
+          if (equalsIndex <= 0) {
+            continue;
+          }
+
+          var key = line.Substring(0, equalsIndex).Trim();
+          if (!string.Equals(key, "dd_use_sunshine_virtual_display_driver", StringComparison.OrdinalIgnoreCase)) {
+            continue;
+          }
+
+          var value = line.Substring(equalsIndex + 1).Trim().Trim('"');
+          enabled = IsTruthyConfigValue(value);
+          return true;
+        }
+      } catch {
+        return false;
+      }
+
+      return false;
+    }
+
+    private static bool IsTruthyConfigValue(string value) {
+      return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(value, "on", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(value, "enabled", StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task ShowLicenseDialogAsync() {
       var maxTextHeight = ActualHeight - 320;
       if (maxTextHeight < 140) {
@@ -1420,6 +1496,7 @@ namespace VibeshineInstaller {
         _installVirtualDisplayCheckBox.IsEnabled = false;
         _browseButton.IsEnabled = false;
         _installSection.Visibility = Visibility.Collapsed;
+        _installVirtualDisplaySection.Visibility = Visibility.Collapsed;
         _continueButton.Visibility = Visibility.Collapsed;
         _uninstallButton.Visibility = Visibility.Visible;
         _uninstallButton.IsEnabled = allowUninstall;
@@ -1433,9 +1510,10 @@ namespace VibeshineInstaller {
       _installLocationHintText.Visibility = showInstallLocation ? Visibility.Visible : Visibility.Collapsed;
       _installPathGrid.Visibility = showInstallLocation ? Visibility.Visible : Visibility.Collapsed;
       _installPathTextBox.IsEnabled = allowInstallInputs && showInstallLocation;
-      _installVirtualDisplayCheckBox.IsEnabled = allowInstallInputs;
+      _installVirtualDisplayCheckBox.IsEnabled = allowInstallInputs && _showInstallVirtualDisplayOption;
       _browseButton.IsEnabled = allowInstallInputs && showInstallLocation;
       _installSection.Visibility = showInstallLocation ? Visibility.Visible : Visibility.Collapsed;
+      _installVirtualDisplaySection.Visibility = _showInstallVirtualDisplayOption ? Visibility.Visible : Visibility.Collapsed;
       _uninstallButton.Visibility = hasInstalledProduct ? Visibility.Visible : Visibility.Collapsed;
       _continueButton.Visibility = Visibility.Visible;
       _continueButton.Content = BuildInstallButtonLabel();
