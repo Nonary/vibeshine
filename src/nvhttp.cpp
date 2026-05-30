@@ -22,6 +22,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 
 // lib includes
@@ -85,7 +86,7 @@ namespace nvhttp {
       context.use_private_key_file(private_key_file, boost::asio::ssl::context::pem);
     }
 
-    std::function<int(SSL *)> verify;
+    std::function<int(SSL *, const boost::asio::ip::tcp::endpoint &)> verify;
     std::function<void(std::shared_ptr<Response>, std::shared_ptr<Request>)> on_verify_failed;
 
   protected:
@@ -130,7 +131,7 @@ namespace nvhttp {
               return;
             }
             if (!ec) {
-              if (verify && !verify(session->connection->socket->native_handle())) {
+              if (verify && !verify(session->connection->socket->native_handle(), session->connection->socket->lowest_layer().remote_endpoint())) {
                 this->write(session, on_verify_failed);
               } else {
                 this->read(session);
@@ -1035,10 +1036,81 @@ namespace nvhttp {
     std::string name;
   };
 
+  std::mutex tls_client_identity_mutex;
+  std::unordered_map<std::string, resolved_client_identity_t> tls_client_identity_by_endpoint;
+
+  std::string endpoint_key(const boost::asio::ip::tcp::endpoint &endpoint) {
+    if (endpoint.address().is_unspecified() || endpoint.port() == 0) {
+      return {};
+    }
+
+    return endpoint.address().to_string() + ":" + std::to_string(endpoint.port());
+  }
+
+  std::optional<resolved_client_identity_t> resolve_client_identity_from_peer_cert(const crypto::x509_t &client_cert) {
+    if (!client_cert) {
+      BOOST_LOG(debug) << "No client certificate available";
+      return std::nullopt;
+    }
+
+    auto client_cert_signature = crypto::signature(const_cast<X509 *>(client_cert.get()));
+
+    std::lock_guard<std::mutex> lock(client_mutex);
+    for (const auto &named_cert : client_root.named_devices) {
+      auto stored_x509 = crypto::x509(named_cert.cert);
+      if (stored_x509) {
+        auto stored_signature = crypto::signature(stored_x509.get());
+        if (stored_signature == client_cert_signature) {
+          BOOST_LOG(debug) << "Found matching client UUID: " << named_cert.uuid << " for client: " << named_cert.name;
+          return resolved_client_identity_t {
+            named_cert.uuid,
+            named_cert.name,
+          };
+        }
+      }
+    }
+
+    BOOST_LOG(debug) << "No matching client UUID found for certificate";
+    return std::nullopt;
+  }
+
+  void remember_tls_client_identity(const boost::asio::ip::tcp::endpoint &endpoint, const resolved_client_identity_t &identity) {
+    const auto key = endpoint_key(endpoint);
+    if (key.empty() || identity.uuid.empty()) {
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(tls_client_identity_mutex);
+    tls_client_identity_by_endpoint[key] = identity;
+  }
+
+  std::optional<resolved_client_identity_t> get_remembered_tls_client_identity(req_https_t request) {
+    if (!request) {
+      return std::nullopt;
+    }
+
+    const auto key = endpoint_key(request->remote_endpoint());
+    if (key.empty()) {
+      return std::nullopt;
+    }
+
+    std::lock_guard<std::mutex> lock(tls_client_identity_mutex);
+    auto it = tls_client_identity_by_endpoint.find(key);
+    if (it == tls_client_identity_by_endpoint.end()) {
+      return std::nullopt;
+    }
+    return it->second;
+  }
+
   resolved_client_identity_t resolve_client_identity_from_request(req_https_t request) {
     resolved_client_identity_t identity;
+    if (auto remembered = get_remembered_tls_client_identity(request)) {
+      return *remembered;
+    }
     if (request) {
-      identity.uuid = get_client_uuid_from_request(request, &identity.name);
+      if (auto resolved = resolve_client_identity_from_peer_cert(tl_peer_certificate)) {
+        identity = *resolved;
+      }
     }
     return identity;
   }
@@ -1055,6 +1127,19 @@ namespace nvhttp {
       }
     }
     return std::nullopt;
+  }
+
+  std::string resolve_known_client_uuid_from_launch_id(const std::string &launch_unique_id) {
+    if (launch_unique_id.empty()) {
+      return {};
+    }
+
+    if (get_named_cert_by_uuid(launch_unique_id)) {
+      return launch_unique_id;
+    }
+
+    BOOST_LOG(debug) << "Ignoring unmatched launch uniqueid for per-client settings: " << launch_unique_id;
+    return {};
   }
 
   std::optional<config::video_t::virtual_display_mode_e> parse_virtual_display_mode_override(const std::string &value) {
@@ -1138,9 +1223,12 @@ namespace nvhttp {
     }
 
     // Some launch paths may not provide a peer certificate (e.g. non-TLS resume).
-    // Fall back to the client-provided unique ID so per-client settings still apply.
+    // Fall back only when the client-provided unique ID is one of our known
+    // paired-client UUIDs. Some clients send a placeholder or host-oriented
+    // uniqueid; treating that as a per-client UUID creates a new Windows monitor
+    // identity and loses DPI/HDR calibration.
     if (launch_session->client_uuid.empty()) {
-      launch_session->client_uuid = get_arg(args, "uniqueid", "");
+      launch_session->client_uuid = resolve_known_client_uuid_from_launch_id(get_arg(args, "uniqueid", ""));
     }
 
     auto client_name_arg = get_arg(args, "clientName", "");
@@ -2048,7 +2136,7 @@ namespace nvhttp {
 
         std::string client_uuid = request_client_identity.uuid;
         if (client_uuid.empty()) {
-          client_uuid = get_arg(args, "uniqueid", "");
+          client_uuid = resolve_known_client_uuid_from_launch_id(get_arg(args, "uniqueid", ""));
         }
         if (auto client_settings = get_named_cert_by_uuid(client_uuid)) {
           for (const auto &[k, v] : client_settings->config_overrides) {
@@ -2555,7 +2643,7 @@ namespace nvhttp {
     http_server_t http_server;
 
     // Verify certificates after establishing connection
-    https_server.verify = [add_cert](SSL *ssl) {
+    https_server.verify = [add_cert](SSL *ssl, const boost::asio::ip::tcp::endpoint &remote_endpoint) {
       crypto::x509_t x509 {
 #if OPENSSL_VERSION_MAJOR >= 3
         SSL_get1_peer_certificate(ssl)
@@ -2628,6 +2716,9 @@ namespace nvhttp {
       }
 
       verified = 1;
+      if (auto identity = resolve_client_identity_from_peer_cert(x509_verify)) {
+        remember_tls_client_identity(remote_endpoint, *identity);
+      }
 
       return verified;
     };
