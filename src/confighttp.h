@@ -12,6 +12,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 // third-party includes
@@ -30,6 +31,7 @@ namespace confighttp {
   using req_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request>;
 
   constexpr auto PORT_HTTPS = 1;
+  std::string get_web_ui_url(std::string_view path = {});
   void start();
 
   // Token scopes for API tokens used by tests and UI
