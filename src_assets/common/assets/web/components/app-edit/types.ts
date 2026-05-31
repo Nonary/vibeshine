@@ -58,6 +58,7 @@ export interface AppForm {
   cmd: string;
   workingDir: string;
   imagePath: string;
+  playniteIconPath: string;
   excludeGlobalPrepCmd: boolean;
   configOverrides: Record<string, unknown>;
   elevated: boolean;
@@ -99,6 +100,7 @@ export interface ServerApp {
   uuid?: string;
   'working-dir'?: string;
   'image-path'?: string;
+  'playnite-icon-path'?: string;
   'exclude-global-prep-cmd'?: boolean;
   'config-overrides'?: Record<string, unknown>;
   elevated?: boolean;
