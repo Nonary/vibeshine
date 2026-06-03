@@ -377,7 +377,7 @@ namespace nvhttp {
 
         if (!no_active_sessions) {
           auto existing_device =
-            VDISPLAY::resolveActiveVirtualDisplayDeviceId(launch_session->virtual_display_device_id, launch_session->client_name);
+            VDISPLAY::resolveActiveVirtualDisplayDeviceId(launch_session->virtual_display_device_id, launch_session->client_name, false);
           if (existing_device) {
             launch_session->virtual_display = true;
             launch_session->virtual_display_failed = false;
@@ -558,7 +558,9 @@ namespace nvhttp {
           virtual_display_guid,
           base_vd_fps_millihz,
           framegen_refresh_active,
-          launch_session->enable_hdr
+          launch_session->enable_hdr,
+          false,
+          !shared_mode
         );
 
         if (display_info) {
