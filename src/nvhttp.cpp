@@ -1035,11 +1035,6 @@ namespace nvhttp {
     return {};
   }
 
-  std::string get_client_uuid_from_request(req_https_t request, std::string *client_name_out = nullptr) {
-    // Try to use the peer certificate that was stored during SSL verification
-    return get_client_uuid_from_peer_cert(tl_peer_certificate, client_name_out);
-  }
-
   struct resolved_client_identity_t {
     std::string uuid;
     std::string name;
@@ -1093,6 +1088,16 @@ namespace nvhttp {
     tls_client_identity_by_endpoint[key] = identity;
   }
 
+  void forget_tls_client_identity(const boost::asio::ip::tcp::endpoint &endpoint) {
+    const auto key = endpoint_key(endpoint);
+    if (key.empty()) {
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(tls_client_identity_mutex);
+    tls_client_identity_by_endpoint.erase(key);
+  }
+
   std::optional<resolved_client_identity_t> get_remembered_tls_client_identity(req_https_t request) {
     if (!request) {
       return std::nullopt;
@@ -1109,6 +1114,17 @@ namespace nvhttp {
       return std::nullopt;
     }
     return it->second;
+  }
+
+  std::string get_client_uuid_from_request(req_https_t request, std::string *client_name_out = nullptr) {
+    if (auto remembered = get_remembered_tls_client_identity(request)) {
+      if (client_name_out) {
+        *client_name_out = remembered->name;
+      }
+      return remembered->uuid;
+    }
+
+    return get_client_uuid_from_peer_cert(tl_peer_certificate, client_name_out);
   }
 
   resolved_client_identity_t resolve_client_identity_from_request(req_https_t request) {
@@ -2653,20 +2669,9 @@ namespace nvhttp {
 
     // Verify certificates after establishing connection
     https_server.verify = [add_cert](SSL *ssl, const boost::asio::ip::tcp::endpoint &remote_endpoint) {
-      crypto::x509_t x509 {
-#if OPENSSL_VERSION_MAJOR >= 3
-        SSL_get1_peer_certificate(ssl)
-#else
-        SSL_get_peer_certificate(ssl)
-#endif
-      };
+      tl_peer_certificate.reset();
+      forget_tls_client_identity(remote_endpoint);
 
-      // Store peer certificate in thread-local storage for use in request handlers
-      if (x509) {
-        tl_peer_certificate = std::move(x509);
-      }
-
-      // Re-fetch for verification logic
       crypto::x509_t x509_verify {
 #if OPENSSL_VERSION_MAJOR >= 3
         SSL_get1_peer_certificate(ssl)
@@ -2728,6 +2733,7 @@ namespace nvhttp {
       if (auto identity = resolve_client_identity_from_peer_cert(x509_verify)) {
         remember_tls_client_identity(remote_endpoint, *identity);
       }
+      tl_peer_certificate = std::move(x509_verify);
 
       return verified;
     };
