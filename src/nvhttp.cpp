@@ -74,6 +74,14 @@ namespace nvhttp {
 
   crypto::cert_chain_t cert_chain;
 
+  std::string cert_subject_name_for_log(const crypto::x509_t &cert) {
+    auto subject_name = crypto::subject_name(cert.get());
+    if (subject_name.empty()) {
+      return "unknown"s;
+    }
+    return subject_name;
+  }
+
   class SunshineHTTPSServer: public SimpleWeb::ServerBase<SunshineHTTPS> {
   public:
     SunshineHTTPSServer(const std::string &certification_file, const std::string &private_key_file):
@@ -2688,9 +2696,7 @@ namespace nvhttp {
       int verified = 0;
 
       auto fg = util::fail_guard([&]() {
-        char subject_name[256];
-
-        X509_NAME_oneline(X509_get_subject_name(x509_verify.get()), subject_name, sizeof(subject_name));
+        const auto subject_name = cert_subject_name_for_log(x509_verify);
 
         BOOST_LOG(verbose) << subject_name << " -- "sv << (verified ? "verified"sv : "denied"sv);
       });
@@ -2699,10 +2705,8 @@ namespace nvhttp {
       {
         std::lock_guard<std::mutex> lock(client_mutex);
         while (add_cert->peek()) {
-          char subject_name[256];
-
           auto cert = add_cert->pop();
-          X509_NAME_oneline(X509_get_subject_name(cert.get()), subject_name, sizeof(subject_name));
+          const auto subject_name = cert_subject_name_for_log(cert);
 
           BOOST_LOG(verbose) << "Added cert ["sv << subject_name << ']';
           cert_chain.add(std::move(cert));
