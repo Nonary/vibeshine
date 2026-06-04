@@ -988,9 +988,31 @@ namespace nvhttp {
     }
   }
 
+  bool is_placeholder_client_name(const std::string &name) {
+    const auto trimmed = boost::algorithm::trim_copy(name);
+    return boost::iequals(trimmed, "self");
+  }
+
+  std::string display_client_name_for_session(const std::string &paired_name, const std::string &device_name, const std::string &host_name) {
+    const auto paired = boost::algorithm::trim_copy(paired_name);
+    const auto device = boost::algorithm::trim_copy(device_name);
+    const auto host = boost::algorithm::trim_copy(host_name);
+
+    if (!paired.empty() && !is_placeholder_client_name(paired)) {
+      return paired;
+    }
+    if (!device.empty() && !is_placeholder_client_name(device)) {
+      return device;
+    }
+    if (!host.empty() && !is_placeholder_client_name(host)) {
+      return host;
+    }
+    return "Sunshine"s;
+  }
+
   void add_authorized_client(const std::string &name, std::string &&cert) {
     named_cert_t named_cert;
-    named_cert.name = name;
+    named_cert.name = display_client_name_for_session(name, std::string {}, "Moonlight Client"s);
     named_cert.cert = std::move(cert);
     named_cert.uuid = uuid_util::uuid_t::generate().string();
     named_cert.hdr_profile.clear();
@@ -1175,6 +1197,13 @@ namespace nvhttp {
     return {};
   }
 
+  std::string client_name_for_uuid(const std::string &uuid) {
+    if (auto named_cert = get_named_cert_by_uuid(uuid)) {
+      return named_cert->name;
+    }
+    return {};
+  }
+
   std::optional<config::video_t::virtual_display_mode_e> parse_virtual_display_mode_override(const std::string &value) {
     const auto trimmed = boost::algorithm::trim_copy(value);
     if (trimmed.empty()) {
@@ -1260,13 +1289,32 @@ namespace nvhttp {
     // paired-client UUIDs. Some clients send a placeholder or host-oriented
     // uniqueid; treating that as a per-client UUID creates a new Windows monitor
     // identity and loses DPI/HDR calibration.
+    const auto launch_client_uuid = resolve_known_client_uuid_from_launch_id(get_arg(args, "uniqueid", ""));
     if (launch_session->client_uuid.empty()) {
-      launch_session->client_uuid = resolve_known_client_uuid_from_launch_id(get_arg(args, "uniqueid", ""));
+      launch_session->client_uuid = launch_client_uuid;
+      launch_session->client_name = client_name_for_uuid(launch_session->client_uuid);
+    } else if (!launch_client_uuid.empty() && launch_client_uuid != launch_session->client_uuid && is_placeholder_client_name(launch_session->client_name)) {
+      BOOST_LOG(warning) << "Resolved TLS client identity '" << launch_session->client_name
+                         << "' is a placeholder and conflicts with launch uniqueid; using paired client UUID "
+                         << launch_client_uuid << " for this session.";
+      launch_session->client_uuid = launch_client_uuid;
+      launch_session->client_name = client_name_for_uuid(launch_session->client_uuid);
     }
 
     auto client_name_arg = get_arg(args, "clientName", "");
     if (!client_name_arg.empty()) {
       launch_session->device_name = client_name_arg;
+    }
+
+    const auto original_client_name = boost::algorithm::trim_copy(launch_session->client_name);
+    if (!original_client_name.empty() && is_placeholder_client_name(original_client_name)) {
+      const auto resolved_display_client_name =
+        display_client_name_for_session(launch_session->client_name, launch_session->device_name, config::nvhttp.sunshine_name);
+      BOOST_LOG(warning) << "Resolved paired client name '" << launch_session->client_name
+                         << "' is not safe for display identity; using '" << resolved_display_client_name << "' instead.";
+      launch_session->client_name = resolved_display_client_name;
+    } else {
+      launch_session->client_name = original_client_name;
     }
 
     auto rikey = util::from_hex_vec(get_arg(args, "rikey"), true);
@@ -1840,6 +1888,11 @@ namespace nvhttp {
     getservercert(sess, tree, pin);
 
     if (!name.empty()) {
+      if (is_placeholder_client_name(name)) {
+        BOOST_LOG(warning) << "PIN submitted with reserved client name '" << name << "'; refusing to pair with placeholder identity.";
+        remove_session(sess);
+        return false;
+      }
       sess.client.name = name;
     }
 
@@ -2168,8 +2221,13 @@ namespace nvhttp {
         }
 
         std::string client_uuid = request_client_identity.uuid;
+        const auto launch_client_uuid = resolve_known_client_uuid_from_launch_id(get_arg(args, "uniqueid", ""));
         if (client_uuid.empty()) {
-          client_uuid = resolve_known_client_uuid_from_launch_id(get_arg(args, "uniqueid", ""));
+          client_uuid = launch_client_uuid;
+        } else if (!launch_client_uuid.empty() && is_placeholder_client_name(request_client_identity.name)) {
+          BOOST_LOG(warning) << "Ignoring placeholder TLS client identity '" << request_client_identity.name
+                             << "' for runtime overrides; using launch uniqueid " << launch_client_uuid << ".";
+          client_uuid = launch_client_uuid;
         }
         if (auto client_settings = get_named_cert_by_uuid(client_uuid)) {
           for (const auto &[k, v] : client_settings->config_overrides) {
@@ -2853,6 +2911,10 @@ namespace nvhttp {
     }
 
     const auto trimmed_name = boost::algorithm::trim_copy(name);
+    if (is_placeholder_client_name(trimmed_name)) {
+      BOOST_LOG(warning) << "Refusing to update paired client '" << uuid << "' to reserved name '" << trimmed_name << "'.";
+      return false;
+    }
     const auto trimmed_display_mode = boost::algorithm::trim_copy(display_mode);
     const auto trimmed_output_override = boost::algorithm::trim_copy(output_name_override);
     const auto trimmed_vd_mode = boost::algorithm::trim_copy(virtual_display_mode);

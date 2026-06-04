@@ -17,6 +17,13 @@ TEST(HttpPairingCertLogging, MissingSubjectNameIsEmptyInsteadOfCrashing) {
   ASSERT_EQ(crypto::subject_name(empty_cert.get()), "");
 }
 
+TEST(HttpPairingClientNames, DisplayClientNameSkipsSelfPlaceholder) {
+  ASSERT_EQ(display_client_name_for_session("Living Room", "TTV", "Vibeshine"), "Living Room");
+  ASSERT_EQ(display_client_name_for_session(" self ", "TTV", "Vibeshine"), "TTV");
+  ASSERT_EQ(display_client_name_for_session("", " self ", "Vibeshine"), "Vibeshine");
+  ASSERT_EQ(display_client_name_for_session("self", "", ""), "Sunshine");
+}
+
 struct pairing_input {
   std::shared_ptr<pair_session_t> session;
   /**

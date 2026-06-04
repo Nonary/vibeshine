@@ -181,6 +181,11 @@ namespace nvhttp {
   bool pin(std::string pin, std::string name);
 
   /**
+   * @brief Pick the client label used for display-facing behavior.
+   */
+  std::string display_client_name_for_session(const std::string &paired_name, const std::string &device_name, const std::string &host_name);
+
+  /**
    * @brief Remove single client.
    * @param uuid The UUID of the client to remove.
    * @examples
