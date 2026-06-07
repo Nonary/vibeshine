@@ -771,13 +771,8 @@ namespace nvhttp {
 
     pt::ptree root;
 
-    if (fs::exists(sunshine_path)) {
-      try {
-        pt::read_json(sunshine_path, root);
-      } catch (std::exception &e) {
-        BOOST_LOG(error) << "Couldn't read "sv << sunshine_path << ": "sv << e.what();
-        return;
-      }
+    if (!statefile::load_json_for_update(sunshine_path, root)) {
+      return;
     }
 
     pt::ptree root_node;
@@ -848,13 +843,8 @@ namespace nvhttp {
       };
 
       pt::ptree vibeshine_tree;
-      if (fs::exists(vibeshine_path)) {
-        try {
-          pt::read_json(vibeshine_path, vibeshine_tree);
-        } catch (std::exception &e) {
-          BOOST_LOG(error) << "Couldn't read "sv << vibeshine_path << ": "sv << e.what();
-          vibeshine_tree = {};
-        }
+      if (!statefile::load_json_for_update(vibeshine_path, vibeshine_tree)) {
+        return;
       }
 
       auto &vibe_root = ensure_root(vibeshine_tree);
