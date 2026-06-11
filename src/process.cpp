@@ -2285,6 +2285,7 @@ namespace proc {
         auto detached_nodes_opt = app_node.get_child_optional("detached"s);
         auto exclude_global_prep = app_node.get_optional<bool>("exclude-global-prep-cmd"s);
         auto output = app_node.get_optional<std::string>("output"s);
+        auto display_output = app_node.get_optional<std::string>("display-output"s);
         auto name = parse_env_val(this_env, app_node.get<std::string>("name"s));
         auto uuid = app_node.get_optional<std::string>("uuid"s);
         auto cmd = app_node.get_optional<std::string>("cmd"s);
@@ -2436,6 +2437,13 @@ namespace proc {
 
         if (output) {
           ctx.output = parse_env_val(this_env, *output);
+        }
+
+        if (display_output) {
+          ctx.output_name_override = parse_env_val(this_env, *display_output);
+        } else if (!ctx.output.empty()) {
+          // Backward compatibility for apps saved before display output received its own field.
+          ctx.output_name_override = ctx.output;
         }
 
         if (cmd) {
