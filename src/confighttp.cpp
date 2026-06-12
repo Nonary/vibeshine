@@ -2993,6 +2993,12 @@ namespace confighttp {
         output["sdp"] = answer_sdp;
         output["type"] = answer_type;
       } else {
+        const auto negotiation_error = webrtc_stream::get_negotiation_error(session_id);
+        if (!negotiation_error.empty()) {
+          output["error"] = negotiation_error;
+          send_response(response, output);
+          return;
+        }
         output["status"] = true;
         output["answer_ready"] = false;
         output["sdp"] = nullptr;
@@ -3023,8 +3029,9 @@ namespace confighttp {
       output["sdp"] = answer_sdp;
       output["type"] = answer_type;
     } else {
+      const auto negotiation_error = webrtc_stream::get_negotiation_error(session_id);
       output["status"] = false;
-      output["error"] = "Answer not ready";
+      output["error"] = negotiation_error.empty() ? "Answer not ready" : negotiation_error;
     }
     send_response(response, output);
   }
