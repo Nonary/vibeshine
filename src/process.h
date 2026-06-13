@@ -59,6 +59,19 @@ namespace proc {
     std::chrono::steady_clock::time_point launch_started_at {};
   };
 
+#ifdef _WIN32
+  struct running_app_state_t {
+    bool has_active_app {false};
+    bool trackable {false};
+    bool uses_playnite {false};
+    std::string playnite_id;
+    std::string name;
+    std::string command;
+    std::string working_dir;
+    uint32_t root_pid {0};
+  };
+#endif
+
   /**
    * pre_cmds -- guaranteed to be executed unless any of the commands fail.
    * detached -- commands detached from Sunshine
@@ -168,6 +181,12 @@ namespace proc {
     std::string get_last_run_app_name();
     bool last_run_app_frame_gen_limiter_fix() const;
     bool is_launch_deferred() const;
+    bool has_trackable_running_app() const;
+    bool foreground_window_matches_running_app();
+#ifdef _WIN32
+    running_app_state_t running_app_state() const;
+    bool running_app_contains_pid(uint32_t pid);
+#endif
     void terminate(bool skip_display_revert = false);
 
     // Hot-update app list and environment without disrupting a running app
