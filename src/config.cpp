@@ -803,7 +803,7 @@ namespace config {
     },  // vk
 
     {
-      true,  // rtx_hdr.enabled
+      false,  // rtx_hdr.enabled
       false,  // rtx_hdr.force_sdr
       0,  // rtx_hdr.contrast
       0,  // rtx_hdr.saturation
