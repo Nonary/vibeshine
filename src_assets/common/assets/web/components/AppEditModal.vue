@@ -41,7 +41,7 @@
             </div>
             <div class="flex flex-col">
               <span class="text-xl font-semibold">{{
-                form.index === -1 ? 'Add Application' : 'Edit Application'
+                isNew ? 'Add Application' : 'Edit Application'
               }}</span>
             </div>
           </div>
@@ -406,7 +406,7 @@
         >
           <n-button type="default" strong @click="close">{{ $t('_common.cancel') }}</n-button>
           <n-button
-            v-if="form.index !== -1"
+            v-if="!isNew"
             type="error"
             :disabled="saving"
             @click="showDeleteConfirm = true"
@@ -499,7 +499,6 @@ type AppVirtualDisplayModeSelection = AppVirtualDisplayMode | 'global';
 interface AppEditModalProps {
   modelValue: boolean;
   app?: ServerApp | null;
-  index?: number;
 }
 
 const props = defineProps<AppEditModalProps>();
@@ -514,6 +513,7 @@ const { t } = useI18n();
 function fresh(): AppForm {
   return {
     index: -1,
+    uuid: '',
     name: '',
     cmd: '',
     workingDir: '',
@@ -729,9 +729,9 @@ watch(
   },
 );
 
-function fromServerApp(src?: ServerApp | null, idx: number = -1): AppForm {
+function fromServerApp(src?: ServerApp | null): AppForm {
   const base = fresh();
-  if (!src) return { ...base, index: idx };
+  if (!src) return base;
   const cmdStr = Array.isArray(src.cmd) ? src.cmd.join(' ') : (src.cmd ?? '');
   const prep = Array.isArray(src['prep-cmd'])
     ? src['prep-cmd'].map((p) => ({
@@ -823,7 +823,8 @@ function fromServerApp(src?: ServerApp | null, idx: number = -1): AppForm {
   const rawConfigOverrides = clonePlainRecord((src as any)?.['config-overrides']);
   const rtxHdrOverrides = extractRtxHdrOverrides(rawConfigOverrides);
   return {
-    index: idx,
+    index: typeof src.index === 'number' ? src.index : -1,
+    uuid: src.uuid || '',
     name: String(src.name ?? ''),
     output: sanitizedOutput,
     cmd: String(cmdStr ?? ''),
@@ -874,8 +875,8 @@ function toServerPayload(f: AppForm): Record<string, any> {
   const captureFixEnabled = !!(f.gen1FramegenFix || f.gen2FramegenFix);
   const configOverridesPayload = buildConfigOverridesPayload(f);
   const payload: Record<string, any> = {
-    // Index is required by the backend to determine add (-1) vs update (>= 0)
-    index: typeof f.index === 'number' ? f.index : -1,
+    ...(f.uuid ? { uuid: f.uuid } : {}),
+    ...(!f.uuid ? { index: typeof f.index === 'number' ? f.index : -1 } : {}),
     name: f.name,
     cmd: f.cmd,
     'working-dir': f.workingDir,
@@ -998,7 +999,7 @@ watch(
   (val) => {
     if (!open.value) return;
     liveRtxHdrSuppress = true;
-    form.value = fromServerApp(val as ServerApp | undefined, props.index ?? -1);
+    form.value = fromServerApp(val as ServerApp | undefined);
     primeLiveRtxHdrState();
     nextTick(() => {
       liveRtxHdrSuppress = false;
@@ -1110,7 +1111,7 @@ function enqueueRtxHdrLivePost(overrides: Record<string, unknown>, key: string):
 }
 
 function scheduleRtxHdrLiveUpdate() {
-  if (liveRtxHdrSuppress || !open.value || form.value.index === -1 || !activeAppUuid()) {
+  if (liveRtxHdrSuppress || !open.value || !activeAppUuid()) {
     return;
   }
 
@@ -1129,7 +1130,7 @@ function scheduleRtxHdrLiveUpdate() {
 }
 
 async function restoreOriginalRtxHdrLiveOverrides() {
-  if (form.value.index === -1 || !activeAppUuid()) {
+  if (!activeAppUuid()) {
     return;
   }
 
@@ -1990,7 +1991,7 @@ watch(open, (o) => {
   if (o) {
     liveRtxHdrProgrammaticClose = false;
     liveRtxHdrSuppress = true;
-    form.value = fromServerApp(props.app ?? undefined, props.index ?? -1);
+    form.value = fromServerApp(props.app ?? undefined);
     primeLiveRtxHdrState();
     nextTick(() => {
       liveRtxHdrSuppress = false;
@@ -2595,7 +2596,7 @@ function warnIfHealthIssues(reason: FrameGenHealthReason) {
 }
 
 const playniteInstalled = ref(false);
-const isNew = computed(() => form.value.index === -1);
+const isNew = computed(() => !form.value.uuid);
 // New app source: 'custom' or 'playnite' (Windows only)
 const newAppSource = ref<'custom' | 'playnite'>('custom');
 const showPlaynitePicker = computed(
@@ -2957,7 +2958,14 @@ async function del() {
       }
     }
 
-    const r = await http.delete(`./api/apps/${form.value.index}`, { validateStatus: () => true });
+    const target = form.value.uuid;
+    if (!target) {
+      message?.error('Cannot delete an application without a UUID.');
+      return;
+    }
+    const r = await http.delete(`./api/apps/${encodeURIComponent(target)}`, {
+      validateStatus: () => true,
+    });
     try {
       if (r && (r as any).data && (r as any).data.playniteFullscreenDisabled) {
         try {

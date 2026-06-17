@@ -130,6 +130,38 @@ namespace confighttp {
     } catch (...) {}
   }
 
+  std::optional<size_t> find_app_index_by_uuid(const nlohmann::json &apps_node, const std::string &uuid) {
+    if (uuid.empty() || !apps_node.is_array()) {
+      return std::nullopt;
+    }
+    for (size_t i = 0; i < apps_node.size(); ++i) {
+      const auto &app = apps_node[i];
+      if (app.is_object() && app.contains("uuid") && app["uuid"].is_string() && app["uuid"].get<std::string>() == uuid) {
+        return i;
+      }
+    }
+    return std::nullopt;
+  }
+
+  std::optional<size_t> resolve_app_index_token(const nlohmann::json &apps_node, const std::string &token) {
+    if (auto uuid_index = find_app_index_by_uuid(apps_node, token)) {
+      return uuid_index;
+    }
+    if (token.empty() || !std::ranges::all_of(token, [](unsigned char ch) {
+          return std::isdigit(ch) != 0;
+        })) {
+      return std::nullopt;
+    }
+    try {
+      const auto index = static_cast<size_t>(std::stoull(token));
+      if (apps_node.is_array() && index < apps_node.size()) {
+        return index;
+      }
+    } catch (...) {
+    }
+    return std::nullopt;
+  }
+
   bool refresh_client_apps_cache(nlohmann::json &file_tree) {
     try {
       sort_apps_by_name(file_tree);
@@ -1662,7 +1694,7 @@ namespace confighttp {
   }
 
   /**
-   * @brief Save an application. To save a new application the index must be `-1`. To update an existing application, you must provide the current index of the application.
+   * @brief Save an application. Existing applications are matched by UUID when present, with index retained as a legacy fallback.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    * The body for the post request should be JSON serialized in the following format:
@@ -1691,7 +1723,7 @@ namespace confighttp {
    * }
    * @endcode
    *
-   * @api_examples{/api/apps| POST| {"name":"Hello, World!","index":-1}}
+   * @api_examples{/api/apps| POST| {"name":"Hello, World!"}}
    */
   void saveApp(resp_https_t response, req_https_t request) {
     if (!check_content_type(response, request, "application/json")) {
@@ -1763,9 +1795,13 @@ namespace confighttp {
 #endif
 
       auto &apps_node = file_tree["apps"];
-      int index = input_tree["index"].get<int>();  // this will intentionally cause exception if the provided value is the wrong type
-
+      int index = input_tree.value("index", -1);
       input_tree.erase("index");
+      const auto input_uuid = input_tree.value("uuid", ""s);
+
+      if (auto uuid_index = find_app_index_by_uuid(apps_node, input_uuid)) {
+        index = static_cast<int>(*uuid_index);
+      }
 
       if (index == -1) {
         // New app: generate a UUID if not provided
@@ -1905,7 +1941,7 @@ namespace confighttp {
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    *
-   * @api_examples{/api/apps/9999| DELETE| null}
+   * @api_examples{/api/apps/@c uuid| DELETE| null}
    */
   void deleteApp(resp_https_t response, req_https_t request) {
     // Skip check_content_type() for this endpoint since the request body is not used.
@@ -1922,9 +1958,10 @@ namespace confighttp {
       std::string file = file_handler::read_file(config::stream.file_apps.c_str());
       nlohmann::json file_tree = nlohmann::json::parse(file);
       auto &apps_node = file_tree["apps"];
-      const int index = std::stoi(request->path_match[1]);
-
-      if (!check_app_index(response, request, index)) {
+      const std::string target = request->path_match[1];
+      const auto index = resolve_app_index_token(apps_node, target);
+      if (!index) {
+        bad_request(response, request, std::format("Application '{}' not found", target));
         return;
       }
 
@@ -1949,7 +1986,7 @@ namespace confighttp {
 
       bool disabled_fullscreen_flag = false;
       for (size_t i = 0; i < apps_node.size(); ++i) {
-        if (i != index) {
+        if (i != *index) {
           new_apps.push_back(apps_node[i]);
         } else {
           // If user deletes the Playnite fullscreen app, turn off the config flag
@@ -1977,7 +2014,7 @@ namespace confighttp {
       proc::refresh(config::stream.file_apps);
 
       output_tree["status"] = true;
-      output_tree["result"] = std::format("application {} deleted", index);
+      output_tree["result"] = std::format("application {} deleted", *index);
       if (disabled_fullscreen_flag) {
         output_tree["playniteFullscreenDisabled"] = true;
       }
@@ -4870,6 +4907,7 @@ namespace confighttp {
 #endif
     register_api_route("^/api/apps/([A-Fa-f0-9-]+)/cover$", "GET", getAppCover);
     register_api_route("^/api/apps/([A-Fa-f0-9-]+)/icon$", "GET", getAppIcon);
+    register_api_route("^/api/apps/([A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12})$", "DELETE", deleteApp);
     register_api_route("^/api/apps/([0-9]+)$", "DELETE", deleteApp);
     register_api_route("^/api/clients/unpair-all$", "POST", unpairAll);
     register_api_route("^/api/clients/list$", "GET", getClients);

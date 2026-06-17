@@ -54,6 +54,7 @@ export interface LosslessProfileDefaults {
 
 export interface AppForm {
   index: number;
+  uuid: string;
   name: string;
   output: string;
   cmd: string;
@@ -102,6 +103,7 @@ export interface AppForm {
 }
 
 export interface ServerApp {
+  index?: number;
   name?: string;
   output?: string;
   'display-output'?: string;
