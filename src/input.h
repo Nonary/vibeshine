@@ -6,6 +6,8 @@
 
 // standard includes
 #include <functional>
+#include <optional>
+#include <utility>
 #include <vector>
 
 // local includes
@@ -14,6 +16,7 @@
 
 namespace input {
   struct input_t;
+  struct touch_port_t;
 
   void print(void *input);
   void reset(std::shared_ptr<input_t> &input);
@@ -21,6 +24,7 @@ namespace input {
 
 #ifdef SUNSHINE_TESTS
   bool validate_packet_for_tests(const std::vector<std::uint8_t> &input_data);
+  std::optional<platf::touch_port_t> monitor_touch_port_for_tests(const input::touch_port_t &touch_port, std::pair<float, float> &coords);
 #endif
 
   [[nodiscard]] std::unique_ptr<platf::deinit_t> init();
