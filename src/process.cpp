@@ -1231,6 +1231,10 @@ namespace proc {
     _env["SUNSHINE_CLIENT_HEIGHT"] = std::to_string(launch_session->height);
     _env["SUNSHINE_CLIENT_FPS"] = std::to_string(launch_session->fps);
     _env["SUNSHINE_CLIENT_HDR"] = launch_session->enable_hdr ? "true" : "false";
+#ifdef _WIN32
+    _env["ENABLE_SUNSHINE_VIRTUAL_HDR"] =
+      should_enable_vulkan_hdr_layer_for_launch(launch_session->enable_hdr, config::video.dd.vulkan_hdr_layer) ? "1" : "";
+#endif
     _env["SUNSHINE_CLIENT_GCMAP"] = std::to_string(launch_session->gcmap);
     _env["SUNSHINE_CLIENT_HOST_AUDIO"] = launch_session->host_audio ? "true" : "false";
     _env["SUNSHINE_CLIENT_ENABLE_SOPS"] = launch_session->enable_sops ? "true" : "false";
@@ -2220,6 +2224,10 @@ namespace proc {
     ss.write(pos, (dollar - pos));
 
     return ss.str();
+  }
+
+  bool should_enable_vulkan_hdr_layer_for_launch(bool session_hdr_enabled, bool vulkan_hdr_layer_enabled) {
+    return session_hdr_enabled && vulkan_hdr_layer_enabled;
   }
 
   /**
