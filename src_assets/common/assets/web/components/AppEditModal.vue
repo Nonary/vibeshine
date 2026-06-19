@@ -556,6 +556,7 @@ function fresh(): AppForm {
   };
 }
 const form = ref<AppForm>(fresh());
+let formHydratingFromServer = false;
 const overridesPickerOpen = ref(false);
 
 const APP_VIRTUAL_DISPLAY_MODES: AppVirtualDisplayMode[] = ['disabled', 'per_client', 'shared'];
@@ -769,15 +770,23 @@ function fromServerApp(src?: ServerApp | null): AppForm {
   const frameGenerationModeFromConfig = parseFrameGenerationMode(
     (src as any)?.['frame-generation-mode'],
   );
-  const normalizedProvider = normalizeFrameGenerationProvider(src['frame-generation-provider']);
+  const providerConfigured =
+    typeof src['frame-generation-provider'] === 'string' &&
+    src['frame-generation-provider'].trim().length > 0;
+  const legacyLosslessFrameGenConfigured =
+    legacyLosslessFlag || lsTarget !== null || lsLimit !== null;
+  const normalizedProvider = providerConfigured
+    ? normalizeFrameGenerationProvider(src['frame-generation-provider'])
+    : legacyLosslessFrameGenConfigured
+      ? 'lossless-scaling'
+      : base.frameGenerationProvider;
   let frameGenerationMode: FrameGenerationMode = frameGenerationModeFromConfig ?? 'off';
   if (!frameGenerationModeFromConfig) {
-    if (normalizedProvider === 'nvidia-smooth-motion') {
+    if (providerConfigured && normalizedProvider === 'nvidia-smooth-motion') {
       frameGenerationMode = 'nvidia-smooth-motion';
     } else if (normalizedProvider === 'lossless-scaling') {
-      const hasLosslessFrameGen = legacyLosslessFlag || lsTarget !== null || lsLimit !== null;
-      frameGenerationMode = hasLosslessFrameGen ? 'lossless-scaling' : 'off';
-    } else if (normalizedProvider === 'game-provided') {
+      frameGenerationMode = legacyLosslessFrameGenConfigured ? 'lossless-scaling' : 'off';
+    } else if (providerConfigured && normalizedProvider === 'game-provided') {
       frameGenerationMode = 'game-provided';
     }
   }
@@ -1008,12 +1017,15 @@ watch(
   (val) => {
     if (!open.value) return;
     liveRtxHdrSuppress = true;
+    formHydratingFromServer = true;
     form.value = fromServerApp(val as ServerApp | undefined);
     primeLiveRtxHdrState();
     nextTick(() => {
       liveRtxHdrSuppress = false;
+      formHydratingFromServer = false;
     }).catch(() => {
       liveRtxHdrSuppress = false;
+      formHydratingFromServer = false;
     });
   },
   { immediate: true },
@@ -1272,6 +1284,9 @@ const losslessFrameGenEnabled = computed<boolean>({
 watch(
   () => form.value.frameGenerationProvider,
   (provider) => {
+    if (formHydratingFromServer) {
+      return;
+    }
     const normalized = normalizeFrameGenerationProvider(provider);
     if (provider !== normalized) {
       form.value.frameGenerationProvider = normalized;
@@ -2039,12 +2054,15 @@ watch(open, (o) => {
   if (o) {
     liveRtxHdrProgrammaticClose = false;
     liveRtxHdrSuppress = true;
+    formHydratingFromServer = true;
     form.value = fromServerApp(props.app ?? undefined);
     primeLiveRtxHdrState();
     nextTick(() => {
       liveRtxHdrSuppress = false;
+      formHydratingFromServer = false;
     }).catch(() => {
       liveRtxHdrSuppress = false;
+      formHydratingFromServer = false;
     });
     selectedPlayniteId.value = '';
     lockPlaynite.value = false;
@@ -2820,6 +2838,9 @@ watch(
 watch(
   () => frameGenerationSelection.value,
   (mode, prevMode) => {
+    if (formHydratingFromServer) {
+      return;
+    }
     const anyFrameGenEnabled = mode !== 'off';
     const wasFrameGenEnabled = prevMode !== 'off';
     if (anyFrameGenEnabled && !form.value.gen1FramegenFix) {
