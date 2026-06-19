@@ -2434,7 +2434,15 @@ namespace nvhttp {
       return;
     }
 
+#ifdef _WIN32
+    auto pending_vulkan_hdr_layer_guard = util::fail_guard([]() {
+      rtsp_stream::set_vulkan_hdr_layer_pending_stream(false);
+    });
+#endif
     if (appid > 0) {
+#ifdef _WIN32
+      rtsp_stream::set_vulkan_hdr_layer_pending_stream(launch_session->enable_hdr);
+#endif
       auto err = proc::proc.execute((int) appid, launch_session);
       if (err) {
         tree.put("root.<xmlattr>.status_code", err);
@@ -2467,6 +2475,9 @@ namespace nvhttp {
 #endif
 
     rtsp_stream::launch_session_raise(launch_session);
+#ifdef _WIN32
+    pending_vulkan_hdr_layer_guard.disable();
+#endif
 #ifdef _WIN32
     virtual_display_teardown_guard.disable();
 #endif
