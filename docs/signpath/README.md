@@ -65,7 +65,7 @@ invalidates the catalog hash and **breaks driver installation**. These must be
   `drivers/sunshine/nefconc.exe`,
   `drivers/sunshine/vulkan-layer/VkLayer_sunshine_hdr.dll`
   (libvirtualdisplay release, origin-signed upstream)
-- `nvngx_truehdr.dll`, `vibeshine_truehdr.dll` (optional NVIDIA/TrueHDR runtimes; not shipped by CI)
+- `nvngx_truehdr.dll` (NVIDIA RTX Video SDK runtime, downloaded from the pinned TrueHDR runtime release)
 
 The recommended config (Strategy 1 below) excludes these by enumerating only
 first-party files explicitly.
@@ -82,6 +82,7 @@ stripped in CI and never signed on the runner). The `msi-file` config is the
 | `uninstall.exe` | `Sunshine\` |
 | `libwebrtc.dll` | `Sunshine\` |
 | `zlib1.dll` | `Sunshine\` |
+| `vibeshine_truehdr.dll` | `Sunshine\` |
 | `sunshinesvc.exe` | `Sunshine\tools\` (bound via the `wix_payload` binder) |
 | `dxgi-info.exe` | `Sunshine\tools\` |
 | `audio-info.exe` | `Sunshine\tools\` |
@@ -92,6 +93,10 @@ stripped in CI and never signed on the runner). The `msi-file` config is the
 > The paths in the artifact-configuration XML must match the MSI's logical
 > directory layout. Confirm the exact in-MSI paths against a built MSI's File
 > table if a `<pe-file>` entry reports zero matches.
+
+`vibeshine_truehdr.dll` is the project-built shim and must be signed like other
+first-party binaries when the pinned TrueHDR runtime bundle is included.
+`nvngx_truehdr.dll` is NVIDIA's runtime and must not be re-signed.
 
 ## Two ways to write the `msi-file` config
 
