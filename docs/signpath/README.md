@@ -26,8 +26,9 @@ MSI or the binaries inside it.
 So the whole package is signed with **two origin-verified requests**, in order:
 
 1. **Deep-sign the MSI** (slug `msi-file`): signs every first-party PE *inside*
-   the MSI (`sunshine.exe`, `uninstall.exe`, the `tools\` executables, bundled
-   DLLs), then signs the MSI container itself.
+   the MSI (`Sunshine\sunshine.exe`, `Sunshine\uninstall.exe`, the
+   `Sunshine\tools\` executables, bundled DLLs), then signs the MSI container
+   itself.
 2. **Sign the setup EXE** (slug `setup-exe`): the bootstrapper is rebuilt
    embedding the already-signed MSI, then the outer EXE is Authenticode-signed.
 
@@ -77,16 +78,16 @@ stripped in CI and never signed on the runner). The `msi-file` config is the
 
 | File | Install location in MSI |
 | --- | --- |
-| `sunshine.exe` | `.` |
-| `uninstall.exe` | `.` |
-| `libwebrtc.dll` | `.` |
-| `zlib1.dll` | `.` |
-| `sunshinesvc.exe` | `tools\` (bound via the `wix_payload` binder) |
-| `dxgi-info.exe` | `tools\` |
-| `audio-info.exe` | `tools\` |
-| `playnite-launcher.exe` | `tools\` |
-| `sunshine_wgc_capture.exe` | `tools\` |
-| `sunshine_display_helper.exe` | `tools\` |
+| `sunshine.exe` | `Sunshine\` |
+| `uninstall.exe` | `Sunshine\` |
+| `libwebrtc.dll` | `Sunshine\` |
+| `zlib1.dll` | `Sunshine\` |
+| `sunshinesvc.exe` | `Sunshine\tools\` (bound via the `wix_payload` binder) |
+| `dxgi-info.exe` | `Sunshine\tools\` |
+| `audio-info.exe` | `Sunshine\tools\` |
+| `playnite-launcher.exe` | `Sunshine\tools\` |
+| `sunshine_wgc_capture.exe` | `Sunshine\tools\` |
+| `sunshine_display_helper.exe` | `Sunshine\tools\` |
 
 > The paths in the artifact-configuration XML must match the MSI's logical
 > directory layout. Confirm the exact in-MSI paths against a built MSI's File
@@ -100,7 +101,7 @@ stripped in CI and never signed on the runner). The `msi-file` config is the
   is the backstop that catches drift. This is what
   [`msi-file.artifact-config.xml`](msi-file.artifact-config.xml) ships.
 - **Strategy 2 — scoped wildcards.** Use `<pe-file-set>` with `*`/`**` includes
-  scoped to `.` and `tools` so the `drivers\` subtree is never swept in. Set
+  scoped to `Sunshine\` and `Sunshine\tools\` so the `drivers\` subtree is never swept in. Set
   `min-matches="0" max-matches="unbounded"` (the defaults are `1`, so a wildcard
   matching any other count fails the whole request). Shown as a comment in the
   XML. Only use this after confirming no catalog-bound driver DLLs live under the

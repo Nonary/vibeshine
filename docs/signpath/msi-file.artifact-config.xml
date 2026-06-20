@@ -18,23 +18,25 @@
   whose .cat catalog hashes would be invalidated by re-signing.
 
   NOTE: the path= values are the file's logical path inside the MSI (install
-  layout). Confirm against a built MSI's File table if an entry reports 0 matches.
+  layout). The WiX package installs under the Sunshine directory, so top-level
+  app files use the "Sunshine/" prefix. Confirm against a built MSI's File table
+  if an entry reports 0 matches.
 -->
 <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
   <msi-file>
-    <!-- install root (".") -->
-    <pe-file path="sunshine.exe"><authenticode-sign/></pe-file>
-    <pe-file path="uninstall.exe"><authenticode-sign/></pe-file>
-    <pe-file path="libwebrtc.dll"><authenticode-sign/></pe-file>
-    <pe-file path="zlib1.dll"><authenticode-sign/></pe-file>
+    <!-- install root ("Sunshine/") -->
+    <pe-file path="Sunshine/sunshine.exe"><authenticode-sign/></pe-file>
+    <pe-file path="Sunshine/uninstall.exe"><authenticode-sign/></pe-file>
+    <pe-file path="Sunshine/libwebrtc.dll"><authenticode-sign/></pe-file>
+    <pe-file path="Sunshine/zlib1.dll"><authenticode-sign/></pe-file>
 
-    <!-- tools\ -->
-    <pe-file path="tools/sunshinesvc.exe"><authenticode-sign/></pe-file>
-    <pe-file path="tools/dxgi-info.exe"><authenticode-sign/></pe-file>
-    <pe-file path="tools/audio-info.exe"><authenticode-sign/></pe-file>
-    <pe-file path="tools/playnite-launcher.exe"><authenticode-sign/></pe-file>
-    <pe-file path="tools/sunshine_wgc_capture.exe"><authenticode-sign/></pe-file>
-    <pe-file path="tools/sunshine_display_helper.exe"><authenticode-sign/></pe-file>
+    <!-- Sunshine/tools\ -->
+    <pe-file path="Sunshine/tools/sunshinesvc.exe"><authenticode-sign/></pe-file>
+    <pe-file path="Sunshine/tools/dxgi-info.exe"><authenticode-sign/></pe-file>
+    <pe-file path="Sunshine/tools/audio-info.exe"><authenticode-sign/></pe-file>
+    <pe-file path="Sunshine/tools/playnite-launcher.exe"><authenticode-sign/></pe-file>
+    <pe-file path="Sunshine/tools/sunshine_wgc_capture.exe"><authenticode-sign/></pe-file>
+    <pe-file path="Sunshine/tools/sunshine_display_helper.exe"><authenticode-sign/></pe-file>
 
     <!--
       DO NOT add the vendor / catalog-bound files below: they are origin-signed
@@ -56,18 +58,19 @@
 
 <!--
   STRATEGY 2 (alternative): scoped wildcards. Only use after confirming no
-  catalog-bound driver DLLs live under the matched roots. Scope includes to "."
-  and "tools" so the drivers\ subtree is NOT swept in. min-matches/max-matches
+  catalog-bound driver DLLs live under the matched roots. Scope includes to
+  "Sunshine/" and "Sunshine/tools" so the drivers\ subtree is NOT swept in.
+  min-matches/max-matches
   default to 1, so always set them or a wildcard matching any other count fails
   the whole request.
 
   <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
     <msi-file>
       <pe-file-set>
-        <include path="*.exe"       min-matches="0" max-matches="unbounded"/>
-        <include path="*.dll"       min-matches="0" max-matches="unbounded"/>
-        <include path="tools/*.exe" min-matches="0" max-matches="unbounded"/>
-        <include path="tools/*.dll" min-matches="0" max-matches="unbounded"/>
+        <include path="Sunshine/*.exe"       min-matches="0" max-matches="unbounded"/>
+        <include path="Sunshine/*.dll"       min-matches="0" max-matches="unbounded"/>
+        <include path="Sunshine/tools/*.exe" min-matches="0" max-matches="unbounded"/>
+        <include path="Sunshine/tools/*.dll" min-matches="0" max-matches="unbounded"/>
         <for-each><authenticode-sign/></for-each>
       </pe-file-set>
       <authenticode-sign/>
