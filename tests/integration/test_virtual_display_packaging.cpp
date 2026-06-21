@@ -66,6 +66,25 @@ TEST(SunshineVirtualDisplayPackaging, VulkanHdrLayerPayloadIsRequiredAndInstalle
   EXPECT_GT(std::filesystem::file_size(layer_dll_path), 0u);
 }
 
+TEST(SunshineVirtualDisplayPackaging, TrueHdrRuntimeIsRequiredAndStagedFromPinnedRelease) {
+  const auto cmake = read_source_file("cmake/packaging/windows.cmake");
+  const auto downloader = read_source_file("scripts/download_truehdr_runtime_release.ps1");
+
+  expect_contains(cmake, "set(SUNSHINE_REQUIRE_TRUEHDR_RUNTIME ON CACHE BOOL");
+  expect_contains(cmake, "FORCE)");
+  expect_contains(cmake, "scripts/download_truehdr_runtime_release.ps1");
+  expect_contains(cmake, "Failed to stage required TrueHDR runtime files");
+  expect_contains(cmake, "Required TrueHDR runtime file missing");
+  expect_contains(cmake, "Required TrueHDR runtime file is empty (0 bytes)");
+  expect_contains(cmake, "install(FILES ${SUNSHINE_TRUEHDR_RUNTIME_FILES}");
+  expect_contains(downloader, "Nonary/vibeshine_truehdr_runtime");
+  expect_contains(downloader, "v1.0.0");
+  expect_contains(downloader, "Pinned runtime already staged");
+  expect_contains(downloader, "Missing required runtime file(s)");
+  expect_contains(downloader, "vibeshine_truehdr.dll");
+  expect_contains(downloader, "nvngx_truehdr.dll");
+}
+
 TEST(SunshineVirtualDisplayPackaging, RefreshScriptBuildsDriverProbeAndValidatesControlInterface) {
   const auto script = read_source_file("packaging/windows/virtual_display_driver/refresh_driver_package.ps1");
 

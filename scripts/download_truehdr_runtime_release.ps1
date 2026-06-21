@@ -63,6 +63,26 @@ if ([string]::IsNullOrWhiteSpace($AssetName)) {
   $AssetName = "vibeshine-truehdr-runtime-$version-windows-x64.zip"
 }
 
+$requiredDlls = @("vibeshine_truehdr.dll", "nvngx_truehdr.dll")
+$missingOrEmpty = @()
+foreach ($dll in $requiredDlls) {
+  $path = Join-Path $OutDir $dll
+  $item = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
+  if (-not $item -or $item.Length -le 0) {
+    $missingOrEmpty += $dll
+  }
+}
+
+if ($missingOrEmpty.Count -eq 0) {
+  Write-Step "Pinned runtime already staged in $OutDir"
+  Get-ChildItem -LiteralPath $OutDir -File | Where-Object { $_.Name -in $requiredDlls } | ForEach-Object {
+    Write-Step ("{0}  {1} bytes  sha256={2}" -f $_.Name, $_.Length, (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())
+  }
+  exit 0
+}
+
+Write-Step "Missing required runtime file(s): $($missingOrEmpty -join ', ')"
+
 $headers = New-GitHubHeaders -Token $GitHubToken
 $releaseUri = "https://api.github.com/repos/$Repository/releases/tags/$([System.Uri]::EscapeDataString($Tag))"
 Write-Step "Resolving $Repository release $Tag"
@@ -109,7 +129,6 @@ try {
 
   Expand-Archive -LiteralPath $archivePath -DestinationPath $extractDir -Force
 
-  $requiredDlls = @("vibeshine_truehdr.dll", "nvngx_truehdr.dll")
   $resolved = @{}
   foreach ($dll in $requiredDlls) {
     $matches = @(Get-ChildItem -LiteralPath $extractDir -Recurse -File -Filter $dll)
