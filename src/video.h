@@ -286,6 +286,7 @@ namespace video {
     bool after_ref_frame_invalidation = false;
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
     std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp;
+    std::chrono::steady_clock::time_point packet_enqueue_timestamp = std::chrono::steady_clock::now();
   };
 
   struct packet_raw_avcodec: packet_raw_t {
