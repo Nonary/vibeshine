@@ -1898,6 +1898,7 @@ namespace video {
           trim_imgs();
           img_out->frame_timestamp.reset();
           img_out->capture_pacing_timestamp.reset();
+          img_out->repeated_frame = false;
           return true;
         } else {
           if (!wait_start) {
@@ -3228,6 +3229,7 @@ namespace video {
         img_out = img;
         img_out->frame_timestamp.reset();
         img_out->capture_pacing_timestamp.reset();
+        img_out->repeated_frame = false;
         return true;
       };
 
