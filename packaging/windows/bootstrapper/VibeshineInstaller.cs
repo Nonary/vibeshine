@@ -2215,7 +2215,9 @@ namespace VibeshineInstaller {
       "sunshine",
       "sunshinesvc",
       "sunshine_wgc_capture",
-      "playnite_launcher"
+      "playnite-launcher",
+      "playnite_launcher",
+      "sunshine_display_helper"
     };
 
     internal sealed class InstalledProductInfo {
@@ -2620,18 +2622,19 @@ namespace VibeshineInstaller {
         return InstalledProductKind.Unknown;
       }
 
-      if (displayName.StartsWith("Vibeshine", StringComparison.OrdinalIgnoreCase)) {
+      var trimmedDisplayName = displayName.Trim();
+      if (string.Equals(trimmedDisplayName, "Vibeshine", StringComparison.OrdinalIgnoreCase)) {
         return InstalledProductKind.Vibeshine;
       }
-      if (displayName.StartsWith("Vibepollo", StringComparison.OrdinalIgnoreCase)) {
+      if (string.Equals(trimmedDisplayName, "Vibepollo", StringComparison.OrdinalIgnoreCase)) {
         return InstalledProductKind.Vibepollo;
       }
       // Apollo is also a common prefix in unrelated software titles, so only
       // the exact streaming-host product name is considered a conflict.
-      if (string.Equals(displayName.Trim(), "Apollo", StringComparison.OrdinalIgnoreCase)) {
+      if (string.Equals(trimmedDisplayName, "Apollo", StringComparison.OrdinalIgnoreCase)) {
         return InstalledProductKind.Apollo;
       }
-      if (displayName.StartsWith("Sunshine", StringComparison.OrdinalIgnoreCase)) {
+      if (string.Equals(trimmedDisplayName, "Sunshine", StringComparison.OrdinalIgnoreCase)) {
         return InstalledProductKind.Sunshine;
       }
       return InstalledProductKind.Unknown;
@@ -3142,6 +3145,9 @@ namespace VibeshineInstaller {
 
       var exitCode = RunMsiexec(args, true, false);
       if (exitCode == 0 && competingProductsRequireRestart) {
+        exitCode = 3010;
+      }
+      if (exitCode == 0 && InstallLogIndicatesDriverRebootRequired(logPath)) {
         exitCode = 3010;
       }
 
@@ -4156,6 +4162,7 @@ namespace VibeshineInstaller {
 
       var uninstallCompetingProducts = ShouldPreUninstallCompetingProducts(cliArgs);
       var competingProductsRequireRestart = false;
+      var vibeshineSourceRequiresRestart = false;
       if (uninstallCompetingProducts) {
         var uninstallCompetingProductsResult = UninstallCompetingProducts(
           "cli_remove_competing",
@@ -4210,10 +4217,42 @@ namespace VibeshineInstaller {
               };
             }
           }
+          vibeshineSourceRequiresRestart |= uninstallUpgradeSourceResult.ExitCode == 3010;
         }
       }
       if (uninstallCompetingProducts && !HasProperty(cliArgs, "SKIP_REMOVE_CONFLICTING_PRODUCTS")) {
         cliArgs.Add("SKIP_REMOVE_CONFLICTING_PRODUCTS=1");
+      }
+
+      if (ShouldPreUninstallVibeshineInstallSource(cliArgs)) {
+        var uninstallDowngradeSourceResult = TryPreUninstallDowngradeSourceVersion(
+          GetMsiPathArgument(cliArgs),
+          "cli_remove_vibeshine_same_or_downgrade",
+          arguments.IsCliQuietMode(),
+          true);
+        if (uninstallDowngradeSourceResult != null) {
+          if (!uninstallDowngradeSourceResult.Succeeded) {
+            if (ShouldRerunCliElevatedForMsiRepair(uninstallDowngradeSourceResult, new[] { InstalledProductKind.Vibeshine })) {
+              return RunElevatedBootstrapperCli(arguments);
+            }
+            string recoveryDetail;
+            if (TryRepairBustedMsiRegistration(
+              uninstallDowngradeSourceResult,
+              new[] { InstalledProductKind.Vibeshine },
+              "CLI same-version or downgrade source pre-uninstall",
+              out recoveryDetail)) {
+              recoveryDetails.Add(recoveryDetail);
+            } else {
+              return new InstallerResult {
+                Operation = InstallerOperation.Install,
+                ExitCode = uninstallDowngradeSourceResult.ExitCode,
+                Message = BuildDowngradeSourcePreUninstallFailureMessage(uninstallDowngradeSourceResult.Message),
+                LogPath = uninstallDowngradeSourceResult.LogPath
+              };
+            }
+          }
+          vibeshineSourceRequiresRestart |= uninstallDowngradeSourceResult.ExitCode == 3010;
+        }
       }
 
       AppendInstallerLogMessage(logPath, "Quiescing Vibeshine/Sunshine services and helper processes before CLI MSI operation.");
@@ -4270,7 +4309,7 @@ namespace VibeshineInstaller {
           exitCode = RunMsiexec(retryArgs, arguments.IsCliQuietMode(), true);
         }
       }
-      if (exitCode == 0 && competingProductsRequireRestart) {
+      if (exitCode == 0 && (competingProductsRequireRestart || vibeshineSourceRequiresRestart || InstallLogIndicatesDriverRebootRequired(logPath))) {
         exitCode = 3010;
       }
       var cliResult = new InstallerResult {
@@ -4382,8 +4421,8 @@ namespace VibeshineInstaller {
     }
 
     private static string BuildDowngradeSourcePreUninstallFailureMessage(string uninstallMessage) {
-      var prefix = "Failed to uninstall the newer Vibeshine version before starting the downgrade."
-        + " Downgrades require uninstall/reinstall because MSI blocks installing an older version over a newer one.";
+      var prefix = "Failed to uninstall the existing Vibeshine version before starting this replacement."
+        + " Downgrades and same-version replacements require uninstall/reinstall because MSI cannot safely order them from the numeric product version alone.";
       if (string.IsNullOrWhiteSpace(uninstallMessage)) {
         return prefix;
       }
@@ -4445,9 +4484,24 @@ namespace VibeshineInstaller {
       }
 
       var payloadMsiInfo = TryGetPayloadMsiInfo(msiPath);
-      return payloadMsiInfo != null
-        && payloadMsiInfo.Version != null
-        && installedProduct.Version > payloadMsiInfo.Version;
+      if (payloadMsiInfo == null || payloadMsiInfo.Version == null) {
+        return false;
+      }
+
+      if (installedProduct.Version > payloadMsiInfo.Version) {
+        return true;
+      }
+
+      return installedProduct.Version.CompareTo(payloadMsiInfo.Version) == 0
+        && HasDifferentProductCode(installedProduct.ProductCode, payloadMsiInfo.ProductCode);
+    }
+
+    private static bool HasDifferentProductCode(string installedProductCode, string payloadProductCode) {
+      var installed = NormalizeProductCode(installedProductCode);
+      var payload = NormalizeProductCode(payloadProductCode);
+      return LooksLikeProductCode(installed)
+        && LooksLikeProductCode(payload)
+        && !string.Equals(installed, payload, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool RequiresPreUninstallUpgradeWorkaround(InstalledProductInfo installedProduct) {
@@ -4722,7 +4776,7 @@ namespace VibeshineInstaller {
 
       try {
         var root = Path.GetFullPath(installLocation.Trim().Trim('"'));
-        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) {
+        if (!IsSafeInstallRootForFactoryReset(root)) {
           return;
         }
 
@@ -4753,6 +4807,29 @@ namespace VibeshineInstaller {
         // Factory reset cleanup is best-effort. MSI-owned files are still
         // removed by Windows Installer, and user-added files must be preserved.
       }
+    }
+
+    private static bool IsSafeInstallRootForFactoryReset(string root) {
+      if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) {
+        return false;
+      }
+
+      var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+      var pathRoot = Path.GetPathRoot(fullRoot);
+      if (string.IsNullOrWhiteSpace(fullRoot)
+          || string.Equals(
+            fullRoot,
+            (pathRoot ?? string.Empty).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            StringComparison.OrdinalIgnoreCase)) {
+        return false;
+      }
+
+      var sentinelFiles = new[] {
+        Path.Combine(fullRoot, "sunshine.exe"),
+        Path.Combine(fullRoot, "uninstall.exe"),
+        Path.Combine(fullRoot, "scripts", "factory-reset-appdata.ps1")
+      };
+      return sentinelFiles.Any(File.Exists);
     }
 
     private static void TryDeleteKnownPath(string path) {
@@ -5115,8 +5192,7 @@ namespace VibeshineInstaller {
       }
 
       return string.Equals(operation, "/i", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(operation, "/package", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(operation, "/a", StringComparison.OrdinalIgnoreCase);
+        || string.Equals(operation, "/package", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ShouldPreUninstallProblematicUpgradeSource(List<string> args) {
@@ -5126,8 +5202,31 @@ namespace VibeshineInstaller {
       }
 
       return string.Equals(operation, "/i", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(operation, "/package", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(operation, "/a", StringComparison.OrdinalIgnoreCase);
+        || string.Equals(operation, "/package", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ShouldPreUninstallVibeshineInstallSource(List<string> args) {
+      return IsMsiInstallOperation(args);
+    }
+
+    private static string GetMsiPathArgument(List<string> args) {
+      if (args == null) {
+        return null;
+      }
+
+      var operationIndex = args.FindIndex(IsOperationSwitch);
+      if (operationIndex < 0 || operationIndex + 1 >= args.Count) {
+        return null;
+      }
+
+      var operation = args[operationIndex];
+      if (!string.Equals(operation, "/i", StringComparison.OrdinalIgnoreCase)
+          && !string.Equals(operation, "/package", StringComparison.OrdinalIgnoreCase)) {
+        return null;
+      }
+
+      var candidate = args[operationIndex + 1];
+      return LooksLikeSwitch(candidate) ? null : candidate;
     }
 
     private static string BuildLogPath(string phase) {
@@ -5160,6 +5259,21 @@ namespace VibeshineInstaller {
       }
 
       return failures;
+    }
+
+    private static bool InstallLogIndicatesDriverRebootRequired(string installLogPath) {
+      if (string.IsNullOrWhiteSpace(installLogPath) || !File.Exists(installLogPath)) {
+        return false;
+      }
+
+      try {
+        return File.ReadLines(installLogPath).Any(line =>
+          !string.IsNullOrWhiteSpace(line)
+          && (line.IndexOf("[SunshineVirtualDisplay] A reboot is required", StringComparison.OrdinalIgnoreCase) >= 0
+            || line.IndexOf("[SudoVDA] A reboot is required", StringComparison.OrdinalIgnoreCase) >= 0));
+      } catch {
+        return false;
+      }
     }
 
     private static string ExtractVirtualDisplayDriverFailureDetail(string[] lines) {
@@ -5506,13 +5620,38 @@ namespace VibeshineInstaller {
       if (string.IsNullOrEmpty(argument)) {
         return "\"\"";
       }
-      if (argument.Contains("\"")) {
+      if (argument.IndexOfAny(new[] {' ', '\t', '"'}) < 0) {
         return argument;
       }
-      if (argument.IndexOf(' ') >= 0 || argument.IndexOf('\t') >= 0) {
-        return "\"" + argument + "\"";
+
+      var builder = new StringBuilder();
+      builder.Append('"');
+      var backslashes = 0;
+      foreach (var ch in argument) {
+        if (ch == '\\') {
+          backslashes++;
+          continue;
+        }
+
+        if (ch == '"') {
+          builder.Append('\\', backslashes * 2 + 1);
+          builder.Append('"');
+          backslashes = 0;
+          continue;
+        }
+
+        if (backslashes > 0) {
+          builder.Append('\\', backslashes);
+          backslashes = 0;
+        }
+        builder.Append(ch);
       }
-      return argument;
+
+      if (backslashes > 0) {
+        builder.Append('\\', backslashes * 2);
+      }
+      builder.Append('"');
+      return builder.ToString();
     }
 
     private static string CreatePropertyArgument(string propertyName, string propertyValue) {
