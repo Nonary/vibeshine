@@ -191,6 +191,7 @@ namespace rtsp_stream {
     snapshot->virtual_display_guid_bytes = source.virtual_display_guid_bytes;
     snapshot->gen1_framegen_fix = source.gen1_framegen_fix;
     snapshot->gen2_framegen_fix = source.gen2_framegen_fix;
+    snapshot->frame_generation_enabled = source.frame_generation_enabled;
     snapshot->lossless_scaling_framegen = source.lossless_scaling_framegen;
     snapshot->frame_generation_provider = source.frame_generation_provider;
     snapshot->lossless_scaling_target_fps = source.lossless_scaling_target_fps;
@@ -1339,6 +1340,7 @@ namespace rtsp_stream {
     stream::config_t config {};
     config.gen1_framegen_fix = false;
     config.gen2_framegen_fix = false;
+    config.frame_generation_enabled = false;
 
     std::int64_t configuredBitrateKbps;
     config.audio.flags[audio::config_t::HOST_AUDIO] = session->host_audio;
@@ -1542,6 +1544,7 @@ namespace rtsp_stream {
 
         config.gen1_framegen_fix = launch_session->gen1_framegen_fix;
         config.gen2_framegen_fix = launch_session->gen2_framegen_fix;
+        config.frame_generation_enabled = launch_session->frame_generation_enabled;
         config.lossless_scaling_framegen = launch_session->lossless_scaling_framegen;
         config.frame_generation_provider = launch_session->frame_generation_provider;
         config.lossless_scaling_target_fps = launch_session->lossless_scaling_target_fps;
