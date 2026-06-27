@@ -2528,12 +2528,14 @@ namespace proc {
           ctx.lossless_scaling_enabled = ctx.lossless_scaling_framegen;
         }
         ctx.frame_generation_provider = frame_generation_provider ? normalize_frame_generation_provider(*frame_generation_provider) : "lossless-scaling";
+        bool frame_generation_explicitly_off = false;
         if (frame_generation_mode) {
           const auto trimmed_mode = boost::algorithm::trim_copy(*frame_generation_mode);
           if (boost::iequals(trimmed_mode, "off") || boost::iequals(trimmed_mode, "none") || boost::iequals(trimmed_mode, "disabled")) {
             ctx.frame_generation_enabled = false;
             ctx.lossless_scaling_framegen = false;
             ctx.frame_generation_provider = "lossless-scaling";
+            frame_generation_explicitly_off = true;
           } else {
             ctx.frame_generation_provider = normalize_frame_generation_provider(trimmed_mode);
             ctx.frame_generation_enabled = true;
@@ -2717,7 +2719,7 @@ namespace proc {
         // Default graceful-exit timeout: 10s (Playnite-managed apps are written with this value)
         ctx.exit_timeout = std::chrono::seconds {exit_timeout.value_or(10)};
         const bool frame_generation_capture_fix_enabled =
-          gen1_framegen_fix.value_or(false) || gen2_framegen_fix.value_or(false);
+          !frame_generation_explicitly_off && (gen1_framegen_fix.value_or(false) || gen2_framegen_fix.value_or(false));
         ctx.gen1_framegen_fix = frame_generation_capture_fix_enabled;
         ctx.gen2_framegen_fix = false;
         if (!ctx.lossless_scaling_framegen) {
