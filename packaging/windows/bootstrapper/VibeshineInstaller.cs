@@ -146,7 +146,7 @@ namespace VibeshineInstaller {
     private InstallerRunner.PayloadMsiInfo _payloadMsiInfo;
     private readonly string _licenseText;
     private readonly string _preferredInstallDirectory;
-    private readonly bool _installVirtualDisplayDriverEnabledInConfig;
+    private readonly bool _useSudoVdaSelectedInConfig;
     private readonly bool _showInstallVirtualDisplayOption;
     private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
     private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
@@ -170,10 +170,10 @@ namespace VibeshineInstaller {
       // already-installed products.
       _payloadMsiInfo = InstallerRunner.TryGetPayloadMsiInfo(_arguments);
       _preferredInstallDirectory = ResolvePreferredInstallDirectory();
-      _installVirtualDisplayDriverEnabledInConfig = IsSunshineVirtualDisplayDriverEnabledInConfiguration(_preferredInstallDirectory);
+      _useSudoVdaSelectedInConfig = IsSudoVdaSelectedInConfiguration(_preferredInstallDirectory);
       _uninstallUiRequested = BuildFlavor.IsUninstallOnly || arguments.UninstallUiRequested;
       var showInstallLocation = !BuildFlavor.IsUninstallOnly && _installedProduct == null;
-      _showInstallVirtualDisplayOption = !BuildFlavor.IsUninstallOnly && !(_installedProduct != null && _installVirtualDisplayDriverEnabledInConfig);
+      _showInstallVirtualDisplayOption = !BuildFlavor.IsUninstallOnly;
       var showInstallOptions = showInstallLocation || _showInstallVirtualDisplayOption;
       var useCompactUpdateLayout = !BuildFlavor.IsUninstallOnly && _installedProduct != null && !showInstallOptions;
       var displayVersion = GetTargetVersionText();
@@ -487,16 +487,16 @@ namespace VibeshineInstaller {
       _installPathGrid.Children.Add(_browseButton);
 
       _installVirtualDisplayCheckBox = new CheckBox {
-        Content = "Install experimental Vibeshine Display Driver",
+        Content = "Use SudoVDA",
         FontSize = 13,
         Foreground = new SolidColorBrush(Color.FromRgb(226, 235, 250)),
         Margin = new Thickness(0, 0, 0, 6),
-        IsChecked = _installVirtualDisplayDriverEnabledInConfig,
-        ToolTip = "Experimental opt-in that may improve performance and smoothness on virtual displays. You can switch back to SudoVDA in options."
+        IsChecked = _useSudoVdaSelectedInConfig,
+        ToolTip = "Switch back to the bundled SudoVDA virtual display driver instead of the default Vibeshine Display Driver."
       };
 
       var installVirtualDisplayHintText = new TextBlock {
-        Text = "This new driver may improve performance and smoothness for games on virtual displays. It replaces SudoVDA when enabled, and you can easily switch back in Options if you have issues.",
+        Text = "The Vibeshine Display Driver is installed and selected by default for virtual displays. Enable this option to use SudoVDA instead.",
         FontSize = 12,
         Foreground = new SolidColorBrush(Color.FromRgb(190, 208, 236)),
         Margin = new Thickness(24, 0, 0, 0),
@@ -1043,7 +1043,7 @@ namespace VibeshineInstaller {
     }
 
     private bool ShouldInstallVirtualDisplayDriver() {
-      return _installVirtualDisplayDriverEnabledInConfig || _installVirtualDisplayCheckBox.IsChecked == true;
+      return _installVirtualDisplayCheckBox.IsChecked != true;
     }
 
     private async Task RunUninstallFlow() {
@@ -1352,8 +1352,8 @@ namespace VibeshineInstaller {
       return InstallerRunner.DefaultInstallDirectory;
     }
 
-    private static bool IsSunshineVirtualDisplayDriverEnabledInConfiguration(string installDirectory) {
-      return InstallerRunner.IsSunshineVirtualDisplayDriverEnabledInConfiguration(installDirectory);
+    private static bool IsSudoVdaSelectedInConfiguration(string installDirectory) {
+      return InstallerRunner.IsSudoVdaSelectedInConfiguration(installDirectory);
     }
 
     private async Task ShowLicenseDialogAsync() {
@@ -2034,7 +2034,7 @@ namespace VibeshineInstaller {
     public List<string> ForwardedArguments { get; private set; }
 
     public InstallerArguments() {
-      InternalInstallVirtualDisplay = false;
+      InternalInstallVirtualDisplay = true;
       ForwardedArguments = new List<string>();
     }
 
@@ -2152,13 +2152,13 @@ namespace VibeshineInstaller {
       Console.WriteLine();
       Console.WriteLine("Supported MSI properties:");
       Console.WriteLine("  INSTALL_ROOT=<path>  Install to a custom directory (default: %ProgramFiles%\\Sunshine)");
-      Console.WriteLine("  INSTALL_VIRTUAL_DISPLAY_DRIVER=1  Install the experimental Vibeshine Display Driver");
+      Console.WriteLine("  INSTALL_VIRTUAL_DISPLAY_DRIVER=0  Use SudoVDA instead of the default Vibeshine Display Driver");
       Console.WriteLine();
       Console.WriteLine("Examples:");
       Console.WriteLine("  VibeshineSetup.exe /qn");
       Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_ROOT=\"D:\\Vibeshine\"");
       Console.WriteLine("  VibeshineSetup.exe /x {PRODUCT-CODE} /qn");
-      Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_VIRTUAL_DISPLAY_DRIVER=1");
+      Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_VIRTUAL_DISPLAY_DRIVER=0");
       Console.WriteLine("  VibeshineSetup.exe /uninstall");
       Console.WriteLine("  VibeshineSetup.exe /uninstall /quiet");
       Console.WriteLine("  VibeshineSetup.exe --msi C:\\temp\\Vibeshine.msi /passive");
@@ -2289,6 +2289,28 @@ namespace VibeshineInstaller {
         }
       }
 
+      return false;
+    }
+
+    public static bool IsSudoVdaSelectedInConfiguration(string installDirectory) {
+      foreach (var configPath in BuildSunshineConfigPathCandidates(installDirectory)) {
+        bool enabled;
+        if (TryReadSunshineVirtualDisplayDriverEnabled(configPath, out enabled)) {
+          return !enabled;
+        }
+      }
+
+      return false;
+    }
+
+    private static bool TryReadSunshineVirtualDisplayDriverEnabledInConfiguration(string installDirectory, out bool enabled) {
+      foreach (var configPath in BuildSunshineConfigPathCandidates(installDirectory)) {
+        if (TryReadSunshineVirtualDisplayDriverEnabled(configPath, out enabled)) {
+          return true;
+        }
+      }
+
+      enabled = false;
       return false;
     }
 
@@ -4328,11 +4350,12 @@ namespace VibeshineInstaller {
         return;
       }
 
-      if (!CliInstallUsesSunshineVirtualDisplayDriver(cliArgs)) {
+      bool useSunshineDriver;
+      if (!TryReadCliSunshineVirtualDisplayDriverSelection(cliArgs, out useSunshineDriver)) {
         return;
       }
 
-      cliArgs.Add("INSTALL_VIRTUAL_DISPLAY_DRIVER=1");
+      cliArgs.Add("INSTALL_VIRTUAL_DISPLAY_DRIVER=" + (useSunshineDriver ? "1" : "0"));
     }
 
     private static bool IsMsiInstallOperation(List<string> cliArgs) {
@@ -4342,12 +4365,18 @@ namespace VibeshineInstaller {
     }
 
     private static bool CliInstallUsesSunshineVirtualDisplayDriver(List<string> cliArgs) {
+      bool useSunshineDriver;
+      return TryReadCliSunshineVirtualDisplayDriverSelection(cliArgs, out useSunshineDriver) && useSunshineDriver;
+    }
+
+    private static bool TryReadCliSunshineVirtualDisplayDriverSelection(List<string> cliArgs, out bool useSunshineDriver) {
       foreach (var installDirectory in ResolveCliInstallDirectoryCandidates(cliArgs)) {
-        if (IsSunshineVirtualDisplayDriverEnabledInConfiguration(installDirectory)) {
+        if (TryReadSunshineVirtualDisplayDriverEnabledInConfiguration(installDirectory, out useSunshineDriver)) {
           return true;
         }
       }
 
+      useSunshineDriver = false;
       return false;
     }
 

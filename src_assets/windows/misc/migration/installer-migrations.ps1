@@ -85,7 +85,7 @@ function Update-SunshineVirtualDriverPreference {
     )
 
     $enabled = Convert-InstallerBooleanValue -Value $InstallVirtualDisplayDriver
-    if ($null -eq $enabled -or -not $enabled) {
+    if ($null -eq $enabled) {
         return $false
     }
 
@@ -93,7 +93,7 @@ function Update-SunshineVirtualDriverPreference {
     return Set-SunshineConfigOption `
         -ConfigPath $configPath `
         -Name 'dd_use_sunshine_virtual_display_driver' `
-        -Value 'enabled'
+        -Value $(if ($enabled) { 'enabled' } else { 'disabled' })
 }
 
 function Convert-LegacySplitEncodeValue {
@@ -336,7 +336,7 @@ $candidateJsonFiles = @(
 
 $changedAny = $false
 if (Update-SunshineVirtualDriverPreference -RootDir $rootDir -InstallVirtualDisplayDriver $InstallVirtualDisplayDriver) {
-    Write-Output 'Updated Vibeshine Display Driver preference from installer selection.'
+    Write-Output 'Updated virtual display driver preference from installer selection.'
     $changedAny = $true
 }
 

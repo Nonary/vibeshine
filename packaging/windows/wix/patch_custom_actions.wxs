@@ -18,7 +18,7 @@
     <Property Id="REMOVEVIRTUALDISPLAYDRIVER" Value="0" Secure="yes"/>
     <Property Id="FACTORYRESET" Value="0" Secure="yes"/>
     <Property Id="INSTALL_SUDOVDA" Value="1" Secure="yes"/>
-    <Property Id="INSTALL_VIRTUAL_DISPLAY_DRIVER" Value="0" Secure="yes"/>
+    <Property Id="INSTALL_VIRTUAL_DISPLAY_DRIVER" Secure="yes"/>
     <Property Id="SKIP_REMOVE_CONFLICTING_PRODUCTS" Value="0" Secure="yes"/>
     <Condition Message="Administrator privileges are required.">Privileged</Condition>
     <Feature Id="VibeshineExtras" Title="Vibeshine Components" Level="1" Absent="disallow">
@@ -62,10 +62,10 @@
       <Custom Action="ResetAcls" After="SetResetAcls">NOT REMOVE</Custom>
       <Custom Action="SetInstallSudovda" After="ResetAcls">NOT REMOVE AND INSTALL_SUDOVDA = "1"</Custom>
       <Custom Action="InstallSudovda" After="SetInstallSudovda">NOT REMOVE AND INSTALL_SUDOVDA = "1"</Custom>
-      <Custom Action="SetInstallVirtualDisplayDriver" After="InstallSudovda">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER = "1"</Custom>
-      <Custom Action="InstallVirtualDisplayDriver" After="SetInstallVirtualDisplayDriver">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER = "1"</Custom>
-      <Custom Action="SetRegisterVulkanHdrLayer" After="InstallVirtualDisplayDriver">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER = "1"</Custom>
-      <Custom Action="RegisterVulkanHdrLayer" After="SetRegisterVulkanHdrLayer">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER = "1"</Custom>
+      <Custom Action="SetInstallVirtualDisplayDriver" After="InstallSudovda">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>
+      <Custom Action="InstallVirtualDisplayDriver" After="SetInstallVirtualDisplayDriver">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>
+      <Custom Action="SetRegisterVulkanHdrLayer" After="InstallVirtualDisplayDriver">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>
+      <Custom Action="RegisterVulkanHdrLayer" After="SetRegisterVulkanHdrLayer">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>
       <Custom Action="SetMigrateConfig" After="RegisterVulkanHdrLayer">NOT Installed AND NOT REMOVE</Custom>
       <Custom Action="MigrateConfig" After="SetMigrateConfig">NOT Installed AND NOT REMOVE</Custom>
       <Custom Action="SetRunInstallerMigrations" After="MigrateConfig">NOT Installed AND NOT REMOVE</Custom>
