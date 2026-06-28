@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generatedAt": "2026-06-28T00:28:57.366Z",
-  "issueCount": 5934,
+  "issueCount": 5945,
   "issues": [
     {
       "fingerprint": "fallback-literal|configs/configSelectOptions.ts|100||config.address_family_both|Both||",
@@ -2056,6 +2056,15 @@
       "message": "Hard-coded message text should use i18n: Update failed"
     },
     {
+      "fingerprint": "hardcoded-ui-prop|components/app-edit/AppEditConfigOverridesSection.vue|1353|||Configure Resolution||",
+      "rule": "hardcoded-ui-prop",
+      "file": "components/app-edit/AppEditConfigOverridesSection.vue",
+      "locale": null,
+      "key": null,
+      "value": "Configure Resolution",
+      "message": "Hard-coded UI property \"label\" should use i18n: Configure Resolution"
+    },
+    {
       "fingerprint": "hardcoded-ui-prop|components/app-edit/AppEditConfigOverridesSection.vue|1354|||Configure Resolution||",
       "rule": "hardcoded-ui-prop",
       "file": "components/app-edit/AppEditConfigOverridesSection.vue",
@@ -2065,6 +2074,15 @@
       "message": "Hard-coded UI property \"label\" should use i18n: Configure Resolution"
     },
     {
+      "fingerprint": "hardcoded-ui-prop|components/app-edit/AppEditConfigOverridesSection.vue|1365|||Configure Refresh Rate||",
+      "rule": "hardcoded-ui-prop",
+      "file": "components/app-edit/AppEditConfigOverridesSection.vue",
+      "locale": null,
+      "key": null,
+      "value": "Configure Refresh Rate",
+      "message": "Hard-coded UI property \"label\" should use i18n: Configure Refresh Rate"
+    },
+    {
       "fingerprint": "hardcoded-ui-prop|components/app-edit/AppEditConfigOverridesSection.vue|1366|||Configure Refresh Rate||",
       "rule": "hardcoded-ui-prop",
       "file": "components/app-edit/AppEditConfigOverridesSection.vue",
@@ -2072,6 +2090,15 @@
       "key": null,
       "value": "Configure Refresh Rate",
       "message": "Hard-coded UI property \"label\" should use i18n: Configure Refresh Rate"
+    },
+    {
+      "fingerprint": "hardcoded-ui-prop|components/app-edit/AppEditConfigOverridesSection.vue|1377|||Configure HDR||",
+      "rule": "hardcoded-ui-prop",
+      "file": "components/app-edit/AppEditConfigOverridesSection.vue",
+      "locale": null,
+      "key": null,
+      "value": "Configure HDR",
+      "message": "Hard-coded UI property \"label\" should use i18n: Configure HDR"
     },
     {
       "fingerprint": "hardcoded-ui-prop|components/app-edit/AppEditConfigOverridesSection.vue|1378|||Configure HDR||",
@@ -2290,6 +2317,15 @@
       "message": "Hard-coded UI property \"description\" should use i18n: Report bugs or request features"
     },
     {
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|701|||Invalid manual resolution. Use WIDTHxHEIGHT (e.g., 2560x1440).||",
+      "rule": "hardcoded-ui-prop",
+      "file": "stores/config.ts",
+      "locale": null,
+      "key": null,
+      "value": "Invalid manual resolution. Use WIDTHxHEIGHT (e.g., 2560x1440).",
+      "message": "Hard-coded UI property \"message\" should use i18n: Invalid manual resolution. Use WIDTHxHEIGHT (e.g., 2560x1440)."
+    },
+    {
       "fingerprint": "hardcoded-ui-prop|stores/config.ts|703|||Invalid manual resolution. Use WIDTHxHEIGHT (e.g., 2560x1440).||",
       "rule": "hardcoded-ui-prop",
       "file": "stores/config.ts",
@@ -2297,6 +2333,15 @@
       "key": null,
       "value": "Invalid manual resolution. Use WIDTHxHEIGHT (e.g., 2560x1440).",
       "message": "Hard-coded UI property \"message\" should use i18n: Invalid manual resolution. Use WIDTHxHEIGHT (e.g., 2560x1440)."
+    },
+    {
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|720|||Invalid manual refresh rate. Use a positive number, e.g., 60 or 59.94.||",
+      "rule": "hardcoded-ui-prop",
+      "file": "stores/config.ts",
+      "locale": null,
+      "key": null,
+      "value": "Invalid manual refresh rate. Use a positive number, e.g., 60 or 59.94.",
+      "message": "Hard-coded UI property \"message\" should use i18n: Invalid manual refresh rate. Use a positive number, e.g., 60 or 59.94."
     },
     {
       "fingerprint": "hardcoded-ui-prop|stores/config.ts|722|||Invalid manual refresh rate. Use a positive number, e.g., 60 or 59.94.||",
@@ -2308,6 +2353,15 @@
       "message": "Hard-coded UI property \"message\" should use i18n: Invalid manual refresh rate. Use a positive number, e.g., 60 or 59.94."
     },
     {
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|747|||Invalid resolution in Display mode remapping. Use WIDTHxHEIGHT (e.g., 1920x1080) or leave blank.||",
+      "rule": "hardcoded-ui-prop",
+      "file": "stores/config.ts",
+      "locale": null,
+      "key": null,
+      "value": "Invalid resolution in Display mode remapping. Use WIDTHxHEIGHT (e.g., 1920x1080) or leave blank.",
+      "message": "Hard-coded UI property \"message\" should use i18n: Invalid resolution in Display mode remapping. Use WIDTHxHEIGHT (e.g., 1920x1080) or leave blank."
+    },
+    {
       "fingerprint": "hardcoded-ui-prop|stores/config.ts|749|||Invalid resolution in Display mode remapping. Use WIDTHxHEIGHT (e.g., 1920x1080) or leave blank.||",
       "rule": "hardcoded-ui-prop",
       "file": "stores/config.ts",
@@ -2315,6 +2369,15 @@
       "key": null,
       "value": "Invalid resolution in Display mode remapping. Use WIDTHxHEIGHT (e.g., 1920x1080) or leave blank.",
       "message": "Hard-coded UI property \"message\" should use i18n: Invalid resolution in Display mode remapping. Use WIDTHxHEIGHT (e.g., 1920x1080) or leave blank."
+    },
+    {
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|762|||Invalid refresh rate in remapping. Use a positive number or leave blank.||",
+      "rule": "hardcoded-ui-prop",
+      "file": "stores/config.ts",
+      "locale": null,
+      "key": null,
+      "value": "Invalid refresh rate in remapping. Use a positive number or leave blank.",
+      "message": "Hard-coded UI property \"message\" should use i18n: Invalid refresh rate in remapping. Use a positive number or leave blank."
     },
     {
       "fingerprint": "hardcoded-ui-prop|stores/config.ts|764|||Invalid refresh rate in remapping. Use a positive number or leave blank.||",
@@ -2326,6 +2389,15 @@
       "message": "Hard-coded UI property \"message\" should use i18n: Invalid refresh rate in remapping. Use a positive number or leave blank."
     },
     {
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|769|||For refresh-rate-only mappings, Final refresh rate is required.||",
+      "rule": "hardcoded-ui-prop",
+      "file": "stores/config.ts",
+      "locale": null,
+      "key": null,
+      "value": "For refresh-rate-only mappings, Final refresh rate is required.",
+      "message": "Hard-coded UI property \"message\" should use i18n: For refresh-rate-only mappings, Final refresh rate is required."
+    },
+    {
       "fingerprint": "hardcoded-ui-prop|stores/config.ts|771|||For refresh-rate-only mappings, Final refresh rate is required.||",
       "rule": "hardcoded-ui-prop",
       "file": "stores/config.ts",
@@ -2333,6 +2405,15 @@
       "key": null,
       "value": "For refresh-rate-only mappings, Final refresh rate is required.",
       "message": "Hard-coded UI property \"message\" should use i18n: For refresh-rate-only mappings, Final refresh rate is required."
+    },
+    {
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|780|||Invalid refresh rate in remapping. Use a positive number or leave blank.||",
+      "rule": "hardcoded-ui-prop",
+      "file": "stores/config.ts",
+      "locale": null,
+      "key": null,
+      "value": "Invalid refresh rate in remapping. Use a positive number or leave blank.",
+      "message": "Hard-coded UI property \"message\" should use i18n: Invalid refresh rate in remapping. Use a positive number or leave blank."
     },
     {
       "fingerprint": "hardcoded-ui-prop|stores/config.ts|782|||Invalid refresh rate in remapping. Use a positive number or leave blank.||",
@@ -2344,6 +2425,15 @@
       "message": "Hard-coded UI property \"message\" should use i18n: Invalid refresh rate in remapping. Use a positive number or leave blank."
     },
     {
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|790|||For mixed mappings, specify at least one Final field.||",
+      "rule": "hardcoded-ui-prop",
+      "file": "stores/config.ts",
+      "locale": null,
+      "key": null,
+      "value": "For mixed mappings, specify at least one Final field.",
+      "message": "Hard-coded UI property \"message\" should use i18n: For mixed mappings, specify at least one Final field."
+    },
+    {
       "fingerprint": "hardcoded-ui-prop|stores/config.ts|792|||For mixed mappings, specify at least one Final field.||",
       "rule": "hardcoded-ui-prop",
       "file": "stores/config.ts",
@@ -2351,6 +2441,15 @@
       "key": null,
       "value": "For mixed mappings, specify at least one Final field.",
       "message": "Hard-coded UI property \"message\" should use i18n: For mixed mappings, specify at least one Final field."
+    },
+    {
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|804|||For resolution-only mappings, Final resolution is required.||",
+      "rule": "hardcoded-ui-prop",
+      "file": "stores/config.ts",
+      "locale": null,
+      "key": null,
+      "value": "For resolution-only mappings, Final resolution is required.",
+      "message": "Hard-coded UI property \"message\" should use i18n: For resolution-only mappings, Final resolution is required."
     },
     {
       "fingerprint": "hardcoded-ui-prop|stores/config.ts|806|||For resolution-only mappings, Final resolution is required.||",

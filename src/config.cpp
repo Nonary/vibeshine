@@ -846,7 +846,7 @@ namespace config {
       false,  // virtual_display_permanent_count_configured
       {},  // snapshot_exclude_devices
       {},  // mode_remapping
-      {false, true},  // wa
+      {false},  // wa
       true  // vulkan_hdr_layer
     },  // display_device
 
@@ -1650,7 +1650,6 @@ namespace config {
       }
     }
     bool_f(vars, "dd_wa_dummy_plug_hdr10", video.dd.wa.dummy_plug_hdr10);
-    bool_f(vars, "dd_wa_virtual_double_refresh", video.dd.wa.virtual_double_refresh);
 
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
@@ -2208,7 +2207,6 @@ namespace config {
         "dd_activate_virtual_display",
         "dd_virtual_display_permanent_count",
         "dd_mode_remapping",
-        "dd_wa_virtual_double_refresh",
         "dd_wa_dummy_plug_hdr10",
         "max_bitrate",
         "minimum_fps_target",
@@ -2448,7 +2446,6 @@ namespace config {
       const auto prev_dd_virtual_display_permanent_count_configured = video.dd.virtual_display_permanent_count_configured;
       const auto prev_dd_snapshot_exclude_devices = video.dd.snapshot_exclude_devices;
       const auto prev_dd_dummy_plug = video.dd.wa.dummy_plug_hdr10;
-      const auto prev_dd_virtual_double_refresh = video.dd.wa.virtual_double_refresh;
       const auto prev_rtx_hdr_enabled = video.rtx_hdr.enabled;
       const auto prev_rtx_hdr_sdr_brightness = video.rtx_hdr.sdr_brightness;
       const auto prev_rtx_hdr_contrast = video.rtx_hdr.contrast;
@@ -2524,8 +2521,7 @@ namespace config {
                                      (prev_dd_virtual_display_permanent_count != video.dd.virtual_display_permanent_count) ||
                                      (prev_dd_virtual_display_permanent_count_configured != video.dd.virtual_display_permanent_count_configured) ||
                                      (prev_dd_snapshot_exclude_devices != video.dd.snapshot_exclude_devices) ||
-                                     (prev_dd_dummy_plug != video.dd.wa.dummy_plug_hdr10) ||
-                                     (prev_dd_virtual_double_refresh != video.dd.wa.virtual_double_refresh);
+                                     (prev_dd_dummy_plug != video.dd.wa.dummy_plug_hdr10);
 
       // If any DD settings changed and there are no active sessions, revert to clear cached state
       if (dd_config_changed && rtsp_stream::session_count() == 0 && runtime_overrides.empty()) {

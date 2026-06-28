@@ -774,8 +774,8 @@ function clearSnapshotHotkey(): void {
                         />
                         <span class="block"
                           >Overrides below are disabled while manual resolution or refresh rate is
-                          enforced. Manual refresh rates are applied forcefully and disable the
-                          double refresh rate fix.</span
+                          enforced. Manual refresh rates are applied forcefully and override the
+                          automatic 4&times; refresh applied to virtual displays.</span
                         >
                       </span>
                     </p>
@@ -1106,13 +1106,6 @@ function clearSnapshotHotkey(): void {
                   <div
                     class="optional-subsection space-y-2 border-l border-dark/10 dark:border-light/10 pl-3"
                   >
-                    <Checkbox
-                      id="dd_wa_virtual_double_refresh"
-                      v-model="config.dd_wa_virtual_double_refresh"
-                      locale-prefix="config"
-                      :default="true"
-                      :disabled="!usingVirtualDisplay"
-                    />
                     <Checkbox
                       id="dd_wa_dummy_plug_hdr10"
                       v-model="config.dd_wa_dummy_plug_hdr10"
