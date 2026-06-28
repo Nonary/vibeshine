@@ -108,16 +108,15 @@
   </Fragment>
 
   <Fragment>
-    <!-- Post-install housekeeping runs after InstallFiles. ACL and migration failures
-         remain best-effort because Sunshine can repair config ACLs at startup and the
-         migrations are idempotent. Driver and Vulkan-layer install failures are checked
-         below because they represent explicit installer component work. -->
+    <!-- Post-install housekeeping runs after InstallFiles. ACL, migration, and optional
+         driver/Vulkan-layer failures remain best-effort because the core application
+         can still install and the bootstrapper reports component warnings from logs. -->
     <CustomAction Id="ResetAcls" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="MigrateConfig" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="RunInstallerMigrations" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="InstallSudovda" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
-    <CustomAction Id="InstallVirtualDisplayDriver" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
-    <CustomAction Id="RegisterVulkanHdrLayer" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
+    <CustomAction Id="InstallVirtualDisplayDriver" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
+    <CustomAction Id="RegisterVulkanHdrLayer" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
 
     <!-- Uninstall-time actions (deferred, elevated) -->
     <CustomAction Id="RestoreNvPrefsUndo" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
@@ -158,7 +157,7 @@
     <!-- The experimental Sunshine virtual display driver is opt-in. -->
     <CustomAction Id="SetInstallVirtualDisplayDriver"
                  Property="InstallVirtualDisplayDriver"
-                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]drivers\sunshine\install.ps1&quot;"/>
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]drivers\sunshine\install.ps1&quot; -InstallerBestEffort"/>
 
     <CustomAction Id="SetRegisterVulkanHdrLayer"
                  Property="RegisterVulkanHdrLayer"
