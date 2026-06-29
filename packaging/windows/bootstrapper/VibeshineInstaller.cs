@@ -3174,6 +3174,11 @@ namespace VibeshineInstaller {
       if (exitCode == 0 && InstallLogIndicatesDriverRebootRequired(logPath)) {
         exitCode = 3010;
       }
+      string validationFailure;
+      if ((exitCode == 0 || exitCode == 3010) && !ValidatePayloadRegisteredAfterInstall(msiPath, logPath, out validationFailure)) {
+        AppendInstallerLogMessage(logPath, validationFailure);
+        exitCode = 1603;
+      }
 
       var componentFailures = CollectInstallComponentFailures(logPath, installVirtualDisplayDriver);
       var savedLogPath = string.Empty;
@@ -3219,6 +3224,32 @@ namespace VibeshineInstaller {
         LogPath = logPath,
         ComponentFailures = componentFailures
       };
+    }
+
+    private static bool ValidatePayloadRegisteredAfterInstall(string msiPath, string logPath, out string failureMessage) {
+      failureMessage = string.Empty;
+
+      var payloadMsiInfo = TryGetPayloadMsiInfo(msiPath);
+      var payloadProductCode = NormalizeProductCode(payloadMsiInfo == null ? null : payloadMsiInfo.ProductCode);
+      if (!LooksLikeProductCode(payloadProductCode)) {
+        return true;
+      }
+
+      var installedProduct = GetInstalledProducts(true)
+        .FirstOrDefault(product => string.Equals(
+          NormalizeProductCode(product.ProductCode),
+          payloadProductCode,
+          StringComparison.OrdinalIgnoreCase));
+      if (installedProduct != null) {
+        return true;
+      }
+
+      failureMessage = "MSI reported success, but the expected product registration was not found after install. Expected ProductCode: "
+        + payloadProductCode + ".";
+      if (!string.IsNullOrWhiteSpace(logPath)) {
+        failureMessage += " Log: " + logPath;
+      }
+      return false;
     }
 
     private static bool ShouldRetryInstallWithFreshPayload(
