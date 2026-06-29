@@ -885,6 +885,7 @@ function fromServerApp(src?: ServerApp | null): AppForm {
 
 function toServerPayload(f: AppForm): Record<string, any> {
   const configOverridesPayload = buildConfigOverridesPayload(f);
+  const selection = displaySelection.value;
   const payload: Record<string, any> = {
     ...(f.uuid ? { uuid: f.uuid } : {}),
     ...(!f.uuid ? { index: typeof f.index === 'number' ? f.index : -1 } : {}),
