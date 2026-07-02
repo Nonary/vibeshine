@@ -23,23 +23,24 @@
         <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>
         <?endif?>
 
+        <!-- AllowDowngrades makes every transition (upgrade, same-version
+             rebuild, downgrade) a single-transaction major upgrade: the
+             installed product is removed inside the transaction
+             (afterInstallInitialize), so a failed install rolls back to the
+             previous version instead of leaving neither installed.
+             ProductVersion is ordinal-encoded (see windows_wix.cmake) so
+             prerelease/stable builds of the same patch are strictly ordered
+             and downgrades only happen when genuinely requested. -->
         <MajorUpgrade
             Schedule="afterInstallInitialize"
-            AllowSameVersionUpgrades="yes"
-            DowngradeErrorMessage="A later version of [ProductName] is already installed. Setup will now exit."/>
+            AllowDowngrades="yes"/>
 
-        <Upgrade Id="$(var.CPACK_WIX_UPGRADE_GUID)">
-            <UpgradeVersion
-                Minimum="$(var.CPACK_PACKAGE_VERSION)"
-                IncludeMinimum="yes"
-                Maximum="$(var.CPACK_PACKAGE_VERSION)"
-                IncludeMaximum="yes"
-                OnlyDetect="yes"
-                Property="VIBESHINE_SAME_VERSION_UPGRADE_DETECTED"/>
-        </Upgrade>
-        <Condition Message="A Vibeshine installation with this same installer version is already present. Use VibeshineSetup.exe to upgrade or reinstall, or uninstall the existing version first.">
-            Installed OR (NOT VIBESHINE_SAME_VERSION_UPGRADE_DETECTED AND VIBESHINE_INSTALLED_PRODUCT_VERSION &lt;&gt; ProductVersion)
-        </Condition>
+        <!-- Read from the payload by the bootstrapper
+             (PayloadSupportsTransactionalReplacement): this package replaces
+             any installed version inside its own transaction, so the
+             bootstrapper must NOT run its legacy uninstall-then-install
+             workaround before launching it. -->
+        <Property Id="VIBESHINE_TRANSACTIONAL_REPLACEMENT" Value="1" Secure="yes"/>
 
         <WixVariable Id="WixUILicenseRtf" Value="$(var.CPACK_WIX_LICENSE_RTF)"/>
         <Property Id="WIXUI_INSTALLDIR" Value="INSTALL_ROOT"/>

@@ -348,21 +348,34 @@ TEST(SunshineVirtualDisplayPackaging, LocalDriverRefreshSkipsSigningByDefault) {
   EXPECT_EQ(cmake.find("SUNSHINE_SKIP_LOCAL_VIRTUAL_DISPLAY_DRIVER_SIGNING"), std::string::npos);
 }
 
-TEST(SunshineVirtualDisplayPackaging, RawMsiBlocksSameVersionReplacement) {
+TEST(SunshineVirtualDisplayPackaging, MsiReplacementIsTransactional) {
   const auto wix = read_source_file("packaging/windows/wix/WIX.template.in");
+  const auto wix_cmake = read_source_file("cmake/packaging/windows_wix.cmake");
   const auto bootstrapper = read_source_file("packaging/windows/bootstrapper/VibeshineInstaller.cs");
 
-  expect_contains(wix, "Schedule=\"afterInstallExecute\"");
+  // Upgrades, same-version rebuilds, and downgrades all run as a single MSI
+  // transaction; a failed install rolls back to the previous version instead
+  // of leaving neither installed.
+  expect_contains(wix, "Schedule=\"afterInstallInitialize\"");
+  expect_contains(wix, "AllowDowngrades=\"yes\"");
   EXPECT_EQ(wix.find("Schedule=\"afterInstallValidate\""), std::string::npos);
-  expect_contains(wix, "Property=\"VIBESHINE_SAME_VERSION_UPGRADE_DETECTED\"");
-  expect_contains(wix, "VIBESHINE_INSTALLED_PRODUCT_VERSION &lt;&gt; ProductVersion");
-  expect_contains(read_source_file("packaging/windows/wix/patch_custom_actions.wxs"), "SearchInstalledVibeshineVersion64");
+  EXPECT_EQ(wix.find("DowngradeErrorMessage"), std::string::npos);
+
+  // Prerelease builds are strictly ordered in the ProductVersion third field
+  // (patch * 100 + ordinal) so MSI can see beta->beta and beta->stable as
+  // real upgrades; the human-readable semver is preserved for ARP.
+  expect_contains(wix_cmake, "_WIX_PRERELEASE_ORDINAL");
+  expect_contains(wix_cmake, "math(EXPR _WIX_PAT \"${_WIX_PAT} * 100 + ${_WIX_PRERELEASE_ORDINAL}\")");
+  expect_contains(wix_cmake, "-dVibeshineSemVer=${PROJECT_VERSION_FULL}");
+  expect_contains(read_source_file("packaging/windows/wix/custom_actions.wxs"), "$(var.VibeshineSemVer)");
+
+  // The bootstrapper only falls back to uninstall-then-install for legacy
+  // payloads that cannot replace in-transaction, and stashes the installed
+  // MSI beforehand so a failed second phase restores the previous version.
+  expect_contains(bootstrapper, "PayloadSupportsTransactionalReplacement");
   expect_contains(bootstrapper, "cli_remove_vibeshine_same_or_downgrade");
-  expect_contains(bootstrapper, "vibeshineSourceRequiresRestart |= uninstallDowngradeSourceResult.ExitCode == 3010");
-  expect_contains(bootstrapper, "competingProductsRequireRestart || vibeshineSourceRequiresRestart");
-  expect_contains(bootstrapper, "ShouldPreUninstallVibeshineInstallSource(cliArgs)");
-  expect_contains(bootstrapper, "installedProduct.Version.CompareTo(payloadMsiInfo.Version) == 0");
-  expect_contains(bootstrapper, "HasDifferentProductCode(installedProduct.ProductCode, payloadMsiInfo.ProductCode)");
+  expect_contains(bootstrapper, "TryStashInstalledVibeshinePayload");
+  expect_contains(bootstrapper, "TryRestoreStashedVibeshinePayload");
 }
 
 TEST(SunshineVirtualDisplayPackaging, DirectMsiConflictRemovalBlocksInsteadOfUninstalling) {

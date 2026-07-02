@@ -3,10 +3,6 @@
   <CPackWiXFragment Id="#PRODUCT">
     <Property Id="ALLUSERS" Value="1"/>
     <Property Id="ARPSYSTEMCOMPONENT" Value="1"/>
-    <Property Id="VIBESHINE_INSTALLED_PRODUCT_VERSION" Secure="yes">
-      <RegistrySearch Id="SearchInstalledVibeshineVersion64" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Vibeshine" Name="DisplayVersion" Type="raw" Win64="yes"/>
-      <RegistrySearch Id="SearchInstalledVibeshineVersion32" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Vibeshine" Name="DisplayVersion" Type="raw"/>
-    </Property>
     <Property Id="LEGACY_SUNSHINE_PRESENT" Secure="yes">
       <RegistrySearch Id="SearchLegacySunshine64" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Sunshine" Name="DisplayName" Type="raw" Win64="yes"/>
       <RegistrySearch Id="SearchLegacySunshine32" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Sunshine" Name="DisplayName" Type="raw"/>
