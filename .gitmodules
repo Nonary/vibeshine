@@ -88,3 +88,6 @@
 	path = third-party/libvirtualdisplay
 	url = https://github.com/Nonary/libvirtualdisplay.git
 	branch = master
+[submodule "third-party/adlx"]
+	path = third-party/adlx
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/ADLX.git
