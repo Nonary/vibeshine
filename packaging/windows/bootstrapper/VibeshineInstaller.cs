@@ -108,7 +108,7 @@ namespace VibeshineInstaller {
     private readonly TextBlock _installLocationHintText;
     private readonly Grid _installPathGrid;
     private readonly TextBox _installPathTextBox;
-    private readonly CheckBox _installVirtualDisplayCheckBox;
+    private readonly ComboBox _virtualDisplayDriverComboBox;
     private readonly TextBlock _statusText;
     private readonly TextBlock _statusDetailText;
     private readonly ProgressBar _progressBar;
@@ -486,20 +486,35 @@ namespace VibeshineInstaller {
       Grid.SetColumn(_browseButton, 1);
       _installPathGrid.Children.Add(_browseButton);
 
-      _installVirtualDisplayCheckBox = new CheckBox {
-        Content = "Use SudoVDA",
+      var virtualDisplayDriverLabel = new TextBlock {
+        Text = "Virtual display driver",
         FontSize = 13,
+        FontWeight = FontWeights.SemiBold,
         Foreground = new SolidColorBrush(Color.FromRgb(226, 235, 250)),
-        Margin = new Thickness(0, 0, 0, 6),
-        IsChecked = _useSudoVdaSelectedInConfig,
-        ToolTip = "Switch back to the bundled SudoVDA virtual display driver instead of the default Vibeshine Display Driver."
+        Margin = new Thickness(0, 0, 0, 6)
       };
 
+      _virtualDisplayDriverComboBox = new ComboBox {
+        FontSize = 13,
+        MinHeight = 32,
+        MaxWidth = 340,
+        HorizontalAlignment = HorizontalAlignment.Left,
+        VerticalContentAlignment = VerticalAlignment.Center,
+        Margin = new Thickness(0, 0, 0, 8),
+        ToolTip = "Choose which bundled virtual display driver Vibeshine uses. The Vibeshine Display Driver is the recommended default."
+      };
+      _virtualDisplayDriverComboBox.Items.Add(new ComboBoxItem {
+        Content = "Vibeshine Display Driver (recommended)"
+      });
+      _virtualDisplayDriverComboBox.Items.Add(new ComboBoxItem {
+        Content = "SudoVDA (legacy)"
+      });
+      _virtualDisplayDriverComboBox.SelectedIndex = _useSudoVdaSelectedInConfig ? 1 : 0;
+
       var installVirtualDisplayHintText = new TextBlock {
-        Text = "The Vibeshine Display Driver is installed and selected by default for virtual displays. Enable this option to use SudoVDA instead.",
+        Text = "The Vibeshine Display Driver is installed and selected by default for virtual displays. Pick SudoVDA (legacy) only if you need to keep using the previous driver.",
         FontSize = 12,
         Foreground = new SolidColorBrush(Color.FromRgb(190, 208, 236)),
-        Margin = new Thickness(24, 0, 0, 0),
         TextWrapping = TextWrapping.Wrap
       };
 
@@ -579,7 +594,8 @@ namespace VibeshineInstaller {
         Orientation = Orientation.Vertical
       };
       _installVirtualDisplaySection.Child = driverStack;
-      driverStack.Children.Add(_installVirtualDisplayCheckBox);
+      driverStack.Children.Add(virtualDisplayDriverLabel);
+      driverStack.Children.Add(_virtualDisplayDriverComboBox);
       driverStack.Children.Add(installVirtualDisplayHintText);
 
       var divider = new System.Windows.Shapes.Rectangle {
@@ -1043,7 +1059,7 @@ namespace VibeshineInstaller {
     }
 
     private bool ShouldInstallVirtualDisplayDriver() {
-      return _installVirtualDisplayCheckBox.IsChecked != true;
+      return _virtualDisplayDriverComboBox.SelectedIndex != 1;
     }
 
     private async Task RunUninstallFlow() {
@@ -1432,7 +1448,7 @@ namespace VibeshineInstaller {
       if (BuildFlavor.IsUninstallOnly) {
         var allowUninstall = !_isBusy && _installedProduct != null;
         _installPathTextBox.IsEnabled = false;
-        _installVirtualDisplayCheckBox.IsEnabled = false;
+        _virtualDisplayDriverComboBox.IsEnabled = false;
         _browseButton.IsEnabled = false;
         _installSection.Visibility = Visibility.Collapsed;
         _installVirtualDisplaySection.Visibility = Visibility.Collapsed;
@@ -1449,7 +1465,7 @@ namespace VibeshineInstaller {
       _installLocationHintText.Visibility = showInstallLocation ? Visibility.Visible : Visibility.Collapsed;
       _installPathGrid.Visibility = showInstallLocation ? Visibility.Visible : Visibility.Collapsed;
       _installPathTextBox.IsEnabled = allowInstallInputs && showInstallLocation;
-      _installVirtualDisplayCheckBox.IsEnabled = allowInstallInputs && _showInstallVirtualDisplayOption;
+      _virtualDisplayDriverComboBox.IsEnabled = allowInstallInputs && _showInstallVirtualDisplayOption;
       _browseButton.IsEnabled = allowInstallInputs && showInstallLocation;
       _installSection.Visibility = showInstallLocation ? Visibility.Visible : Visibility.Collapsed;
       _installVirtualDisplaySection.Visibility = _showInstallVirtualDisplayOption ? Visibility.Visible : Visibility.Collapsed;

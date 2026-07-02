@@ -40,6 +40,7 @@ const props = defineProps<{
   losslessActive: boolean;
   nvidiaActive: boolean;
   usingVirtualDisplay: boolean;
+  windows10: boolean;
   hasActiveLosslessOverrides: boolean;
   onLosslessRtssLimitChange: (value: number | null) => void;
   resetActiveLosslessProfile: () => void;
@@ -85,6 +86,13 @@ function handleLosslessAdvancedToggle(enabled: boolean) {
 const requirementRows = computed(() => {
   if (!props.health) return [];
   return [
+    {
+      id: 'os',
+      icon: 'fab fa-windows',
+      label: t('apps.framegen.req_os_label'),
+      status: props.health.os.status,
+      message: props.health.os.message,
+    },
     {
       id: 'capture',
       icon: 'fas fa-desktop',
@@ -243,6 +251,9 @@ const displayTargets = computed(() => props.health?.display.targets || []);
         v-if="isLosslessMode"
         class="space-y-3 rounded-xl border border-primary/20 bg-primary/5 p-3"
       >
+        <n-alert v-if="windows10" type="warning" size="small">
+          {{ $t('apps.framegen.lossless_win10_warning') }}
+        </n-alert>
         <div class="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
           <div class="space-y-1">
             <div class="font-medium text-sm">{{ $t('apps.framegen.lossless_title') }}</div>
@@ -429,7 +440,9 @@ const displayTargets = computed(() => props.health?.display.targets || []);
         >
           <div class="space-y-1">
             <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-              <div class="font-medium text-sm">{{ $t('apps.framegen.refresh_coverage_title') }}</div>
+              <div class="font-medium text-sm">
+                {{ $t('apps.framegen.refresh_coverage_title') }}
+              </div>
               <div class="text-[12px] opacity-70">
                 {{
                   $t('apps.framegen.targeted_display_label', {

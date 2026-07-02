@@ -150,6 +150,11 @@ export interface FrameGenDisplayTarget {
 
 export interface FrameGenHealth {
   checkedAt: number;
+  os: {
+    status: FrameGenRequirementStatus;
+    buildNumber: number | null;
+    message: string;
+  };
   capture: {
     status: FrameGenRequirementStatus;
     method: string;

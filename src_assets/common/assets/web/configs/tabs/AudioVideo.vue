@@ -9,7 +9,7 @@ import DisplayOutputSelector from '@/configs/tabs/audiovideo/DisplayOutputSelect
 import DisplayDeviceOptions from '@/configs/tabs/audiovideo/DisplayDeviceOptions.vue';
 import DisplayModesSettings from '@/configs/tabs/audiovideo/DisplayModesSettings.vue';
 import FrameLimiterStep from '@/configs/tabs/audiovideo/FrameLimiterStep.vue';
-import { NCheckbox, NSwitch, NRadioGroup, NRadio } from 'naive-ui';
+import { NCheckbox, NSelect, NSwitch, NRadioGroup, NRadio } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
 import { storeToRefs } from 'pinia';
 
@@ -89,15 +89,22 @@ const displayAutomationEnabled = computed<boolean>({
   },
 });
 
-const useSudoVdaDriver = computed<boolean>({
+const useSudoVdaDriver = computed<boolean>(
+  () => config.value?.dd_use_sunshine_virtual_display_driver === false,
+);
+const virtualDisplayDriver = computed<'vibeshine' | 'sudovda'>({
   get() {
-    return config.value?.dd_use_sunshine_virtual_display_driver === false;
+    return useSudoVdaDriver.value ? 'sudovda' : 'vibeshine';
   },
-  set(useSudoVda) {
+  set(driver) {
     if (!config.value) return;
-    store.updateOption('dd_use_sunshine_virtual_display_driver', !useSudoVda);
+    store.updateOption('dd_use_sunshine_virtual_display_driver', driver !== 'sudovda');
   },
 });
+const virtualDisplayDriverOptions = computed(() => [
+  { label: t('config.virtual_display_driver_vibeshine_option'), value: 'vibeshine' },
+  { label: t('config.virtual_display_driver_sudovda_option'), value: 'sudovda' },
+]);
 const vulkanHdrLayerEnabled = computed<boolean>({
   get() {
     return config.value?.vulkan_hdr_layer !== false;
@@ -408,16 +415,18 @@ function selectVirtualDisplayLayout(v: unknown) {
             <PlatformLayout>
               <template #windows>
                 <div class="mt-4 border-t border-dark/5 pt-4 dark:border-light/5">
-                  <n-checkbox v-model:checked="useSudoVdaDriver">
-                    <div class="flex flex-col">
-                      <span class="text-sm font-medium">
-                        {{ $t('config.dd_use_sunshine_virtual_display_driver') }}
-                      </span>
-                      <span class="mt-1 text-[11px] leading-snug opacity-70">
-                        {{ $t('config.dd_use_sunshine_virtual_display_driver_desc') }}
-                      </span>
-                    </div>
-                  </n-checkbox>
+                  <div class="text-sm font-medium">
+                    {{ $t('config.virtual_display_driver_label') }}
+                  </div>
+                  <p class="mt-1 text-[11px] leading-snug opacity-70">
+                    {{ $t('config.virtual_display_driver_desc') }}
+                  </p>
+                  <n-select
+                    v-model:value="virtualDisplayDriver"
+                    :options="virtualDisplayDriverOptions"
+                    size="small"
+                    class="mt-2 max-w-md"
+                  />
                 </div>
                 <div class="mt-4 border-t border-dark/5 pt-4 dark:border-light/5">
                   <n-checkbox v-model:checked="vulkanHdrLayerEnabled">
