@@ -1583,7 +1583,18 @@ namespace config {
     string_f(vars, "adapter_name", video.adapter_name);
     string_f(vars, "output_name", video.output_name);
 
+    const auto virtual_display_mode_it = vars.find("virtual_display_mode");
+    const bool virtual_display_mode_specified =
+      virtual_display_mode_it != vars.end() && !virtual_display_mode_it->second.empty();
     generic_f(vars, "virtual_display_mode", video.virtual_display_mode, virtual_display_mode_from_view);
+#ifdef _WIN32
+    // The virtual-display pipeline is built around Windows 11 capture features (WGC
+    // frame-generation capture at 4x refresh), so unconfigured Windows 10 hosts stay on
+    // the physical display; an explicit config value always wins.
+    if (!virtual_display_mode_specified && !platf::is_windows_11_or_later()) {
+      video.virtual_display_mode = video_t::virtual_display_mode_e::disabled;
+    }
+#endif
     generic_f(vars, "virtual_display_layout", video.virtual_display_layout, virtual_display_layout_from_view);
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);

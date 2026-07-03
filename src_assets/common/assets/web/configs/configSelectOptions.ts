@@ -411,7 +411,7 @@ export function getConfigSelectOptions(
         { label: translateOr(t, 'frameLimiter.provider.auto', 'Auto'), value: 'auto' },
         { label: translateOr(t, 'frameLimiter.provider.rtss', 'RTSS'), value: 'rtss' },
         {
-          label: translateOr(t, 'frameLimiter.provider.nvcp', 'NVIDIA Control Panel'),
+          label: translateOr(t, 'frameLimiter.provider.nvcp', 'NVIDIA driver'),
           value: 'nvidia-control-panel',
         },
       ];

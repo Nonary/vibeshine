@@ -1080,7 +1080,10 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Default</td>
         <td colspan="2">@code{}
             per_client
-            @endcode</td>
+            @endcode
+            On Windows 10 hosts the default is <code>disabled</code> (physical display) instead, because the
+            Windows 11 capture features the virtual-display pipeline relies on (WGC frame-generation capture
+            at 4x refresh) are unavailable there. An explicit value always wins.</td>
     </tr>
     <tr>
         <td>Example</td>

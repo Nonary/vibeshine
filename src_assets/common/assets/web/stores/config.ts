@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { http } from '@/http';
 
 // Metadata describing build/runtime info returned by /api/meta
@@ -365,6 +365,22 @@ export const useConfigStore = defineStore('config', () => {
   const loading = ref(false);
   const error = ref<string | null>(null);
   const validationError = ref<string | null>(null);
+
+  // Windows 11 shipped as build 22000; anything below that on Windows is Windows 10.
+  const isWindows10Host = computed(() => {
+    const m = metadata.value;
+    if ((m?.platform || '') !== 'windows') return false;
+    const raw = m?.windows_build_number;
+    const build = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isFinite(build) && build > 0 && build < 22000;
+  });
+
+  // The backend defaults virtual_display_mode to disabled (physical display) on Windows 10
+  // and per_client elsewhere. Mirror that in the client-side default map so pruning values
+  // that equal the default doesn't silently flip the user's effective choice.
+  function applyOsAwareDefaults() {
+    defaultMap.virtual_display_mode = isWindows10Host.value ? 'disabled' : 'per_client';
+  }
 
   // --- Autosave (PATCH) queue ------------------------------------------------
   // Holds only non-manual changes since last flush. Keys are replaced with
@@ -889,6 +905,7 @@ export const useConfigStore = defineStore('config', () => {
           else if (raw.startsWith('lin')) norm = 'linux';
           (m as any).platform = norm;
           metadata.value = m;
+          applyOsAwareDefaults();
         }
       } catch (_) {
         /* ignore */
@@ -996,6 +1013,7 @@ export const useConfigStore = defineStore('config', () => {
     manualDirty,
     savingState,
     metadata,
+    isWindows10Host,
     loading,
     error,
     validationError,

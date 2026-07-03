@@ -15,7 +15,7 @@ import { storeToRefs } from 'pinia';
 
 const { t } = useI18n();
 const store = useConfigStore();
-const { config } = storeToRefs(store);
+const { config, isWindows10Host } = storeToRefs(store);
 const platform = computed(() => (config.value as any)?.platform || '');
 const ddConfigDisabled = computed(
   () => (config.value as any)?.dd_configuration_option === 'disabled',
@@ -294,18 +294,46 @@ function selectVirtualDisplayLayout(v: unknown) {
                   <p v-if="vdisplay" class="text-[11px] opacity-70 mt-2 leading-snug">
                     {{ currentDriverStatusHint }}
                   </p>
+                  <div
+                    v-if="isWindows10Host"
+                    class="rounded-md bg-warning/10 px-4 py-3 text-warning"
+                  >
+                    <div class="flex items-start gap-2">
+                      <i class="fa-solid fa-triangle-exclamation mt-0.5"></i>
+                      <div>
+                        <div class="text-[13px] font-semibold">
+                          {{ $t('config.win10_notice_title') }}
+                        </div>
+                        <p class="mt-1 text-[11px] leading-snug opacity-90">
+                          {{ $t('config.win10_notice_body') }}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </template>
             </PlatformLayout>
             <p class="text-[11px] opacity-70 mt-2 leading-snug">
-              {{ $t('config.virtual_display_mode_step_hint') }}
+              {{
+                isWindows10Host
+                  ? $t('config.virtual_display_mode_step_hint_win10')
+                  : $t('config.virtual_display_mode_step_hint')
+              }}
             </p>
             <n-radio-group v-model:value="virtualDisplayMode" class="grid gap-2 sm:grid-cols-3">
               <n-radio value="disabled">
-                {{ $t('config.virtual_display_mode_disabled') }}
+                {{
+                  isWindows10Host
+                    ? $t('config.virtual_display_mode_disabled_win10')
+                    : $t('config.virtual_display_mode_disabled')
+                }}
               </n-radio>
               <n-radio value="per_client">
-                {{ $t('config.virtual_display_mode_per_client') }}
+                {{
+                  isWindows10Host
+                    ? $t('config.virtual_display_mode_per_client_plain')
+                    : $t('config.virtual_display_mode_per_client')
+                }}
               </n-radio>
               <n-radio value="shared">
                 {{ $t('config.virtual_display_mode_shared') }}

@@ -6,7 +6,7 @@ import { NButton, NTable } from 'naive-ui';
 import { http } from '@/http';
 import { useI18n } from 'vue-i18n';
 
-const props = defineProps<{ stepLabel: string }>();
+defineProps<{ stepLabel: string }>();
 
 const { t } = useI18n();
 const store = useConfigStore();
@@ -28,12 +28,6 @@ const usingVirtualDisplay = computed(() => {
   return config.output_name === VIRTUAL_DISPLAY_SELECTION;
 });
 
-const noticeTitle = computed(() =>
-  usingVirtualDisplay.value ? t('frameLimiter.noticeTitleVirtual') : t('frameLimiter.noticeTitle'),
-);
-const noticeCopy = computed(() =>
-  usingVirtualDisplay.value ? t('frameLimiter.noticeCopyVirtual') : t('frameLimiter.noticeCopy'),
-);
 const syncLimiterHint = computed(() =>
   usingVirtualDisplay.value
     ? t('frameLimiter.syncLimiterHintVirtual')
@@ -50,8 +44,23 @@ watch(
   { immediate: true },
 );
 
-const status = ref<any>(null);
-const statusError = ref<string | null>(null);
+// Shape of /api/rtss/status (see confighttp_rtss.cpp); only the fields this step reads.
+interface FrameLimiterStatus {
+  enabled?: boolean;
+  configured_provider?: string;
+  active_provider?: string;
+  nvidia_available?: boolean;
+  nvcp_ready?: boolean;
+  rtss_available?: boolean;
+  path_exists?: boolean;
+  hooks_found?: boolean;
+  process_running?: boolean;
+  can_bootstrap_profile?: boolean;
+  profile_found?: boolean;
+}
+
+const status = ref<FrameLimiterStatus>();
+const statusError = ref<string>();
 const loading = ref(false);
 
 const frameLimiterEnabled = computed({
@@ -141,6 +150,51 @@ const rtssDetected = computed(() => {
   const s = status.value;
   return !!(s && s.path_exists && s.hooks_found);
 });
+const rtssUsable = computed(() => !!status.value?.rtss_available || rtssDetected.value);
+const nvDriverFallbackReady = computed(() => nvidiaDetected.value && nvcpReady.value);
+
+// Virtual screens always get a stream-start frame cap: NVIDIA Reflex through RTSS when it is
+// installed, otherwise the NVIDIA driver's limiter. Surface which path will be taken so users
+// understand what installing RTSS buys them.
+const limiterPath = computed(() => {
+  if (!status.value) {
+    return { text: t('frameLimiter.virtual.pathChecking'), tone: 'neutral' };
+  }
+  if (rtssUsable.value) {
+    return nvidiaDetected.value
+      ? { text: t('frameLimiter.virtual.pathRtssReflex'), tone: 'success' }
+      : { text: t('frameLimiter.virtual.pathRtss'), tone: 'success' };
+  }
+  if (nvDriverFallbackReady.value) {
+    return { text: t('frameLimiter.virtual.pathNvDriver'), tone: 'warning' };
+  }
+  return { text: t('frameLimiter.virtual.pathNone'), tone: 'warning' };
+});
+
+const limiterPathBadgeClass = computed(() => {
+  switch (limiterPath.value.tone) {
+    case 'success':
+      return 'bg-success/10 text-success';
+    case 'warning':
+      return 'bg-warning/10 text-warning';
+    default:
+      return 'bg-primary/10 opacity-80';
+  }
+});
+
+const virtualSteps = computed(() => [
+  t('frameLimiter.virtual.step1'),
+  !status.value || nvidiaDetected.value
+    ? t('frameLimiter.virtual.step2Nvidia')
+    : t('frameLimiter.virtual.step2Generic'),
+  t('frameLimiter.virtual.step3'),
+]);
+
+const rtssMissingText = computed(() =>
+  nvDriverFallbackReady.value
+    ? t('frameLimiter.rtssMissingNvFallback')
+    : t('frameLimiter.rtssMissingNoFallback'),
+);
 
 const effectiveProvider = computed(() => {
   const active = status.value?.active_provider;
@@ -176,9 +230,15 @@ const shouldShowRtssConfig = computed(() => {
   return provider === 'rtss' || provider === 'auto';
 });
 
-const showRtssInstallHint = computed(() => shouldShowRtssConfig.value && !rtssDetected.value);
+// Wait for the status probe before claiming RTSS is missing so the hint doesn't flash
+// (with the wrong fallback copy) while the page loads.
+const showRtssInstallHint = computed(
+  () => shouldShowRtssConfig.value && !!status.value && !rtssDetected.value,
+);
 
-const showRtssInstallInput = computed(() => shouldShowRtssConfig.value && !rtssDetected.value);
+const showRtssInstallInput = computed(
+  () => shouldShowRtssConfig.value && !!status.value && !rtssDetected.value,
+);
 
 const showSyncLimiterSelect = computed(() => {
   const provider = frameLimiterProvider.value;
@@ -193,9 +253,25 @@ const showSyncLimiterSelect = computed(() => {
 
 const showSyncLimiterHelp = computed(() => showSyncLimiterSelect.value);
 
+const autoVirtualLimiter = computed(() => !!config.frame_limiter_auto_virtual_framegen);
+
+// The auto-limit policy forces the limiter on for virtual screens even when the global
+// toggle is off, so treat that combination as healthy rather than warning about it.
+const virtualAutoCapCoversDisabledLimiter = computed(
+  () =>
+    usingVirtualDisplay.value &&
+    autoVirtualLimiter.value &&
+    (rtssUsable.value || nvDriverFallbackReady.value),
+);
+
 const statusBadgeClass = computed(() => {
-  if (!status.value || !frameLimiterEnabled.value) {
+  if (!status.value) {
     return 'bg-warning/10 text-warning';
+  }
+  if (!frameLimiterEnabled.value) {
+    return virtualAutoCapCoversDisabledLimiter.value
+      ? 'bg-success/10 text-success'
+      : 'bg-warning/10 text-warning';
   }
   if (effectiveProvider.value === 'nvidia-control-panel') {
     return nvidiaDetected.value && nvcpReady.value
@@ -221,7 +297,9 @@ const statusMessage = computed(() => {
     return t('frameLimiter.status.unknown');
   }
   if (!frameLimiterEnabled.value) {
-    return t('frameLimiter.status.limiterDisabled');
+    return virtualAutoCapCoversDisabledLimiter.value
+      ? t('frameLimiter.status.limiterDisabledVirtualAuto')
+      : t('frameLimiter.status.limiterDisabled');
   }
   if (effectiveProvider.value === 'nvidia-control-panel') {
     if (!nvidiaDetected.value) {
@@ -230,7 +308,10 @@ const statusMessage = computed(() => {
     if (!nvcpReady.value) {
       return t('frameLimiter.status.nvcpUnavailable');
     }
-    return t('frameLimiter.status.nvcpDetected');
+    // Distinguish "you picked the NVIDIA driver" from "Auto fell back because RTSS is missing".
+    return frameLimiterProvider.value === 'auto' && !rtssUsable.value
+      ? t('frameLimiter.status.nvcpFallback')
+      : t('frameLimiter.status.nvcpDetected');
   }
   if (effectiveProvider.value === 'rtss') {
     if (rtssDetected.value) {
@@ -245,22 +326,24 @@ const statusMessage = computed(() => {
 });
 
 watch(frameLimiterProvider, () => {
-  refreshStatus();
+  void refreshStatus();
 });
 
 watch(frameLimiterEnabled, () => {
-  refreshStatus();
+  void refreshStatus();
 });
 
 async function refreshStatus() {
   if (loading.value) return;
   loading.value = true;
-  statusError.value = null;
+  statusError.value = undefined;
   try {
-    const res = await http.get('/api/rtss/status', { params: { _ts: Date.now() } });
-    status.value = res?.data || null;
-  } catch (e: any) {
-    statusError.value = e?.message || t('frameLimiter.status.error');
+    const res = await http.get<FrameLimiterStatus>('/api/rtss/status', {
+      params: { _ts: Date.now() },
+    });
+    status.value = res?.data ?? undefined;
+  } catch (e) {
+    statusError.value = e instanceof Error ? e.message : t('frameLimiter.status.error');
   } finally {
     loading.value = false;
   }
@@ -268,12 +351,12 @@ async function refreshStatus() {
 
 function handleProviderDropdown(show: boolean) {
   if (show) {
-    refreshStatus();
+    void refreshStatus();
   }
 }
 
 onMounted(() => {
-  refreshStatus();
+  void refreshStatus();
 });
 </script>
 
@@ -283,9 +366,49 @@ onMounted(() => {
       {{ stepLabel }}: {{ t('frameLimiter.stepTitle') }}
     </legend>
 
-    <div class="mb-4 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3 text-[12px]">
-      <div class="font-medium">{{ noticeTitle }}</div>
-      <div class="mt-1 opacity-80">{{ noticeCopy }}</div>
+    <div
+      v-if="usingVirtualDisplay"
+      class="mb-4 rounded-lg border border-primary/30 bg-primary/10 px-4 py-4 text-[12px]"
+    >
+      <div class="flex items-start gap-3">
+        <i class="fas fa-tachometer-alt mt-0.5 text-[15px] opacity-80" />
+        <div>
+          <div class="text-[13px] font-semibold">{{ t('frameLimiter.virtual.title') }}</div>
+          <p class="mt-1 leading-relaxed opacity-80">{{ t('frameLimiter.virtual.why') }}</p>
+          <p class="mt-2 leading-relaxed opacity-80">{{ t('frameLimiter.virtual.whyCap') }}</p>
+        </div>
+      </div>
+      <div class="mt-3 font-medium">{{ t('frameLimiter.virtual.autoHeading') }}</div>
+      <ol class="mt-2 space-y-2">
+        <li v-for="(step, index) in virtualSteps" :key="index" class="flex items-start gap-2">
+          <span
+            class="mt-px flex h-4 w-4 flex-none items-center justify-center rounded-full bg-primary/20 text-[10px] font-semibold leading-none"
+          >
+            {{ index + 1 }}
+          </span>
+          <span class="leading-snug opacity-80">{{ step }}</span>
+        </li>
+      </ol>
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <span class="text-[11px] uppercase tracking-wide opacity-70">
+          {{ t('frameLimiter.virtual.pathLabel') }}
+        </span>
+        <span
+          :class="[
+            'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
+            limiterPathBadgeClass,
+          ]"
+        >
+          {{ limiterPath.text }}
+        </span>
+      </div>
+    </div>
+    <div
+      v-else
+      class="mb-4 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3 text-[12px]"
+    >
+      <div class="font-medium">{{ t('frameLimiter.noticeTitle') }}</div>
+      <div class="mt-1 opacity-80">{{ t('frameLimiter.noticeCopy') }}</div>
     </div>
 
     <div class="space-y-4">
@@ -321,15 +444,15 @@ onMounted(() => {
 
       <div class="grid gap-4 md:grid-cols-2">
         <ConfigFieldRenderer
-          setting-key="frame_limiter_enable"
           v-model="frameLimiterEnabled"
+          setting-key="frame_limiter_enable"
           :label="t('frameLimiter.enable')"
           :desc="t('frameLimiter.enableHint')"
         />
 
         <ConfigFieldRenderer
-          setting-key="frame_limiter_provider"
           v-model="frameLimiterProvider"
+          setting-key="frame_limiter_provider"
           :label="t('frameLimiter.providerLabel')"
           :desc="t('frameLimiter.providerHint')"
           :options="providerOptions"
@@ -338,23 +461,23 @@ onMounted(() => {
       </div>
 
       <ConfigFieldRenderer
-        setting-key="frame_limiter_fps_limit"
         v-model="config.frame_limiter_fps_limit"
+        setting-key="frame_limiter_fps_limit"
         :label="t('frameLimiter.limitLabel')"
         :desc="t('frameLimiter.limitHint')"
         :placeholder="t('frameLimiter.limitPlaceholder')"
       />
 
       <ConfigFieldRenderer
-        setting-key="frame_limiter_auto_virtual_framegen"
         v-model="config.frame_limiter_auto_virtual_framegen"
+        setting-key="frame_limiter_auto_virtual_framegen"
         :label="t('frameLimiter.autoVirtualFramegenLabel')"
         :desc="t('frameLimiter.autoVirtualFramegenHint')"
       />
 
       <ConfigFieldRenderer
-        setting-key="frame_limiter_disable_vsync"
         v-model="config.frame_limiter_disable_vsync"
+        setting-key="frame_limiter_disable_vsync"
         :label="t('frameLimiter.vsyncUllmLabel')"
         :desc="
           dummyPlugHdrActive
@@ -369,14 +492,14 @@ onMounted(() => {
       <div v-if="shouldShowRtssConfig" class="space-y-4">
         <ConfigFieldRenderer
           v-if="showRtssInstallInput"
-          setting-key="rtss_install_path"
           v-model="config.rtss_install_path"
+          setting-key="rtss_install_path"
           :label="t('frameLimiter.rtssPath')"
           :desc="t('frameLimiter.rtssPathHint')"
           :placeholder="t('frameLimiter.rtssPathPlaceholder')"
         />
         <p v-if="showRtssInstallHint" class="text-[11px] text-warning">
-          {{ t('frameLimiter.rtssMissing') }}
+          {{ rtssMissingText }}
         </p>
       </div>
 
@@ -480,8 +603,8 @@ onMounted(() => {
         </div>
         <ConfigFieldRenderer
           v-if="showSyncLimiterSelect"
-          setting-key="rtss_frame_limit_type"
           v-model="config.rtss_frame_limit_type"
+          setting-key="rtss_frame_limit_type"
           :label="t('frameLimiter.syncLimiterLabel')"
           :desc="syncLimiterHint"
           :options="syncLimiterOptions"
