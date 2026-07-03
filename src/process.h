@@ -13,9 +13,11 @@
 #include <chrono>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 // lib includes
 #include "boost_process_shim.h"
@@ -119,6 +121,8 @@ namespace proc {
     std::optional<std::string> output_name_override;
     std::string image_path;
     std::string id;
+    std::string art_version;
+    std::vector<std::string> id_aliases;
     // When present, this app should be launched via Playnite instead of direct cmd.
     std::string playnite_id;
     // When true, launch Playnite in fullscreen mode via the helper.
@@ -179,6 +183,8 @@ namespace proc {
     active_session_guard_t active_session_guard() const;
     std::vector<ctx_t> get_apps() const;
     std::string get_app_image(int app_id);
+    std::optional<ctx_t> resolve_app(const std::string &appid, const std::string &appuuid = "") const;
+    std::optional<ctx_t> resolve_app(int app_id) const;
     std::string get_last_run_app_name();
     bool last_run_app_frame_gen_limiter_fix() const;
     bool is_launch_deferred() const;
@@ -260,6 +266,7 @@ namespace proc {
 
   bool check_valid_png(const std::filesystem::path &path);
   std::string validate_app_image_path(std::string app_image_path);
+  std::string calculate_app_cover_fingerprint(std::string app_image_path);
   void refresh(const std::string &file_name);
   std::optional<proc::proc_t> parse(const std::string &file_name);
 

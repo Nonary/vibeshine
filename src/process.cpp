@@ -18,7 +18,9 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -65,6 +67,7 @@
   #include "platform/windows/virtual_display.h"
 #endif
 #include "rtsp.h"
+#include "state_storage.h"
 #include "system_tray.h"
 #include "utility.h"
 #include "uuid.h"
@@ -81,6 +84,8 @@
 namespace proc {
   using namespace std::literals;
   namespace pt = boost::property_tree;
+
+  std::optional<ctx_t> resolve_app_from_snapshot(const std::vector<ctx_t> &apps, const std::string &appid, const std::string &appuuid);
 
   namespace {
     constexpr const char *LOSSLESS_PROFILE_RECOMMENDED = "recommended";
@@ -1179,17 +1184,14 @@ namespace proc {
     _lossless_metadata = {};
 #endif
 
-    auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto app) {
-      return app.id == std::to_string(app_id);
-    });
-
-    if (iter == _apps.end()) {
+    auto resolved_app = resolve_app_from_snapshot(_apps, std::to_string(app_id), "");
+    if (!resolved_app) {
       BOOST_LOG(error) << "Couldn't find app with ID ["sv << app_id << ']';
       return 404;
     }
 
-    _app_id = app_id;
-    _app = *iter;
+    _app = *resolved_app;
+    _app_id = (int) util::from_view(_app.id);
     _active_client_uuid = launch_session ? launch_session->client_uuid : std::string();
     launch_session->gen1_framegen_fix = _app.gen1_framegen_fix;
     launch_session->gen2_framegen_fix = _app.gen2_framegen_fix;
@@ -2141,12 +2143,22 @@ namespace proc {
   // Returns http content-type header compatible image type.
   std::string proc_t::get_app_image(int app_id) {
     std::scoped_lock lk(_apps_mutex);
-    auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto app) {
-      return app.id == std::to_string(app_id);
-    });
-    auto app_image_path = iter == _apps.end() ? std::string() : iter->image_path;
+    auto resolved_app = resolve_app_from_snapshot(_apps, std::to_string(app_id), "");
+    auto app_image_path = resolved_app ? resolved_app->image_path : std::string();
 
     return validate_app_image_path(app_image_path);
+  }
+
+  std::optional<ctx_t> proc_t::resolve_app(const std::string &appid, const std::string &appuuid) const {
+    std::scoped_lock lk(_apps_mutex);
+    return resolve_app_from_snapshot(_apps, appid, appuuid);
+  }
+
+  std::optional<ctx_t> proc_t::resolve_app(int app_id) const {
+    if (app_id <= 0) {
+      return std::nullopt;
+    }
+    return resolve_app(std::to_string(app_id), "");
   }
 
   std::string proc_t::get_last_run_app_name() {
@@ -2374,6 +2386,339 @@ namespace proc {
     return result.checksum();
   }
 
+  struct app_id_alias_state_t {
+    std::string current_id;
+    std::string cover_fingerprint;
+    std::set<std::string> aliases;
+  };
+
+  std::string calculate_numeric_id_from_parts(const std::vector<std::string> &parts, int index) {
+    std::stringstream ss;
+    for (const auto &part : parts) {
+      ss << part;
+    }
+    ss << index;
+    return std::to_string(abs((int32_t) calculate_crc32(ss.str())));
+  }
+
+  std::string calculate_numeric_id_from_parts(const std::vector<std::string> &parts) {
+    std::stringstream ss;
+    for (const auto &part : parts) {
+      ss << part;
+    }
+    return std::to_string(abs((int32_t) calculate_crc32(ss.str())));
+  }
+
+  std::tuple<std::string, std::string> calculate_cover_versioned_app_id(const std::string &app_uuid, const std::string &cover_fingerprint, int index) {
+    std::vector<std::string> parts {app_uuid, "\n", cover_fingerprint};
+    auto id_no_index = calculate_numeric_id_from_parts(parts);
+    auto id_with_index = calculate_numeric_id_from_parts(parts, index);
+    return std::make_tuple(id_no_index, id_with_index);
+  }
+
+  std::string calculate_app_cover_fingerprint(std::string app_image_path) {
+    const auto file_path = validate_app_image_path(std::move(app_image_path));
+    if (file_path == DEFAULT_APP_IMAGE_PATH) {
+      return "default";
+    }
+
+    auto file_hash = calculate_sha256(file_path);
+    if (file_hash) {
+      return "sha256:" + file_hash.value();
+    }
+
+    BOOST_LOG(warning) << "Failed to compute SHA256 for image ["sv << file_path << "], falling back to path for app art version";
+    return "path:" + file_path;
+  }
+
+  std::map<std::string, app_id_alias_state_t> load_app_id_alias_state() {
+    std::map<std::string, app_id_alias_state_t> result;
+
+    statefile::migrate_recent_state_keys();
+    const auto &path = statefile::vibeshine_state_path();
+    if (path.empty()) {
+      return result;
+    }
+
+    std::lock_guard<std::mutex> lock(statefile::state_mutex());
+    pt::ptree tree;
+    if (!statefile::load_json_for_update(path, tree)) {
+      BOOST_LOG(warning) << "Unable to load state file for app ID aliases; using in-memory app IDs for this refresh.";
+      return result;
+    }
+
+    const auto aliases_root = tree.get_child_optional("root.app_id_aliases");
+    if (!aliases_root) {
+      return result;
+    }
+
+    for (const auto &app_node : *aliases_root) {
+      const auto &app_uuid = app_node.first;
+      if (app_uuid.empty()) {
+        continue;
+      }
+
+      app_id_alias_state_t state;
+      state.current_id = app_node.second.get<std::string>("current_id", "");
+      state.cover_fingerprint = app_node.second.get<std::string>("cover_fingerprint", "");
+      if (const auto aliases = app_node.second.get_child_optional("aliases")) {
+        for (const auto &alias_node : *aliases) {
+          auto alias = alias_node.second.get_value<std::string>("");
+          boost::algorithm::trim(alias);
+          if (!alias.empty()) {
+            state.aliases.insert(std::move(alias));
+          }
+        }
+      }
+
+      if (!state.current_id.empty()) {
+        result.emplace(app_uuid, std::move(state));
+      }
+    }
+
+    return result;
+  }
+
+  bool save_app_id_alias_state(const std::map<std::string, app_id_alias_state_t> &state) {
+    statefile::migrate_recent_state_keys();
+    const auto &path = statefile::vibeshine_state_path();
+    if (path.empty()) {
+      return false;
+    }
+
+    std::lock_guard<std::mutex> lock(statefile::state_mutex());
+    pt::ptree tree;
+    if (!statefile::load_json_for_update(path, tree)) {
+      BOOST_LOG(warning) << "Unable to update state file with app ID aliases.";
+      return false;
+    }
+
+    pt::ptree aliases_root;
+    for (const auto &[app_uuid, entry] : state) {
+      if (app_uuid.empty() || entry.current_id.empty()) {
+        continue;
+      }
+
+      pt::ptree app_node;
+      app_node.put("current_id", entry.current_id);
+      app_node.put("cover_fingerprint", entry.cover_fingerprint);
+
+      pt::ptree aliases_node;
+      for (const auto &alias : entry.aliases) {
+        if (alias.empty() || alias == entry.current_id) {
+          continue;
+        }
+        pt::ptree alias_node;
+        alias_node.put_value(alias);
+        aliases_node.push_back(std::make_pair("", std::move(alias_node)));
+      }
+      app_node.put_child("aliases", aliases_node);
+      aliases_root.push_back(std::make_pair(app_uuid, std::move(app_node)));
+    }
+
+    pt::ptree empty_root;
+    pt::ptree root = tree.get_child("root", empty_root);
+    root.put_child("app_id_aliases", std::move(aliases_root));
+    tree.put_child("root", std::move(root));
+
+    try {
+      statefile::write_json_atomic(path, tree);
+      return true;
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Failed to persist app ID aliases: " << e.what();
+      return false;
+    }
+  }
+
+  void remember_alias(app_id_alias_state_t &state, const std::string &alias) {
+    if (!alias.empty() && alias != state.current_id) {
+      state.aliases.insert(alias);
+    }
+  }
+
+  void assign_compatible_app_id(
+    ctx_t &ctx,
+    const std::string &app_name,
+    int index,
+    std::set<std::string> &ids,
+    std::map<std::string, app_id_alias_state_t> &alias_state,
+    std::set<std::string> &active_uuids,
+    bool &alias_state_changed
+  ) {
+    const auto legacy_ids = calculate_app_id(app_name, ctx.uuid, ctx.image_path, index);
+    if (ctx.uuid.empty()) {
+      if (ids.count(std::get<0>(legacy_ids)) == 0) {
+        ctx.id = std::get<0>(legacy_ids);
+      } else {
+        ctx.id = std::get<1>(legacy_ids);
+      }
+      ids.insert(ctx.id);
+      return;
+    }
+
+    active_uuids.insert(ctx.uuid);
+    ctx.art_version = calculate_app_cover_fingerprint(ctx.image_path);
+
+    auto [state_iter, inserted] = alias_state.try_emplace(
+      ctx.uuid,
+      app_id_alias_state_t {
+        std::get<0>(legacy_ids),
+        ctx.art_version,
+        {}
+      }
+    );
+    auto &state = state_iter->second;
+    if (inserted) {
+      alias_state_changed = true;
+    }
+
+    if (state.cover_fingerprint.empty()) {
+      state.cover_fingerprint = ctx.art_version;
+      alias_state_changed = true;
+    }
+    if (state.current_id.empty()) {
+      state.current_id = std::get<0>(legacy_ids);
+      alias_state_changed = true;
+    }
+
+    if (state.cover_fingerprint != ctx.art_version) {
+      const auto previous_current_id = state.current_id;
+      const auto versioned_ids = calculate_cover_versioned_app_id(ctx.uuid, ctx.art_version, index);
+      state.current_id = ids.count(std::get<0>(versioned_ids)) == 0 ? std::get<0>(versioned_ids) : std::get<1>(versioned_ids);
+      state.cover_fingerprint = ctx.art_version;
+      remember_alias(state, previous_current_id);
+      remember_alias(state, std::get<0>(legacy_ids));
+      alias_state_changed = true;
+    }
+
+    if (ids.count(state.current_id) != 0) {
+      BOOST_LOG(warning) << "App ID collision for UUID ["sv << ctx.uuid << "] and ID [" << state.current_id << "]; assigning indexed compatibility ID.";
+      remember_alias(state, state.current_id);
+      const auto versioned_ids = calculate_cover_versioned_app_id(ctx.uuid, ctx.art_version, index);
+      if (ids.count(std::get<1>(versioned_ids)) == 0) {
+        state.current_id = std::get<1>(versioned_ids);
+      } else {
+        state.current_id = std::get<1>(legacy_ids);
+      }
+      alias_state_changed = true;
+    }
+
+    ctx.id = state.current_id;
+    ctx.id_aliases.assign(state.aliases.begin(), state.aliases.end());
+    ids.insert(ctx.id);
+  }
+
+  void prune_and_filter_app_id_alias_state(
+    std::vector<ctx_t> &apps,
+    std::map<std::string, app_id_alias_state_t> &alias_state,
+    const std::set<std::string> &active_uuids,
+    bool &alias_state_changed
+  ) {
+    for (auto it = alias_state.begin(); it != alias_state.end();) {
+      if (active_uuids.count(it->first) == 0) {
+        it = alias_state.erase(it);
+        alias_state_changed = true;
+      } else {
+        ++it;
+      }
+    }
+
+    std::set<std::string> current_ids;
+    std::map<std::string, int> alias_counts;
+    for (const auto &app : apps) {
+      if (!app.id.empty()) {
+        current_ids.insert(app.id);
+      }
+      if (app.uuid.empty()) {
+        continue;
+      }
+      for (const auto &alias : app.id_aliases) {
+        if (!alias.empty()) {
+          ++alias_counts[alias];
+        }
+      }
+    }
+
+    for (auto &app : apps) {
+      if (app.uuid.empty()) {
+        continue;
+      }
+
+      std::vector<std::string> filtered_aliases;
+      std::set<std::string> seen_aliases;
+      for (const auto &alias : app.id_aliases) {
+        if (alias.empty() || alias == app.id || !seen_aliases.insert(alias).second) {
+          alias_state_changed = true;
+          continue;
+        }
+        if (current_ids.count(alias) != 0) {
+          BOOST_LOG(warning) << "Dropping app ID alias ["sv << alias << "] for UUID [" << app.uuid << "] because it collides with a current app ID.";
+          alias_state_changed = true;
+          continue;
+        }
+        if (alias_counts[alias] > 1) {
+          BOOST_LOG(warning) << "Dropping app ID alias ["sv << alias << "] for UUID [" << app.uuid << "] because it is shared by multiple apps.";
+          alias_state_changed = true;
+          continue;
+        }
+        filtered_aliases.push_back(alias);
+      }
+
+      if (filtered_aliases != app.id_aliases) {
+        app.id_aliases = std::move(filtered_aliases);
+      }
+
+      if (auto state_iter = alias_state.find(app.uuid); state_iter != alias_state.end()) {
+        state_iter->second.current_id = app.id;
+        state_iter->second.cover_fingerprint = app.art_version;
+        state_iter->second.aliases = std::set<std::string>(app.id_aliases.begin(), app.id_aliases.end());
+      }
+    }
+  }
+
+  std::optional<ctx_t> resolve_app_from_snapshot(const std::vector<ctx_t> &apps, const std::string &appid, const std::string &appuuid) {
+    if (!appuuid.empty()) {
+      auto iter = std::find_if(apps.begin(), apps.end(), [&appuuid](const auto &app) {
+        return app.uuid == appuuid;
+      });
+      if (iter != apps.end()) {
+        return *iter;
+      }
+    }
+
+    std::string appid_trimmed = appid;
+    boost::algorithm::trim(appid_trimmed);
+    if (appid_trimmed.empty() || appid_trimmed == "0") {
+      return std::nullopt;
+    }
+
+    auto current_iter = std::find_if(apps.begin(), apps.end(), [&appid_trimmed](const auto &app) {
+      return app.id == appid_trimmed;
+    });
+    if (current_iter != apps.end()) {
+      return *current_iter;
+    }
+
+    const ctx_t *alias_match = nullptr;
+    for (const auto &app : apps) {
+      if (std::find(app.id_aliases.begin(), app.id_aliases.end(), appid_trimmed) == app.id_aliases.end()) {
+        continue;
+      }
+      if (alias_match) {
+        BOOST_LOG(warning) << "Ignoring ambiguous app ID alias ["sv << appid_trimmed << "] shared by UUIDs ["
+                           << alias_match->uuid << "] and [" << app.uuid << "].";
+        return std::nullopt;
+      }
+      alias_match = &app;
+    }
+
+    if (alias_match) {
+      return *alias_match;
+    }
+
+    return std::nullopt;
+  }
+
   std::tuple<std::string, std::string> calculate_app_id(const std::string &app_name, const std::string &app_uuid, std::string app_image_path, int index) {
     // Prefer the persistent app UUID for stable client-facing IDs. Artwork can be
     // refreshed by Playnite sync, so image bytes must not affect launch identity.
@@ -2456,6 +2801,9 @@ namespace proc {
 
       std::set<std::string> ids;
       std::vector<proc::ctx_t> apps;
+      auto app_id_alias_state = load_app_id_alias_state();
+      std::set<std::string> active_app_uuids;
+      bool app_id_alias_state_changed = false;
       int i = 0;
       for (auto &[_, app_node] : apps_node) {
         const int json_index = i;
@@ -2727,22 +3075,18 @@ namespace proc {
           ctx.lossless_scaling_rtss_limit.reset();
         }
 
-        auto possible_ids = calculate_app_id(name, ctx.uuid, ctx.image_path, i++);
-        if (ids.count(std::get<0>(possible_ids)) == 0) {
-          // Avoid using index to generate id if possible
-          ctx.id = std::get<0>(possible_ids);
-        } else {
-          BOOST_LOG(info) << "Playnite URI launch started";
-          // Fallback to include index on collision
-          ctx.id = std::get<1>(possible_ids);
-        }
-        ids.insert(ctx.id);
+        assign_compatible_app_id(ctx, name, i++, ids, app_id_alias_state, active_app_uuids, app_id_alias_state_changed);
 
         ctx.name = std::move(name);
         ctx.prep_cmds = std::move(prep_cmds);
         ctx.detached = std::move(detached);
 
         apps.emplace_back(std::move(ctx));
+      }
+
+      prune_and_filter_app_id_alias_state(apps, app_id_alias_state, active_app_uuids, app_id_alias_state_changed);
+      if (app_id_alias_state_changed) {
+        save_app_id_alias_state(app_id_alias_state);
       }
 
       return std::optional<proc::proc_t>(std::in_place, std::move(this_env), std::move(apps));

@@ -63,21 +63,12 @@ namespace display_helper_integration::helpers {
     }
 
     bool session_targets_desktop(const rtsp_stream::launch_session_t &session) {
-      const auto apps = proc::proc.get_apps();
-      if (apps.empty()) {
-        return false;
-      }
-
-      const auto app_id = std::to_string(session.appid);
-      const auto it = std::find_if(apps.begin(), apps.end(), [&](const proc::ctx_t &app) {
-        return app.id == app_id;
-      });
-
-      if (it == apps.end()) {
+      auto app = proc::proc.resolve_app(session.appid);
+      if (!app) {
         return session.appid <= 0;
       }
 
-      return it->cmd.empty() && it->playnite_id.empty();
+      return app->cmd.empty() && app->playnite_id.empty();
     }
 
     bool output_name_targets_virtual(const std::string &output_name) {

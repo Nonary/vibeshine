@@ -2218,20 +2218,14 @@ namespace webrtc_stream {
 
       if (effective_app_id > 0) {
         try {
-          auto apps_snapshot = proc::proc.get_apps();
-          const std::string app_id_str = std::to_string(effective_app_id);
-          for (const auto &app_ctx : apps_snapshot) {
-            if (app_ctx.id != app_id_str) {
-              continue;
-            }
-            params.gen1_framegen_fix = app_ctx.gen1_framegen_fix;
-            params.gen2_framegen_fix = app_ctx.gen2_framegen_fix;
-            frame_generation_enabled = app_ctx.frame_generation_enabled;
-            lossless_scaling_framegen = app_ctx.lossless_scaling_framegen;
-            lossless_scaling_target_fps = app_ctx.lossless_scaling_target_fps;
-            lossless_scaling_rtss_limit = app_ctx.lossless_scaling_rtss_limit;
-            frame_generation_provider = app_ctx.frame_generation_provider;
-            break;
+          if (auto app_ctx = proc::proc.resolve_app(effective_app_id)) {
+            params.gen1_framegen_fix = app_ctx->gen1_framegen_fix;
+            params.gen2_framegen_fix = app_ctx->gen2_framegen_fix;
+            frame_generation_enabled = app_ctx->frame_generation_enabled;
+            lossless_scaling_framegen = app_ctx->lossless_scaling_framegen;
+            lossless_scaling_target_fps = app_ctx->lossless_scaling_target_fps;
+            lossless_scaling_rtss_limit = app_ctx->lossless_scaling_rtss_limit;
+            frame_generation_provider = app_ctx->frame_generation_provider;
           }
         } catch (...) {
         }
@@ -2386,40 +2380,36 @@ namespace webrtc_stream {
 
       if (launch_session->appid > 0) {
         try {
-          auto apps_snapshot = proc::proc.get_apps();
-          const std::string app_id_str = std::to_string(launch_session->appid);
-          for (const auto &app_ctx : apps_snapshot) {
-            if (app_ctx.id == app_id_str) {
-              launch_session->gen1_framegen_fix = app_ctx.gen1_framegen_fix;
-              launch_session->gen2_framegen_fix = app_ctx.gen2_framegen_fix;
-              launch_session->frame_generation_enabled = app_ctx.frame_generation_enabled;
-              launch_session->lossless_scaling_framegen = app_ctx.lossless_scaling_framegen;
-              launch_session->lossless_scaling_target_fps = app_ctx.lossless_scaling_target_fps;
-              launch_session->lossless_scaling_rtss_limit = app_ctx.lossless_scaling_rtss_limit;
-              launch_session->frame_generation_provider = app_ctx.frame_generation_provider;
-              rtsp_stream::launch_session_t::app_metadata_t metadata;
-              metadata.id = app_ctx.id;
-              metadata.name = app_ctx.name;
-              metadata.virtual_screen = app_ctx.virtual_screen;
-              metadata.has_command = !app_ctx.cmd.empty();
-              metadata.has_playnite = !app_ctx.playnite_id.empty();
-              metadata.playnite_fullscreen = app_ctx.playnite_fullscreen;
-              launch_session->virtual_display = app_ctx.virtual_screen;
-              if (!launch_session->virtual_display_mode_override && app_ctx.virtual_display_mode_override) {
-                launch_session->virtual_display_mode_override = app_ctx.virtual_display_mode_override;
-              }
-              if (!launch_session->virtual_display_layout_override && app_ctx.virtual_display_layout_override) {
-                launch_session->virtual_display_layout_override = app_ctx.virtual_display_layout_override;
-              }
-              if (!launch_session->dd_config_option_override && app_ctx.dd_config_option_override) {
-                launch_session->dd_config_option_override = app_ctx.dd_config_option_override;
-              }
-              if (!launch_session->output_name_override && app_ctx.output_name_override) {
-                launch_session->output_name_override = *app_ctx.output_name_override;
-              }
-              launch_session->app_metadata = std::move(metadata);
-              break;
+          if (auto app_ctx = proc::proc.resolve_app(launch_session->appid)) {
+            launch_session->appid = util::from_view(app_ctx->id);
+            launch_session->gen1_framegen_fix = app_ctx->gen1_framegen_fix;
+            launch_session->gen2_framegen_fix = app_ctx->gen2_framegen_fix;
+            launch_session->frame_generation_enabled = app_ctx->frame_generation_enabled;
+            launch_session->lossless_scaling_framegen = app_ctx->lossless_scaling_framegen;
+            launch_session->lossless_scaling_target_fps = app_ctx->lossless_scaling_target_fps;
+            launch_session->lossless_scaling_rtss_limit = app_ctx->lossless_scaling_rtss_limit;
+            launch_session->frame_generation_provider = app_ctx->frame_generation_provider;
+            rtsp_stream::launch_session_t::app_metadata_t metadata;
+            metadata.id = app_ctx->id;
+            metadata.name = app_ctx->name;
+            metadata.virtual_screen = app_ctx->virtual_screen;
+            metadata.has_command = !app_ctx->cmd.empty();
+            metadata.has_playnite = !app_ctx->playnite_id.empty();
+            metadata.playnite_fullscreen = app_ctx->playnite_fullscreen;
+            launch_session->virtual_display = app_ctx->virtual_screen;
+            if (!launch_session->virtual_display_mode_override && app_ctx->virtual_display_mode_override) {
+              launch_session->virtual_display_mode_override = app_ctx->virtual_display_mode_override;
             }
+            if (!launch_session->virtual_display_layout_override && app_ctx->virtual_display_layout_override) {
+              launch_session->virtual_display_layout_override = app_ctx->virtual_display_layout_override;
+            }
+            if (!launch_session->dd_config_option_override && app_ctx->dd_config_option_override) {
+              launch_session->dd_config_option_override = app_ctx->dd_config_option_override;
+            }
+            if (!launch_session->output_name_override && app_ctx->output_name_override) {
+              launch_session->output_name_override = *app_ctx->output_name_override;
+            }
+            launch_session->app_metadata = std::move(metadata);
           }
         } catch (...) {
         }
@@ -2557,7 +2547,9 @@ namespace webrtc_stream {
       }
 
       const int current_app_id = proc::proc.running();
-      const int requested_app_id = options.app_id.value_or(0);
+      const int raw_requested_app_id = options.app_id.value_or(0);
+      const auto requested_app_ctx = raw_requested_app_id > 0 ? proc::proc.resolve_app(raw_requested_app_id) : std::optional<proc::ctx_t> {};
+      const int requested_app_id = requested_app_ctx ? (int) util::from_view(requested_app_ctx->id) : raw_requested_app_id;
       const bool resume_only = options.resume.value_or(false);
 
       if (resume_only) {
@@ -4753,7 +4745,9 @@ namespace webrtc_stream {
       }
       if (start_params.fps == 0) {
         const int current_app_id = proc::proc.running();
-        const int requested_app_id = options.app_id.value_or(0);
+        const int raw_requested_app_id = options.app_id.value_or(0);
+        const auto requested_app_ctx = raw_requested_app_id > 0 ? proc::proc.resolve_app(raw_requested_app_id) : std::optional<proc::ctx_t> {};
+        const int requested_app_id = requested_app_ctx ? (int) util::from_view(requested_app_ctx->id) : raw_requested_app_id;
         const int effective_app_id = requested_app_id > 0 ? requested_app_id : current_app_id;
         start_params = compute_stream_start_params(options, effective_app_id);
       }
