@@ -776,6 +776,17 @@ namespace video {
     bool force_idr = false;
   };
 
+  // Sticky per-session HDR state, persists across capture reinits so a transient SDR
+  // display reading cannot downgrade an HDR stream's colorspace or poison its metadata.
+  struct hdr_latch_t {
+    // Set once the session has actually established HDR.
+    bool latched = false;
+    // Metadata captured while the display genuinely read HDR, reused during reinits
+    // where the display transiently reads SDR.
+    bool metadata_valid = false;
+    SS_HDR_METADATA metadata {};
+  };
+
   struct sync_session_ctx_t {
     safe::signal_t *join_event;
     safe::mail_raw_t::event_t<bool> shutdown_event;
@@ -788,9 +799,9 @@ namespace video {
     config_t config;
     int frame_nr;
     void *channel_data;
-    // Sticky "this session has established HDR" flag, persists across capture
-    // reinits so a transient SDR display reading cannot downgrade an HDR stream.
-    bool hdr_latched = false;
+    hdr_latch_t hdr_latch;
+    // Last HDR info raised to this session's client, used to suppress duplicates on reinit.
+    std::optional<hdr_info_raw_t> last_hdr_info;
   };
 
   struct sync_session_t {
@@ -2574,24 +2585,12 @@ namespace video {
     frame->colorspace = ctx->colorspace;
     frame->chroma_location = ctx->chroma_sample_location;
 
-    // Attach HDR metadata to the AVFrame
+    // Attach HDR metadata to the AVFrame, using the metadata resolved at encode-device
+    // creation so the SEI always matches the control-channel metadata (and never reflects
+    // a display that transiently reads SDR during a reinit).
     if (colorspace_is_hdr(colorspace)) {
-      SS_HDR_METADATA hdr_metadata;
-      bool have_hdr_metadata = false;
-#ifdef SUNSHINE_ENABLE_NV_TRUEHDR
-      if (config.rtx_hdr_active) {
-        // SDR source + TrueHDR: synthesize from the conversion's target peak so the encoded
-        // mastering-display/content-light SEI matches the control-channel metadata, instead of
-        // embedding the (irrelevant) capture panel's luminance.
-        hdr_metadata = synthesize_rtx_hdr_metadata();
-        have_hdr_metadata = true;
-      } else
-#endif
-      if (disp->get_hdr_metadata(hdr_metadata)) {
-        have_hdr_metadata = true;
-      }
-
-      if (have_hdr_metadata) {
+      if (encode_device->hdr_metadata_valid) {
+        const auto &hdr_metadata = encode_device->hdr_metadata;
         auto mdm = av_mastering_display_metadata_create_side_data(frame.get());
 
         mdm->display_primaries[0][0] = av_make_q(hdr_metadata.displayPrimaries[0].x, 50000);
@@ -2617,7 +2616,7 @@ namespace video {
           clm->MaxFALL = hdr_metadata.maxFrameAverageLightLevel;
         }
       } else {
-        BOOST_LOG(error) << "Couldn't get display hdr metadata when colorspace selection indicates it should have one";
+        BOOST_LOG(warning) << "No HDR metadata available to attach to the encoded stream";
       }
     }
 
@@ -2965,10 +2964,11 @@ namespace video {
     };
   }
 
-  std::unique_ptr<platf::encode_device_t> make_encode_device(platf::display_t &disp, const encoder_t &encoder, const config_t &config, bool *hdr_latch = nullptr) {
+  std::unique_ptr<platf::encode_device_t> make_encode_device(platf::display_t &disp, const encoder_t &encoder, const config_t &config, hdr_latch_t *hdr_latch = nullptr) {
     std::unique_ptr<platf::encode_device_t> result;
 
-    bool hdr_display = disp.is_hdr();
+    const bool display_is_hdr = disp.is_hdr();
+    bool hdr_display = display_is_hdr;
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
     // When NVIDIA TrueHDR (RTX HDR) is enabled for an HDR stream, synthesize HDR from an
     // SDR capture. The source display may intentionally remain SDR; the actual SDR->HDR
@@ -2988,8 +2988,8 @@ namespace video {
     // (Genuinely-SDR sources never latch, because hdr_display is never true for them.)
     if (config.dynamicRange > 0 && hdr_latch) {
       if (hdr_display) {
-        *hdr_latch = true;
-      } else if (*hdr_latch) {
+        hdr_latch->latched = true;
+      } else if (hdr_latch->latched) {
         BOOST_LOG(info) << "Display momentarily reported SDR during reinit; keeping HDR colorspace for this HDR session.";
         hdr_display = true;
       }
@@ -3039,9 +3039,52 @@ namespace video {
     if (result) {
       result->colorspace = colorspace;
       result->rtx_hdr_active = config.rtx_hdr_active;
+
+      // Resolve the stream's HDR metadata once, here, so every consumer (control-channel
+      // HDR mode message, mastering-display SEI) reports the same values. Never query the
+      // display while it reads SDR: on Windows get_hdr_metadata() succeeds unconditionally
+      // and would return SDR-mode luminance, which clients like moonlight-xbox push straight
+      // into the HDMI HDR InfoFrame.
+      if (colorspace_is_hdr(colorspace)) {
+#ifdef SUNSHINE_ENABLE_NV_TRUEHDR
+        if (config.rtx_hdr_active) {
+          // SDR source + TrueHDR: report the conversion's target peak, not the capture panel's.
+          result->hdr_metadata = synthesize_rtx_hdr_metadata();
+          result->hdr_metadata_valid = true;
+          BOOST_LOG(info) << "RTX HDR: synthesized HDR10 metadata (peak " << result->hdr_metadata.maxDisplayLuminance << " nits) for SDR source";
+        } else
+#endif
+        if (display_is_hdr && disp.get_hdr_metadata(result->hdr_metadata)) {
+          result->hdr_metadata_valid = true;
+          if (hdr_latch) {
+            hdr_latch->metadata = result->hdr_metadata;
+            hdr_latch->metadata_valid = true;
+          }
+        } else if (hdr_latch && hdr_latch->metadata_valid) {
+          // Latched HDR colorspace but the display transiently reads SDR; reuse the
+          // metadata captured when this session established HDR.
+          result->hdr_metadata = hdr_latch->metadata;
+          result->hdr_metadata_valid = true;
+        } else {
+          BOOST_LOG(error) << "Couldn't get display hdr metadata when colorspace selection indicates it should have one";
+        }
+      }
     }
 
     return result;
+  }
+
+  // Raise hdr_info unless it matches what this session last raised. Some clients
+  // (moonlight-xbox) perform a full HDMI display mode-set for every HDR mode message,
+  // so a redundant one on reinit costs seconds of black screen mid-stream.
+  void raise_hdr_info_if_changed(safe::mail_raw_t::event_t<hdr_info_t> &event, std::optional<hdr_info_raw_t> &last_hdr_info, hdr_info_t hdr_info) {
+    if (last_hdr_info && last_hdr_info->enabled == hdr_info->enabled &&
+        std::memcmp(&last_hdr_info->metadata, &hdr_info->metadata, sizeof(hdr_info->metadata)) == 0) {
+      return;
+    }
+
+    last_hdr_info = *hdr_info;
+    event->raise(std::move(hdr_info));
   }
 
   std::optional<sync_session_t> make_synced_session(platf::display_t *disp, const encoder_t &encoder, platf::img_t &img, sync_session_ctx_t &ctx) {
@@ -3049,7 +3092,7 @@ namespace video {
 
     encode_session.ctx = &ctx;
 
-    auto encode_device = make_encode_device(*disp, encoder, ctx.config, &ctx.hdr_latched);
+    auto encode_device = make_encode_device(*disp, encoder, ctx.config, &ctx.hdr_latch);
     if (!encode_device) {
       return std::nullopt;
     }
@@ -3057,26 +3100,12 @@ namespace video {
     // absolute mouse coordinates require that the dimensions of the screen are known
     ctx.touch_port_events->raise(make_port(disp, ctx.config));
 
-    // Update client with our current HDR display state
+    // Update client with our current HDR stream state
     hdr_info_t hdr_info = std::make_unique<hdr_info_raw_t>(false);
-    if (colorspace_is_hdr(encode_device->colorspace)) {
-#ifdef SUNSHINE_ENABLE_NV_TRUEHDR
-      if (ctx.config.rtx_hdr_active) {
-        // SDR source + TrueHDR: ignore the capture display's metadata entirely and report the
-        // peak the TrueHDR conversion targets -- otherwise get_hdr_metadata() succeeds for the
-        // (SDR-forced) panel and the client tone-maps against the panel cap instead of the dial.
-        hdr_info->metadata = synthesize_rtx_hdr_metadata();
-        hdr_info->enabled = true;
-        BOOST_LOG(info) << "RTX HDR: synthesized HDR10 metadata (peak " << hdr_info->metadata.maxDisplayLuminance << " nits) for SDR source";
-      } else
-#endif
-      if (disp->get_hdr_metadata(hdr_info->metadata)) {
-        hdr_info->enabled = true;
-      } else {
-        BOOST_LOG(error) << "Couldn't get display hdr metadata when colorspace selection indicates it should have one";
-      }
+    if (encode_device->hdr_metadata_valid) {
+      hdr_info = std::make_unique<hdr_info_raw_t>(true, encode_device->hdr_metadata);
     }
-    ctx.hdr_events->raise(std::move(hdr_info));
+    raise_hdr_info_if_changed(ctx.hdr_events, ctx.last_hdr_info, std::move(hdr_info));
 
     auto session = make_encode_session(disp, encoder, ctx.config, img.width, img.height, std::move(encode_device));
     if (!session) {
@@ -3372,9 +3401,10 @@ namespace video {
 
     int frame_nr = 1;
 
-    // Sticky "this session has established HDR" flag, persists across capture
-    // reinits so a transient SDR display reading cannot downgrade an HDR stream.
-    bool hdr_latched = false;
+    // Per-session HDR latch and last-raised HDR info, persisting across capture reinits
+    // so a transient SDR display reading cannot downgrade or re-signal an HDR stream.
+    hdr_latch_t hdr_latch;
+    std::optional<hdr_info_raw_t> last_hdr_info;
 
     auto touch_port_event = mail->event<input::touch_port_t>(mail::touch_port);
     auto hdr_event = mail->event<hdr_info_t>(mail::hdr);
@@ -3406,7 +3436,7 @@ namespace video {
       }
       auto &encoder = *enc_ptr;
 
-      auto encode_device = make_encode_device(*display, encoder, config, &hdr_latched);
+      auto encode_device = make_encode_device(*display, encoder, config, &hdr_latch);
       if (!encode_device) {
         return;
       }
@@ -3414,26 +3444,12 @@ namespace video {
       // absolute mouse coordinates require that the dimensions of the screen are known
       touch_port_event->raise(make_port(display.get(), config));
 
-      // Update client with our current HDR display state
+      // Update client with our current HDR stream state
       hdr_info_t hdr_info = std::make_unique<hdr_info_raw_t>(false);
-      if (colorspace_is_hdr(encode_device->colorspace)) {
-#ifdef SUNSHINE_ENABLE_NV_TRUEHDR
-        if (config.rtx_hdr_active) {
-          // SDR source + TrueHDR: report the conversion's target peak, not the capture panel's.
-          // This is the path NVENC (PARALLEL_ENCODING) actually takes, so without it the RTX HDR
-          // peak-brightness dial is dropped and the client is pinned to the panel's metadata.
-          hdr_info->metadata = synthesize_rtx_hdr_metadata();
-          hdr_info->enabled = true;
-          BOOST_LOG(info) << "RTX HDR: synthesized HDR10 metadata (peak " << hdr_info->metadata.maxDisplayLuminance << " nits) for SDR source";
-        } else
-#endif
-        if (display->get_hdr_metadata(hdr_info->metadata)) {
-          hdr_info->enabled = true;
-        } else {
-          BOOST_LOG(error) << "Couldn't get display hdr metadata when colorspace selection indicates it should have one";
-        }
+      if (encode_device->hdr_metadata_valid) {
+        hdr_info = std::make_unique<hdr_info_raw_t>(true, encode_device->hdr_metadata);
       }
-      hdr_event->raise(std::move(hdr_info));
+      raise_hdr_info_if_changed(hdr_event, last_hdr_info, std::move(hdr_info));
 
       encode_run(
         frame_nr,
