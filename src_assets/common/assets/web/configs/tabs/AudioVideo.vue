@@ -266,19 +266,19 @@ function selectVirtualDisplayLayout(v: unknown) {
     <!-- Display configuration: clear, guided, pre-stream focused -->
     <section class="mb-8">
       <div class="rounded-md overflow-hidden border border-dark/10 dark:border-light/10">
-        <div class="bg-surface/40 px-4 py-3">
+        <div class="bg-surface/40 px-3 py-3 sm:px-4">
           <h3 class="text-sm font-medium">{{ $t('config.dd_display_setup_title') }}</h3>
           <p class="text-[11px] opacity-70 mt-1">
             {{ $t('config.dd_display_setup_intro') }}
           </p>
         </div>
 
-        <div class="p-4">
+        <div class="p-3 sm:p-4">
           <!-- Step 1: Which display to capture -->
-          <fieldset class="mb-4 border border-dark/35 dark:border-light/25 rounded-xl p-4">
-            <legend class="px-2 text-sm font-medium">
+          <section class="mb-5 min-w-0">
+            <h4 class="mb-3 break-words text-sm font-semibold leading-snug">
               {{ $t('config.dd_step_1') }}: {{ $t('config.dd_choose_display') }}
-            </legend>
+            </h4>
             <PlatformLayout>
               <template #windows>
                 <div class="mt-3 space-y-3">
@@ -470,23 +470,23 @@ function selectVirtualDisplayLayout(v: unknown) {
                 </div>
               </template>
             </PlatformLayout>
-          </fieldset>
+          </section>
 
-          <div class="my-4 border-t border-dark/5 dark:border-light/5" />
+          <div class="my-5 border-t border-dark/10 dark:border-light/10" />
 
           <!-- Step 2: What to do before the stream starts -->
           <div>
             <DisplayDeviceOptions section="pre" />
           </div>
 
-          <div class="my-4 border-t border-dark/5 dark:border-light/5" />
+          <div class="my-5 border-t border-dark/10 dark:border-light/10" />
 
           <!-- Step 3: Optional adjustments -->
           <div>
             <DisplayDeviceOptions section="options" />
           </div>
 
-          <div class="my-4 border-t border-dark/5 dark:border-light/5" />
+          <div class="my-5 border-t border-dark/10 dark:border-light/10" />
 
           <FrameLimiterStep :step-label="frameLimiterStepLabel" />
         </div>

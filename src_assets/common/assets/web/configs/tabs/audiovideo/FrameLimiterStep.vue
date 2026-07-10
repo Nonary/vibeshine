@@ -361,10 +361,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <fieldset class="border border-dark/35 dark:border-light/25 rounded-xl p-4">
-    <legend class="px-2 text-sm font-medium">
+  <section class="min-w-0">
+    <h4 class="mb-3 break-words text-sm font-semibold leading-snug">
       {{ stepLabel }}: {{ t('frameLimiter.stepTitle') }}
-    </legend>
+    </h4>
 
     <div
       v-if="usingVirtualDisplay"
@@ -416,14 +416,22 @@ onMounted(() => {
         v-if="status || statusError"
         :class="['rounded-lg px-4 py-3 text-[12px]', statusBadgeClass]"
       >
-        <div class="flex items-center justify-between gap-3">
-          <div class="flex items-center gap-2">
+        <div class="flex items-start justify-between gap-3">
+          <div class="flex min-w-0 items-start gap-2">
             <i :class="statusIcon" />
             <span class="font-medium leading-tight">{{ statusMessage }}</span>
           </div>
-          <n-button size="tiny" type="default" strong :loading="loading" @click="refreshStatus">
+          <n-button
+            size="tiny"
+            type="default"
+            strong
+            class="flex-none"
+            :loading="loading"
+            :aria-label="t('frameLimiter.actions.refresh')"
+            @click="refreshStatus"
+          >
             <i class="fas fa-sync" />
-            <span class="ml-1">{{ t('frameLimiter.actions.refresh') }}</span>
+            <span class="ml-1 hidden sm:inline">{{ t('frameLimiter.actions.refresh') }}</span>
           </n-button>
         </div>
         <p
@@ -505,102 +513,8 @@ onMounted(() => {
 
       <div
         v-if="showSyncLimiterHelp"
-        class="rounded-lg border border-primary/30 bg-primary/5 p-4 text-[12px]"
+        class="rounded-lg bg-primary/5 p-3 text-[12px] sm:p-4"
       >
-        <div class="text-[13px] font-medium">{{ t('rtss.sync_limiter_help_heading') }}</div>
-        <div class="mt-1 opacity-80">{{ t('rtss.sync_limiter_help_blurb') }}</div>
-        <div class="mt-3 desktop-sync-table">
-          <div class="overflow-x-auto">
-            <n-table
-              size="small"
-              :single-line="false"
-              :bordered="false"
-              class="min-w-full text-left whitespace-normal break-words"
-            >
-              <thead>
-                <tr
-                  class="border-b border-primary/30 text-[11px] uppercase tracking-wide opacity-70"
-                >
-                  <th scope="col" class="pb-2 pr-4 font-medium">
-                    {{ t('rtss.sync_limiter_help_mode') }}
-                  </th>
-                  <th scope="col" class="pb-2 pr-4 font-medium">
-                    {{ t('rtss.sync_limiter_help_latency') }}
-                  </th>
-                  <th scope="col" class="pb-2 pr-4 font-medium">
-                    {{ t('rtss.sync_limiter_help_stutter') }}
-                  </th>
-                  <th scope="col" class="pb-2 pr-4 font-medium">
-                    {{ t('rtss.sync_limiter_help_advantages') }}
-                  </th>
-                  <th scope="col" class="pb-2 pr-4 font-medium">
-                    {{ t('rtss.sync_limiter_help_disadvantages') }}
-                  </th>
-                  <th scope="col" class="pb-2 font-medium">
-                    {{ t('rtss.sync_limiter_help_usage') }}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="row in syncLimiterHelpRows"
-                  :key="row.id"
-                  class="border-b border-primary/20 last:border-0"
-                >
-                  <th scope="row" class="py-3 pr-4 text-[12px] font-medium align-top">
-                    <span class="font-semibold">{{ row.label }}</span>
-                  </th>
-                  <td class="py-3 pr-4 align-top text-[12px]">{{ row.latency }}</td>
-                  <td class="py-3 pr-4 align-top text-[12px]">{{ row.stutter }}</td>
-                  <td class="py-3 pr-4 align-top text-[12px]">{{ row.advantages }}</td>
-                  <td class="py-3 pr-4 align-top text-[12px]">{{ row.disadvantages }}</td>
-                  <td class="py-3 align-top text-[12px]">{{ row.use }}</td>
-                </tr>
-              </tbody>
-            </n-table>
-          </div>
-        </div>
-        <div class="mt-3 space-y-3 mobile-sync-list">
-          <div
-            v-for="row in syncLimiterHelpRows"
-            :key="row.id"
-            class="rounded-lg border border-primary/20 bg-primary/10 p-3"
-          >
-            <div class="text-[13px] font-semibold">{{ row.label }}</div>
-            <dl class="mt-2 space-y-2">
-              <div>
-                <dt class="text-[11px] uppercase tracking-wide opacity-70">
-                  {{ t('rtss.sync_limiter_help_latency') }}
-                </dt>
-                <dd class="text-[12px] leading-snug">{{ row.latency }}</dd>
-              </div>
-              <div>
-                <dt class="text-[11px] uppercase tracking-wide opacity-70">
-                  {{ t('rtss.sync_limiter_help_stutter') }}
-                </dt>
-                <dd class="text-[12px] leading-snug">{{ row.stutter }}</dd>
-              </div>
-              <div>
-                <dt class="text-[11px] uppercase tracking-wide opacity-70">
-                  {{ t('rtss.sync_limiter_help_advantages') }}
-                </dt>
-                <dd class="text-[12px] leading-snug">{{ row.advantages }}</dd>
-              </div>
-              <div>
-                <dt class="text-[11px] uppercase tracking-wide opacity-70">
-                  {{ t('rtss.sync_limiter_help_disadvantages') }}
-                </dt>
-                <dd class="text-[12px] leading-snug">{{ row.disadvantages }}</dd>
-              </div>
-              <div>
-                <dt class="text-[11px] uppercase tracking-wide opacity-70">
-                  {{ t('rtss.sync_limiter_help_usage') }}
-                </dt>
-                <dd class="text-[12px] leading-snug">{{ row.use }}</dd>
-              </div>
-            </dl>
-          </div>
-        </div>
         <ConfigFieldRenderer
           v-if="showSyncLimiterSelect"
           v-model="config.rtss_frame_limit_type"
@@ -609,9 +523,114 @@ onMounted(() => {
           :desc="syncLimiterHint"
           :options="syncLimiterOptions"
         />
+
+        <details class="sync-comparison mt-3 border-t border-primary/20 pt-3">
+          <summary class="flex cursor-pointer list-none items-center justify-between gap-3 py-1">
+            <span class="text-[13px] font-medium">{{ t('rtss.sync_limiter_help_heading') }}</span>
+            <i class="fas fa-chevron-down text-[11px] opacity-60 transition-transform" />
+          </summary>
+          <div class="mt-1 opacity-80">{{ t('rtss.sync_limiter_help_blurb') }}</div>
+          <div class="mt-3 desktop-sync-table">
+            <div class="overflow-x-auto">
+              <n-table
+                size="small"
+                :single-line="false"
+                :bordered="false"
+                class="min-w-full text-left whitespace-normal break-words"
+              >
+                <thead>
+                  <tr
+                    class="border-b border-primary/30 text-[11px] uppercase tracking-wide opacity-70"
+                  >
+                    <th scope="col" class="pb-2 pr-4 font-medium">
+                      {{ t('rtss.sync_limiter_help_mode') }}
+                    </th>
+                    <th scope="col" class="pb-2 pr-4 font-medium">
+                      {{ t('rtss.sync_limiter_help_latency') }}
+                    </th>
+                    <th scope="col" class="pb-2 pr-4 font-medium">
+                      {{ t('rtss.sync_limiter_help_stutter') }}
+                    </th>
+                    <th scope="col" class="pb-2 pr-4 font-medium">
+                      {{ t('rtss.sync_limiter_help_advantages') }}
+                    </th>
+                    <th scope="col" class="pb-2 pr-4 font-medium">
+                      {{ t('rtss.sync_limiter_help_disadvantages') }}
+                    </th>
+                    <th scope="col" class="pb-2 font-medium">
+                      {{ t('rtss.sync_limiter_help_usage') }}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in syncLimiterHelpRows"
+                    :key="row.id"
+                    class="border-b border-primary/20 last:border-0"
+                  >
+                    <th scope="row" class="py-3 pr-4 text-[12px] font-medium align-top">
+                      <span class="font-semibold">{{ row.label }}</span>
+                    </th>
+                    <td class="py-3 pr-4 align-top text-[12px]">{{ row.latency }}</td>
+                    <td class="py-3 pr-4 align-top text-[12px]">{{ row.stutter }}</td>
+                    <td class="py-3 pr-4 align-top text-[12px]">{{ row.advantages }}</td>
+                    <td class="py-3 pr-4 align-top text-[12px]">{{ row.disadvantages }}</td>
+                    <td class="py-3 align-top text-[12px]">{{ row.use }}</td>
+                  </tr>
+                </tbody>
+              </n-table>
+            </div>
+          </div>
+          <div class="mt-3 space-y-2 mobile-sync-list">
+            <details
+              v-for="row in syncLimiterHelpRows"
+              :key="row.id"
+              class="mode-card rounded-lg border border-primary/20 bg-primary/10"
+            >
+              <summary
+                class="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5"
+              >
+                <span class="text-[13px] font-semibold">{{ row.label }}</span>
+                <i class="fas fa-chevron-down text-[10px] opacity-60 transition-transform" />
+              </summary>
+              <dl class="space-y-2 border-t border-primary/15 px-3 py-3">
+                <div>
+                  <dt class="text-[11px] uppercase tracking-wide opacity-70">
+                    {{ t('rtss.sync_limiter_help_latency') }}
+                  </dt>
+                  <dd class="text-[12px] leading-snug">{{ row.latency }}</dd>
+                </div>
+                <div>
+                  <dt class="text-[11px] uppercase tracking-wide opacity-70">
+                    {{ t('rtss.sync_limiter_help_stutter') }}
+                  </dt>
+                  <dd class="text-[12px] leading-snug">{{ row.stutter }}</dd>
+                </div>
+                <div>
+                  <dt class="text-[11px] uppercase tracking-wide opacity-70">
+                    {{ t('rtss.sync_limiter_help_advantages') }}
+                  </dt>
+                  <dd class="text-[12px] leading-snug">{{ row.advantages }}</dd>
+                </div>
+                <div>
+                  <dt class="text-[11px] uppercase tracking-wide opacity-70">
+                    {{ t('rtss.sync_limiter_help_disadvantages') }}
+                  </dt>
+                  <dd class="text-[12px] leading-snug">{{ row.disadvantages }}</dd>
+                </div>
+                <div>
+                  <dt class="text-[11px] uppercase tracking-wide opacity-70">
+                    {{ t('rtss.sync_limiter_help_usage') }}
+                  </dt>
+                  <dd class="text-[12px] leading-snug">{{ row.use }}</dd>
+                </div>
+              </dl>
+            </details>
+          </div>
+        </details>
       </div>
     </div>
-  </fieldset>
+  </section>
 </template>
 
 <style scoped>
@@ -624,7 +643,12 @@ onMounted(() => {
   flex-direction: column;
 }
 
-@media (min-width: 768px) {
+.sync-comparison[open] > summary i,
+.mode-card[open] > summary i {
+  transform: rotate(180deg);
+}
+
+@media (min-width: 1280px) {
   .desktop-sync-table {
     display: block;
   }
