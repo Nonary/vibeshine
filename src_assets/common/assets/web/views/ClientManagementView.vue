@@ -1,5 +1,5 @@
 <template>
-  <div class="clients-page space-y-5 px-2 pb-10 md:px-4">
+  <div class="clients-page space-y-5 pb-10">
     <section class="clients-hero">
       <div class="clients-hero__content">
         <div class="clients-hero__identity">
