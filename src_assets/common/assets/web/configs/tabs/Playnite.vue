@@ -1,19 +1,19 @@
 <template>
-  <div class="space-y-8 playnite-tab">
+  <div class="playnite-tab">
     <n-alert v-if="platform && platform !== 'windows'" type="info" :show-icon="true">
       {{ $t('playnite.only_windows') }}
     </n-alert>
 
-    <section v-if="platform === 'windows'" class="space-y-3">
-      <h3 class="text-sm font-semibold uppercase tracking-wider">
+    <section v-if="platform === 'windows'" class="playnite-section">
+      <h3 class="playnite-section-title">
         {{ $t('playnite.status_title') }}
       </h3>
       <div
-        class="bg-light/70 dark:bg-surface/70 border border-dark/10 dark:border-light/10 rounded-lg p-4 space-y-4 playnite-card"
+        class="playnite-card playnite-status-card bg-light/70 dark:bg-surface/70 border border-dark/10 dark:border-light/10"
       >
         <!-- Integration is always on; no enable/disable toggle -->
-        <div class="text-sm grid md:grid-cols-3 gap-3">
-          <div class="flex items-center gap-2">
+        <div class="flex min-w-0 flex-wrap items-center gap-3 text-sm">
+          <div class="flex min-w-0 flex-wrap items-center gap-2">
             <b>{{ $t('playnite.status_overall') }}</b>
             <n-tooltip v-if="statusKind === 'waiting'" trigger="hover">
               <template #trigger>
@@ -35,7 +35,7 @@
         <div class="text-xs opacity-80" v-if="diagnosticText">
           {{ diagnosticText }}
         </div>
-        <div class="flex items-center gap-2">
+        <div class="playnite-primary-actions">
           <n-button
             v-if="canLaunch"
             size="small"
@@ -75,7 +75,7 @@
             >
           </template>
         </div>
-        <div class="pt-2 border-t border-dark/10 dark:border-light/10 mt-2">
+        <div class="playnite-card-footer">
           <div class="flex items-center justify-end gap-2 playnite-actions">
             <PlayniteReinstallButton
               v-if="status.extensions_dir"
@@ -108,20 +108,20 @@
         </div>
       </div>
     </section>
-    <section v-if="platform === 'windows'" class="space-y-6">
-      <h3 class="text-sm font-semibold uppercase tracking-wider">
+    <section v-if="platform === 'windows'" class="playnite-section">
+      <h3 class="playnite-section-title">
         {{ $t('playnite.settings_title') }}
       </h3>
 
       <!-- Auto-sync card -->
       <div
-        class="bg-light/70 dark:bg-surface/70 border border-dark/10 dark:border-light/10 rounded-lg section-card"
+        class="playnite-card section-card bg-light/70 dark:bg-surface/70 border border-dark/10 dark:border-light/10"
       >
-        <div class="px-4 pt-3 pb-2 flex items-baseline justify-between section-header">
+        <div class="section-header">
           <h4 class="text-sm font-semibold">
             {{ $t('playnite.section_auto_sync') || 'Auto-sync' }}
           </h4>
-          <div class="flex items-center gap-2">
+          <div class="section-header-actions">
             <n-button size="tiny" type="default" strong @click="resetAutoSyncSection">
               <i class="fas fa-undo" />
               <span class="ml-1">{{ $t('playnite.reset_defaults') || 'Reset to defaults' }}</span>
@@ -140,8 +140,8 @@
             </n-button>
           </div>
         </div>
-        <div class="px-4 pb-4 section-body">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 items-start">
+        <div class="section-body">
+          <div class="settings-grid">
             <div>
               <Checkbox
                 v-model="config.playnite_auto_sync"
@@ -178,7 +178,7 @@
                 :min="0"
                 :max="50"
                 :show-button="true"
-                class="w-32"
+                class="playnite-number-input"
                 :disabled="!autoSyncEnabled"
               />
               <div class="form-text">
@@ -196,7 +196,7 @@
                 :min="0"
                 :max="3650"
                 :show-button="true"
-                class="w-32"
+                class="playnite-number-input"
                 :disabled="!autoSyncEnabled"
               />
               <div class="form-text">
@@ -258,14 +258,16 @@
                     class="w-full"
                   />
                 </template>
-                <span
-                  >{ !autoSyncEnabled ? $t('playnite.enable_autosync_hint') || 'Enable Auto-sync to
-                  edit these settings.' : disabledHint }</span
-                >
+                <span>{{
+                  !autoSyncEnabled
+                    ? $t('playnite.enable_autosync_hint') ||
+                      'Enable Auto-sync to edit these settings.'
+                    : disabledHint
+                }}</span>
               </n-tooltip>
               <div class="form-text">{{ $t('playnite.sync_plugins_help') }}</div>
             </div>
-            <div class="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+            <div class="md:col-span-2 settings-grid">
               <div>
                 <label for="playnite_autosync_delete_after_days" class="form-label">{{
                   $t('playnite.delete_after_days')
@@ -276,7 +278,7 @@
                   :min="0"
                   :max="3650"
                   :show-button="true"
-                  class="w-32"
+                  class="playnite-number-input"
                   :disabled="!autoSyncEnabled"
                 />
                 <div class="form-text">
@@ -335,9 +337,9 @@
 
       <!-- Launch Behavior card -->
       <div
-        class="bg-light/70 dark:bg-surface/70 border border-dark/10 dark:border-light/10 rounded-lg section-card"
+        class="playnite-card section-card bg-light/70 dark:bg-surface/70 border border-dark/10 dark:border-light/10"
       >
-        <div class="px-4 pt-3 pb-2 flex items-baseline justify-between section-header">
+        <div class="section-header">
           <h4 class="text-sm font-semibold">
             {{ $t('playnite.section_launch_behavior') || 'Launch Behavior' }}
           </h4>
@@ -346,8 +348,8 @@
             <span class="ml-1">{{ $t('playnite.reset_defaults') || 'Reset to defaults' }}</span>
           </n-button>
         </div>
-        <div class="px-4 pb-4 section-body">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 items-start">
+        <div class="section-body">
+          <div class="settings-grid">
             <div class="md:col-span-2">
               <Checkbox
                 v-model="config.playnite_fullscreen_entry_enabled"
@@ -368,7 +370,7 @@
                 :min="0"
                 :max="30"
                 :show-button="true"
-                class="w-32"
+                class="playnite-number-input"
               />
               <div class="form-text">
                 {{
@@ -411,9 +413,9 @@
 
       <!-- Exclusions & Filters card -->
       <div
-        class="bg-light/70 dark:bg-surface/70 border border-dark/10 dark:border-light/10 rounded-lg"
+        class="playnite-card section-card bg-light/70 dark:bg-surface/70 border border-dark/10 dark:border-light/10"
       >
-        <div class="px-4 pt-3 pb-2 flex items-baseline justify-between">
+        <div class="section-header">
           <h4 class="text-sm font-semibold">
             {{ $t('playnite.section_exclusions_filters') || 'Exclusions & Filters' }}
           </h4>
@@ -422,8 +424,8 @@
             <span class="ml-1">{{ $t('playnite.reset_defaults') || 'Reset to defaults' }}</span>
           </n-button>
         </div>
-        <div class="px-4 pb-4">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 items-start">
+        <div class="section-body">
+          <div class="settings-grid">
             <div>
               <label for="playnite_exclude_categories" class="form-label">{{
                 $t('playnite.exclude_categories') || 'Exclude categories'
@@ -447,10 +449,12 @@
                     class="w-full"
                   />
                 </template>
-                <span
-                  >{ !autoSyncEnabled ? $t('playnite.enable_autosync_hint') || 'Enable Auto-sync to
-                  edit these settings.' : disabledHint }}</span
-                >
+                <span>{{
+                  !autoSyncEnabled
+                    ? $t('playnite.enable_autosync_hint') ||
+                      'Enable Auto-sync to edit these settings.'
+                    : disabledHint
+                }}</span>
               </n-tooltip>
               <div class="form-text">
                 {{
@@ -481,10 +485,12 @@
                     class="w-full"
                   />
                 </template>
-                <span
-                  >{ !autoSyncEnabled ? $t('playnite.enable_autosync_hint') || 'Enable Auto-sync to
-                  edit these settings.' : disabledHint }}</span
-                >
+                <span>{{
+                  !autoSyncEnabled
+                    ? $t('playnite.enable_autosync_hint') ||
+                      'Enable Auto-sync to edit these settings.'
+                    : disabledHint
+                }}</span>
               </n-tooltip>
               <div class="form-text">
                 {{
@@ -513,11 +519,11 @@
                   </n-alert>
                 </div>
                 <div class="playnite-exclusions">
-                  <div class="flex items-center justify-between mb-2">
+                  <div class="playnite-exclusions-header">
                     <div class="text-sm font-medium">
                       {{ $t('playnite.exclude_games_table_title') || 'Excluded Games' }}
                     </div>
-                    <div class="flex items-center gap-2">
+                    <div class="playnite-exclusions-actions">
                       <n-button
                         size="small"
                         type="default"
@@ -1535,46 +1541,201 @@ function confirmAddExclusions() {
 </script>
 
 <style scoped>
-/* No global heights for transfer lists; only adjust on mobile below */
-/* Compact nested cards and responsive actions on small screens */
+.playnite-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
+}
+
+.playnite-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.playnite-section-title {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.25rem;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.playnite-card {
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+.playnite-status-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.25rem;
+}
+
+.playnite-primary-actions,
+.section-header-actions,
+.playnite-actions,
+.playnite-exclusions-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.inline-info {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.inline-info code {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: 0.25rem;
+  padding: 0.25rem 0.375rem;
+  background: rgb(0 0 0 / 5%);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+:global(.dark) .inline-info code {
+  background: rgb(255 255 255 / 6%);
+}
+
+.playnite-card-footer {
+  margin-top: 0.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgb(var(--color-dark) / 10%);
+}
+
+:global(.dark) .playnite-card-footer {
+  border-top-color: rgb(var(--color-light) / 10%);
+}
+
+.section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid rgb(var(--color-dark) / 10%);
+}
+
+:global(.dark) .section-header {
+  border-bottom-color: rgb(var(--color-light) / 10%);
+}
+
+.section-header h4 {
+  margin: 0;
+  line-height: 1.5rem;
+}
+
+.section-body {
+  padding: 1.25rem;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 1.5rem 2rem;
+}
+
+.settings-grid > * {
+  min-width: 0;
+}
+
+.playnite-number-input {
+  width: 100%;
+  max-width: 10rem;
+}
+
+.playnite-exclusions {
+  overflow: hidden;
+  border: 1px solid rgb(var(--color-dark) / 10%);
+  border-radius: 0.5rem;
+  padding: 1rem;
+}
+
+:global(.dark) .playnite-exclusions {
+  border-color: rgb(var(--color-light) / 10%);
+}
+
+.playnite-exclusions-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.playnite-tab :deep(.form-text) {
+  line-height: 1.45;
+}
+
+@media (max-width: 767px) {
+  .settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 640px) {
-  .playnite-tab .playnite-card {
-    padding: 0.75rem !important; /* reduce p-4 */
+  .playnite-tab {
+    gap: 2rem;
   }
-  .playnite-tab .section-card .section-header {
-    padding-left: 0.75rem !important;
-    padding-right: 0.75rem !important;
-    padding-top: 0.5rem !important;
-    padding-bottom: 0.25rem !important;
+
+  .playnite-status-card,
+  .section-body {
+    padding: 1rem;
   }
-  .playnite-tab .section-card .section-body {
-    padding-left: 0.75rem !important;
-    padding-right: 0.75rem !important;
-    padding-bottom: 0.75rem !important;
+
+  .section-header {
+    align-items: flex-start;
+    padding: 0.875rem 1rem;
   }
-  /* Stack info rows to avoid cramping */
-  .playnite-tab .inline-info {
+
+  .settings-grid {
+    gap: 1.25rem;
+  }
+
+  .inline-info {
     flex-direction: column;
-    align-items: stretch;
-    gap: 0.25rem;
+    align-items: flex-start;
+    gap: 0.5rem;
   }
-  .playnite-tab .inline-info code {
+
+  .inline-info code {
+    width: 100%;
     max-width: 100%;
   }
-  /* Plugin actions: stack and let text wrap to prevent overflow */
-  .playnite-tab .playnite-actions {
+
+  .playnite-actions,
+  .playnite-exclusions-actions {
+    width: 100%;
     flex-direction: column;
     align-items: stretch;
   }
-  .playnite-tab .playnite-actions :deep(.n-button) {
+
+  .playnite-actions :deep(.n-button),
+  .playnite-exclusions-actions :deep(.n-button) {
     width: 100%;
   }
-  .playnite-tab .playnite-actions :deep(.n-button .n-button__content) {
-    white-space: normal; /* allow wrapping */
+
+  .playnite-actions :deep(.n-button .n-button__content) {
+    white-space: normal;
     line-height: 1.2;
     text-align: center;
   }
 
-  /* No special mobile styles needed for exclusions table */
+  .playnite-exclusions-header {
+    align-items: stretch;
+  }
 }
 </style>
