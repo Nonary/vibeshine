@@ -126,7 +126,7 @@ namespace {
       state.session_snapshot.width = request.session->width;
       state.session_snapshot.height = request.session->height;
       state.session_snapshot.fps = request.session->fps;
-      state.session_snapshot.enable_hdr = request.session->enable_hdr;
+      state.session_snapshot.enable_hdr = rtsp_stream::effective_hdr_requested(*request.session);
       state.session_snapshot.enable_sops = request.session->enable_sops;
       state.session_snapshot.virtual_display = request.session->virtual_display;
       state.session_snapshot.virtual_display_device_id = request.session->virtual_display_device_id;
@@ -1053,7 +1053,7 @@ namespace {
       .width = width_override ? *width_override : session.width,
       .height = height_override ? *height_override : session.height,
       .fps = effective_fps,
-      .enable_hdr = session.enable_hdr,
+      .enable_hdr = rtsp_stream::effective_hdr_requested(session),
       .enable_sops = session.enable_sops,
       .virtual_display = virtual_display_override ? *virtual_display_override : session.virtual_display,
       .virtual_display_device_id = device_id_override ? *device_id_override : session.virtual_display_device_id,

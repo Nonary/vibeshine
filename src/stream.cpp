@@ -731,6 +731,9 @@ namespace stream {
                                       : session->config.monitor.bitrate;
       info.video_format = session->config.monitor.videoFormat;
       info.dynamic_range = session->config.monitor.dynamicRange;
+      info.hdr = session->config.monitor.dynamicRange != 0 &&
+                 !session->config.monitor.prefer_sdr_10bit &&
+                 !session->config.monitor.force_sdr;
       info.yuv444 = session->config.monitor.chromaSamplingType != 0;
       info.audio_channels = session->config.audio.channels;
       info.state = state_name(session->state.load(std::memory_order_relaxed));
@@ -2707,7 +2710,9 @@ namespace stream {
                                         ? session.config.monitor.client_requested_bitrate
                                         : session.config.monitor.bitrate;
         meta.codec = std::string(video_format_name(session.config.monitor.videoFormat));
-        meta.hdr = session.config.monitor.dynamicRange != 0;
+        meta.hdr = session.config.monitor.dynamicRange != 0 &&
+                   !session.config.monitor.prefer_sdr_10bit &&
+                   !session.config.monitor.force_sdr;
         meta.yuv444 = session.config.monitor.chromaSamplingType != 0;
         meta.audio_channels = session.config.audio.channels;
         meta.server_version = current_server_version();

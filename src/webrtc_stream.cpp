@@ -57,6 +57,7 @@
 #include "httpcommon.h"
 #include "input.h"
 #include "logging.h"
+#include "nvhttp.h"
 #include "process.h"
 #include "rtsp.h"
 #include "session_history.h"
@@ -214,6 +215,7 @@ namespace webrtc_stream {
       int dynamic_range = 0;
       int chroma_sampling_type = 0;
       bool prefer_sdr_10bit = false;
+      bool force_sdr = false;
       bool rtx_hdr_active = false;
       int audio_channels = 0;
       bool host_audio = false;
@@ -482,7 +484,7 @@ namespace webrtc_stream {
         base_vd_fps_millihz,
         framegen_refresh_active,
         refresh_multiplier,
-        session->enable_hdr,
+        rtsp_stream::effective_hdr_requested(*session),
         false,
         !shared_mode
       );
@@ -510,7 +512,7 @@ namespace webrtc_stream {
         recovery_params.base_fps_millihz = base_vd_fps_millihz;
         recovery_params.framegen_refresh_active = framegen_refresh_active;
         recovery_params.framegen_refresh_multiplier = refresh_multiplier;
-        recovery_params.hdr_requested = session->enable_hdr;
+        recovery_params.hdr_requested = rtsp_stream::effective_hdr_requested(*session);
         recovery_params.client_uid = session->unique_id;
         recovery_params.client_name = client_label;
         recovery_params.hdr_profile = session->hdr_profile;
@@ -2147,7 +2149,14 @@ namespace webrtc_stream {
     }
 #endif
 
-    video::config_t build_video_config(const SessionOptions &options) {
+    bool resolve_prefer_10bit_sdr(const SessionOptions &options) {
+      const auto client_override = options.client_uuid ?
+                                     nvhttp::get_client_prefer_10bit_sdr_override(*options.client_uuid) :
+                                     std::nullopt;
+      return client_override.value_or(config::video.prefer_10bit_sdr);
+    }
+
+    video::config_t build_video_config(const SessionOptions &options, std::optional<bool> resolved_prefer_10bit_sdr = std::nullopt) {
       video::config_t config {};
       config.width = options.width.value_or(kDefaultWidth);
       config.height = options.height.value_or(kDefaultHeight);
@@ -2166,17 +2175,35 @@ namespace webrtc_stream {
       config.videoFormat = codec_to_video_format(options.codec);
       config.dynamicRange = options.hdr.value_or(false) ? 1 : 0;
       config.prefer_sdr_10bit = false;
+      config.force_sdr = false;
       config.chromaSamplingType = 0;
       config.enableIntraRefresh = 0;
 
-      const bool prefer_10bit_sdr = config::video.prefer_10bit_sdr;
-      if (prefer_10bit_sdr && config.dynamicRange == 0) {
-        const bool hevc_main10 = config.videoFormat == 1 && video::active_hevc_mode >= 3;
-        const bool av1_main10 = config.videoFormat == 2 && video::active_av1_mode >= 3;
-        if (hevc_main10 || av1_main10) {
+      bool prefer_10bit_sdr = resolved_prefer_10bit_sdr.value_or(resolve_prefer_10bit_sdr(options));
+      const bool hevc_main10 = config.videoFormat == 1 && video::active_hevc_mode >= 3;
+      const bool av1_main10 = config.videoFormat == 2 && video::active_av1_mode >= 3;
+      const bool supports_main10 = hevc_main10 || av1_main10;
+#ifdef _WIN32
+      if (config::video.dd.hdr_request_override == config::video_t::dd_t::hdr_request_override_e::force_on) {
+        prefer_10bit_sdr = false;
+        if (supports_main10) {
+          config.dynamicRange = 1;
+        } else {
+          config.dynamicRange = 0;
+          BOOST_LOG(warning) << "WebRTC HDR force-on requested, but Main10 is unavailable; using 8-bit SDR encode";
+        }
+      } else if (config::video.dd.hdr_request_override == config::video_t::dd_t::hdr_request_override_e::force_off) {
+        config.force_sdr = true;
+      }
+#endif
+      if (prefer_10bit_sdr) {
+        if (supports_main10) {
           BOOST_LOG(info) << "Preferring 10-bit SDR encode for WebRTC capture";
           config.dynamicRange = 1;
           config.prefer_sdr_10bit = true;
+        } else {
+          config.dynamicRange = 0;
+          BOOST_LOG(info) << "10-bit SDR preference active for WebRTC, but Main10 is unavailable; using 8-bit SDR encode";
         }
       }
 
@@ -2191,7 +2218,8 @@ namespace webrtc_stream {
       config.rtx_hdr_active = config::runtime_config_override_enabled("rtx_hdr") &&
                               config::video.rtx_hdr.enabled &&
                               config.dynamicRange > 0 &&
-                              !config.prefer_sdr_10bit;
+                              !config.prefer_sdr_10bit &&
+                              !config.force_sdr;
     }
 
     audio::config_t build_audio_config(const SessionOptions &options) {
@@ -2315,7 +2343,8 @@ namespace webrtc_stream {
     std::shared_ptr<rtsp_stream::launch_session_t> build_launch_session(
       const SessionOptions &options,
       int app_id,
-      int audio_channels
+      int audio_channels,
+      std::optional<bool> resolved_prefer_10bit_sdr = std::nullopt
     ) {
       auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
       launch_session->id = ++webrtc_launch_session_id;
@@ -2347,6 +2376,7 @@ namespace webrtc_stream {
       launch_session->gcmap = 0;
       launch_session->enable_sops = false;
       launch_session->enable_hdr = options.hdr.value_or(false);
+      launch_session->prefer_sdr_10bit = resolved_prefer_10bit_sdr.value_or(resolve_prefer_10bit_sdr(options));
 
 #ifdef _WIN32
       {
@@ -2354,9 +2384,12 @@ namespace webrtc_stream {
         switch (config::video.dd.hdr_request_override) {
           case override_e::force_on:
             launch_session->enable_hdr = true;
+            launch_session->prefer_sdr_10bit = false;
+            launch_session->force_sdr = false;
             break;
           case override_e::force_off:
             launch_session->enable_hdr = false;
+            launch_session->force_sdr = true;
             break;
           case override_e::automatic:
             break;
@@ -2447,6 +2480,7 @@ namespace webrtc_stream {
       key.dynamic_range = video_config.dynamicRange;
       key.chroma_sampling_type = video_config.chromaSamplingType;
       key.prefer_sdr_10bit = video_config.prefer_sdr_10bit;
+      key.force_sdr = video_config.force_sdr;
       key.rtx_hdr_active = video_config.rtx_hdr_active;
       key.audio_channels = options.audio_channels.value_or(kDefaultAudioChannels);
       key.host_audio = options.host_audio;
@@ -2575,7 +2609,8 @@ namespace webrtc_stream {
       const int effective_app_id = requested_app_id > 0 ? requested_app_id : current_app_id;
       webrtc_capture.stream_start_params = compute_stream_start_params(options, effective_app_id);
       const int audio_channels = options.audio_channels.value_or(kDefaultAudioChannels);
-      auto video_config = build_video_config(options);
+      const bool prefer_10bit_sdr = resolve_prefer_10bit_sdr(options);
+      auto video_config = build_video_config(options, prefer_10bit_sdr);
       auto audio_config = build_audio_config(options);
       apply_rtsp_video_overrides(video_config, rtsp_config);
       apply_rtx_hdr_stream_policy(video_config);
@@ -2597,7 +2632,7 @@ namespace webrtc_stream {
         stop_webrtc_capture_locked(!rtsp_active, false);
       }
 
-      auto launch_session = build_launch_session(options, effective_app_id, audio_channels);
+      auto launch_session = build_launch_session(options, effective_app_id, audio_channels, prefer_10bit_sdr);
 
       const bool allow_display_changes = !rtsp_active && !resume_only;
       if (allow_display_changes && launch_session->output_name_override) {
@@ -4691,7 +4726,9 @@ namespace webrtc_stream {
     session.state.fps = session.video_config.framerate;
     session.state.bitrate_kbps = session.video_config.bitrate;
     session.state.codec = video_format_to_codec(session.video_config.videoFormat);
-    session.state.hdr = session.video_config.dynamicRange != 0;
+    session.state.hdr = session.video_config.dynamicRange != 0 &&
+                        !session.video_config.prefer_sdr_10bit &&
+                        !session.video_config.force_sdr;
     session.state.yuv444 = session.video_config.chromaSamplingType != 0;
 #ifdef _WIN32
     if (const auto stream_gpu_model = platf::dxgi::current_display_adapter_name(); !stream_gpu_model.empty()) {

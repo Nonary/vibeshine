@@ -88,6 +88,8 @@ namespace display_helper_integration::helpers {
       snapshot.client_uuid = session.client_uuid;
       snapshot.client_name = session.client_name;
       snapshot.enable_hdr = session.enable_hdr;
+      snapshot.prefer_sdr_10bit = session.prefer_sdr_10bit;
+      snapshot.force_sdr = session.force_sdr;
       snapshot.enable_sops = session.enable_sops;
       snapshot.width = session.width;
       snapshot.height = session.height;

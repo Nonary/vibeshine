@@ -2986,7 +2986,7 @@ namespace video {
     // has actually established HDR, keep the HDR colorspace for the rest of the session so a
     // momentary SDR reading during a reinit can no longer downgrade the wire colorspace.
     // (Genuinely-SDR sources never latch, because hdr_display is never true for them.)
-    if (config.dynamicRange > 0 && hdr_latch) {
+    if (config.dynamicRange > 0 && !config.prefer_sdr_10bit && !config.force_sdr && hdr_latch) {
       if (hdr_display) {
         hdr_latch->latched = true;
       } else if (hdr_latch->latched) {

@@ -46,6 +46,9 @@ namespace video {
     // Set when we bumped dynamicRange to 10-bit for SDR-only encoding (prefer_10bit_sdr)
     bool prefer_sdr_10bit;
 
+    // Force SDR colorspace/signaling independently of negotiated encoder bit depth.
+    bool force_sdr = false;
+
     // Stream-scoped TrueHDR-capable pipeline enable. Runtime foreground-window
     // checks can still bypass per-frame conversion while this remains true, which
     // keeps capture and encoder format stable across desktop/app focus changes.

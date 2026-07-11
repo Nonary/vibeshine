@@ -67,6 +67,10 @@ namespace rtsp_stream {
     std::string surround_params;
     bool continuous_audio;
     bool enable_hdr;
+    // Resolved global/per-client policy, independent of the client's HDR marker.
+    bool prefer_sdr_10bit = false;
+    // Explicit HDR-off override. Unlike prefer_sdr_10bit, this does not request Main10.
+    bool force_sdr = false;
     bool enable_sops;
     bool client_display_mode_override;
     bool client_requests_virtual_display;
@@ -115,6 +119,10 @@ namespace rtsp_stream {
     std::shared_future<display_helper_gate_status_e> display_helper_gate;
 #endif
   };
+
+  inline bool effective_hdr_requested(const launch_session_t &session) {
+    return session.enable_hdr && !session.prefer_sdr_10bit && !session.force_sdr;
+  }
 
   inline bool framegen_capture_fix_enabled(const launch_session_t &session) {
     return session.gen1_framegen_fix || session.gen2_framegen_fix;

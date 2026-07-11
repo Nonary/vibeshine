@@ -511,7 +511,7 @@ namespace confighttp {
     output["requested_bitrate_kbps"] = info.requested_bitrate_kbps;
     output["video_format"] = info.video_format;
     output["codec"] = stream::canonical_codec_name(stream::video_format_name(info.video_format));
-    output["hdr"] = info.dynamic_range != 0;
+    output["hdr"] = info.hdr;
     output["yuv444"] = info.yuv444;
     output["audio_channels"] = info.audio_channels;
     output["stream_gpu_model"] = info.stream_gpu_model;

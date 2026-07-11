@@ -169,11 +169,12 @@ namespace rtsp_stream {
     config.rtx_hdr_active = config::runtime_config_override_enabled("rtx_hdr") &&
                             config::video.rtx_hdr.enabled &&
                             config.dynamicRange > 0 &&
-                            !config.prefer_sdr_10bit;
+                            !config.prefer_sdr_10bit &&
+                            !config.force_sdr;
   }
 
   bool activates_vulkan_hdr_layer_for_stream(const video::config_t &config) {
-    return config.dynamicRange != 0 && !config.prefer_sdr_10bit;
+    return config.dynamicRange != 0 && !config.prefer_sdr_10bit && !config.force_sdr;
   }
 
   std::shared_ptr<launch_session_t> make_startup_launch_session_snapshot(const launch_session_t &source) {
@@ -187,6 +188,9 @@ namespace rtsp_stream {
     snapshot->unique_id = source.unique_id;
     snapshot->client_uuid = source.client_uuid;
     snapshot->device_name = source.device_name;
+    snapshot->enable_hdr = source.enable_hdr;
+    snapshot->prefer_sdr_10bit = source.prefer_sdr_10bit;
+    snapshot->force_sdr = source.force_sdr;
     snapshot->virtual_display = source.virtual_display;
     snapshot->virtual_display_guid_bytes = source.virtual_display_guid_bytes;
     snapshot->gen1_framegen_fix = source.gen1_framegen_fix;
@@ -1451,19 +1455,25 @@ namespace rtsp_stream {
       config.audio.flags[audio::config_t::CONTINUOUS_AUDIO] = true;
     }
 
-    const auto client_prefer_10bit_sdr_override = nvhttp::get_client_prefer_10bit_sdr_override(session->client_uuid);
-    const bool prefer_10bit_sdr = client_prefer_10bit_sdr_override.value_or(config::video.prefer_10bit_sdr);
+    const bool prefer_10bit_sdr = session->prefer_sdr_10bit;
     const bool hevc_main10 = config.monitor.videoFormat == 1 && video::active_hevc_mode >= 3;
     const bool av1_main10 = config.monitor.videoFormat == 2 && video::active_av1_mode >= 3;
     const bool supports_10bit_dynamic_range = hevc_main10 || av1_main10;
-    if (config.monitor.dynamicRange == 0) {
-      if (session->enable_hdr && supports_10bit_dynamic_range) {
-        BOOST_LOG(info) << "RTSP ANNOUNCE requested SDR while launch HDR is enabled; using HDR 10-bit encode";
-        config.monitor.dynamicRange = 1;
-      } else if (prefer_10bit_sdr && !session->enable_hdr && supports_10bit_dynamic_range) {
+    config.monitor.force_sdr = session->force_sdr;
+    if (prefer_10bit_sdr) {
+      if (supports_10bit_dynamic_range) {
         BOOST_LOG(info) << "Preferring 10-bit SDR encode for compatible client request";
         config.monitor.dynamicRange = 1;
         config.monitor.prefer_sdr_10bit = true;
+      } else {
+        config.monitor.dynamicRange = 0;
+        config.monitor.prefer_sdr_10bit = false;
+        BOOST_LOG(info) << "10-bit SDR preference active, but Main10 is unavailable; using 8-bit SDR encode";
+      }
+    } else if (config.monitor.dynamicRange == 0) {
+      if (session->enable_hdr && supports_10bit_dynamic_range) {
+        BOOST_LOG(info) << "RTSP ANNOUNCE requested SDR while launch HDR is enabled; using HDR 10-bit encode";
+        config.monitor.dynamicRange = 1;
       }
     }
     apply_rtx_hdr_stream_policy(config.monitor);

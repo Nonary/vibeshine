@@ -129,7 +129,8 @@ namespace stream {
     int encoder_bitrate_kbps;
     int requested_bitrate_kbps;  // Original client-requested wire bitrate (== encoder_bitrate_kbps for clients that don't send maximumBitrateKbps)
     int video_format;  // 0=H.264, 1=HEVC, 2=AV1
-    int dynamic_range;  // 0=SDR 8-bit, 1=HDR 10-bit
+    int dynamic_range;  // Encoder bit depth: 0=8-bit, 1=10-bit
+    bool hdr;
     bool yuv444;
     int audio_channels;
     std::string stream_gpu_model;
