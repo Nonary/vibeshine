@@ -284,5 +284,16 @@ namespace proc {
    */
   void terminate_process_group(bp::child &proc, bp::group &group, std::chrono::seconds exit_timeout);
 
+#ifdef _WIN32
+  /** Mark an app-triggered display revert to run after the final stream ends. */
+  void defer_display_revert();
+
+  /** Consume a previously deferred app-triggered display revert exactly once. */
+  bool consume_deferred_display_revert();
+
+  /** Discard a deferred revert when a replacement app takes ownership of the display. */
+  void clear_deferred_display_revert();
+#endif
+
   extern proc_t proc;
 }  // namespace proc

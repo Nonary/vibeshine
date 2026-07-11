@@ -2560,9 +2560,6 @@ namespace stream {
         display_helper_integration::clear_pending_apply();
         clear_deferred_stream_start_actions();
 #endif
-        // Only revert on disconnect when explicitly enabled by config.
-        bool revert_display_config {config::video.dd.config_revert_on_disconnect};
-
         const bool is_paused = proc::proc.running();
         if (is_paused) {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
@@ -2571,6 +2568,18 @@ namespace stream {
         }
 
         const bool webrtc_active = webrtc_stream::has_active_sessions();
+#ifdef _WIN32
+        // App teardown may have reached us before the RTSP session finished.
+        // Consume that deferred request only after the app and every stream are gone.
+        const bool deferred_app_revert =
+          !is_paused && !webrtc_active && proc::consume_deferred_display_revert();
+#else
+        constexpr bool deferred_app_revert = false;
+#endif
+        // Revert immediately on disconnect when configured, or complete a restore
+        // that an app exit deferred until the final streaming session ended.
+        const bool revert_display_config =
+          config::video.dd.config_revert_on_disconnect || deferred_app_revert;
         const int paused_timeout_secs = std::max(0, config::video.dd.paused_virtual_display_timeout_secs);
         const bool delay_virtual_display_cleanup_due_to_pause = is_paused && !revert_display_config && paused_timeout_secs > 0;
         const bool keep_virtual_display_due_to_pause = is_paused && !revert_display_config && paused_timeout_secs == 0;

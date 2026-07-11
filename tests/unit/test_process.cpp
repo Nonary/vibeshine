@@ -19,6 +19,34 @@
 namespace fs = std::filesystem;
 namespace pt = boost::property_tree;
 
+#ifdef _WIN32
+class DeferredDisplayRevertTest: public ::testing::Test {
+protected:
+  void SetUp() override {
+    proc::clear_deferred_display_revert();
+  }
+
+  void TearDown() override {
+    proc::clear_deferred_display_revert();
+  }
+};
+
+TEST_F(DeferredDisplayRevertTest, PersistsUntilFinalSessionConsumesIt) {
+  proc::defer_display_revert();
+
+  EXPECT_TRUE(proc::consume_deferred_display_revert());
+  EXPECT_FALSE(proc::consume_deferred_display_revert());
+}
+
+TEST_F(DeferredDisplayRevertTest, ReplacementAppCancelsPendingRestore) {
+  proc::defer_display_revert();
+
+  proc::clear_deferred_display_revert();
+
+  EXPECT_FALSE(proc::consume_deferred_display_revert());
+}
+#endif
+
 class ProcessPNGTest: public ::testing::Test {
 protected:
   void SetUp() override {

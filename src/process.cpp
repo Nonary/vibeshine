@@ -850,6 +850,21 @@ namespace proc {
 
 #ifdef _WIN32
   VDISPLAY::DRIVER_STATUS vDisplayDriverStatus = VDISPLAY::DRIVER_STATUS::UNKNOWN;
+  namespace {
+    std::atomic_bool deferred_display_revert {false};
+  }
+
+  void defer_display_revert() {
+    deferred_display_revert.store(true, std::memory_order_release);
+  }
+
+  bool consume_deferred_display_revert() {
+    return deferred_display_revert.exchange(false, std::memory_order_acq_rel);
+  }
+
+  void clear_deferred_display_revert() {
+    deferred_display_revert.store(false, std::memory_order_release);
+  }
 
   void onVDisplayWatchdogFailed() {
     vDisplayDriverStatus = VDISPLAY::DRIVER_STATUS::WATCHDOG_FAILED;
@@ -1192,6 +1207,11 @@ namespace proc {
 
     _app = *resolved_app;
     _app_id = (int) util::from_view(_app.id);
+#ifdef _WIN32
+    // A replacement app now owns the streaming display configuration. Any
+    // deferred revert from the previous app must not fire when this session ends.
+    clear_deferred_display_revert();
+#endif
     _active_client_uuid = launch_session ? launch_session->client_uuid : std::string();
     launch_session->gen1_framegen_fix = _app.gen1_framegen_fix;
     launch_session->gen2_framegen_fix = _app.gen2_framegen_fix;
@@ -2091,10 +2111,12 @@ namespace proc {
 
     if (should_dispatch_revert && skip_display_revert) {
 #ifdef _WIN32
+      clear_deferred_display_revert();
       BOOST_LOG(info) << "Skipping display revert during app replacement because the new session has already applied its display configuration.";
 #endif
     } else if (should_dispatch_revert && !other_streaming_session_active) {
 #ifdef _WIN32
+      clear_deferred_display_revert();
       const bool reverted = display_helper_integration::revert();
       if (reverted && rtsp_stream::session_count() == 0) {
         BOOST_LOG(debug) << "Display helper: stopping watchdog after app termination.";
@@ -2102,6 +2124,9 @@ namespace proc {
       }
 #endif
     } else if (should_dispatch_revert && other_streaming_session_active) {
+#ifdef _WIN32
+      defer_display_revert();
+#endif
       BOOST_LOG(info) << "Deferring display revert after app termination because another streaming session is still active.";
     }
 

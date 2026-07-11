@@ -2487,6 +2487,11 @@ namespace webrtc_stream {
 #ifdef _WIN32
       if (allow_platform_teardown) {
         const bool is_paused = proc::proc.running() > 0;
+        if (final_teardown && !is_paused) {
+          // WebRTC already restores on final teardown; consume any app-triggered
+          // request so it cannot leak into a later streaming session.
+          (void) proc::consume_deferred_display_revert();
+        }
         // config_revert_on_disconnect only governs reverting while an app is still
         // running (paused session). When the stream is fully over with no app left,
         // the physical display configuration must always be restored — otherwise a
