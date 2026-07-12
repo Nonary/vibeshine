@@ -38,12 +38,23 @@ namespace platf::dxgi {
    * probe from the main process) so the DXGI-fallback grace window applies.
    */
   void note_wgc_desktop_switch();
+
+  struct shared_frame_t {
+    winrt::com_ptr<ID3D11Texture2D> texture;
+    winrt::com_ptr<IDXGIKeyedMutex> keyed_mutex;
+    std::shared_ptr<winrt::handle> encoder_texture_handle;
+    std::shared_ptr<void> lease;
+    size_t texture_slot = WGC_IPC_TEXTURE_SLOT_COUNT;
+    uint64_t frame_id = 0;
+    uint64_t frame_qpc = 0;
+  };
+
   /**
    * @brief Shared WGC IPC session encapsulating helper process, control pipe, shared texture and sync primitives.
    * Manages lifecycle & communication with the helper process, duplication of shared textures, keyed mutex
    * coordination and event-driven frame availability signaling for both RAM & VRAM capture paths.
    */
-  class ipc_session_t {
+  class ipc_session_t: public std::enable_shared_from_this<ipc_session_t> {
   public:
     /**
      * @brief Destructor. Stops the helper process and tears down IPC.
@@ -89,6 +100,12 @@ namespace platf::dxgi {
      * @return Capture result enum indicating success, timeout, or failure.
      */
     capture_e lock_frame(winrt::com_ptr<ID3D11Texture2D> &gpu_tex_out, uint64_t &frame_qpc_out);
+
+    /**
+     * @brief Claim the latest helper-owned texture-ring slot for direct encoder use.
+     * The returned lease keeps the slot immutable until all consumers release it.
+     */
+    capture_e claim_frame(shared_frame_t &frame_out);
 
     /**
      * @brief Release the keyed mutex.
@@ -143,10 +160,10 @@ namespace platf::dxgi {
      * @return `true` if the shared texture is available; `false` otherwise.
      */
     bool peek_shared_texture_desc(D3D11_TEXTURE2D_DESC &desc_out) const {
-      if (!_shared_texture) {
+      if (!_shared_textures[0]) {
         return false;
       }
-      _shared_texture->GetDesc(&desc_out);
+      _shared_textures[0]->GetDesc(&desc_out);
       return true;
     }
 
@@ -157,6 +174,11 @@ namespace platf::dxgi {
      * @return `true` if setup was successful, `false` otherwise.
      */
     bool setup_shared_resources_from_shared_handles(const shared_handle_data_t &handle_data);
+
+    /**
+     * @brief Return a leased slot to the helper after its last encoder consumer exits.
+     */
+    void release_frame_slot(size_t slot, LONG64 frame_id);
 
     /**
      * @brief Handle a desktop-switch notification from the helper process.
@@ -179,13 +201,16 @@ namespace platf::dxgi {
     // --- members ---
     std::unique_ptr<ProcessHandler> _process_helper;  ///< Helper process owner.
     std::unique_ptr<AsyncNamedPipe> _pipe;  ///< Async control/message pipe.
-    winrt::com_ptr<IDXGIKeyedMutex> _keyed_mutex;  ///< Keyed mutex for shared texture.
-    winrt::com_ptr<ID3D11Texture2D> _shared_texture;  ///< Shared texture duplicated from helper.
+    std::array<winrt::com_ptr<IDXGIKeyedMutex>, WGC_IPC_TEXTURE_SLOT_COUNT> _keyed_mutexes;  ///< Keyed mutexes for the shared texture ring.
+    std::array<winrt::com_ptr<ID3D11Texture2D>, WGC_IPC_TEXTURE_SLOT_COUNT> _shared_textures;  ///< Shared textures duplicated from helper.
+    std::array<std::shared_ptr<winrt::handle>, WGC_IPC_TEXTURE_SLOT_COUNT> _shared_texture_handles;  ///< Stable local handle owners for encoder devices.
     winrt::com_ptr<ID3D11Device> _device;  ///< D3D11 device pointer (not owned).
     winrt::handle _frame_ready_event;  ///< Duplicated auto-reset event signaled by the helper per frame.
     winrt::handle _frame_metadata_mapping;  ///< Duplicated shared-memory mapping for frame metadata.
     frame_metadata_t *_frame_metadata = nullptr;  ///< Mapped frame metadata view.
     LONG64 _last_frame_id {0};  ///< Last frame id consumed from shared metadata.
+    size_t _locked_texture_slot = WGC_IPC_TEXTURE_SLOT_COUNT;  ///< Ring slot currently locked by lock_frame().
+    LONG64 _locked_frame_id {0};  ///< Generation of the ring slot currently locked by lock_frame().
     uint64_t _frame_qpc {0};  ///< QPC timestamp of latest frame.
     std::atomic<bool> _initializing {false};  ///< True while an initialization attempt is in progress.
     std::atomic<bool> _initialized {false};  ///< True once the most recent initialization attempt succeeded.

@@ -19,6 +19,7 @@
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -791,9 +792,9 @@ public:
  */
 class SharedResourceManager {
 private:
-  winrt::com_ptr<ID3D11Texture2D> _shared_texture;  ///< Shared D3D11 texture for frame data
-  winrt::com_ptr<IDXGIKeyedMutex> _keyed_mutex;  ///< Keyed mutex for synchronization
-  winrt::handle _shared_handle;  ///< Shared handle for cross-process sharing
+  std::array<winrt::com_ptr<ID3D11Texture2D>, platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT> _shared_textures;  ///< Shared D3D11 texture ring for frame data
+  std::array<winrt::com_ptr<IDXGIKeyedMutex>, platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT> _keyed_mutexes;  ///< Keyed mutexes for synchronization
+  std::array<winrt::handle, platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT> _shared_handles;  ///< Shared handles for cross-process sharing
   winrt::handle _frame_ready_event;  ///< Auto-reset event signaled after each published frame
   winrt::handle _frame_metadata_mapping;  ///< Shared memory containing latest frame metadata
   platf::dxgi::frame_metadata_t *_frame_metadata = nullptr;  ///< Mapped frame metadata view
@@ -835,7 +836,7 @@ public:
    * @param format DXGI format for the texture.
    * @return true if the texture was successfully created; false otherwise.
    */
-  bool create_shared_texture(const winrt::com_ptr<ID3D11Device> &device, UINT texture_width, UINT texture_height, DXGI_FORMAT format) {
+  bool create_shared_texture(const winrt::com_ptr<ID3D11Device> &device, size_t slot, UINT texture_width, UINT texture_height, DXGI_FORMAT format) {
     _width = texture_width;
     _height = texture_height;
 
@@ -851,7 +852,7 @@ public:
     // Use NT shared handles exclusively
     tex_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 
-    HRESULT hr = device->CreateTexture2D(&tex_desc, nullptr, _shared_texture.put());
+    HRESULT hr = device->CreateTexture2D(&tex_desc, nullptr, _shared_textures[slot].put());
     if (FAILED(hr)) {
       BOOST_LOG(error) << "Failed to create NT shared texture: " << hr;
       return false;
@@ -863,13 +864,13 @@ public:
    * @brief Acquires a keyed mutex interface from the shared texture for synchronization.
    * @return true if the keyed mutex was successfully acquired; false otherwise.
    */
-  bool create_keyed_mutex() {
-    if (!_shared_texture) {
+  bool create_keyed_mutex(size_t slot) {
+    if (!_shared_textures[slot]) {
       return false;
     }
 
-    _keyed_mutex = _shared_texture.try_as<IDXGIKeyedMutex>();
-    if (!_keyed_mutex) {
+    _keyed_mutexes[slot] = _shared_textures[slot].try_as<IDXGIKeyedMutex>();
+    if (!_keyed_mutexes[slot]) {
       BOOST_LOG(error) << "Failed to get keyed mutex";
       return false;
     }
@@ -881,20 +882,20 @@ public:
    *
    * @return true if the handle was successfully created; false otherwise.
    */
-  bool create_shared_handle() {
-    if (!_shared_texture) {
+  bool create_shared_handle(size_t slot) {
+    if (!_shared_textures[slot]) {
       BOOST_LOG(error) << "Cannot create shared handle - no shared texture available";
       return false;
     }
 
-    winrt::com_ptr<IDXGIResource1> dxgi_resource1 = _shared_texture.try_as<IDXGIResource1>();
+    winrt::com_ptr<IDXGIResource1> dxgi_resource1 = _shared_textures[slot].try_as<IDXGIResource1>();
     if (!dxgi_resource1) {
       BOOST_LOG(error) << "Failed to query DXGI resource1 interface";
       return false;
     }
 
     // Create the shared handle
-    HRESULT hr = dxgi_resource1->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, _shared_handle.put());
+    HRESULT hr = dxgi_resource1->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, _shared_handles[slot].put());
     if (FAILED(hr)) {
       BOOST_LOG(error) << "Failed to create shared handle: " << hr;
       return false;
@@ -937,6 +938,13 @@ public:
     _frame_metadata->sequence = 0;
     _frame_metadata->frame_id = 0;
     _frame_metadata->frame_qpc = 0;
+    _frame_metadata->texture_slot = 0;
+    for (auto &slot: _frame_metadata->slots) {
+      slot.state = static_cast<LONG>(platf::dxgi::wgc_texture_slot_state_e::free);
+      slot.reserved = 0;
+      slot.frame_id = 0;
+      slot.frame_qpc = 0;
+    }
     return true;
   }
 
@@ -950,10 +958,14 @@ public:
    * @return true if all resources were successfully initialized; false otherwise.
    */
   bool initialize_all(const winrt::com_ptr<ID3D11Device> &device, UINT texture_width, UINT texture_height, DXGI_FORMAT format) {
-    return create_shared_texture(device, texture_width, texture_height, format) &&
-           create_keyed_mutex() &&
-           create_shared_handle() &&
-           create_frame_signal();
+    for (size_t slot = 0; slot < platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT; ++slot) {
+      if (!create_shared_texture(device, slot, texture_width, texture_height, format) ||
+          !create_keyed_mutex(slot) ||
+          !create_shared_handle(slot)) {
+        return false;
+      }
+    }
+    return create_frame_signal();
   }
 
   /**
@@ -962,7 +974,9 @@ public:
    */
   platf::dxgi::shared_handle_data_t get_shared_handle_data() const {
     platf::dxgi::shared_handle_data_t data = {};
-    data.texture_handle = const_cast<HANDLE>(_shared_handle.get());
+    for (size_t slot = 0; slot < platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT; ++slot) {
+      data.texture_handles[slot] = const_cast<HANDLE>(_shared_handles[slot].get());
+    }
     data.frame_event_handle = const_cast<HANDLE>(_frame_ready_event.get());
     data.frame_metadata_handle = const_cast<HANDLE>(_frame_metadata_mapping.get());
     data.width = _width;
@@ -970,14 +984,83 @@ public:
     return data;
   }
 
-  void publish_frame_metadata(uint64_t frame_qpc) {
+  struct texture_slot_reservation_t {
+    size_t slot = platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT;
+    LONG previous_state = static_cast<LONG>(platf::dxgi::wgc_texture_slot_state_e::free);
+  };
+
+  std::optional<texture_slot_reservation_t> reserve_texture_slot() {
+    if (!_frame_metadata) {
+      return std::nullopt;
+    }
+
+    const auto ready_state = static_cast<LONG>(platf::dxgi::wgc_texture_slot_state_e::ready);
+    for (size_t slot = 0; slot < platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT; ++slot) {
+      if (platf::dxgi::transition_wgc_texture_slot(
+            _frame_metadata->slots[slot],
+            platf::dxgi::wgc_texture_slot_state_e::free,
+            platf::dxgi::wgc_texture_slot_state_e::writing
+          )) {
+        return texture_slot_reservation_t {
+          .slot = slot,
+          .previous_state = static_cast<LONG>(platf::dxgi::wgc_texture_slot_state_e::free)
+        };
+      }
+    }
+
+    // A ready slot has not been claimed by Sunshine yet. Reclaim the oldest
+    // one so a stalled consumer still receives the newest available frame.
+    size_t oldest_slot = platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT;
+    LONG64 oldest_frame_id = (std::numeric_limits<LONG64>::max)();
+    for (size_t slot = 0; slot < platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT; ++slot) {
+      if (platf::dxgi::wgc_texture_slot_state(_frame_metadata->slots[slot]) != ready_state) {
+        continue;
+      }
+      const auto frame_id = InterlockedCompareExchange64(&_frame_metadata->slots[slot].frame_id, 0, 0);
+      if (frame_id < oldest_frame_id) {
+        oldest_frame_id = frame_id;
+        oldest_slot = slot;
+      }
+    }
+
+    if (oldest_slot < platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT &&
+        platf::dxgi::transition_wgc_texture_slot(
+          _frame_metadata->slots[oldest_slot],
+          platf::dxgi::wgc_texture_slot_state_e::ready,
+          platf::dxgi::wgc_texture_slot_state_e::writing
+        )) {
+      return texture_slot_reservation_t {.slot = oldest_slot, .previous_state = ready_state};
+    }
+
+    return std::nullopt;
+  }
+
+  void abandon_texture_slot(const texture_slot_reservation_t &reservation) {
+    if (!_frame_metadata || reservation.slot >= platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT) {
+      return;
+    }
+
+    (void) platf::dxgi::transition_wgc_texture_slot(
+      _frame_metadata->slots[reservation.slot],
+      platf::dxgi::wgc_texture_slot_state_e::writing,
+      static_cast<platf::dxgi::wgc_texture_slot_state_e>(reservation.previous_state)
+    );
+  }
+
+  void publish_frame_metadata(uint64_t frame_qpc, size_t texture_slot) {
     if (!_frame_metadata) {
       return;
     }
 
     InterlockedIncrement64(&_frame_metadata->sequence);
+    const auto frame_id = InterlockedCompareExchange64(&_frame_metadata->frame_id, 0, 0) + 1;
+    auto &slot = _frame_metadata->slots[texture_slot];
+    InterlockedExchange64(&slot.frame_qpc, static_cast<LONG64>(frame_qpc));
+    InterlockedExchange64(&slot.frame_id, frame_id);
+    InterlockedExchange(&slot.state, static_cast<LONG>(platf::dxgi::wgc_texture_slot_state_e::ready));
     InterlockedExchange64(&_frame_metadata->frame_qpc, static_cast<LONG64>(frame_qpc));
-    InterlockedIncrement64(&_frame_metadata->frame_id);
+    InterlockedExchange64(&_frame_metadata->texture_slot, static_cast<LONG64>(texture_slot));
+    InterlockedExchange64(&_frame_metadata->frame_id, frame_id);
     InterlockedIncrement64(&_frame_metadata->sequence);
   }
 
@@ -993,16 +1076,16 @@ public:
    * @brief Gets the underlying shared D3D11 texture pointer.
    * @return Pointer to the managed ID3D11Texture2D, or nullptr if not initialized.
    */
-  const winrt::com_ptr<ID3D11Texture2D> &get_shared_texture() const {
-    return _shared_texture;
+  const winrt::com_ptr<ID3D11Texture2D> &get_shared_texture(size_t slot) const {
+    return _shared_textures[slot];
   }
 
   /**
    * @brief Gets the keyed mutex interface com_ptr for the shared texture.
    * @return const winrt::com_ptr<IDXGIKeyedMutex>& (may be empty if not initialized).
    */
-  const winrt::com_ptr<IDXGIKeyedMutex> &get_keyed_mutex() const {
-    return _keyed_mutex;
+  const winrt::com_ptr<IDXGIKeyedMutex> &get_keyed_mutex(size_t slot) const {
+    return _keyed_mutexes[slot];
   }
 
   /**
@@ -1037,24 +1120,6 @@ struct WgcCaptureDependencies {
 
 class WgcCaptureManager {
 private:
-  enum class scratch_state_e {
-    free,
-    reserved,
-    pending,
-    delivering
-  };
-
-  struct scratch_texture_t {
-    winrt::com_ptr<ID3D11Texture2D> texture;
-    scratch_state_e state = scratch_state_e::free;
-  };
-
-  struct delivery_frame_t {
-    winrt::com_ptr<ID3D11Texture2D> texture;
-    size_t scratch_index = 0;
-    uint64_t frame_qpc = 0;
-  };
-
   static constexpr auto WGC_DIAGNOSTICS_LOG_INTERVAL = std::chrono::seconds(15);
   static constexpr auto WGC_DRAIN_LOG_INTERVAL = std::chrono::seconds(5);
 
@@ -1089,22 +1154,11 @@ private:
   uint64_t _last_diagnostics_published_frames = 0;
   uint64_t _last_diagnostics_empty_drops = 0;
   uint64_t _last_diagnostics_drained_frames = 0;
-  uint64_t _last_diagnostics_replaced_frames = 0;
-  uint64_t _last_diagnostics_scratch_dropped = 0;
   uint64_t _last_diagnostics_slow_context = 0;
   uint64_t _last_diagnostics_slow_mutex = 0;
   uint64_t _last_diagnostics_slow_hold = 0;
   uint64_t _last_diagnostics_slow_copy = 0;
-  std::mutex _delivery_mutex;
-  std::condition_variable _delivery_cv;
-  std::jthread _delivery_thread;
-  std::optional<delivery_frame_t> _pending_delivery_frame;
-  bool _delivery_stop = false;
   std::mutex _d3d_context_mutex;
-  std::array<scratch_texture_t, 3> _scratch_textures;
-  std::atomic<uint64_t> _delivery_backpressure_waits {0};
-  std::atomic<uint64_t> _delivery_replaced_frames {0};
-  std::atomic<uint64_t> _scratch_dropped_frames {0};
   DXGI_FORMAT _capture_format = DXGI_FORMAT_UNKNOWN;  ///< DXGI format for captured frames
   UINT _height = 0;  ///< Capture height in pixels
   UINT _width = 0;  ///< Capture width in pixels
@@ -1144,9 +1198,6 @@ public:
     _last_buffer_check = now;
     _last_diagnostics_log_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
 
-    _delivery_thread = std::jthread([this](std::stop_token stop_token) {
-      delivery_thread_proc(stop_token);
-    });
   }
 
   /**
@@ -1179,26 +1230,9 @@ public:
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
-    stop_delivery_thread();
   }
 
 private:
-  void stop_delivery_thread() noexcept {
-    {
-      std::lock_guard lock(_delivery_mutex);
-      _delivery_stop = true;
-      _pending_delivery_frame.reset();
-      for (auto &scratch: _scratch_textures) {
-        scratch.state = scratch_state_e::free;
-      }
-    }
-
-    _delivery_cv.notify_all();
-    if (_delivery_thread.joinable()) {
-      _delivery_thread.request_stop();
-      _delivery_thread.join();
-    }
-  }
 
   void cleanup_capture_session() noexcept {
     try {
@@ -1428,8 +1462,6 @@ private:
       const auto published = _published_frames.load(std::memory_order_relaxed);
       const auto empty_drops = _frame_pool_empty_drops.load(std::memory_order_relaxed);
       const auto drained = _drained_pool_frames.load(std::memory_order_relaxed);
-      const auto replaced = _delivery_replaced_frames.load(std::memory_order_relaxed);
-      const auto scratch_dropped = _scratch_dropped_frames.load(std::memory_order_relaxed);
       const auto slow_context = _slow_context_waits.load(std::memory_order_relaxed);
       const auto slow_mutex = _slow_mutex_waits.load(std::memory_order_relaxed);
       const auto slow_hold = _slow_shared_mutex_holds.load(std::memory_order_relaxed);
@@ -1439,8 +1471,6 @@ private:
       const auto published_delta = published - _last_diagnostics_published_frames;
       const auto empty_drop_delta = empty_drops - _last_diagnostics_empty_drops;
       const auto drained_delta = drained - _last_diagnostics_drained_frames;
-      const auto replaced_delta = replaced - _last_diagnostics_replaced_frames;
-      const auto scratch_dropped_delta = scratch_dropped - _last_diagnostics_scratch_dropped;
       const auto slow_context_delta = slow_context - _last_diagnostics_slow_context;
       const auto slow_mutex_delta = slow_mutex - _last_diagnostics_slow_mutex;
       const auto slow_hold_delta = slow_hold - _last_diagnostics_slow_hold;
@@ -1450,8 +1480,6 @@ private:
       _last_diagnostics_published_frames = published;
       _last_diagnostics_empty_drops = empty_drops;
       _last_diagnostics_drained_frames = drained;
-      _last_diagnostics_replaced_frames = replaced;
-      _last_diagnostics_scratch_dropped = scratch_dropped;
       _last_diagnostics_slow_context = slow_context;
       _last_diagnostics_slow_mutex = slow_mutex;
       _last_diagnostics_slow_hold = slow_hold;
@@ -1464,8 +1492,6 @@ private:
                       << " publish_fps=" << (static_cast<double>(published_delta) / interval_s)
                       << " drained=" << drained_delta
                       << " empty_drops=" << empty_drop_delta
-                      << " delivery_replaced=" << replaced_delta
-                      << " scratch_dropped=" << scratch_dropped_delta
                       << " slow_context=" << slow_context_delta
                       << " slow_mutex=" << slow_mutex_delta
                       << " slow_shared_hold=" << slow_hold_delta
@@ -1544,127 +1570,9 @@ private:
     return false;
   }
 
-  bool ensure_scratch_texture(size_t index) {
-    if (!_deps || index >= _scratch_textures.size()) {
-      return false;
-    }
-
-    auto &scratch = _scratch_textures[index];
-    if (scratch.texture) {
-      return true;
-    }
-
-    winrt::com_ptr<ID3D11Device> device;
-    _deps->d3d_context->GetDevice(device.put());
-    if (!device) {
-      BOOST_LOG(error) << "Failed to get D3D11 device for WGC scratch texture";
-      return false;
-    }
-
-    D3D11_TEXTURE2D_DESC desc = {};
-    desc.Width = _width;
-    desc.Height = _height;
-    desc.MipLevels = 1;
-    desc.ArraySize = 1;
-    desc.Format = _capture_format;
-    desc.SampleDesc.Count = 1;
-    desc.Usage = D3D11_USAGE_DEFAULT;
-    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-
-    HRESULT hr = device->CreateTexture2D(&desc, nullptr, scratch.texture.put());
-    if (FAILED(hr)) {
-      BOOST_LOG(error) << "Failed to create WGC scratch texture: " << std::format(": 0x{:08X}", hr);
-      return false;
-    }
-
-    return true;
-  }
-
-  std::optional<size_t> reserve_scratch_texture() {
-    std::lock_guard lock(_delivery_mutex);
-
-    if (_delivery_stop || _shutting_down.load(std::memory_order_acquire)) {
-      return std::nullopt;
-    }
-
-    for (size_t i = 0; i < _scratch_textures.size(); ++i) {
-      if (_scratch_textures[i].state == scratch_state_e::free) {
-        _scratch_textures[i].state = scratch_state_e::reserved;
-        return i;
-      }
-    }
-
-    if (_pending_delivery_frame) {
-      const auto stale_index = _pending_delivery_frame->scratch_index;
-      if (stale_index >= _scratch_textures.size()) {
-        _pending_delivery_frame.reset();
-        return std::nullopt;
-      }
-
-      _pending_delivery_frame.reset();
-      _scratch_textures[stale_index].state = scratch_state_e::reserved;
-
-      const auto replaced = _delivery_replaced_frames.fetch_add(1, std::memory_order_relaxed) + 1;
-      if (replaced <= 5 || replaced % 120 == 0) {
-        BOOST_LOG(debug) << "WGC delivery replaced stale queued scratch frame"
-                         << " (count=" << replaced << ")";
-      }
-      return stale_index;
-    }
-
-    const auto dropped = _scratch_dropped_frames.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (dropped <= 5 || dropped % 120 == 0) {
-      BOOST_LOG(debug) << "WGC scratch handoff had no free texture; dropping frame"
-                       << " (count=" << dropped << ")";
-    }
-    return std::nullopt;
-  }
-
-  void release_reserved_scratch_texture(size_t index) {
-    std::lock_guard lock(_delivery_mutex);
-    if (index < _scratch_textures.size() && _scratch_textures[index].state == scratch_state_e::reserved) {
-      _scratch_textures[index].state = scratch_state_e::free;
-    }
-  }
-
-  bool enqueue_scratch_texture(size_t index, uint64_t frame_qpc) {
-    std::lock_guard lock(_delivery_mutex);
-
-    if (index >= _scratch_textures.size() || !_scratch_textures[index].texture) {
-      return false;
-    }
-
-    if (_delivery_stop || _shutting_down.load(std::memory_order_acquire)) {
-      _scratch_textures[index].state = scratch_state_e::free;
-      return false;
-    }
-
-    if (_pending_delivery_frame) {
-      const auto stale_index = _pending_delivery_frame->scratch_index;
-      _pending_delivery_frame.reset();
-      if (stale_index < _scratch_textures.size()) {
-        _scratch_textures[stale_index].state = scratch_state_e::free;
-      }
-
-      const auto replaced = _delivery_replaced_frames.fetch_add(1, std::memory_order_relaxed) + 1;
-      if (replaced <= 5 || replaced % 120 == 0) {
-        BOOST_LOG(debug) << "WGC delivery replaced stale queued scratch frame"
-                         << " (count=" << replaced << ")";
-      }
-    }
-
-    _scratch_textures[index].state = scratch_state_e::pending;
-    _pending_delivery_frame = delivery_frame_t {
-      .texture = _scratch_textures[index].texture,
-      .scratch_index = index,
-      .frame_qpc = frame_qpc
-    };
-    return true;
-  }
-
   /**
-   * @brief Copies the next WGC frame into helper-owned scratch storage and queues it for delivery.
-   * @param frame The WGC frame object; it is released before the shared IPC mutex can block.
+   * @brief Copies the WGC frame directly into an immediately available shared IPC slot.
+   * @param frame The WGC frame object, kept alive until the copy has been submitted.
    * @param surface The captured D3D11 surface.
    * @param frame_qpc The QPC timestamp from when the frame was captured.
    */
@@ -1687,88 +1595,9 @@ private:
       return;
     }
 
-    auto scratch_index = reserve_scratch_texture();
-    if (!scratch_index) {
-      return;
-    }
-
-    if (!ensure_scratch_texture(*scratch_index)) {
-      release_reserved_scratch_texture(*scratch_index);
-      return;
-    }
-
-    {
-      std::lock_guard context_lock(_d3d_context_mutex);
-      _deps->d3d_context->CopyResource(_scratch_textures[*scratch_index].texture.get(), frame_tex.get());
-    }
-
-    // From here on the delivery thread owns only the helper scratch texture, not
-    // the Direct3D11CaptureFrame/WGC frame-pool buffer. The helper can wait for
-    // the main process' shared keyed mutex without starving WGC FrameArrived.
-    frame = nullptr;
-
-    if (!enqueue_scratch_texture(*scratch_index, frame_qpc)) {
-      return;
-    }
-    _delivery_cv.notify_one();
-  }
-
-  void delivery_thread_proc(std::stop_token stop_token) noexcept {
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
-
-    DWORD task_idx = 0;
-    safe_mmcss_handle mmcss_handle = nullptr;
-    HANDLE raw_mmcss_handle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_idx);
-    if (!raw_mmcss_handle) {
-      raw_mmcss_handle = AvSetMmThreadCharacteristicsW(L"Games", &task_idx);
-    }
-    if (raw_mmcss_handle) {
-      mmcss_handle.reset(raw_mmcss_handle);
-      AvSetMmThreadPriority(mmcss_handle.get(), AVRT_PRIORITY_HIGH);
-    } else {
-      BOOST_LOG(warning) << "Failed to set WGC delivery thread MMCSS characteristics: " << GetLastError();
-    }
-
-    for (;;) {
-      std::optional<delivery_frame_t> frame;
-      {
-        std::unique_lock lock(_delivery_mutex);
-        _delivery_cv.wait(lock, [&]() {
-          return _delivery_stop || stop_token.stop_requested() || _pending_delivery_frame.has_value();
-        });
-
-        if (_delivery_stop || stop_token.stop_requested()) {
-          break;
-        }
-
-        frame = std::move(_pending_delivery_frame);
-        _pending_delivery_frame.reset();
-        if (frame && frame->scratch_index < _scratch_textures.size()) {
-          _scratch_textures[frame->scratch_index].state = scratch_state_e::delivering;
-        }
-      }
-      _delivery_cv.notify_all();
-
-      if (!frame || !frame->texture) {
-        continue;
-      }
-
-      try {
-        copy_frame_to_shared_texture(frame->texture, frame->frame_qpc);
-      } catch (const winrt::hresult_error &ex) {
-        BOOST_LOG(error) << "WinRT error in WGC delivery thread: " << ex.code() << " - " << winrt::to_string(ex.message());
-      } catch (...) {
-        BOOST_LOG(error) << "Unknown error in WGC delivery thread";
-      }
-
-      {
-        std::lock_guard lock(_delivery_mutex);
-        if (frame->scratch_index < _scratch_textures.size() &&
-            _scratch_textures[frame->scratch_index].state == scratch_state_e::delivering) {
-          _scratch_textures[frame->scratch_index].state = scratch_state_e::free;
-        }
-      }
-    }
+    // Each IPC slot has an independent keyed mutex. A busy consumer only makes
+    // this callback skip that slot; it never makes WGC retain a frame-pool buffer.
+    copy_frame_to_shared_texture(frame_tex, frame_qpc);
   }
 
   /**
@@ -1781,27 +1610,31 @@ private:
       return;
     }
 
-    // Take the helper-local D3D context lock before the cross-process keyed
-    // mutex. The callback thread also uses this context for scratch copies; if
-    // GPU load makes that copy slow, waiting here must not block Sunshine from
-    // acquiring the shared WGC texture.
+    // Serialize all helper D3D work before taking the cross-process keyed
+    // mutex, keeping the shared-slot critical section to one copy submission.
     const auto context_wait_start = std::chrono::steady_clock::now();
     std::unique_lock context_lock(_d3d_context_mutex);
     const auto context_wait = std::chrono::steady_clock::now() - context_wait_start;
 
     const auto mutex_wait_start = std::chrono::steady_clock::now();
-    HRESULT hr = _deps->resource_manager.get_keyed_mutex()->AcquireSync(0, 200);
+    const auto reservation = _deps->resource_manager.reserve_texture_slot();
     const auto mutex_wait = std::chrono::steady_clock::now() - mutex_wait_start;
-    if (hr == WAIT_TIMEOUT) {
+    if (!reservation) {
       const auto slow_mutex_count = _slow_mutex_waits.fetch_add(1, std::memory_order_relaxed) + 1;
       if (slow_mutex_count <= 5 || slow_mutex_count % 120 == 0) {
-        BOOST_LOG(debug) << "Timed out acquiring keyed mutex for WGC frame copy; dropping frame"
+        BOOST_LOG(debug) << "All WGC IPC texture-ring slots are leased; dropping frame"
                          << " (count=" << slow_mutex_count << ")";
       }
       return;
     }
+    const auto texture_slot = reservation->slot;
+
+    const HRESULT hr = _deps->resource_manager.get_keyed_mutex(texture_slot)->AcquireSync(0, 0);
     if (hr != S_OK && hr != WAIT_ABANDONED) {
-      BOOST_LOG(error) << "Failed to acquire mutex key 0: " << std::format(": 0x{:08X}", hr);
+      _deps->resource_manager.abandon_texture_slot(*reservation);
+      if (hr != WAIT_TIMEOUT) {
+        BOOST_LOG(error) << "Failed to acquire WGC IPC slot mutex: " << std::format(": 0x{:08X}", hr);
+      }
       return;
     }
     if (hr == WAIT_ABANDONED) {
@@ -1810,33 +1643,32 @@ private:
 
     const auto shared_mutex_hold_start = std::chrono::steady_clock::now();
     auto release_shared_mutex = util::fail_guard([&]() {
-      const HRESULT rel_hr = _deps->resource_manager.get_keyed_mutex()->ReleaseSync(0);
+      const HRESULT rel_hr = _deps->resource_manager.get_keyed_mutex(texture_slot)->ReleaseSync(0);
       if (FAILED(rel_hr)) {
         BOOST_LOG(warning) << "Failed to release mutex key 0: " << std::format(": 0x{:08X}", rel_hr);
       }
+      _deps->resource_manager.abandon_texture_slot(*reservation);
     });
 
-    // Copy frame data while holding the keyed mutex. The main process acquires
-    // the same mutex before snapshotting this shared texture into a pool-owned frame.
+    // The one capture-handoff copy: WGC's non-shareable frame surface becomes
+    // a helper-owned shared ring texture that encoder devices can consume directly.
     const auto copy_start = std::chrono::steady_clock::now();
-    _deps->d3d_context->CopyResource(_deps->resource_manager.get_shared_texture().get(), frame_tex.get());
+    _deps->d3d_context->CopyResource(_deps->resource_manager.get_shared_texture(texture_slot).get(), frame_tex.get());
     const auto copy_submit = std::chrono::steady_clock::now() - copy_start;
 
-    // Publish the metadata while still holding the shared keyed mutex so the
-    // consumer can never lock a newer texture while reading an older frame id.
-    _deps->resource_manager.publish_frame_metadata(frame_qpc);
-
-    const HRESULT rel_hr = _deps->resource_manager.get_keyed_mutex()->ReleaseSync(0);
+    const HRESULT rel_hr = _deps->resource_manager.get_keyed_mutex(texture_slot)->ReleaseSync(0);
     release_shared_mutex.disable();
     if (FAILED(rel_hr)) {
       BOOST_LOG(warning) << "Failed to release mutex key 0: " << std::format(": 0x{:08X}", rel_hr);
+      _deps->resource_manager.abandon_texture_slot(*reservation);
       return;
     }
     const auto shared_mutex_hold = std::chrono::steady_clock::now() - shared_mutex_hold_start;
     context_lock.unlock();
 
-    // Signal only after releasing the mutex so a woken consumer can acquire the
-    // frame without waiting on the producer's normal release path.
+    // Publish after releasing the keyed mutex. Once the slot is visible as ready,
+    // Sunshine can lease it directly to encoder consumers without a second copy.
+    _deps->resource_manager.publish_frame_metadata(frame_qpc, texture_slot);
     _deps->resource_manager.signal_frame_ready();
     _published_frames.fetch_add(1, std::memory_order_relaxed);
 
@@ -2348,7 +2180,7 @@ int main(int argc, char *argv[]) {
 
   // Send shared handle data via named pipe to main process
   platf::dxgi::shared_handle_data_t handle_data = shared_resource_manager.get_shared_handle_data();
-  BOOST_LOG(info) << "Prepared shared handle message - Size: " << sizeof(handle_data) << " bytes, Handle: 0x" << std::hex << reinterpret_cast<uintptr_t>(handle_data.texture_handle) << std::dec;
+  BOOST_LOG(info) << "Prepared shared texture-ring handle message - Size: " << sizeof(handle_data) << " bytes, first handle: 0x" << std::hex << reinterpret_cast<uintptr_t>(handle_data.texture_handles[0]) << std::dec;
   std::span<const uint8_t> handle_message(reinterpret_cast<const uint8_t *>(&handle_data), sizeof(handle_data));
 
   // Wait for connection and send the handle data
