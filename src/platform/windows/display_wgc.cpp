@@ -6,15 +6,15 @@
 // standard includes
 #include <algorithm>
 #include <chrono>
-#include <winsock2.h>
 #include <dxgi1_2.h>
 #include <optional>
+#include <winsock2.h>
 #include <wrl/client.h>
 
 // local includes
-#include "src/config.h"
 #include "ipc/ipc_session.h"
 #include "ipc/misc_utils.h"
+#include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/windows/display.h"
 #include "src/platform/windows/display_vram.h"
@@ -76,6 +76,20 @@ namespace platf::dxgi {
     bool is_wgc_constant_mode() {
       return config::video.capture == "wgcc";
     }
+
+    /**
+     * Owns both a pooled capture image and its move-only helper ring-slot
+     * lease. The image returned to encoders aliases this owner, so the slot is
+     * released only after the final consumer drops the image.
+     */
+    struct wgc_vram_frame_owner_t {
+      wgc_vram_frame_owner_t(std::shared_ptr<platf::img_t> pooled_image, wgc_texture_slot_lease_t slot_lease):
+          image(std::move(pooled_image)),
+          lease(std::move(slot_lease)) {}
+
+      std::shared_ptr<platf::img_t> image;
+      wgc_texture_slot_lease_t lease;
+    };
 
     std::chrono::milliseconds effective_wgc_timeout(std::chrono::milliseconds timeout, int client_framerate) {
       if (timeout.count() != 0) {
@@ -177,14 +191,14 @@ namespace platf::dxgi {
       return -1;
     }
 
-    for (auto &image_id: _slot_image_ids) {
+    for (auto &image_id : _slot_image_ids) {
       image_id = next_image_id++;
     }
 
     return 0;
   }
 
-  capture_e display_wgc_ipc_vram_t::snapshot(const pull_free_image_cb_t &, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) {
+  capture_e display_wgc_ipc_vram_t::snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) {
     if (!_ipc_session) {
       return capture_e::error;
     }
@@ -251,18 +265,35 @@ namespace platf::dxgi {
       return capture_e::reinit;
     }
 
+    // Use the shared capture-image pool so frame handoff has no per-frame
+    // image allocation. The alias owner below keeps this pooled image checked
+    // out until all encoder consumers have released the ring slot.
+    std::shared_ptr<platf::img_t> pooled_image;
+    if (!pull_free_image_cb(pooled_image)) {
+      return capture_e::interrupted;
+    }
+
     // Claim the helper-owned ring slot directly. The lease keeps the texture
     // immutable until every encoder and cached-frame reference has finished.
     shared_frame_t frame;
     capture_status = _ipc_session->claim_frame(frame);
     if (capture_status != capture_e::ok) {
+      pooled_image.reset();
       return capture_status;
     }
 
     const auto host_processing_timestamp = std::chrono::steady_clock::now();
     const auto frame_timestamp = host_processing_timestamp - qpc_time_difference(qpc_counter(), frame.frame_qpc);
 
-    auto img = std::make_shared<img_d3d_t>();
+    // This is the only new owner allocation per frame. The returned shared_ptr
+    // aliases it rather than allocating another image/control block.
+    auto owner = std::make_shared<wgc_vram_frame_owner_t>(std::move(pooled_image), std::move(frame.lease));
+    auto *img = static_cast<img_d3d_t *>(owner->image.get());
+    img->capture_texture.reset();
+    img->capture_rt.reset();
+    img->capture_mutex.reset();
+    img->encoder_texture_handle.reset();
+    img->data = nullptr;
     img->width = width_before_rotation;
     img->height = height_before_rotation;
     img->pixel_pitch = get_pixel_pitch();
@@ -274,7 +305,6 @@ namespace platf::dxgi {
     frame.texture.copy_to(&img->capture_texture);
     frame.keyed_mutex.copy_to(&img->capture_mutex);
     img->encoder_texture_handle = std::move(frame.encoder_texture_handle);
-    img->frame_lease = std::move(frame.lease);
     img->data = reinterpret_cast<std::uint8_t *>(img->capture_texture.get());
 
     img->frame_timestamp = frame_timestamp;
@@ -282,8 +312,12 @@ namespace platf::dxgi {
     // Keep WGC's QPC-derived timestamp for RTP/client accounting, but do not
     // use compositor timestamp jitter as the capture-loop sleep anchor.
     img->capture_pacing_timestamp = host_processing_timestamp;
-    img_out = img;
-    _last_cached_frame = img;
+    img_out = std::shared_ptr<platf::img_t> {owner, owner->image.get()};
+    if (is_wgc_constant_mode()) {
+      _last_cached_frame = img_out;
+    } else {
+      _last_cached_frame.reset();
+    }
 
     return capture_e::ok;
   }
@@ -495,7 +529,11 @@ namespace platf::dxgi {
     img->frame_timestamp = frame_timestamp;
     img->host_processing_timestamp = host_processing_timestamp;
     img->capture_pacing_timestamp = host_processing_timestamp;
-    _last_cached_frame = img_out;
+    if (is_wgc_constant_mode()) {
+      _last_cached_frame = img_out;
+    } else {
+      _last_cached_frame.reset();
+    }
 
     return capture_e::ok;
   }

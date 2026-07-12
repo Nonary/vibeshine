@@ -721,16 +721,16 @@ namespace platf::dxgi {
         return capture_e::reinit;
       }
 
-      const auto session = shared_from_this();
-      auto lease = std::shared_ptr<int>(new int {0}, [session, slot, frame_id = slot_snapshot.frame_id](int *value) {
-        delete value;
-        session->release_frame_slot(slot, frame_id);
-      });
+      auto session = shared_from_this();
+      std::shared_ptr<wgc_texture_slot_release_sink_t> release_sink {
+        std::move(session),
+        static_cast<wgc_texture_slot_release_sink_t *>(this)
+      };
 
       frame_out.texture = _shared_textures[slot];
       frame_out.keyed_mutex = _keyed_mutexes[slot];
       frame_out.encoder_texture_handle = _shared_texture_handles[slot];
-      frame_out.lease = std::move(lease);
+      frame_out.lease = wgc_texture_slot_lease_t {std::move(release_sink), slot, slot_snapshot.frame_id};
       frame_out.texture_slot = slot;
       frame_out.frame_id = static_cast<uint64_t>(slot_snapshot.frame_id);
       frame_out.frame_qpc = static_cast<uint64_t>(slot_snapshot.frame_qpc);
@@ -768,7 +768,7 @@ namespace platf::dxgi {
       return;
     }
 
-    (void) release_wgc_texture_slot(slot_metadata, frame_id);
+    (void) platf::dxgi::release_wgc_texture_slot(slot_metadata, frame_id);
   }
 
   bool ipc_session_t::setup_shared_resources_from_shared_handles(const shared_handle_data_t &handle_data) {
@@ -782,7 +782,7 @@ namespace platf::dxgi {
       BOOST_LOG(error) << "Invalid WGC shared handle data provided";
       return false;
     }
-    for (HANDLE texture_handle: handle_data.texture_handles) {
+    for (HANDLE texture_handle : handle_data.texture_handles) {
       if (!texture_handle || texture_handle == INVALID_HANDLE_VALUE) {
         BOOST_LOG(error) << "Invalid WGC shared texture-ring handle data provided";
         return false;
@@ -828,7 +828,7 @@ namespace platf::dxgi {
     if (!duplicated_event_handle || !duplicated_metadata_handle) {
       return false;
     }
-    for (const auto &texture_handle: duplicated_texture_handles) {
+    for (const auto &texture_handle : duplicated_texture_handles) {
       if (!texture_handle) {
         return false;
       }

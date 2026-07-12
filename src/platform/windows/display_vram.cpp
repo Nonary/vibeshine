@@ -12,9 +12,9 @@
 #include <optional>
 
 // platform includes
-#include <winsock2.h>
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
+#include <winsock2.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -2516,7 +2516,6 @@ namespace platf::dxgi {
     img->capture_mutex.reset();
     img->data = nullptr;
     img->encoder_texture_handle.reset();
-    img->frame_lease.reset();
 
     // Initialize format-dependent fields
     img->pixel_pitch = get_pixel_pitch();
