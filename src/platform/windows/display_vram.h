@@ -32,7 +32,6 @@ namespace platf::dxgi {
     bool blank = true;  ///< True if contains no desktop or cursor content.
     uint32_t id = 0;  ///< Monotonically increasing identifier.
     DXGI_FORMAT format;  ///< Underlying DXGI texture format.
-    std::shared_ptr<void> frame_lease;  ///< WGC ring-slot lease released after all consumers drop the image.
   };
 
 }  // namespace platf::dxgi

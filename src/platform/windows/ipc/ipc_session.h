@@ -8,12 +8,13 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <winsock2.h>
 #include <d3d11.h>
 #include <memory>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <winsock2.h>
 
 // local includes
 #include "misc_utils.h"
@@ -39,11 +40,76 @@ namespace platf::dxgi {
    */
   void note_wgc_desktop_switch();
 
+  /** Receives the final release of a helper-owned WGC texture-ring slot. */
+  class wgc_texture_slot_release_sink_t {
+  public:
+    virtual ~wgc_texture_slot_release_sink_t() = default;
+    virtual void release_wgc_texture_slot(size_t slot, LONG64 frame_id) = 0;
+  };
+
+  /**
+   * Move-only ownership of a helper texture-ring slot.
+   *
+   * The lease is moved into the aliasing image owner returned to encoders. Its
+   * destructor returns the slot only after the final image consumer releases
+   * that owner.
+   */
+  class wgc_texture_slot_lease_t {
+  public:
+    wgc_texture_slot_lease_t() = default;
+
+    wgc_texture_slot_lease_t(std::shared_ptr<wgc_texture_slot_release_sink_t> sink, size_t slot, LONG64 frame_id):
+        _sink(std::move(sink)),
+        _slot(slot),
+        _frame_id(frame_id) {}
+
+    ~wgc_texture_slot_lease_t() {
+      release();
+    }
+
+    wgc_texture_slot_lease_t(const wgc_texture_slot_lease_t &) = delete;
+    wgc_texture_slot_lease_t &operator=(const wgc_texture_slot_lease_t &) = delete;
+
+    wgc_texture_slot_lease_t(wgc_texture_slot_lease_t &&other) noexcept:
+        _sink(std::move(other._sink)),
+        _slot(other._slot),
+        _frame_id(other._frame_id) {
+      other._slot = WGC_IPC_TEXTURE_SLOT_COUNT;
+      other._frame_id = 0;
+    }
+
+    wgc_texture_slot_lease_t &operator=(wgc_texture_slot_lease_t &&other) noexcept {
+      if (this != &other) {
+        release();
+        _sink = std::move(other._sink);
+        _slot = other._slot;
+        _frame_id = other._frame_id;
+        other._slot = WGC_IPC_TEXTURE_SLOT_COUNT;
+        other._frame_id = 0;
+      }
+      return *this;
+    }
+
+  private:
+    void release() noexcept {
+      if (_sink) {
+        auto sink = std::move(_sink);
+        sink->release_wgc_texture_slot(_slot, _frame_id);
+      }
+      _slot = WGC_IPC_TEXTURE_SLOT_COUNT;
+      _frame_id = 0;
+    }
+
+    std::shared_ptr<wgc_texture_slot_release_sink_t> _sink;
+    size_t _slot = WGC_IPC_TEXTURE_SLOT_COUNT;
+    LONG64 _frame_id = 0;
+  };
+
   struct shared_frame_t {
     winrt::com_ptr<ID3D11Texture2D> texture;
     winrt::com_ptr<IDXGIKeyedMutex> keyed_mutex;
     std::shared_ptr<winrt::handle> encoder_texture_handle;
-    std::shared_ptr<void> lease;
+    wgc_texture_slot_lease_t lease;
     size_t texture_slot = WGC_IPC_TEXTURE_SLOT_COUNT;
     uint64_t frame_id = 0;
     uint64_t frame_qpc = 0;
@@ -54,7 +120,7 @@ namespace platf::dxgi {
    * Manages lifecycle & communication with the helper process, duplication of shared textures, keyed mutex
    * coordination and event-driven frame availability signaling for both RAM & VRAM capture paths.
    */
-  class ipc_session_t: public std::enable_shared_from_this<ipc_session_t> {
+  class ipc_session_t: public std::enable_shared_from_this<ipc_session_t>, private wgc_texture_slot_release_sink_t {
   public:
     /**
      * @brief Destructor. Stops the helper process and tears down IPC.
@@ -179,6 +245,10 @@ namespace platf::dxgi {
      * @brief Return a leased slot to the helper after its last encoder consumer exits.
      */
     void release_frame_slot(size_t slot, LONG64 frame_id);
+
+    void release_wgc_texture_slot(size_t slot, LONG64 frame_id) override {
+      release_frame_slot(slot, frame_id);
+    }
 
     /**
      * @brief Handle a desktop-switch notification from the helper process.

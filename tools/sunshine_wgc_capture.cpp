@@ -12,9 +12,9 @@
 #define WIN32_LEAN_AND_MEAN
 
 // standard includes
-#include <atomic>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -32,6 +32,7 @@
 #include "src/logging.h"
 #include "src/platform/windows/ipc/misc_utils.h"
 #include "src/platform/windows/ipc/pipes.h"
+#include "src/platform/windows/wgc_damage_tracker.h"
 #include "src/utility.h"  // For RAII utilities
 
 // platform includes
@@ -44,6 +45,7 @@
 #include <Windows.Graphics.Capture.Interop.h>
 #include <Windows.h>
 #include <winrt/base.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Metadata.h>  // For ApiInformation
 #include <winrt/Windows.Graphics.Capture.h>
@@ -163,6 +165,8 @@ static bool g_secure_desktop_detected = false;
  * helper must exit and let the main process reinitialize capture.
  */
 static std::atomic<bool> g_capture_item_closed {false};
+static winrt::handle g_pipe_disconnected_event;
+static winrt::handle g_capture_item_closed_event;
 
 /**
  * @brief Pending verification deadline for desktop switches that were not immediately secure.
@@ -177,6 +181,19 @@ static std::optional<std::chrono::steady_clock::time_point> g_pending_secure_des
  * onto secure desktop, without forcing a reinit for ordinary non-secure desktop churn.
  */
 constexpr auto SECURE_DESKTOP_CONFIRMATION_WINDOW = std::chrono::seconds(1);
+
+void signal_capture_item_closed() {
+  g_capture_item_closed.store(true, std::memory_order_release);
+  if (g_capture_item_closed_event) {
+    SetEvent(g_capture_item_closed_event.get());
+  }
+}
+
+void signal_pipe_disconnected() {
+  if (g_pipe_disconnected_event) {
+    SetEvent(g_pipe_disconnected_event.get());
+  }
+}
 
 void notify_main_process_about_secure_desktop() {
   if (g_secure_desktop_detected) {
@@ -318,8 +335,8 @@ public:
   /**
    * @brief Sets GPU scheduling priority for optimal capture performance under high GPU load.
    *
-   * Configures the process GPU scheduling priority to REALTIME. This is critical for maintaining
-   * capture performance when the GPU is under heavy load from games or other applications.
+   * Uses HIGH rather than REALTIME so capture work remains responsive without
+   * preempting the game's rendering queue under GPU pressure.
    *
    * @return true if GPU priority was successfully set, false otherwise.
    */
@@ -336,16 +353,16 @@ public:
       return false;
     }
 
-    auto priority = static_cast<LONG>(D3DKMT_SchedulingPriorityClass::REALTIME);
+    auto priority = static_cast<LONG>(D3DKMT_SchedulingPriorityClass::HIGH);
 
     HRESULT hr = d3dkmt_set_process_priority(GetCurrentProcess(), priority);
     if (FAILED(hr)) {
-      BOOST_LOG(warning) << "Failed to set GPU scheduling priority to REALTIME: " << hr
+      BOOST_LOG(warning) << "Failed to set GPU scheduling priority to HIGH: " << hr
                          << " (may require administrator privileges for optimal performance)";
       return false;
     }
 
-    BOOST_LOG(info) << "GPU scheduling priority set to REALTIME for optimal capture performance";
+    BOOST_LOG(info) << "GPU scheduling priority set to HIGH for balanced capture performance";
     _gpu_priority_set = true;
     return true;
   }
@@ -939,7 +956,7 @@ public:
     _frame_metadata->frame_id = 0;
     _frame_metadata->frame_qpc = 0;
     _frame_metadata->texture_slot = 0;
-    for (auto &slot: _frame_metadata->slots) {
+    for (auto &slot : _frame_metadata->slots) {
       slot.state = static_cast<LONG>(platf::dxgi::wgc_texture_slot_state_e::free);
       slot.reserved = 0;
       slot.frame_id = 0;
@@ -1122,6 +1139,7 @@ class WgcCaptureManager {
 private:
   static constexpr auto WGC_DIAGNOSTICS_LOG_INTERVAL = std::chrono::seconds(15);
   static constexpr auto WGC_DRAIN_LOG_INTERVAL = std::chrono::seconds(5);
+  static constexpr uint64_t WGC_TIMING_SAMPLE_PERIOD = 120;
 
   std::atomic<bool> _shutting_down {false};
   Direct3D11CaptureFramePool _frame_pool = nullptr;  ///< WinRT frame pool for capture operations
@@ -1145,23 +1163,46 @@ private:
   std::atomic<uint64_t> _captured_frames {0};
   std::atomic<uint64_t> _frame_pool_empty_drops {0};
   std::atomic<uint64_t> _drained_pool_frames {0};
+  std::atomic<uint64_t> _ring_slot_drops {0};
   std::atomic<uint64_t> _slow_context_waits {0};
   std::atomic<uint64_t> _slow_mutex_waits {0};
   std::atomic<uint64_t> _slow_shared_mutex_holds {0};
   std::atomic<uint64_t> _slow_copy_submissions {0};
   std::atomic<uint64_t> _published_frames {0};
+  std::atomic<uint64_t> _full_copies {0};
+  std::atomic<uint64_t> _partial_copies {0};
+  std::atomic<uint64_t> _no_change_skips {0};
+  std::atomic<uint64_t> _copied_pixels {0};
+  std::atomic<uint64_t> _timing_samples {0};
+  std::atomic<uint64_t> _sampled_context_wait_us {0};
+  std::atomic<uint64_t> _sampled_mutex_wait_us {0};
+  std::atomic<uint64_t> _sampled_mutex_hold_us {0};
+  std::atomic<uint64_t> _sampled_copy_submit_us {0};
   uint64_t _last_diagnostics_captured_frames = 0;
   uint64_t _last_diagnostics_published_frames = 0;
   uint64_t _last_diagnostics_empty_drops = 0;
   uint64_t _last_diagnostics_drained_frames = 0;
+  uint64_t _last_diagnostics_ring_slot_drops = 0;
   uint64_t _last_diagnostics_slow_context = 0;
   uint64_t _last_diagnostics_slow_mutex = 0;
   uint64_t _last_diagnostics_slow_hold = 0;
   uint64_t _last_diagnostics_slow_copy = 0;
+  uint64_t _last_diagnostics_full_copies = 0;
+  uint64_t _last_diagnostics_partial_copies = 0;
+  uint64_t _last_diagnostics_no_change_skips = 0;
+  uint64_t _last_diagnostics_copied_pixels = 0;
+  uint64_t _last_diagnostics_timing_samples = 0;
+  uint64_t _last_diagnostics_context_wait_us = 0;
+  uint64_t _last_diagnostics_mutex_wait_us = 0;
+  uint64_t _last_diagnostics_mutex_hold_us = 0;
+  uint64_t _last_diagnostics_copy_submit_us = 0;
   std::mutex _d3d_context_mutex;
+  std::mutex _damage_mutex;
   DXGI_FORMAT _capture_format = DXGI_FORMAT_UNKNOWN;  ///< DXGI format for captured frames
   UINT _height = 0;  ///< Capture height in pixels
   UINT _width = 0;  ///< Capture width in pixels
+  wgc_texture_ring_damage_tracker_t _damage_tracker;
+  std::atomic<bool> _dirty_regions_enabled {false};
 
 public:
   /**
@@ -1180,7 +1221,8 @@ public:
       _deps(std::move(deps)),
       _capture_format(capture_format),
       _height(height),
-      _width(width) {
+      _width(width),
+      _damage_tracker(width, height) {
     _max_buffer_size = std::clamp<uint32_t>(
       g_config.max_frame_buffer_size ? g_config.max_frame_buffer_size : ABSOLUTE_MAX_BUFFER_SIZE,
       1,
@@ -1197,7 +1239,6 @@ public:
     _last_quiet_start = now;
     _last_buffer_check = now;
     _last_diagnostics_log_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
-
   }
 
   /**
@@ -1229,11 +1270,9 @@ public:
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-
   }
 
 private:
-
   void cleanup_capture_session() noexcept {
     try {
       if (_capture_session) {
@@ -1346,6 +1385,7 @@ public:
       if (drain_to_latest()) {
         while (auto next_frame = sender.TryGetNextFrame()) {
           if (frame) {
+            accumulate_dirty_regions(frame);
             ++drained_frames;
           }
           frame = std::move(next_frame);
@@ -1373,12 +1413,13 @@ public:
     } else {
       // Frame successfully retrieved
       try {
+        accumulate_dirty_regions(frame);
         auto surface = frame.Surface();
 
         // Get frame timing information from the WGC frame
         uint64_t frame_qpc = frame.SystemRelativeTime().count();
-        record_frame_arrival(drained_frames);
-        queue_frame_for_delivery(std::move(frame), surface, frame_qpc);
+        const bool sample_timing = record_frame_arrival(drained_frames);
+        queue_frame_for_delivery(std::move(frame), surface, frame_qpc, sample_timing);
       } catch (const winrt::hresult_error &ex) {
         // Log error
         BOOST_LOG(error) << "WinRT error in frame processing: " << ex.code() << " - " << winrt::to_string(ex.message());
@@ -1427,8 +1468,8 @@ private:
              0.0;
   }
 
-  void record_frame_arrival(uint32_t drained_frames) {
-    _captured_frames.fetch_add(1, std::memory_order_relaxed);
+  bool record_frame_arrival(uint32_t drained_frames) {
+    const auto captured_frames = _captured_frames.fetch_add(1, std::memory_order_relaxed) + 1;
 
     if (drained_frames > 0) {
       const auto now = std::chrono::steady_clock::now();
@@ -1440,6 +1481,55 @@ private:
                         << ", buffer=" << _current_buffer_size << "/" << _max_buffer_size
                         << ", approx_extra_pool_latency_ms=" << approximate_extra_pool_latency_ms(_current_buffer_size) << ")";
       }
+    }
+
+    return captured_frames == 1 || captured_frames % WGC_TIMING_SAMPLE_PERIOD == 0;
+  }
+
+  void disable_dirty_regions(std::string_view reason) {
+    if (!_dirty_regions_enabled.exchange(false, std::memory_order_acq_rel)) {
+      return;
+    }
+
+    std::lock_guard lock(_damage_mutex);
+    _damage_tracker.invalidate();
+    BOOST_LOG(warning) << "WGC dirty-region capture disabled; using full copies (" << reason << ')';
+  }
+
+  void accumulate_dirty_regions(const Direct3D11CaptureFrame &frame) {
+    if (!_dirty_regions_enabled.load(std::memory_order_acquire)) {
+      return;
+    }
+
+    try {
+      auto frame2 = frame.try_as<IDirect3D11CaptureFrame2>();
+      if (!frame2 || frame2.DirtyRegionMode() != GraphicsCaptureDirtyRegionMode::ReportOnly) {
+        disable_dirty_regions("frame did not report ReportOnly damage");
+        return;
+      }
+
+      std::lock_guard lock(_damage_mutex);
+      if (!_dirty_regions_enabled.load(std::memory_order_relaxed)) {
+        return;
+      }
+      for (const auto &region : frame2.DirtyRegions()) {
+        const wgc_damage_rect_t damage {
+          .x = region.X,
+          .y = region.Y,
+          .width = region.Width,
+          .height = region.Height
+        };
+        if (!_damage_tracker.accumulate(std::span<const wgc_damage_rect_t> {&damage, 1})) {
+          _dirty_regions_enabled.store(false, std::memory_order_release);
+          BOOST_LOG(warning) << "WGC reported an invalid dirty region; using full copies";
+          return;
+        }
+      }
+    } catch (const winrt::hresult_error &ex) {
+      disable_dirty_regions("dirty-region query failed");
+      BOOST_LOG(debug) << "WGC dirty-region query failed: " << ex.code() << " - " << winrt::to_string(ex.message());
+    } catch (...) {
+      disable_dirty_regions("dirty-region query threw");
     }
   }
 
@@ -1462,28 +1552,68 @@ private:
       const auto published = _published_frames.load(std::memory_order_relaxed);
       const auto empty_drops = _frame_pool_empty_drops.load(std::memory_order_relaxed);
       const auto drained = _drained_pool_frames.load(std::memory_order_relaxed);
+      const auto ring_slot_drops = _ring_slot_drops.load(std::memory_order_relaxed);
       const auto slow_context = _slow_context_waits.load(std::memory_order_relaxed);
       const auto slow_mutex = _slow_mutex_waits.load(std::memory_order_relaxed);
       const auto slow_hold = _slow_shared_mutex_holds.load(std::memory_order_relaxed);
       const auto slow_copy = _slow_copy_submissions.load(std::memory_order_relaxed);
+      const auto full_copies = _full_copies.load(std::memory_order_relaxed);
+      const auto partial_copies = _partial_copies.load(std::memory_order_relaxed);
+      const auto no_change_skips = _no_change_skips.load(std::memory_order_relaxed);
+      const auto copied_pixels = _copied_pixels.load(std::memory_order_relaxed);
+      const auto timing_samples = _timing_samples.load(std::memory_order_relaxed);
+      const auto context_wait_us = _sampled_context_wait_us.load(std::memory_order_relaxed);
+      const auto mutex_wait_us = _sampled_mutex_wait_us.load(std::memory_order_relaxed);
+      const auto mutex_hold_us = _sampled_mutex_hold_us.load(std::memory_order_relaxed);
+      const auto copy_submit_us = _sampled_copy_submit_us.load(std::memory_order_relaxed);
 
       const auto captured_delta = captured - _last_diagnostics_captured_frames;
       const auto published_delta = published - _last_diagnostics_published_frames;
       const auto empty_drop_delta = empty_drops - _last_diagnostics_empty_drops;
       const auto drained_delta = drained - _last_diagnostics_drained_frames;
+      const auto ring_slot_drop_delta = ring_slot_drops - _last_diagnostics_ring_slot_drops;
       const auto slow_context_delta = slow_context - _last_diagnostics_slow_context;
       const auto slow_mutex_delta = slow_mutex - _last_diagnostics_slow_mutex;
       const auto slow_hold_delta = slow_hold - _last_diagnostics_slow_hold;
       const auto slow_copy_delta = slow_copy - _last_diagnostics_slow_copy;
+      const auto full_copy_delta = full_copies - _last_diagnostics_full_copies;
+      const auto partial_copy_delta = partial_copies - _last_diagnostics_partial_copies;
+      const auto no_change_skip_delta = no_change_skips - _last_diagnostics_no_change_skips;
+      const auto copied_pixels_delta = copied_pixels - _last_diagnostics_copied_pixels;
+      const auto timing_sample_delta = timing_samples - _last_diagnostics_timing_samples;
+      const auto context_wait_us_delta = context_wait_us - _last_diagnostics_context_wait_us;
+      const auto mutex_wait_us_delta = mutex_wait_us - _last_diagnostics_mutex_wait_us;
+      const auto mutex_hold_us_delta = mutex_hold_us - _last_diagnostics_mutex_hold_us;
+      const auto copy_submit_us_delta = copy_submit_us - _last_diagnostics_copy_submit_us;
 
       _last_diagnostics_captured_frames = captured;
       _last_diagnostics_published_frames = published;
       _last_diagnostics_empty_drops = empty_drops;
       _last_diagnostics_drained_frames = drained;
+      _last_diagnostics_ring_slot_drops = ring_slot_drops;
       _last_diagnostics_slow_context = slow_context;
       _last_diagnostics_slow_mutex = slow_mutex;
       _last_diagnostics_slow_hold = slow_hold;
       _last_diagnostics_slow_copy = slow_copy;
+      _last_diagnostics_full_copies = full_copies;
+      _last_diagnostics_partial_copies = partial_copies;
+      _last_diagnostics_no_change_skips = no_change_skips;
+      _last_diagnostics_copied_pixels = copied_pixels;
+      _last_diagnostics_timing_samples = timing_samples;
+      _last_diagnostics_context_wait_us = context_wait_us;
+      _last_diagnostics_mutex_wait_us = mutex_wait_us;
+      _last_diagnostics_mutex_hold_us = mutex_hold_us;
+      _last_diagnostics_copy_submit_us = copy_submit_us;
+
+      const auto copied_pixel_ratio = captured_delta > 0 ?
+                                        static_cast<double>(copied_pixels_delta) /
+                                          (static_cast<double>(captured_delta) * static_cast<uint64_t>(_width) * _height) :
+                                        0.0;
+      const auto sampled_average_ms = [timing_sample_delta](uint64_t total_us) {
+        return timing_sample_delta > 0 ?
+                 static_cast<double>(total_us) / timing_sample_delta / 1000.0 :
+                 0.0;
+      };
 
       BOOST_LOG(info) << "WGC capture diagnostics: interval_s=" << interval_s
                       << " buffer=" << _current_buffer_size << "/" << _max_buffer_size
@@ -1492,6 +1622,16 @@ private:
                       << " publish_fps=" << (static_cast<double>(published_delta) / interval_s)
                       << " drained=" << drained_delta
                       << " empty_drops=" << empty_drop_delta
+                      << " ring_slot_drops=" << ring_slot_drop_delta
+                      << " full_copies=" << full_copy_delta
+                      << " partial_copies=" << partial_copy_delta
+                      << " no_change_skips=" << no_change_skip_delta
+                      << " copied_pixel_ratio=" << copied_pixel_ratio
+                      << " timing_samples=" << timing_sample_delta
+                      << " sampled_context_wait_ms=" << sampled_average_ms(context_wait_us_delta)
+                      << " sampled_mutex_wait_ms=" << sampled_average_ms(mutex_wait_us_delta)
+                      << " sampled_mutex_hold_ms=" << sampled_average_ms(mutex_hold_us_delta)
+                      << " sampled_copy_submit_ms=" << sampled_average_ms(copy_submit_us_delta)
                       << " slow_context=" << slow_context_delta
                       << " slow_mutex=" << slow_mutex_delta
                       << " slow_shared_hold=" << slow_hold_delta
@@ -1576,7 +1716,7 @@ private:
    * @param surface The captured D3D11 surface.
    * @param frame_qpc The QPC timestamp from when the frame was captured.
    */
-  void queue_frame_for_delivery(Direct3D11CaptureFrame frame, winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DSurface surface, uint64_t frame_qpc) {
+  void queue_frame_for_delivery(Direct3D11CaptureFrame frame, winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DSurface surface, uint64_t frame_qpc, bool sample_timing) {
     if (!_deps) {
       return;
     }
@@ -1597,7 +1737,7 @@ private:
 
     // Each IPC slot has an independent keyed mutex. A busy consumer only makes
     // this callback skip that slot; it never makes WGC retain a frame-pool buffer.
-    copy_frame_to_shared_texture(frame_tex, frame_qpc);
+    copy_frame_to_shared_texture(frame_tex, frame_qpc, sample_timing);
   }
 
   /**
@@ -1605,31 +1745,45 @@ private:
    * @param frame_tex The captured D3D11 texture.
    * @param frame_qpc The QPC timestamp from when the frame was captured.
    */
-  void copy_frame_to_shared_texture(const winrt::com_ptr<ID3D11Texture2D> &frame_tex, uint64_t frame_qpc) {
+  void copy_frame_to_shared_texture(const winrt::com_ptr<ID3D11Texture2D> &frame_tex, uint64_t frame_qpc, bool sample_timing) {
     if (!_deps || !frame_tex) {
       return;
     }
 
     // Serialize all helper D3D work before taking the cross-process keyed
     // mutex, keeping the shared-slot critical section to one copy submission.
-    const auto context_wait_start = std::chrono::steady_clock::now();
+    const auto context_wait_start = sample_timing ? std::optional {std::chrono::steady_clock::now()} : std::nullopt;
     std::unique_lock context_lock(_d3d_context_mutex);
-    const auto context_wait = std::chrono::steady_clock::now() - context_wait_start;
+    const auto context_wait = context_wait_start ?
+                                std::optional {std::chrono::steady_clock::now() - *context_wait_start} :
+                                std::nullopt;
 
-    const auto mutex_wait_start = std::chrono::steady_clock::now();
+    std::unique_lock damage_lock(_damage_mutex);
     const auto reservation = _deps->resource_manager.reserve_texture_slot();
-    const auto mutex_wait = std::chrono::steady_clock::now() - mutex_wait_start;
     if (!reservation) {
-      const auto slow_mutex_count = _slow_mutex_waits.fetch_add(1, std::memory_order_relaxed) + 1;
-      if (slow_mutex_count <= 5 || slow_mutex_count % 120 == 0) {
+      const auto ring_slot_drops = _ring_slot_drops.fetch_add(1, std::memory_order_relaxed) + 1;
+      if (ring_slot_drops <= 5 || ring_slot_drops % 120 == 0) {
         BOOST_LOG(debug) << "All WGC IPC texture-ring slots are leased; dropping frame"
-                         << " (count=" << slow_mutex_count << ")";
+                         << " (count=" << ring_slot_drops << ")";
       }
       return;
     }
     const auto texture_slot = reservation->slot;
 
+    auto copy_plan = _dirty_regions_enabled.load(std::memory_order_acquire) ?
+                       _damage_tracker.plan_for_slot(texture_slot) :
+                       wgc_damage_copy_plan_t {.kind = wgc_damage_copy_kind_e::full};
+    if (copy_plan.kind == wgc_damage_copy_kind_e::skip) {
+      _deps->resource_manager.abandon_texture_slot(*reservation);
+      _no_change_skips.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+
+    const auto mutex_wait_start = sample_timing ? std::optional {std::chrono::steady_clock::now()} : std::nullopt;
     const HRESULT hr = _deps->resource_manager.get_keyed_mutex(texture_slot)->AcquireSync(0, 0);
+    const auto mutex_wait = mutex_wait_start ?
+                              std::optional {std::chrono::steady_clock::now() - *mutex_wait_start} :
+                              std::nullopt;
     if (hr != S_OK && hr != WAIT_ABANDONED) {
       _deps->resource_manager.abandon_texture_slot(*reservation);
       if (hr != WAIT_TIMEOUT) {
@@ -1641,7 +1795,14 @@ private:
       BOOST_LOG(error) << "Keyed mutex was abandoned; continuing with lock held";
     }
 
-    const auto shared_mutex_hold_start = std::chrono::steady_clock::now();
+    // A concurrent frame may have made dirty-region reporting invalid after
+    // this callback selected its plan. Prefer one conservative full copy over
+    // publishing a texture with any untracked pixels.
+    if (!_dirty_regions_enabled.load(std::memory_order_acquire)) {
+      copy_plan = {.kind = wgc_damage_copy_kind_e::full};
+    }
+
+    const auto shared_mutex_hold_start = sample_timing ? std::optional {std::chrono::steady_clock::now()} : std::nullopt;
     auto release_shared_mutex = util::fail_guard([&]() {
       const HRESULT rel_hr = _deps->resource_manager.get_keyed_mutex(texture_slot)->ReleaseSync(0);
       if (FAILED(rel_hr)) {
@@ -1650,11 +1811,28 @@ private:
       _deps->resource_manager.abandon_texture_slot(*reservation);
     });
 
-    // The one capture-handoff copy: WGC's non-shareable frame surface becomes
-    // a helper-owned shared ring texture that encoder devices can consume directly.
-    const auto copy_start = std::chrono::steady_clock::now();
-    _deps->d3d_context->CopyResource(_deps->resource_manager.get_shared_texture(texture_slot).get(), frame_tex.get());
-    const auto copy_submit = std::chrono::steady_clock::now() - copy_start;
+    // WGC frame surfaces cannot be shared directly. A full copy initializes a
+    // ring slot; otherwise a single accumulated damage bounding box refreshes
+    // all changes that slot missed while it was leased.
+    const auto copy_start = sample_timing ? std::optional {std::chrono::steady_clock::now()} : std::nullopt;
+    auto *destination = _deps->resource_manager.get_shared_texture(texture_slot).get();
+    if (copy_plan.kind == wgc_damage_copy_kind_e::full) {
+      _deps->d3d_context->CopyResource(destination, frame_tex.get());
+    } else {
+      const auto &rect = copy_plan.rect;
+      const D3D11_BOX source_box {
+        static_cast<UINT>(rect.x),
+        static_cast<UINT>(rect.y),
+        0,
+        static_cast<UINT>(rect.x + rect.width),
+        static_cast<UINT>(rect.y + rect.height),
+        1
+      };
+      _deps->d3d_context->CopySubresourceRegion(destination, 0, source_box.left, source_box.top, 0, frame_tex.get(), 0, &source_box);
+    }
+    const auto copy_submit = copy_start ?
+                               std::optional {std::chrono::steady_clock::now() - *copy_start} :
+                               std::nullopt;
 
     const HRESULT rel_hr = _deps->resource_manager.get_keyed_mutex(texture_slot)->ReleaseSync(0);
     release_shared_mutex.disable();
@@ -1663,49 +1841,56 @@ private:
       _deps->resource_manager.abandon_texture_slot(*reservation);
       return;
     }
-    const auto shared_mutex_hold = std::chrono::steady_clock::now() - shared_mutex_hold_start;
+    const auto shared_mutex_hold = shared_mutex_hold_start ?
+                                     std::optional {std::chrono::steady_clock::now() - *shared_mutex_hold_start} :
+                                     std::nullopt;
+    _damage_tracker.mark_copied(texture_slot);
+    damage_lock.unlock();
     context_lock.unlock();
+
+    const uint64_t frame_pixels = static_cast<uint64_t>(_width) * _height;
+    if (copy_plan.kind == wgc_damage_copy_kind_e::full) {
+      _full_copies.fetch_add(1, std::memory_order_relaxed);
+      _copied_pixels.fetch_add(frame_pixels, std::memory_order_relaxed);
+    } else {
+      const uint64_t copied_pixels = static_cast<uint64_t>(copy_plan.rect.width) * copy_plan.rect.height;
+      _partial_copies.fetch_add(1, std::memory_order_relaxed);
+      _copied_pixels.fetch_add(copied_pixels, std::memory_order_relaxed);
+    }
 
     // Publish after releasing the keyed mutex. Once the slot is visible as ready,
     // Sunshine can lease it directly to encoder consumers without a second copy.
     _deps->resource_manager.publish_frame_metadata(frame_qpc, texture_slot);
     _deps->resource_manager.signal_frame_ready();
-    _published_frames.fetch_add(1, std::memory_order_relaxed);
+    const auto published = _published_frames.fetch_add(1, std::memory_order_relaxed) + 1;
 
-    const auto context_wait_ms = std::chrono::duration<double, std::milli>(context_wait).count();
-    const auto mutex_wait_ms = std::chrono::duration<double, std::milli>(mutex_wait).count();
-    const auto shared_mutex_hold_ms = std::chrono::duration<double, std::milli>(shared_mutex_hold).count();
-    const auto copy_submit_ms = std::chrono::duration<double, std::milli>(copy_submit).count();
-    const bool slow_context = context_wait_ms > 1.0;
-    const bool slow_mutex = mutex_wait_ms > 1.0;
-    const bool slow_shared_hold = shared_mutex_hold_ms > 1.0;
-    const bool slow_copy = copy_submit_ms > 1.0;
-    if (slow_context || slow_mutex || slow_shared_hold || slow_copy) {
-      const auto slow_context_count = slow_context ? (_slow_context_waits.fetch_add(1, std::memory_order_relaxed) + 1) : _slow_context_waits.load(std::memory_order_relaxed);
-      const auto slow_mutex_count = slow_mutex ? (_slow_mutex_waits.fetch_add(1, std::memory_order_relaxed) + 1) : _slow_mutex_waits.load(std::memory_order_relaxed);
-      const auto slow_hold_count = slow_shared_hold ? (_slow_shared_mutex_holds.fetch_add(1, std::memory_order_relaxed) + 1) : _slow_shared_mutex_holds.load(std::memory_order_relaxed);
-      const auto slow_copy_count = slow_copy ? (_slow_copy_submissions.fetch_add(1, std::memory_order_relaxed) + 1) : _slow_copy_submissions.load(std::memory_order_relaxed);
-      const bool should_log_slow_context = slow_context && (slow_context_count <= 5 || slow_context_count % 120 == 0);
-      const bool should_log_slow_mutex = slow_mutex && (slow_mutex_count <= 5 || slow_mutex_count % 120 == 0);
-      const bool should_log_slow_hold = slow_shared_hold && (slow_hold_count <= 5 || slow_hold_count % 120 == 0);
-      const bool should_log_slow_copy = slow_copy && (slow_copy_count <= 5 || slow_copy_count % 120 == 0);
-      if (should_log_slow_context || should_log_slow_mutex || should_log_slow_hold || should_log_slow_copy) {
-        BOOST_LOG(debug) << "WGC helper copy timing: context_wait_ms=" << context_wait_ms
-                         << " mutex_wait_ms=" << mutex_wait_ms
-                         << " shared_mutex_hold_ms=" << shared_mutex_hold_ms
-                         << " copy_submit_ms=" << copy_submit_ms
-                         << " slow_context_count=" << slow_context_count
-                         << " slow_mutex_count=" << slow_mutex_count
-                         << " slow_shared_hold_count=" << slow_hold_count
-                         << " slow_copy_count=" << slow_copy_count;
+    if (sample_timing) {
+      const auto context_wait_us = std::chrono::duration_cast<std::chrono::microseconds>(*context_wait).count();
+      const auto mutex_wait_us = std::chrono::duration_cast<std::chrono::microseconds>(*mutex_wait).count();
+      const auto shared_mutex_hold_us = std::chrono::duration_cast<std::chrono::microseconds>(*shared_mutex_hold).count();
+      const auto copy_submit_us = std::chrono::duration_cast<std::chrono::microseconds>(*copy_submit).count();
+      _timing_samples.fetch_add(1, std::memory_order_relaxed);
+      _sampled_context_wait_us.fetch_add(context_wait_us, std::memory_order_relaxed);
+      _sampled_mutex_wait_us.fetch_add(mutex_wait_us, std::memory_order_relaxed);
+      _sampled_mutex_hold_us.fetch_add(shared_mutex_hold_us, std::memory_order_relaxed);
+      _sampled_copy_submit_us.fetch_add(copy_submit_us, std::memory_order_relaxed);
+      if (context_wait_us > 1000) {
+        _slow_context_waits.fetch_add(1, std::memory_order_relaxed);
+      }
+      if (mutex_wait_us > 1000) {
+        _slow_mutex_waits.fetch_add(1, std::memory_order_relaxed);
+      }
+      if (shared_mutex_hold_us > 1000) {
+        _slow_shared_mutex_holds.fetch_add(1, std::memory_order_relaxed);
+      }
+      if (copy_submit_us > 1000) {
+        _slow_copy_submissions.fetch_add(1, std::memory_order_relaxed);
       }
     }
 
     // Log first frame and frame 100 for quick sanity checks, but avoid long-running spam.
-    static std::atomic<uint64_t> frame_count {0};
-    const auto count = ++frame_count;
-    if (count == 1 || count == 100) {
-      BOOST_LOG(info) << "Published frame " << count << " to main process";
+    if (published == 1 || published == 100) {
+      BOOST_LOG(info) << "Published frame " << published << " to main process";
     }
   }
 
@@ -1776,6 +1961,29 @@ public:
       } catch (...) {
         BOOST_LOG(warning) << "IsBorderRequired(false) threw an unknown exception (continuing without it)";
       }
+    }
+
+    if (winrt::Windows::Foundation::Metadata::ApiInformation::IsApiContractPresent(
+          L"Windows.Foundation.UniversalApiContract",
+          19
+        )) {
+      auto session4 = _capture_session.try_as<winrt::Windows::Graphics::Capture::IGraphicsCaptureSession4>();
+      if (session4) {
+        try {
+          session4.DirtyRegionMode(GraphicsCaptureDirtyRegionMode::ReportOnly);
+          _dirty_regions_enabled.store(true, std::memory_order_release);
+          BOOST_LOG(info) << "WGC dirty-region mode set to ReportOnly";
+        } catch (const winrt::hresult_error &ex) {
+          BOOST_LOG(warning) << "Failed to enable WGC ReportOnly dirty regions; using full copies: "
+                             << ex.code() << " - " << winrt::to_string(ex.message());
+        } catch (...) {
+          BOOST_LOG(warning) << "Failed to enable WGC ReportOnly dirty regions; using full copies";
+        }
+      } else {
+        BOOST_LOG(debug) << "IGraphicsCaptureSession4 unavailable; using full WGC copies";
+      }
+    } else {
+      BOOST_LOG(debug) << "WGC dirty regions require UniversalApiContract 19; using full copies";
     }
 
     if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(L"Windows.Graphics.Capture.GraphicsCaptureSession", L"MinUpdateInterval")) {
@@ -1975,7 +2183,11 @@ bool setup_pipe_callbacks(AsyncNamedPipe &pipe) {
     // Error handler, intentionally left empty or log as needed
   };
 
-  return pipe.start(on_message, on_error);
+  auto on_broken_pipe = []() {
+    signal_pipe_disconnected();
+  };
+
+  return pipe.start(on_message, on_error, on_broken_pipe);
 }
 
 /**
@@ -1995,6 +2207,21 @@ bool process_window_messages(bool &shutdown_requested) {
     }
   }
   return true;
+}
+
+DWORD helper_wait_timeout_ms() {
+  constexpr DWORD connection_health_interval_ms = 1000;
+  if (!g_pending_secure_desktop_check_deadline) {
+    return connection_health_interval_ms;
+  }
+
+  const auto remaining = *g_pending_secure_desktop_check_deadline - std::chrono::steady_clock::now();
+  if (remaining <= std::chrono::steady_clock::duration::zero()) {
+    return 0;
+  }
+
+  const auto remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds>(remaining + std::chrono::microseconds(999)).count();
+  return static_cast<DWORD>((std::min) (int64_t {connection_health_interval_ms}, (std::max) (int64_t {1}, remaining_ms)));
 }
 
 /**
@@ -2057,6 +2284,13 @@ int main(int argc, char *argv[]) {
 
   std::string pipe_name = argv[1];
   BOOST_LOG(info) << "Using pipe name: " << pipe_name;
+
+  g_pipe_disconnected_event = winrt::handle(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  g_capture_item_closed_event = winrt::handle(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  if (!g_pipe_disconnected_event || !g_capture_item_closed_event) {
+    BOOST_LOG(error) << "Failed to create helper wait events: " << GetLastError();
+    return 1;
+  }
 
   // Initialize system settings (DPI awareness, thread priority, MMCSS)
   SystemInitializer system_initializer;
@@ -2158,7 +2392,7 @@ int main(int argc, char *argv[]) {
   // of freezing on the last delivered frame.
   item.Closed([](GraphicsCaptureItem const &, winrt::Windows::Foundation::IInspectable const &) {
     BOOST_LOG(warning) << "GraphicsCaptureItem closed; shutting down so capture can be reinitialized";
-    g_capture_item_closed.store(true, std::memory_order_release);
+    signal_capture_item_closed();
   });
 
   // Use FP16 whenever the stream is HDR or the target output is already in
@@ -2232,17 +2466,39 @@ int main(int argc, char *argv[]) {
 
   wgc_capture_manager.start_capture();
 
-  // Main message loop
+  // Wait on desktop-switch messages and helper shutdown signals rather than
+  // polling at 1 kHz. A one-second timeout remains as a connection-health
+  // fallback for pipe implementations that cannot signal remote closure.
   bool shutdown_requested = false;
-  while (pipe_shared->is_connected() && !shutdown_requested && !g_capture_item_closed.load(std::memory_order_acquire)) {
-    // Process window messages and check for shutdown
-    if (!process_window_messages(shutdown_requested)) {
+  const std::array wait_handles {
+    g_pipe_disconnected_event.get(),
+    g_capture_item_closed_event.get()
+  };
+  while (!shutdown_requested && !g_capture_item_closed.load(std::memory_order_acquire)) {
+    if (!pipe_shared->is_connected()) {
       break;
     }
 
     poll_pending_secure_desktop_transition();
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));  // Reduced from 5ms for lower IPC jitter
+    const auto wait_result = MsgWaitForMultipleObjectsEx(
+      static_cast<DWORD>(wait_handles.size()),
+      wait_handles.data(),
+      helper_wait_timeout_ms(),
+      QS_ALLINPUT,
+      MWMO_INPUTAVAILABLE
+    );
+    if (wait_result == WAIT_FAILED) {
+      BOOST_LOG(error) << "MsgWaitForMultipleObjectsEx failed: " << GetLastError();
+      break;
+    }
+    if (wait_result == WAIT_OBJECT_0 || wait_result == WAIT_OBJECT_0 + 1) {
+      break;
+    }
+    if (wait_result == WAIT_OBJECT_0 + wait_handles.size()) {
+      if (!process_window_messages(shutdown_requested)) {
+        break;
+      }
+    }
   }
 
   if (g_capture_item_closed.load(std::memory_order_acquire)) {
