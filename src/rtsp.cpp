@@ -176,6 +176,16 @@ namespace rtsp_stream {
     return config.dynamicRange != 0 && !config.prefer_sdr_10bit;
   }
 
+#ifdef _WIN32
+  void abort_display_start(launch_session_t &session) {
+    auto callback = std::move(session.display_start_abort);
+    session.display_start_abort = {};
+    if (callback) {
+      callback();
+    }
+  }
+#endif
+
   std::shared_ptr<launch_session_t> make_startup_launch_session_snapshot(const launch_session_t &source) {
     auto snapshot = std::make_shared<launch_session_t>();
 
@@ -198,6 +208,7 @@ namespace rtsp_stream {
     snapshot->lossless_scaling_rtss_limit = source.lossless_scaling_rtss_limit;
 #ifdef _WIN32
     snapshot->display_helper_gate = source.display_helper_gate;
+    snapshot->display_start_reservation = source.display_start_reservation;
 #endif
 
     return snapshot;
@@ -619,6 +630,7 @@ namespace rtsp_stream {
 
     template<class Function>
     void run_startup(Function &&fn) {
+      std::lock_guard submit_lock(startup_submit_mutex);
       if (stopping.load(std::memory_order_acquire)) {
         throw std::runtime_error("RTSP server is stopping");
       }
@@ -643,6 +655,48 @@ namespace rtsp_stream {
       startup_tasks.fetch_sub(1, std::memory_order_acq_rel);
     }
 
+    // Exception-path session cleanup must be owned by the same pool that
+    // drains ANNOUNCE startup. A detached join can outlive server shutdown and
+    // race static display/network teardown.
+    void schedule_session_stop_join(std::shared_ptr<stream::session_t> stream_session) noexcept {
+      if (!stream_session) {
+        return;
+      }
+      auto fallback_session = stream_session;
+      try {
+        run_startup([this, stream_session = std::move(stream_session)]() mutable {
+          auto finish = util::fail_guard([this]() {
+            finish_startup();
+          });
+          try {
+            stream::session::stop(*stream_session);
+            stream::session::join(*stream_session);
+          } catch (const std::exception &e) {
+            BOOST_LOG(error) << "RTSP exceptional session cleanup failed: " << e.what();
+          } catch (...) {
+            BOOST_LOG(error) << "RTSP exceptional session cleanup failed with an unknown exception.";
+          }
+        });
+        return;
+      } catch (const std::exception &e) {
+        BOOST_LOG(warning) << "RTSP cleanup pool unavailable; joining inline: " << e.what();
+      } catch (...) {
+        BOOST_LOG(warning) << "RTSP cleanup pool unavailable; joining inline.";
+      }
+
+      // The server is already stopping or the queue rejected work. This rare
+      // fallback is intentionally synchronous rather than detached so the
+      // session cannot outlive its owning server.
+      try {
+        stream::session::stop(*fallback_session);
+        stream::session::join(*fallback_session);
+      } catch (const std::exception &e) {
+        BOOST_LOG(error) << "RTSP inline exceptional session cleanup failed: " << e.what();
+      } catch (...) {
+        BOOST_LOG(error) << "RTSP inline exceptional session cleanup failed with an unknown exception.";
+      }
+    }
+
     int startup_count() const {
       return startup_tasks.load(std::memory_order_acquire);
     }
@@ -658,26 +712,148 @@ namespace rtsp_stream {
      *       the session will be discarded.
      * @param launch_session Streaming session information.
      */
-    void session_raise(std::shared_ptr<launch_session_t> launch_session) {
-      // If a launch event is still pending, don't overwrite it.
-      if (launch_event.view(0s)) {
+    void arm_launch_timeout_locked() {
+      auto pending = launch_event.view(0s);
+      if (!pending) {
         return;
+      }
+      const auto launch_session_id = pending->id;
+      const auto timer_generation = ++launch_timer_generation;
+      raised_timer.expires_after(config::stream.ping_timeout);
+      raised_timer.async_wait([this, launch_session_id, timer_generation](const boost::system::error_code &ec) {
+        std::shared_ptr<launch_session_t> discarded;
+        {
+          std::lock_guard lock(launch_state_mutex);
+          if (ec || timer_generation != launch_timer_generation) {
+            return;
+          }
+          auto pending = launch_event.view(0s);
+          if (!pending || pending->id != launch_session_id) {
+            return;
+          }
+          discarded = launch_event.pop(0s);
+          ++launch_timer_generation;
+        }
+        if (discarded) {
+          set_pending_vulkan_hdr_layer_stream(false);
+#ifdef _WIN32
+          abort_display_start(*discarded);
+#endif
+          BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
+        }
+      });
+    }
+
+    bool begin_launch_startup(uint32_t launch_session_id) {
+      std::lock_guard lock(launch_state_mutex);
+      auto pending = launch_event.view(0s);
+      if (!pending || pending->id != launch_session_id ||
+          launch_startup_in_progress.load(std::memory_order_acquire) != 0 ||
+          launch_cancel_requested.load(std::memory_order_acquire) == launch_session_id) {
+        return false;
+      }
+      launch_startup_in_progress.store(launch_session_id, std::memory_order_release);
+      ++launch_timer_generation;
+      raised_timer.cancel();
+      return true;
+    }
+
+    void fail_launch_startup(
+      uint32_t launch_session_id,
+      std::shared_ptr<launch_session_t> fallback_session = {}
+    ) {
+      std::shared_ptr<launch_session_t> discarded;
+      {
+        std::lock_guard lock(launch_state_mutex);
+        auto pending = launch_event.view(0s);
+        if (pending && pending->id == launch_session_id) {
+          ++launch_timer_generation;
+          raised_timer.cancel();
+          discarded = launch_event.pop(0s);
+        }
+        uint32_t expected = launch_session_id;
+        (void) launch_startup_in_progress.compare_exchange_strong(
+          expected,
+          0,
+          std::memory_order_acq_rel
+        );
+        if (launch_cancel_requested.load(std::memory_order_acquire) == launch_session_id) {
+          launch_cancel_requested.store(0, std::memory_order_release);
+        }
+        if (launch_control_connected == launch_session_id) {
+          launch_control_connected = 0;
+        }
+      }
+      auto aborted = discarded ? std::move(discarded) : std::move(fallback_session);
+      if (aborted) {
+        set_pending_vulkan_hdr_layer_stream(false);
+#ifdef _WIN32
+        abort_display_start(*aborted);
+#endif
+      }
+    }
+
+    bool commit_launch_startup(uint32_t launch_session_id, const std::function<void()> &commit) {
+      std::lock_guard lock(launch_state_mutex);
+      if (launch_startup_in_progress.load(std::memory_order_acquire) != launch_session_id ||
+          launch_cancel_requested.load(std::memory_order_acquire) == launch_session_id) {
+        return false;
+      }
+      if (commit) {
+        commit();
+      }
+      launch_startup_in_progress.store(0, std::memory_order_release);
+      if (launch_control_connected == launch_session_id) {
+        launch_control_connected = 0;
+      } else {
+        arm_launch_timeout_locked();
+      }
+      return true;
+    }
+
+    bool launch_cancelled(uint32_t launch_session_id) const {
+      return launch_cancel_requested.load(std::memory_order_acquire) == launch_session_id;
+    }
+
+    bool cancel_pending_launch() {
+      std::shared_ptr<launch_session_t> discarded;
+      {
+        std::lock_guard lock(launch_state_mutex);
+        const auto startup_id = launch_startup_in_progress.load(std::memory_order_acquire);
+        if (startup_id != 0) {
+          launch_cancel_requested.store(startup_id, std::memory_order_release);
+          BOOST_LOG(info) << "RTSP launch cancellation recorded while ANNOUNCE startup is in flight.";
+          return true;
+        }
+        ++launch_timer_generation;
+        raised_timer.cancel();
+        discarded = launch_event.pop(0s);
+      }
+      if (!discarded) {
+        return false;
+      }
+      set_pending_vulkan_hdr_layer_stream(false);
+#ifdef _WIN32
+      abort_display_start(*discarded);
+#endif
+      return true;
+    }
+
+    bool session_raise(std::shared_ptr<launch_session_t> launch_session) {
+      std::lock_guard lock(launch_state_mutex);
+      // If a launch event is still pending, don't overwrite it.
+      if (launch_event.view(0s) ||
+          launch_startup_in_progress.load(std::memory_order_acquire) != 0) {
+        return false;
       }
 
       // Raise the new launch session to prepare for the RTSP handshake
       launch_event.raise(std::move(launch_session));
-
-      // Arm the timer to expire this launch session if the client times out
-      raised_timer.expires_after(config::stream.ping_timeout);
-      raised_timer.async_wait([this](const boost::system::error_code &ec) {
-        if (!ec) {
-          auto discarded = launch_event.pop(0s);
-          if (discarded) {
-            set_pending_vulkan_hdr_layer_stream(false);
-            BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
-          }
-        }
-      });
+      launch_startup_in_progress.store(0, std::memory_order_release);
+      launch_cancel_requested.store(0, std::memory_order_release);
+      launch_control_connected = 0;
+      arm_launch_timeout_locked();
+      return true;
     }
 
     /**
@@ -685,6 +861,21 @@ namespace rtsp_stream {
      * @param launch_session_id The ID of the session to clear.
      */
     void session_clear(uint32_t launch_session_id) {
+      std::lock_guard lock(launch_state_mutex);
+      if (launch_startup_in_progress.load(std::memory_order_acquire) == launch_session_id) {
+        // Control connected while ANNOUNCE startup is still finishing. Clear
+        // the pending event/timer without touching its cancel/start ownership;
+        // commit suppresses rearming and failure uses its fallback session.
+        auto pending = launch_event.view(0s);
+        if (pending && pending->id == launch_session_id) {
+          ++launch_timer_generation;
+          raised_timer.cancel();
+          launch_event.pop();
+          launch_control_connected = launch_session_id;
+          set_pending_vulkan_hdr_layer_stream(false);
+        }
+        return;
+      }
       // We currently only support a single pending RTSP session,
       // so the ID should always match the one for that session.
       auto launch_session = launch_event.view(0s);
@@ -692,8 +883,12 @@ namespace rtsp_stream {
         if (launch_session->id != launch_session_id) {
           BOOST_LOG(error) << "Attempted to clear unexpected session: "sv << launch_session_id << " vs "sv << launch_session->id;
         } else {
+          ++launch_timer_generation;
           raised_timer.cancel();
           launch_event.pop();
+          if (launch_cancel_requested.load(std::memory_order_acquire) == launch_session_id) {
+            launch_cancel_requested.store(0, std::memory_order_release);
+          }
           set_pending_vulkan_hdr_layer_stream(false);
         }
       }
@@ -800,6 +995,7 @@ namespace rtsp_stream {
     void insert(const std::shared_ptr<stream::session_t> &session, const std::string &client_uuid, bool hdr_enabled) {
       const bool has_uuid = !client_uuid.empty();
       bool vulkan_hdr_layer_active = false;
+      std::size_t active_session_count = 0;
       {
         auto lg = _session_state.lock();
         _session_state->sessions.emplace(session);
@@ -815,6 +1011,7 @@ namespace rtsp_stream {
         }
         _session_state->vulkan_hdr_layer_pending_stream = false;
         vulkan_hdr_layer_active = vulkan_hdr_layer_active_locked();
+        active_session_count = _session_state->sessions.size();
       }
 #ifdef _WIN32
       set_vulkan_hdr_layer_streaming_active(vulkan_hdr_layer_active);
@@ -822,7 +1019,7 @@ namespace rtsp_stream {
       if (has_uuid) {
         nvhttp::mark_client_last_seen(client_uuid);
       }
-      BOOST_LOG(info) << "New streaming session started [active sessions: "sv << _session_state->sessions.size() << ']';
+      BOOST_LOG(info) << "New streaming session started [active sessions: "sv << active_session_count << ']';
     }
 
     std::list<std::string> get_all_client_uuids() {
@@ -891,11 +1088,19 @@ namespace rtsp_stream {
      * @brief Stop the RTSP server.
      */
     void stop_startup_pool() {
-      stopping.store(true, std::memory_order_release);
+      {
+        // Make the stop decision atomic with run_startup's check+enqueue so no
+        // task can be pushed after the worker has drained its queue.
+        std::lock_guard submit_lock(startup_submit_mutex);
+        stopping.store(true, std::memory_order_release);
+        startup_pool.stop();
+      }
+      // Keep the outstanding accept alive while workers finish. Otherwise the
+      // io_context can enter its stopped state in the gap before a worker posts
+      // its ANNOUNCE completion, and a later post alone would not restart it.
+      startup_pool.join();
       boost::system::error_code ec;
       acceptor.close(ec);
-      startup_pool.stop();
-      startup_pool.join();
     }
 
     void stop() {
@@ -952,8 +1157,14 @@ namespace rtsp_stream {
     boost::asio::io_context io_context;
     tcp::acceptor acceptor {io_context};
     boost::asio::steady_timer raised_timer {io_context};
+    mutable std::mutex launch_state_mutex;
+    std::uint64_t launch_timer_generation {0};
+    std::uint32_t launch_control_connected {0};
     thread_pool_util::ThreadPool startup_pool;
+    std::mutex startup_submit_mutex;
     std::atomic_int startup_tasks {0};
+    std::atomic_uint32_t launch_startup_in_progress {0};
+    std::atomic_uint32_t launch_cancel_requested {0};
     std::atomic_bool stopping {false};
 
     std::shared_ptr<socket_t> next_socket;
@@ -961,8 +1172,12 @@ namespace rtsp_stream {
 
   rtsp_server_t server {};
 
-  void launch_session_raise(std::shared_ptr<launch_session_t> launch_session) {
-    server.session_raise(std::move(launch_session));
+  bool launch_session_raise(std::shared_ptr<launch_session_t> launch_session) {
+    return server.session_raise(std::move(launch_session));
+  }
+
+  bool cancel_pending_launch() {
+    return server.cancel_pending_launch();
   }
 
   void launch_session_clear(uint32_t launch_session_id) {
@@ -1535,66 +1750,135 @@ namespace rtsp_stream {
     const int sequence_number = req->sequenceNumber;
     const std::string client_uuid = session->client_uuid;
     auto launch_session = make_startup_launch_session_snapshot(*session);
+    if (!server->begin_launch_startup(session->id)) {
+      BOOST_LOG(warning) << "Rejecting stale or duplicate RTSP ANNOUNCE for launch " << session->id << ".";
+      respond(socket->sock, *session, &option, 409, "Conflict", req->sequenceNumber, {});
+      return false;
+    }
     try {
       server->run_startup([server, socket = std::move(socket), session = std::move(session), launch_session, config = std::move(config), remote_address = std::move(remote_address), client_uuid, sequence_number]() mutable {
-        // Apply deferred updates and take the hot-apply gate on the startup worker so
-        // display/config churn cannot stall the RTSP io_context.
-        config::maybe_apply_deferred();
-        auto _hot_apply_gate = config::acquire_apply_read_gate();
-
-        config.gen1_framegen_fix = launch_session->gen1_framegen_fix;
-        config.gen2_framegen_fix = launch_session->gen2_framegen_fix;
-        config.frame_generation_enabled = launch_session->frame_generation_enabled;
-        config.lossless_scaling_framegen = launch_session->lossless_scaling_framegen;
-        config.frame_generation_provider = launch_session->frame_generation_provider;
-        config.lossless_scaling_target_fps = launch_session->lossless_scaling_target_fps;
-        config.lossless_scaling_rtss_limit = launch_session->lossless_scaling_rtss_limit;
-
         std::shared_ptr<stream::session_t> stream_session;
         bool startup_failed = true;
         std::string startup_error;
+        bool stream_hdr_enabled = false;
 
         try {
-          stream_session = stream::session::alloc(config, *launch_session);
-          startup_failed = stream::session::start(*stream_session, remote_address) != 0;
+          if (server->launch_cancelled(session->id)) {
+            startup_error = "launch canceled";
+          } else {
+            // Apply deferred updates and take the hot-apply gate on the startup
+            // worker so display/config churn cannot stall the RTSP io_context.
+            config::maybe_apply_deferred();
+            auto _hot_apply_gate = config::acquire_apply_read_gate();
+
+            config.gen1_framegen_fix = launch_session->gen1_framegen_fix;
+            config.gen2_framegen_fix = launch_session->gen2_framegen_fix;
+            config.frame_generation_enabled = launch_session->frame_generation_enabled;
+            config.lossless_scaling_framegen = launch_session->lossless_scaling_framegen;
+            config.frame_generation_provider = launch_session->frame_generation_provider;
+            config.lossless_scaling_target_fps = launch_session->lossless_scaling_target_fps;
+            config.lossless_scaling_rtss_limit = launch_session->lossless_scaling_rtss_limit;
+
+            if (server->launch_cancelled(session->id)) {
+              startup_error = "launch canceled";
+            } else {
+              stream_session = stream::session::alloc(config, *launch_session);
+              startup_failed = stream::session::start(*stream_session, remote_address) != 0;
+              stream_hdr_enabled = activates_vulkan_hdr_layer_for_stream(config.monitor);
+            }
+          }
         } catch (const std::exception &e) {
           startup_error = e.what();
         } catch (...) {
           startup_error = "unknown exception";
         }
 
-        const bool stream_hdr_enabled = activates_vulkan_hdr_layer_for_stream(config.monitor);
-        server->post([server, socket = std::move(socket), session = std::move(session), stream_session = std::move(stream_session), client_uuid, sequence_number, startup_failed, startup_error = std::move(startup_error), stream_hdr_enabled]() mutable {
-          auto fg = util::fail_guard([server]() {
-            server->finish_startup();
-          });
-          OPTION_ITEM completion_option {};
-          completion_option.option = const_cast<char *>("CSeq");
-          auto completion_seqn = std::to_string(sequence_number);
-          completion_option.content = const_cast<char *>(completion_seqn.c_str());
+        try {
+          server->post([server, socket, session, stream_session, client_uuid, sequence_number, startup_failed, startup_error = std::move(startup_error), stream_hdr_enabled]() mutable {
+            auto fg = util::fail_guard([server]() {
+              server->finish_startup();
+            });
+            try {
+              OPTION_ITEM completion_option {};
+              completion_option.option = const_cast<char *>("CSeq");
+              auto completion_seqn = std::to_string(sequence_number);
+              completion_option.content = const_cast<char *>(completion_seqn.c_str());
 
-          if (startup_failed) {
-            server->set_pending_vulkan_hdr_layer_stream(false);
-            if (startup_error.empty()) {
-              BOOST_LOG(error) << "Failed to start a streaming session"sv;
-            } else {
-              BOOST_LOG(error) << "Failed to start a streaming session: "sv << startup_error;
+              const bool committed = !startup_failed && server->commit_launch_startup(
+                                                          session->id,
+                                                          [&]() {
+                                                            server->insert(stream_session, client_uuid, stream_session && stream_hdr_enabled);
+                                                          }
+                                                        );
+              if (!committed) {
+                const bool canceled = server->launch_cancelled(session->id);
+                // If cancellation arrived after session::start published active,
+                // insert then stop it so normal server ownership joins it safely.
+                if (!startup_failed && stream_session) {
+                  server->insert(stream_session, client_uuid, stream_session && stream_hdr_enabled);
+                  stream::session::stop(*stream_session);
+                }
+                server->set_pending_vulkan_hdr_layer_stream(false);
+                server->fail_launch_startup(session->id, session);
+                if (canceled) {
+                  BOOST_LOG(info) << "RTSP ANNOUNCE startup canceled.";
+                } else if (startup_error.empty()) {
+                  BOOST_LOG(error) << "Failed to start a streaming session"sv;
+                } else {
+                  BOOST_LOG(error) << "Failed to start a streaming session: "sv << startup_error;
+                }
+                respond(socket->sock, *session, &completion_option, 503, "Canceled or unavailable", sequence_number, {});
+              } else {
+                respond(socket->sock, *session, &completion_option, 200, "OK", sequence_number, {});
+              }
+
+              server->shutdown_socket(*socket);
+            } catch (const std::exception &e) {
+              BOOST_LOG(error) << "RTSP ANNOUNCE completion failed: " << e.what();
+              if (!startup_failed && stream_session) {
+                server->remove(stream_session);
+                server->schedule_session_stop_join(std::move(stream_session));
+              }
+              server->fail_launch_startup(session->id, session);
+              server->shutdown_socket(*socket);
+            } catch (...) {
+              BOOST_LOG(error) << "RTSP ANNOUNCE completion failed with an unknown exception.";
+              if (!startup_failed && stream_session) {
+                server->remove(stream_session);
+                server->schedule_session_stop_join(std::move(stream_session));
+              }
+              server->fail_launch_startup(session->id, session);
+              server->shutdown_socket(*socket);
             }
-            respond(socket->sock, *session, &completion_option, 500, "Internal Server Error", sequence_number, {});
-          } else {
-            server->insert(stream_session, client_uuid, stream_session && stream_hdr_enabled);
-            respond(socket->sock, *session, &completion_option, 200, "OK", sequence_number, {});
+          });
+        } catch (const std::exception &e) {
+          BOOST_LOG(error) << "Failed to post RTSP ANNOUNCE completion: " << e.what();
+          if (!startup_failed && stream_session) {
+            stream::session::stop(*stream_session);
+            stream::session::join(*stream_session);
           }
-
+          server->fail_launch_startup(session->id, session);
+          server->finish_startup();
           server->shutdown_socket(*socket);
-        });
+        } catch (...) {
+          BOOST_LOG(error) << "Failed to post RTSP ANNOUNCE completion with an unknown exception.";
+          if (!startup_failed && stream_session) {
+            stream::session::stop(*stream_session);
+            stream::session::join(*stream_session);
+          }
+          server->fail_launch_startup(session->id, session);
+          server->finish_startup();
+          server->shutdown_socket(*socket);
+        }
       });
     } catch (const std::exception &e) {
       BOOST_LOG(error) << "Failed to queue RTSP ANNOUNCE startup task: "sv << e.what();
+      server->fail_launch_startup(session->id, session);
       respond(socket->sock, *session, &option, 500, "Internal Server Error", req->sequenceNumber, {});
       return false;
     } catch (...) {
       BOOST_LOG(error) << "Failed to queue RTSP ANNOUNCE startup task with an unknown exception"sv;
+      server->fail_launch_startup(session->id, session);
       respond(socket->sock, *session, &option, 500, "Internal Server Error", req->sequenceNumber, {});
       return false;
     }
@@ -1657,9 +1941,13 @@ namespace rtsp_stream {
     // Drain startup workers before stopping the io_context so any posted ANNOUNCE
     // completion can run on the RTSP loop instead of being abandoned during shutdown.
     server.stop_startup_pool();
-    // Stop the server and join the server thread
-    server.stop();
+    // A startup worker can post its completion immediately before join() returns.
+    // Wake a loop that was already blocked in run_one(), then let it consume every
+    // completion (and decrement startup_count) before stopping the io_context.
+    server.post([]() {
+    });
     rtsp_thread.join();
+    server.stop();
   }
 
   void print_msg(PRTSP_MESSAGE msg) {

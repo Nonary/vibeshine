@@ -11,6 +11,7 @@
   #include <boost/algorithm/string/predicate.hpp>
   #include <chrono>
   #include <cmath>
+  #include <condition_variable>
   #include <cstdint>
   #include <exception>
   #include <filesystem>
@@ -36,6 +37,7 @@
   #include "src/logging.h"
   #include "src/platform/windows/display_helper_coordinator.h"
   #include "src/platform/windows/display_helper_request_helpers.h"
+  #include "src/platform/windows/display_restore_guard.h"
   #include "src/platform/windows/frame_limiter_nvcp.h"
   #include "src/platform/windows/impersonating_display_device.h"
   #include "src/platform/windows/ipc/display_settings_client.h"
@@ -45,6 +47,8 @@
   #include "src/platform/windows/virtual_display.h"
   #include "src/process.h"
   #include "src/state_storage.h"
+  #include "src/stream.h"
+  #include "src/webrtc_stream.h"
 
   #include <display_device/noop_audio_context.h>
   #include <display_device/noop_settings_persistence.h>
@@ -89,6 +93,7 @@ namespace {
     int attempts {0};
     std::optional<std::chrono::steady_clock::time_point> ready_since;
     std::chrono::steady_clock::time_point next_attempt {};
+    std::uint64_t epoch {0};
   };
 
   std::mutex &pending_apply_mutex() {
@@ -99,6 +104,11 @@ namespace {
   std::optional<PendingApplyState> &pending_apply_state() {
     static std::optional<PendingApplyState> state;
     return state;
+  }
+
+  std::atomic<std::uint64_t> &pending_apply_epoch() {
+    static std::atomic<std::uint64_t> epoch {0};
+    return epoch;
   }
 
   std::atomic<bool> &cold_start_resolution_deferral_armed() {
@@ -143,6 +153,7 @@ namespace {
   void queue_deferred_resolution_apply(const display_helper_integration::DisplayApplyRequest &request) {
     PendingApplyState state = make_pending_apply_state(request);
     std::lock_guard<std::mutex> lock(pending_apply_mutex());
+    state.epoch = pending_apply_epoch().fetch_add(1, std::memory_order_acq_rel) + 1;
     pending_apply_state() = std::move(state);
     BOOST_LOG(info) << "Display helper: deferring resolution apply for session " << pending_apply_state()->session_id << ".";
   }
@@ -157,8 +168,7 @@ namespace {
       return;
     }
     queue_deferred_resolution_apply(request);
-    BOOST_LOG(info) << "Display helper: API unavailable; queued deferred resolution apply for session "
-                    << pending_apply_state()->session_id << ".";
+    BOOST_LOG(info) << "Display helper: API unavailable; queued deferred resolution apply.";
   }
 
   bool should_defer_resolution_apply(const display_helper_integration::DisplayApplyRequest &request) {
@@ -211,9 +221,9 @@ namespace {
   // Once the helper has had time to begin an actual restore, do not kill/overwrite
   // that in-flight restore from a later stream-start probe; the helper will either
   // finish restoring or an explicit APPLY will supersede it.
-  constexpr std::chrono::milliseconds kDisarmRestoreBudget {150};
+  constexpr std::chrono::milliseconds kDisarmRestoreBudget {300};
   constexpr std::chrono::milliseconds kDisarmRetryThrottle {150};
-  constexpr std::chrono::milliseconds kDisarmRestoreGrace {5000};
+  constexpr int kRestoreHandoffApplyResultTimeoutMs = 10000;
   constexpr std::chrono::milliseconds kDeferredApplyInitialDelay {2000};
   constexpr std::chrono::milliseconds kDeferredApplyRetryBase {500};
   constexpr std::chrono::milliseconds kDeferredApplyRetryMax {10000};
@@ -224,12 +234,49 @@ namespace {
   bool ensure_helper_started(bool force_restart = false, bool force_enable = false);
   const char *virtual_layout_to_string(const display_helper_integration::VirtualDisplayArrangement layout);
 
+  bool external_helper_process_running() {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+      return false;
+    }
+
+    PROCESSENTRY32W entry {};
+    entry.dwSize = sizeof(entry);
+    bool found = false;
+    if (Process32FirstW(snapshot, &entry)) {
+      do {
+        if (_wcsicmp(entry.szExeFile, L"sunshine_display_helper.exe") == 0 &&
+            entry.th32ProcessID != GetCurrentProcessId()) {
+          found = true;
+          break;
+        }
+      } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return found;
+  }
+
   bool helper_process_running() {
     std::lock_guard<std::mutex> lg(helper_mutex());
     if (HANDLE h = helper_proc().get_process_handle()) {
-      return WaitForSingleObject(h, 0) == WAIT_TIMEOUT;
+      if (WaitForSingleObject(h, 0) == WAIT_TIMEOUT) {
+        return true;
+      }
     }
-    return false;
+    // A helper can outlive Sunshine after a crash or be launched by the restore
+    // scheduled task. It has no ProcessHandler handle in this process but must
+    // still participate in the handoff before any kill/start/display mutation.
+    return external_helper_process_running();
+  }
+
+  bool helper_process_is_external() {
+    std::lock_guard<std::mutex> lg(helper_mutex());
+    if (HANDLE h = helper_proc().get_process_handle()) {
+      if (WaitForSingleObject(h, 0) == WAIT_TIMEOUT) {
+        return false;
+      }
+    }
+    return external_helper_process_running();
   }
 
   bool restore_expected_with_live_helper();
@@ -604,12 +651,246 @@ namespace {
   static std::mutex g_session_mutex;
   static std::optional<session_dd_fields_t> g_active_session_dd;
 
-  // Tracks whether we've recently requested a helper REVERT and therefore expect a restore loop to be active.
-  // Used to avoid spamming DISARM frames and to enable a kill-switch if IPC is wedged.
-  static std::atomic<bool> g_restore_expected {false};
-  // True when the most recent APPLY was dispatched through the helper; gates the
-  // capture-start verification wait (v2 engine only).
-  static std::atomic<bool> g_last_apply_used_helper {false};
+  // Tracks the exact helper REVERT generation expected to still be active. This
+  // avoids spamming DISARM and prevents stale acknowledgements from clearing a
+  // newer restore request.
+  // Non-zero identifies the exact REVERT generation that is still unconfirmed.
+  // Compare/exchange prevents a late DISARM/APPLY result for generation N from
+  // clearing a newer generation N+1.
+  static display_helper::PendingRestoreTracker g_restore_tracker;
+  // Orders host-side REVERT publication/dispatch against DISARM probes. Without
+  // this lock, DISARM could overtake the gap between publishing generation N and
+  // writing its REVERT frame, then falsely clear N before the helper sees it.
+  static std::recursive_timed_mutex g_restore_handoff_mutex;
+  static std::atomic<bool> g_external_helper_recovery_requested {false};
+
+  struct DisplayLifecycleState {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool start_in_progress {false};
+    bool teardown_in_progress {false};
+    std::uint32_t start_waiters {0};
+    std::uint64_t next_generation {0};
+    std::uint64_t start_generation {0};
+    std::uint64_t teardown_generation {0};
+    std::function<void()> deferred_teardown;
+    bool platform_streaming_claimed {false};
+    bool platform_streaming_started {false};
+    std::uint64_t platform_streaming_generation {0};
+  };
+
+  DisplayLifecycleState &display_lifecycle_state() {
+    // Deliberately process-lifetime: reservation destructors can run from late
+    // RTSP timeout callbacks while other function-local statics are unwinding.
+    static auto *state = new DisplayLifecycleState();
+    return *state;
+  }
+
+  std::mutex &platform_streaming_hook_mutex() {
+    static auto *mutex = new std::mutex();
+    return *mutex;
+  }
+
+  struct DisplayCleanupDispatcher {
+    std::mutex mutex;
+    thread_pool_util::ThreadPool pool;
+    bool running {false};
+    bool accepting {false};
+    bool stopped {false};
+  };
+
+  DisplayCleanupDispatcher &display_cleanup_dispatcher() {
+    // Process-lifetime for the same late-callback reason as the lifecycle
+    // state. Explicit shutdown below stops and joins its workers before the
+    // virtual-display singleton is destroyed.
+    static auto *dispatcher = new DisplayCleanupDispatcher();
+    return *dispatcher;
+  }
+
+  bool start_display_cleanup_dispatcher_locked(DisplayCleanupDispatcher &dispatcher) noexcept {
+    if (dispatcher.accepting) {
+      return true;
+    }
+    if (dispatcher.stopped) {
+      return false;
+    }
+    try {
+      // Verification can wait for up to six seconds while rollback/retry work
+      // may need a display handoff. Keep those rare operations independent so
+      // a verifier cannot delay a safety cleanup.
+      dispatcher.pool.start(2);
+      dispatcher.running = true;
+      dispatcher.accepting = true;
+      return true;
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Display cleanup dispatcher could not start: " << e.what();
+    } catch (...) {
+      BOOST_LOG(error) << "Display cleanup dispatcher could not start.";
+    }
+    dispatcher.pool.stop();
+    dispatcher.stopped = true;
+    return false;
+  }
+
+  template<typename Submit>
+  bool enqueue_display_cleanup_task_impl(Submit &&submit) noexcept {
+    try {
+      auto &dispatcher = display_cleanup_dispatcher();
+      std::lock_guard lock(dispatcher.mutex);
+      if (!start_display_cleanup_dispatcher_locked(dispatcher)) {
+        BOOST_LOG(warning) << "Display cleanup task rejected because the dispatcher is stopped.";
+        return false;
+      }
+      submit(dispatcher.pool);
+      return true;
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Unable to enqueue display cleanup task: " << e.what();
+    } catch (...) {
+      BOOST_LOG(error) << "Unable to enqueue display cleanup task.";
+    }
+    return false;
+  }
+
+  std::function<void()> guard_display_cleanup_task(std::function<void()> task) {
+    return [task = std::move(task)]() mutable {
+      try {
+        if (task) {
+          task();
+        }
+      } catch (const std::exception &e) {
+        BOOST_LOG(error) << "Deferred display cleanup task failed: " << e.what();
+      } catch (...) {
+        BOOST_LOG(error) << "Deferred display cleanup task failed with an unknown exception.";
+      }
+    };
+  }
+
+  void append_deferred_teardown_locked(
+    DisplayLifecycleState &state,
+    std::function<void()> teardown
+  ) {
+    if (!teardown) {
+      return;
+    }
+    if (!state.deferred_teardown) {
+      state.deferred_teardown = std::move(teardown);
+      return;
+    }
+    auto earlier = std::move(state.deferred_teardown);
+    state.deferred_teardown = [earlier = std::move(earlier),
+                               later = std::move(teardown)]() mutable {
+      try {
+        earlier();
+      } catch (...) {
+        BOOST_LOG(warning) << "Display lifecycle: one retained teardown callback threw; continuing remaining cleanup.";
+      }
+      try {
+        later();
+      } catch (...) {
+        BOOST_LOG(warning) << "Display lifecycle: one retained teardown callback threw.";
+      }
+    };
+  }
+
+  void release_display_teardown_lease(std::uint64_t generation);
+
+  void dispatch_retained_display_teardown(
+    std::function<void()> teardown,
+    std::uint64_t teardown_generation
+  ) noexcept {
+    bool queued = false;
+    try {
+      queued = display_helper_integration::enqueue_display_cleanup_task([teardown = std::move(teardown),
+                                                                         teardown_generation]() mutable {
+        try {
+          teardown();
+        } catch (...) {
+          BOOST_LOG(warning) << "Display lifecycle: deferred abandoned-start teardown threw.";
+        }
+        release_display_teardown_lease(teardown_generation);
+      });
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Display lifecycle: unable to enqueue retained teardown: " << e.what();
+    } catch (...) {
+      BOOST_LOG(error) << "Display lifecycle: unable to enqueue retained teardown.";
+    }
+    if (!queued) {
+      // Reservation destructors are noexcept. If shutdown or resource
+      // exhaustion rejects cleanup work, at least release the logical gate so
+      // later starts cannot remain blocked forever.
+      release_display_teardown_lease(teardown_generation);
+    }
+  }
+
+  void release_display_start_reservation(std::uint64_t generation, bool published_active) {
+    auto &state = display_lifecycle_state();
+    std::function<void()> deferred_teardown;
+    std::function<void()> discarded_teardown;
+    std::uint64_t deferred_teardown_generation = 0;
+    {
+      std::lock_guard lock(state.mutex);
+      if (!state.start_in_progress || state.start_generation != generation) {
+        return;
+      }
+      state.start_in_progress = false;
+      state.start_generation = 0;
+      if (published_active) {
+        // The new active counter now owns final teardown responsibility.
+        discarded_teardown = std::move(state.deferred_teardown);
+      } else if (state.deferred_teardown) {
+        // Convert the abandoned start directly into a logical teardown so a
+        // waiting start cannot overtake the retained last-session cleanup.
+        deferred_teardown = std::move(state.deferred_teardown);
+        state.teardown_in_progress = true;
+        state.teardown_generation = ++state.next_generation;
+        deferred_teardown_generation = state.teardown_generation;
+      }
+    }
+    if (deferred_teardown) {
+      // Token destruction frequently occurs while RTSP/WebRTC owner locks are
+      // held. Keep the logical teardown gate, but execute out of line to avoid
+      // re-entering those locks on the destructor thread.
+      dispatch_retained_display_teardown(
+        std::move(deferred_teardown),
+        deferred_teardown_generation
+      );
+      return;
+    }
+    state.cv.notify_all();
+  }
+
+  void release_display_teardown_lease(std::uint64_t generation) {
+    auto &state = display_lifecycle_state();
+    std::function<void()> followup_teardown;
+    std::uint64_t followup_generation = 0;
+    {
+      std::lock_guard lock(state.mutex);
+      if (!state.teardown_in_progress || state.teardown_generation != generation) {
+        return;
+      }
+      if (state.deferred_teardown) {
+        followup_teardown = std::move(state.deferred_teardown);
+        state.teardown_generation = ++state.next_generation;
+        followup_generation = state.teardown_generation;
+      } else {
+        state.teardown_in_progress = false;
+        state.teardown_generation = 0;
+      }
+    }
+    if (followup_teardown) {
+      dispatch_retained_display_teardown(
+        std::move(followup_teardown),
+        followup_generation
+      );
+      return;
+    }
+    state.cv.notify_all();
+  }
+
+  void reset_helper_connection_serialized() {
+    std::lock_guard<std::recursive_timed_mutex> handoff_lock(g_restore_handoff_mutex);
+    platf::display_helper_client::reset_connection();
+  }
 
   // Resolve the effective display helper engine. In automatic mode the v2 engine
   // only rides pre-release builds; stable releases keep the legacy engine until
@@ -625,15 +906,14 @@ namespace {
       default:
         break;
     }
-#ifdef PROJECT_VERSION_PRERELEASE
+  #ifdef PROJECT_VERSION_PRERELEASE
     return std::string_view(PROJECT_VERSION_PRERELEASE).empty();
-#else
+  #else
     return true;
-#endif
+  #endif
   }
-  static std::atomic<std::uint64_t> g_restore_generation {0};
+
   static std::atomic<std::uint64_t> g_disarm_generation_sent {0};
-  static std::atomic<std::int64_t> g_last_revert_us {0};
   static std::atomic<std::int64_t> g_last_disarm_attempt_us {0};
   static std::atomic<std::int64_t> g_last_disarm_success_us {0};
   static std::atomic<std::int64_t> g_last_helper_start_failure_us {0};
@@ -671,14 +951,17 @@ namespace {
   }
 
   bool restore_expected_with_live_helper() {
-    if (!g_restore_expected.load(std::memory_order_relaxed)) {
+    const auto restore_generation = g_restore_tracker.current();
+    if (restore_generation == 0) {
       return false;
     }
     if (helper_process_running()) {
       return true;
     }
-    g_restore_expected.store(false, std::memory_order_relaxed);
-    return false;
+    if (g_restore_tracker.clear_if(restore_generation)) {
+      return false;
+    }
+    return g_restore_tracker.current() != 0 && helper_process_running();
   }
 
   // Active session display parameters snapshot for re-apply on reconnect.
@@ -715,107 +998,125 @@ namespace {
     }
   }
 
-  bool disarm_helper_restore_if_running() {
-    if (shutdown_requested()) {
-      return false;
-    }
-
+  platf::display_helper_client::DisarmResult disarm_helper_restore_if_running_locked() {
+    const auto observed_restore_generation = g_restore_tracker.current();
     const bool helper_running = helper_process_running();
     if (!helper_running) {
-      g_restore_expected.store(false, std::memory_order_relaxed);
-      return false;
-    }
-
-    const bool restore_expected = g_restore_expected.load(std::memory_order_relaxed);
-    const auto now_us = now_steady_us();
-    const auto last_revert_us = g_last_revert_us.load(std::memory_order_relaxed);
-    if (restore_expected && last_revert_us > 0) {
-      const auto disarm_grace_us = kDisarmRestoreGrace.count() * 1000LL;
-      if ((now_us - last_revert_us) >= disarm_grace_us) {
-        BOOST_LOG(info) << "Display helper: restore has been pending for more than "
-                        << kDisarmRestoreGrace.count()
-                        << "ms; not sending DISARM so the unconfirmed restore can complete.";
-        return false;
+      if (observed_restore_generation == 0 || g_restore_tracker.clear_if(observed_restore_generation)) {
+        return platf::display_helper_client::DisarmResult::Disarmed;
       }
+      return platf::display_helper_client::DisarmResult::Busy;
     }
 
+    const auto pending_restore_generation = g_restore_tracker.current();
+    const bool restore_expected = pending_restore_generation != 0;
+    const auto now_us = now_steady_us();
     const auto last_attempt_us = g_last_disarm_attempt_us.load(std::memory_order_relaxed);
 
     // Don't spam DISARM frames (they share the helper's job/message queues with APPLY/REVERT).
+    // A cached success is valid only for the restore generation it acknowledged.
+    // A newly-published REVERT must bypass the throttle and receive its own ACK.
     if ((now_us - last_attempt_us) < (kDisarmRetryThrottle.count() * 1000)) {
       const auto last_success_us = g_last_disarm_success_us.load(std::memory_order_relaxed);
-      return (now_us - last_success_us) < (kDisarmRetryThrottle.count() * 1000);
+      const auto disarmed_generation = g_disarm_generation_sent.load(std::memory_order_acquire);
+      const bool cached_success_covers_restore =
+        restore_expected && disarmed_generation >= pending_restore_generation;
+      if (cached_success_covers_restore &&
+          (now_us - last_success_us) < (kDisarmRetryThrottle.count() * 1000)) {
+        return platf::display_helper_client::DisarmResult::Disarmed;
+      }
+      if (restore_expected && disarmed_generation >= pending_restore_generation) {
+        return platf::display_helper_client::DisarmResult::Busy;
+      }
+      // With no tracked generation, the helper may have autonomously armed a
+      // restore after the last ACK. A newer tracked restore has the same rule:
+      // fall through and probe current helper state rather than using cache.
     }
 
     // If we believe a restore loop is active, ensure we only issue one DISARM per restore generation unless it fails
     // and the throttle allows a retry.
-    const auto restore_generation = g_restore_generation.load(std::memory_order_relaxed);
+    const auto restore_generation = pending_restore_generation;
     if (restore_expected) {
       const auto disarmed_generation = g_disarm_generation_sent.load(std::memory_order_relaxed);
       if (disarmed_generation >= restore_generation) {
         const auto last_success_us = g_last_disarm_success_us.load(std::memory_order_relaxed);
-        return (now_us - last_success_us) < (kDisarmRetryThrottle.count() * 1000);
+        return (now_us - last_success_us) < (kDisarmRetryThrottle.count() * 1000) ?
+                 platf::display_helper_client::DisarmResult::Disarmed :
+                 platf::display_helper_client::DisarmResult::Busy;
       }
     }
 
-    using namespace std::chrono;
-    const auto start = steady_clock::now();
-    const auto deadline = start + kDisarmRestoreBudget;
-    auto remaining_ms = [&]() -> int {
-      const auto now = steady_clock::now();
-      if (now >= deadline) {
-        return 0;
-      }
-      return static_cast<int>(duration_cast<milliseconds>(deadline - now).count());
-    };
-
-    // Bound total blocking to kDisarmRestoreBudget by splitting the budget across connect+send.
-    auto try_send_fast = [&](int max_total_ms) -> bool {
-      const int per_op_ms = std::max(10, max_total_ms / 2);
-      return platf::display_helper_client::send_disarm_restore_fast(per_op_ms);
+    // The client enforces one total deadline across connect, send, and acknowledgement.
+    auto try_send_fast = [&](int max_total_ms) -> platf::display_helper_client::DisarmResult {
+      return platf::display_helper_client::send_disarm_restore_fast(std::max(10, max_total_ms));
     };
 
     g_last_disarm_attempt_us.store(now_us, std::memory_order_relaxed);
-    bool ok = try_send_fast(static_cast<int>(kDisarmRestoreBudget.count()));
-    if (!ok) {
-      const int rem = remaining_ms();
-      if (rem > 20) {
-        platf::display_helper_client::reset_connection();
-        ok = try_send_fast(rem);
-      }
-    }
+    auto result = try_send_fast(static_cast<int>(kDisarmRestoreBudget.count()));
 
-    if (ok) {
+    if (result == platf::display_helper_client::DisarmResult::Disarmed) {
       g_last_disarm_success_us.store(now_us, std::memory_order_relaxed);
       g_disarm_generation_sent.store(restore_generation, std::memory_order_relaxed);
-      g_restore_expected.store(false, std::memory_order_relaxed);
-      BOOST_LOG(info) << "Display helper: DISARM dispatched (fast).";
-      return true;
-    }
-
-    // Fail-safe: if we recently initiated a helper restore, and DISARM couldn't be delivered quickly,
-    // terminate the helper so restore activity stops immediately (prevents virtual display crash loops).
-    const bool revert_recent = (now_us - last_revert_us) < (30LL * 1000LL * 1000LL);
-    if (revert_recent) {
-      BOOST_LOG(warning) << "Display helper: DISARM could not be delivered within "
-                         << kDisarmRestoreBudget.count() << "ms; terminating helper to stop restore activity.";
-      {
-        std::lock_guard<std::mutex> lg(helper_mutex());
-        helper_proc().terminate();
+      // A late acknowledgement for an older restore generation must never clear
+      // a newer REVERT request.
+      if (restore_generation != 0) {
+        (void) g_restore_tracker.clear_if(restore_generation);
       }
-      platf::display_helper_client::reset_connection();
-      g_restore_expected.store(false, std::memory_order_relaxed);
+      BOOST_LOG(info) << "Display helper: DISARM confirmed before display mutation.";
+      return platf::display_helper_client::DisarmResult::Disarmed;
     }
 
-    return false;
+    if (result == platf::display_helper_client::DisarmResult::Busy) {
+      if (!restore_expected) {
+        (void) g_restore_tracker.discover_restore();
+      }
+      BOOST_LOG(info) << "Display helper: DISARM rejected because a restore mutation is unconfirmed; preserving helper and restore state.";
+      return platf::display_helper_client::DisarmResult::Busy;
+    }
+
+    // A missing acknowledgement is not proof that SetDisplayConfig stopped.
+    // Never kill or disconnect a helper that the host believes may be restoring.
+    if (restore_expected) {
+      BOOST_LOG(warning) << "Display helper: DISARM was not acknowledged; preserving unconfirmed restore state.";
+    }
+    return platf::display_helper_client::DisarmResult::Unavailable;
+  }
+
+  platf::display_helper_client::DisarmResult disarm_helper_restore_if_running() {
+    // This is a fast probe on the stream-start path. Contention means a REVERT
+    // dispatch is currently being linearized, so report unavailable and let a
+    // bounded caller retry instead of waiting here.
+    std::unique_lock<std::recursive_timed_mutex> handoff_lock(g_restore_handoff_mutex, std::try_to_lock);
+    if (!handoff_lock.owns_lock()) {
+      return platf::display_helper_client::DisarmResult::Unavailable;
+    }
+    return disarm_helper_restore_if_running_locked();
   }
 
   bool ensure_helper_started(bool force_restart, bool force_enable) {
+    // Connection reset/replacement can make the helper arm an autonomous
+    // disconnect restore. It must not occur while a start/cleanup lease relies
+    // on a prior DISARM acknowledgement.
+    std::lock_guard<std::recursive_timed_mutex> handoff_lock(g_restore_handoff_mutex);
     if (!force_enable && !dd_feature_enabled()) {
       return false;
     }
     const bool shutting_down = shutdown_requested();
     std::lock_guard<std::mutex> lg(helper_mutex());
+    const HANDLE tracked_helper = helper_proc().get_process_handle();
+    const bool tracked_helper_is_live =
+      tracked_helper != nullptr && WaitForSingleObject(tracked_helper, 0) == WAIT_TIMEOUT;
+    if (!tracked_helper_is_live && external_helper_process_running()) {
+      // A restore-task helper or a helper surviving a prior Sunshine process is
+      // not ours to terminate. Reuse it when reachable; otherwise preserve it
+      // until the handoff protocol or process exit proves mutation has drained.
+      if (platf::display_helper_client::send_ping_fast(100)) {
+        BOOST_LOG(info) << "Display helper: reusing externally-owned helper instance.";
+        return true;
+      }
+      BOOST_LOG(warning) << "Display helper: external instance is not reachable; refusing unsafe replacement.";
+      return false;
+    }
     // Already started? Verify liveness to avoid stale or wedged state
     if (HANDLE h = helper_proc().get_process_handle(); h != nullptr) {
       BOOST_LOG(debug) << "Display helper: checking existing process handle...";
@@ -884,6 +1185,10 @@ namespace {
       return false;
     }
 
+    if (external_helper_process_running()) {
+      BOOST_LOG(warning) << "Display helper: external instance appeared before launch; deferring replacement.";
+      return false;
+    }
     kill_all_helper_processes();
 
     // Compute path to sunshine_display_helper.exe inside the tools subdirectory next to Sunshine.exe
@@ -1170,7 +1475,7 @@ namespace {
     };
     auto reset_connection_noexcept = []() noexcept {
       try {
-        platf::display_helper_client::reset_connection();
+        reset_helper_connection_serialized();
       } catch (...) {
       }
     };
@@ -1179,7 +1484,7 @@ namespace {
       try {
         if (!dd_feature_enabled()) {
           if (helper_ready) {
-            platf::display_helper_client::reset_connection();
+            reset_helper_connection_serialized();
             helper_ready = false;
           }
           sleep_interruptible(kActiveInterval);
@@ -1195,7 +1500,9 @@ namespace {
           (void) platf::display_helper_client::send_ping();
         }
 
-        const bool suspended = (rtsp_stream::session_count() == 0) && (proc::proc.running() > 0);
+        const bool suspended =
+          stream::session::running_sessions.load(std::memory_order_acquire) == 0 &&
+          proc::proc.running() > 0;
         const auto interval = suspended ? kSuspendedInterval : kActiveInterval;
         sleep_interruptible(interval);
         if (st.stop_requested()) {
@@ -1204,7 +1511,7 @@ namespace {
 
         if (!platf::display_helper_client::send_ping()) {
           // Avoid logging ping failures to reduce log spam; proceed to reconnect
-          platf::display_helper_client::reset_connection();
+          reset_helper_connection_serialized();
           helper_ready = ensure_helper_started();
           if (!helper_ready) {
             continue;
@@ -1229,25 +1536,592 @@ namespace {
 }  // namespace
 
 namespace display_helper_integration {
+  void start_display_cleanup_dispatcher() noexcept {
+    auto &dispatcher = display_cleanup_dispatcher();
+    std::lock_guard lock(dispatcher.mutex);
+    (void) start_display_cleanup_dispatcher_locked(dispatcher);
+  }
+
+  void stop_display_cleanup_dispatcher() noexcept {
+    auto &dispatcher = display_cleanup_dispatcher();
+    bool should_join = false;
+    {
+      std::lock_guard lock(dispatcher.mutex);
+      dispatcher.accepting = false;
+      dispatcher.stopped = true;
+      if (dispatcher.running) {
+        dispatcher.pool.stop();
+        dispatcher.running = false;
+        should_join = true;
+      }
+    }
+    if (should_join) {
+      try {
+        dispatcher.pool.join();
+      } catch (const std::exception &e) {
+        BOOST_LOG(error) << "Display cleanup dispatcher join failed: " << e.what();
+      } catch (...) {
+        BOOST_LOG(error) << "Display cleanup dispatcher join failed.";
+      }
+    }
+  }
+
+  bool enqueue_display_cleanup_task(std::function<void()> task) noexcept {
+    try {
+      if (!task) {
+        return false;
+      }
+      return enqueue_display_cleanup_task_impl([task = guard_display_cleanup_task(std::move(task))](thread_pool_util::ThreadPool &pool) mutable {
+        pool.push(std::move(task));
+      });
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Unable to prepare display cleanup task: " << e.what();
+    } catch (...) {
+      BOOST_LOG(error) << "Unable to prepare display cleanup task.";
+    }
+    return false;
+  }
+
+  bool enqueue_delayed_display_cleanup_task(
+    std::chrono::milliseconds delay,
+    std::function<void()> task
+  ) noexcept {
+    try {
+      if (!task) {
+        return false;
+      }
+      return enqueue_display_cleanup_task_impl([delay,
+                                                task = guard_display_cleanup_task(std::move(task))](thread_pool_util::ThreadPool &pool) mutable {
+        (void) pool.pushDelayed(std::move(task), delay);
+      });
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Unable to prepare delayed display cleanup task: " << e.what();
+    } catch (...) {
+      BOOST_LOG(error) << "Unable to prepare delayed display cleanup task.";
+    }
+    return false;
+  }
+
+  struct DisplayTeardownLease::Impl {
+    explicit Impl(std::uint64_t generation_in, std::function<void()> on_release_in = {}):
+        generation(generation_in),
+        on_release(std::move(on_release_in)) {}
+
+    ~Impl() {
+      if (on_release) {
+        dispatch_retained_display_teardown(std::move(on_release), generation);
+        return;
+      }
+      release_display_teardown_lease(generation);
+    }
+
+    std::uint64_t generation;
+    std::function<void()> on_release;
+  };
+
+  struct DisplayStartReservation::Impl {
+    explicit Impl(std::uint64_t generation_in):
+        generation(generation_in) {}
+
+    ~Impl() {
+      release(false);
+    }
+
+    void release(bool published_active) {
+      bool should_release = false;
+      {
+        std::lock_guard lock(release_mutex);
+        if (!released) {
+          released = true;
+          should_release = true;
+        }
+      }
+      if (should_release) {
+        release_display_start_reservation(generation, published_active);
+      }
+    }
+
+    std::shared_ptr<DisplayTeardownLease> convert_to_teardown() {
+      std::unique_lock release_lock(release_mutex);
+      if (released) {
+        return {};
+      }
+
+      auto &state = display_lifecycle_state();
+      std::unique_lock state_lock(state.mutex);
+      if (!state.start_in_progress ||
+          state.start_generation != generation ||
+          state.teardown_in_progress) {
+        // Match the normal reservation release behavior if a competing path
+        // already changed lifecycle state. Do the external release after
+        // dropping our local lock.
+        released = true;
+        state_lock.unlock();
+        release_lock.unlock();
+        release_display_start_reservation(generation, false);
+        return {};
+      }
+
+      const auto teardown_generation = state.next_generation + 1;
+      // All fallible allocation/copying happens before publishing the state
+      // transition. An exception therefore leaves the start reservation live
+      // and retryable instead of wedging the lifecycle gate.
+      auto deferred_teardown = state.deferred_teardown;
+      auto teardown_impl = std::make_unique<DisplayTeardownLease::Impl>(
+        teardown_generation,
+        std::move(deferred_teardown)
+      );
+      auto teardown = std::shared_ptr<DisplayTeardownLease>(
+        new DisplayTeardownLease(std::move(teardown_impl))
+      );
+
+      state.start_in_progress = false;
+      state.start_generation = 0;
+      state.teardown_in_progress = true;
+      state.teardown_generation = teardown_generation;
+      state.next_generation = teardown_generation;
+      state.deferred_teardown = {};
+      released = true;
+      return teardown;
+    }
+
+    std::uint64_t generation;
+    std::mutex release_mutex;
+    bool released {false};
+  };
+
+  DisplayStartReservation::DisplayStartReservation(std::unique_ptr<Impl> impl):
+      impl_(std::move(impl)) {}
+
+  DisplayStartReservation::~DisplayStartReservation() = default;
+  DisplayStartReservation::DisplayStartReservation(DisplayStartReservation &&) noexcept = default;
+  DisplayStartReservation &DisplayStartReservation::operator=(DisplayStartReservation &&) noexcept = default;
+
+  void DisplayStartReservation::publish_active() {
+    if (impl_) {
+      impl_->release(true);
+    }
+  }
+
+  std::shared_ptr<DisplayTeardownLease> DisplayStartReservation::begin_abort_cleanup() noexcept {
+    try {
+      return impl_ ? impl_->convert_to_teardown() : std::shared_ptr<DisplayTeardownLease> {};
+    } catch (const std::exception &e) {
+      // Impl::convert_to_teardown deliberately leaves lifecycle state untouched
+      // on allocation/copy failure. The reservation's later destruction will
+      // still release its start gate; callers must not terminate while already
+      // handling an aborted launch.
+      BOOST_LOG(error) << "Display lifecycle: unable to prepare abort cleanup lease: " << e.what();
+    } catch (...) {
+      BOOST_LOG(error) << "Display lifecycle: unable to prepare abort cleanup lease.";
+    }
+    return {};
+  }
+
+  std::shared_ptr<DisplayStartReservation> acquire_display_start_reservation(
+    std::chrono::milliseconds timeout
+  ) {
+    using namespace std::chrono;
+    auto &state = display_lifecycle_state();
+    const auto deadline = steady_clock::now() + std::max(timeout, milliseconds(0));
+
+    std::unique_lock lock(state.mutex);
+    ++state.start_waiters;
+    state.cv.notify_all();
+    const auto available = [&]() {
+      return !state.start_in_progress && !state.teardown_in_progress;
+    };
+    if (!state.cv.wait_until(lock, deadline, available)) {
+      --state.start_waiters;
+      BOOST_LOG(warning) << "Display lifecycle: timed out waiting for another start/teardown transaction.";
+      return {};
+    }
+
+    --state.start_waiters;
+    const auto generation = state.next_generation + 1;
+    try {
+      // Allocate before publishing the state transition. If memory allocation
+      // fails, availability remains true and another start can proceed.
+      auto impl = std::make_unique<DisplayStartReservation::Impl>(generation);
+      auto reservation = std::shared_ptr<DisplayStartReservation>(
+        new DisplayStartReservation(std::move(impl))
+      );
+      state.start_in_progress = true;
+      state.start_generation = generation;
+      state.next_generation = generation;
+      return reservation;
+    } catch (...) {
+      state.cv.notify_all();
+      throw;
+    }
+  }
+
+  bool display_start_waiting() {
+    auto &state = display_lifecycle_state();
+    std::lock_guard lock(state.mutex);
+    return state.start_waiters != 0;
+  }
+
+  bool display_start_in_progress() {
+    auto &state = display_lifecycle_state();
+    std::lock_guard lock(state.mutex);
+    return state.start_in_progress;
+  }
+
+  DisplayTeardownLease::DisplayTeardownLease(std::unique_ptr<Impl> impl):
+      impl_(std::move(impl)) {}
+
+  DisplayTeardownLease::~DisplayTeardownLease() = default;
+  DisplayTeardownLease::DisplayTeardownLease(DisplayTeardownLease &&) noexcept = default;
+  DisplayTeardownLease &DisplayTeardownLease::operator=(DisplayTeardownLease &&) noexcept = default;
+
+  std::shared_ptr<DisplayTeardownLease> try_acquire_display_teardown(
+    std::function<bool()> still_last_capture_user,
+    std::function<void()> retry_if_start_abandoned
+  ) {
+    auto &state = display_lifecycle_state();
+    std::lock_guard lock(state.mutex);
+    if (state.teardown_in_progress) {
+      append_deferred_teardown_locked(state, std::move(retry_if_start_abandoned));
+      return {};
+    }
+    if (state.start_in_progress || state.start_waiters != 0) {
+      append_deferred_teardown_locked(state, std::move(retry_if_start_abandoned));
+      return {};
+    }
+    try {
+      if (still_last_capture_user && !still_last_capture_user()) {
+        return {};
+      }
+    } catch (...) {
+      BOOST_LOG(warning) << "Display lifecycle: final-capture predicate threw; suppressing teardown.";
+      return {};
+    }
+
+    const auto generation = state.next_generation + 1;
+    // As with start reservations, construct all ownership before setting the
+    // global in-progress bit so allocation failure cannot strand the gate.
+    auto impl = std::make_unique<DisplayTeardownLease::Impl>(generation);
+    auto lease = std::shared_ptr<DisplayTeardownLease>(
+      new DisplayTeardownLease(std::move(impl))
+    );
+    state.teardown_in_progress = true;
+    state.teardown_generation = generation;
+    state.next_generation = generation;
+    return lease;
+  }
+
+  std::optional<PlatformStreamingClaim> claim_platform_streaming_lifecycle(
+    std::function<bool()> still_needed
+  ) {
+    std::lock_guard hook_lock(platform_streaming_hook_mutex());
+    auto &state = display_lifecycle_state();
+    std::lock_guard lock(state.mutex);
+    try {
+      if (still_needed && !still_needed()) {
+        return std::nullopt;
+      }
+    } catch (...) {
+      BOOST_LOG(warning) << "Display lifecycle: platform start predicate threw; suppressing stale start hook.";
+      return std::nullopt;
+    }
+    if (state.platform_streaming_claimed) {
+      return PlatformStreamingClaim {
+        .generation = state.platform_streaming_generation,
+        .start_required = !state.platform_streaming_started,
+      };
+    }
+    state.platform_streaming_claimed = true;
+    state.platform_streaming_started = false;
+    state.platform_streaming_generation = ++state.next_generation;
+    return PlatformStreamingClaim {
+      .generation = state.platform_streaming_generation,
+      .start_required = true,
+    };
+  }
+
+  bool run_platform_streaming_start(
+    std::uint64_t generation,
+    std::function<void()> start_hook,
+    std::function<bool()> still_needed,
+    std::function<void()> rollback_hook
+  ) {
+    std::lock_guard hook_lock(platform_streaming_hook_mutex());
+    auto &state = display_lifecycle_state();
+    {
+      std::lock_guard lock(state.mutex);
+      if (!state.platform_streaming_claimed ||
+          state.platform_streaming_generation != generation ||
+          state.platform_streaming_started) {
+        return false;
+      }
+    }
+    try {
+      if (still_needed && !still_needed()) {
+        return false;
+      }
+    } catch (...) {
+      BOOST_LOG(warning) << "Display lifecycle: platform start predicate threw; suppressing stale start hook.";
+      return false;
+    }
+    try {
+      if (start_hook) {
+        start_hook();
+      }
+    } catch (...) {
+      // The callback can consist of multiple non-idempotent platform steps.
+      // Leave the lifecycle unstarted, but give it a precise rollback for any
+      // step that completed before the exception.
+      if (rollback_hook) {
+        try {
+          rollback_hook();
+        } catch (const std::exception &e) {
+          BOOST_LOG(error) << "Display lifecycle: platform start rollback failed: " << e.what();
+        } catch (...) {
+          BOOST_LOG(error) << "Display lifecycle: platform start rollback failed.";
+        }
+      }
+      throw;
+    }
+    {
+      std::lock_guard lock(state.mutex);
+      // Final release is serialized by hook_lock and cannot revoke the claim
+      // between the callback and this publication.
+      if (state.platform_streaming_claimed &&
+          state.platform_streaming_generation == generation) {
+        state.platform_streaming_started = true;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool run_platform_streaming_update(
+    std::uint64_t generation,
+    std::function<void()> update_hook
+  ) {
+    std::lock_guard hook_lock(platform_streaming_hook_mutex());
+    auto &state = display_lifecycle_state();
+    {
+      std::lock_guard lock(state.mutex);
+      if (!state.platform_streaming_claimed ||
+          state.platform_streaming_generation != generation ||
+          !state.platform_streaming_started) {
+        return false;
+      }
+    }
+    if (update_hook) {
+      update_hook();
+    }
+    return true;
+  }
+
+  bool release_platform_streaming_lifecycle(
+    std::uint64_t generation,
+    std::function<void(bool platform_started)> stop_hook
+  ) {
+    std::lock_guard hook_lock(platform_streaming_hook_mutex());
+    auto &state = display_lifecycle_state();
+    bool should_stop = false;
+    {
+      std::lock_guard lock(state.mutex);
+      if (!state.platform_streaming_claimed ||
+          state.platform_streaming_generation != generation) {
+        return false;
+      }
+      should_stop = state.platform_streaming_started;
+      state.platform_streaming_claimed = false;
+      state.platform_streaming_started = false;
+      state.platform_streaming_generation = 0;
+    }
+    if (stop_hook) {
+      stop_hook(should_stop);
+    }
+    return true;
+  }
+
+  std::optional<std::uint64_t> current_platform_streaming_generation() {
+    std::lock_guard hook_lock(platform_streaming_hook_mutex());
+    auto &state = display_lifecycle_state();
+    std::lock_guard lock(state.mutex);
+    if (!state.platform_streaming_claimed) {
+      return std::nullopt;
+    }
+    return state.platform_streaming_generation;
+  }
+
+  struct DisplayHandoffLease::Impl {
+    explicit Impl(std::unique_lock<std::recursive_timed_mutex> lock_in):
+        lock(std::move(lock_in)) {}
+
+    std::unique_lock<std::recursive_timed_mutex> lock;
+  };
+
+  DisplayHandoffLease::DisplayHandoffLease(std::unique_ptr<Impl> impl):
+      impl_(std::move(impl)) {}
+
+  DisplayHandoffLease::~DisplayHandoffLease() = default;
+  DisplayHandoffLease::DisplayHandoffLease(DisplayHandoffLease &&) noexcept = default;
+  DisplayHandoffLease &DisplayHandoffLease::operator=(DisplayHandoffLease &&) noexcept = default;
+
+  std::shared_ptr<DisplayHandoffLease> acquire_safe_display_handoff(
+    std::chrono::milliseconds timeout,
+    std::function<bool()> still_allowed
+  ) {
+    using namespace std::chrono;
+    const auto deadline = steady_clock::now() + std::max(timeout, milliseconds(0));
+
+    std::unique_lock<std::recursive_timed_mutex> handoff_lock(g_restore_handoff_mutex, std::defer_lock);
+    // Do not let a canceled recovery monitor consume its whole handoff budget
+    // while another display transaction owns the mutex. The uncontended path
+    // still acquires immediately; callers without a freshness predicate keep
+    // the original one-shot timed-lock behavior.
+    constexpr auto kSerializationPollInterval = milliseconds(50);
+    bool serialized = false;
+    if (!still_allowed) {
+      serialized = handoff_lock.try_lock_until(deadline);
+    } else {
+      while (!serialized) {
+        if (!still_allowed()) {
+          BOOST_LOG(info) << "Display helper: handoff transaction canceled while waiting for serialization because it is stale.";
+          return {};
+        }
+
+        const auto now = steady_clock::now();
+        if (now >= deadline) {
+          // Preserve the prior zero-timeout behavior: make one immediate lock
+          // attempt before reporting that serialization timed out.
+          serialized = handoff_lock.try_lock();
+          break;
+        }
+
+        serialized = handoff_lock.try_lock_until(std::min(deadline, now + kSerializationPollInterval));
+      }
+    }
+    if (!serialized) {
+      BOOST_LOG(warning) << "Display helper: timed out waiting to serialize the restore handoff.";
+      return {};
+    }
+    if (still_allowed && !still_allowed()) {
+      BOOST_LOG(info) << "Display helper: handoff transaction canceled after serialization because it is stale.";
+      return {};
+    }
+
+    do {
+      if (still_allowed && !still_allowed()) {
+        BOOST_LOG(info) << "Display helper: handoff transaction canceled while waiting because it became stale.";
+        return {};
+      }
+      const auto disarm_result = disarm_helper_restore_if_running_locked();
+      if (disarm_result == platf::display_helper_client::DisarmResult::Disarmed) {
+        // Pair the ACK with a final generation read while retaining the lease.
+        // A published REVERT cannot overtake the caller's first display action.
+        if (g_restore_tracker.current() == 0) {
+          if (still_allowed && !still_allowed()) {
+            return {};
+          }
+          g_external_helper_recovery_requested.store(false, std::memory_order_release);
+          auto impl = std::make_unique<DisplayHandoffLease::Impl>(std::move(handoff_lock));
+          return std::shared_ptr<DisplayHandoffLease>(new DisplayHandoffLease(std::move(impl)));
+        }
+        continue;
+      }
+      if (disarm_result == platf::display_helper_client::DisarmResult::Unavailable &&
+          helper_process_running()) {
+        // An unresponsive helper may be serialized behind a blocking APPLY or
+        // may predate the acknowledgement protocol. Treat it as unsafe until a
+        // positive acknowledgement or process exit proves otherwise.
+        (void) g_restore_tracker.discover_restore();
+        if (helper_process_is_external() &&
+            !g_external_helper_recovery_requested.exchange(true, std::memory_order_acq_rel)) {
+          // An older helper cannot positively acknowledge DISARM. Let its own
+          // strict restore engine finish and exit before this process upgrades
+          // it; never terminate it in a blocking display call.
+          BOOST_LOG(warning) << "Display helper: requesting strict restore from external helper before upgrade.";
+          if (still_allowed && !still_allowed()) {
+            g_external_helper_recovery_requested.store(false, std::memory_order_release);
+            return {};
+          }
+          const auto remaining = duration_cast<milliseconds>(deadline - steady_clock::now());
+          const bool sent = remaining > milliseconds(0) &&
+                            platf::display_helper_client::send_revert_fast(
+                              {},
+                              static_cast<int>(remaining.count())
+                            );
+          if (!sent) {
+            g_external_helper_recovery_requested.store(false, std::memory_order_release);
+          }
+        }
+      }
+      if (!restore_expected_with_live_helper()) {
+        if (still_allowed && !still_allowed()) {
+          return {};
+        }
+        g_external_helper_recovery_requested.store(false, std::memory_order_release);
+        auto impl = std::make_unique<DisplayHandoffLease::Impl>(std::move(handoff_lock));
+        return std::shared_ptr<DisplayHandoffLease>(new DisplayHandoffLease(std::move(impl)));
+      }
+      if (steady_clock::now() >= deadline) {
+        break;
+      }
+      std::this_thread::sleep_for(milliseconds(100));
+    } while (true);
+
+    g_external_helper_recovery_requested.store(false, std::memory_order_release);
+    BOOST_LOG(warning) << "Display helper: restore handoff remained unsafe for "
+                       << timeout.count() << "ms; suppressing stream-start display changes.";
+    return {};
+  }
+
   namespace {
-    bool apply_internal(const DisplayApplyRequest &request, bool allow_resolution_deferral) {
+    bool apply_internal(
+      const DisplayApplyRequest &request,
+      bool allow_resolution_deferral,
+      std::optional<std::uint64_t> *verification_token = nullptr,
+      bool *handoff_safe = nullptr
+    ) {
+      // All host-side APPLY paths (including deferred/hot recovery) participate
+      // in the same transaction order as stream start, cleanup, and REVERT.
+      // Start/recovery callers may already own the recursive lease.
+      std::lock_guard<std::recursive_timed_mutex> transaction_lock(g_restore_handoff_mutex);
+      if (verification_token) {
+        verification_token->reset();
+      }
+      if (handoff_safe) {
+        *handoff_safe = true;
+      }
       if (request.action == DisplayApplyAction::Skip) {
         BOOST_LOG(info) << "Display helper: configuration parse failed; not dispatching.";
         return false;
       }
 
-      if (request.action == DisplayApplyAction::Revert) {
-        const bool helper_ready = ensure_helper_started(false, true);
-        if (!helper_ready) {
-          BOOST_LOG(warning) << "Display helper: REVERT skipped (helper not reachable).";
-          clear_active_session();
-          return false;
+      if (request.action == DisplayApplyAction::Preserve) {
+        BOOST_LOG(info) << "Display helper: display configuration is disabled; preserving current state.";
+        if (request.session) {
+          // Preserve means "no topology Apply", not "no active display
+          // session". Recording a per-session VD keeps helper/watchdog policy
+          // alive when the global DD and VD settings are disabled by overrides.
+          set_active_session(
+            *request.session,
+            request.session_overrides.device_id_override,
+            request.session_overrides.fps_override,
+            request.session_overrides.width_override,
+            request.session_overrides.height_override,
+            request.session_overrides.virtual_display_override,
+            request.session_overrides.framegen_refresh_override
+          );
+          if (request.enable_virtual_display_watchdog) {
+            platf::display_helper::Coordinator::instance().set_virtual_display_watchdog_enabled(true);
+          }
         }
-        BOOST_LOG(info) << "Display helper: sending REVERT request (builder).";
-        const bool ok = platf::display_helper_client::send_revert();
-        BOOST_LOG(info) << "Display helper: REVERT dispatch result=" << (ok ? "true" : "false");
-        clear_active_session();
-        return ok;
+        return true;
+      }
+
+      if (request.action == DisplayApplyAction::Revert) {
+        // REVERT has its own generation-tracked API and must never be smuggled
+        // through an Apply request (which may already hold a handoff lease).
+        BOOST_LOG(error) << "Display helper: refusing untracked REVERT through apply(); use revert() instead.";
+        return false;
       }
 
       if (request.action != DisplayApplyAction::Apply) {
@@ -1261,16 +2135,33 @@ namespace display_helper_integration {
         BOOST_LOG(debug) << "Display helper: SYSTEM context without user session; preferring helper dispatch.";
       }
 
-      // Stream-start policy: if a helper is already running, hard-restart it immediately
-      // rather than attempting graceful STOP (avoids apply timeouts and wedged restore loops).
-      // Exception: if we recently asked the helper to restore and did not cancel it inside
-      // the short disarm grace window, keep that helper alive and let APPLY supersede the
-      // restore through IPC. Killing it here can strand the host in a partially restored
-      // physical-display mode when a monitor input is still switched away.
-      // In SYSTEM/no-user-session mode we still keep hard restart to recover stale pipe state,
-      // but we avoid in-process display API fallback if helper IPC remains unavailable.
+      // Stream-start policy: probe the existing helper with a correlated
+      // DISARM before deciding whether it can be reused. An acknowledged helper
+      // is both faster and safer to reuse; an unconfirmed restore is preserved
+      // because killing it could strand a partially restored topology.
+      // A helper can autonomously arm its disconnect restore without a host
+      // generation (for example after a prior process or pipe died). Fence that
+      // state before force-restart decisions on every Apply path, including
+      // deferred/background applies that do not already own a start lease.
+      const bool helper_was_running = helper_process_running();
+      const auto pre_apply_disarm = disarm_helper_restore_if_running_locked();
+      if (pre_apply_disarm != platf::display_helper_client::DisarmResult::Disarmed &&
+          helper_process_running()) {
+        (void) g_restore_tracker.discover_restore();
+      }
       const bool restore_expected = restore_expected_with_live_helper();
-      const bool hard_restart = (request.session != nullptr) && !restore_expected;
+      const auto restore_generation = restore_expected ?
+                                        g_restore_tracker.current() :
+                                        0;
+      // A correlated DISARM ACK is a positive drained/live barrier. Reuse that
+      // helper instead of killing and relaunching the instance that just took
+      // the start snapshot. This keeps the normal start path fast; restart is
+      // reserved for a live helper that could not provide the barrier.
+      const bool reusable_helper_barrier =
+        helper_was_running &&
+        pre_apply_disarm == platf::display_helper_client::DisarmResult::Disarmed;
+      const bool hard_restart =
+        (request.session != nullptr) && !restore_expected && helper_was_running && !reusable_helper_barrier;
       if (request.session && restore_expected) {
         BOOST_LOG(info) << "Display helper: reusing existing helper because an unconfirmed restore is pending; APPLY will supersede it.";
       }
@@ -1292,11 +2183,34 @@ namespace display_helper_integration {
         }
 
         BOOST_LOG(info) << "Display helper: sending APPLY request via helper.";
-        const bool ok = platf::display_helper_client::send_apply_json(*payload);
+        // A restore that is already inside SetDisplayConfig cannot stop until the
+        // Windows call returns. Give the serialized APPLY enough time to run after
+        // that handoff without penalizing the normal fast path.
+        platf::display_helper_client::ApplyResult ipc_result;
+        if (restore_expected) {
+          ipc_result = platf::display_helper_client::send_apply_json(*payload, kRestoreHandoffApplyResultTimeoutMs);
+        } else {
+          ipc_result = platf::display_helper_client::send_apply_json(*payload);
+        }
+        const bool ok = ipc_result.succeeded;
+        if (!ok) {
+          // Even an acknowledged Expired/Invalid result can be emitted before
+          // an older restore or post-Apply worker has drained. Force every
+          // failed Apply through the positive DISARM barrier before the caller
+          // probes/captures; success is the only cross-engine drain contract.
+          (void) g_restore_tracker.discover_restore();
+          if (handoff_safe) {
+            *handoff_safe = false;
+          }
+        }
         BOOST_LOG(info) << "Display helper: APPLY dispatch result=" << (ok ? "true" : "false");
-        g_last_apply_used_helper.store(ok, std::memory_order_relaxed);
+        if (ok && verification_token && !use_legacy_helper_engine()) {
+          *verification_token = ipc_result.request_id;
+        }
         if (ok && request.session) {
-          g_restore_expected.store(false, std::memory_order_relaxed);
+          if (restore_generation != 0) {
+            (void) g_restore_tracker.clear_if(restore_generation);
+          }
           g_last_apply_completed_us.store(now_steady_us(), std::memory_order_relaxed);
           set_active_session(
             *request.session,
@@ -1364,17 +2278,16 @@ namespace display_helper_integration {
     }
   }  // namespace
 
-  ApplyVerificationStatus wait_for_apply_verification(std::chrono::milliseconds timeout) {
-    // The legacy engine never emits VerificationResult frames; don't burn the timeout.
-    if (use_legacy_helper_engine()) {
-      return ApplyVerificationStatus::Unknown;
-    }
-    if (!g_last_apply_used_helper.exchange(false, std::memory_order_acq_rel)) {
+  ApplyVerificationStatus wait_for_apply_verification(
+    std::uint64_t verification_token,
+    std::chrono::milliseconds timeout
+  ) {
+    if (verification_token == 0) {
       return ApplyVerificationStatus::Unknown;
     }
 
     const int timeout_ms = static_cast<int>(std::max<long long>(timeout.count(), 0LL));
-    const auto result = platf::display_helper_client::wait_for_verification_result(timeout_ms);
+    const auto result = platf::display_helper_client::wait_for_verification_result(verification_token, timeout_ms);
     if (!result.has_value()) {
       BOOST_LOG(warning) << "Display helper: verification result unavailable; proceeding with stream.";
       return ApplyVerificationStatus::Unknown;
@@ -1383,8 +2296,11 @@ namespace display_helper_integration {
     return *result ? ApplyVerificationStatus::Verified : ApplyVerificationStatus::Failed;
   }
 
-  bool apply(const DisplayApplyRequest &request) {
-    g_last_apply_used_helper.store(false, std::memory_order_relaxed);
+  ApplyDispatchResult apply_with_verification(const DisplayApplyRequest &request) {
+    // A new direct Apply supersedes any lock-screen/API retry retained for an
+    // older session. Deferred retries call apply_internal directly and keep
+    // their captured epoch.
+    clear_pending_apply();
     // Remember the session's virtual display before the APPLY payload is built so the
     // helper can exclude it from the pre-apply baseline it may capture.
     if (request.session) {
@@ -1395,10 +2311,28 @@ namespace display_helper_integration {
         statefile::remember_virtual_display_device(vd_id);
       }
     }
-    return apply_internal(request, true);
+    ApplyDispatchResult result;
+    result.accepted = apply_internal(
+      request,
+      true,
+      &result.verification_token,
+      &result.handoff_safe
+    );
+    return result;
+  }
+
+  bool apply(const DisplayApplyRequest &request) {
+    return apply_with_verification(request).accepted;
   }
 
   bool revert(bool prefer_golden_if_current_missing) {
+    // Serialize helper inspection/start as well as publication/send. Otherwise
+    // a new Sunshine process could kill an external restore helper before the
+    // transaction lock was acquired.
+    std::lock_guard<std::recursive_timed_mutex> handoff_lock(g_restore_handoff_mutex);
+    // Queue creation happens under this same transaction. Clearing here makes
+    // it impossible for a deferred Apply from the ended session to appear in
+    // the pre-lock gap and run after REVERT.
     clear_pending_apply();
     if (!ensure_helper_started()) {
       BOOST_LOG(info) << "Display helper unavailable; cannot send revert.";
@@ -1406,22 +2340,41 @@ namespace display_helper_integration {
     }
     BOOST_LOG(info) << "Display helper: sending REVERT request"
                     << (prefer_golden_if_current_missing ? " (prefer golden if current missing)." : ".");
+    // Publish before the frame can be observed by the helper. A concurrent
+    // stream-start barrier must never declare safety in the send->publish gap.
+    const auto restore_generation = g_restore_tracker.begin_restore();
     const bool ok = platf::display_helper_client::send_revert(build_revert_payload(prefer_golden_if_current_missing));
     BOOST_LOG(info) << "Display helper: REVERT dispatch result=" << (ok ? "true" : "false");
-    if (ok) {
-      g_restore_expected.store(true, std::memory_order_relaxed);
-      g_last_revert_us.store(now_steady_us(), std::memory_order_relaxed);
-      g_restore_generation.fetch_add(1, std::memory_order_relaxed);
+    if (!ok) {
+      // A failed/timeout send is ambiguous: the helper may already have the
+      // frame. Retain this generation until process exit or an acknowledged
+      // handoff proves that no restore can still mutate the topology.
+      BOOST_LOG(warning) << "Display helper: preserving REVERT generation "
+                         << restore_generation << " after unacknowledged dispatch.";
     }
     clear_active_session();
     return ok;
   }
 
   bool disarm_pending_restore() {
-    return disarm_helper_restore_if_running();
+    const auto result = disarm_helper_restore_if_running();
+    if (result == platf::display_helper_client::DisarmResult::Unavailable && helper_process_running()) {
+      (void) g_restore_tracker.discover_restore();
+    }
+    return result == platf::display_helper_client::DisarmResult::Disarmed;
+  }
+
+  bool wait_for_safe_display_handoff(std::chrono::milliseconds timeout) {
+    return static_cast<bool>(acquire_safe_display_handoff(timeout));
+  }
+
+  bool helper_or_restore_active() {
+    std::lock_guard<std::recursive_timed_mutex> handoff_lock(g_restore_handoff_mutex);
+    return g_restore_tracker.current() != 0 || helper_process_running();
   }
 
   bool export_golden_restore() {
+    std::lock_guard<std::recursive_timed_mutex> handoff_lock(g_restore_handoff_mutex);
     if (!ensure_helper_started()) {
       BOOST_LOG(info) << "Display helper unavailable; cannot export golden snapshot.";
       return false;
@@ -1433,6 +2386,7 @@ namespace display_helper_integration {
   }
 
   bool reset_persistence() {
+    std::lock_guard<std::recursive_timed_mutex> handoff_lock(g_restore_handoff_mutex);
     if (!ensure_helper_started()) {
       BOOST_LOG(info) << "Display helper unavailable; cannot reset persistence.";
       return false;
@@ -1444,6 +2398,7 @@ namespace display_helper_integration {
   }
 
   bool snapshot_current_display_state() {
+    std::lock_guard<std::recursive_timed_mutex> handoff_lock(g_restore_handoff_mutex);
     if (restore_expected_with_live_helper()) {
       BOOST_LOG(info) << "Display helper: skipping SNAPSHOT_CURRENT while an unconfirmed restore is pending.";
       return false;
@@ -1496,7 +2451,6 @@ namespace display_helper_integration {
         return false;
       }
       pending = state;
-      pending_apply_state().reset();
     }
 
     std::optional<rtsp_stream::launch_session_t> session;
@@ -1520,6 +2474,27 @@ namespace display_helper_integration {
       pending.request.session = nullptr;
     }
 
+    // Linearize the popped request with REVERT/clear and revalidate the source
+    // session after the potentially long readiness delay. apply_internal takes
+    // the same recursive transaction, so no ended-session retry can overtake a
+    // restore after this point.
+    std::lock_guard<std::recursive_timed_mutex> handoff_lock(g_restore_handoff_mutex);
+    {
+      std::lock_guard<std::mutex> lock(pending_apply_mutex());
+      if (!pending_apply_state() || pending_apply_state()->epoch != pending.epoch ||
+          pending_apply_epoch().load(std::memory_order_acquire) != pending.epoch) {
+        BOOST_LOG(info) << "Display helper: dropping stale deferred APPLY before dispatch.";
+        return false;
+      }
+      pending_apply_state().reset();
+    }
+    if (pending.has_session &&
+        stream::session::running_sessions.load(std::memory_order_acquire) == 0 &&
+        !webrtc_stream::has_active_sessions()) {
+      BOOST_LOG(info) << "Display helper: dropping deferred APPLY because its stream session ended.";
+      return false;
+    }
+
     BOOST_LOG(info) << "Display helper: applying deferred configuration for session " << pending.session_id << ".";
     const bool ok = apply_internal(pending.request, false);
     if (!ok) {
@@ -1528,7 +2503,8 @@ namespace display_helper_integration {
       const auto delay = deferred_apply_retry_delay(pending.attempts);
       pending.next_attempt = std::chrono::steady_clock::now() + delay;
       std::lock_guard<std::mutex> lock(pending_apply_mutex());
-      if (!pending_apply_state()) {
+      if (!pending_apply_state() &&
+          pending_apply_epoch().load(std::memory_order_acquire) == pending.epoch) {
         pending_apply_state() = pending;
         BOOST_LOG(warning) << "Display helper: deferred APPLY failed; retrying in "
                            << delay.count() << "ms (attempt " << pending.attempts
@@ -1547,6 +2523,7 @@ namespace display_helper_integration {
 
   void clear_pending_apply() {
     std::lock_guard<std::mutex> lock(pending_apply_mutex());
+    (void) pending_apply_epoch().fetch_add(1, std::memory_order_acq_rel);
     pending_apply_state().reset();
   }
 
@@ -1859,7 +2836,7 @@ namespace display_helper_integration {
       }
     }
     if (config::video.dd.config_revert_on_disconnect) {
-      platf::display_helper_client::reset_connection();
+      reset_helper_connection_serialized();
     }
     clear_active_session();
   }

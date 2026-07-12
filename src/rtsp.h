@@ -12,11 +12,12 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <future>
+#include <limits>
 #include <list>
 #include <map>
 #include <memory>
-#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -28,6 +29,12 @@
 namespace stream {
   struct session_t;
 }
+
+#ifdef _WIN32
+namespace display_helper_integration {
+  class DisplayStartReservation;
+}
+#endif
 
 namespace rtsp_stream {
   constexpr auto RTSP_SETUP_PORT = 21;
@@ -83,6 +90,17 @@ namespace rtsp_stream {
     std::optional<std::chrono::steady_clock::time_point> virtual_display_ready_since;
     bool virtual_display_recreated_on_demand = false;
     bool virtual_display_needs_resume_apply = false;
+    enum class virtual_display_start_mutation_e : std::uint8_t {
+      none,
+      created_new,
+      replaced_or_ambiguous,
+    };
+    virtual_display_start_mutation_e virtual_display_start_mutation {
+      virtual_display_start_mutation_e::none
+    };
+    bool virtual_display_reused_for_start = false;
+    bool display_snapshot_captured_for_start = false;
+    bool display_apply_attempted_for_start = false;
     std::optional<std::vector<std::vector<std::string>>> virtual_display_topology_snapshot;
 
     /// @brief Pre-virtual-display device refresh rates captured before VD creation.
@@ -113,6 +131,11 @@ namespace rtsp_stream {
     /// Soft gate: capture start waits (bounded) for the display helper's apply
     /// verification so the first frames aren't grabbed mid-modeset.
     std::shared_future<display_helper_gate_status_e> display_helper_gate;
+
+    // Cross-protocol start intent. It remains live through RTSP ANNOUNCE and is
+    // published only after stream::session::running_sessions is incremented.
+    std::shared_ptr<display_helper_integration::DisplayStartReservation> display_start_reservation;
+    std::function<void()> display_start_abort;
 #endif
   };
 
@@ -153,7 +176,8 @@ namespace rtsp_stream {
     });
   }
 
-  void launch_session_raise(std::shared_ptr<launch_session_t> launch_session);
+  bool launch_session_raise(std::shared_ptr<launch_session_t> launch_session);
+  bool cancel_pending_launch();
 
   /**
    * @brief Clear state for the specified launch session.

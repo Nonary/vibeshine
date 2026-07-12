@@ -1,9 +1,10 @@
 #include "src/platform/windows/display_helper_v2/state_machine.h"
 
-#include <boost/algorithm/string/predicate.hpp>
-#include <utility>
-
 #include "src/logging.h"
+
+#include <boost/algorithm/string/predicate.hpp>
+#include <type_traits>
+#include <utility>
 
 namespace display_helper::v2 {
   namespace {
@@ -80,6 +81,8 @@ namespace display_helper::v2 {
           return "NeedsVirtualDisplayReset";
         case ApplyStatus::Retryable:
           return "Retryable";
+        case ApplyStatus::Expired:
+          return "Expired";
         case ApplyStatus::Fatal:
           return "Fatal";
         default:
@@ -87,6 +90,7 @@ namespace display_helper::v2 {
       }
     }
   }  // namespace
+
   std::optional<std::pair<Snapshot, codec::layout_rotation_map_t>> SnapshotLedger::capture_filtered(const std::vector<std::string> &exclusions, const char *reason) {
     auto snap = service_.capture();
     if (!service_.topology_is_valid(snap.m_topology)) {
@@ -129,7 +133,19 @@ namespace display_helper::v2 {
     return false;
   }
 
-  bool SnapshotLedger::refresh_current_preserving_previous(const std::vector<std::string> &exclusions) {
+  bool SnapshotLedger::refresh_current_preserving_previous(
+    const std::vector<std::string> &exclusions,
+    std::optional<std::chrono::steady_clock::time_point> expires_at
+  ) {
+    const auto expired = [&]() {
+      return expires_at.has_value() && clock_.now() >= *expires_at;
+    };
+
+    if (expired()) {
+      BOOST_LOG(info) << "Current session snapshot lease expired before capture began.";
+      return false;
+    }
+
     // Capture first; a failed capture must never destroy the existing baseline
     // chain (53cd8b4c / 62839421).
     auto captured = capture_filtered(exclusions, "snapshot-only");
@@ -138,14 +154,51 @@ namespace display_helper::v2 {
       return false;
     }
 
+    // The host is free to begin display enumeration once the lease expires.
+    // Never rotate or replace the baseline with a capture that crossed that
+    // boundary, even when the Windows capture call itself could not be canceled.
+    if (expired()) {
+      BOOST_LOG(info) << "Current session snapshot lease expired during capture; discarding candidate.";
+      return false;
+    }
+
     auto &storage = persistence_.storage();
+    bool history_rotation_committed = false;
+    auto previous_before_rotation = storage.load_with_metadata(SnapshotTier::Previous);
+    const auto roll_back_history = [&]() {
+      if (!history_rotation_committed) {
+        return true;
+      }
+      return previous_before_rotation ?
+               storage.save(
+                 SnapshotTier::Previous,
+                 previous_before_rotation->snapshot,
+                 previous_before_rotation->layout_rotations
+               ) :
+               storage.remove(SnapshotTier::Previous);
+    };
     if (auto current = storage.load_with_metadata(SnapshotTier::Current)) {
       if (!storage.save(SnapshotTier::Previous, current->snapshot, current->layout_rotations)) {
         BOOST_LOG(warning) << "Failed to refresh session snapshot history (snapshot-only): current->previous copy failed.";
+        return false;
       }
+      history_rotation_committed = true;
+    }
+
+    if (expired()) {
+      if (!roll_back_history()) {
+        BOOST_LOG(error) << "Failed to roll back Previous after the snapshot commit lease expired.";
+      }
+      BOOST_LOG(info) << "Current session snapshot lease expired before baseline commit; discarded candidate and rolled back history.";
+      return false;
     }
 
     const bool replaced = storage.save(SnapshotTier::Current, captured->first, captured->second);
+    if (!replaced && history_rotation_committed) {
+      if (!roll_back_history()) {
+        BOOST_LOG(error) << "Failed to roll back Previous after Current snapshot replacement failed.";
+      }
+    }
     BOOST_LOG(info) << "Refreshed current session snapshot (snapshot-only): " << (replaced ? "true" : "false");
     return replaced;
   }
@@ -157,8 +210,9 @@ namespace display_helper::v2 {
     SystemPorts &system,
     IVirtualDisplayDriver &virtual_display,
     GoldenHealth &golden_health,
-    RestoreState &restore_state)
-    : apply_(apply),
+    RestoreState &restore_state
+  ):
+      apply_(apply),
       recovery_(recovery),
       snapshots_(snapshots),
       system_(system),
@@ -167,22 +221,53 @@ namespace display_helper::v2 {
       restore_state_(restore_state) {}
 
   std::vector<std::string> StateMachine::exclusions_vector() const {
-    return {snapshot_blacklist_.begin(), snapshot_blacklist_.end()};
+    return restore_state_.exclusions();
   }
 
   void StateMachine::update_blacklist(const std::vector<std::string> &exclude_devices) {
-    snapshot_blacklist_.clear();
+    std::vector<std::string> exclusions;
+    exclusions.reserve(exclude_devices.size());
     for (const auto &id : exclude_devices) {
       if (!id.empty()) {
-        snapshot_blacklist_.insert(id);
+        exclusions.push_back(id);
       }
     }
-    restore_state_.set_exclusions(exclusions_vector());
+    restore_state_.set_exclusions(std::move(exclusions));
   }
 
   void StateMachine::start_recovery(std::chrono::milliseconds delay, ApplyAction trigger) {
+    // Recovery must never overlap a delayed post-Apply workaround. Cancellation
+    // joins any mutation that already crossed its own gate.
+    system_.cancel_pending_display_mutations();
     transition(State::Recovery, trigger);
     recovery_.dispatch_recovery(delay);
+  }
+
+  bool StateMachine::process_pending_disconnect_if_apply_drained() {
+    if (!pending_disconnect_revert_ ||
+        restore_state_.apply_workers_active.load(std::memory_order_acquire) != 0) {
+      return false;
+    }
+
+    auto pending = *pending_disconnect_revert_;
+    pending_disconnect_revert_.reset();
+    pending.generation = system_.current_generation();
+    BOOST_LOG(info) << "Display helper: Apply drained; resolving deferred disconnect restore policy.";
+    const bool skip_disconnect_restore =
+      pending.from_disconnect &&
+      !restore_state_.restore_on_disconnect.load(std::memory_order_acquire) &&
+      !restore_pending();
+    if (skip_disconnect_restore) {
+      // restore_on_disconnect=false intentionally retains the committed display
+      // state, but the canceled Apply completion must still leave InProgress.
+      transition(State::Waiting, ApplyAction::Apply);
+      apply_result_sent_ = true;
+    } else {
+      // Do not infer policy handling from state equality: restarting an already
+      // active Recovery legitimately leaves state_ unchanged.
+      handle_revert_command(pending);
+    }
+    return true;
   }
 
   void StateMachine::retarget_virtual_display_device_id_if_needed() {
@@ -234,12 +319,20 @@ namespace display_helper::v2 {
     observer_ = std::move(observer);
   }
 
-  void StateMachine::set_apply_result_callback(std::function<void(ApplyStatus)> callback) {
+  void StateMachine::set_apply_result_callback(std::function<void(ApplyStatus, std::uint64_t, std::uint64_t)> callback) {
     apply_result_callback_ = std::move(callback);
   }
 
-  void StateMachine::set_verification_result_callback(std::function<void(bool)> callback) {
+  void StateMachine::set_verification_result_callback(std::function<void(bool, std::uint64_t, std::uint64_t)> callback) {
     verification_result_callback_ = std::move(callback);
+  }
+
+  void StateMachine::set_snapshot_result_callback(std::function<void(std::uint64_t, std::uint64_t, bool)> callback) {
+    snapshot_result_callback_ = std::move(callback);
+  }
+
+  void StateMachine::set_disarm_result_callback(std::function<void(std::uint64_t, std::uint64_t, bool)> callback) {
+    disarm_result_callback_ = std::move(callback);
   }
 
   void StateMachine::set_exit_callback(std::function<void(int)> callback) {
@@ -247,8 +340,7 @@ namespace display_helper::v2 {
   }
 
   void StateMachine::set_snapshot_blacklist(std::set<std::string> blacklist) {
-    snapshot_blacklist_ = std::move(blacklist);
-    restore_state_.set_exclusions(exclusions_vector());
+    restore_state_.set_exclusions({blacklist.begin(), blacklist.end()});
   }
 
   State StateMachine::state() const {
@@ -260,9 +352,7 @@ namespace display_helper::v2 {
   }
 
   void StateMachine::handle_message(const Message &message) {
-    std::visit([
-      this
-    ](const auto &payload) {
+    std::visit([this](const auto &payload) {
       using T = std::decay_t<decltype(payload)>;
       if constexpr (std::is_same_v<T, ApplyCommand>) {
         handle_apply_command(payload);
@@ -293,7 +383,8 @@ namespace display_helper::v2 {
       } else if constexpr (std::is_same_v<T, HelperEventMessage>) {
         handle_helper_event(payload);
       }
-    }, message);
+    },
+               message);
   }
 
   void StateMachine::handle_apply_command(const ApplyCommand &command) {
@@ -302,41 +393,86 @@ namespace display_helper::v2 {
                     << ", prefer_golden_first=" << (command.request.prefer_golden_first ? "true" : "false")
                     << (command.request.virtual_layout ? ", virtual_layout=" + *command.request.virtual_layout : "");
 
+    if (command.request.expires_at && system_.now() >= *command.request.expires_at) {
+      BOOST_LOG(info) << "Display helper: correlated APPLY expired before state-machine processing.";
+      if (apply_result_callback_) {
+        apply_result_callback_(ApplyStatus::Expired, command.request_id, command.connection_epoch);
+      }
+      return;
+    }
+
+    // A live replacement Apply supersedes a disconnect decision retained while
+    // an older worker drained.
+    pending_disconnect_revert_.reset();
+
+    system_.cancel_pending_display_mutations();
+
+    // Linearize cancellation with the recovery worker's entry into
+    // SetDisplayConfig. If mutation won, preserve the existing snapshot chain;
+    // if cancellation won during grace/read-only work, fallback capture is safe.
+    const bool superseding_apply_worker =
+      restore_state_.apply_workers_active.load(std::memory_order_acquire) != 0;
+    const bool superseding_unconfirmed_restore =
+      restore_state_.mutation_guard.supersede_for_apply([&]() {
+        system_.cancel_operations();
+      });
+    const bool baseline_capture_unsafe = superseding_apply_worker || superseding_unconfirmed_restore;
+
     // A new APPLY supersedes any pending restore via IPC instead of forcing a
-    // helper restart (72b0d996). Cancel in-flight work and disarm the scheduler.
-    system_.cancel_operations();
+    // helper restart (72b0d996). Disarm the scheduler after fencing its worker.
     scheduler_.disarm();
     restore_state_.reset_request_progress();
 
-    restore_state_.always_restore_from_golden.store(command.request.prefer_golden_first, std::memory_order_release);
-    restore_state_.restore_on_disconnect.store(command.request.restore_on_disconnect, std::memory_order_release);
-
     apply_attempt_ = 1;
     apply_result_sent_ = false;
+    current_apply_reports_results_ = true;
     current_request_ = command.request;
+    current_request_.mutation_committed = std::make_shared<std::atomic<bool>>(command.request.deadline_committed);
+    current_apply_request_id_ = command.request_id;
+    current_apply_connection_epoch_ = command.connection_epoch;
+    if (command.snapshot_blacklist) {
+      current_request_.staged_exclusions = std::vector<std::string> {
+        command.snapshot_blacklist->begin(),
+        command.snapshot_blacklist->end()
+      };
+    }
     expected_topology_.reset();
 
-    snapshots_.set_prefer_golden_first(command.request.prefer_golden_first);
-
-    // The session baseline is normally captured earlier via SnapshotCurrent. That
-    // request is fire-and-forget and can be lost (helper restart races), which
+    // The session baseline is normally captured earlier via SnapshotCurrent. A
+    // helper restart or rejected capture can still leave no current tier, which
     // used to leave REVERT with nothing to restore and strand the user on the
     // session-only display layout (f3841ad8). Capture the pre-apply state here as
-    // a fallback whenever no baseline exists yet.
-    if (!snapshots_.tier_exists(SnapshotTier::Current)) {
-      BOOST_LOG(warning) << "Display helper: no session baseline present at APPLY; capturing pre-apply baseline now.";
-      if (!snapshots_.capture_filtered_and_save(SnapshotTier::Current, exclusions_vector(), "pre-apply baseline")) {
-        BOOST_LOG(warning) << "Display helper: pre-apply baseline capture failed; REVERT may have nothing to restore.";
+    // a fallback whenever no baseline exists yet and no restore handoff is active.
+    if (!snapshots_.tier_exists(SnapshotTier::Current) && baseline_capture_unsafe) {
+      BOOST_LOG(info) << "Display helper: skipping pre-apply baseline capture while superseded display work drains; preserving previous/golden snapshots.";
+    } else if (!snapshots_.tier_exists(SnapshotTier::Current)) {
+      auto capture_lease = restore_state_.mutation_guard.try_begin_capture();
+      if (!capture_lease) {
+        BOOST_LOG(info) << "Display helper: skipping pre-apply baseline capture because restore mutation safety changed.";
+      } else {
+        BOOST_LOG(warning) << "Display helper: no session baseline present at APPLY; capturing pre-apply baseline now.";
+        const auto capture_exclusions = current_request_.staged_exclusions.value_or(exclusions_vector());
+        if (!snapshots_.refresh_current_preserving_previous(capture_exclusions, current_request_.expires_at)) {
+          BOOST_LOG(warning) << "Display helper: pre-apply baseline capture failed; REVERT may have nothing to restore.";
+        }
       }
     }
-
-    system_.create_restore_task();
 
     transition(State::InProgress, ApplyAction::Apply);
     apply_.dispatch_apply(current_request_, std::chrono::milliseconds(0), false);
   }
 
   void StateMachine::handle_revert_command(const RevertCommand &command) {
+    if (command.from_disconnect &&
+        restore_state_.apply_workers_active.load(std::memory_order_acquire) != 0) {
+      // The request policy is published at the exact mutation boundary. Do not
+      // read the previous session's policy while a new Apply can still commit;
+      // cancel preflight and resolve after every Apply worker has drained.
+      pending_disconnect_revert_ = command;
+      system_.cancel_operations();
+      BOOST_LOG(info) << "Display helper: deferring disconnect restore decision until Apply drains.";
+      return;
+    }
     // Disconnect-triggered reverts honor the restore-on-disconnect policy: a
     // paused stream with revert_on_disconnect=false must preserve its display
     // state (3b7a52c4 / 0add1f80). Explicit client REVERTs always run.
@@ -380,19 +516,47 @@ namespace display_helper::v2 {
     start_recovery(grace, ApplyAction::Revert);
   }
 
-  void StateMachine::handle_disarm_command(const DisarmCommand &) {
-    // A restore attempt that has not been confirmed yet must not be cancelled or
-    // overwritten by a later stream-start probe (72b0d996).
-    if (restore_pending() &&
-        restore_state_.restore_attempted_unconfirmed.load(std::memory_order_acquire)) {
-      BOOST_LOG(info) << "DISARM command ignored because an unconfirmed restore attempt is still pending.";
+  void StateMachine::handle_disarm_command(const DisarmCommand &command) {
+    if (command.expires_at.has_value() && system_.now() >= *command.expires_at) {
+      BOOST_LOG(info) << "DISARM request expired before state-machine processing.";
+      if (command.request_id != 0 && disarm_result_callback_) {
+        disarm_result_callback_(command.request_id, command.connection_epoch, false);
+      }
       return;
     }
 
+    // DISARM is a restore command, not permission to race a still-running APPLY.
+    // The dispatcher cannot interrupt a blocking display apply either, so report
+    // busy and let the stream-start barrier retry after the worker completes.
+    if (state_ == State::InProgress ||
+        restore_state_.apply_workers_active.load(std::memory_order_acquire) != 0) {
+      BOOST_LOG(info) << "DISARM command deferred because display APPLY work is still in progress.";
+      if (command.request_id != 0 && disarm_result_callback_) {
+        disarm_result_callback_(command.request_id, command.connection_epoch, false);
+      }
+      return;
+    }
+
+    // The shared mutation gate makes this decision atomic with the worker's
+    // entry into SetDisplayConfig. Busy means DISARM was not applied.
+    if (!restore_state_.mutation_guard.try_disarm([&]() {
+          system_.cancel_operations();
+        })) {
+      BOOST_LOG(info) << "DISARM command ignored because an unconfirmed restore attempt is still pending.";
+      if (command.request_id != 0 && disarm_result_callback_) {
+        disarm_result_callback_(command.request_id, command.connection_epoch, false);
+      }
+      return;
+    }
+
+    // The ACK is also a barrier for post-Apply HDR/display work. If that work
+    // already entered Windows, wait for it to finish before declaring safety.
+    system_.cancel_pending_display_mutations();
+
     BOOST_LOG(info) << "Display helper: received Disarm command, resetting state";
 
-    system_.cancel_operations();
     scheduler_.disarm();
+    pending_disconnect_revert_.reset();
     restore_state_.reset_request_progress();
     recovery_armed_ = false;
     system_.disarm_heartbeat();
@@ -401,11 +565,21 @@ namespace display_helper::v2 {
     apply_result_sent_ = false;
     expected_topology_.reset();
     recovery_snapshot_.reset();
-
     transition(State::Waiting, ApplyAction::Disarm);
+    if (command.request_id != 0 && disarm_result_callback_) {
+      disarm_result_callback_(command.request_id, command.connection_epoch, true);
+    }
   }
 
   void StateMachine::handle_export_golden(const ExportGoldenCommand &command) {
+    auto capture_lease = restore_state_.mutation_guard.try_begin_capture();
+    if (state_ != State::Waiting || restore_pending() ||
+        restore_state_.apply_workers_active.load(std::memory_order_acquire) != 0 ||
+        !capture_lease) {
+      BOOST_LOG(info) << "Skipping golden snapshot export while restore or restore handoff is pending.";
+      return;
+    }
+
     if (command.payload.update_exclusions || !command.payload.exclude_devices.empty()) {
       update_blacklist(command.payload.exclude_devices);
     }
@@ -418,10 +592,25 @@ namespace display_helper::v2 {
   }
 
   void StateMachine::handle_snapshot_current(const SnapshotCurrentCommand &command) {
+    if (command.expires_at && system_.now() >= *command.expires_at) {
+      BOOST_LOG(info) << "Current session snapshot request expired before state-machine processing.";
+      if (command.request_id != 0 && snapshot_result_callback_) {
+        snapshot_result_callback_(command.request_id, command.connection_epoch, false);
+      }
+      return;
+    }
+
     // Never overwrite the restore baseline while a restore is being worked on
-    // (72b0d996): the snapshot would capture the un-restored state.
-    if (restore_pending()) {
-      BOOST_LOG(info) << "Skipping current session snapshot refresh while restore is pending.";
+    // (72b0d996), or after APPLY has superseded a blocking restore that may still
+    // be draining: the snapshot would capture a transitional state.
+    auto capture_lease = restore_state_.mutation_guard.try_begin_capture();
+    if (state_ != State::Waiting || restore_pending() ||
+        restore_state_.apply_workers_active.load(std::memory_order_acquire) != 0 ||
+        !capture_lease) {
+      BOOST_LOG(info) << "Skipping current session snapshot refresh while restore or restore handoff is pending.";
+      if (command.request_id != 0 && snapshot_result_callback_) {
+        snapshot_result_callback_(command.request_id, command.connection_epoch, false);
+      }
       return;
     }
 
@@ -429,7 +618,10 @@ namespace display_helper::v2 {
       update_blacklist(command.payload.exclude_devices);
     }
 
-    (void) snapshots_.refresh_current_preserving_previous(exclusions_vector());
+    const bool saved = snapshots_.refresh_current_preserving_previous(exclusions_vector(), command.expires_at);
+    if (command.request_id != 0 && snapshot_result_callback_) {
+      snapshot_result_callback_(command.request_id, command.connection_epoch, saved);
+    }
   }
 
   void StateMachine::handle_reset_command(const ResetCommand &) {
@@ -442,21 +634,36 @@ namespace display_helper::v2 {
 
   void StateMachine::handle_stop_command(const StopCommand &) {
     BOOST_LOG(info) << "Display helper: received STOP command, exiting gracefully.";
+    system_.cancel_pending_display_mutations();
     if (exit_callback_) {
       exit_callback_(0);
     }
   }
 
   void StateMachine::handle_apply_completed(const ApplyCompleted &completed) {
+    // Keep the worker visible until its completion reaches the serialized FSM
+    // queue. Commands queued ahead of this message must continue to treat the
+    // Apply as active; stale completions still retire their worker here.
+    const auto active_workers = restore_state_.apply_workers_active.load(std::memory_order_acquire);
+    if (active_workers != 0) {
+      restore_state_.apply_workers_active.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    if (process_pending_disconnect_if_apply_drained()) {
+      return;
+    }
     if (is_stale(completed.generation)) {
       return;
     }
 
     expected_topology_ = completed.expected_topology;
+    if (completed.deadline_committed) {
+      current_request_.deadline_committed = true;
+      restore_state_.mutation_guard.mark_apply_started();
+    }
 
     if (completed.status == ApplyStatus::Ok) {
-      if (!apply_result_sent_ && apply_result_callback_) {
-        apply_result_callback_(completed.status);
+      if (current_apply_reports_results_ && !apply_result_sent_ && apply_result_callback_) {
+        apply_result_callback_(completed.status, current_apply_request_id_, current_apply_connection_epoch_);
         apply_result_sent_ = true;
       }
       transition(State::Verification, ApplyAction::Apply, completed.status);
@@ -467,7 +674,8 @@ namespace display_helper::v2 {
     if (completed.status == ApplyStatus::NeedsVirtualDisplayReset) {
       const auto decision = apply_.maybe_reset_virtual_display(
         completed.status,
-        completed.virtual_display_requested);
+        completed.virtual_display_requested
+      );
       if (decision == PolicyDecision::ResetVirtualDisplay) {
         apply_.dispatch_apply(current_request_, std::chrono::milliseconds(0), true);
         return;
@@ -483,8 +691,8 @@ namespace display_helper::v2 {
       }
     }
 
-    if (!apply_result_sent_ && apply_result_callback_) {
-      apply_result_callback_(completed.status);
+    if (current_apply_reports_results_ && !apply_result_sent_ && apply_result_callback_) {
+      apply_result_callback_(completed.status, current_apply_request_id_, current_apply_connection_epoch_);
       apply_result_sent_ = true;
     }
 
@@ -496,11 +704,12 @@ namespace display_helper::v2 {
       return;
     }
 
-    if (verification_result_callback_) {
-      verification_result_callback_(completed.success);
+    if (current_apply_reports_results_ && verification_result_callback_) {
+      verification_result_callback_(completed.success, current_apply_request_id_, current_apply_connection_epoch_);
     }
 
     if (completed.success) {
+      restore_state_.mutation_guard.mark_superseding_apply_confirmed();
       recovery_armed_ = true;
       system_.arm_heartbeat();
       system_.refresh_shell();
@@ -543,6 +752,7 @@ namespace display_helper::v2 {
 
     if (completed.success) {
       BOOST_LOG(info) << "Display helper: recovery validation succeeded, display settings restored.";
+      restore_state_.mutation_guard.mark_topology_confirmed();
       recovery_armed_ = false;
       scheduler_.disarm();
       restore_state_.reset_request_progress();
@@ -575,9 +785,11 @@ namespace display_helper::v2 {
     // Virtual display monitoring: re-apply configuration when device crashes/recovers
     if (state_ == State::VirtualDisplayMonitoring) {
       BOOST_LOG(info) << "Display helper: display event while monitoring virtual display, re-applying configuration.";
+      system_.cancel_pending_display_mutations();
       retarget_virtual_display_device_id_if_needed();
       apply_attempt_ = 1;
-      apply_result_sent_ = false;
+      apply_result_sent_ = true;
+      current_apply_reports_results_ = false;
       transition(State::InProgress, ApplyAction::Apply);
       apply_.dispatch_apply(current_request_, std::chrono::milliseconds(0), false);
       return;
@@ -612,6 +824,7 @@ namespace display_helper::v2 {
       BOOST_LOG(info) << "Display helper: display event during virtual display apply, restarting apply.";
 
       // Cancel in-flight apply/verification work so their completions become stale.
+      system_.cancel_pending_display_mutations();
       system_.cancel_operations();
       expected_topology_.reset();
       retarget_virtual_display_device_id_if_needed();
@@ -641,6 +854,14 @@ namespace display_helper::v2 {
       return;
     }
     if (event.event != HelperEvent::HeartbeatTimeout) {
+      return;
+    }
+
+    if (restore_state_.apply_workers_active.load(std::memory_order_acquire) != 0) {
+      RevertCommand disconnect;
+      disconnect.generation = event.generation;
+      disconnect.from_disconnect = true;
+      handle_revert_command(disconnect);
       return;
     }
 

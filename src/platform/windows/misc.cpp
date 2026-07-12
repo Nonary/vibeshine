@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <algorithm>
+#include <atomic>
 #include <csignal>
 #include <filesystem>
 #include <iomanip>
@@ -79,6 +80,10 @@ extern "C" {
 namespace {
 
   std::atomic<bool> used_nt_set_timer_resolution = false;
+  // The shared stream lifecycle normally serializes these calls. This guard
+  // additionally makes a transactional rollback safe if a later start phase
+  // throws after Windows platform state has begun changing.
+  std::atomic_bool streaming_platform_active {false};
 
   bool nt_set_timer_resolution_max() {
     ULONG maximum;
@@ -219,6 +224,7 @@ namespace platf {
   namespace {
     constexpr wchar_t kVulkanImplicitLayersSubKey[] = L"SOFTWARE\\Khronos\\Vulkan\\ImplicitLayers";
     constexpr wchar_t kVulkanHdrLayerManifestName[] = L"VkLayer_sunshine_hdr.json";
+
     // Resolve the shipped manifest path: <sunshine.exe dir>\drivers\sunshine\vulkan-layer\VkLayer_sunshine_hdr.json
     std::filesystem::path vulkan_hdr_layer_manifest_path() {
       wchar_t module_path[MAX_PATH] = {};
@@ -1394,6 +1400,19 @@ namespace platf {
       }
     });
 
+    if (streaming_platform_active.exchange(true, std::memory_order_acq_rel)) {
+      return;
+    }
+    auto rollback_on_failure = util::fail_guard([]() {
+      try {
+        streaming_will_stop();
+      } catch (const std::exception &e) {
+        BOOST_LOG(error) << "Failed to roll back partial platform stream start: " << e.what();
+      } catch (...) {
+        BOOST_LOG(error) << "Failed to roll back partial platform stream start.";
+      }
+    });
+
     // Enable MMCSS scheduling for DWM
     DwmEnableMMCSS(true);
 
@@ -1453,6 +1472,7 @@ namespace platf {
       }
     }
     enable_mouse_keys();
+    rollback_on_failure.disable();
   }
 
   void enable_mouse_keys() {
@@ -1485,6 +1505,9 @@ namespace platf {
   }
 
   void streaming_will_stop() {
+    if (!streaming_platform_active.exchange(false, std::memory_order_acq_rel)) {
+      return;
+    }
     // If the client disconnected without /cancel, Sunshine can leave the app running to allow /resume.
     // In that "paused" state, we must keep feeding the display helper heartbeat to prevent it from
     // autonomously reverting the virtual display configuration.

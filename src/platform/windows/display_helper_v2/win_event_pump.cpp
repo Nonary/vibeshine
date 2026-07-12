@@ -11,7 +11,9 @@ namespace display_helper::v2 {
   void WinEventPump::start(Callback callback) {
     stop();
     callback_ = std::move(callback);
-    worker_ = std::jthread(&WinEventPump::thread_proc, this);
+    worker_ = std::jthread([this](std::stop_token stop_token) {
+      thread_proc(stop_token);
+    });
   }
 
   void WinEventPump::stop() {

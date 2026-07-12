@@ -6,11 +6,15 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
+// Windows.h includes the obsolete Winsock.h unless Winsock2 is included first.
+// clang-format off
 #include <winsock2.h>
 #include <windows.h>
+// clang-format on
 
 namespace VDISPLAY {
   inline constexpr const char *VIRTUAL_DISPLAY_SELECTION = "sunshine:virtual_display";
@@ -26,6 +30,35 @@ namespace VDISPLAY {
   extern HANDLE VIRTUAL_DISPLAY_DRIVER_HANDLE;
 
   void closeVDisplayDevice();
+  // First phase of process-exit shutdown. It invalidates recovery ownership
+  // and asks both driver backends to stop recovery before cleanup workers are
+  // drained. Do not use for normal operational driver reopens.
+  void beginVDisplayDeviceShutdown();
+  // Process-exit variant: aborts and quiesces recovery monitors before closing
+  // driver handles. Do not use for normal operational driver reopens.
+  void shutdownVDisplayDevice();
+  // Internal recovery-operation serialization. A nonempty lease excludes a
+  // watchdog-triggered close while a monitor is reopening/recreating a
+  // display. Terminal shutdown makes future acquisitions fail, signals both
+  // drivers, then waits for an already-held lease to drain.
+  std::shared_ptr<void> acquire_virtual_display_recovery_operation() noexcept;
+  // Virtual-display HDR profile work is asynchronous. These generation-bound
+  // checks and write leases prevent an old profile task from applying to a
+  // removed/reused virtual display after a newer create or teardown wins.
+  std::uint64_t begin_virtual_display_hdr_profile_operation(const GUID &guid) noexcept;
+  bool is_virtual_display_hdr_profile_operation_current(
+    const GUID &guid,
+    std::uint64_t generation
+  ) noexcept;
+  // Acquire immediately before registry mutation, not while resolving a
+  // display path. This preserves a fast stream-start path while still
+  // serializing a profile write against invalidation/new creation.
+  std::shared_ptr<void> acquire_virtual_display_hdr_profile_operation(
+    const GUID &guid,
+    std::uint64_t generation
+  ) noexcept;
+  void invalidate_virtual_display_hdr_profile_operation(const GUID &guid) noexcept;
+  void invalidate_all_virtual_display_hdr_profile_operations() noexcept;
   DRIVER_STATUS openVDisplayDevice();
   bool ensure_driver_is_ready();
   bool startPingThread(std::function<void()> failCb);
@@ -59,7 +92,24 @@ namespace VDISPLAY {
     std::optional<std::string> device_id;
     std::optional<std::wstring> monitor_device_path;
     unsigned int max_attempts = 3;
+    // Acquires a lease immediately before recovery touches the driver/display
+    // stack. The returned token is held through recreation; an empty token
+    // defers the attempt.
+    std::function<std::shared_ptr<void>()> acquire_display_handoff;
+    // A successful recovery recreation registers the same GUID with a fresh
+    // driver-tracker generation. The owner refreshes that expected generation
+    // before continuing, without accepting a different stream's claim.
+    std::function<bool()> refresh_recovery_owner_after_recreation;
+    // Opens a narrow owner window immediately before a recovery removes and
+    // recreates its own tracked GUID. During that window only the expected
+    // no-tracker gap is accepted; a different tracker generation still aborts
+    // the stale monitor. A failed recreation must cancel this window.
+    std::function<bool()> begin_recovery_owner_recreation;
+    std::function<void()> cancel_recovery_owner_recreation;
     std::function<void(const VirtualDisplayCreationResult &)> on_recovery_success;
+    // Releases the generation-specific recovery owner when this monitor exits.
+    // It must tolerate being superseded by a newer monitor for the same GUID.
+    std::function<void()> on_monitor_exit;
     std::function<bool()> should_abort;
   };
 
@@ -89,11 +139,25 @@ namespace VDISPLAY {
 
   // Restore any physical display color profiles that Sunshine overrode for streaming.
   // Virtual display associations are not restored.
-  void restorePhysicalHdrProfiles();
+  void restorePhysicalHdrProfiles() noexcept;
   bool removeVirtualDisplay(const GUID &guid);
   bool removeAllVirtualDisplays();
   void schedule_virtual_display_recovery_monitor(const VirtualDisplayRecoveryParams &params);
   bool is_virtual_display_guid_tracked(const GUID &guid);
+  std::optional<std::uint64_t> virtual_display_tracking_generation(const GUID &guid);
+  bool is_virtual_display_tracking_generation_current(const GUID &guid, std::uint64_t generation);
+  // Distinct from driver tracking: every session/monitor claim increments even
+  // when shared mode reuses an already-tracked GUID.
+  std::uint64_t claim_virtual_display_recovery_owner(const GUID &guid);
+  bool is_virtual_display_recovery_owner_current(const GUID &guid, std::uint64_t generation);
+  bool begin_virtual_display_recovery_recreation(const GUID &guid, std::uint64_t generation);
+  bool cancel_virtual_display_recovery_recreation(const GUID &guid, std::uint64_t generation);
+  bool refresh_virtual_display_recovery_owner_tracking(const GUID &guid, std::uint64_t generation);
+  // Release only the matching claimant so an older monitor cannot erase a
+  // newer stream's owner. Whole-process and terminal cleanup use invalidate.
+  bool release_virtual_display_recovery_owner(const GUID &guid, std::uint64_t generation);
+  void invalidate_virtual_display_recovery_owner(const GUID &guid);
+  void invalidate_all_virtual_display_recovery_owners();
 
   std::optional<std::string> resolveVirtualDisplayDeviceId(const std::wstring &display_name);
   std::optional<std::string> resolveVirtualDisplayDeviceIdForClient(const std::string &client_name);

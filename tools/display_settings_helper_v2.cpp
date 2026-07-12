@@ -7,8 +7,8 @@
 
   #include <algorithm>
   #include <atomic>
-  #include <chrono>
   #include <cctype>
+  #include <chrono>
   #include <cstdint>
   #include <cstring>
   #include <filesystem>
@@ -20,15 +20,13 @@
   #include <span>
   #include <string>
   #include <thread>
+  #include <type_traits>
   #include <utility>
   #include <vector>
 
   #ifndef WIN32_LEAN_AND_MEAN
     #define WIN32_LEAN_AND_MEAN
   #endif
-  #include <winsock2.h>
-  #include <windows.h>
-
   #include "src/logging.h"
   #include "src/platform/windows/display_helper_v2/async_dispatcher.h"
   #include "src/platform/windows/display_helper_v2/golden_health.h"
@@ -42,27 +40,19 @@
   #include "src/platform/windows/display_helper_v2/win_platform_workarounds.h"
   #include "src/platform/windows/display_helper_v2/win_scheduled_task_manager.h"
   #include "src/platform/windows/display_helper_v2/win_virtual_display_driver.h"
+  #include "src/platform/windows/ipc/display_settings_protocol.h"
   #include "src/platform/windows/ipc/pipes.h"
   #include "tools/display_helper_paths.h"
 
   #include <display_device/json.h>
   #include <display_device/logging.h>
   #include <nlohmann/json.hpp>
+  #include <windows.h>
+  #include <winsock2.h>
 
 namespace {
-  enum class MsgType : uint8_t {
-    Apply = 1,
-    Revert = 2,
-    Reset = 3,
-    ExportGolden = 4,
-    LogLevel = 5,
-    ApplyResult = 6,
-    Disarm = 7,
-    SnapshotCurrent = 8,
-    VerificationResult = 9,
-    Ping = 0xFE,
-    Stop = 0xFF,
-  };
+  using MsgType = platf::display_helper_protocol::MsgType;
+  using ResultStatus = platf::display_helper_protocol::ResultStatus;
 
   std::optional<int> parse_log_level_value(const char *value) {
     if (!value || *value == '\0') {
@@ -213,7 +203,8 @@ namespace {
     std::span<const uint8_t> payload,
     display_helper::v2::ApplyRequest &out_request,
     std::optional<std::vector<std::string>> &snapshot_exclusions,
-    std::string &error) {
+    std::string &error
+  ) {
     std::string json(reinterpret_cast<const char *>(payload.data()), payload.size());
     std::string sanitized_json = json;
 
@@ -343,7 +334,8 @@ namespace {
   bool parse_frame(
     std::span<const uint8_t> frame,
     MsgType &type,
-    std::span<const uint8_t> &payload) {
+    std::span<const uint8_t> &payload
+  ) {
     if (frame.empty()) {
       return false;
     }
@@ -418,7 +410,8 @@ namespace {
   void adopt_snapshots_from_search_roots(
     const std::vector<std::filesystem::path> &search_roots,
     const std::filesystem::path &active_current,
-    const std::filesystem::path &active_previous) {
+    const std::filesystem::path &active_previous
+  ) {
     for (const auto &root : search_roots) {
       const auto paths = display_helper_paths::make_snapshot_paths(root);
       std::error_code ec_cur;
@@ -518,10 +511,24 @@ int run_v2_helper(int argc, char *argv[]) {
   display_helper::v2::HeartbeatMonitor heartbeat(clock);
   display_helper::v2::CancellationSource cancellation;
   display_helper::v2::SystemPorts system_ports(workarounds, task_manager, heartbeat, clock, cancellation);
-  display_helper::v2::ApplyOperation apply_operation(display_settings, clock);
+  // Drive this from ApplyOperation's mutation boundary, rather than receipt
+  // of an IPC frame. A disconnected client can leave parsed APPLY messages in
+  // the queue that must never arm an autonomous restore.
+  std::atomic<bool> apply_seen {false};
+  display_helper::v2::ApplyOperation apply_operation(
+    display_settings,
+    clock,
+    [&task_manager, &apply_seen]() {
+      apply_seen.store(true, std::memory_order_release);
+      (void) task_manager.create_restore_task(L"");
+    }
+  );
   display_helper::v2::VerificationOperation verification_operation(display_settings, clock);
   display_helper::v2::RecoveryOperation recovery_operation(display_settings, storage, golden_health, restore_state, clock);
   display_helper::v2::RecoveryValidationOperation recovery_validation(snapshot_service, clock);
+  // Must outlive the dispatcher: outstanding worker completions enqueue here
+  // while AsyncDispatcher's destructor drains/joins its worker.
+  display_helper::v2::MessageQueue<display_helper::v2::Message> queue;
   display_helper::v2::AsyncDispatcher dispatcher(
     apply_operation,
     verification_operation,
@@ -531,7 +538,6 @@ int run_v2_helper(int argc, char *argv[]) {
     clock
   );
 
-  display_helper::v2::MessageQueue<display_helper::v2::Message> queue;
   std::atomic<bool> running {true};
 
   // Adopt snapshots written by other contexts (SYSTEM vs user) or the legacy engine.
@@ -557,7 +563,7 @@ int run_v2_helper(int argc, char *argv[]) {
   auto enqueue_message = [&](display_helper::v2::Message message) {
     queue.push(std::move(message));
   };
-  display_helper::v2::ApplyPipeline apply_pipeline(dispatcher, apply_policy, system_ports, enqueue_message);
+  display_helper::v2::ApplyPipeline apply_pipeline(dispatcher, apply_policy, system_ports, restore_state, enqueue_message);
   display_helper::v2::RecoveryPipeline recovery_pipeline(dispatcher, system_ports, enqueue_message);
   display_helper::v2::SnapshotLedger snapshot_ledger(snapshot_service, persistence, clock);
 
@@ -568,7 +574,8 @@ int run_v2_helper(int argc, char *argv[]) {
     system_ports,
     virtual_display,
     golden_health,
-    restore_state);
+    restore_state
+  );
 
   state_machine.set_snapshot_blacklist(std::move(initial_blacklist));
 
@@ -577,9 +584,14 @@ int run_v2_helper(int argc, char *argv[]) {
   std::atomic<uint64_t> connection_epoch {0};
   std::atomic<uint64_t> restore_origin_epoch {0};
   std::atomic<bool> client_connected {false};
+  // Every liveness publication and the recovery-exit snapshot share this
+  // mutex. An old pipe can therefore never overwrite a disconnect's false
+  // liveness value after that disconnect advances the epoch.
+  std::recursive_mutex client_command_epoch_mutex;
 
   int exit_code = 0;
   state_machine.set_exit_callback([&](int code) {
+    std::lock_guard epoch_lock(client_command_epoch_mutex);
     const auto origin = restore_origin_epoch.load(std::memory_order_acquire);
     const auto current = connection_epoch.load(std::memory_order_acquire);
     if (code == 0 && origin != 0 && current > origin && client_connected.load(std::memory_order_acquire)) {
@@ -592,23 +604,80 @@ int run_v2_helper(int argc, char *argv[]) {
   });
 
   std::atomic<platf::dxgi::AsyncNamedPipe *> active_pipe {nullptr};
-  state_machine.set_apply_result_callback([&](display_helper::v2::ApplyStatus status) {
+  std::mutex response_mutex;
+  state_machine.set_apply_result_callback([&](display_helper::v2::ApplyStatus status, std::uint64_t request_id, std::uint64_t epoch) {
+    std::lock_guard<std::mutex> lock(response_mutex);
+    if (connection_epoch.load(std::memory_order_acquire) != epoch) {
+      return;
+    }
     auto *pipe = active_pipe.load(std::memory_order_acquire);
     if (!pipe) {
       return;
     }
-    std::vector<uint8_t> payload;
-    payload.push_back(status == display_helper::v2::ApplyStatus::Ok ? 1u : 0u);
-    send_framed_content(*pipe, MsgType::ApplyResult, payload);
+    if (request_id != 0) {
+      const auto payload = platf::display_helper_protocol::encode_correlated_result(
+        request_id,
+        status == display_helper::v2::ApplyStatus::Ok ?
+          ResultStatus::Succeeded :
+          (status == display_helper::v2::ApplyStatus::Expired ? ResultStatus::Expired : ResultStatus::Failed)
+      );
+      send_framed_content(*pipe, MsgType::ApplyResultCorrelated, payload);
+    } else {
+      const std::vector<uint8_t> payload {
+        status == display_helper::v2::ApplyStatus::Ok ? std::uint8_t {1} : std::uint8_t {0}
+      };
+      send_framed_content(*pipe, MsgType::ApplyResult, payload);
+    }
   });
-  state_machine.set_verification_result_callback([&](bool success) {
+  state_machine.set_verification_result_callback([&](bool success, std::uint64_t request_id, std::uint64_t epoch) {
+    std::lock_guard<std::mutex> lock(response_mutex);
+    if (connection_epoch.load(std::memory_order_acquire) != epoch) {
+      return;
+    }
     auto *pipe = active_pipe.load(std::memory_order_acquire);
     if (!pipe) {
       return;
     }
-    std::vector<uint8_t> payload;
-    payload.push_back(success ? 1u : 0u);
-    send_framed_content(*pipe, MsgType::VerificationResult, payload);
+    if (request_id != 0) {
+      const auto payload = platf::display_helper_protocol::encode_correlated_result(
+        request_id,
+        success ? ResultStatus::Succeeded : ResultStatus::Failed
+      );
+      send_framed_content(*pipe, MsgType::VerificationResultCorrelated, payload);
+    } else {
+      const std::vector<uint8_t> payload {success ? std::uint8_t {1} : std::uint8_t {0}};
+      send_framed_content(*pipe, MsgType::VerificationResult, payload);
+    }
+  });
+  state_machine.set_snapshot_result_callback([&](std::uint64_t request_id, std::uint64_t epoch, bool success) {
+    std::lock_guard<std::mutex> lock(response_mutex);
+    if (connection_epoch.load(std::memory_order_acquire) != epoch) {
+      return;
+    }
+    auto *pipe = active_pipe.load(std::memory_order_acquire);
+    if (!pipe) {
+      return;
+    }
+    const auto payload = platf::display_helper_protocol::encode_correlated_result(
+      request_id,
+      success ? ResultStatus::Succeeded : ResultStatus::Failed
+    );
+    send_framed_content(*pipe, MsgType::SnapshotCurrentResult, payload);
+  });
+  state_machine.set_disarm_result_callback([&](std::uint64_t request_id, std::uint64_t epoch, bool accepted) {
+    std::lock_guard<std::mutex> lock(response_mutex);
+    if (connection_epoch.load(std::memory_order_acquire) != epoch) {
+      return;
+    }
+    auto *pipe = active_pipe.load(std::memory_order_acquire);
+    if (!pipe) {
+      return;
+    }
+    const auto payload = platf::display_helper_protocol::encode_correlated_result(
+      request_id,
+      accepted ? ResultStatus::Succeeded : ResultStatus::Busy
+    );
+    send_framed_content(*pipe, MsgType::DisarmResult, payload);
   });
 
   display_helper::v2::DebouncedTrigger debouncer(std::chrono::milliseconds(500));
@@ -622,15 +691,33 @@ int run_v2_helper(int argc, char *argv[]) {
   auto process_queue = [&]() {
     auto message = queue.wait_for(std::chrono::milliseconds(100));
     if (message) {
+      const auto message_epoch = display_helper::v2::connection_bound_epoch(*message);
+      if (message_epoch) {
+        // Serialize the final epoch check with disconnect invalidation. A
+        // command is therefore either accepted before the disconnect callback
+        // or rejected after it; it cannot cross that boundary half-validated.
+        std::lock_guard epoch_lock(client_command_epoch_mutex);
+        const auto serialized_epoch = connection_epoch.load(std::memory_order_acquire);
+        if (*message_epoch != serialized_epoch) {
+          BOOST_LOG(info) << "Dropping stale client command from IPC epoch " << *message_epoch
+                          << " (current=" << serialized_epoch << ").";
+          return;
+        }
+        if (const auto *revert = std::get_if<display_helper::v2::RevertCommand>(&*message);
+            revert && revert->client_connection_epoch) {
+          // Only an accepted explicit client REVERT owns this origin. A stale
+          // command must not poison a later internal disconnect restore.
+          restore_origin_epoch.store(*revert->client_connection_epoch, std::memory_order_release);
+        }
+        state_machine.handle_message(*message);
+        return;
+      }
       state_machine.handle_message(*message);
       return;
     }
 
     if (heartbeat.check_timeout()) {
-      queue.push(display_helper::v2::HelperEventMessage {
-        display_helper::v2::HelperEvent::HeartbeatTimeout,
-        cancellation.current_generation()
-      });
+      queue.push(display_helper::v2::HelperEventMessage {display_helper::v2::HelperEvent::HeartbeatTimeout, cancellation.current_generation()});
     }
 
     bool fire = false;
@@ -639,10 +726,7 @@ int run_v2_helper(int argc, char *argv[]) {
       fire = debouncer.should_fire(clock.now());
     }
     if (fire) {
-      queue.push(display_helper::v2::DisplayEventMessage {
-        display_helper::v2::DisplayEvent::DisplayChange,
-        cancellation.current_generation()
-      });
+      queue.push(display_helper::v2::DisplayEventMessage {display_helper::v2::DisplayEvent::DisplayChange, cancellation.current_generation()});
     }
 
     state_machine.handle_tick();
@@ -650,7 +734,8 @@ int run_v2_helper(int argc, char *argv[]) {
 
   if (restore_mode) {
     BOOST_LOG(info) << "Display helper v2 running in restore mode.";
-    display_helper::v2::RevertCommand revert {cancellation.current_generation()};
+    display_helper::v2::RevertCommand revert;
+    revert.generation = cancellation.current_generation();
     revert.immediate = true;
     queue.push(revert);
     while (running.load(std::memory_order_acquire)) {
@@ -664,7 +749,6 @@ int run_v2_helper(int argc, char *argv[]) {
 
   auto last_connect_wait_log = std::chrono::steady_clock::time_point::min();
   constexpr auto kReconnectLogInterval = std::chrono::hours(1);
-  std::atomic<bool> apply_seen {false};
 
   while (running.load(std::memory_order_acquire)) {
     platf::dxgi::FramedPipeFactory pipe_factory(std::make_unique<platf::dxgi::AnonymousPipeFactory>());
@@ -707,8 +791,15 @@ int run_v2_helper(int argc, char *argv[]) {
       continue;
     }
 
-    const auto epoch = connection_epoch.fetch_add(1, std::memory_order_acq_rel) + 1;
-    client_connected.store(true, std::memory_order_release);
+    std::uint64_t epoch = 0;
+    {
+      // Publish connection liveness before the new epoch. The restore exit
+      // callback uses the epoch as a newer-connection fence; seeing that
+      // fence must also mean the connection is already live.
+      std::lock_guard epoch_lock(client_command_epoch_mutex);
+      client_connected.store(true, std::memory_order_release);
+      epoch = connection_epoch.fetch_add(1, std::memory_order_acq_rel) + 1;
+    }
     active_pipe.store(&async_pipe, std::memory_order_release);
 
     auto on_message = [&, epoch](std::span<const uint8_t> bytes) {
@@ -722,79 +813,204 @@ int run_v2_helper(int argc, char *argv[]) {
       }
 
       switch (type) {
-        case MsgType::Apply: {
-          display_helper::v2::ApplyRequest request;
-          std::optional<std::vector<std::string>> snapshot_exclusions;
-          std::string parse_failure;
-          if (!parse_apply_payload(payload, request, snapshot_exclusions, parse_failure)) {
-            BOOST_LOG(error) << "Failed to parse SingleDisplayConfiguration JSON: " << parse_failure;
-            std::vector<uint8_t> result_payload;
-            result_payload.push_back(0u);
-            if (!parse_failure.empty()) {
-              result_payload.insert(result_payload.end(), parse_failure.begin(), parse_failure.end());
-            }
-            send_framed_content(async_pipe, MsgType::ApplyResult, result_payload);
-            return;
-          }
-          if (snapshot_exclusions.has_value()) {
-            std::set<std::string> blacklist;
-            for (auto &id : *snapshot_exclusions) {
-              if (!id.empty()) {
-                blacklist.insert(std::move(id));
+        case MsgType::Apply:
+        case MsgType::ApplyRequest:
+          {
+            std::uint64_t request_id = 0;
+            std::optional<std::chrono::steady_clock::time_point> apply_expires_at;
+            auto apply_payload = payload;
+            if (type == MsgType::ApplyRequest) {
+              const auto correlated = platf::display_helper_protocol::decode_correlated_request(payload);
+              if (!correlated) {
+                BOOST_LOG(warning) << "Ignoring malformed correlated APPLY request.";
+                break;
               }
+              request_id = correlated->request_id;
+              apply_payload = correlated->body;
+              const auto now_tick = static_cast<std::uint64_t>(::GetTickCount64());
+              if (now_tick >= correlated->not_after_tick_ms) {
+                const auto result_payload = platf::display_helper_protocol::encode_correlated_result(
+                  request_id,
+                  ResultStatus::Expired
+                );
+                std::lock_guard<std::mutex> lock(response_mutex);
+                send_framed_content(async_pipe, MsgType::ApplyResultCorrelated, result_payload);
+                break;
+              }
+              apply_expires_at = clock.now() +
+                                 std::chrono::milliseconds(correlated->not_after_tick_ms - now_tick);
             }
-            state_machine.set_snapshot_blacklist(std::move(blacklist));
-          }
 
-          apply_seen.store(true, std::memory_order_release);
-          queue.push(display_helper::v2::ApplyCommand {request, cancellation.current_generation()});
-          break;
-        }
-        case MsgType::Revert: {
-          display_helper::v2::RevertCommand revert {cancellation.current_generation()};
-          parse_revert_payload(payload, revert);
-          restore_origin_epoch.store(epoch, std::memory_order_release);
-          queue.push(revert);
-          break;
-        }
+            display_helper::v2::ApplyRequest request;
+            std::optional<std::vector<std::string>> snapshot_exclusions;
+            std::string parse_failure;
+            if (!parse_apply_payload(apply_payload, request, snapshot_exclusions, parse_failure)) {
+              BOOST_LOG(error) << "Failed to parse SingleDisplayConfiguration JSON: " << parse_failure;
+              std::lock_guard<std::mutex> lock(response_mutex);
+              if (request_id != 0) {
+                const auto result_payload = platf::display_helper_protocol::encode_correlated_result(
+                  request_id,
+                  ResultStatus::Invalid
+                );
+                send_framed_content(async_pipe, MsgType::ApplyResultCorrelated, result_payload);
+              } else {
+                std::vector<uint8_t> result_payload;
+                result_payload.push_back(0u);
+                if (!parse_failure.empty()) {
+                  result_payload.insert(result_payload.end(), parse_failure.begin(), parse_failure.end());
+                }
+                send_framed_content(async_pipe, MsgType::ApplyResult, result_payload);
+              }
+              return;
+            }
+            request.expires_at = apply_expires_at;
+            std::optional<std::set<std::string>> apply_blacklist;
+            if (snapshot_exclusions.has_value()) {
+              std::set<std::string> blacklist;
+              for (auto &id : *snapshot_exclusions) {
+                if (!id.empty()) {
+                  blacklist.insert(std::move(id));
+                }
+              }
+              apply_blacklist = std::move(blacklist);
+            }
+
+            display_helper::v2::ApplyCommand command {request, cancellation.current_generation()};
+            command.request_id = request_id;
+            command.connection_epoch = epoch;
+            command.snapshot_blacklist = std::move(apply_blacklist);
+            queue.push(std::move(command));
+            break;
+          }
+        case MsgType::Revert:
+          {
+            display_helper::v2::RevertCommand revert;
+            revert.generation = cancellation.current_generation();
+            parse_revert_payload(payload, revert);
+            revert.client_connection_epoch = epoch;
+            queue.push(revert);
+            break;
+          }
         case MsgType::Disarm:
-          queue.push(display_helper::v2::DisarmCommand {cancellation.current_generation()});
-          break;
-        case MsgType::ExportGolden: {
-          display_helper::v2::SnapshotCommandPayload payload_struct;
-          if (auto parsed = parse_snapshot_exclude_payload(payload)) {
-            payload_struct.exclude_devices = std::move(*parsed);
-            payload_struct.update_exclusions = true;
+          {
+            display_helper::v2::DisarmCommand disarm {cancellation.current_generation()};
+            disarm.connection_epoch = epoch;
+            queue.push(disarm);
           }
-          queue.push(display_helper::v2::ExportGoldenCommand {payload_struct, cancellation.current_generation()});
           break;
-        }
-        case MsgType::SnapshotCurrent: {
-          display_helper::v2::SnapshotCommandPayload payload_struct;
-          if (auto parsed = parse_snapshot_exclude_payload(payload)) {
-            payload_struct.exclude_devices = std::move(*parsed);
-            payload_struct.update_exclusions = true;
+        case MsgType::DisarmRequest:
+          {
+            const auto correlated = platf::display_helper_protocol::decode_correlated_request(payload);
+            if (!correlated) {
+              BOOST_LOG(warning) << "Ignoring malformed correlated DISARM request.";
+              break;
+            }
+            const auto now_tick = static_cast<std::uint64_t>(::GetTickCount64());
+            if (now_tick >= correlated->not_after_tick_ms) {
+              const auto result_payload = platf::display_helper_protocol::encode_correlated_result(
+                correlated->request_id,
+                ResultStatus::Expired
+              );
+              std::lock_guard<std::mutex> lock(response_mutex);
+              send_framed_content(async_pipe, MsgType::DisarmResult, result_payload);
+              break;
+            }
+            display_helper::v2::DisarmCommand disarm {cancellation.current_generation()};
+            disarm.request_id = correlated->request_id;
+            disarm.connection_epoch = epoch;
+            disarm.expires_at = clock.now() + std::chrono::milliseconds(correlated->not_after_tick_ms - now_tick);
+            queue.push(disarm);
+            break;
           }
-          queue.push(display_helper::v2::SnapshotCurrentCommand {payload_struct, cancellation.current_generation()});
-          break;
-        }
+        case MsgType::ExportGolden:
+          {
+            display_helper::v2::SnapshotCommandPayload payload_struct;
+            if (auto parsed = parse_snapshot_exclude_payload(payload)) {
+              payload_struct.exclude_devices = std::move(*parsed);
+              payload_struct.update_exclusions = true;
+            }
+            display_helper::v2::ExportGoldenCommand command {payload_struct, cancellation.current_generation()};
+            command.connection_epoch = epoch;
+            queue.push(std::move(command));
+            break;
+          }
+        case MsgType::SnapshotCurrent:
+          {
+            display_helper::v2::SnapshotCommandPayload payload_struct;
+            if (auto parsed = parse_snapshot_exclude_payload(payload)) {
+              payload_struct.exclude_devices = std::move(*parsed);
+              payload_struct.update_exclusions = true;
+            }
+            display_helper::v2::SnapshotCurrentCommand snapshot {payload_struct, cancellation.current_generation()};
+            snapshot.connection_epoch = epoch;
+            queue.push(std::move(snapshot));
+            break;
+          }
+        case MsgType::SnapshotCurrentRequest:
+          {
+            const auto correlated = platf::display_helper_protocol::decode_correlated_request(payload);
+            if (!correlated) {
+              BOOST_LOG(warning) << "Ignoring malformed correlated SNAPSHOT_CURRENT request.";
+              break;
+            }
+
+            const auto now_tick = static_cast<std::uint64_t>(::GetTickCount64());
+            if (now_tick >= correlated->not_after_tick_ms) {
+              const auto result_payload = platf::display_helper_protocol::encode_correlated_result(
+                correlated->request_id,
+                ResultStatus::Expired
+              );
+              std::lock_guard<std::mutex> lock(response_mutex);
+              send_framed_content(async_pipe, MsgType::SnapshotCurrentResult, result_payload);
+              break;
+            }
+
+            display_helper::v2::SnapshotCommandPayload payload_struct;
+            if (auto parsed = parse_snapshot_exclude_payload(correlated->body)) {
+              payload_struct.exclude_devices = std::move(*parsed);
+              payload_struct.update_exclusions = true;
+            }
+            display_helper::v2::SnapshotCurrentCommand snapshot {payload_struct, cancellation.current_generation()};
+            snapshot.request_id = correlated->request_id;
+            snapshot.connection_epoch = epoch;
+            snapshot.expires_at = clock.now() + std::chrono::milliseconds(correlated->not_after_tick_ms - now_tick);
+            queue.push(snapshot);
+            break;
+          }
         case MsgType::Reset:
-          queue.push(display_helper::v2::ResetCommand {cancellation.current_generation()});
+          {
+            display_helper::v2::ResetCommand reset {cancellation.current_generation()};
+            reset.connection_epoch = epoch;
+            queue.push(reset);
+          }
           break;
         case MsgType::Ping:
-          send_framed_content(async_pipe, MsgType::Ping);
-          queue.push(display_helper::v2::PingCommand {cancellation.current_generation()});
+          {
+            std::lock_guard<std::mutex> lock(response_mutex);
+            send_framed_content(async_pipe, MsgType::Ping);
+          }
+          display_helper::v2::PingCommand ping {cancellation.current_generation()};
+          ping.connection_epoch = epoch;
+          queue.push(ping);
           break;
         case MsgType::LogLevel:
           if (!payload.empty()) {
-            const int level = std::clamp(static_cast<int>(payload.front()), 0, 6);
-            logging::reconfigure_min_log_level(level);
-            BOOST_LOG(info) << "Display helper log level updated to " << level;
+            // This changes process-global state. Serialize its final epoch
+            // check with disconnect invalidation as we do for queued commands.
+            std::lock_guard epoch_lock(client_command_epoch_mutex);
+            if (connection_epoch.load(std::memory_order_acquire) == epoch) {
+              const int level = std::clamp(static_cast<int>(payload.front()), 0, 6);
+              logging::reconfigure_min_log_level(level);
+              BOOST_LOG(info) << "Display helper log level updated to " << level;
+            }
           }
           break;
         case MsgType::Stop:
-          BOOST_LOG(info) << "Display helper: received STOP command, exiting gracefully.";
-          running.store(false, std::memory_order_release);
+          {
+            display_helper::v2::StopCommand stop {cancellation.current_generation()};
+            stop.connection_epoch = epoch;
+            queue.push(stop);
+          }
           break;
         default:
           BOOST_LOG(warning) << "Unknown message type: " << static_cast<int>(type);
@@ -805,50 +1021,126 @@ int run_v2_helper(int argc, char *argv[]) {
     std::atomic<bool> broken {false};
 
     auto on_error = [&, epoch](const std::string &err) {
+      std::lock_guard epoch_lock(client_command_epoch_mutex);
+      auto expected_epoch = epoch;
       if (connection_epoch.load(std::memory_order_acquire) != epoch) {
         BOOST_LOG(info) << "Ignoring async pipe error from stale connection (epoch=" << epoch << ")";
         return;
       }
+      // Publish disconnection before the invalidating epoch. An exit callback
+      // that sees the newer epoch can therefore never mistake this stale pipe
+      // for a live reconnect.
+      client_connected.store(false, std::memory_order_release);
+      if (!connection_epoch.compare_exchange_strong(
+            expected_epoch,
+            epoch + 1,
+            std::memory_order_acq_rel
+          )) {
+        BOOST_LOG(info) << "Ignoring async pipe error from stale connection (epoch=" << epoch << ")";
+        return;
+      }
+      client_connected.store(false, std::memory_order_release);
       BOOST_LOG(error) << "Async pipe error: " << err << "; handling disconnect and revert policy.";
       broken.store(true, std::memory_order_release);
     };
 
     auto on_broken = [&, epoch]() {
+      std::lock_guard epoch_lock(client_command_epoch_mutex);
+      auto expected_epoch = epoch;
       if (connection_epoch.load(std::memory_order_acquire) != epoch) {
         BOOST_LOG(info) << "Ignoring disconnect notification from stale connection (epoch=" << epoch << ")";
         return;
       }
+      // See on_error: connection liveness must become false before its epoch
+      // becomes observable as a newer connection fence.
+      client_connected.store(false, std::memory_order_release);
+      if (!connection_epoch.compare_exchange_strong(
+            expected_epoch,
+            epoch + 1,
+            std::memory_order_acq_rel
+          )) {
+        BOOST_LOG(info) << "Ignoring disconnect notification from stale connection (epoch=" << epoch << ")";
+        return;
+      }
+      client_connected.store(false, std::memory_order_release);
       BOOST_LOG(warning) << "Client disconnected; applying revert policy.";
       broken.store(true, std::memory_order_release);
     };
 
     async_pipe.start(on_message, on_error, on_broken);
 
+    bool enqueue_disconnect_revert = false;
     while (running.load(std::memory_order_acquire)) {
       process_queue();
 
-      const bool connected = async_pipe.is_connected() && !broken.load(std::memory_order_acquire);
-      client_connected.store(connected, std::memory_order_release);
+      bool connected = async_pipe.is_connected() && !broken.load(std::memory_order_acquire);
+      {
+        std::lock_guard epoch_lock(client_command_epoch_mutex);
+        if (connection_epoch.load(std::memory_order_acquire) == epoch) {
+          client_connected.store(connected, std::memory_order_release);
+        } else {
+          // on_error/on_broken already published false before invalidating the
+          // epoch. Do not let this stale pipe revive it from an old
+          // is_connected() snapshot.
+          connected = false;
+        }
+      }
       if (!connected) {
         // Sunshine disconnected or crashed. Arm the autonomous restore now (the
         // FSM applies a 5s grace and the restore-on-disconnect policy; a fast
         // reconnect supersedes it via DISARM/APPLY like the legacy engine), but
-        // only when this helper actually changed something or a restore is
-        // already being worked on.
-        if (apply_seen.load(std::memory_order_acquire) || state_machine.restore_pending()) {
+        // only when this helper actually changed something, an accepted APPLY
+        // still needs to drain, or a restore is already being worked on. An
+        // APPLY worker can be queued between IPC acceptance and its mutation
+        // boundary; route that case through the deferred disconnect REVERT so
+        // it is canceled before it can mutate after the client is gone.
+        const bool apply_worker_active =
+          restore_state.apply_workers_active.load(std::memory_order_acquire) != 0;
+        if (apply_seen.load(std::memory_order_acquire) ||
+            apply_worker_active ||
+            state_machine.restore_pending()) {
           BOOST_LOG(info) << "Client disconnected; applying revert policy and staying alive until successful.";
-          display_helper::v2::RevertCommand revert {cancellation.current_generation()};
-          revert.from_disconnect = true;
-          restore_origin_epoch.store(epoch, std::memory_order_release);
-          queue.push(revert);
+          enqueue_disconnect_revert = true;
         }
         break;
       }
     }
 
-    active_pipe.store(nullptr, std::memory_order_release);
-    client_connected.store(false, std::memory_order_release);
+    {
+      // Completion callbacks hold this lock from their epoch check through the
+      // final send. Retiring the pointer under the same lock guarantees none
+      // can retain it across AsyncNamedPipe destruction.
+      std::lock_guard<std::mutex> lock(response_mutex);
+      active_pipe.store(nullptr, std::memory_order_release);
+    }
+    {
+      std::lock_guard epoch_lock(client_command_epoch_mutex);
+      if (connection_epoch.load(std::memory_order_acquire) == epoch) {
+        client_connected.store(false, std::memory_order_release);
+      }
+    }
     async_pipe.stop();
+
+    // The pipe worker is now joined, so no more commands from this connection
+    // can enter the queue. Remove abandoned client work while preserving
+    // internal completions and recovery events that must drain generation and
+    // apply-worker accounting. Explicit client REVERT is connection-bound;
+    // internal safety/disconnect REVERT remains preserved.
+    const auto purged = queue.erase_if(display_helper::v2::is_connection_bound_command);
+    if (purged != 0) {
+      BOOST_LOG(info) << "Discarded " << purged << " abandoned client command(s) from IPC epoch " << epoch << ".";
+    }
+
+    if (enqueue_disconnect_revert) {
+      display_helper::v2::RevertCommand revert;
+      revert.generation = cancellation.current_generation();
+      revert.from_disconnect = true;
+      {
+        std::lock_guard epoch_lock(client_command_epoch_mutex);
+        restore_origin_epoch.store(epoch, std::memory_order_release);
+      }
+      queue.push(revert);
+    }
   }
 
   event_pump.stop();
