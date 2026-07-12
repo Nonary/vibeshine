@@ -2,6 +2,7 @@
 
 #include "src/platform/windows/display_helper_v2/interfaces.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -34,8 +35,8 @@ namespace display_helper::v2 {
   private:
     friend class CancellationSource;
 
-    explicit CancellationToken(std::shared_ptr<std::atomic<std::uint64_t>> generation, std::uint64_t expected)
-      : generation_(std::move(generation)),
+    explicit CancellationToken(std::shared_ptr<std::atomic<std::uint64_t>> generation, std::uint64_t expected):
+        generation_(std::move(generation)),
         expected_generation_(expected) {}
 
     std::shared_ptr<std::atomic<std::uint64_t>> generation_;
@@ -44,8 +45,8 @@ namespace display_helper::v2 {
 
   class CancellationSource {
   public:
-    CancellationSource()
-      : generation_(std::make_shared<std::atomic<std::uint64_t>>(0)) {}
+    CancellationSource():
+        generation_(std::make_shared<std::atomic<std::uint64_t>>(0)) {}
 
     CancellationToken token() const {
       return CancellationToken(generation_, generation_->load(std::memory_order_acquire));
@@ -63,7 +64,7 @@ namespace display_helper::v2 {
     std::shared_ptr<std::atomic<std::uint64_t>> generation_;
   };
 
-  template <typename T>
+  template<typename T>
   class MessageQueue {
   public:
     void push(const T &value) {
@@ -94,16 +95,20 @@ namespace display_helper::v2 {
 
     T wait_pop() {
       std::unique_lock<std::mutex> lock(mutex_);
-      cv_.wait(lock, [&]() { return !queue_.empty(); });
+      cv_.wait(lock, [&]() {
+        return !queue_.empty();
+      });
       T value = std::move(queue_.front());
       queue_.pop_front();
       return value;
     }
 
-    template <typename Rep, typename Period>
+    template<typename Rep, typename Period>
     std::optional<T> wait_for(const std::chrono::duration<Rep, Period> &timeout) {
       std::unique_lock<std::mutex> lock(mutex_);
-      if (!cv_.wait_for(lock, timeout, [&]() { return !queue_.empty(); })) {
+      if (!cv_.wait_for(lock, timeout, [&]() {
+            return !queue_.empty();
+          })) {
         return std::nullopt;
       }
       T value = std::move(queue_.front());
@@ -121,6 +126,14 @@ namespace display_helper::v2 {
       queue_.clear();
     }
 
+    template<typename Predicate>
+    std::size_t erase_if(Predicate predicate) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const auto before = queue_.size();
+      std::erase_if(queue_, std::move(predicate));
+      return before - queue_.size();
+    }
+
   private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
@@ -129,8 +142,8 @@ namespace display_helper::v2 {
 
   class DebouncedTrigger {
   public:
-    explicit DebouncedTrigger(std::chrono::milliseconds delay)
-      : delay_(delay) {}
+    explicit DebouncedTrigger(std::chrono::milliseconds delay):
+        delay_(delay) {}
 
     void notify(std::chrono::steady_clock::time_point now) {
       pending_ = true;
@@ -164,8 +177,8 @@ namespace display_helper::v2 {
 
   class DisconnectGrace {
   public:
-    DisconnectGrace(IClock &clock, std::chrono::milliseconds grace)
-      : clock_(clock),
+    DisconnectGrace(IClock &clock, std::chrono::milliseconds grace):
+        clock_(clock),
         grace_(grace) {}
 
     void on_disconnect() {
@@ -204,8 +217,8 @@ namespace display_helper::v2 {
 
   class ReconnectController {
   public:
-    ReconnectController(IClock &clock, std::chrono::milliseconds grace)
-      : grace_(clock, grace) {}
+    ReconnectController(IClock &clock, std::chrono::milliseconds grace):
+        grace_(clock, grace) {}
 
     void on_broken() {
       restart_pipe_ = true;
@@ -330,8 +343,8 @@ namespace display_helper::v2 {
 
   class HeartbeatMonitor {
   public:
-    explicit HeartbeatMonitor(IClock &clock)
-      : clock_(clock) {}
+    explicit HeartbeatMonitor(IClock &clock):
+        clock_(clock) {}
 
     void arm() {
       armed_ = true;
@@ -368,7 +381,7 @@ namespace display_helper::v2 {
     std::chrono::milliseconds timeout_ {std::chrono::seconds(30)};
   };
 
-  class SystemClock final : public IClock {
+  class SystemClock final: public IClock {
   public:
     std::chrono::steady_clock::time_point now() override {
       return std::chrono::steady_clock::now();

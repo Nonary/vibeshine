@@ -20,26 +20,31 @@ namespace display_helper::v2 {
       const CancellationToken &token,
       std::chrono::milliseconds delay,
       bool reset_virtual_display,
-      std::function<void(const ApplyOutcome &)> completion) = 0;
+      std::function<void()> mutation_commit,
+      std::function<void(const ApplyOutcome &)> completion
+    ) = 0;
 
     virtual void dispatch_verification(
       const ApplyRequest &request,
       const std::optional<ActiveTopology> &expected_topology,
       const CancellationToken &token,
-      std::function<void(bool)> completion) = 0;
+      std::function<void(bool)> completion
+    ) = 0;
 
     virtual void dispatch_recovery(
       const CancellationToken &token,
       std::chrono::milliseconds delay,
-      std::function<void(const RecoveryOutcome &)> completion) = 0;
+      std::function<void(const RecoveryOutcome &)> completion
+    ) = 0;
 
     virtual void dispatch_recovery_validation(
       const Snapshot &snapshot,
       const CancellationToken &token,
-      std::function<void(bool)> completion) = 0;
+      std::function<void(bool)> completion
+    ) = 0;
   };
 
-  class AsyncDispatcher final : public IAsyncDispatcher {
+  class AsyncDispatcher final: public IAsyncDispatcher {
   public:
     AsyncDispatcher(
       ApplyOperation &apply_operation,
@@ -47,7 +52,8 @@ namespace display_helper::v2 {
       RecoveryOperation &recovery_operation,
       RecoveryValidationOperation &recovery_validation_operation,
       IVirtualDisplayDriver &virtual_display,
-      IClock &clock);
+      IClock &clock
+    );
 
     ~AsyncDispatcher();
 
@@ -56,23 +62,28 @@ namespace display_helper::v2 {
       const CancellationToken &token,
       std::chrono::milliseconds delay,
       bool reset_virtual_display,
-      std::function<void(const ApplyOutcome &)> completion) override;
+      std::function<void()> mutation_commit,
+      std::function<void(const ApplyOutcome &)> completion
+    ) override;
 
     void dispatch_verification(
       const ApplyRequest &request,
       const std::optional<ActiveTopology> &expected_topology,
       const CancellationToken &token,
-      std::function<void(bool)> completion) override;
+      std::function<void(bool)> completion
+    ) override;
 
     void dispatch_recovery(
       const CancellationToken &token,
       std::chrono::milliseconds delay,
-      std::function<void(const RecoveryOutcome &)> completion) override;
+      std::function<void(const RecoveryOutcome &)> completion
+    ) override;
 
     void dispatch_recovery_validation(
       const Snapshot &snapshot,
       const CancellationToken &token,
-      std::function<void(bool)> completion) override;
+      std::function<void(bool)> completion
+    ) override;
 
   private:
     void enqueue_task(std::function<void()> task);

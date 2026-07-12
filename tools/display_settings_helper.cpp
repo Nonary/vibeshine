@@ -21,8 +21,9 @@
   #include <filesystem>
   #include <fstream>
   #include <functional>
-  #include <memory>
+  #include <future>
   #include <map>
+  #include <memory>
   #include <mutex>
   #include <optional>
   #include <set>
@@ -36,6 +37,8 @@
 
 // third-party (libdisplaydevice)
   #include "src/logging.h"
+  #include "src/platform/windows/display_restore_guard.h"
+  #include "src/platform/windows/ipc/display_settings_protocol.h"
   #include "src/platform/windows/ipc/pipes.h"
 
   #include <display_device/json.h>
@@ -163,17 +166,8 @@ namespace {
   }
 
   // Simple framed protocol: [u32 length][u8 type][payload...]
-  enum class MsgType : uint8_t {
-    Apply = 1,  // payload: JSON SingleDisplayConfiguration
-    Revert = 2,  // no payload
-    Reset = 3,  // clear persistence (best-effort)
-    ExportGolden = 4,  // no payload; export current settings snapshot as golden restore
-    ApplyResult = 6,  // payload: [u8 success][optional message...]
-    Disarm = 7,  // cancel any pending restore requests/watchdogs
-    SnapshotCurrent = 8,  // snapshot current session state (rotate current->previous) without applying
-    Ping = 0xFE,  // no payload, reply with Pong
-    Stop = 0xFF  // no payload, terminate process
-  };
+  using MsgType = platf::display_helper_protocol::MsgType;
+  using ResultStatus = platf::display_helper_protocol::ResultStatus;
 
   inline void send_framed_content(platf::dxgi::AsyncNamedPipe &pipe, MsgType type, std::span<const uint8_t> payload = {}) {
     std::vector<uint8_t> out(1 + payload.size());
@@ -329,8 +323,11 @@ namespace {
       for (auto &prep : pending) {
         auto *request = reinterpret_cast<DEVMODEW *>(prep.devmode_buffer.data());
         LONG result = ChangeDisplaySettingsExW(
-          prep.display_name.c_str(), request, nullptr,
-          CDS_UPDATEREGISTRY | CDS_NORESET, nullptr
+          prep.display_name.c_str(),
+          request,
+          nullptr,
+          CDS_UPDATEREGISTRY | CDS_NORESET,
+          nullptr
         );
         if (result != DISP_CHANGE_SUCCESSFUL) {
           BOOST_LOG(warning) << "Layout restore: CDS_NORESET batch failed for display "
@@ -1674,7 +1671,7 @@ namespace {
     struct PreparedRotation {
       std::wstring display_name;
       std::vector<uint8_t> devmode_buffer;  ///< Heap buffer holding the full DEVMODEW + dmDriverExtra
-      bool already_correct = false;         ///< True if the display is already at the target rotation
+      bool already_correct = false;  ///< True if the display is already at the target rotation
     };
 
     /**
@@ -2185,7 +2182,9 @@ namespace {
     void start(Callback cb) {
       stop();
       callback_ = std::move(cb);
-      worker_ = std::jthread(&DisplayEventPump::thread_proc, this);
+      worker_ = std::jthread([this](std::stop_token stop_token) {
+        thread_proc(stop_token);
+      });
     }
 
     void stop() {
@@ -2357,15 +2356,15 @@ namespace {
     std::atomic<bool> session_saved {false};
     // Track last APPLY to suppress revert-on-topology within a grace window
     std::atomic<long long> last_apply_ms {0};
+    std::atomic<bool> last_apply_completed_successfully {false};
     // If a REVERT was requested directly by Sunshine, bypass grace
     std::atomic<bool> direct_revert_bypass_grace {false};
     // Track whether a revert/restore is currently pending
     std::atomic<bool> restore_requested {false};
     std::atomic<uint64_t> restore_cancel_generation {0};
-    // True after the restore loop has made at least one restore attempt that has
-    // not yet been confirmed. DISARM/SNAPSHOT_CURRENT from a later stream-start
-    // probe must not cancel or overwrite that restore baseline.
-    std::atomic<bool> restore_attempted_unconfirmed {false};
+    // Serializes cancellation with entry into blocking display mutation and
+    // retains whether the resulting topology is still unconfirmed.
+    display_helper::RestoreMutationGuard restore_mutation_guard;
     // Guard: if a session restore succeeded recently, suppress Golden for a cooldown
     std::atomic<long long> last_session_restore_success_ms {0};
     // After a few consecutive confirmed session fallbacks, stop forcing golden
@@ -2382,6 +2381,9 @@ namespace {
     // Polling-based restore loop state (replaces topology-change-triggered retries)
     std::jthread restore_poll_thread;
     std::atomic<bool> restore_poll_active {false};
+    std::mutex restore_poll_lifecycle_mutex;
+    std::condition_variable restore_poll_lifecycle_cv;
+    bool restore_poll_worker_running = false;
     std::atomic<uint64_t> next_connection_epoch {1};
     std::atomic<uint64_t> active_connection_epoch {0};
     std::atomic<uint64_t> restore_origin_epoch {0};
@@ -2425,6 +2427,19 @@ namespace {
     std::atomic<uint64_t> command_worker_epoch {0};
     std::mutex async_join_mutex;  // Guards async joiners used to avoid blocking the command loop
     std::vector<std::jthread> async_join_threads;
+
+    ~ServiceState() {
+      command_worker_stop.store(true, std::memory_order_release);
+      command_queue_cv.notify_all();
+      if (command_worker.joinable()) {
+        command_worker.join();
+      }
+      // Producers first, then every worker that can touch the mutation guard.
+      cancel_post_apply_tasks();
+      cancel_delayed_reapply();
+      cancel_hdr_blank();
+      stop_restore_polling();
+    }
 
     static long long steady_now_ms() {
       return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2772,6 +2787,17 @@ namespace {
       return !ec_copy;
     }
 
+    static bool move_file_replace_atomically(
+      const std::filesystem::path &from,
+      const std::filesystem::path &to
+    ) {
+      return ::MoveFileExW(
+               from.c_str(),
+               to.c_str(),
+               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+             ) != FALSE;
+    }
+
     bool save_snapshot_with_retry(
       const std::filesystem::path &path,
       const char *reason = nullptr,
@@ -2796,6 +2822,11 @@ namespace {
 
     // Capture the current display state to the "current" snapshot slot.
     bool capture_current_snapshot(const char *reason = nullptr) {
+      auto capture_lease = restore_mutation_guard.try_begin_capture();
+      if (!capture_lease) {
+        BOOST_LOG(info) << "Skipping current session snapshot because restore topology is unconfirmed.";
+        return false;
+      }
       const bool saved = save_snapshot_with_retry(session_current_path, reason);
       session_saved.store(saved || path_exists(session_current_path), std::memory_order_release);
       const char *why = reason ? reason : "apply";
@@ -2803,7 +2834,26 @@ namespace {
       return saved;
     }
 
-    bool refresh_current_snapshot_preserving_previous(const char *reason = nullptr) {
+    bool refresh_current_snapshot_preserving_previous(
+      const char *reason = nullptr,
+      std::optional<std::uint64_t> not_after_tick_ms = std::nullopt
+    ) {
+      const auto expired = [&]() {
+        return not_after_tick_ms.has_value() &&
+               static_cast<std::uint64_t>(::GetTickCount64()) >= *not_after_tick_ms;
+      };
+
+      if (expired()) {
+        BOOST_LOG(info) << "Current session snapshot lease expired before capture began.";
+        return false;
+      }
+
+      auto capture_lease = restore_mutation_guard.try_begin_capture();
+      if (!capture_lease) {
+        BOOST_LOG(info) << "Skipping current session snapshot because restore topology is unconfirmed.";
+        return false;
+      }
+
       auto staged_path = session_current_path;
       staged_path += L".candidate";
       std::error_code ec_rm;
@@ -2817,13 +2867,76 @@ namespace {
         return false;
       }
 
-      if (path_exists(session_current_path) && !copy_file_overwrite(session_current_path, session_previous_path)) {
-        BOOST_LOG(warning) << "Failed to refresh session snapshot history (" << why << "): current->previous copy failed.";
+      if (expired()) {
+        std::error_code ec_rm_expired;
+        std::filesystem::remove(staged_path, ec_rm_expired);
+        session_saved.store(path_exists(session_current_path), std::memory_order_release);
+        BOOST_LOG(info) << "Current session snapshot lease expired during capture; discarding candidate.";
+        return false;
       }
 
-      const bool replaced = copy_file_overwrite(staged_path, session_current_path);
+      auto previous_rollback_path = session_previous_path;
+      previous_rollback_path += L".rollback";
+      std::error_code ec_rm_rollback;
+      std::filesystem::remove(previous_rollback_path, ec_rm_rollback);
+      const bool had_previous_snapshot = path_exists(session_previous_path);
+      if (had_previous_snapshot &&
+          !copy_file_overwrite(session_previous_path, previous_rollback_path)) {
+        BOOST_LOG(warning) << "Failed to stage Previous snapshot rollback before history rotation (" << why << ").";
+        std::error_code ec_rm_candidate;
+        std::filesystem::remove(staged_path, ec_rm_candidate);
+        session_saved.store(path_exists(session_current_path), std::memory_order_release);
+        return false;
+      }
+
+      bool history_rotation_committed = false;
+      const auto roll_back_history = [&]() {
+        if (!history_rotation_committed) {
+          return true;
+        }
+        if (had_previous_snapshot) {
+          return copy_file_overwrite(previous_rollback_path, session_previous_path);
+        }
+        std::error_code ec_remove_previous;
+        const bool removed = std::filesystem::remove(session_previous_path, ec_remove_previous);
+        return removed && !ec_remove_previous;
+      };
+      if (path_exists(session_current_path)) {
+        if (!copy_file_overwrite(session_current_path, session_previous_path)) {
+          BOOST_LOG(warning) << "Failed to refresh session snapshot history (" << why << "): current->previous copy failed.";
+          std::error_code ec_rm_candidate;
+          std::filesystem::remove(staged_path, ec_rm_candidate);
+          std::error_code ec_rm_previous_rollback;
+          std::filesystem::remove(previous_rollback_path, ec_rm_previous_rollback);
+          session_saved.store(true, std::memory_order_release);
+          return false;
+        }
+        history_rotation_committed = true;
+      }
+
+      if (expired()) {
+        std::error_code ec_rm_expired;
+        std::filesystem::remove(staged_path, ec_rm_expired);
+        if (!roll_back_history()) {
+          BOOST_LOG(error) << "Failed to roll back Previous after the snapshot commit lease expired (" << why << ").";
+        }
+        std::error_code ec_rm_previous_rollback;
+        std::filesystem::remove(previous_rollback_path, ec_rm_previous_rollback);
+        session_saved.store(path_exists(session_current_path), std::memory_order_release);
+        BOOST_LOG(info) << "Current session snapshot lease expired before baseline commit; discarded candidate and rolled back history.";
+        return false;
+      }
+
+      const bool replaced = move_file_replace_atomically(staged_path, session_current_path);
+      if (!replaced && history_rotation_committed) {
+        if (!roll_back_history()) {
+          BOOST_LOG(error) << "Failed to roll back Previous after Current snapshot replacement failed (" << why << ").";
+        }
+      }
       std::error_code ec_rm_stage;
       std::filesystem::remove(staged_path, ec_rm_stage);
+      std::error_code ec_rm_previous_rollback;
+      std::filesystem::remove(previous_rollback_path, ec_rm_previous_rollback);
 
       session_saved.store(replaced || path_exists(session_current_path), std::memory_order_release);
       BOOST_LOG(info) << "Refreshed current session snapshot (" << why << "): " << (replaced ? "true" : "false");
@@ -2930,12 +3043,12 @@ namespace {
 
     static void hdr_blank_proc(std::stop_token st, ServiceState *self) {
       using namespace std::chrono_literals;
-      // Fire soon after apply; delay is baked into blank_hdr_states
-      if (st.stop_requested()) {
+      // Keep the delay interruptible so DISARM can drain this worker quickly.
+      // Once the mutation begins, cancel_hdr_blank() joins it before ACKing.
+      if (!wait_with_stop(st, 1000ms)) {
         return;
       }
-      // Use fixed 1 second delay per requirements
-      self->controller.blank_hdr_states(1000ms);
+      self->controller.blank_hdr_states(0ms);
     }
 
     // Windows enumerates topology groups in an arbitrary, session-dependent order;
@@ -3259,6 +3372,7 @@ namespace {
       }
       if (confirm_current_matches_golden()) {
         BOOST_LOG(info) << "Golden restore confirmed without apply; clearing session restore snapshots.";
+        restore_mutation_guard.mark_topology_confirmed();
         clear_session_restore_snapshots_after_golden();
         clear_golden_restore_status("restore confirmed");
         return true;
@@ -3266,6 +3380,9 @@ namespace {
 
       // Attempt 1
       if (should_cancel()) {
+        return false;
+      }
+      if (!restore_mutation_guard.try_begin_mutation_for_active_worker(should_cancel)) {
         return false;
       }
       (void) controller.apply_snapshot(golden, require_layout_match ? &golden_layouts : nullptr);
@@ -3283,6 +3400,7 @@ namespace {
                       << ", match=" << (ok ? "true" : "false");
       if (ok) {
         BOOST_LOG(info) << "Golden restore confirmed; clearing session restore snapshots.";
+        restore_mutation_guard.mark_topology_confirmed();
         clear_session_restore_snapshots_after_golden();
         clear_golden_restore_status("restore confirmed");
         return true;
@@ -3300,9 +3418,13 @@ namespace {
       }
       if (confirm_current_matches_golden()) {
         BOOST_LOG(info) << "Golden restore confirmed before retry apply; clearing session restore snapshots.";
+        restore_mutation_guard.mark_topology_confirmed();
         clear_session_restore_snapshots_after_golden();
         clear_golden_restore_status("restore confirmed");
         return true;
+      }
+      if (!restore_mutation_guard.try_begin_mutation_for_active_worker(should_cancel)) {
+        return false;
       }
       (void) controller.apply_snapshot(golden, require_layout_match ? &golden_layouts : nullptr);
       display_device::DisplaySettingsSnapshot cur2;
@@ -3318,6 +3440,7 @@ namespace {
                       << ", match=" << (ok ? "true" : "false");
       if (ok) {
         BOOST_LOG(info) << "Golden restore confirmed (retry); clearing session restore snapshots.";
+        restore_mutation_guard.mark_topology_confirmed();
         clear_session_restore_snapshots_after_golden();
         clear_golden_restore_status("restore confirmed");
       }
@@ -3393,6 +3516,7 @@ namespace {
         return false;
       }
       if (confirm_current_matches_session()) {
+        restore_mutation_guard.mark_topology_confirmed();
         const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::steady_clock::now().time_since_epoch()
         )
@@ -3402,6 +3526,9 @@ namespace {
       }
 
       if (should_cancel()) {
+        return false;
+      }
+      if (!restore_mutation_guard.try_begin_mutation_for_active_worker(should_cancel)) {
         return false;
       }
       (void) controller.apply_snapshot(base, require_layout_match ? &base_layouts : nullptr);
@@ -3428,12 +3555,16 @@ namespace {
           return false;
         }
         if (confirm_current_matches_session()) {
+          restore_mutation_guard.mark_topology_confirmed();
           const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now().time_since_epoch()
           )
                                 .count();
           last_session_restore_success_ms.store(now_ms, std::memory_order_release);
           return true;
+        }
+        if (!restore_mutation_guard.try_begin_mutation_for_active_worker(should_cancel)) {
+          return false;
         }
         (void) controller.apply_snapshot(base, require_layout_match ? &base_layouts : nullptr);
         display_device::DisplaySettingsSnapshot cur2;
@@ -3451,6 +3582,7 @@ namespace {
       }
 
       if (ok) {
+        restore_mutation_guard.mark_topology_confirmed();
         const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::steady_clock::now().time_since_epoch()
         )
@@ -3480,8 +3612,6 @@ namespace {
       if (cancelled()) {
         return false;
       }
-
-      restore_attempted_unconfirmed.store(true, std::memory_order_release);
 
       const bool golden_first = always_restore_from_golden.load(std::memory_order_acquire);
       if (!golden_first) {
@@ -3663,22 +3793,32 @@ namespace {
 
       const char *label = reason ? reason : ((window == RestoreWindow::Primary) ? "initial" : "event");
       signal_restore_event(label, window, force_start);
+      std::unique_lock<std::mutex> lifecycle_lock(restore_poll_lifecycle_mutex);
+      restore_poll_lifecycle_cv.wait(lifecycle_lock, [&]() {
+        return !restore_poll_worker_running;
+      });
+      if (restore_poll_thread.joinable()) {
+        restore_poll_thread.join();
+      }
+      restore_poll_worker_running = true;
       restore_poll_thread = std::jthread(&ServiceState::restore_poll_proc, this);
     }
 
     void stop_restore_polling() {
-      restore_poll_active.store(false, std::memory_order_release);
+      // Hide the request from event callbacks before exposing an inactive poll
+      // worker. This prevents the pump from trying to replace/join the worker
+      // while that worker is stopping the pump.
+      restore_requested.store(false, std::memory_order_release);
       request_restore_cancel();
       event_pump.stop();
       event_pump_running.store(false, std::memory_order_release);
-      restore_attempted_unconfirmed.store(false, std::memory_order_release);
       reset_restore_backoff();
       restore_active_until_ms.store(0, std::memory_order_release);
       last_restore_event_ms.store(0, std::memory_order_release);
       restore_active_window.store(RestoreWindow::Event, std::memory_order_release);
       restore_stage_running.store(false, std::memory_order_release);
       stop_and_join(restore_poll_thread, "restore-poll");
-      restore_requested.store(false, std::memory_order_release);
+      restore_poll_active.store(false, std::memory_order_release);
       restore_origin_epoch.store(0, std::memory_order_release);
       prefer_golden_if_current_missing.store(true, std::memory_order_release);
       reset_pending_golden_session_fallbacks();
@@ -3687,8 +3827,11 @@ namespace {
     void disarm_restore_requests(const char *reason = nullptr) {
       const bool had_pending = restore_requested.load(std::memory_order_acquire);
       stop_restore_polling();
-      cancel_delayed_reapply();
+      // Join the producer before draining the workers it can spawn. This makes
+      // the DISARM acknowledgement a true no-more-mutations barrier.
       cancel_post_apply_tasks();
+      cancel_delayed_reapply();
+      cancel_hdr_blank();
       delete_restore_scheduled_task();
       direct_revert_bypass_grace.store(false, std::memory_order_release);
       exit_after_revert.store(false, std::memory_order_release);
@@ -3718,7 +3861,6 @@ namespace {
     void clear_restore_origin() {
       restore_origin_epoch.store(0, std::memory_order_release);
       prefer_golden_if_current_missing.store(true, std::memory_order_release);
-      restore_attempted_unconfirmed.store(false, std::memory_order_release);
       reset_pending_golden_session_fallbacks();
     }
 
@@ -3732,6 +3874,20 @@ namespace {
 
     static void restore_poll_proc(std::stop_token st, ServiceState *self) {
       using namespace std::chrono_literals;
+
+      struct WorkerLifecycleGuard {
+        ServiceState *state;
+
+        ~WorkerLifecycleGuard() {
+          {
+            std::lock_guard<std::mutex> lock(state->restore_poll_lifecycle_mutex);
+            state->restore_poll_worker_running = false;
+          }
+          state->restore_poll_lifecycle_cv.notify_all();
+        }
+      } worker_lifecycle {self};
+
+      auto restore_worker = self->restore_mutation_guard.begin_worker();
       const auto kPoll = 3s;
       const auto kLogThrottle = std::chrono::minutes(15);
       auto last_log = std::chrono::steady_clock::now() - kLogThrottle;  // allow immediate log
@@ -3776,10 +3932,10 @@ namespace {
           if (self->running_flag) {
             self->running_flag->store(false, std::memory_order_release);
           }
+          self->restore_requested.store(false, std::memory_order_release);
           self->event_pump.stop();
           self->event_pump_running.store(false, std::memory_order_release);
           self->restore_poll_active.store(false, std::memory_order_release);
-          self->restore_requested.store(false, std::memory_order_release);
           self->clear_restore_origin();
           return;
         }
@@ -3789,6 +3945,7 @@ namespace {
 
       if (cancelled()) {
         self->restore_stage_running.store(false, std::memory_order_release);
+        self->restore_requested.store(false, std::memory_order_release);
         self->restore_poll_active.store(false, std::memory_order_release);
         return;
       }
@@ -3805,13 +3962,13 @@ namespace {
 
       if (initial_success) {
         if (cancelled()) {
+          self->restore_requested.store(false, std::memory_order_release);
           self->event_pump.stop();
           self->event_pump_running.store(false, std::memory_order_release);
           self->restore_poll_active.store(false, std::memory_order_release);
           self->restore_active_until_ms.store(0, std::memory_order_release);
           self->restore_active_window.store(RestoreWindow::Event, std::memory_order_release);
           self->last_restore_event_ms.store(0, std::memory_order_release);
-          self->restore_requested.store(false, std::memory_order_release);
           self->clear_restore_origin();
           return;
         }
@@ -3821,13 +3978,13 @@ namespace {
         run_restore_cleanup("initial attempt");
 
         if (cancelled()) {
+          self->restore_requested.store(false, std::memory_order_release);
           self->event_pump.stop();
           self->event_pump_running.store(false, std::memory_order_release);
           self->restore_poll_active.store(false, std::memory_order_release);
           self->restore_active_until_ms.store(0, std::memory_order_release);
           self->restore_active_window.store(RestoreWindow::Event, std::memory_order_release);
           self->last_restore_event_ms.store(0, std::memory_order_release);
-          self->restore_requested.store(false, std::memory_order_release);
           self->clear_restore_origin();
           return;
         }
@@ -3839,13 +3996,13 @@ namespace {
         } else if (!exit_helper) {
           BOOST_LOG(info) << "Restore confirmed (initial attempt); keeping helper alive for newer connection.";
         }
+        self->restore_requested.store(false, std::memory_order_release);
         self->event_pump.stop();
         self->event_pump_running.store(false, std::memory_order_release);
         self->restore_poll_active.store(false, std::memory_order_release);
         self->restore_active_until_ms.store(0, std::memory_order_release);
         self->restore_active_window.store(RestoreWindow::Event, std::memory_order_release);
         self->last_restore_event_ms.store(0, std::memory_order_release);
-        self->restore_requested.store(false, std::memory_order_release);
         self->clear_restore_origin();
         return;
       }
@@ -3920,13 +4077,13 @@ namespace {
 
         if (success) {
           if (cancelled()) {
+            self->restore_requested.store(false, std::memory_order_release);
             self->event_pump.stop();
             self->event_pump_running.store(false, std::memory_order_release);
             self->restore_poll_active.store(false, std::memory_order_release);
             self->restore_active_until_ms.store(0, std::memory_order_release);
             self->restore_active_window.store(RestoreWindow::Event, std::memory_order_release);
             self->last_restore_event_ms.store(0, std::memory_order_release);
-            self->restore_requested.store(false, std::memory_order_release);
             self->clear_restore_origin();
             return;
           }
@@ -3936,13 +4093,13 @@ namespace {
           run_restore_cleanup("polling attempt");
 
           if (cancelled()) {
+            self->restore_requested.store(false, std::memory_order_release);
             self->event_pump.stop();
             self->event_pump_running.store(false, std::memory_order_release);
             self->restore_poll_active.store(false, std::memory_order_release);
             self->restore_active_until_ms.store(0, std::memory_order_release);
             self->restore_active_window.store(RestoreWindow::Event, std::memory_order_release);
             self->last_restore_event_ms.store(0, std::memory_order_release);
-            self->restore_requested.store(false, std::memory_order_release);
             self->clear_restore_origin();
             return;
           }
@@ -3954,13 +4111,13 @@ namespace {
           } else if (!exit_helper) {
             BOOST_LOG(info) << "Restore confirmed while newer connection active; helper remains running.";
           }
-          self->restore_poll_active.store(false, std::memory_order_release);
+          self->restore_requested.store(false, std::memory_order_release);
           self->event_pump.stop();
           self->event_pump_running.store(false, std::memory_order_release);
+          self->restore_poll_active.store(false, std::memory_order_release);
           self->restore_active_until_ms.store(0, std::memory_order_release);
           self->restore_active_window.store(RestoreWindow::Event, std::memory_order_release);
           self->last_restore_event_ms.store(0, std::memory_order_release);
-          self->restore_requested.store(false, std::memory_order_release);
           self->clear_restore_origin();
           return;
         }
@@ -3977,13 +4134,15 @@ namespace {
         }
       }
       self->restore_stage_running.store(false, std::memory_order_release);
-      self->restore_poll_active.store(false, std::memory_order_release);
       self->restore_active_until_ms.store(0, std::memory_order_release);
       self->restore_active_window.store(RestoreWindow::Event, std::memory_order_release);
       self->last_restore_event_ms.store(0, std::memory_order_release);
       self->reset_restore_backoff();
 
       if (exit_due_to_timeout) {
+        // Keep the event request armed. A callback may wait for the lifecycle
+        // guard below to publish worker completion before replacing the thread.
+        self->restore_poll_active.store(false, std::memory_order_release);
         self->register_unresolved_golden_restore_request("restore window exhausted");
         return;
       }
@@ -3992,9 +4151,10 @@ namespace {
         self->register_unresolved_golden_restore_request("restore ended unresolved");
       }
 
+      self->restore_requested.store(false, std::memory_order_release);
       self->event_pump.stop();
       self->event_pump_running.store(false, std::memory_order_release);
-      self->restore_requested.store(false, std::memory_order_release);
+      self->restore_poll_active.store(false, std::memory_order_release);
       self->clear_restore_origin();
     }
 
@@ -4110,6 +4270,7 @@ namespace {
           return;
         }
         if (self->verify_last_configuration_sticky(kVerificationSettleDelay, st)) {
+          self->restore_mutation_guard.mark_superseding_apply_confirmed();
           continue;
         }
         if (self->restore_requested.load(std::memory_order_acquire)) {
@@ -4117,6 +4278,9 @@ namespace {
         }
         BOOST_LOG(info) << "Delayed re-apply attempt after activation 213Q902";
         self->best_effort_apply_last_cfg();
+        if (self->verify_last_configuration_sticky(kVerificationSettleDelay, st)) {
+          self->restore_mutation_guard.mark_superseding_apply_confirmed();
+        }
       }
     }
 
@@ -4159,7 +4323,30 @@ namespace {
       stop_and_join(post_apply_thread, "post-apply");
     }
 
-    void schedule_post_apply_tasks(
+    struct FirstApplyPassNotifier {
+      explicit FirstApplyPassNotifier(std::shared_ptr<std::promise<void>> promise_in):
+          promise(std::move(promise_in)) {}
+
+      ~FirstApplyPassNotifier() {
+        signal();
+      }
+
+      void signal() {
+        if (signaled || !promise) {
+          return;
+        }
+        signaled = true;
+        try {
+          promise->set_value();
+        } catch (...) {
+        }
+      }
+
+      std::shared_ptr<std::promise<void>> promise;
+      bool signaled = false;
+    };
+
+    std::future<void> schedule_post_apply_tasks(
       bool enforce_snapshot,
       std::optional<std::string> before_sig,
       bool wa_hdr_toggle,
@@ -4169,6 +4356,8 @@ namespace {
       std::vector<std::chrono::milliseconds> reapply_delays
     ) {
       cancel_post_apply_tasks();
+      auto first_pass_promise = std::make_shared<std::promise<void>>();
+      auto first_pass_future = first_pass_promise->get_future();
       post_apply_thread = std::jthread(
         [this,
          enforce_snapshot,
@@ -4177,7 +4366,9 @@ namespace {
          requested_virtual_layout = std::move(requested_virtual_layout),
          monitor_position_overrides = std::move(monitor_position_overrides),
          refresh_rate_overrides = std::move(refresh_rate_overrides),
-         reapply_delays = std::move(reapply_delays)](std::stop_token st) mutable {
+         reapply_delays = std::move(reapply_delays),
+         first_pass_promise = std::move(first_pass_promise)](std::stop_token st) mutable {
+          FirstApplyPassNotifier first_pass_notifier(std::move(first_pass_promise));
           const auto apply_epoch = current_connection_epoch();
           auto cancelled = [&]() {
             return st.stop_requested() || !is_connection_epoch_current(apply_epoch);
@@ -4201,12 +4392,6 @@ namespace {
             return;
           }
           retry_apply_on_topology.store(false, std::memory_order_release);
-          if (!reapply_delays.empty()) {
-            if (cancelled()) {
-              return;
-            }
-            schedule_delayed_reapply(std::move(reapply_delays));
-          }
           if (cancelled()) {
             return;
           }
@@ -4222,6 +4407,44 @@ namespace {
           if (requested_virtual_layout) {
             BOOST_LOG(info) << "Display helper: requested virtual display layout=" << *requested_virtual_layout;
           }
+
+          // Restore physical monitor refresh rates from the pre-VD snapshot in
+          // the first completion pass. Later sticky Apply retries remain
+          // asynchronous, but the host must not begin capture while this first
+          // SetDisplayConfig-backed pass is still running.
+          if (!refresh_rate_overrides.empty()) {
+            if (cancelled()) {
+              return;
+            }
+            bool rate_result = true;
+            for (const auto &[device_id, rate] : refresh_rate_overrides) {
+              if (cancelled()) {
+                return;
+              }
+              if (device_id.empty() || rate.first == 0 || rate.second == 0) {
+                continue;
+              }
+              if (last_cfg && device_id == last_cfg->m_device_id) {
+                continue;
+              }
+              const bool ok = controller.set_device_refresh_rate(device_id, rate.first, rate.second);
+              if (ok) {
+                BOOST_LOG(info) << "Display helper: restored refresh rate for device=" << device_id
+                                << " to " << rate.first << "/" << rate.second;
+              } else {
+                BOOST_LOG(warning) << "Display helper: failed to restore refresh rate for device=" << device_id;
+              }
+              rate_result = rate_result && ok;
+            }
+            BOOST_LOG(info) << "Display helper: refresh rate overrides applied result=" << (rate_result ? "true" : "false");
+          }
+
+          auto finish_first_pass = [&]() {
+            if (!reapply_delays.empty() && !cancelled()) {
+              schedule_delayed_reapply(std::move(reapply_delays));
+            }
+            first_pass_notifier.signal();
+          };
 
           if (cancelled()) {
             return;
@@ -4280,6 +4503,12 @@ namespace {
               }
 
               pending_overrides = std::move(next_pending);
+              if (retry_attempt == 1) {
+                // The immediately available origins are now committed. Do not
+                // make stream start wait on the bounded 3s enumeration retry;
+                // those follow-up attempts are best-effort stickiness work.
+                finish_first_pass();
+              }
               if (pending_overrides.empty()) {
                 break;
               }
@@ -4304,40 +4533,12 @@ namespace {
             }
             BOOST_LOG(info) << "Display helper: monitor position overrides applied result="
                             << (pending_overrides.empty() ? "true" : "false");
-          }
-
-          // Restore physical monitor refresh rates from pre-VD-creation snapshot.
-          // When a virtual display is created at (0,0), Windows may reset other monitors'
-          // refresh rates (e.g. 240Hz → 60Hz). This restores the original rates.
-          if (!refresh_rate_overrides.empty()) {
-            if (cancelled()) {
-              return;
-            }
-            bool rate_result = true;
-            for (const auto &[device_id, rate] : refresh_rate_overrides) {
-              if (cancelled()) {
-                break;
-              }
-              if (device_id.empty() || rate.first == 0 || rate.second == 0) {
-                continue;
-              }
-              // Skip the virtual display device
-              if (last_cfg && device_id == last_cfg->m_device_id) {
-                continue;
-              }
-              const bool ok = controller.set_device_refresh_rate(device_id, rate.first, rate.second);
-              if (ok) {
-                BOOST_LOG(info) << "Display helper: restored refresh rate for device=" << device_id
-                                << " to " << rate.first << "/" << rate.second;
-              } else {
-                BOOST_LOG(warning) << "Display helper: failed to restore refresh rate for device=" << device_id;
-              }
-              rate_result = rate_result && ok;
-            }
-            BOOST_LOG(info) << "Display helper: refresh rate overrides applied result=" << (rate_result ? "true" : "false");
+          } else {
+            finish_first_pass();
           }
         }
       );
+      return first_pass_future;
     }
   };
 
@@ -4997,12 +5198,51 @@ namespace {
     return false;
   }
 
-  bool handle_apply(ServiceState &state, std::span<const uint8_t> payload, std::string &error_msg) {
+  bool handle_apply(
+    ServiceState &state,
+    std::span<const uint8_t> payload,
+    std::string &error_msg,
+    std::optional<std::uint64_t> not_after_tick_ms = std::nullopt,
+    bool *expired_before_mutation = nullptr
+  ) {
+    if (expired_before_mutation) {
+      *expired_before_mutation = false;
+    }
+    bool deadline_committed = false;
+    const auto expired = [&]() {
+      return !deadline_committed && not_after_tick_ms &&
+             static_cast<std::uint64_t>(::GetTickCount64()) >= *not_after_tick_ms;
+    };
+    if (expired()) {
+      if (expired_before_mutation) {
+        *expired_before_mutation = true;
+      }
+      error_msg = "Correlated APPLY expired before processing";
+      return false;
+    }
+
+    // Close the cancel-vs-SetDisplayConfig race before draining the restore
+    // thread. If mutation already won, no fallback snapshot may be synthesized.
+    const bool superseding_unconfirmed_restore =
+      state.restore_mutation_guard.supersede_for_apply([&]() {
+        state.request_restore_cancel();
+      });
+
     // Cancel any ongoing restore activity since a new APPLY supersedes it
     state.stop_restore_polling();
-    state.cancel_delayed_reapply();
+    // Stop producers before the delayed/HDR workers they may create.
     state.cancel_post_apply_tasks();
+    state.cancel_delayed_reapply();
+    state.cancel_hdr_blank();
     state.exit_after_revert.store(false, std::memory_order_release);
+
+    if (expired()) {
+      if (expired_before_mutation) {
+        *expired_before_mutation = true;
+      }
+      error_msg = "Correlated APPLY expired while prior display work drained";
+      return false;
+    }
 
     std::string json(reinterpret_cast<const char *>(payload.data()), payload.size());
     bool wa_hdr_toggle = false;
@@ -5011,6 +5251,9 @@ namespace {
     std::vector<std::pair<std::string, std::pair<unsigned int, unsigned int>>> refresh_rate_overrides;
     std::optional<display_device::ActiveTopology> sunshine_topology;
     std::optional<std::vector<std::string>> snapshot_exclude_devices;
+    bool staged_always_restore_from_golden =
+      state.always_restore_from_golden.load(std::memory_order_acquire);
+    bool staged_restore_on_disconnect = true;
     std::string sanitized_json = json;
     try {
       auto j = nlohmann::json::parse(json);
@@ -5068,22 +5311,24 @@ namespace {
           j.erase("sunshine_topology");
         }
         if (j.contains("sunshine_always_restore_from_golden") && j["sunshine_always_restore_from_golden"].is_boolean()) {
-          state.always_restore_from_golden.store(j["sunshine_always_restore_from_golden"].get<bool>(), std::memory_order_release);
+          staged_always_restore_from_golden = j["sunshine_always_restore_from_golden"].get<bool>();
           j.erase("sunshine_always_restore_from_golden");
         }
         if (j.contains("sunshine_restore_on_disconnect") && j["sunshine_restore_on_disconnect"].is_boolean()) {
-          state.restore_on_disconnect.store(j["sunshine_restore_on_disconnect"].get<bool>(), std::memory_order_release);
+          staged_restore_on_disconnect = j["sunshine_restore_on_disconnect"].get<bool>();
           j.erase("sunshine_restore_on_disconnect");
-        } else {
-          state.restore_on_disconnect.store(true, std::memory_order_release);
         }
         if (j.contains("sunshine_device_refresh_rate_overrides") && j["sunshine_device_refresh_rate_overrides"].is_object()) {
           for (auto it = j["sunshine_device_refresh_rate_overrides"].begin(); it != j["sunshine_device_refresh_rate_overrides"].end(); ++it) {
             const auto &node = it.value();
-            if (!node.is_object()) continue;
+            if (!node.is_object()) {
+              continue;
+            }
             auto num_it = node.find("num");
             auto den_it = node.find("den");
-            if (num_it == node.end() || den_it == node.end() || !num_it->is_number_unsigned() || !den_it->is_number_unsigned()) continue;
+            if (num_it == node.end() || den_it == node.end() || !num_it->is_number_unsigned() || !den_it->is_number_unsigned()) {
+              continue;
+            }
             refresh_rate_overrides.emplace_back(
               it.key(),
               std::make_pair(num_it->get<unsigned int>(), den_it->get<unsigned int>())
@@ -5096,10 +5341,6 @@ namespace {
     } catch (...) {
     }
 
-    if (snapshot_exclude_devices.has_value()) {
-      state.controller.set_snapshot_exclusions(*snapshot_exclude_devices);
-    }
-
     display_device::SingleDisplayConfiguration cfg {};
     std::string err;
     if (!display_device::fromJson(sanitized_json, cfg, &err)) {
@@ -5107,24 +5348,57 @@ namespace {
       error_msg = "Invalid display configuration payload";
       return false;
     }
-    state.last_apply_ms.store(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()
-      )
-        .count(),
-      std::memory_order_release
-    );
-    state.last_cfg = cfg;
+    auto commit_apply_state = [&]() {
+      if (deadline_committed) {
+        return;
+      }
+      deadline_committed = true;
+      state.restore_mutation_guard.mark_apply_started();
+      state.always_restore_from_golden.store(staged_always_restore_from_golden, std::memory_order_release);
+      state.restore_on_disconnect.store(staged_restore_on_disconnect, std::memory_order_release);
+      if (snapshot_exclude_devices) {
+        state.controller.set_snapshot_exclusions(*snapshot_exclude_devices);
+      }
+      state.last_cfg = cfg;
+      state.last_apply_completed_successfully.store(false, std::memory_order_release);
+      state.last_apply_ms.store(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()
+        )
+          .count(),
+        std::memory_order_release
+      );
+      // Arm crash recovery only once this logical Apply is committed to enter
+      // the display mutation path. An expired/invalid request that never
+      // mutates must not leave a boot-time task restoring an unrelated snapshot.
+      BOOST_LOG(info) << "Display configuration committed, creating scheduled restore task before mutation";
+      const bool task_created = create_restore_scheduled_task();
+      BOOST_LOG(info) << "Scheduled task creation result: " << (task_created ? "SUCCESS" : "FAILED");
+    };
     // The session baseline is normally captured earlier via SnapshotCurrent, before any
-    // display enumeration that might activate external dummy plugs. That request is
-    // fire-and-forget and can be lost (helper hard-restart races, helper not yet running),
-    // which used to leave REVERT with nothing to restore and strand the user on the
-    // session-only display layout (vibeshine#223). Capture the pre-apply state here as a
-    // fallback whenever no baseline exists yet; the snapshot exclusions set above keep
-    // virtual displays out of it.
-    if (!ServiceState::path_exists(state.session_current_path)) {
+    // display enumeration that might activate external dummy plugs. A helper hard-restart
+    // or rejected capture can still leave no baseline, which used to leave REVERT with
+    // nothing to restore and strand the user on the session-only display layout
+    // (vibeshine#223). Capture the pre-apply state here as a fallback whenever no baseline
+    // exists and no unconfirmed restore handoff is active; the snapshot exclusions set
+    // above keep virtual displays out of it.
+    if (!ServiceState::path_exists(state.session_current_path) && superseding_unconfirmed_restore) {
+      BOOST_LOG(info) << "Display helper: skipping pre-apply baseline capture after an unconfirmed restore handoff; preserving previous/golden snapshots.";
+    } else if (!ServiceState::path_exists(state.session_current_path)) {
       BOOST_LOG(warning) << "Display helper: no session baseline present at APPLY; capturing pre-apply baseline now.";
-      if (!state.capture_current_snapshot("pre-apply baseline")) {
+      const auto prior_exclusions = state.controller.snapshot_exclusions_copy_public();
+      if (snapshot_exclude_devices) {
+        // Use the candidate session exclusions for this fallback capture, but
+        // do not publish them as global restore policy unless mutation commits.
+        state.controller.set_snapshot_exclusions(*snapshot_exclude_devices);
+      }
+      const bool captured = not_after_tick_ms ?
+                              state.refresh_current_snapshot_preserving_previous("pre-apply baseline", not_after_tick_ms) :
+                              state.capture_current_snapshot("pre-apply baseline");
+      if (snapshot_exclude_devices) {
+        state.controller.set_snapshot_exclusions(prior_exclusions);
+      }
+      if (!captured) {
         BOOST_LOG(warning) << "Display helper: pre-apply baseline capture failed; REVERT may have nothing to restore.";
       }
     }
@@ -5134,21 +5408,29 @@ namespace {
     bool validated = state.controller.soft_test_display_settings(cfg, sunshine_topology);
     if (!validated) {
       BOOST_LOG(warning) << "Display helper: configuration failed SDC_VALIDATE soft-test; attempting display stack recovery and retrying once.";
-      if (state.controller.recover_display_stack()) {
+      if (!expired()) {
+        commit_apply_state();
+      }
+      if (deadline_committed && state.controller.recover_display_stack()) {
         std::this_thread::sleep_for(500ms);
         validated = state.controller.soft_test_display_settings(cfg, sunshine_topology);
       }
     }
 
     if (validated) {
-      BOOST_LOG(info) << "Display configuration validated, creating scheduled task before applying settings";
-      const bool task_created = create_restore_scheduled_task();
-      BOOST_LOG(info) << "Scheduled task creation result: " << (task_created ? "SUCCESS" : "FAILED");
-
+      if (expired()) {
+        if (expired_before_mutation) {
+          *expired_before_mutation = true;
+        }
+        error_msg = "Correlated APPLY expired before display mutation";
+        return false;
+      }
+      commit_apply_state();
       if (!state.controller.apply(cfg, sunshine_topology)) {
         error_msg = "Helper failed to apply requested display configuration";
         return false;
       }
+      state.last_apply_completed_successfully.store(true, std::memory_order_release);
 
       constexpr int kMaxSyncVerifyAttempts = 2;
       bool verified_sync = false;
@@ -5174,13 +5456,14 @@ namespace {
         state.best_effort_apply_last_cfg();
       }
       if (verified_sync) {
+        state.restore_mutation_guard.mark_superseding_apply_confirmed();
         BOOST_LOG(debug) << "Display helper: synchronous verification succeeded; scheduling follow-up check.";
       } else {
         BOOST_LOG(warning) << "Display helper: synchronous verification failed; scheduling async fallback.";
       }
 
       state.retry_apply_on_topology.store(false, std::memory_order_release);
-      state.schedule_post_apply_tasks(
+      auto first_post_apply_pass = state.schedule_post_apply_tasks(
         false,
         std::nullopt,
         wa_hdr_toggle,
@@ -5189,6 +5472,12 @@ namespace {
         std::move(refresh_rate_overrides),
         std::move(reapply_delays)
       );
+      // Correlated success means the first immediate post-Apply mutation pass
+      // has drained. Enumeration-dependent position retries and delayed sticky
+      // verification remain best-effort so normal stream starts stay fast.
+      if (first_post_apply_pass.valid()) {
+        first_post_apply_pass.wait();
+      }
     } else {
       BOOST_LOG(error) << "Display helper: configuration failed SDC_VALIDATE soft-test; not applying.";
       error_msg = "Display configuration failed validation";
@@ -5203,8 +5492,9 @@ namespace {
     BOOST_LOG(info) << "REVERT command received - initiating display settings restoration"
                     << (revert_options.prefer_golden_if_current_missing ? " (prefer golden if current missing)." : ".");
     state.retry_apply_on_topology.store(false, std::memory_order_release);
-    state.cancel_delayed_reapply();
     state.cancel_post_apply_tasks();
+    state.cancel_delayed_reapply();
+    state.cancel_hdr_blank();
     state.direct_revert_bypass_grace.store(true, std::memory_order_release);
     state.exit_after_revert.store(true, std::memory_order_release);
     state.reset_golden_restore_request_tracking();
@@ -5222,10 +5512,70 @@ namespace {
   }
 
   void handle_misc(ServiceState &state, platf::dxgi::AsyncNamedPipe &async_pipe, MsgType type, std::span<const uint8_t> payload) {
+    if (type == MsgType::DisarmRequest) {
+      const auto correlated = platf::display_helper_protocol::decode_correlated_request(payload);
+      if (!correlated) {
+        BOOST_LOG(warning) << "Ignoring malformed correlated DISARM request.";
+        return;
+      }
+
+      ResultStatus status = ResultStatus::Expired;
+      if (static_cast<std::uint64_t>(::GetTickCount64()) < correlated->not_after_tick_ms) {
+        const bool accepted = state.restore_mutation_guard.try_disarm([&]() {
+          state.request_restore_cancel();
+        });
+        if (accepted) {
+          state.disarm_restore_requests("DISARM command received and acknowledged");
+          status = ResultStatus::Succeeded;
+        } else {
+          BOOST_LOG(info) << "DISARM command rejected because restore topology is unconfirmed.";
+          status = ResultStatus::Busy;
+        }
+      }
+      const auto result_payload = platf::display_helper_protocol::encode_correlated_result(correlated->request_id, status);
+      send_framed_content(async_pipe, MsgType::DisarmResult, result_payload);
+      return;
+    }
+
+    if (type == MsgType::SnapshotCurrentRequest) {
+      const auto correlated = platf::display_helper_protocol::decode_correlated_request(payload);
+      if (!correlated) {
+        BOOST_LOG(warning) << "Ignoring malformed correlated SNAPSHOT_CURRENT request.";
+        return;
+      }
+
+      ResultStatus status = ResultStatus::Failed;
+      if (static_cast<std::uint64_t>(::GetTickCount64()) >= correlated->not_after_tick_ms) {
+        status = ResultStatus::Expired;
+      } else {
+        if (auto exclusions = parse_snapshot_exclude_payload(correlated->body)) {
+          state.controller.set_snapshot_exclusions(*exclusions);
+        }
+        if (state.restore_requested.load(std::memory_order_acquire) ||
+            !state.restore_mutation_guard.capture_allowed()) {
+          BOOST_LOG(info) << "Skipping current session snapshot refresh while restore is pending or unconfirmed.";
+          status = ResultStatus::Busy;
+        } else if (state.refresh_current_snapshot_preserving_previous("snapshot-only", correlated->not_after_tick_ms)) {
+          status = ResultStatus::Succeeded;
+        } else if (static_cast<std::uint64_t>(::GetTickCount64()) >= correlated->not_after_tick_ms) {
+          status = ResultStatus::Expired;
+        }
+      }
+
+      const auto result_payload = platf::display_helper_protocol::encode_correlated_result(correlated->request_id, status);
+      send_framed_content(async_pipe, MsgType::SnapshotCurrentResult, result_payload);
+      return;
+    }
+
     if (auto exclusions = parse_snapshot_exclude_payload(payload)) {
       state.controller.set_snapshot_exclusions(*exclusions);
     }
     if (type == MsgType::ExportGolden) {
+      auto capture_lease = state.restore_mutation_guard.try_begin_capture();
+      if (state.restore_requested.load(std::memory_order_acquire) || !capture_lease) {
+        BOOST_LOG(info) << "Skipping golden snapshot export while restore is pending.";
+        return;
+      }
       const bool saved = state.save_snapshot_with_retry(state.golden_path, "export-golden");
       if (saved) {
         state.clear_golden_restore_status("snapshot exported");
@@ -5236,18 +5586,20 @@ namespace {
       state.retry_apply_on_topology.store(false, std::memory_order_release);
       state.retry_revert_on_topology.store(false, std::memory_order_release);
     } else if (type == MsgType::Disarm) {
-      if (state.restore_requested.load(std::memory_order_acquire) &&
-          state.restore_attempted_unconfirmed.load(std::memory_order_acquire)) {
+      if (!state.restore_mutation_guard.try_disarm([&]() {
+            state.request_restore_cancel();
+          })) {
         BOOST_LOG(info) << "DISARM command ignored because an unconfirmed restore attempt is still pending.";
         return;
       }
       state.disarm_restore_requests("DISARM command received");
     } else if (type == MsgType::SnapshotCurrent) {
-      if (state.restore_requested.load(std::memory_order_acquire)) {
+      if (state.restore_requested.load(std::memory_order_acquire) ||
+          !state.restore_mutation_guard.capture_allowed()) {
         BOOST_LOG(info) << "Skipping current session snapshot refresh while restore is pending.";
-        return;
+      } else {
+        (void) state.refresh_current_snapshot_preserving_previous("snapshot-only");
       }
-      (void) state.refresh_current_snapshot_preserving_previous("snapshot-only");
     } else if (type == MsgType::Ping) {
       state.record_heartbeat_ping();
       send_framed_content(async_pipe, MsgType::Ping);
@@ -5257,9 +5609,46 @@ namespace {
   }
 
   void handle_frame(ServiceState &state, platf::dxgi::AsyncNamedPipe &async_pipe, MsgType type, std::span<const uint8_t> payload, std::atomic<bool> &running) {
-    if (type == MsgType::Apply) {
+    if (type == MsgType::Apply || type == MsgType::ApplyRequest) {
+      std::uint64_t request_id = 0;
+      std::optional<std::uint64_t> not_after_tick_ms;
+      if (type == MsgType::ApplyRequest) {
+        const auto correlated = platf::display_helper_protocol::decode_correlated_request(payload);
+        if (!correlated) {
+          BOOST_LOG(warning) << "Ignoring malformed correlated APPLY request.";
+          return;
+        }
+        request_id = correlated->request_id;
+        not_after_tick_ms = correlated->not_after_tick_ms;
+        payload = correlated->body;
+        if (static_cast<std::uint64_t>(::GetTickCount64()) >= *not_after_tick_ms) {
+          const auto result_payload = platf::display_helper_protocol::encode_correlated_result(
+            request_id,
+            ResultStatus::Expired
+          );
+          send_framed_content(async_pipe, MsgType::ApplyResultCorrelated, result_payload);
+          return;
+        }
+      }
+
       std::string error_msg;
-      bool success = handle_apply(state, payload, error_msg);
+      bool expired_before_mutation = false;
+      bool success = handle_apply(
+        state,
+        payload,
+        error_msg,
+        not_after_tick_ms,
+        &expired_before_mutation
+      );
+      if (request_id != 0) {
+        const auto result_payload = platf::display_helper_protocol::encode_correlated_result(
+          request_id,
+          success ? ResultStatus::Succeeded :
+                    (expired_before_mutation ? ResultStatus::Expired : ResultStatus::Failed)
+        );
+        send_framed_content(async_pipe, MsgType::ApplyResultCorrelated, result_payload);
+        return;
+      }
       std::vector<uint8_t> result_payload;
       result_payload.push_back(success ? 1u : 0u);
       if (!error_msg.empty()) {
@@ -5287,7 +5676,9 @@ namespace {
     };
     // Pipe broken -> Sunshine might have crashed. Begin autonomous restore.
     state.retry_apply_on_topology.store(false, std::memory_order_release);
+    state.cancel_post_apply_tasks();
     state.cancel_delayed_reapply();
+    state.cancel_hdr_blank();
     const bool potentially_modified = state.last_cfg.has_value() ||
                                       state.exit_after_revert.load(std::memory_order_acquire);
     if (!potentially_modified) {
@@ -5313,7 +5704,8 @@ namespace {
       )
                             .count();
       const auto last_apply = state.last_apply_ms.load(std::memory_order_acquire);
-      if (last_apply > 0 && now_ms >= last_apply) {
+      if (state.last_apply_completed_successfully.load(std::memory_order_acquire) &&
+          last_apply > 0 && now_ms >= last_apply) {
         const auto delta_ms = now_ms - last_apply;
         if (delta_ms <= kApplyDisconnectGrace.count()) {
           BOOST_LOG(info)
@@ -5401,6 +5793,7 @@ int run_legacy_helper(int argc, char *argv[]) {
   if (restore_mode) {
     BOOST_LOG(info) << "Display helper started in restore mode (--restore flag)";
     dd_log_bridge().install();
+    std::atomic<bool> running {true};
     ServiceState state;
     state.golden_path = active_snapshots.golden;
     state.golden_status_path = active_snapshots.golden_status;
@@ -5457,7 +5850,6 @@ int run_legacy_helper(int argc, char *argv[]) {
       }
     }
 
-    std::atomic<bool> running {true};
     state.running_flag = &running;
     state.exit_after_revert.store(true, std::memory_order_release);
     state.reset_golden_restore_request_tracking();
@@ -5477,6 +5869,7 @@ int run_legacy_helper(int argc, char *argv[]) {
 
   platf::dxgi::FramedPipeFactory pipe_factory(std::make_unique<platf::dxgi::AnonymousPipeFactory>());
   dd_log_bridge().install();
+  std::atomic<bool> running {true};
   ServiceState state;
   // Suppression of startup restore is deprecated; REVERTs are always allowed.
   state.golden_path = active_snapshots.golden;
@@ -5534,7 +5927,6 @@ int run_legacy_helper(int argc, char *argv[]) {
   }
   // Topology-based retries disabled; no watcher needed anymore.
 
-  std::atomic<bool> running {true};
   state.running_flag = &running;
   auto last_connect_wait_log = std::chrono::steady_clock::time_point::min();
   constexpr auto kReconnectLogInterval = std::chrono::hours(1);
@@ -5653,7 +6045,6 @@ int run_legacy_helper(int argc, char *argv[]) {
       broken.store(true, std::memory_order_release);
       state.command_worker_stop.store(true, std::memory_order_release);
       state.command_queue_cv.notify_all();
-      attempt_revert_after_disconnect(state, running, connection_epoch);
     };
 
     auto on_broken = [&, connection_epoch]() {
@@ -5666,7 +6057,6 @@ int run_legacy_helper(int argc, char *argv[]) {
       broken.store(true, std::memory_order_release);
       state.command_worker_stop.store(true, std::memory_order_release);
       state.command_queue_cv.notify_all();
-      attempt_revert_after_disconnect(state, running, connection_epoch);
     };
 
     // Start async message loop (establish_connection is a no-op if already connected)
@@ -5679,7 +6069,8 @@ int run_legacy_helper(int argc, char *argv[]) {
       if (state.check_heartbeat_timeout() && state.is_connection_epoch_current(connection_epoch)) {
         BOOST_LOG(warning) << "Heartbeat timeout exceeded; applying revert policy.";
         broken.store(true, std::memory_order_release);
-        attempt_revert_after_disconnect(state, running, connection_epoch);
+        state.command_worker_stop.store(true, std::memory_order_release);
+        state.command_queue_cv.notify_all();
         break;
       }
     }
@@ -5697,6 +6088,14 @@ int run_legacy_helper(int argc, char *argv[]) {
       state.command_queue.clear();
     }
     async_pipe.stop();
+
+    // The command worker may have been inside a blocking APPLY when the pipe
+    // broke. Only arm autonomous recovery after it has drained, then cancel and
+    // join any post-Apply workers it produced. This prevents restore/APPLY
+    // SetDisplayConfig calls from overlapping.
+    if (broken.load(std::memory_order_acquire) && running.load(std::memory_order_acquire)) {
+      attempt_revert_after_disconnect(state, running, connection_epoch);
+    }
 
     // If a successful restore requested exit, break outer loop
     if (!running.load(std::memory_order_acquire)) {

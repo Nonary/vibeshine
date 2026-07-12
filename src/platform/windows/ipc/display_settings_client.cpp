@@ -6,17 +6,21 @@
   // standard
   #include <algorithm>
   #include <array>
+  #include <atomic>
   #include <chrono>
   #include <cstdint>
+  #include <deque>
   #include <mutex>
   #include <optional>
   #include <string>
+  #include <unordered_map>
   #include <vector>
 
   // local
   #include "display_settings_client.h"
   #include "src/globals.h"
   #include "src/logging.h"
+  #include "src/platform/windows/ipc/display_settings_protocol.h"
   #include "src/platform/windows/ipc/pipes.h"
 
 namespace platf::display_helper_client {
@@ -25,7 +29,83 @@ namespace platf::display_helper_client {
     constexpr int kConnectTimeoutMs = 2000;
     constexpr int kSendTimeoutMs = 5000;
     constexpr int kShutdownIpcTimeoutMs = 500;
-    constexpr int kApplyResultTimeoutMs = 5000;
+    // Baseline capture is on the stream-start path. The helper's commit lease is
+    // shorter than the client wait so an expired capture is fenced before the
+    // host proceeds with display enumeration.
+    constexpr int kSnapshotCurrentCommitLeaseMs = 750;
+    constexpr int kSnapshotCurrentResultTimeoutMs = 1000;
+
+    using MsgType = platf::display_helper_protocol::MsgType;
+    using ResultStatus = platf::display_helper_protocol::ResultStatus;
+
+    std::uint64_t next_request_id() {
+      static std::atomic<std::uint64_t> next {1};
+      auto id = next.fetch_add(1, std::memory_order_relaxed);
+      if (id == 0) {
+        id = next.fetch_add(1, std::memory_order_relaxed);
+      }
+      return id;
+    }
+
+    struct PendingCorrelatedResult {
+      MsgType type;
+      platf::display_helper_protocol::CorrelatedResult result;
+    };
+
+    std::deque<PendingCorrelatedResult> &pending_correlated_results() {
+      static std::deque<PendingCorrelatedResult> results;
+      return results;
+    }
+
+    std::uint64_t &pipe_connection_serial() {
+      static std::uint64_t serial = 0;
+      return serial;
+    }
+
+    std::unordered_map<std::uint64_t, std::uint64_t> &verification_connections() {
+      static std::unordered_map<std::uint64_t, std::uint64_t> connections;
+      return connections;
+    }
+
+    void clear_connection_scoped_state_locked() {
+      pending_correlated_results().clear();
+      verification_connections().clear();
+    }
+
+    void note_new_connection_locked() {
+      clear_connection_scoped_state_locked();
+      auto &serial = pipe_connection_serial();
+      ++serial;
+      if (serial == 0) {
+        ++serial;
+      }
+    }
+
+    std::optional<ResultStatus> take_pending_result(MsgType type, std::uint64_t request_id) {
+      auto &results = pending_correlated_results();
+      const auto found = std::find_if(results.begin(), results.end(), [&](const PendingCorrelatedResult &pending) {
+        return pending.type == type && pending.result.request_id == request_id;
+      });
+      if (found == results.end()) {
+        return std::nullopt;
+      }
+      const auto status = found->result.status;
+      results.erase(found);
+      return status;
+    }
+
+    void preserve_pending_result(MsgType type, platf::display_helper_protocol::CorrelatedResult result) {
+      constexpr std::size_t kMaxPendingResults = 32;
+      auto &results = pending_correlated_results();
+      if (results.size() >= kMaxPendingResults) {
+        results.pop_front();
+      }
+      results.push_back(PendingCorrelatedResult {type, result});
+    }
+
+    std::uint64_t system_tick_ms() {
+      return static_cast<std::uint64_t>(::GetTickCount64());
+    }
 
     bool shutdown_requested() {
       if (!mail::man) {
@@ -49,28 +129,22 @@ namespace platf::display_helper_client {
 
   }  // namespace
 
-  /**
-   * @brief IPC message types used by the display settings helper protocol.
-   */
-  enum class MsgType : uint8_t {
-    Apply = 1,  ///< Apply display settings from JSON payload.
-    Revert = 2,  ///< Revert display settings to the previous state.
-    Reset = 3,  ///< Reset helper persistence/state (if supported).
-    ExportGolden = 4,  ///< Export current OS settings as golden snapshot
-    LogLevel = 5,  ///< Update helper log level (payload: [u8 min_log_level]); v2 engine only.
-    ApplyResult = 6,  ///< Helper acknowledgement for APPLY (payload: [u8 success][optional message...]).
-    Disarm = 7,  ///< Cancel any pending restore/watchdog actions on the helper.
-    SnapshotCurrent = 8,  ///< Save current session snapshot (rotate current->previous) without applying config.
-    VerificationResult = 9,  ///< Helper acknowledgement for verification completion (payload: [u8 success]); v2 engine only.
-    Ping = 0xFE,  ///< Health check message; expects a response.
-    Stop = 0xFF  ///< Request helper process to terminate gracefully.
-  };
-
   namespace {
-    std::optional<bool> wait_for_apply_result_locked(platf::dxgi::INamedPipe &pipe) {
+    std::optional<ResultStatus> wait_for_correlated_result_locked(
+      platf::dxgi::INamedPipe &pipe,
+      MsgType expected_type,
+      std::uint64_t request_id,
+      int result_timeout_ms,
+      const char *operation,
+      bool log_timeout = true
+    ) {
       using namespace std::chrono;
 
-      const auto deadline = steady_clock::now() + milliseconds(kApplyResultTimeoutMs);
+      if (auto pending = take_pending_result(expected_type, request_id)) {
+        return pending;
+      }
+
+      const auto deadline = steady_clock::now() + milliseconds(std::max(result_timeout_ms, 1));
       std::array<uint8_t, 2048> buffer {};
 
       while (steady_clock::now() < deadline) {
@@ -79,95 +153,70 @@ namespace platf::display_helper_client {
         if (remaining.count() < 0) {
           remaining = milliseconds(0);
         }
-        int timeout_ms = static_cast<int>(std::max<long long>(remaining.count(), 100LL));
+        const int timeout_ms = static_cast<int>(std::max<long long>(remaining.count(), 1LL));
         size_t bytes_read = 0;
-        auto result = pipe.receive(buffer, bytes_read, timeout_ms);
+        const auto result = pipe.receive(buffer, bytes_read, timeout_ms);
 
         if (result == platf::dxgi::PipeResult::Timeout) {
           continue;
         }
         if (result != platf::dxgi::PipeResult::Success) {
-          BOOST_LOG(error) << "Display helper IPC: failed waiting for APPLY result (pipe error)";
+          BOOST_LOG(error) << "Display helper IPC: failed waiting for " << operation << " result (pipe error)";
+          pipe.disconnect();
+          clear_connection_scoped_state_locked();
           return std::nullopt;
         }
         if (bytes_read == 0) {
-          BOOST_LOG(error) << "Display helper IPC: connection closed while waiting for APPLY result";
+          BOOST_LOG(error) << "Display helper IPC: connection closed while waiting for " << operation << " result";
+          pipe.disconnect();
+          clear_connection_scoped_state_locked();
           return std::nullopt;
         }
 
         const uint8_t msg_type = buffer[0];
-        if (msg_type == static_cast<uint8_t>(MsgType::ApplyResult)) {
-          bool success = bytes_read >= 2 && buffer[1] != 0;
-          if (!success && bytes_read > 2) {
-            std::string helper_msg(reinterpret_cast<const char *>(buffer.data() + 2), reinterpret_cast<const char *>(buffer.data() + bytes_read));
-            BOOST_LOG(error) << "Display helper reported APPLY failure: " << helper_msg;
+        const auto received_type = static_cast<MsgType>(msg_type);
+        const bool correlated_type =
+          received_type == MsgType::SnapshotCurrentResult ||
+          received_type == MsgType::DisarmResult ||
+          received_type == MsgType::ApplyResultCorrelated ||
+          received_type == MsgType::VerificationResultCorrelated;
+        if (correlated_type) {
+          const auto decoded = platf::display_helper_protocol::decode_correlated_result(
+            std::span<const std::uint8_t>(buffer.data() + 1, bytes_read - 1)
+          );
+          if (!decoded) {
+            BOOST_LOG(warning) << "Display helper IPC: ignoring malformed " << operation << " result";
+            continue;
           }
-          return success;
+          if (received_type == expected_type && decoded->request_id == request_id) {
+            return decoded->status;
+          }
+          BOOST_LOG(debug) << "Display helper IPC: preserving unmatched correlated result type="
+                           << static_cast<int>(msg_type) << " request_id=" << decoded->request_id
+                           << " while awaiting type=" << static_cast<int>(expected_type)
+                           << " request_id=" << request_id;
+          preserve_pending_result(received_type, *decoded);
+          continue;
         }
 
         if (msg_type == static_cast<uint8_t>(MsgType::Ping) ||
-            msg_type == static_cast<uint8_t>(MsgType::VerificationResult)) {
+            msg_type == static_cast<uint8_t>(MsgType::ApplyResult) ||
+            msg_type == static_cast<uint8_t>(MsgType::VerificationResult) ||
+            msg_type == static_cast<uint8_t>(MsgType::SnapshotCurrentResult) ||
+            msg_type == static_cast<uint8_t>(MsgType::DisarmResult)) {
           continue;
         }
 
         BOOST_LOG(debug) << "Display helper IPC: ignoring unexpected message type=" << static_cast<int>(msg_type)
-                         << " while awaiting APPLY result";
+                         << " while awaiting " << operation << " result";
       }
 
-      BOOST_LOG(error) << "Display helper IPC: timed out waiting for APPLY result acknowledgement";
+      if (log_timeout) {
+        BOOST_LOG(warning) << "Display helper IPC: timed out waiting for " << operation << " result acknowledgement";
+      }
       return std::nullopt;
     }
 
-    std::optional<bool> wait_for_verification_result_locked(platf::dxgi::INamedPipe &pipe, int timeout_ms) {
-      using namespace std::chrono;
-
-      if (timeout_ms <= 0) {
-        return std::nullopt;
-      }
-
-      const auto deadline = steady_clock::now() + milliseconds(timeout_ms);
-      std::array<uint8_t, 2048> buffer {};
-
-      while (steady_clock::now() < deadline) {
-        const auto now = steady_clock::now();
-        auto remaining = duration_cast<milliseconds>(deadline - now);
-        if (remaining.count() < 0) {
-          remaining = milliseconds(0);
-        }
-        int wait_ms = static_cast<int>(std::max<long long>(remaining.count(), 100LL));
-        size_t bytes_read = 0;
-        auto result = pipe.receive(buffer, bytes_read, wait_ms);
-
-        if (result == platf::dxgi::PipeResult::Timeout) {
-          continue;
-        }
-        if (result != platf::dxgi::PipeResult::Success) {
-          BOOST_LOG(error) << "Display helper IPC: failed waiting for verification result (pipe error)";
-          return std::nullopt;
-        }
-        if (bytes_read == 0) {
-          BOOST_LOG(error) << "Display helper IPC: connection closed while waiting for verification result";
-          return std::nullopt;
-        }
-
-        const uint8_t msg_type = buffer[0];
-        if (msg_type == static_cast<uint8_t>(MsgType::VerificationResult)) {
-          bool success = bytes_read >= 2 && buffer[1] != 0;
-          return success;
-        }
-
-        if (msg_type == static_cast<uint8_t>(MsgType::Ping) ||
-            msg_type == static_cast<uint8_t>(MsgType::ApplyResult)) {
-          continue;
-        }
-
-        BOOST_LOG(debug) << "Display helper IPC: ignoring unexpected message type=" << static_cast<int>(msg_type)
-                         << " while awaiting verification result";
-      }
-
-      BOOST_LOG(error) << "Display helper IPC: timed out waiting for verification result acknowledgement";
-      return std::nullopt;
-    }
   }  // namespace
 
   static bool send_message(
@@ -187,6 +236,10 @@ namespace platf::display_helper_client {
     out.insert(out.end(), payload.begin(), payload.end());
     const int timeout_ms = send_timeout_override_ms.value_or(effective_send_timeout());
     const bool ok = pipe.send(out, timeout_ms);
+    if (!ok) {
+      pipe.disconnect();
+      clear_connection_scoped_state_locked();
+    }
     if (!is_ping) {
       BOOST_LOG(info) << "Display helper IPC: send result=" << (ok ? "true" : "false");
     }
@@ -207,14 +260,17 @@ namespace platf::display_helper_client {
 
   // Global mutex to serialize all access to the pipe (connect, reset, send)
   // and prevent interleaved writes on a BYTE-mode pipe.
-  static std::mutex &pipe_mutex() {
-    static std::mutex m;
+  static std::timed_mutex &pipe_mutex() {
+    static std::timed_mutex m;
     return m;
   }
 
   // Ensure connected while holding the pipe mutex. Returns true on success.
-  static bool ensure_connected_locked(std::optional<int> connect_timeout_override_ms = std::nullopt) {
-    if (shutdown_requested()) {
+  static bool ensure_connected_locked(
+    std::optional<int> connect_timeout_override_ms = std::nullopt,
+    bool allow_during_shutdown = false
+  ) {
+    if (!allow_during_shutdown && shutdown_requested()) {
       return false;
     }
     auto &pipe = pipe_singleton();
@@ -232,40 +288,41 @@ namespace platf::display_helper_client {
       return static_cast<int>(std::max<long long>(0LL, remaining));
     };
 
-    // If we still have a pipe object (just disconnected), try reconnecting it
-    // instead of recreating - avoids unnecessary factory/timeout overhead
+    // A disconnected transport is a new connection epoch. Correlated commands
+    // never reconnect transparently because their results belong to the exact
+    // pipe that accepted the request.
     if (pipe) {
-      pipe->wait_for_client_connection(remaining_ms());
-      if (pipe->is_connected()) {
-        return true;
-      }
+      clear_connection_scoped_state_locked();
+      pipe->disconnect();
       pipe.reset();
     }
 
     // Create fresh pipe - try anonymous first, then named fallback
     if (remaining_ms() > 0) {
-      auto creator_anon = []() -> std::unique_ptr<platf::dxgi::INamedPipe> {
-        platf::dxgi::FramedPipeFactory ff(std::make_unique<platf::dxgi::AnonymousPipeFactory>());
-        return ff.create_client("sunshine_display_helper");
-      };
-      pipe = std::make_unique<platf::dxgi::SelfHealingPipe>(creator_anon);
+      platf::dxgi::AnonymousPipeFactory factory;
+      auto base = factory.create_client_with_timeout(
+        "sunshine_display_helper",
+        remaining_ms()
+      );
+      pipe = base ? std::make_unique<platf::dxgi::FramedPipe>(std::move(base)) : nullptr;
       if (pipe) {
-        pipe->wait_for_client_connection(remaining_ms());
         if (pipe->is_connected()) {
+          note_new_connection_locked();
           return true;
         }
       }
     }
     if (remaining_ms() > 0) {
       BOOST_LOG(debug) << "Display helper IPC: anonymous connect failed; trying named fallback";
-      auto creator_named = []() -> std::unique_ptr<platf::dxgi::INamedPipe> {
-        platf::dxgi::FramedPipeFactory ff(std::make_unique<platf::dxgi::NamedPipeFactory>());
-        return ff.create_client("sunshine_display_helper");
-      };
-      pipe = std::make_unique<platf::dxgi::SelfHealingPipe>(creator_named);
+      platf::dxgi::NamedPipeFactory factory;
+      auto base = factory.create_client_with_timeout(
+        "sunshine_display_helper",
+        remaining_ms()
+      );
+      pipe = base ? std::make_unique<platf::dxgi::FramedPipe>(std::move(base)) : nullptr;
       if (pipe) {
-        pipe->wait_for_client_connection(remaining_ms());
         if (pipe->is_connected()) {
+          note_new_connection_locked();
           return true;
         }
       }
@@ -275,7 +332,7 @@ namespace platf::display_helper_client {
   }
 
   void reset_connection() {
-    std::lock_guard<std::mutex> lg(pipe_mutex());
+    std::lock_guard<std::timed_mutex> lg(pipe_mutex());
     auto &pipe = pipe_singleton();
     if (pipe) {
       BOOST_LOG(debug) << "Display helper IPC: resetting cached connection";
@@ -283,25 +340,60 @@ namespace platf::display_helper_client {
     }
     pipe.reset();
     last_log_level_sent().reset();
+    clear_connection_scoped_state_locked();
   }
 
-  std::optional<bool> wait_for_verification_result(int timeout_ms) {
-    std::unique_lock<std::mutex> lk(pipe_mutex());
-    if (!ensure_connected_locked()) {
-      BOOST_LOG(warning) << "Display helper IPC: verification wait aborted - no connection";
+  std::optional<bool> wait_for_verification_result(std::uint64_t request_id, int timeout_ms) {
+    if (request_id == 0) {
       return std::nullopt;
     }
-    auto &pipe = pipe_singleton();
-    if (!pipe) {
-      BOOST_LOG(warning) << "Display helper IPC: verification wait aborted - no pipe instance";
-      return std::nullopt;
+    using namespace std::chrono;
+    const auto deadline = steady_clock::now() + milliseconds(std::max(timeout_ms, 1));
+    constexpr auto kReceiveSlice = milliseconds(100);
+
+    while (steady_clock::now() < deadline) {
+      const auto remaining = duration_cast<milliseconds>(deadline - steady_clock::now());
+      const auto slice = std::min(kReceiveSlice, std::max(remaining, milliseconds(1)));
+      std::unique_lock<std::timed_mutex> lk(pipe_mutex(), std::defer_lock);
+      if (!lk.try_lock_for(slice)) {
+        continue;
+      }
+
+      // Verification belongs to the exact connection that accepted APPLY. A
+      // reconnect cannot produce its result and would only waste the timeout.
+      auto &pipe = pipe_singleton();
+      const auto owner = verification_connections().find(request_id);
+      if (!pipe || !pipe->is_connected() ||
+          owner == verification_connections().end() ||
+          owner->second != pipe_connection_serial()) {
+        verification_connections().erase(request_id);
+        return std::nullopt;
+      }
+      if (const auto result = wait_for_correlated_result_locked(
+            *pipe,
+            MsgType::VerificationResultCorrelated,
+            request_id,
+            static_cast<int>(slice.count()),
+            "verification",
+            false
+          )) {
+        verification_connections().erase(request_id);
+        return *result == ResultStatus::Succeeded;
+      }
     }
-    return wait_for_verification_result_locked(*pipe, timeout_ms);
+    {
+      std::unique_lock<std::timed_mutex> lk(pipe_mutex(), std::try_to_lock);
+      if (lk.owns_lock()) {
+        verification_connections().erase(request_id);
+      }
+    }
+    BOOST_LOG(warning) << "Display helper IPC: timed out waiting for correlated verification result";
+    return std::nullopt;
   }
 
   bool send_log_level(int min_log_level) {
     const int clamped = std::clamp(min_log_level, 0, 6);
-    std::unique_lock<std::mutex> lk(pipe_mutex());
+    std::unique_lock<std::timed_mutex> lk(pipe_mutex());
     if (!ensure_connected_locked()) {
       return false;
     }
@@ -319,37 +411,74 @@ namespace platf::display_helper_client {
     return false;
   }
 
-  bool send_apply_json(const std::string &json) {
+  ApplyResult send_apply_json(const std::string &json, int result_timeout_ms) {
     BOOST_LOG(debug) << "Display helper IPC: APPLY request queued (json_len=" << json.size() << ")";
-    std::unique_lock<std::mutex> lk(pipe_mutex());
-    if (!ensure_connected_locked()) {
-      BOOST_LOG(warning) << "Display helper IPC: APPLY aborted - no connection";
-      return false;
+    using namespace std::chrono;
+    const auto deadline = steady_clock::now() + milliseconds(std::max(result_timeout_ms, 1));
+    auto remaining_ms = [&]() -> int {
+      const auto remaining = duration_cast<milliseconds>(deadline - steady_clock::now()).count();
+      return static_cast<int>(std::max<long long>(remaining, 0));
+    };
+
+    std::unique_lock<std::timed_mutex> lk(pipe_mutex(), std::defer_lock);
+    if (!lk.try_lock_until(deadline)) {
+      BOOST_LOG(warning) << "Display helper IPC: APPLY timed out waiting for the shared pipe";
+      return {};
     }
-    std::vector<uint8_t> payload(json.begin(), json.end());
+    if (!ensure_connected_locked(remaining_ms())) {
+      BOOST_LOG(warning) << "Display helper IPC: APPLY aborted - no connection";
+      return {};
+    }
+    const auto request_id = next_request_id();
+    const std::vector<uint8_t> body(json.begin(), json.end());
+    const auto payload = platf::display_helper_protocol::encode_correlated_request(
+      request_id,
+      system_tick_ms() + static_cast<std::uint64_t>(std::max(remaining_ms(), 1)),
+      body
+    );
     auto &pipe = pipe_singleton();
     if (!pipe) {
       BOOST_LOG(warning) << "Display helper IPC: APPLY aborted - no pipe instance";
-      return false;
+      return {};
     }
 
-    if (!send_message(*pipe, MsgType::Apply, payload)) {
-      return false;
+    if (remaining_ms() <= 0 ||
+        !send_message(*pipe, MsgType::ApplyRequest, payload, remaining_ms())) {
+      return {};
     }
 
-    if (auto result = wait_for_apply_result_locked(*pipe)) {
-      return *result;
+    if (auto result = wait_for_correlated_result_locked(
+          *pipe,
+          MsgType::ApplyResultCorrelated,
+          request_id,
+          remaining_ms(),
+          "APPLY"
+        )) {
+      if (*result == ResultStatus::Succeeded) {
+        constexpr std::size_t kMaxVerificationOwners = 32;
+        auto &owners = verification_connections();
+        if (owners.size() >= kMaxVerificationOwners) {
+          owners.erase(owners.begin());
+        }
+        owners.insert_or_assign(request_id, pipe_connection_serial());
+      }
+      return ApplyResult {
+        .succeeded = *result == ResultStatus::Succeeded,
+        .acknowledged = true,
+        .request_id = request_id,
+      };
     }
 
     BOOST_LOG(warning) << "Display helper IPC: dropping cached connection after missing APPLY result";
     pipe->disconnect();
     pipe.reset();
-    return false;
+    clear_connection_scoped_state_locked();
+    return {};
   }
 
   bool send_revert(const std::string &json_payload) {
     BOOST_LOG(debug) << "Display helper IPC: REVERT request queued";
-    std::unique_lock<std::mutex> lk(pipe_mutex());
+    std::unique_lock<std::timed_mutex> lk(pipe_mutex());
     if (!ensure_connected_locked()) {
       BOOST_LOG(warning) << "Display helper IPC: REVERT aborted - no connection";
       return false;
@@ -362,9 +491,27 @@ namespace platf::display_helper_client {
     return false;
   }
 
+  bool send_revert_fast(const std::string &json_payload, int timeout_ms) {
+    using namespace std::chrono;
+    const auto deadline = steady_clock::now() + milliseconds(std::max(timeout_ms, 1));
+    auto remaining_ms = [&]() -> int {
+      const auto remaining = duration_cast<milliseconds>(deadline - steady_clock::now()).count();
+      return static_cast<int>(std::max<long long>(remaining, 0));
+    };
+
+    std::unique_lock<std::timed_mutex> lk(pipe_mutex(), std::defer_lock);
+    if (!lk.try_lock_until(deadline) || !ensure_connected_locked(remaining_ms(), true)) {
+      return false;
+    }
+    std::vector<uint8_t> payload(json_payload.begin(), json_payload.end());
+    auto &pipe = pipe_singleton();
+    return pipe && remaining_ms() > 0 &&
+           send_message(*pipe, MsgType::Revert, payload, remaining_ms());
+  }
+
   bool send_export_golden(const std::string &json_payload) {
     BOOST_LOG(debug) << "Display helper IPC: EXPORT_GOLDEN request queued";
-    std::unique_lock<std::mutex> lk(pipe_mutex());
+    std::unique_lock<std::timed_mutex> lk(pipe_mutex());
     if (!ensure_connected_locked()) {
       BOOST_LOG(warning) << "Display helper IPC: EXPORT_GOLDEN aborted - no connection";
       return false;
@@ -379,7 +526,7 @@ namespace platf::display_helper_client {
 
   bool send_reset() {
     BOOST_LOG(debug) << "Display helper IPC: RESET request queued";
-    std::unique_lock<std::mutex> lk(pipe_mutex());
+    std::unique_lock<std::timed_mutex> lk(pipe_mutex());
     if (!ensure_connected_locked()) {
       BOOST_LOG(warning) << "Display helper IPC: RESET aborted - no connection";
       return false;
@@ -393,52 +540,118 @@ namespace platf::display_helper_client {
   }
 
   bool send_disarm_restore() {
-    BOOST_LOG(info) << "Display helper IPC: DISARM request queued";
-    std::unique_lock<std::mutex> lk(pipe_mutex());
-    if (!ensure_connected_locked()) {
-      BOOST_LOG(warning) << "Display helper IPC: DISARM aborted - no connection";
-      return false;
-    }
-    std::vector<uint8_t> payload;
-    auto &pipe = pipe_singleton();
-    if (pipe && send_message(*pipe, MsgType::Disarm, payload)) {
-      return true;
-    }
-    return false;
+    return send_disarm_restore_fast(kSendTimeoutMs) == DisarmResult::Disarmed;
   }
 
-  bool send_disarm_restore_fast(int timeout_ms) {
+  DisarmResult send_disarm_restore_fast(int timeout_ms) {
     BOOST_LOG(debug) << "Display helper IPC: DISARM (fast) request queued (timeout_ms=" << timeout_ms << ")";
-    std::unique_lock<std::mutex> lk(pipe_mutex());
-    if (!ensure_connected_locked(timeout_ms)) {
-      return false;
+    using namespace std::chrono;
+    const auto deadline = steady_clock::now() + milliseconds(std::max(timeout_ms, 1));
+    auto remaining_ms = [&]() -> int {
+      const auto remaining = duration_cast<milliseconds>(deadline - steady_clock::now()).count();
+      return static_cast<int>(std::max<long long>(remaining, 0));
+    };
+
+    std::unique_lock<std::timed_mutex> lk(pipe_mutex(), std::defer_lock);
+    if (!lk.try_lock_until(deadline)) {
+      BOOST_LOG(debug) << "Display helper IPC: DISARM timed out waiting for the shared pipe";
+      return DisarmResult::Unavailable;
     }
-    std::vector<uint8_t> payload;
+    if (!ensure_connected_locked(remaining_ms(), true)) {
+      return DisarmResult::Unavailable;
+    }
+
+    const auto request_id = next_request_id();
+    const auto not_after = system_tick_ms() + static_cast<std::uint64_t>(std::max(remaining_ms(), 1));
+    auto payload = platf::display_helper_protocol::encode_correlated_request(request_id, not_after);
     auto &pipe = pipe_singleton();
-    if (pipe && send_message(*pipe, MsgType::Disarm, payload, timeout_ms)) {
-      return true;
+    if (!pipe || remaining_ms() <= 0 ||
+        !send_message(*pipe, MsgType::DisarmRequest, payload, remaining_ms())) {
+      return DisarmResult::Unavailable;
     }
-    return false;
+
+    const auto result = wait_for_correlated_result_locked(
+      *pipe,
+      MsgType::DisarmResult,
+      request_id,
+      remaining_ms(),
+      "DISARM"
+    );
+    if (!result) {
+      return DisarmResult::Unavailable;
+    }
+    if (*result == ResultStatus::Succeeded) {
+      return DisarmResult::Disarmed;
+    }
+    if (*result == ResultStatus::Busy) {
+      return DisarmResult::Busy;
+    }
+    return DisarmResult::Unavailable;
   }
 
   bool send_snapshot_current(const std::string &json_payload) {
     BOOST_LOG(debug) << "Display helper IPC: SNAPSHOT_CURRENT request queued";
-    std::unique_lock<std::mutex> lk(pipe_mutex());
-    if (!ensure_connected_locked()) {
+    using namespace std::chrono;
+    const auto result_deadline = steady_clock::now() + milliseconds(kSnapshotCurrentResultTimeoutMs);
+    auto remaining_ms = [&]() -> int {
+      const auto remaining = duration_cast<milliseconds>(result_deadline - steady_clock::now()).count();
+      return static_cast<int>(std::max<long long>(remaining, 0));
+    };
+
+    std::unique_lock<std::timed_mutex> lk(pipe_mutex(), std::defer_lock);
+    if (!lk.try_lock_until(result_deadline)) {
+      BOOST_LOG(warning) << "Display helper IPC: SNAPSHOT_CURRENT timed out waiting for the shared pipe";
+      return false;
+    }
+    if (!ensure_connected_locked(remaining_ms())) {
       BOOST_LOG(warning) << "Display helper IPC: SNAPSHOT_CURRENT aborted - no connection";
       return false;
     }
-    std::vector<uint8_t> payload(json_payload.begin(), json_payload.end());
-    auto &pipe = pipe_singleton();
-    if (pipe && send_message(*pipe, MsgType::SnapshotCurrent, payload)) {
-      return true;
+
+    // Keep the helper's absolute commit lease strictly inside this call's
+    // remaining budget, including any time already spent waiting for the pipe.
+    // Once this call returns, stream enumeration may begin immediately.
+    constexpr int kLeaseSafetyMarginMs = 25;
+    const int lease_ms = std::min(
+      kSnapshotCurrentCommitLeaseMs,
+      remaining_ms() - kLeaseSafetyMarginMs
+    );
+    if (lease_ms <= 0) {
+      BOOST_LOG(warning) << "Display helper IPC: SNAPSHOT_CURRENT budget exhausted before dispatch";
+      return false;
     }
+
+    const auto request_id = next_request_id();
+    const auto not_after = system_tick_ms() + static_cast<std::uint64_t>(lease_ms);
+    const std::vector<uint8_t> body(json_payload.begin(), json_payload.end());
+    auto payload = platf::display_helper_protocol::encode_correlated_request(request_id, not_after, body);
+    auto &pipe = pipe_singleton();
+    if (!pipe || remaining_ms() <= 0 ||
+        !send_message(*pipe, MsgType::SnapshotCurrentRequest, payload, remaining_ms())) {
+      return false;
+    }
+
+    if (auto result = wait_for_correlated_result_locked(
+          *pipe,
+          MsgType::SnapshotCurrentResult,
+          request_id,
+          remaining_ms(),
+          "SNAPSHOT_CURRENT"
+        )) {
+      return *result == ResultStatus::Succeeded;
+    }
+
+    // Keep the pipe: the helper cannot commit past the absolute lease, and the
+    // request ID prevents a late result from satisfying a future snapshot. A
+    // reconnect here could make the helper interpret a timeout as a crash.
+    BOOST_LOG(warning) << "Display helper IPC: SNAPSHOT_CURRENT was not confirmed within "
+                       << kSnapshotCurrentResultTimeoutMs << "ms; continuing stream start.";
     return false;
   }
 
   bool send_stop() {
     BOOST_LOG(info) << "Display helper IPC: STOP request queued";
-    std::unique_lock<std::mutex> lk(pipe_mutex());
+    std::unique_lock<std::timed_mutex> lk(pipe_mutex());
     if (!ensure_connected_locked()) {
       BOOST_LOG(warning) << "Display helper IPC: STOP aborted - no connection";
       return false;
@@ -453,7 +666,7 @@ namespace platf::display_helper_client {
 
   bool send_ping() {
     // No logging for ping path to reduce log spam
-    std::unique_lock<std::mutex> lk(pipe_mutex());
+    std::unique_lock<std::timed_mutex> lk(pipe_mutex());
     if (!ensure_connected_locked()) {
       return false;
     }
@@ -466,13 +679,30 @@ namespace platf::display_helper_client {
   }
 
   bool send_ping_fast(int timeout_ms) {
-    std::unique_lock<std::mutex> lk(pipe_mutex());
-    if (!ensure_connected_locked(timeout_ms)) {
+    using namespace std::chrono;
+    const auto deadline = steady_clock::now() + milliseconds(std::max(timeout_ms, 1));
+    auto remaining_ms = [&]() -> int {
+      const auto remaining = duration_cast<milliseconds>(deadline - steady_clock::now()).count();
+      return static_cast<int>(std::max<long long>(remaining, 0));
+    };
+
+    std::unique_lock<std::timed_mutex> lk(pipe_mutex(), std::defer_lock);
+    if (!lk.try_lock_until(deadline)) {
+      // Local contention means another healthy IPC operation owns the pipe. It
+      // is not evidence that callers may terminate the helper.
+      return true;
+    }
+    if (!ensure_connected_locked(remaining_ms())) {
       return false;
     }
     std::vector<uint8_t> payload;
     auto &pipe = pipe_singleton();
-    if (pipe && send_message(*pipe, MsgType::Ping, payload, timeout_ms)) {
+    if (pipe && pipe->is_connected() && remaining_ms() <= 0) {
+      // Reaching an already-connected pipe at the edge of this tiny probe
+      // budget is evidence of liveness, not permission to terminate it.
+      return true;
+    }
+    if (pipe && remaining_ms() > 0 && send_message(*pipe, MsgType::Ping, payload, remaining_ms())) {
       return true;
     }
     return false;

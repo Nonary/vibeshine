@@ -20,8 +20,9 @@ namespace display_helper::v2 {
       IScheduledTaskManager &task_manager,
       HeartbeatMonitor &heartbeat,
       IClock &clock,
-      CancellationSource &cancellation)
-      : workarounds_(workarounds),
+      CancellationSource &cancellation
+    ):
+        workarounds_(workarounds),
         task_manager_(task_manager),
         heartbeat_(heartbeat),
         clock_(clock),
@@ -63,6 +64,10 @@ namespace display_helper::v2 {
       workarounds_.blank_hdr_states(delay);
     }
 
+    void cancel_pending_display_mutations() {
+      workarounds_.cancel_pending_display_mutations();
+    }
+
     void create_restore_task() {
       (void) task_manager_.create_restore_task(L"");
     }
@@ -85,10 +90,13 @@ namespace display_helper::v2 {
       IAsyncDispatcher &dispatcher,
       ApplyPolicy &policy,
       SystemPorts &system,
-      std::function<void(Message)> enqueue)
-      : dispatcher_(dispatcher),
+      RestoreState &restore_state,
+      std::function<void(Message)> enqueue
+    ):
+        dispatcher_(dispatcher),
         policy_(policy),
         system_(system),
+        restore_state_(restore_state),
         enqueue_(std::move(enqueue)) {}
 
     PolicyDecision maybe_reset_virtual_display(ApplyStatus status, bool virtual_display_requested) const {
@@ -106,25 +114,73 @@ namespace display_helper::v2 {
     void dispatch_apply(const ApplyRequest &request, std::chrono::milliseconds delay, bool reset_virtual_display) {
       const auto token = system_.token();
       const auto generation = token.generation();
+      restore_state_.apply_workers_active.fetch_add(1, std::memory_order_acq_rel);
 
-      dispatcher_.dispatch_apply(
-        request,
-        token,
-        delay,
-        reset_virtual_display,
-        [enqueue = enqueue_, generation](const ApplyOutcome &outcome) {
-          ApplyCompleted completed;
-          completed.status = outcome.status;
-          completed.expected_topology = outcome.expected_topology;
-          completed.virtual_display_requested = outcome.virtual_display_requested;
-          completed.generation = generation;
-          enqueue(completed);
-        });
+      try {
+        dispatcher_.dispatch_apply(
+          request,
+          token,
+          delay,
+          reset_virtual_display,
+          [request, &restore_state = restore_state_]() {
+            if (!request.mutation_committed) {
+              return;
+            }
+            bool expected = false;
+            if (!request.mutation_committed->compare_exchange_strong(
+                  expected,
+                  true,
+                  std::memory_order_acq_rel,
+                  std::memory_order_acquire
+                )) {
+              return;
+            }
+            restore_state.mutation_guard.mark_apply_started();
+            restore_state.always_restore_from_golden.store(
+              request.prefer_golden_first,
+              std::memory_order_release
+            );
+            restore_state.restore_on_disconnect.store(
+              request.restore_on_disconnect,
+              std::memory_order_release
+            );
+            if (request.staged_exclusions) {
+              restore_state.set_exclusions(*request.staged_exclusions);
+            }
+          },
+          [enqueue = enqueue_, generation, &restore_state = restore_state_](const ApplyOutcome &outcome) {
+            // Publish the mutation latch before the active-worker count can ever
+            // reach zero. A stale completion must still keep session/partial
+            // topology out of restore snapshots.
+            if (outcome.deadline_committed) {
+              restore_state.mutation_guard.mark_apply_started();
+            }
+            ApplyCompleted completed;
+            completed.status = outcome.status;
+            completed.expected_topology = outcome.expected_topology;
+            completed.virtual_display_requested = outcome.virtual_display_requested;
+            completed.deadline_committed = outcome.deadline_committed;
+            completed.generation = generation;
+            enqueue(completed);
+          }
+        );
+      } catch (...) {
+        ApplyCompleted completed;
+        completed.status = ApplyStatus::Fatal;
+        completed.generation = generation;
+        try {
+          enqueue_(completed);
+        } catch (...) {
+          restore_state_.apply_workers_active.fetch_sub(1, std::memory_order_acq_rel);
+          throw;
+        }
+      }
     }
 
     void dispatch_verification(
       const ApplyRequest &request,
-      const std::optional<ActiveTopology> &expected_topology) {
+      const std::optional<ActiveTopology> &expected_topology
+    ) {
       const auto token = system_.token();
       const auto generation = token.generation();
 
@@ -137,13 +193,15 @@ namespace display_helper::v2 {
           completed.success = success;
           completed.generation = generation;
           enqueue(completed);
-        });
+        }
+      );
     }
 
   private:
     IAsyncDispatcher &dispatcher_;
     ApplyPolicy &policy_;
     SystemPorts &system_;
+    RestoreState &restore_state_;
     std::function<void(Message)> enqueue_;
   };
 
@@ -152,8 +210,9 @@ namespace display_helper::v2 {
     RecoveryPipeline(
       IAsyncDispatcher &dispatcher,
       SystemPorts &system,
-      std::function<void(Message)> enqueue)
-      : dispatcher_(dispatcher),
+      std::function<void(Message)> enqueue
+    ):
+        dispatcher_(dispatcher),
         system_(system),
         enqueue_(std::move(enqueue)) {}
 
@@ -170,7 +229,8 @@ namespace display_helper::v2 {
           completed.snapshot = outcome.snapshot;
           completed.generation = generation;
           enqueue(completed);
-        });
+        }
+      );
     }
 
     void dispatch_recovery_validation(const Snapshot &snapshot) {
@@ -185,7 +245,8 @@ namespace display_helper::v2 {
           completed.success = success;
           completed.generation = generation;
           enqueue(completed);
-        });
+        }
+      );
     }
 
   private:
@@ -196,8 +257,8 @@ namespace display_helper::v2 {
 
   class SnapshotLedger {
   public:
-    SnapshotLedger(SnapshotService &service, SnapshotPersistence &persistence, IClock &clock)
-      : service_(service),
+    SnapshotLedger(SnapshotService &service, SnapshotPersistence &persistence, IClock &clock):
+        service_(service),
         persistence_(persistence),
         clock_(clock) {}
 
@@ -233,7 +294,10 @@ namespace display_helper::v2 {
      *        first; only rotate current->previous once the new capture is known
      *        good, so a failed capture never destroys the existing baseline.
      */
-    bool refresh_current_preserving_previous(const std::vector<std::string> &exclusions);
+    bool refresh_current_preserving_previous(
+      const std::vector<std::string> &exclusions,
+      std::optional<std::chrono::steady_clock::time_point> expires_at = std::nullopt
+    );
 
   private:
     std::optional<std::pair<Snapshot, codec::layout_rotation_map_t>> capture_filtered(const std::vector<std::string> &exclusions, const char *reason);
@@ -262,11 +326,14 @@ namespace display_helper::v2 {
       SystemPorts &system,
       IVirtualDisplayDriver &virtual_display,
       GoldenHealth &golden_health,
-      RestoreState &restore_state);
+      RestoreState &restore_state
+    );
 
     void set_state_observer(StateObserver observer);
-    void set_apply_result_callback(std::function<void(ApplyStatus)> callback);
-    void set_verification_result_callback(std::function<void(bool)> callback);
+    void set_apply_result_callback(std::function<void(ApplyStatus, std::uint64_t, std::uint64_t)> callback);
+    void set_verification_result_callback(std::function<void(bool, std::uint64_t, std::uint64_t)> callback);
+    void set_snapshot_result_callback(std::function<void(std::uint64_t, std::uint64_t, bool)> callback);
+    void set_disarm_result_callback(std::function<void(std::uint64_t, std::uint64_t, bool)> callback);
     void set_exit_callback(std::function<void(int)> callback);
     void set_snapshot_blacklist(std::set<std::string> blacklist);
 
@@ -306,6 +373,7 @@ namespace display_helper::v2 {
     std::vector<std::string> exclusions_vector() const;
     void update_blacklist(const std::vector<std::string> &exclude_devices);
     void start_recovery(std::chrono::milliseconds delay, ApplyAction trigger);
+    bool process_pending_disconnect_if_apply_drained();
 
     ApplyPipeline &apply_;
     RecoveryPipeline &recovery_;
@@ -320,16 +388,20 @@ namespace display_helper::v2 {
     bool recovery_armed_ = false;
     int apply_attempt_ = 0;
     bool apply_result_sent_ = false;
+    bool current_apply_reports_results_ = true;
     ApplyRequest current_request_ {};
+    std::uint64_t current_apply_request_id_ = 0;
+    std::uint64_t current_apply_connection_epoch_ = 0;
     std::optional<ActiveTopology> expected_topology_;
     std::optional<Snapshot> recovery_snapshot_;
-    std::set<std::string> snapshot_blacklist_;
-
+    std::optional<RevertCommand> pending_disconnect_revert_;
     std::chrono::steady_clock::time_point last_virtual_apply_display_event_restart_ {};
 
     StateObserver observer_;
-    std::function<void(ApplyStatus)> apply_result_callback_;
-    std::function<void(bool)> verification_result_callback_;
+    std::function<void(ApplyStatus, std::uint64_t, std::uint64_t)> apply_result_callback_;
+    std::function<void(bool, std::uint64_t, std::uint64_t)> verification_result_callback_;
+    std::function<void(std::uint64_t, std::uint64_t, bool)> snapshot_result_callback_;
+    std::function<void(std::uint64_t, std::uint64_t, bool)> disarm_result_callback_;
     std::function<void(int)> exit_callback_;
   };
 }  // namespace display_helper::v2

@@ -41,6 +41,7 @@
 #include "rtsp.h"
 #include "session_history.h"
 #include "state_storage.h"
+#include "stream.h"
 #include "utility.h"
 #include "version_compare.h"
 #include "webrtc_stream.h"
@@ -2534,10 +2535,31 @@ namespace config {
                                      (prev_dd_snapshot_exclude_devices != video.dd.snapshot_exclude_devices) ||
                                      (prev_dd_dummy_plug != video.dd.wa.dummy_plug_hdr10);
 
-      // If any DD settings changed and there are no active sessions, revert to clear cached state
-      if (dd_config_changed && rtsp_stream::session_count() == 0 && runtime_overrides.empty()) {
-        BOOST_LOG(info) << "Hot-apply: DD configuration changed with no active sessions; reverting cached display state.";
-        display_helper_integration::revert();
+      // If any DD settings changed and there are no active sessions, revert to clear cached state.
+      if (dd_config_changed && runtime_overrides.empty()) {
+#ifdef _WIN32
+        auto hot_apply_revert = []() {
+          if (stream::session::running_sessions.load(std::memory_order_acquire) == 0 &&
+              !webrtc_stream::has_active_sessions()) {
+            BOOST_LOG(info) << "Hot-apply: DD configuration changed with no active sessions; reverting cached display state.";
+            (void) display_helper_integration::revert();
+          }
+        };
+        auto teardown_lease = display_helper_integration::try_acquire_display_teardown(
+          []() {
+            return stream::session::running_sessions.load(std::memory_order_acquire) == 0 &&
+                   !webrtc_stream::has_active_sessions();
+          },
+          hot_apply_revert);
+        if (teardown_lease) {
+          hot_apply_revert();
+        }
+#else
+        if (rtsp_stream::session_count() == 0 && !webrtc_stream::has_active_sessions()) {
+          BOOST_LOG(info) << "Hot-apply: DD configuration changed with no active sessions; reverting cached display state.";
+          (void) display_helper_integration::revert();
+        }
+#endif
 
         if (dd_was_enabled && dd_disabled_now) {
           BOOST_LOG(info) << "Hot-apply: DD configuration changed to disabled.";

@@ -25,7 +25,8 @@ namespace display_helper::v2 {
     virtual bool set_display_origin(const std::string &device_id, const display_device::Point &origin) = 0;
     virtual std::optional<ActiveTopology> compute_expected_topology(
       const SingleDisplayConfiguration &config,
-      const std::optional<ActiveTopology> &base_topology = std::nullopt) = 0;
+      const std::optional<ActiveTopology> &base_topology = std::nullopt
+    ) = 0;
     virtual bool is_topology_same(const ActiveTopology &lhs, const ActiveTopology &rhs) = 0;
 
     // --- legacy engine capabilities (defaulted so test fakes only override what they assert on) ---
@@ -86,7 +87,8 @@ namespace display_helper::v2 {
     virtual bool remove(SnapshotTier tier) = 0;
     virtual std::vector<std::string> missing_devices(
       const Snapshot &snapshot,
-      const std::set<std::string> &available) = 0;
+      const std::set<std::string> &available
+    ) = 0;
 
     /// Load including schema version and display layout (rotation) metadata.
     virtual std::optional<codec::ParsedSnapshot> load_with_metadata(SnapshotTier tier) {
@@ -158,6 +160,7 @@ namespace display_helper::v2 {
     virtual ~IPlatformWorkarounds() = default;
 
     virtual void blank_hdr_states(std::chrono::milliseconds delay) = 0;
+    virtual void cancel_pending_display_mutations() = 0;
     virtual void refresh_shell() = 0;
   };
 }  // namespace display_helper::v2

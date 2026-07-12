@@ -20,6 +20,7 @@
 // local includes
 #include "audio.h"
 #include "crypto.h"
+#include "framegen_policy.h"
 #include "thread_safe.h"
 #include "video.h"
 
@@ -119,6 +120,11 @@ namespace stream {
   }  // namespace session
 
   void cancel_paused_display_cleanup();
+#ifdef _WIN32
+  void clear_deferred_stream_start_actions();
+  void clear_deferred_stream_start_actions_for_generation(std::uint64_t platform_generation);
+  void update_deferred_stream_start_policy(const framegen::stream_start_policy_t &policy);
+#endif
 
   struct session_info_t {
     std::string uuid;

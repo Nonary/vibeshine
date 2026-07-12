@@ -4,18 +4,17 @@
  */
 #ifdef _WIN32
 
-#include "../tests_common.h"
+  #include "../tests_common.h"
+  #include "src/platform/windows/display_helper_v2/async_dispatcher.h"
+  #include "src/platform/windows/display_helper_v2/golden_health.h"
+  #include "src/platform/windows/display_helper_v2/operations.h"
+  #include "src/platform/windows/display_helper_v2/snapshot.h"
 
-#include "src/platform/windows/display_helper_v2/async_dispatcher.h"
-#include "src/platform/windows/display_helper_v2/golden_health.h"
-#include "src/platform/windows/display_helper_v2/operations.h"
-#include "src/platform/windows/display_helper_v2/snapshot.h"
-
-#include <future>
-#include <mutex>
+  #include <future>
+  #include <mutex>
 
 namespace {
-  class FakeClock final : public display_helper::v2::IClock {
+  class FakeClock final: public display_helper::v2::IClock {
   public:
     std::chrono::steady_clock::time_point now() override {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -35,7 +34,7 @@ namespace {
     std::chrono::steady_clock::time_point now_ {std::chrono::steady_clock::now()};
   };
 
-  class FakeDisplaySettings final : public display_helper::v2::IDisplaySettings {
+  class FakeDisplaySettings final: public display_helper::v2::IDisplaySettings {
   public:
     display_helper::v2::ApplyStatus apply(const display_device::SingleDisplayConfiguration &) override {
       apply_calls += 1;
@@ -80,7 +79,8 @@ namespace {
 
     std::optional<display_device::ActiveTopology> compute_expected_topology(
       const display_device::SingleDisplayConfiguration &,
-      const std::optional<display_device::ActiveTopology> &) override {
+      const std::optional<display_device::ActiveTopology> &
+    ) override {
       return std::nullopt;
     }
 
@@ -92,7 +92,7 @@ namespace {
     int apply_calls = 0;
   };
 
-  class FakeVirtualDisplayDriver final : public display_helper::v2::IVirtualDisplayDriver {
+  class FakeVirtualDisplayDriver final: public display_helper::v2::IVirtualDisplayDriver {
   public:
     bool disable() override {
       disable_calls += 1;
@@ -144,6 +144,7 @@ TEST(DisplayHelperV2AsyncDispatcher, AppliesAfterVirtualDisplayResetSequence) {
   display_helper::v2::ApplyRequest request;
   request.configuration = display_device::SingleDisplayConfiguration {};
   display_helper::v2::CancellationSource cancel;
+  std::atomic<int> mutation_commits {0};
 
   std::promise<display_helper::v2::ApplyOutcome> promise;
   dispatcher.dispatch_apply(
@@ -151,6 +152,9 @@ TEST(DisplayHelperV2AsyncDispatcher, AppliesAfterVirtualDisplayResetSequence) {
     cancel.token(),
     std::chrono::milliseconds(100),
     true,
+    [&]() {
+      mutation_commits.fetch_add(1, std::memory_order_relaxed);
+    },
     [&](const display_helper::v2::ApplyOutcome &outcome) {
       promise.set_value(outcome);
     }
@@ -164,6 +168,7 @@ TEST(DisplayHelperV2AsyncDispatcher, AppliesAfterVirtualDisplayResetSequence) {
   EXPECT_EQ(display.apply_calls, 1);
   EXPECT_EQ(virtual_display.disable_calls, 1);
   EXPECT_EQ(virtual_display.enable_calls, 1);
+  EXPECT_EQ(mutation_commits.load(std::memory_order_relaxed), 1);
   ASSERT_EQ(clock.sleeps.size(), 3u);
   EXPECT_EQ(clock.sleeps[0], std::chrono::milliseconds(100));
   EXPECT_EQ(clock.sleeps[1], std::chrono::milliseconds(500));
@@ -196,6 +201,7 @@ TEST(DisplayHelperV2AsyncDispatcher, FailsWhenVirtualDisplayDisableFails) {
   display_helper::v2::ApplyRequest request;
   request.configuration = display_device::SingleDisplayConfiguration {};
   display_helper::v2::CancellationSource cancel;
+  std::atomic<int> mutation_commits {0};
 
   std::promise<display_helper::v2::ApplyOutcome> promise;
   dispatcher.dispatch_apply(
@@ -203,6 +209,9 @@ TEST(DisplayHelperV2AsyncDispatcher, FailsWhenVirtualDisplayDisableFails) {
     cancel.token(),
     std::chrono::milliseconds(50),
     true,
+    [&]() {
+      mutation_commits.fetch_add(1, std::memory_order_relaxed);
+    },
     [&](const display_helper::v2::ApplyOutcome &outcome) {
       promise.set_value(outcome);
     }
@@ -216,6 +225,7 @@ TEST(DisplayHelperV2AsyncDispatcher, FailsWhenVirtualDisplayDisableFails) {
   EXPECT_EQ(display.apply_calls, 0);
   EXPECT_EQ(virtual_display.disable_calls, 1);
   EXPECT_EQ(virtual_display.enable_calls, 0);
+  EXPECT_EQ(mutation_commits.load(std::memory_order_relaxed), 1);
   ASSERT_EQ(clock.sleeps.size(), 1u);
   EXPECT_EQ(clock.sleeps[0], std::chrono::milliseconds(50));
 }

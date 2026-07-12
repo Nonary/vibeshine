@@ -3086,21 +3086,12 @@ namespace confighttp {
 
     BOOST_LOG(debug) << "WebRTC: creating session";
     if (auto error = webrtc_stream::ensure_capture_started(options)) {
-#ifdef _WIN32
-      // Lifecycle gap: if capture start fails after a virtual display was created/applied but
-      // before a session exists, ensure we don't leave the virtual display behind.
-      if (rtsp_stream::session_count() == 0 && !webrtc_stream::has_active_sessions()) {
-        (void) platf::virtual_display_cleanup::run(
-          "webrtc_session_start_failed",
-          config::video.dd.config_revert_on_disconnect
-        );
-      }
-#endif
       bad_request(response, request, error->c_str());
       return;
     }
     auto session = webrtc_stream::create_session(options);
     if (!session) {
+      webrtc_stream::abort_pending_capture_start();
       webrtc_stream::shutdown_all_sessions();
       service_unavailable(response, "Shutdown in progress");
       return;

@@ -4,8 +4,10 @@
  */
 // standard includes
 #include <algorithm>
+#include <atomic>
 #include <codecvt>
 #include <csignal>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -21,17 +23,16 @@
 #include "nvhttp.h"
 #include "process.h"
 #include "rtsp.h"
+#include "session_history.h"
+#include "state_storage.h"
+#include "stream.h"
 #include "system_tray.h"
 #include "update.h"
 #include "upnp.h"
 #include "version_compare.h"
 #include "video.h"
-#include "session_history.h"
-#include "state_storage.h"
 #include "webrtc_stream.h"
 #ifdef _WIN32
-  #include <shobjidl.h>
-
   #include "src/display_helper_integration.h"
   #include "src/platform/windows/frame_limiter_nvcp.h"
   #include "src/platform/windows/misc.h"
@@ -39,6 +40,8 @@
   #include "src/platform/windows/rtss_integration.h"
   #include "src/platform/windows/virtual_display.h"
   #include "src/platform/windows/virtual_display_cleanup.h"
+
+  #include <shobjidl.h>
 #endif
 
 extern "C" {
@@ -357,6 +360,18 @@ int main(int argc, char *argv[]) {
 
   task_pool.start(1);
 
+#ifdef _WIN32
+  // Deferred display cleanup has its own bounded worker set so a rare display
+  // handoff never delays input tasks. It is drained before VDISPLAY teardown.
+  display_helper_integration::start_display_cleanup_dispatcher();
+  auto display_cleanup_dispatcher_guard = util::fail_guard([]() {
+    // Covers every early startup return as well as normal shutdown. The
+    // dispatcher stop is idempotent, so the explicit ordered shutdown below
+    // remains the primary handoff point before VDISPLAY is closed.
+    display_helper_integration::stop_display_cleanup_dispatcher();
+  });
+#endif
+
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
   // create tray thread and detach it if enabled in config
   if (config::sunshine.system_tray) {
@@ -455,11 +470,48 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(error) << "Proc failed to initialize"sv;
   }
 
+#ifdef _WIN32
+  // This guard is deliberately constructed after proc/platform initialization,
+  // so an early return after virtual-display startup shuts down monitors and
+  // handles before those dependencies begin their own teardown.
+  auto shutdown_windows_display_runtime = []() noexcept {
+    try {
+      // Stop recovery first: queued cleanup work then observes cancellation
+      // instead of entering another display handoff during process exit.
+      VDISPLAY::beginVDisplayDeviceShutdown();
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Failed to begin virtual display terminal shutdown: " << e.what();
+    } catch (...) {
+      BOOST_LOG(error) << "Failed to begin virtual display terminal shutdown.";
+    }
+
+    display_helper_integration::stop_display_cleanup_dispatcher();
+
+    try {
+      display_helper_integration::stop_watchdog();
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Failed to stop display helper watchdog: " << e.what();
+    } catch (...) {
+      BOOST_LOG(error) << "Failed to stop display helper watchdog.";
+    }
+
+    try {
+      VDISPLAY::shutdownVDisplayDevice();
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Failed to complete virtual display terminal shutdown: " << e.what();
+    } catch (...) {
+      BOOST_LOG(error) << "Failed to complete virtual display terminal shutdown.";
+    }
+  };
+  auto display_terminal_shutdown_guard = util::fail_guard(shutdown_windows_display_runtime);
+#endif
+
   if (shutdown_event->peek()) {
     return lifetime::desired_exit_code;
   }
 
 #ifdef _WIN32
+  bool startup_display_cleanup_requested = false;
   // Check if virtual display should be auto-enabled due to no physical monitors
   if (VDISPLAY::should_auto_enable_virtual_display()) {
     BOOST_LOG(info) << "No physical monitors detected at initialization. Initializing virtual display driver.";
@@ -483,7 +535,18 @@ int main(int argc, char *argv[]) {
     );
     if (has_active_virtual_display) {
       BOOST_LOG(warning) << "Startup detected active virtual display(s) with no active stream session; running cleanup.";
-      (void) platf::virtual_display_cleanup::run("startup_recovery", config::video.dd.config_revert_on_disconnect);
+      startup_display_cleanup_requested = true;
+      (void) platf::virtual_display_cleanup::run(
+        "startup_recovery",
+        true,
+        platf::virtual_display_cleanup::revert_order_t::remove_before_restore,
+        true,
+        std::nullopt,
+        []() {
+          return stream::session::running_sessions.load(std::memory_order_acquire) == 0 &&
+                 !webrtc_stream::has_active_sessions();
+        }
+      );
     }
   }
 #endif
@@ -499,7 +562,11 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(warning) << "No gamepad input is available"sv;
   }
 
+#ifdef _WIN32
+  auto startup_probe = [&shutdown_event, startup_display_cleanup_requested]() {
+#else
   auto startup_probe = [&shutdown_event]() {
+#endif
     if (video::has_attempted_encoder_probe()) {
       BOOST_LOG(debug) << "Startup encoder probe skipped; probe already attempted.";
       return;
@@ -510,8 +577,40 @@ int main(int argc, char *argv[]) {
     }
 
 #ifdef _WIN32
+    if (startup_display_cleanup_requested) {
+      // Startup recovery can leave an asynchronous helper REVERT armed after
+      // its VD removal dispatch. Do not immediately DISARM it by creating a
+      // probe display; the first real capture will probe after its start fence.
+      BOOST_LOG(info) << "Startup encoder probe deferred until startup display recovery settles.";
+      return;
+    }
+
     if (!platf::is_default_input_desktop_active()) {
       BOOST_LOG(info) << "Startup encoder probe deferred until the interactive desktop is ready.";
+      return;
+    }
+
+    if (display_helper_integration::helper_or_restore_active()) {
+      BOOST_LOG(info) << "Startup encoder probe deferred because an existing display helper may be restoring topology.";
+      return;
+    }
+
+    auto display_start_reservation =
+      display_helper_integration::acquire_display_start_reservation(std::chrono::seconds(2));
+    if (!display_start_reservation) {
+      BOOST_LOG(info) << "Startup encoder probe deferred behind an active display lifecycle transaction.";
+      return;
+    }
+    auto display_handoff = display_helper_integration::acquire_safe_display_handoff(
+      std::chrono::seconds(2),
+      [&shutdown_event]() {
+        return !shutdown_event->peek() &&
+               stream::session::running_sessions.load(std::memory_order_acquire) == 0 &&
+               !webrtc_stream::has_active_sessions();
+      }
+    );
+    if (!display_handoff) {
+      BOOST_LOG(info) << "Startup encoder probe deferred because the display restore handoff is still active.";
       return;
     }
 
@@ -668,14 +767,8 @@ int main(int argc, char *argv[]) {
   rtspThread.join();
 
 #ifdef _WIN32
-  // Full process shutdown cannot leave the paused-session watchdog running.
-  // If it survives past main(), CRT teardown can fast-fail while the helper
-  // watchdog thread is still unwinding.
-  display_helper_integration::stop_watchdog();
-
-  // The virtual display watchdog thread also lives in static storage.
-  // Ensure it is joined before CRT on-exit handlers destroy the thread object.
-  VDISPLAY::closeVDisplayDevice();
+  shutdown_windows_display_runtime();
+  display_terminal_shutdown_guard.disable();
 #endif
 
   task_pool.stop();

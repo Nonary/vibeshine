@@ -1,9 +1,9 @@
 #include "src/platform/windows/display_helper_v2/operations.h"
 
+#include "src/logging.h"
+
 #include <algorithm>
 #include <sstream>
-
-#include "src/logging.h"
 
 namespace display_helper::v2 {
   namespace {
@@ -21,8 +21,8 @@ namespace display_helper::v2 {
     }
   }  // namespace
 
-  ApplyPolicy::ApplyPolicy(IClock &clock)
-    : clock_(clock) {}
+  ApplyPolicy::ApplyPolicy(IClock &clock):
+      clock_(clock) {}
 
   PolicyDecision ApplyPolicy::maybe_reset_virtual_display(ApplyStatus status, bool virtual_display_requested) {
     if (status != ApplyStatus::NeedsVirtualDisplayReset || !virtual_display_requested) {
@@ -62,13 +62,52 @@ namespace display_helper::v2 {
     return attempt < kMaxApplyAttempts;
   }
 
-  ApplyOperation::ApplyOperation(IDisplaySettings &display, IClock &clock)
-    : display_(display),
-      clock_(clock) {}
+  ApplyOperation::ApplyOperation(
+    IDisplaySettings &display,
+    IClock &clock,
+    std::function<void()> on_mutation_commit
+  ):
+      display_(display),
+      clock_(clock),
+      on_mutation_commit_(std::move(on_mutation_commit)) {}
 
-  ApplyOutcome ApplyOperation::run(const ApplyRequest &request, const CancellationToken &token) {
+  void ApplyOperation::notify_mutation_commit() {
+    if (on_mutation_commit_) {
+      on_mutation_commit_();
+    }
+  }
+
+  ApplyOutcome ApplyOperation::run(
+    const ApplyRequest &request,
+    const CancellationToken &token,
+    std::function<void()> on_mutation_commit
+  ) {
     ApplyOutcome outcome;
     outcome.virtual_display_requested = request.virtual_layout.has_value();
+    bool deadline_committed = request.deadline_committed ||
+                              (request.mutation_committed &&
+                               request.mutation_committed->load(std::memory_order_acquire));
+    outcome.deadline_committed = deadline_committed;
+
+    const auto expired = [&]() {
+      return !deadline_committed && request.expires_at && clock_.now() >= *request.expires_at;
+    };
+    const auto commit_mutation = [&]() {
+      if (deadline_committed) {
+        return;
+      }
+      deadline_committed = true;
+      outcome.deadline_committed = true;
+      if (on_mutation_commit) {
+        on_mutation_commit();
+      }
+      notify_mutation_commit();
+    };
+
+    if (expired()) {
+      outcome.status = ApplyStatus::Expired;
+      return outcome;
+    }
 
     if (token.is_cancelled()) {
       outcome.status = ApplyStatus::Fatal;
@@ -84,7 +123,10 @@ namespace display_helper::v2 {
     bool validated = display_.soft_test(*request.configuration, request.topology);
     if (!validated) {
       BOOST_LOG(warning) << "Display helper: configuration failed SDC_VALIDATE soft-test; attempting display stack recovery and retrying once.";
-      if (display_.recover_display_stack()) {
+      if (!expired()) {
+        commit_mutation();
+      }
+      if (deadline_committed && display_.recover_display_stack()) {
         clock_.sleep_for(std::chrono::milliseconds(500));
         if (token.is_cancelled()) {
           outcome.status = ApplyStatus::Fatal;
@@ -99,19 +141,35 @@ namespace display_helper::v2 {
       return outcome;
     }
 
+    if (expired()) {
+      outcome.status = ApplyStatus::Expired;
+      return outcome;
+    }
+
     if (request.topology) {
       outcome.expected_topology = request.topology;
     } else {
       outcome.expected_topology = display_.compute_expected_topology(
         *request.configuration,
-        request.topology);
+        request.topology
+      );
     }
 
     // Best-effort base topology pre-set (legacy apply(cfg, base_topology)).
     if (request.topology && display_.topology_is_valid(*request.topology)) {
+      if (expired()) {
+        outcome.status = ApplyStatus::Expired;
+        return outcome;
+      }
+      commit_mutation();
       (void) display_.apply_topology(*request.topology);
     }
 
+    if (expired()) {
+      outcome.status = ApplyStatus::Expired;
+      return outcome;
+    }
+    commit_mutation();
     outcome.status = display_.apply(*request.configuration);
 
     if (outcome.status == ApplyStatus::Ok) {
@@ -236,14 +294,15 @@ namespace display_helper::v2 {
     BOOST_LOG(info) << "Display helper: refresh rate overrides applied result=" << (rate_result ? "true" : "false");
   }
 
-  VerificationOperation::VerificationOperation(IDisplaySettings &display, IClock &clock)
-    : display_(display),
+  VerificationOperation::VerificationOperation(IDisplaySettings &display, IClock &clock):
+      display_(display),
       clock_(clock) {}
 
   bool VerificationOperation::run(
     const ApplyRequest &request,
     const std::optional<ActiveTopology> &expected_topology,
-    const CancellationToken &token) {
+    const CancellationToken &token
+  ) {
     if (token.is_cancelled()) {
       return false;
     }
@@ -286,8 +345,9 @@ namespace display_helper::v2 {
     ISnapshotStorage &storage,
     GoldenHealth &golden_health,
     RestoreState &state,
-    IClock &clock)
-    : display_(display),
+    IClock &clock
+  ):
+      display_(display),
       storage_(storage),
       golden_health_(golden_health),
       state_(state),
@@ -313,7 +373,8 @@ namespace display_helper::v2 {
     Snapshot &out,
     std::chrono::milliseconds deadline,
     std::chrono::milliseconds interval,
-    const CancellationToken &token) {
+    const CancellationToken &token
+  ) {
     const auto t0 = clock_.now();
     bool have_last = false;
     Snapshot last;
@@ -341,7 +402,8 @@ namespace display_helper::v2 {
   bool RecoveryOperation::quiet_period(
     std::chrono::milliseconds duration,
     std::chrono::milliseconds interval,
-    const CancellationToken &token) {
+    const CancellationToken &token
+  ) {
     Snapshot base;
     if (!read_stable_snapshot(base, std::chrono::milliseconds(2000), std::chrono::milliseconds(150), token)) {
       return false;
@@ -396,7 +458,12 @@ namespace display_helper::v2 {
     return ok;
   }
 
-  bool RecoveryOperation::apply_and_confirm(const codec::ParsedSnapshot &loaded, const char *label, const CancellationToken &token) {
+  bool RecoveryOperation::apply_and_confirm(
+    const codec::ParsedSnapshot &loaded,
+    const char *label,
+    const CancellationToken &token,
+    display_helper::RestoreMutationGuard::WorkerLease &worker
+  ) {
     const auto &base = loaded.snapshot;
     const auto &layouts = loaded.layout_rotations;
     const bool require_layout_match = loaded.has_layout_data;
@@ -407,11 +474,20 @@ namespace display_helper::v2 {
 
     const auto before_sig = codec::signature(display_.capture_snapshot());
 
-    auto apply_once = [&]() {
+    auto apply_once = [&]() -> bool {
+      // Linearize cancellation against the first mutating Windows call. Once
+      // this succeeds, cancellation can suppress follow-up work but cannot
+      // interrupt SetDisplayConfig itself.
+      if (!worker.try_begin_mutation([&]() {
+            return token.is_cancelled();
+          })) {
+        return false;
+      }
       (void) display_.apply_snapshot(base);
       if (require_layout_match && !layouts.empty()) {
         (void) display_.apply_layout_rotations(layouts);
       }
+      return true;
     };
 
     auto verify_once = [&](const char *attempt) -> bool {
@@ -442,7 +518,9 @@ namespace display_helper::v2 {
     if (token.is_cancelled()) {
       return false;
     }
-    apply_once();
+    if (!apply_once()) {
+      return false;
+    }
     if (verify_once("#1")) {
       return true;
     }
@@ -454,7 +532,9 @@ namespace display_helper::v2 {
     if (confirm_matches(loaded, label, token)) {
       return true;
     }
-    apply_once();
+    if (!apply_once()) {
+      return false;
+    }
     return verify_once("#2");
   }
 
@@ -521,11 +601,10 @@ namespace display_helper::v2 {
 
   RecoveryOutcome RecoveryOperation::run(const CancellationToken &token) {
     RecoveryOutcome outcome;
+    auto worker = state_.mutation_guard.begin_worker(token.is_cancelled());
     if (token.is_cancelled()) {
       return outcome;
     }
-
-    state_.restore_attempted_unconfirmed.store(true, std::memory_order_release);
 
     const bool golden_first = state_.always_restore_from_golden.load(std::memory_order_acquire);
     if (!golden_first) {
@@ -549,7 +628,7 @@ namespace display_helper::v2 {
         golden_health_.note_issue("invalid_topology");
         return false;
       }
-      if (apply_and_confirm(*golden, "golden", token)) {
+      if (apply_and_confirm(*golden, "golden", token, worker)) {
         BOOST_LOG(info) << "Golden restore confirmed; clearing session restore snapshots.";
         clear_session_snapshots_after_golden();
         golden_health_.clear_status("restore confirmed");
@@ -574,7 +653,7 @@ namespace display_helper::v2 {
         BOOST_LOG(info) << label << " snapshot rejected due to invalid topology.";
         return false;
       }
-      if (apply_and_confirm(*loaded, label, token)) {
+      if (apply_and_confirm(*loaded, label, token, worker)) {
         state_.last_session_restore_success_ms.store(steady_now_ms(), std::memory_order_release);
         restored = loaded->snapshot;
         return true;
@@ -676,8 +755,9 @@ namespace display_helper::v2 {
 
   RecoveryValidationOperation::RecoveryValidationOperation(
     SnapshotService &snapshot_service,
-    IClock &clock)
-    : snapshot_service_(snapshot_service),
+    IClock &clock
+  ):
+      snapshot_service_(snapshot_service),
       clock_(clock) {}
 
   bool RecoveryValidationOperation::run(const Snapshot &snapshot, const CancellationToken &token) {

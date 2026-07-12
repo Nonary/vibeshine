@@ -6,8 +6,8 @@
 
 #ifdef _WIN32
 
-  #include "src/platform/windows/rtss_integration.h"
   #include "src/framegen_policy.h"
+  #include "src/platform/windows/rtss_integration.h"
 
   #include <optional>
   #include <string>
@@ -36,6 +36,10 @@ namespace platf {
   };
 
   void frame_limiter_streaming_start(const framegen::stream_start_policy_t &policy);
+  // Updates an already-active cross-protocol stream without acquiring another
+  // ownership reference. The first active stream owns global overrides until
+  // the shared platform lifecycle performs its one final stop.
+  void frame_limiter_streaming_update(const framegen::stream_start_policy_t &policy);
   void frame_limiter_streaming_stop(bool keep_rtss_running = false);
   void frame_limiter_streaming_refresh();
 

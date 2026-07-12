@@ -35,9 +35,9 @@
 #include <AclAPI.h>
 #include <combaseapi.h>
 #include <sddl.h>
-#include <winsock2.h>
 #include <Windows.h>
 #include <winrt/base.h>
+#include <winsock2.h>
 
 // local includes
 #include "misc_utils.h"
@@ -255,10 +255,17 @@ namespace platf::dxgi {
   }
 
   std::unique_ptr<INamedPipe> NamedPipeFactory::create_client(const std::string &pipeName) {
+    return create_client_with_timeout(pipeName, 500);
+  }
+
+  std::unique_ptr<INamedPipe> NamedPipeFactory::create_client_with_timeout(
+    const std::string &pipeName,
+    int timeout_ms
+  ) {
     auto wPipeBase = utf8_to_wide(pipeName);
     std::wstring fullPipeName = (wPipeBase.find(LR"(\\.\pipe\)") == 0) ? wPipeBase : LR"(\\.\pipe\)" + wPipeBase;
 
-    winrt::file_handle hPipe = create_client_pipe(fullPipeName);
+    winrt::file_handle hPipe = create_client_pipe(fullPipeName, timeout_ms);
     if (!hPipe) {
       DWORD err = GetLastError();
       BOOST_LOG(error) << "CreateFileW failed (" << err << ")";
@@ -269,9 +276,12 @@ namespace platf::dxgi {
     return pipeObj;
   }
 
-  winrt::file_handle NamedPipeFactory::create_client_pipe(const std::wstring &fullPipeName) const {
-    constexpr ULONGLONG kClientConnectDeadlineMs = 500;  // 500ms per attempt; callers retry externally
-    const ULONGLONG deadline = GetTickCount64() + kClientConnectDeadlineMs;
+  winrt::file_handle NamedPipeFactory::create_client_pipe(
+    const std::wstring &fullPipeName,
+    int timeout_ms
+  ) const {
+    const auto bounded_timeout_ms = static_cast<ULONGLONG>(std::max(timeout_ms, 1));
+    const ULONGLONG deadline = GetTickCount64() + bounded_timeout_ms;
     const ULONGLONG start_time = GetTickCount64();
     int retry_count = 0;
     DWORD last_error = 0;
@@ -297,7 +307,11 @@ namespace platf::dxgi {
         if (retry_count == 1 || retry_count % 20 == 0) {
           BOOST_LOG(debug) << "Pipe busy, waiting... (retry " << retry_count << ")";
         }
-        WaitNamedPipeW(fullPipeName.c_str(), 250);
+        const auto now = GetTickCount64();
+        const DWORD wait_ms = static_cast<DWORD>(std::min<ULONGLONG>(250, deadline > now ? deadline - now : 0));
+        if (wait_ms > 0) {
+          WaitNamedPipeW(fullPipeName.c_str(), wait_ms);
+        }
         continue;
       }
       if (err == ERROR_FILE_NOT_FOUND) {
@@ -307,7 +321,11 @@ namespace platf::dxgi {
           BOOST_LOG(warning) << "Still waiting for pipe after " << (GetTickCount64() - start_time)
                              << "ms (" << retry_count << " retries)";
         }
-        Sleep(50);
+        const auto now = GetTickCount64();
+        const DWORD sleep_ms = static_cast<DWORD>(std::min<ULONGLONG>(50, deadline > now ? deadline - now : 0));
+        if (sleep_ms > 0) {
+          Sleep(sleep_ms);
+        }
         continue;
       }
 
@@ -354,11 +372,30 @@ namespace platf::dxgi {
   }
 
   std::unique_ptr<INamedPipe> AnonymousPipeFactory::create_client(const std::string &pipeName) {
-    auto first_pipe = _pipe_factory.create_client(pipeName);
+    return create_client_with_timeout(pipeName, 8000);
+  }
+
+  std::unique_ptr<INamedPipe> AnonymousPipeFactory::create_client_with_timeout(
+    const std::string &pipeName,
+    int timeout_ms
+  ) {
+    using namespace std::chrono;
+    const auto deadline = steady_clock::now() + milliseconds(std::max(timeout_ms, 1));
+    // Reserve budget for handshake classification and the caller's actual
+    // command. The control pipe is normally already present, so this remains
+    // an immediate operation on the healthy path.
+    const int control_connect_budget_ms = std::min(
+      500,
+      std::max(1, timeout_ms / 2)
+    );
+    auto first_pipe = _pipe_factory.create_client_with_timeout(
+      pipeName,
+      control_connect_budget_ms
+    );
     if (!first_pipe) {
       return nullptr;
     }
-    return handshake_client(std::move(first_pipe));
+    return handshake_client(std::move(first_pipe), deadline);
   }
 
   void AnonymousPipeFactory::set_security_descriptor_builder(NamedPipeFactory::SecurityDescriptorBuilder builder) {
@@ -789,11 +826,34 @@ namespace platf::dxgi {
     return HandshakeAckResult::Fallback;
   }
 
-  std::unique_ptr<INamedPipe> AnonymousPipeFactory::handshake_client(std::unique_ptr<INamedPipe> pipe) {
+  std::unique_ptr<INamedPipe> AnonymousPipeFactory::handshake_client(
+    std::unique_ptr<INamedPipe> pipe,
+    std::chrono::steady_clock::time_point deadline
+  ) {
     AnonConnectMsg msg {};
     std::vector<uint8_t> prefetched;
 
-    const auto msg_result = receive_handshake_message(pipe, msg, prefetched);
+    const auto now = std::chrono::steady_clock::now();
+    const auto remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+    if (remaining_ms <= 0) {
+      // The connection epoch was never classified as anonymous-handshake or
+      // legacy-inline. Drop it rather than caching bytes that may arrive later
+      // and be misinterpreted as a framed result.
+      return nullptr;
+    }
+    // A current AnonymousServerPipe emits its handshake immediately. Bound
+    // detection to a small share of the caller budget so a silent legacy
+    // inline server still leaves time for the command/result exchange.
+    const auto detection_slice = std::chrono::milliseconds(
+      std::min<long long>(250, std::max<long long>(20, remaining_ms / 3))
+    );
+    const auto detection_deadline = std::min(deadline, now + detection_slice);
+    const auto msg_result = receive_handshake_message(
+      pipe,
+      msg,
+      prefetched,
+      detection_deadline
+    );
     if (msg_result == HandshakeMessageResult::Failed) {
       return nullptr;
     }
@@ -803,13 +863,21 @@ namespace platf::dxgi {
       return std::make_unique<PrefetchedPipe>(std::move(pipe), std::move(prefetched));
     }
 
-    if (!send_handshake_ack(pipe)) {
+    if (!send_handshake_ack(pipe, deadline)) {
       return nullptr;
     }
 
     std::wstring wpipeName(msg.pipe_name);
     std::string pipeNameStr = wide_to_utf8(wpipeName);
-    auto data_pipe = connect_to_data_pipe(pipeNameStr);
+    const auto data_now = std::chrono::steady_clock::now();
+    const auto data_remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - data_now).count();
+    const auto data_slice = std::chrono::milliseconds(
+      std::min<long long>(500, std::max<long long>(20, data_remaining_ms / 2))
+    );
+    auto data_pipe = connect_to_data_pipe(
+      pipeNameStr,
+      std::min(deadline, data_now + data_slice)
+    );
     if (!data_pipe) {
       BOOST_LOG(warning) << "Anonymous handshake: failed to connect to data pipe; using control pipe.";
       return pipe;
@@ -822,26 +890,31 @@ namespace platf::dxgi {
   AnonymousPipeFactory::HandshakeMessageResult AnonymousPipeFactory::receive_handshake_message(
     std::unique_ptr<INamedPipe> &pipe,
     AnonConnectMsg &msg,
-    std::vector<uint8_t> &prefetched
+    std::vector<uint8_t> &prefetched,
+    std::chrono::steady_clock::time_point deadline
   ) const {
     using enum platf::dxgi::PipeResult;
     prefetched.clear();
 
     std::array<uint8_t, 256> chunk {};
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     int zero_reads = 0;
 
     constexpr uint32_t kMaxFrameLen = 2 * 1024 * 1024;
 
     while (std::chrono::steady_clock::now() < deadline) {
       size_t bytes_read = 0;
-      const PipeResult result = pipe->receive(chunk, bytes_read, 200);
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               deadline - std::chrono::steady_clock::now()
+      )
+                               .count();
+      const int receive_timeout_ms = static_cast<int>(std::min<long long>(200, std::max<long long>(remaining, 1)));
+      const PipeResult result = pipe->receive(chunk, bytes_read, receive_timeout_ms);
 
       if (result == Success) {
         if (bytes_read == 0) {
           ++zero_reads;
           if (zero_reads >= 5) {  // ~1s of empty reads at 200ms interval
-            BOOST_LOG(info) << "Handshake message missing; assuming inline control pipe.";
+            BOOST_LOG(info) << "Handshake message missing; using the connected inline control pipe.";
             return HandshakeMessageResult::Inline;
           }
           continue;
@@ -879,17 +952,33 @@ namespace platf::dxgi {
 
     if (!prefetched.empty()) {
       BOOST_LOG(info) << "Handshake message timed out with " << prefetched.size()
-                      << " buffered byte(s); using inline control pipe.";
-      return HandshakeMessageResult::Inline;
+                      << " unclassified buffered byte(s); rejecting the connection epoch.";
+      return HandshakeMessageResult::Failed;
     }
 
-    BOOST_LOG(info) << "Did not receive handshake message in time; using inline control pipe.";
+    BOOST_LOG(debug) << "No handshake bytes observed in the detection slice; using the connected inline control pipe.";
     return HandshakeMessageResult::Inline;
   }
 
-  bool AnonymousPipeFactory::send_handshake_ack(std::unique_ptr<INamedPipe> &pipe) const {
+  bool AnonymousPipeFactory::send_handshake_ack(
+    std::unique_ptr<INamedPipe> &pipe,
+    std::chrono::steady_clock::time_point deadline
+  ) const {
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             deadline - std::chrono::steady_clock::now()
+    )
+                             .count();
+    if (remaining <= 0) {
+      return false;
+    }
     uint8_t ack = ACK_MSG;
-    if (!pipe->send(std::span<const uint8_t>(&ack, 1), 5000)) {
+    const int ack_timeout_ms = static_cast<int>(
+      std::min<long long>(200, std::max<long long>(remaining / 3, 1))
+    );
+    if (!pipe->send(
+          std::span<const uint8_t>(&ack, 1),
+          ack_timeout_ms
+        )) {
       BOOST_LOG(error) << "Failed to send handshake ACK to server";
       pipe->disconnect();
       return false;
@@ -899,17 +988,32 @@ namespace platf::dxgi {
     return true;
   }
 
-  std::unique_ptr<INamedPipe> AnonymousPipeFactory::connect_to_data_pipe(const std::string &pipeNameStr) {
+  std::unique_ptr<INamedPipe> AnonymousPipeFactory::connect_to_data_pipe(
+    const std::string &pipeNameStr,
+    std::chrono::steady_clock::time_point deadline
+  ) {
     std::unique_ptr<INamedPipe> data_pipe = nullptr;
-    auto retry_start = std::chrono::steady_clock::now();
-    const auto retry_timeout = std::chrono::seconds(5);
 
-    while (std::chrono::steady_clock::now() - retry_start < retry_timeout) {
-      data_pipe = _pipe_factory.create_client(pipeNameStr);
+    while (std::chrono::steady_clock::now() < deadline) {
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               deadline - std::chrono::steady_clock::now()
+      )
+                               .count();
+      if (remaining <= 0) {
+        break;
+      }
+      data_pipe = _pipe_factory.create_client_with_timeout(
+        pipeNameStr,
+        static_cast<int>(std::min<long long>(remaining, 500))
+      );
       if (data_pipe) {
         break;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      const auto after_attempt = std::chrono::steady_clock::now();
+      if (after_attempt >= deadline) {
+        break;
+      }
+      std::this_thread::sleep_for(std::min(std::chrono::milliseconds(100), std::chrono::duration_cast<std::chrono::milliseconds>(deadline - after_attempt)));
     }
 
     if (!data_pipe) {
@@ -965,8 +1069,10 @@ namespace platf::dxgi {
     DWORD err = GetLastError();
     if (err == ERROR_IO_PENDING) {
       return handle_pending_send_operation(ctx, timeout_ms, bytesWritten);
-    } else if (err == ERROR_BROKEN_PIPE) {
-      BOOST_LOG(warning) << "Pipe broken during WriteFile (ERROR_BROKEN_PIPE)";
+    } else if (err == ERROR_BROKEN_PIPE ||
+               err == ERROR_PIPE_NOT_CONNECTED ||
+               err == ERROR_NO_DATA) {
+      BOOST_LOG(warning) << "Pipe disconnected during WriteFile (error=" << err << ")";
       _connected.store(false, std::memory_order_release);
       return false;
     } else {
@@ -981,8 +1087,10 @@ namespace platf::dxgi {
     if (waitResult == WAIT_OBJECT_0) {
       if (!GetOverlappedResult(_pipe.get(), ctx.get(), &bytesWritten, FALSE)) {
         DWORD err = GetLastError();
-        if (err == ERROR_BROKEN_PIPE) {
-          BOOST_LOG(warning) << "Pipe broken during overlapped send (ERROR_BROKEN_PIPE)";
+        if (err == ERROR_BROKEN_PIPE ||
+            err == ERROR_PIPE_NOT_CONNECTED ||
+            err == ERROR_NO_DATA) {
+          BOOST_LOG(warning) << "Pipe disconnected during overlapped send (error=" << err << ")";
           _connected.store(false, std::memory_order_release);
         } else if (err != ERROR_OPERATION_ABORTED) {
           BOOST_LOG(error) << "GetOverlappedResult failed in send, error=" << err;
@@ -1054,8 +1162,10 @@ namespace platf::dxgi {
     DWORD err = GetLastError();
     if (err == ERROR_IO_PENDING) {
       return handle_pending_receive_operation(ctx, timeout_ms, dst, bytesRead);
-    } else if (err == ERROR_BROKEN_PIPE) {
-      BOOST_LOG(warning) << "Pipe broken during ReadFile (ERROR_BROKEN_PIPE)";
+    } else if (err == ERROR_BROKEN_PIPE ||
+               err == ERROR_PIPE_NOT_CONNECTED ||
+               err == ERROR_NO_DATA) {
+      BOOST_LOG(warning) << "Pipe disconnected during ReadFile (error=" << err << ")";
       // Reflect disconnected state immediately so higher layers don't think we're still connected
       _connected.store(false, std::memory_order_release);
       return PipeResult::BrokenPipe;
@@ -1365,6 +1475,7 @@ namespace platf::dxgi {
               if (_pipe) {
                 _pipe->disconnect();
               }
+              safe_execute_operation("brokenPipe callback", _onBrokenPipe);
               return;
             }
             // Create span from only the valid portion of the buffer
@@ -1385,11 +1496,22 @@ namespace platf::dxgi {
           return;  // terminate
 
         case Error:
+          if (_pipe) {
+            _pipe->disconnect();
+          }
+          safe_execute_operation("receive error callback", [this]() {
+            if (_onError) {
+              _onError("Pipe receive failed");
+            }
+          });
+          return;
+
         case Disconnected:
         default:
           if (_pipe) {
             _pipe->disconnect();
           }
+          safe_execute_operation("brokenPipe callback", _onBrokenPipe);
           return;  // terminate
       }
     }

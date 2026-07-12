@@ -98,6 +98,9 @@ namespace webrtc_stream {
   std::optional<SessionState> get_session(std::string_view id);
   std::vector<SessionState> list_sessions();
   void shutdown_all_sessions();
+  // Owner-side rollback for the narrow ensure_capture_started/create_session
+  // failure gap. Must be called by the request that completed ensure.
+  void abort_pending_capture_start();
 
   void cancel_paused_display_cleanup();
   void submit_video_packet(video::packet_raw_t &packet);
@@ -106,6 +109,9 @@ namespace webrtc_stream {
   void submit_audio_frame(const std::vector<float> &samples, int sample_rate, int channels, int frames);
   void set_rtsp_sessions_active(bool active);
   void set_rtsp_capture_config(const video::config_t &video_config, const audio::config_t &audio_config);
+  // Stop an idle WebRTC capture during RTSP takeover/final teardown without
+  // touching shared display/platform state.
+  void retire_idle_capture_without_display_teardown();
 
   bool set_remote_offer(std::string_view id, const std::string &sdp, const std::string &type);
   bool add_ice_candidate(std::string_view id, std::string mid, int mline_index, std::string candidate);

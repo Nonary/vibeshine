@@ -68,6 +68,7 @@
 #endif
 #include "rtsp.h"
 #include "state_storage.h"
+#include "stream.h"
 #include "system_tray.h"
 #include "utility.h"
 #include "uuid.h"
@@ -2078,24 +2079,51 @@ namespace proc {
     _pipe.reset();
 
     const bool other_streaming_session_active =
-      rtsp_stream::session_count() > 0 || webrtc_stream::has_active_sessions();
+      stream::session::running_sessions.load(std::memory_order_acquire) > 0 ||
+      webrtc_stream::has_active_sessions();
 
 #ifdef _WIN32
-    if (_virtual_display_active) {
-      if (!other_streaming_session_active) {
-        const auto cleanup = platf::virtual_display_cleanup::run("app_termination", false);
-        if (!cleanup.virtual_displays_removed) {
+    const bool app_owned_virtual_display = _virtual_display_active;
+    const bool app_termination_restore = should_dispatch_revert && !skip_display_revert;
+    if (app_owned_virtual_display || app_termination_restore) {
+      auto final_display_cleanup = [app_owned_virtual_display, app_termination_restore]() {
+        if (stream::session::running_sessions.load(std::memory_order_acquire) != 0 ||
+            webrtc_stream::has_active_sessions()) {
+          return;
+        }
+        const auto cleanup = platf::virtual_display_cleanup::run(
+          "app_termination",
+          app_termination_restore,
+          platf::virtual_display_cleanup::revert_order_t::remove_before_restore,
+          true,
+          std::nullopt,
+          []() {
+            return stream::session::running_sessions.load(std::memory_order_acquire) == 0 &&
+                   !webrtc_stream::has_active_sessions();
+          });
+        if (app_owned_virtual_display && !cleanup.virtual_displays_removed) {
           BOOST_LOG(warning) << "Failed to remove virtual display after app termination.";
-        } else {
+        } else if (app_owned_virtual_display) {
           BOOST_LOG(info) << "Virtual display cleanup completed after app termination.";
         }
-      } else {
-        if (!VDISPLAY::removeVirtualDisplay(_virtual_display_guid)) {
-          BOOST_LOG(warning) << "Failed to remove virtual display.";
-        } else {
-          BOOST_LOG(info) << "Virtual display removed.";
+        if (app_termination_restore && cleanup.helper_revert_dispatched) {
+          BOOST_LOG(debug) << "Display helper: stopping watchdog after app termination.";
+          display_helper_integration::stop_watchdog();
         }
+      };
+      auto teardown_lease = display_helper_integration::try_acquire_display_teardown(
+        []() {
+          return stream::session::running_sessions.load(std::memory_order_acquire) == 0 &&
+                 !webrtc_stream::has_active_sessions();
+        },
+        final_display_cleanup);
+      if (teardown_lease) {
+        final_display_cleanup();
+      } else {
+        BOOST_LOG(info) << "Deferring app display cleanup while another stream/start owns the display lifecycle.";
       }
+    }
+    if (_virtual_display_active) {
       std::memset(&_virtual_display_guid, 0, sizeof(_virtual_display_guid));
       _virtual_display_active = false;
     }
@@ -2113,15 +2141,6 @@ namespace proc {
 #ifdef _WIN32
       clear_deferred_display_revert();
       BOOST_LOG(info) << "Skipping display revert during app replacement because the new session has already applied its display configuration.";
-#endif
-    } else if (should_dispatch_revert && !other_streaming_session_active) {
-#ifdef _WIN32
-      clear_deferred_display_revert();
-      const bool reverted = display_helper_integration::revert();
-      if (reverted && rtsp_stream::session_count() == 0) {
-        BOOST_LOG(debug) << "Display helper: stopping watchdog after app termination.";
-        display_helper_integration::stop_watchdog();
-      }
 #endif
     } else if (should_dispatch_revert && other_streaming_session_active) {
 #ifdef _WIN32

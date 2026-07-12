@@ -4,9 +4,11 @@
 #include "src/platform/windows/display_helper_v2/interfaces.h"
 #include "src/platform/windows/display_helper_v2/runtime_support.h"
 #include "src/platform/windows/display_helper_v2/snapshot.h"
+#include "src/platform/windows/display_restore_guard.h"
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <mutex>
 #include <vector>
 
@@ -15,6 +17,7 @@ namespace display_helper::v2 {
     ApplyStatus status = ApplyStatus::Fatal;
     std::optional<ActiveTopology> expected_topology;
     bool virtual_display_requested = false;
+    bool deadline_committed = false;
   };
 
   struct RecoveryOutcome {
@@ -32,10 +35,14 @@ namespace display_helper::v2 {
     std::atomic<bool> prefer_golden_if_current_missing {true};
     std::atomic<bool> restore_on_disconnect {true};
 
-    /// True after a restore attempt that has not been confirmed yet; DISARM and
-    /// SNAPSHOT_CURRENT from later stream-start probes must not cancel or
-    /// overwrite that restore baseline (72b0d996).
-    std::atomic<bool> restore_attempted_unconfirmed {false};
+    /// Serializes cancellation with entry into blocking display mutations and
+    /// retains whether the resulting topology has been strictly confirmed.
+    display_helper::RestoreMutationGuard mutation_guard;
+
+    /// Includes queued and running APPLY workers. State transitions can move on
+    /// before a canceled blocking Windows call returns, so the FSM state alone
+    /// is not a sufficient stream-start safety signal.
+    std::atomic<std::size_t> apply_workers_active {0};
 
     /// Consecutive confirmed session fallbacks while golden remains pending.
     std::atomic<std::size_t> golden_pending_session_fallbacks {0};
@@ -54,7 +61,6 @@ namespace display_helper::v2 {
     }
 
     void reset_request_progress() {
-      restore_attempted_unconfirmed.store(false, std::memory_order_release);
       golden_pending_session_fallbacks.store(0, std::memory_order_release);
     }
 
@@ -82,9 +88,18 @@ namespace display_helper::v2 {
 
   class ApplyOperation {
   public:
-    ApplyOperation(IDisplaySettings &display, IClock &clock);
+    ApplyOperation(
+      IDisplaySettings &display,
+      IClock &clock,
+      std::function<void()> on_mutation_commit = {}
+    );
 
-    ApplyOutcome run(const ApplyRequest &request, const CancellationToken &token);
+    ApplyOutcome run(
+      const ApplyRequest &request,
+      const CancellationToken &token,
+      std::function<void()> on_mutation_commit = {}
+    );
+    void notify_mutation_commit();
 
   private:
     void apply_monitor_positions(const ApplyRequest &request, const CancellationToken &token);
@@ -92,6 +107,7 @@ namespace display_helper::v2 {
 
     IDisplaySettings &display_;
     IClock &clock_;
+    std::function<void()> on_mutation_commit_;
   };
 
   class VerificationOperation {
@@ -101,7 +117,8 @@ namespace display_helper::v2 {
     bool run(
       const ApplyRequest &request,
       const std::optional<ActiveTopology> &expected_topology,
-      const CancellationToken &token);
+      const CancellationToken &token
+    );
 
   private:
     IDisplaySettings &display_;
@@ -124,7 +141,8 @@ namespace display_helper::v2 {
       ISnapshotStorage &storage,
       GoldenHealth &golden_health,
       RestoreState &state,
-      IClock &clock);
+      IClock &clock
+    );
 
     RecoveryOutcome run(const CancellationToken &token);
 
@@ -134,7 +152,12 @@ namespace display_helper::v2 {
     bool quiet_period(std::chrono::milliseconds duration, std::chrono::milliseconds interval, const CancellationToken &token);
     bool wait_with_cancel(std::chrono::milliseconds duration, const CancellationToken &token);
     bool confirm_matches(const codec::ParsedSnapshot &loaded, const char *label, const CancellationToken &token);
-    bool apply_and_confirm(const codec::ParsedSnapshot &loaded, const char *label, const CancellationToken &token);
+    bool apply_and_confirm(
+      const codec::ParsedSnapshot &loaded,
+      const char *label,
+      const CancellationToken &token,
+      display_helper::RestoreMutationGuard::WorkerLease &worker
+    );
     bool should_skip_golden(const Snapshot &golden);
     std::set<std::string> known_present_devices();
     void clear_session_snapshots_after_golden();

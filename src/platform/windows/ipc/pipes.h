@@ -12,6 +12,7 @@
 // standard includes
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -29,8 +30,8 @@
   #define WIN32_LEAN_AND_MEAN
 #endif
 // winsock2.h must be included before windows.h
-#include <winsock2.h>
 #include <windows.h>
+#include <winsock2.h>
 
 namespace platf::dxgi {
 
@@ -491,6 +492,12 @@ namespace platf::dxgi {
      */
     std::unique_ptr<INamedPipe> create_client(const std::string &pipe_name) override;
 
+    /// Create a client without exceeding the caller's connection budget.
+    std::unique_ptr<INamedPipe> create_client_with_timeout(
+      const std::string &pipe_name,
+      int timeout_ms
+    );
+
     /**
      * @brief Creates a server named pipe.
      * @param pipe_name The name of the pipe to create.
@@ -550,7 +557,10 @@ namespace platf::dxgi {
      * @param fullPipeName The full name of the pipe.
      * @return safe handle to the created client pipe.
      */
-    winrt::file_handle create_client_pipe(const std::wstring &fullPipeName) const;
+    winrt::file_handle create_client_pipe(
+      const std::wstring &fullPipeName,
+      int timeout_ms
+    ) const;
 
     SecurityDescriptorBuilder _secdesc_builder;  // optional custom SD builder (Playnite can override)
   };
@@ -588,18 +598,38 @@ namespace platf::dxgi {
      */
     std::unique_ptr<INamedPipe> create_client(const std::string &pipe_name) override;
 
+    /// Complete the control/data handshake within one absolute caller budget.
+    std::unique_ptr<INamedPipe> create_client_with_timeout(
+      const std::string &pipe_name,
+      int timeout_ms
+    );
+
     // Forward a custom SD builder into the underlying NamedPipeFactory
     void set_security_descriptor_builder(NamedPipeFactory::SecurityDescriptorBuilder builder);
 
   private:
     std::unique_ptr<INamedPipe> handshake_server(std::unique_ptr<INamedPipe> pipe);
-    std::unique_ptr<INamedPipe> handshake_client(std::unique_ptr<INamedPipe> pipe);
+    std::unique_ptr<INamedPipe> handshake_client(
+      std::unique_ptr<INamedPipe> pipe,
+      std::chrono::steady_clock::time_point deadline
+    );
 
     bool send_handshake_message(std::unique_ptr<INamedPipe> &pipe, const std::string &pipe_name) const;
     HandshakeAckResult wait_for_handshake_ack(std::unique_ptr<INamedPipe> &pipe, std::vector<uint8_t> &buffered) const;
-    HandshakeMessageResult receive_handshake_message(std::unique_ptr<INamedPipe> &pipe, AnonConnectMsg &msg, std::vector<uint8_t> &prefetched) const;
-    bool send_handshake_ack(std::unique_ptr<INamedPipe> &pipe) const;
-    std::unique_ptr<INamedPipe> connect_to_data_pipe(const std::string &pipeNameStr);
+    HandshakeMessageResult receive_handshake_message(
+      std::unique_ptr<INamedPipe> &pipe,
+      AnonConnectMsg &msg,
+      std::vector<uint8_t> &prefetched,
+      std::chrono::steady_clock::time_point deadline
+    ) const;
+    bool send_handshake_ack(
+      std::unique_ptr<INamedPipe> &pipe,
+      std::chrono::steady_clock::time_point deadline
+    ) const;
+    std::unique_ptr<INamedPipe> connect_to_data_pipe(
+      const std::string &pipeNameStr,
+      std::chrono::steady_clock::time_point deadline
+    );
 
     NamedPipeFactory _pipe_factory;
   };

@@ -10,6 +10,7 @@
   #include <cstring>
   #include <filesystem>
   #include <fstream>
+  #include <initializer_list>
   #include <sstream>
   #include <string>
 
@@ -107,6 +108,57 @@ TEST(SunshineVirtualDisplay, TemporaryCreationDoesNotPersistSessionGuidAsSharedI
   const auto source = read_virtual_display_source();
 
   EXPECT_EQ(source.find("write_guid_to_state_locked(requested_uuid)"), std::string::npos);
+}
+
+TEST(SunshineVirtualDisplay, RecoveryOwnerRecreationWindowIsStrictAndBoundedAcrossBackends) {
+  // Recovery removes and recreates the same GUID, which briefly removes its
+  // tracker generation. Keep that one expected gap valid, but never let a
+  // different generation make an old monitor current again (ABA regression).
+  const auto dispatcher_source = read_source("src/platform/windows/virtual_display.cpp");
+  const auto sunshine_source = read_virtual_display_source();
+  const auto sudo_source = read_source("src/platform/windows/virtual_display_sudovda.cpp");
+  const auto rtsp_source = read_source("src/nvhttp.cpp");
+  const auto webrtc_source = read_source("src/webrtc_stream.cpp");
+
+  expect_contains(dispatcher_source, "bool recreating {false};");
+  expect_contains(dispatcher_source, "bool begin_virtual_display_recovery_recreation(");
+  expect_contains(dispatcher_source, "bool cancel_virtual_display_recovery_recreation(");
+  expect_contains(dispatcher_source, "*found->second.tracking_generation != *tracking_generation");
+  expect_contains(dispatcher_source, "*tracking_generation == *current_tracking_generation");
+  expect_contains(dispatcher_source, "return recreating && tracking_generation;");
+  expect_contains(dispatcher_source, "found->second.recreating = false;");
+
+  // Both drivers must open the window immediately around their recreation,
+  // cancel it on every failed path, and refresh the fresh generation before
+  // considering the monitor current again.
+  for (const auto *backend_source : {&sunshine_source, &sudo_source}) {
+    expect_contains(*backend_source, "begin_recovery_owner_recreation");
+    expect_contains(*backend_source, "cancel_recovery_owner_recreation");
+    expect_contains(*backend_source, "refresh_recovery_owner_after_recreation");
+  }
+
+  // Stream owners must provide the complete transaction callbacks for RTSP
+  // and WebRTC; a missing callback would leave a no-tracker allowance open.
+  for (const auto *stream_source : {&rtsp_source, &webrtc_source}) {
+    expect_contains(*stream_source, "recovery_params.begin_recovery_owner_recreation");
+    expect_contains(*stream_source, "recovery_params.cancel_recovery_owner_recreation");
+    expect_contains(*stream_source, "begin_virtual_display_recovery_recreation(");
+    expect_contains(*stream_source, "cancel_virtual_display_recovery_recreation(");
+  }
+
+  // Sunshine preserves its recovery owner for self-removal, while still
+  // invalidating old asynchronous HDR work before the replacement can exist.
+  expect_contains(sunshine_source, "removeVirtualDisplay(guid, should_abort, false)");
+  const auto self_removal_pos = sunshine_source.find("bool removeVirtualDisplay(\n    const GUID &guid,\n    const std::function<bool()> &should_abort,\n    bool invalidate_recovery_owner");
+  ASSERT_NE(self_removal_pos, std::string::npos);
+  const auto owner_invalidation_pos = sunshine_source.find("if (invalidate_recovery_owner)", self_removal_pos);
+  const auto hdr_invalidation_pos = sunshine_source.find(
+    "VDISPLAY::invalidate_virtual_display_hdr_profile_operation(guid);",
+    self_removal_pos
+  );
+  ASSERT_NE(owner_invalidation_pos, std::string::npos);
+  ASSERT_NE(hdr_invalidation_pos, std::string::npos);
+  EXPECT_LT(owner_invalidation_pos, hdr_invalidation_pos);
 }
 
 TEST(SunshineVirtualDisplay, EnsureDisplayReservedIdentityNeverCollidesWithClients) {

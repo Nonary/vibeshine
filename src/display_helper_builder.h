@@ -26,6 +26,7 @@ namespace display_helper_integration {
    */
   enum class DisplayApplyAction {
     Skip,  ///< Do not dispatch anything to the helper.
+    Preserve,  ///< Configuration is disabled; keep the current display state.
     Apply,  ///< Apply the provided configuration.
     Revert  ///< Revert the helper state.
   };

@@ -456,7 +456,10 @@ namespace display_helper_integration::helpers {
       }
 
       builder.clear_configuration();
-      builder.set_action(DisplayApplyAction::Revert);
+      // "Disabled" means no session-start display mutation. Dispatching an
+      // asynchronous REVERT here can race the VD/probe transaction that just
+      // acquired a safe handoff and reintroduce issue #242.
+      builder.set_action(DisplayApplyAction::Preserve);
       builder.set_virtual_display_watchdog(false);
       return true;
     }

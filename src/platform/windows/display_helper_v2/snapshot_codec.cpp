@@ -7,9 +7,13 @@
   #include <cstdio>
   #include <memory>
 
-  #include <nlohmann/json.hpp>
-
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
   #include "src/logging.h"
+
+  #include <nlohmann/json.hpp>
+  #include <windows.h>
 
 namespace display_helper::v2::codec {
   namespace {
@@ -264,7 +268,8 @@ namespace display_helper::v2::codec {
     void parse_layouts_field(
       const nlohmann::json &root,
       layout_rotation_map_t &layout_rotations,
-      bool &has_layout_data) {
+      bool &has_layout_data
+    ) {
       layout_rotations.clear();
       has_layout_data = false;
       auto it_layouts = root.find("layouts");
@@ -594,7 +599,8 @@ namespace display_helper::v2::codec {
     Snapshot snap,
     const EnumeratedDeviceList &devices,
     const std::vector<std::string> &exclusions,
-    std::string &reject_reason) {
+    std::string &reject_reason
+  ) {
     reject_reason.clear();
 
     std::vector<std::string> exclusions_norm;
@@ -729,7 +735,8 @@ namespace display_helper::v2::codec {
     ParsedSnapshot loaded,
     const EnumeratedDeviceList &devices,
     const std::vector<std::string> &exclusions,
-    const std::string &source_label) {
+    const std::string &source_label
+  ) {
     auto &snap = loaded.snapshot;
 
     // Filter snapshot using current exclusion list and currently enumerated devices.
@@ -895,25 +902,20 @@ namespace display_helper::v2::codec {
       }
     }
 
-    std::error_code ec_exist;
-    const bool target_exists = std::filesystem::exists(path, ec_exist) && !ec_exist;
-    if (!target_exists) {
-      std::error_code ec_move;
-      std::filesystem::rename(temp_path, path, ec_move);
-      if (!ec_move) {
-        return true;
-      }
-    }
-
-    std::error_code ec_copy;
-    std::filesystem::copy_file(temp_path, path, std::filesystem::copy_options::overwrite_existing, ec_copy);
-    if (ec_copy) {
-      return false;
+    // The slow serialization/write is complete. Commit with one same-directory
+    // atomic replacement so a lease check immediately before save cannot be
+    // followed by a long, partially visible overwrite of Current.
+    if (::MoveFileExW(
+          temp_path.c_str(),
+          path.c_str(),
+          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+        )) {
+      return true;
     }
 
     std::error_code ec_rm_tmp;
     std::filesystem::remove(temp_path, ec_rm_tmp);
-    return true;
+    return false;
   }
 
   std::optional<std::string> read_file_text(const std::filesystem::path &path) {

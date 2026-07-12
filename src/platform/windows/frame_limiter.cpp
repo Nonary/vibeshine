@@ -15,6 +15,7 @@
   #include <algorithm>
   #include <array>
   #include <cctype>
+  #include <mutex>
   #include <optional>
   #include <string>
   #include <vector>
@@ -24,6 +25,7 @@ namespace platf {
   namespace {
 
     frame_limiter_provider g_active_provider = frame_limiter_provider::none;
+    std::mutex g_frame_limiter_mutex;
     unsigned int g_stream_owner_count = 0;
     bool g_nvcp_started = false;
     bool g_gen1_framegen_fix_active = false;
@@ -106,6 +108,22 @@ namespace platf {
       return "front edge sync";
     }
 
+    void frame_limiter_streaming_update_locked(const framegen::stream_start_policy_t &policy) {
+      if (g_stream_owner_count == 0) {
+        BOOST_LOG(debug) << "Frame limiter policy update ignored because no stream owns the limiter.";
+        return;
+      }
+
+      // Frame-limiter/provider overrides are process-global and cannot be
+      // safely replaced while another capture is active. Keep the first
+      // lifecycle owner's policy until the shared final teardown restores the
+      // original configuration; unlike streaming_start this deliberately does
+      // not acquire another ownership reference.
+      BOOST_LOG(debug) << "Frame limiter policy update retained the active owner policy "
+                       << "(requested_fps=" << policy.fps
+                       << ", owners=" << g_stream_owner_count << ")";
+    }
+
   }  // namespace
 
   const char *frame_limiter_provider_to_string(frame_limiter_provider provider) {
@@ -124,9 +142,9 @@ namespace platf {
   }
 
   void frame_limiter_streaming_start(const framegen::stream_start_policy_t &policy) {
+    std::lock_guard lock(g_frame_limiter_mutex);
     if (g_stream_owner_count > 0) {
-      ++g_stream_owner_count;
-      BOOST_LOG(debug) << "Frame limiter start requested while already active; reusing existing overrides (owners=" << g_stream_owner_count << ")";
+      frame_limiter_streaming_update_locked(policy);
       return;
     }
     g_stream_owner_count = 1;
@@ -305,7 +323,16 @@ namespace platf {
     }
   }
 
+  void frame_limiter_streaming_update(const framegen::stream_start_policy_t &policy) {
+    std::lock_guard lock(g_frame_limiter_mutex);
+    frame_limiter_streaming_update_locked(policy);
+  }
+
   bool frame_limiter_prepare_launch(const framegen::stream_start_policy_t &policy) {
+    // RTSS warmup mutates the same provider/process state as the active
+    // limiter lifecycle. Serialize launch preparation with start/stop/refresh
+    // so a concurrent Playnite refresh cannot race its process discovery.
+    std::lock_guard lock(g_frame_limiter_mutex);
     const bool capture_fix_enabled = policy.capture_fix_enabled;
     const bool auto_framegen_policy_enabled = policy.auto_virtual_framegen_limiter;
     const bool physical_framegen_policy_enabled = policy.physical_framegen_capture;
@@ -356,6 +383,7 @@ namespace platf {
   }
 
   void frame_limiter_streaming_stop(bool keep_rtss_running) {
+    std::lock_guard lock(g_frame_limiter_mutex);
     if (g_stream_owner_count == 0) {
       return;
     }
@@ -400,6 +428,7 @@ namespace platf {
   }
 
   void frame_limiter_streaming_refresh() {
+    std::lock_guard lock(g_frame_limiter_mutex);
     if (g_active_provider != frame_limiter_provider::rtss || g_last_effective_limit <= 0) {
       return;
     }
@@ -410,10 +439,12 @@ namespace platf {
   }
 
   frame_limiter_provider frame_limiter_active_provider() {
+    std::lock_guard lock(g_frame_limiter_mutex);
     return g_active_provider;
   }
 
   frame_limiter_status_t frame_limiter_get_status() {
+    std::lock_guard lock(g_frame_limiter_mutex);
     frame_limiter_status_t status {};
     status.enabled = config::frame_limiter.enable;
     status.configured_provider = parse_provider(config::frame_limiter.provider);
