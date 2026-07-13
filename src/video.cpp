@@ -75,6 +75,28 @@ namespace video {
     }
 
 #ifdef _WIN32
+    void wait_for_recent_display_apply_stability() {
+      constexpr auto kFallbackSettleWindow = std::chrono::milliseconds(1500);
+      constexpr auto kVerificationPollInterval = std::chrono::milliseconds(25);
+
+      auto elapsed = std::chrono::milliseconds(display_helper_integration::ms_since_last_apply());
+      if (elapsed >= kFallbackSettleWindow || display_helper_integration::last_apply_is_capture_stable()) {
+        return;
+      }
+
+      BOOST_LOG(info) << "Display topology recently changed; waiting up to "
+                      << (kFallbackSettleWindow - elapsed).count()
+                      << "ms for helper verification or display-settle fallback";
+      while (elapsed < kFallbackSettleWindow) {
+        if (display_helper_integration::last_apply_is_capture_stable()) {
+          BOOST_LOG(debug) << "Display topology verification completed; ending settle wait early.";
+          return;
+        }
+        std::this_thread::sleep_for(std::min(kVerificationPollInterval, kFallbackSettleWindow - elapsed));
+        elapsed = std::chrono::milliseconds(display_helper_integration::ms_since_last_apply());
+      }
+    }
+
     bool should_prefer_virtual_display() {
       if (platf::is_lock_screen_active() && VDISPLAY::has_active_physical_display()) {
         return false;
@@ -2061,18 +2083,9 @@ namespace video {
               disp.reset();
 
 #ifdef _WIN32
-              // After a recent display-helper APPLY (topology change), give the display
-              // subsystem time to settle before trying to reinit. Without this, DXGI
-              // may not yet reflect the new topology, causing repeated failures that
-              // leave the stream frozen.
-              {
-                const auto ms_since_apply = display_helper_integration::ms_since_last_apply();
-                if (ms_since_apply < 1500) {
-                  auto settle_ms = std::max<int64_t>(0, 1500 - ms_since_apply);
-                  BOOST_LOG(info) << "Display topology recently changed; waiting " << settle_ms << "ms for display subsystem to settle";
-                  std::this_thread::sleep_for(std::chrono::milliseconds(settle_ms));
-                }
-              }
+              // Verified helper results end this wait immediately. If verification is
+              // unavailable or fails, preserve the original fixed settling fallback.
+              wait_for_recent_display_apply_stability();
 #endif
 
               // Refresh display names since a display removal might have caused the reinitialization
@@ -3152,15 +3165,9 @@ namespace video {
 
     while (encode_session_ctx_queue.running()) {
 #ifdef _WIN32
-      // After a recent display-helper APPLY, give the display subsystem time to settle.
-      {
-        const auto ms_since_apply = display_helper_integration::ms_since_last_apply();
-        if (ms_since_apply < 1500) {
-          auto settle_ms = std::max<int64_t>(0, 1500 - ms_since_apply);
-          BOOST_LOG(info) << "Display topology recently changed; waiting " << settle_ms << "ms for display subsystem to settle";
-          std::this_thread::sleep_for(std::chrono::milliseconds(settle_ms));
-        }
-      }
+      // Verified helper results end this wait immediately. If verification is
+      // unavailable or fails, preserve the original fixed settling fallback.
+      wait_for_recent_display_apply_stability();
 #endif
       // Refresh display names since a display removal might have caused the reinitialization
       refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);

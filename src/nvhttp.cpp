@@ -534,12 +534,26 @@ namespace nvhttp {
 
         uint32_t vd_width = launch_session->width > 0 ? static_cast<uint32_t>(launch_session->width) : 1920u;
         uint32_t vd_height = launch_session->height > 0 ? static_cast<uint32_t>(launch_session->height) : 1080u;
-        display_helper_integration::helpers::SessionDisplayConfigurationHelper initial_display_helper(config::video, *launch_session);
-        if (auto initial_resolution = initial_display_helper.initial_virtual_display_resolution()) {
-          vd_width = initial_resolution->m_width;
-          vd_height = initial_resolution->m_height;
-          BOOST_LOG(info) << "Virtual display initial resolution resolved from display configuration: "
-                          << vd_width << 'x' << vd_height;
+        bool virtual_display_hdr_requested = rtsp_stream::effective_hdr_requested(*launch_session);
+        display_helper_integration::helpers::SessionDisplayConfigurationHelper initial_display_helper(config::video, *launch_session, true);
+        if (auto initial_configuration = initial_display_helper.initial_virtual_display_configuration()) {
+          if (initial_configuration->m_resolution &&
+              initial_configuration->m_resolution->m_width > 0 &&
+              initial_configuration->m_resolution->m_height > 0) {
+            vd_width = initial_configuration->m_resolution->m_width;
+            vd_height = initial_configuration->m_resolution->m_height;
+            BOOST_LOG(info) << "Virtual display initial resolution resolved from display configuration: "
+                            << vd_width << 'x' << vd_height;
+          }
+          if (initial_configuration->m_hdr_state) {
+            const bool source_hdr_requested =
+              *initial_configuration->m_hdr_state == display_device::HdrState::Enabled;
+            if (source_hdr_requested != virtual_display_hdr_requested) {
+              BOOST_LOG(info) << "Virtual display creation HDR state aligned with source-display policy: "
+                              << (source_hdr_requested ? "enabled" : "disabled") << '.';
+            }
+            virtual_display_hdr_requested = source_hdr_requested;
+          }
         }
         uint32_t base_vd_fps = launch_session->fps > 0 ? static_cast<uint32_t>(launch_session->fps) : 0u;
         uint32_t base_vd_fps_millihz = base_vd_fps;
@@ -629,7 +643,7 @@ namespace nvhttp {
           base_vd_fps_millihz,
           framegen_refresh_active,
           refresh_multiplier,
-          rtsp_stream::effective_hdr_requested(*launch_session),
+          virtual_display_hdr_requested,
           false,
           !shared_mode
         );
@@ -659,12 +673,13 @@ namespace nvhttp {
           recovery_params.base_fps_millihz = base_vd_fps_millihz;
           recovery_params.framegen_refresh_active = framegen_refresh_active;
           recovery_params.framegen_refresh_multiplier = refresh_multiplier;
-          recovery_params.hdr_requested = rtsp_stream::effective_hdr_requested(*launch_session);
+          recovery_params.hdr_requested = virtual_display_hdr_requested;
           recovery_params.client_uid = display_uuid_source;
           recovery_params.client_name = client_label;
           recovery_params.hdr_profile = launch_session->hdr_profile;
           recovery_params.display_name = display_info->display_name;
           recovery_params.monitor_device_path = display_info->monitor_device_path;
+          recovery_params.confirmed_active_at_schedule = display_info->confirmed_active;
           if (display_info->device_id && !display_info->device_id->empty()) {
             recovery_params.device_id = *display_info->device_id;
           } else if (!launch_session->virtual_display_device_id.empty()) {

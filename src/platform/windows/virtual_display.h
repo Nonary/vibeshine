@@ -40,6 +40,7 @@ namespace VDISPLAY {
     std::optional<std::string> client_name;
     std::optional<std::wstring> monitor_device_path;
     bool reused_existing;
+    bool confirmed_active = false;
     std::chrono::steady_clock::time_point ready_since;
   };
 
@@ -58,6 +59,7 @@ namespace VDISPLAY {
     std::optional<std::wstring> display_name;
     std::optional<std::string> device_id;
     std::optional<std::wstring> monitor_device_path;
+    bool confirmed_active_at_schedule = false;
     unsigned int max_attempts = 3;
     std::function<void(const VirtualDisplayCreationResult &)> on_recovery_success;
     std::function<bool()> should_abort;

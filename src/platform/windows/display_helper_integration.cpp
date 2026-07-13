@@ -641,10 +641,17 @@ namespace {
   // Tracks when the most recent successful APPLY completed, so the capture thread
   // can add a stabilization delay before attempting to reinit after topology changes.
   static std::atomic<std::int64_t> g_last_apply_completed_us {0};
+  static std::atomic<std::uint64_t> g_last_apply_generation {0};
+  static std::atomic<std::uint64_t> g_last_verified_apply_generation {0};
+  static std::atomic<std::uint64_t> g_capture_stable_eligible_apply_generation {0};
 
   static std::int64_t now_steady_us() {
     using namespace std::chrono;
     return duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count();
+  }
+
+  static void note_successful_apply() {
+    g_last_apply_completed_us.store(now_steady_us(), std::memory_order_release);
   }
 
   bool helper_start_failure_cooldown_active() {
@@ -1254,6 +1261,19 @@ namespace display_helper_integration {
         return false;
       }
 
+      // Invalidate verification from any older APPLY before starting work. This
+      // prevents capture from treating the previous generation as proof while a
+      // newer topology change is in flight.
+      const auto apply_generation = g_last_apply_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+      const bool exclusive_virtual =
+        request.virtual_display_arrangement == VirtualDisplayArrangement::Exclusive;
+      const bool source_hdr_explicitly_disabled =
+        request.configuration && request.configuration->m_hdr_state == display_device::HdrState::Disabled;
+      g_capture_stable_eligible_apply_generation.store(
+        exclusive_virtual && source_hdr_explicitly_disabled ? apply_generation : 0,
+        std::memory_order_release
+      );
+
       // Prefer the helper for APPLY, even when running as SYSTEM without an interactive user session.
       // In-process display APIs frequently return ERROR_ACCESS_DENIED in that context.
       const bool system_no_user_session = platf::is_running_as_system() && !user_session_ready();
@@ -1297,7 +1317,7 @@ namespace display_helper_integration {
         g_last_apply_used_helper.store(ok, std::memory_order_relaxed);
         if (ok && request.session) {
           g_restore_expected.store(false, std::memory_order_relaxed);
-          g_last_apply_completed_us.store(now_steady_us(), std::memory_order_relaxed);
+          note_successful_apply();
           set_active_session(
             *request.session,
             request.session_overrides.device_id_override,
@@ -1346,7 +1366,7 @@ namespace display_helper_integration {
       }
       (void) apply_topology_definition(request.topology, "in-process");
 
-      g_last_apply_completed_us.store(now_steady_us(), std::memory_order_relaxed);
+      note_successful_apply();
       set_active_session(
         *request.session,
         request.session_overrides.device_id_override,
@@ -1365,7 +1385,8 @@ namespace display_helper_integration {
   }  // namespace
 
   ApplyVerificationStatus wait_for_apply_verification(std::chrono::milliseconds timeout) {
-    // The legacy engine never emits VerificationResult frames; don't burn the timeout.
+    // Legacy success is acknowledged only after its synchronous verification, but
+    // it does not emit a separately attributable VerificationResult frame.
     if (use_legacy_helper_engine()) {
       return ApplyVerificationStatus::Unknown;
     }
@@ -1373,6 +1394,7 @@ namespace display_helper_integration {
       return ApplyVerificationStatus::Unknown;
     }
 
+    const auto apply_generation = g_last_apply_generation.load(std::memory_order_acquire);
     const int timeout_ms = static_cast<int>(std::max<long long>(timeout.count(), 0LL));
     const auto result = platf::display_helper_client::wait_for_verification_result(timeout_ms);
     if (!result.has_value()) {
@@ -1380,7 +1402,19 @@ namespace display_helper_integration {
       return ApplyVerificationStatus::Unknown;
     }
 
-    return *result ? ApplyVerificationStatus::Verified : ApplyVerificationStatus::Failed;
+    if (*result && g_last_apply_generation.load(std::memory_order_acquire) == apply_generation) {
+      g_last_verified_apply_generation.store(apply_generation, std::memory_order_release);
+      return ApplyVerificationStatus::Verified;
+    }
+    return *result ? ApplyVerificationStatus::Unknown : ApplyVerificationStatus::Failed;
+  }
+
+  bool last_apply_is_capture_stable() {
+    const auto before = g_last_apply_generation.load(std::memory_order_acquire);
+    const auto verified = g_last_verified_apply_generation.load(std::memory_order_acquire);
+    const auto eligible = g_capture_stable_eligible_apply_generation.load(std::memory_order_acquire);
+    const auto after = g_last_apply_generation.load(std::memory_order_acquire);
+    return before != 0 && before == after && verified == after && eligible == after;
   }
 
   bool apply(const DisplayApplyRequest &request) {

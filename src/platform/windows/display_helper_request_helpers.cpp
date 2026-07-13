@@ -210,7 +210,11 @@ namespace display_helper_integration::helpers {
 
   }  // namespace
 
-  SessionDisplayConfigurationHelper::SessionDisplayConfigurationHelper(const config::video_t &video_config, const rtsp_stream::launch_session_t &session):
+  SessionDisplayConfigurationHelper::SessionDisplayConfigurationHelper(
+    const config::video_t &video_config,
+    const rtsp_stream::launch_session_t &session,
+    bool virtual_display_intended
+  ):
       video_config_ {video_config},
       effective_video_config_ {video_config},
       session_ {session} {
@@ -225,7 +229,7 @@ namespace display_helper_integration::helpers {
     }
     const auto effective_layout =
       session_.virtual_display_layout_override.value_or(effective_video_config_.virtual_display_layout);
-    if (session_.virtual_display &&
+    if ((session_.virtual_display || virtual_display_intended) &&
         effective_video_config_.dd.configuration_option == config::video_t::dd_t::config_option_e::disabled &&
         effective_layout == config::video_t::virtual_display_layout_e::exclusive) {
       effective_video_config_.dd.configuration_option = config::video_t::dd_t::config_option_e::ensure_only_display;
@@ -233,12 +237,20 @@ namespace display_helper_integration::helpers {
   }
 
   std::optional<display_device::Resolution> SessionDisplayConfigurationHelper::initial_virtual_display_resolution() const {
-    const auto parsed = display_device::parse_configuration(effective_video_config_, session_);
-    const auto *cfg = std::get_if<display_device::SingleDisplayConfiguration>(&parsed);
+    const auto cfg = initial_virtual_display_configuration();
     if (!cfg || !cfg->m_resolution || cfg->m_resolution->m_width == 0 || cfg->m_resolution->m_height == 0) {
       return std::nullopt;
     }
     return cfg->m_resolution;
+  }
+
+  std::optional<display_device::SingleDisplayConfiguration> SessionDisplayConfigurationHelper::initial_virtual_display_configuration() const {
+    const auto parsed = display_device::parse_configuration(effective_video_config_, session_);
+    const auto *cfg = std::get_if<display_device::SingleDisplayConfiguration>(&parsed);
+    if (!cfg) {
+      return std::nullopt;
+    }
+    return *cfg;
   }
 
   bool SessionDisplayConfigurationHelper::configure(DisplayApplyBuilder &builder) const {

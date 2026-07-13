@@ -7,6 +7,8 @@
 #include "src/platform/windows/display_helper_session_deferral.h"
 #include "src/rtsp.h"
 
+#include <unordered_map>
+
 namespace {
   class FakeClock {
   public:
@@ -20,6 +22,16 @@ namespace {
 
   private:
     std::chrono::steady_clock::time_point now_ {std::chrono::steady_clock::now()};
+  };
+
+  struct runtime_config_overrides_guard_t {
+    runtime_config_overrides_guard_t() {
+      config::clear_runtime_config_overrides();
+    }
+
+    ~runtime_config_overrides_guard_t() {
+      config::clear_runtime_config_overrides();
+    }
   };
 
   display_helper_integration::DisplayApplyRequest make_request(rtsp_stream::launch_session_t &session) {
@@ -161,6 +173,30 @@ TEST(DisplayHelperRequestHelpers, AppliesExclusiveVirtualDisplayWhenDisplayConfi
     request->configuration->m_device_prep,
     display_device::SingleDisplayConfiguration::DevicePreparation::EnsureOnlyDisplay
   );
+}
+
+TEST(DisplayHelperRequestHelpers, InitialVirtualDisplayConfigurationUsesRtxHdrSourcePolicy) {
+  runtime_config_overrides_guard_t overrides_guard;
+  config::set_runtime_config_overrides(std::unordered_map<std::string, std::string> {
+    {"rtx_hdr", "true"},
+  });
+
+  config::video_t video_config {};
+  video_config.dd.configuration_option = config::video_t::dd_t::config_option_e::disabled;
+  video_config.dd.hdr_option = config::video_t::dd_t::hdr_option_e::automatic;
+  video_config.virtual_display_layout = config::video_t::virtual_display_layout_e::exclusive;
+  video_config.rtx_hdr.enabled = true;
+
+  auto session = make_virtual_display_session();
+  session.virtual_display = false;
+  session.enable_hdr = true;
+
+  display_helper_integration::helpers::SessionDisplayConfigurationHelper helper(video_config, session, true);
+  const auto initial_configuration = helper.initial_virtual_display_configuration();
+
+  ASSERT_TRUE(initial_configuration.has_value());
+  ASSERT_TRUE(initial_configuration->m_hdr_state.has_value());
+  EXPECT_EQ(*initial_configuration->m_hdr_state, display_device::HdrState::Disabled);
 }
 
 TEST(DisplayHelperRequestHelpers, SkipsExtendedVirtualDisplayWhenDisplayConfigurationDisabled) {

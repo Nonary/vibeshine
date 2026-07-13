@@ -65,8 +65,12 @@ namespace display_helper_integration {
   };
 
   // Wait for helper verification to finish after APPLY (v2 engine only).
-  // Returns Unknown on timeout/unavailable/legacy engine.
+  // Returns Unknown on timeout, legacy engine, or when verification is unavailable.
   ApplyVerificationStatus wait_for_apply_verification(std::chrono::milliseconds timeout);
+
+  // True when the most recent successful APPLY is verified and has no pending
+  // HDR/topology workaround that requires the settling fallback.
+  bool last_apply_is_capture_stable();
 #endif
 
 #ifdef _WIN32

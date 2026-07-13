@@ -2820,7 +2820,6 @@ namespace VDISPLAY_SUNSHINE {
     constexpr auto RECOVERY_RETRY_DELAY = std::chrono::milliseconds(350);
     constexpr auto RECOVERY_MISSING_GRACE = std::chrono::milliseconds(500);
     constexpr auto RECOVERY_INACTIVE_GRACE = std::chrono::seconds(1);
-    constexpr auto RECOVERY_NO_ACTIVE_GRACE = std::chrono::seconds(10);
     constexpr auto RECOVERY_INITIAL_SETTLE_GRACE = std::chrono::seconds(6);
     constexpr auto RECOVERY_POST_SUCCESS_GRACE = std::chrono::seconds(3);
     constexpr auto RECOVERY_MAX_ATTEMPTS_BACKOFF = std::chrono::seconds(5);
@@ -2940,20 +2939,6 @@ namespace VDISPLAY_SUNSHINE {
       unknown,
     };
 
-    const char *monitor_target_presence_name(const MonitorTargetPresence presence) {
-      switch (presence) {
-        case MonitorTargetPresence::missing:
-          return "missing";
-        case MonitorTargetPresence::present_inactive:
-          return "inactive";
-        case MonitorTargetPresence::present_active:
-          return "active";
-        case MonitorTargetPresence::unknown:
-          return "unknown";
-      }
-      return "unknown";
-    }
-
     MonitorTargetPresence monitor_target_presence(RecoveryMonitorState &state) {
       auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
       if (!devices || devices->empty()) {
@@ -2963,72 +2948,93 @@ namespace VDISPLAY_SUNSHINE {
         return MonitorTargetPresence::unknown;
       }
 
-      bool matched_inactive = false;
+      const bool has_stable_identity =
+        (state.current_device_id && !state.current_device_id->empty()) ||
+        state.normalized_monitor_device_path.has_value();
+      bool matched_strong_inactive = false;
+      std::optional<display_device::EnumeratedDevice> unique_weak_candidate;
+      bool weak_candidate_conflict = false;
+
       for (const auto &device : *devices) {
         if (!is_virtual_display_device(device)) {
           continue;
         }
 
-        bool matches = false;
-        bool matched_by_client_name = false;
-        if (!matches && !state.params.client_name.empty() && !device.m_friendly_name.empty() && equals_ci(device.m_friendly_name, state.params.client_name)) {
-          matches = true;
-          matched_by_client_name = true;
-        }
-        if (!matches && state.normalized_monitor_device_path && !device.m_monitor_device_path.empty()) {
+        bool strong_match = false;
+        if (state.normalized_monitor_device_path && !device.m_monitor_device_path.empty()) {
           const auto normalized_path = normalize_display_name(device.m_monitor_device_path);
           if (!normalized_path.empty() && normalized_path == *state.normalized_monitor_device_path) {
-            matches = true;
+            strong_match = true;
           }
         }
-        if (!matches && state.current_device_id && !state.current_device_id->empty() && !device.m_device_id.empty()) {
-          matches = equals_ci(device.m_device_id, *state.current_device_id);
+        if (!strong_match && state.current_device_id && !state.current_device_id->empty() && !device.m_device_id.empty()) {
+          strong_match = equals_ci(device.m_device_id, *state.current_device_id);
         }
-        if (!matches && state.normalized_display_name) {
+        if (!strong_match && state.normalized_display_name && !device.m_display_name.empty()) {
           auto normalized_display = normalize_display_name(device.m_display_name);
           if (!normalized_display.empty() && normalized_display == *state.normalized_display_name) {
-            matches = true;
-          } else {
-            auto normalized_friendly = normalize_display_name(device.m_friendly_name);
-            if (!normalized_friendly.empty() && normalized_friendly == *state.normalized_display_name) {
-              matches = true;
-            }
+            strong_match = true;
           }
         }
-        if (!matches) {
+
+        if (strong_match) {
+          const bool is_active = device.m_info.has_value() || !device.m_display_name.empty();
+          if (is_active) {
+            return MonitorTargetPresence::present_active;
+          }
+          matched_strong_inactive = true;
           continue;
         }
 
-        if (matched_by_client_name) {
-          auto adopted_display_name = state.current_display_name;
-          if (!device.m_display_name.empty()) {
-            adopted_display_name = platf::from_utf8(device.m_display_name);
+        if (!has_stable_identity) {
+          bool weak_match =
+            !state.params.client_name.empty() &&
+            !device.m_friendly_name.empty() &&
+            equals_ci(device.m_friendly_name, state.params.client_name);
+          if (!weak_match && state.normalized_display_name && !device.m_friendly_name.empty()) {
+            const auto normalized_friendly = normalize_display_name(device.m_friendly_name);
+            weak_match = !normalized_friendly.empty() && normalized_friendly == *state.normalized_display_name;
           }
-          auto adopted_device_id = state.current_device_id;
-          if (!device.m_device_id.empty()) {
-            adopted_device_id = device.m_device_id;
-          }
-          auto adopted_monitor_device_path = state.current_monitor_device_path;
-          if (!device.m_monitor_device_path.empty()) {
-            adopted_monitor_device_path = platf::from_utf8(device.m_monitor_device_path);
-          }
-
-          if (adopted_display_name != state.current_display_name || adopted_device_id != state.current_device_id || adopted_monitor_device_path != state.current_monitor_device_path) {
-            const auto before = state.describe_target();
-            state.update_identifiers(adopted_display_name, adopted_device_id, adopted_monitor_device_path);
-            BOOST_LOG(debug) << "Virtual display recovery monitor adopted updated identifiers via client_name '"
-                             << state.params.client_name << "': " << before << " -> " << state.describe_target();
+          if (weak_match && !weak_candidate_conflict) {
+            if (!unique_weak_candidate) {
+              unique_weak_candidate = device;
+            } else {
+              weak_candidate_conflict = true;
+              unique_weak_candidate.reset();
+            }
           }
         }
-
-        const bool is_active = device.m_info.has_value() || !device.m_display_name.empty();
-        if (is_active) {
-          return MonitorTargetPresence::present_active;
-        }
-        matched_inactive = true;
       }
 
-      return matched_inactive ? MonitorTargetPresence::present_inactive : MonitorTargetPresence::missing;
+      if (matched_strong_inactive) {
+        return MonitorTargetPresence::present_inactive;
+      }
+
+      if (!weak_candidate_conflict && unique_weak_candidate) {
+        const auto &device = *unique_weak_candidate;
+        auto adopted_display_name = state.current_display_name;
+        if (!device.m_display_name.empty()) {
+          adopted_display_name = platf::from_utf8(device.m_display_name);
+        }
+        auto adopted_device_id = state.current_device_id;
+        if (!device.m_device_id.empty()) {
+          adopted_device_id = device.m_device_id;
+        }
+        auto adopted_monitor_device_path = state.current_monitor_device_path;
+        if (!device.m_monitor_device_path.empty()) {
+          adopted_monitor_device_path = platf::from_utf8(device.m_monitor_device_path);
+        }
+
+        const auto before = state.describe_target();
+        state.update_identifiers(adopted_display_name, adopted_device_id, adopted_monitor_device_path);
+        BOOST_LOG(debug) << "Virtual display recovery monitor adopted unique identifiers via client_name '"
+                         << state.params.client_name << "': " << before << " -> " << state.describe_target();
+        return (device.m_info.has_value() || !device.m_display_name.empty()) ?
+                 MonitorTargetPresence::present_active :
+                 MonitorTargetPresence::present_inactive;
+      }
+
+      return MonitorTargetPresence::missing;
     }
 
     bool attempt_virtual_display_recovery(RecoveryMonitorState &state) {
@@ -3099,6 +3105,30 @@ namespace VDISPLAY_SUNSHINE {
       std::optional<std::chrono::steady_clock::time_point> missing_since;
       auto recovery_cooldown_until = std::chrono::steady_clock::now() + RECOVERY_INITIAL_SETTLE_GRACE;
 
+      // Recovery is intentionally forbidden during the initial settle grace. Avoid
+      // contending with the helper's topology work by checking only for cancellation
+      // when activity was already confirmed. An initially inactive target still needs
+      // presence observations so a brief helper activation establishes recovery history.
+      while (std::chrono::steady_clock::now() < recovery_cooldown_until) {
+        if (monitor_should_abort(state)) {
+          BOOST_LOG(debug) << "Virtual display recovery monitor aborted for " << state.describe_target();
+          return;
+        }
+        if (!observed_active && monitor_target_presence(state) == MonitorTargetPresence::present_active) {
+          observed_active = true;
+          active_since = std::chrono::steady_clock::now();
+          BOOST_LOG(debug) << "Virtual display recovery monitor observed initial activation for "
+                           << state.describe_target() << ".";
+        }
+        const auto remaining = std::max(
+          std::chrono::milliseconds(1),
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+            recovery_cooldown_until - std::chrono::steady_clock::now()
+          )
+        );
+        std::this_thread::sleep_for(std::min(RECOVERY_CHECK_INTERVAL, remaining));
+      }
+
       while (true) {
         if (monitor_should_abort(state)) {
           BOOST_LOG(debug) << "Virtual display recovery monitor aborted for " << state.describe_target();
@@ -3129,6 +3159,14 @@ namespace VDISPLAY_SUNSHINE {
 
         active_since.reset();
 
+        // A newly created target may be enumerated before the helper activates it.
+        // Keep the monitor dormant until this exact target has been observed active;
+        // never recover an identity that has not established active history.
+        if (!observed_active) {
+          std::this_thread::sleep_for(RECOVERY_CHECK_INTERVAL);
+          continue;
+        }
+
         // Defer recovery attempts for a short grace window after a successful recovery. This allows
         // the display stack and helper APPLY to stabilize without immediately retriggering recovery.
         if (now < recovery_cooldown_until) {
@@ -3152,7 +3190,7 @@ namespace VDISPLAY_SUNSHINE {
         } else {
           missing_since.reset();
           issue_since = &inactive_since;
-          required_grace = observed_active ? RECOVERY_INACTIVE_GRACE : RECOVERY_NO_ACTIVE_GRACE;
+          required_grace = RECOVERY_INACTIVE_GRACE;
           issue_label = "inactive";
         }
 
@@ -3321,13 +3359,7 @@ namespace VDISPLAY_SUNSHINE {
       return;
     }
 
-    const auto initial_presence = monitor_target_presence(initial_state);
-    if (initial_presence != MonitorTargetPresence::present_active) {
-      BOOST_LOG(info) << "Virtual display recovery monitor not armed for " << initial_state.describe_target()
-                      << ": display was not confirmed active at schedule time (presence="
-                      << monitor_target_presence_name(initial_presence) << ").";
-      return;
-    }
+    initial_state.confirmed_active_at_schedule = params.confirmed_active_at_schedule;
 
     const auto abort_flag = reset_recovery_monitor_abort_flag(guid_uuid);
     VirtualDisplayRecoveryParams wrapped = params;
@@ -3340,9 +3372,10 @@ namespace VDISPLAY_SUNSHINE {
     };
 
     RecoveryMonitorState state(wrapped);
-    state.confirmed_active_at_schedule = true;
+    state.confirmed_active_at_schedule = initial_state.confirmed_active_at_schedule;
     BOOST_LOG(debug) << "Virtual display recovery monitor scheduled for " << state.describe_target()
-                     << " (max_attempts=" << params.max_attempts << ").";
+                     << " (max_attempts=" << params.max_attempts
+                     << (state.confirmed_active_at_schedule ? ", active confirmed)." : ", awaiting first active observation).");
     std::thread monitor_thread([state = std::move(state)]() mutable {
       run_virtual_display_recovery_monitor(std::move(state));
     });
@@ -3858,8 +3891,12 @@ namespace VDISPLAY_SUNSHINE {
     std::optional<std::string> &device_id,
     uint32_t width,
     uint32_t height,
-    const DisplayConfigIdentity *display_config_identity = nullptr
+    const DisplayConfigIdentity *display_config_identity = nullptr,
+    bool *confirmed_active = nullptr
   ) {
+    if (confirmed_active) {
+      *confirmed_active = false;
+    }
     std::optional<std::string> normalized_name;
     if (display_name && !display_name->empty()) {
       normalized_name = normalize_display_name(platf::to_utf8(*display_name));
@@ -3881,12 +3918,15 @@ namespace VDISPLAY_SUNSHINE {
     }
 
     const auto start = std::chrono::steady_clock::now();
+    const auto requested_device_id = device_id;
     std::optional<std::chrono::steady_clock::time_point> enumerated_at;
     const auto enumeration_timeout = std::chrono::seconds(2);
     const auto activation_grace = std::chrono::milliseconds(500);
     const auto poll_interval = std::chrono::milliseconds(50);
     const bool has_dynamic_hints =
       (device_id && !device_id->empty()) || normalized_name || monitor_path_hint || gdi_name_hint || friendly_name_hint;
+    const bool has_strong_identity_hints =
+      (requested_device_id && !requested_device_id->empty()) || monitor_path_hint || gdi_name_hint;
 
     while (true) {
       const auto now = std::chrono::steady_clock::now();
@@ -3899,8 +3939,8 @@ namespace VDISPLAY_SUNSHINE {
         return true;
       }
 
-      auto attempt_candidate = [&](const display_device::EnumeratedDevice &candidate) -> bool {
-        if (!candidate.m_device_id.empty()) {
+      auto attempt_candidate = [&](const display_device::EnumeratedDevice &candidate, bool exact_target, bool adopt_identity) -> bool {
+        if (adopt_identity && !candidate.m_device_id.empty()) {
           if (!device_id || !equals_ci(candidate.m_device_id, *device_id)) {
             device_id = candidate.m_device_id;
           }
@@ -3913,6 +3953,17 @@ namespace VDISPLAY_SUNSHINE {
         if (candidate.m_info) {
           if (candidate.m_info->m_resolution.m_width == width &&
               candidate.m_info->m_resolution.m_height == height) {
+            if (confirmed_active) {
+              *confirmed_active = true;
+            }
+            return true;
+          }
+
+          if (exact_target) {
+            if (confirmed_active) {
+              *confirmed_active = true;
+            }
+            BOOST_LOG(debug) << "Virtual display target is enumerated and active; continuing immediately so the display helper can apply the requested mode.";
             return true;
           }
 
@@ -3928,6 +3979,11 @@ namespace VDISPLAY_SUNSHINE {
           return false;
         }
 
+        if (exact_target) {
+          BOOST_LOG(debug) << "Virtual display target is enumerated but not active yet; continuing immediately so the display helper can activate it.";
+          return true;
+        }
+
         if (enumerated_at && now - *enumerated_at >= activation_grace) {
           BOOST_LOG(debug) << "Virtual display is enumerated but not active yet; continuing so the display helper can apply the session mode.";
           return true;
@@ -3939,7 +3995,9 @@ namespace VDISPLAY_SUNSHINE {
       auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
       if (devices) {
         std::optional<display_device::EnumeratedDevice> unique_resolution_candidate;
+        std::optional<display_device::EnumeratedDevice> unique_weak_identity_candidate;
         bool resolution_conflict = false;
+        bool weak_identity_conflict = false;
 
         for (const auto &candidate : *devices) {
           const bool is_virtual = is_virtual_display_device(candidate);
@@ -3959,55 +4017,79 @@ namespace VDISPLAY_SUNSHINE {
             }
           }
 
-          bool matches = false;
-          if (device_id && !device_id->empty() && !candidate.m_device_id.empty()) {
-            matches = equals_ci(candidate.m_device_id, *device_id);
+          bool strong_identity_match = false;
+          bool weak_identity_match = false;
+          if (requested_device_id && !requested_device_id->empty() && !candidate.m_device_id.empty()) {
+            strong_identity_match = equals_ci(candidate.m_device_id, *requested_device_id);
           }
 
           const auto candidate_display_name = !candidate.m_display_name.empty() ? std::make_optional(normalize_display_name(candidate.m_display_name)) : std::nullopt;
           const auto candidate_friendly_name = !candidate.m_friendly_name.empty() ? std::make_optional(normalize_display_name(candidate.m_friendly_name)) : std::nullopt;
 
-          if (!matches && monitor_path_hint && !candidate.m_device_id.empty()) {
-            matches = equals_ci(candidate.m_device_id, *monitor_path_hint);
+          if (!strong_identity_match && monitor_path_hint && !candidate.m_monitor_device_path.empty()) {
+            strong_identity_match = equals_ci(candidate.m_monitor_device_path, *monitor_path_hint);
           }
 
-          if (!matches && gdi_name_hint) {
+          if (!strong_identity_match && gdi_name_hint) {
             if (candidate_display_name && *candidate_display_name == *gdi_name_hint) {
-              matches = true;
+              strong_identity_match = true;
             }
           }
 
-          if (!matches && friendly_name_hint) {
+          if (!strong_identity_match && friendly_name_hint) {
             if (candidate_friendly_name && *candidate_friendly_name == *friendly_name_hint) {
-              matches = true;
+              weak_identity_match = true;
             }
           }
 
-          if (!matches && normalized_name) {
+          if (!strong_identity_match && normalized_name) {
             if (!candidate.m_display_name.empty() &&
                 candidate_display_name && *candidate_display_name == *normalized_name) {
-              matches = true;
+              strong_identity_match = true;
             } else if (!candidate.m_friendly_name.empty() &&
                        candidate_friendly_name && *candidate_friendly_name == *normalized_name) {
-              matches = true;
+              weak_identity_match = true;
             }
           }
 
-          if (!matches && !has_dynamic_hints) {
-            matches = true;
-          }
-
-          if (!matches) {
+          if (!strong_identity_match && weak_identity_match) {
+            if (has_strong_identity_hints || !is_virtual) {
+              continue;
+            }
+            if (!weak_identity_conflict) {
+              if (!unique_weak_identity_candidate) {
+                unique_weak_identity_candidate = candidate;
+              } else {
+                weak_identity_conflict = true;
+                unique_weak_identity_candidate.reset();
+              }
+            }
             continue;
           }
 
-          if (attempt_candidate(candidate)) {
+          if (!strong_identity_match && has_dynamic_hints) {
+            continue;
+          }
+
+          if (!has_dynamic_hints) {
+            // No identity is available, so defer selection until the complete
+            // enumeration proves there is exactly one virtual resolution match.
+            continue;
+          }
+
+          if (attempt_candidate(candidate, strong_identity_match, strong_identity_match || !has_dynamic_hints)) {
             return true;
           }
         }
 
-        if (!resolution_conflict && unique_resolution_candidate) {
-          if (attempt_candidate(*unique_resolution_candidate)) {
+        if (!has_strong_identity_hints && !weak_identity_conflict && unique_weak_identity_candidate) {
+          if (attempt_candidate(*unique_weak_identity_candidate, false, true)) {
+            return true;
+          }
+        }
+
+        if (!has_strong_identity_hints && !resolution_conflict && unique_resolution_candidate) {
+          if (attempt_candidate(*unique_resolution_candidate, false, true)) {
             return true;
           }
         }
@@ -4246,7 +4328,8 @@ namespace VDISPLAY_SUNSHINE {
                            << (reuse_name ? platf::to_utf8(*reuse_name) : std::string("(none)"))
                            << "' device_id='" << (device_id ? *device_id : std::string("(none)")) << "'";
           std::optional<std::wstring> display_name = reuse_name;
-          if (wait_for_virtual_display_ready(display_name, device_id, width, height)) {
+          bool confirmed_active = false;
+          if (wait_for_virtual_display_ready(display_name, device_id, width, height, nullptr, &confirmed_active)) {
             if (display_name) {
               wprintf(
                 L"[SunshineVirtualDisplay] Reusing existing virtual display (error=%lu): %ls\n",
@@ -4288,6 +4371,7 @@ namespace VDISPLAY_SUNSHINE {
 
             result.monitor_device_path = resolve_monitor_device_path(display_name, result.device_id);
             result.reused_existing = true;
+            result.confirmed_active = confirmed_active;
             result.ready_since = ready_since;
             if (!adopt_existing_driver_lease(client, requested_uuid, display_id, result.display_name, result.device_id, result.monitor_device_path)) {
               BOOST_LOG(warning) << "Refusing to reuse existing Sunshine virtual display for guid="
@@ -4364,7 +4448,8 @@ namespace VDISPLAY_SUNSHINE {
         BOOST_LOG(debug) << "Sunshine temporary display created before Windows exposed a target-specific display identity; waiting for virtual display enumeration.";
       }
 
-      if (!wait_for_virtual_display_ready(resolved_display_name, device_id, width, height, display_config_ptr)) {
+      bool confirmed_active = false;
+      if (!wait_for_virtual_display_ready(resolved_display_name, device_id, width, height, display_config_ptr, &confirmed_active)) {
         if (allow_pending_enumeration) {
           BOOST_LOG(warning) << "Sunshine temporary display was accepted by the driver, but Windows display enumeration is unavailable; retaining it for encoder probing.";
 
@@ -4440,6 +4525,7 @@ namespace VDISPLAY_SUNSHINE {
         }
       }
       result.reused_existing = false;
+      result.confirmed_active = confirmed_active;
       result.ready_since = ready_since;
       std::optional<std::string> hdr_profile;
       if (s_hdr_profile && std::strlen(s_hdr_profile) > 0) {
