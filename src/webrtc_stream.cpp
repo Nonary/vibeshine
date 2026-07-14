@@ -428,7 +428,9 @@ namespace webrtc_stream {
 
       uint32_t vd_width = session->width > 0 ? static_cast<uint32_t>(session->width) : 1920u;
       uint32_t vd_height = session->height > 0 ? static_cast<uint32_t>(session->height) : 1080u;
-      bool virtual_display_hdr_requested = rtsp_stream::effective_hdr_requested(*session);
+      // Virtual-display creation may eagerly enable HDR. Default to no state change so
+      // "Do not change HDR" preserves the retained Windows setting.
+      bool virtual_display_hdr_requested = false;
       display_helper_integration::helpers::SessionDisplayConfigurationHelper initial_display_helper(config::video, *session, true);
       if (auto initial_configuration = initial_display_helper.initial_virtual_display_configuration()) {
         if (initial_configuration->m_resolution &&
