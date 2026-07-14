@@ -3028,11 +3028,14 @@ namespace VDISPLAY_SUNSHINE {
 
     MonitorTargetPresence monitor_target_presence(RecoveryMonitorState &state) {
       auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
-      if (!devices || devices->empty()) {
-        // Either enumeration failed outright (nullopt) or the CCD subsystem returned no valid
-        // paths (empty vector, e.g. during transient topology churn).  Treat both as "unknown"
-        // rather than letting an empty list fall through to "missing".
+      if (!devices) {
+        // Enumeration failed, so the target's presence cannot be determined yet.
         return MonitorTargetPresence::unknown;
+      }
+      if (devices->empty()) {
+        // A successful empty enumeration is definitive on a headless system. Let the
+        // normal missing-target grace period recreate the virtual display.
+        return MonitorTargetPresence::missing;
       }
 
       const bool has_stable_identity =
