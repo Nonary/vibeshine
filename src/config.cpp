@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <filesystem>
@@ -842,6 +843,7 @@ namespace config {
 #endif
       true,  // use_sunshine_virtual_display_driver
       false,  // activate_virtual_display
+      250,  // virtual_display_scale_percent
       0,  // virtual_display_permanent_count
       false,  // virtual_display_permanent_count_configured
       {},  // snapshot_exclude_devices
@@ -1575,7 +1577,7 @@ namespace config {
     int_between_f(vars, "rtx_hdr_contrast", video.rtx_hdr.contrast, {-100, 100});
     int_between_f(vars, "rtx_hdr_saturation", video.rtx_hdr.saturation, {-100, 100});
     int_between_f(vars, "rtx_hdr_middle_gray", video.rtx_hdr.middle_gray, {10, 100});
-    int_between_f(vars, "rtx_hdr_peak_brightness", video.rtx_hdr.peak_brightness, {400, 1500});
+    int_between_f(vars, "rtx_hdr_peak_brightness", video.rtx_hdr.peak_brightness, {400, 2000});
 
     string_f(vars, "capture", video.capture);
     bool_f(vars, "wgc_pacing_smoothing", video.wgc_pacing_smoothing);
@@ -1621,6 +1623,17 @@ namespace config {
     generic_f(vars, "dd_display_helper_engine", video.dd.display_helper_engine, dd::helper_engine_from_view);
     bool_f(vars, "dd_use_sunshine_virtual_display_driver", video.dd.use_sunshine_virtual_display_driver);
     bool_f(vars, "dd_activate_virtual_display", video.dd.activate_virtual_display);
+    {
+      int value = video.dd.virtual_display_scale_percent;
+      int_f(vars, "dd_virtual_display_scale", value);
+      constexpr std::array allowed_scales {0, 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500};
+      if (std::ranges::find(allowed_scales, value) != allowed_scales.end()) {
+        video.dd.virtual_display_scale_percent = value;
+      } else {
+        BOOST_LOG(warning) << "Ignoring unsupported virtual display scale " << value
+                           << "%; use 0, 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, or 500.";
+      }
+    }
     bool_f(vars, "vulkan_hdr_layer", video.dd.vulkan_hdr_layer);
     {
       auto it = vars.find("dd_virtual_display_permanent_count");
@@ -2216,6 +2229,7 @@ namespace config {
         "dd_snapshot_restore_hotkey_modifiers",
         "dd_use_sunshine_virtual_display_driver",
         "dd_activate_virtual_display",
+        "dd_virtual_display_scale",
         "dd_virtual_display_permanent_count",
         "dd_mode_remapping",
         "dd_wa_dummy_plug_hdr10",
@@ -2453,6 +2467,7 @@ namespace config {
       const auto prev_dd_paused_virtual_display_timeout_secs = video.dd.paused_virtual_display_timeout_secs;
       const auto prev_dd_use_sunshine_virtual_display_driver = video.dd.use_sunshine_virtual_display_driver;
       const auto prev_dd_activate_virtual_display = video.dd.activate_virtual_display;
+      const auto prev_dd_virtual_display_scale_percent = video.dd.virtual_display_scale_percent;
       const auto prev_dd_virtual_display_permanent_count = video.dd.virtual_display_permanent_count;
       const auto prev_dd_virtual_display_permanent_count_configured = video.dd.virtual_display_permanent_count_configured;
       const auto prev_dd_snapshot_exclude_devices = video.dd.snapshot_exclude_devices;
@@ -2529,6 +2544,7 @@ namespace config {
                                      (prev_dd_paused_virtual_display_timeout_secs != video.dd.paused_virtual_display_timeout_secs) ||
                                      (prev_dd_use_sunshine_virtual_display_driver != video.dd.use_sunshine_virtual_display_driver) ||
                                      (prev_dd_activate_virtual_display != video.dd.activate_virtual_display) ||
+                                     (prev_dd_virtual_display_scale_percent != video.dd.virtual_display_scale_percent) ||
                                      (prev_dd_virtual_display_permanent_count != video.dd.virtual_display_permanent_count) ||
                                      (prev_dd_virtual_display_permanent_count_configured != video.dd.virtual_display_permanent_count_configured) ||
                                      (prev_dd_snapshot_exclude_devices != video.dd.snapshot_exclude_devices) ||

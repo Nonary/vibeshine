@@ -123,7 +123,7 @@ namespace config {
       int contrast;  ///< -100..100 (overlay "Contrast", default 0 = neutral)
       int saturation;  ///< -100..100 (overlay "Saturation", default 0 = neutral)
       int middle_gray;  ///< 10..100 (overlay "Middle Gray", default 50)
-      int peak_brightness;  ///< 400..1500 nits (overlay "Peak Brightness", default 1000)
+      int peak_brightness;  ///< 400..2000 nits (overlay "Peak Brightness", default 1000)
     } rtx_hdr;
 
     std::string capture;
@@ -206,6 +206,7 @@ namespace config {
       std::uint32_t snapshot_restore_hotkey_modifiers;  ///< Modifier flags for the restore hotkey.
       bool use_sunshine_virtual_display_driver;  ///< Use the Vibeshine Display Driver instead of rollback drivers such as SudoVDA.
       bool activate_virtual_display;  ///< Auto-activate Sunshine virtual display when selected as the target output.
+      int virtual_display_scale_percent;  ///< Windows scale for virtual displays (0 preserves Windows' existing choice).
       int virtual_display_permanent_count;  ///< Number of always-present Sunshine virtual displays to request when explicitly configured.
       bool virtual_display_permanent_count_configured;  ///< False preserves installs that predate this setting.
       std::vector<std::string> snapshot_exclude_devices;  ///< Device IDs to skip when saving display snapshots.

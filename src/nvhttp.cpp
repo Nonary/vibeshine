@@ -2302,11 +2302,31 @@ namespace nvhttp {
                              << "' for runtime overrides; using launch uniqueid " << launch_client_uuid << ".";
           client_uuid = launch_client_uuid;
         }
-        if (auto client_settings = get_named_cert_by_uuid(client_uuid)) {
+        const auto client_settings = get_named_cert_by_uuid(client_uuid);
+        if (client_settings) {
           for (const auto &[k, v] : client_settings->config_overrides) {
             overrides.insert_or_assign(k, v);
           }
         }
+
+#ifdef _WIN32
+        // "Auto" client peak brightness follows the selected Windows HDR calibration
+        // profile's MHC2 peak. An explicit app/client override remains authoritative.
+        if (client_settings &&
+            !client_settings->hdr_profile.empty() &&
+            !overrides.contains("rtx_hdr_peak_brightness")) {
+          if (const auto profile_peak = VDISPLAY::hdr_profile_peak_luminance_nits(client_settings->hdr_profile)) {
+            const auto effective_peak = std::clamp<std::uint32_t>(*profile_peak, 400, 2000);
+            overrides.insert_or_assign("rtx_hdr_peak_brightness", std::to_string(effective_peak));
+            BOOST_LOG(info) << "HDR peak: using " << effective_peak << " nits from MHC2 profile '"
+                            << client_settings->hdr_profile << "'"
+                            << (*profile_peak == effective_peak ? "." : " (clamped to supported range).");
+          } else {
+            BOOST_LOG(warning) << "HDR peak: profile '" << client_settings->hdr_profile
+                               << "' has no readable MHC2 peak; using the configured default.";
+          }
+        }
+#endif
 
         config::set_runtime_config_overrides(std::move(overrides));
         runtime_overrides_applied = true;

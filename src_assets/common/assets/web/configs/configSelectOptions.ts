@@ -541,6 +541,16 @@ export function getConfigSelectOptions(
       ];
       return ensureIncludesCurrentValue(options, ctx.currentValue);
     }
+    case 'dd_virtual_display_scale': {
+      const options: ConfigSelectOption[] = [
+        { label: t('config.virtual_display_scale_auto'), value: 0 },
+        ...[100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500].map((value) => ({
+          label: `${value}%`,
+          value,
+        })),
+      ];
+      return ensureIncludesCurrentValue(options, ctx.currentValue);
+    }
     default:
       return [];
   }

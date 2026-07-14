@@ -217,6 +217,7 @@ namespace webrtc_stream {
       bool prefer_sdr_10bit = false;
       bool force_sdr = false;
       bool rtx_hdr_active = false;
+      int rtx_hdr_peak_nits = 1000;
       int audio_channels = 0;
       bool host_audio = false;
 
@@ -2237,6 +2238,7 @@ namespace webrtc_stream {
                               config.dynamicRange > 0 &&
                               !config.prefer_sdr_10bit &&
                               !config.force_sdr;
+      config.rtx_hdr_peak_nits = std::clamp(config::video.rtx_hdr.peak_brightness, 400, 2000);
     }
 
     audio::config_t build_audio_config(const SessionOptions &options) {
@@ -2499,6 +2501,7 @@ namespace webrtc_stream {
       key.prefer_sdr_10bit = video_config.prefer_sdr_10bit;
       key.force_sdr = video_config.force_sdr;
       key.rtx_hdr_active = video_config.rtx_hdr_active;
+      key.rtx_hdr_peak_nits = video_config.rtx_hdr_peak_nits;
       key.audio_channels = options.audio_channels.value_or(kDefaultAudioChannels);
       key.host_audio = options.host_audio;
       return key;

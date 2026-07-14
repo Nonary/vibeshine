@@ -2251,12 +2251,6 @@ namespace video {
   }
 
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
-  // The NGX TrueHDR model's output tops out around 1500 nits, so we advertise that as the HDR
-  // volume regardless of the per-app peak-brightness dial. The dial varies the actual rendered
-  // luminance (which never exceeds this ceiling), so a fixed honest ceiling keeps the client's
-  // tone-mapping stable and means we never have to re-send metadata when the dial is tuned live.
-  constexpr uint16_t RTX_HDR_PEAK_NITS = 1500;
-
   /**
    * @brief Synthesize Rec.2020/D65 HDR10 metadata for an RTX HDR (SDR->HDR) stream.
    *
@@ -2265,16 +2259,17 @@ namespace video {
    * volume the TrueHDR conversion targets, not whatever the panel reports. Shared by every
    * HDR-metadata producer so the bitstream SEI and the control-channel metadata stay consistent.
    */
-  SS_HDR_METADATA synthesize_rtx_hdr_metadata() {
+  SS_HDR_METADATA synthesize_rtx_hdr_metadata(const int peak_nits) {
+    const auto safe_peak_nits = static_cast<uint16_t>(std::clamp(peak_nits, 400, 2000));
     SS_HDR_METADATA m {};
     m.displayPrimaries[0] = {35400, 14600};  // R (Rec.2020, normalized to 50000)
     m.displayPrimaries[1] = {8500, 39850};  // G
     m.displayPrimaries[2] = {6550, 2300};  // B
     m.whitePoint = {15635, 16450};  // D65
-    m.maxDisplayLuminance = RTX_HDR_PEAK_NITS;  // nits
+    m.maxDisplayLuminance = safe_peak_nits;  // nits
     m.minDisplayLuminance = 1;  // 1/10000th nit (~0)
-    m.maxContentLightLevel = RTX_HDR_PEAK_NITS;  // nits
-    m.maxFrameAverageLightLevel = RTX_HDR_PEAK_NITS / 4;  // nits
+    m.maxContentLightLevel = safe_peak_nits;  // nits
+    m.maxFrameAverageLightLevel = safe_peak_nits / 4;  // nits
     return m;
   }
 #endif
@@ -3062,7 +3057,7 @@ namespace video {
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
         if (config.rtx_hdr_active) {
           // SDR source + TrueHDR: report the conversion's target peak, not the capture panel's.
-          result->hdr_metadata = synthesize_rtx_hdr_metadata();
+          result->hdr_metadata = synthesize_rtx_hdr_metadata(config.rtx_hdr_peak_nits);
           result->hdr_metadata_valid = true;
           BOOST_LOG(info) << "RTX HDR: synthesized HDR10 metadata (peak " << result->hdr_metadata.maxDisplayLuminance << " nits) for SDR source";
         } else

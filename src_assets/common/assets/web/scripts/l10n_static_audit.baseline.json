@@ -1867,7 +1867,7 @@
       "message": "Hard-coded template text should use i18n: Override HDR values directly"
     },
     {
-      "fingerprint": "hardcoded-template-text|configs/tabs/AudioVideo.vue|228|||tools\\audio-info.exe||",
+      "fingerprint": "hardcoded-template-text|configs/tabs/AudioVideo.vue|247|||tools\\audio-info.exe||",
       "rule": "hardcoded-template-text",
       "file": "configs/tabs/AudioVideo.vue",
       "locale": null,
@@ -2479,7 +2479,7 @@
       "message": "Hard-coded UI property \"message\" should use i18n: host_info fetch failed"
     },
     {
-      "fingerprint": "hardcoded-ui-prop|views/ClientManagementView.vue|1648|||${displayName} - ${value}${suffix}||",
+      "fingerprint": "hardcoded-ui-prop|views/ClientManagementView.vue|1785|||${displayName} - ${value}${suffix}||",
       "rule": "hardcoded-ui-prop",
       "file": "views/ClientManagementView.vue",
       "locale": null,
@@ -58243,7 +58243,7 @@
       "message": "zh_TW.json is missing key frameLimiter.virtual.step1"
     },
     {
-      "fingerprint": "hardcoded-ui-prop|stores/config.ts|717|||Invalid manual resolution. Use WIDTHxHEIGHT (e.g., 2560x1440).||",
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|718|||Invalid manual resolution. Use WIDTHxHEIGHT (e.g., 2560x1440).||",
       "rule": "hardcoded-ui-prop",
       "file": "stores/config.ts",
       "locale": null,
@@ -58252,7 +58252,7 @@
       "message": "Hard-coded UI property \"message\" should use i18n: Invalid manual resolution. Use WIDTHxHEIGHT (e.g., 2560x1440)."
     },
     {
-      "fingerprint": "hardcoded-ui-prop|stores/config.ts|736|||Invalid manual refresh rate. Use a positive number, e.g., 60 or 59.94.||",
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|737|||Invalid manual refresh rate. Use a positive number, e.g., 60 or 59.94.||",
       "rule": "hardcoded-ui-prop",
       "file": "stores/config.ts",
       "locale": null,
@@ -58261,7 +58261,7 @@
       "message": "Hard-coded UI property \"message\" should use i18n: Invalid manual refresh rate. Use a positive number, e.g., 60 or 59.94."
     },
     {
-      "fingerprint": "hardcoded-ui-prop|stores/config.ts|763|||Invalid resolution in Display mode remapping. Use WIDTHxHEIGHT (e.g., 1920x1080) or leave blank.||",
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|764|||Invalid resolution in Display mode remapping. Use WIDTHxHEIGHT (e.g., 1920x1080) or leave blank.||",
       "rule": "hardcoded-ui-prop",
       "file": "stores/config.ts",
       "locale": null,
@@ -58270,7 +58270,7 @@
       "message": "Hard-coded UI property \"message\" should use i18n: Invalid resolution in Display mode remapping. Use WIDTHxHEIGHT (e.g., 1920x1080) or leave blank."
     },
     {
-      "fingerprint": "hardcoded-ui-prop|stores/config.ts|778|||Invalid refresh rate in remapping. Use a positive number or leave blank.||",
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|779|||Invalid refresh rate in remapping. Use a positive number or leave blank.||",
       "rule": "hardcoded-ui-prop",
       "file": "stores/config.ts",
       "locale": null,
@@ -58279,7 +58279,7 @@
       "message": "Hard-coded UI property \"message\" should use i18n: Invalid refresh rate in remapping. Use a positive number or leave blank."
     },
     {
-      "fingerprint": "hardcoded-ui-prop|stores/config.ts|785|||For refresh-rate-only mappings, Final refresh rate is required.||",
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|786|||For refresh-rate-only mappings, Final refresh rate is required.||",
       "rule": "hardcoded-ui-prop",
       "file": "stores/config.ts",
       "locale": null,
@@ -58288,7 +58288,7 @@
       "message": "Hard-coded UI property \"message\" should use i18n: For refresh-rate-only mappings, Final refresh rate is required."
     },
     {
-      "fingerprint": "hardcoded-ui-prop|stores/config.ts|796|||Invalid refresh rate in remapping. Use a positive number or leave blank.||",
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|797|||Invalid refresh rate in remapping. Use a positive number or leave blank.||",
       "rule": "hardcoded-ui-prop",
       "file": "stores/config.ts",
       "locale": null,
@@ -58297,7 +58297,7 @@
       "message": "Hard-coded UI property \"message\" should use i18n: Invalid refresh rate in remapping. Use a positive number or leave blank."
     },
     {
-      "fingerprint": "hardcoded-ui-prop|stores/config.ts|806|||For mixed mappings, specify at least one Final field.||",
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|807|||For mixed mappings, specify at least one Final field.||",
       "rule": "hardcoded-ui-prop",
       "file": "stores/config.ts",
       "locale": null,
@@ -58306,7 +58306,7 @@
       "message": "Hard-coded UI property \"message\" should use i18n: For mixed mappings, specify at least one Final field."
     },
     {
-      "fingerprint": "hardcoded-ui-prop|stores/config.ts|820|||For resolution-only mappings, Final resolution is required.||",
+      "fingerprint": "hardcoded-ui-prop|stores/config.ts|821|||For resolution-only mappings, Final resolution is required.||",
       "rule": "hardcoded-ui-prop",
       "file": "stores/config.ts",
       "locale": null,
