@@ -516,9 +516,7 @@ namespace VDISPLAY_SUNSHINE {
           );
         }
       }
-      // Virtual displays always target 4x the requested refresh (or the highest the driver can
-      // provide) for smooth pacing; frame generation reuses the same multiplier.
-      const int refresh_multiplier = std::max(4, framegen_refresh_multiplier);
+      const int refresh_multiplier = std::max(1, framegen_refresh_multiplier);
       if (refresh_multiplier > 1 && base_fps_millihz > 0) {
         const uint64_t minimum_millihz = static_cast<uint64_t>(base_fps_millihz) * static_cast<uint64_t>(refresh_multiplier);
         const uint32_t safe_minimum = static_cast<uint32_t>(std::min<uint64_t>(minimum_millihz, std::numeric_limits<uint32_t>::max()));
@@ -4368,6 +4366,11 @@ namespace VDISPLAY_SUNSHINE {
       }
 
       const uint32_t requested_fps = apply_refresh_overrides(fps, base_fps_millihz, framegen_refresh_active ? framegen_refresh_multiplier : 1);
+      // The driver derives its complete mode catalog from the descriptor timing. Keep the
+      // descriptor at the client/base rate so it can advertise both that mode and 4x; the
+      // display helper selects requested_fps after the monitor arrives when a fixed refresh
+      // policy needs to start above the base rate.
+      const uint32_t descriptor_fps = base_fps_millihz > 0 ? base_fps_millihz : requested_fps;
       const auto display_id = client_uuid_to_virtual_display_id(guid);
       const auto lease_id = generate_driver_lease_id();
       const auto dpi_settings_prefix = virtual_display_dpi_settings_prefix(display_id);
@@ -4394,7 +4397,7 @@ namespace VDISPLAY_SUNSHINE {
           sunshine_driver::kMaxPhysicalSizeMillimeters
         );
       }
-      create_request.refresh_rate_millihz = requested_fps;
+      create_request.refresh_rate_millihz = descriptor_fps;
       create_request.requested_timeout_ms = DRIVER_LEASE_TIMEOUT_MS;
       create_request.hdr_max_luminance_nits = static_cast<std::uint32_t>(
         std::clamp(config::video.rtx_hdr.peak_brightness, 400, 2000)

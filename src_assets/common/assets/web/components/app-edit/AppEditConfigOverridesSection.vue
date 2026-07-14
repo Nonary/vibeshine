@@ -810,6 +810,20 @@ function normalizeOverrideRecord(value: unknown): Record<string, unknown> {
     if (rawKey !== key && Object.prototype.hasOwnProperty.call(normalized, key)) {
       continue;
     }
+    if (key === 'frame_limiter_auto_virtual_framegen') {
+      const mode = String(rawValue ?? '')
+        .toLowerCase()
+        .trim();
+      normalized[key] =
+        mode === 'legacy' || mode === '2x' || mode === 'fixed-2x'
+          ? 'legacy'
+          : rawValue === false ||
+              rawValue === 0 ||
+              ['false', 'no', 'disable', 'disabled', 'off', '0'].includes(mode)
+            ? 'disabled'
+            : 'enabled';
+      continue;
+    }
     normalized[key] = cloneValue(rawValue);
   }
   return normalized;

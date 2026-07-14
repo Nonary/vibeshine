@@ -307,12 +307,10 @@ namespace display_helper_integration::helpers {
     BOOST_LOG(debug) << "metadata_requests_virtual: " << metadata_requests_virtual;
     const bool session_requests_virtual = session_.virtual_display || config_selects_virtual || metadata_requests_virtual;
     BOOST_LOG(debug) << "session_requests_virtual: " << session_requests_virtual;
-    // Virtual displays always run at 4x the requested refresh (or the highest the driver can
-    // provide) for smooth pacing; frame generation reuses the same multiplier.
-    const int refresh_multiplier = std::max(
-      session_requests_virtual ? 4 : 1,
-      framegen_active ? rtsp_stream::framegen_refresh_multiplier(session_) : 1
-    );
+    // Fixed-refresh compatibility mode starts at its requested multiplier. The smoother
+    // capture mode begins at the client rate and is promoted dynamically while a game is active.
+    const int refresh_multiplier =
+      framegen_active ? rtsp_stream::framegen_refresh_multiplier(session_) : 1;
     const int minimum_fps = refresh_multiplier > 1 ? rtsp_stream::saturating_refresh_fps(base_fps, refresh_multiplier) : base_fps;
     // Use the higher of display_fps (which may already be raised by framegen) or the minimum
     const int effective_virtual_display_fps = std::max(display_fps, minimum_fps);

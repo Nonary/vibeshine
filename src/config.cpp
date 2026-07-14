@@ -21,6 +21,7 @@
 
 // lib includes
 #include <boost/asio.hpp>
+#include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
@@ -920,7 +921,7 @@ namespace config {
     "auto",  // provider
     0,  // fps_limit
     false,  // disable_vsync
-    true  // auto_virtual_framegen
+    frame_limiter_t::virtual_display_capture_mode_e::enabled
   };
 
   // Windows-only: RTSS defaults
@@ -1687,7 +1688,32 @@ namespace config {
     int_between_f(vars, "frame_limiter_fps_limit", frame_limiter.fps_limit, {0, 1000});
     bool_f(vars, "frame_limiter_disable_vsync", frame_limiter.disable_vsync);
     bool_f(vars, "rtss_disable_vsync_ullm", frame_limiter.disable_vsync);
-    bool_f(vars, "frame_limiter_auto_virtual_framegen", frame_limiter.auto_virtual_framegen);
+    {
+      std::string virtual_capture_mode;
+      string_f(vars, "frame_limiter_auto_virtual_framegen", virtual_capture_mode);
+      if (!virtual_capture_mode.empty()) {
+        boost::algorithm::to_lower(virtual_capture_mode);
+        boost::algorithm::trim(virtual_capture_mode);
+        using mode_e = frame_limiter_t::virtual_display_capture_mode_e;
+        if (virtual_capture_mode == "legacy" || virtual_capture_mode == "2x" ||
+            virtual_capture_mode == "fixed-2x" || virtual_capture_mode == "fixed_2x") {
+          frame_limiter.virtual_display_capture_mode = mode_e::legacy;
+        } else if (virtual_capture_mode == "false" || virtual_capture_mode == "no" ||
+                   virtual_capture_mode == "disable" || virtual_capture_mode == "disabled" ||
+                   virtual_capture_mode == "off" || virtual_capture_mode == "0") {
+          frame_limiter.virtual_display_capture_mode = mode_e::disabled;
+        } else if (virtual_capture_mode == "enabled" || virtual_capture_mode == "enable" ||
+                   virtual_capture_mode == "true" || virtual_capture_mode == "yes" ||
+                   virtual_capture_mode == "on" || virtual_capture_mode == "1" ||
+                   virtual_capture_mode == "smooth" || virtual_capture_mode == "smoother") {
+          frame_limiter.virtual_display_capture_mode = mode_e::enabled;
+        } else {
+          BOOST_LOG(warning) << "config: Unknown frame_limiter_auto_virtual_framegen mode '"
+                             << virtual_capture_mode << "'; using enabled.";
+          frame_limiter.virtual_display_capture_mode = mode_e::enabled;
+        }
+      }
+    }
     string_f(vars, "rtss_install_path", rtss.install_path);
     string_f(vars, "rtss_frame_limit_type", rtss.frame_limit_type);
     if (video.dd.wa.dummy_plug_hdr10 && !frame_limiter.disable_vsync) {

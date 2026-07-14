@@ -417,6 +417,23 @@ export function getConfigSelectOptions(
       ];
       return ensureIncludesCurrentValue(options, ctx.currentValue);
     }
+    case 'frame_limiter_auto_virtual_framegen': {
+      const options = [
+        {
+          label: translateOr(t, 'frameLimiter.virtual.modeEnabled', 'Enabled (recommended)'),
+          value: 'enabled',
+        },
+        {
+          label: translateOr(t, 'frameLimiter.virtual.modeDisabled', 'Disabled'),
+          value: 'disabled',
+        },
+        {
+          label: translateOr(t, 'frameLimiter.virtual.modeLegacy', 'Legacy (fixed 2× refresh)'),
+          value: 'legacy',
+        },
+      ];
+      return ensureIncludesCurrentValue(options, ctx.currentValue);
+    }
     case 'rtss_frame_limit_type': {
       const options = [
         { label: translateOr(t, 'frameLimiter.syncLimiter.keep', 'Keep'), value: '' },

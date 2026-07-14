@@ -5,6 +5,7 @@
 #include "rtx_hdr_runtime.h"
 
 #include "foreground_app.h"
+#include "game_activity.h"
 
 #include "src/config.h"
 #include "src/logging.h"
@@ -142,7 +143,7 @@ namespace platf::rtx_hdr {
         return std::chrono::steady_clock::now();
       };
       backend.foreground_snapshot = [](const std::optional<RECT> &capture_rect) {
-        return platf::foreground_app::snapshot(capture_rect);
+        return platf::game_activity::foreground_snapshot(capture_rect);
       };
       backend.resolve_profile = [](const std::string &executable) {
         return resolve_profile_for_executable(executable);

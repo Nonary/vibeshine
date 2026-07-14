@@ -286,6 +286,12 @@ namespace config {
   };
 
   struct frame_limiter_t {
+    enum class virtual_display_capture_mode_e {
+      enabled,
+      disabled,
+      legacy,
+    };
+
     bool enable {false};
 
     // Provider selector. Supported values: "auto", "nvidia-control-panel", "rtss".
@@ -299,9 +305,24 @@ namespace config {
     // Restores the previous VSYNC state when streaming stops.
     bool disable_vsync {false};
 
-    // Automatically apply the virtual-display frame-generation pacing policy: 4x virtual refresh
-    // plus a matching frame limit when the effective capture path is WGC.
-    bool auto_virtual_framegen {true};
+    // Virtual-display capture policy. Enabled dynamically switches between 1x desktop and
+    // 4x game refresh with a matching limiter; legacy uses a fixed 2x refresh; disabled
+    // leaves both automatic refresh adjustment and the virtual-display limiter off.
+    virtual_display_capture_mode_e virtual_display_capture_mode {
+      virtual_display_capture_mode_e::enabled
+    };
+
+    [[nodiscard]] bool virtual_display_limiter_enabled() const {
+      return virtual_display_capture_mode != virtual_display_capture_mode_e::disabled;
+    }
+
+    [[nodiscard]] bool game_aware_virtual_display_refresh_enabled() const {
+      return virtual_display_capture_mode == virtual_display_capture_mode_e::enabled;
+    }
+
+    [[nodiscard]] int fixed_virtual_display_refresh_multiplier() const {
+      return virtual_display_capture_mode == virtual_display_capture_mode_e::legacy ? 2 : 1;
+    }
   };
 
   // Windows-only: RTSS integration settings

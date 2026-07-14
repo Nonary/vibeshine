@@ -403,9 +403,7 @@ namespace VDISPLAY_SUDOVDA {
           );
         }
       }
-      // Virtual displays always target 4x the requested refresh (or the highest the driver can
-      // provide) for smooth pacing; frame generation reuses the same multiplier.
-      const int refresh_multiplier = std::max(4, framegen_refresh_multiplier);
+      const int refresh_multiplier = std::max(1, framegen_refresh_multiplier);
       if (refresh_multiplier > 1 && base_fps_millihz > 0) {
         const uint64_t minimum_millihz = static_cast<uint64_t>(base_fps_millihz) * static_cast<uint64_t>(refresh_multiplier);
         const uint32_t safe_minimum = static_cast<uint32_t>(std::min<uint64_t>(minimum_millihz, std::numeric_limits<uint32_t>::max()));
