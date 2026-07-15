@@ -1912,7 +1912,13 @@ namespace platf::dxgi {
       }
 
       auto nvenc_colorspace = nvenc::nvenc_colorspace_from_sunshine_colorspace(colorspace);
-      if (!nvenc_d3d->create_encoder(config::video.nv, client_config, nvenc_colorspace, buffer_format)) {
+      if (!nvenc_d3d->create_encoder(
+            config::video.nv,
+            client_config,
+            nvenc_colorspace,
+            buffer_format,
+            hdr_metadata_valid ? &hdr_metadata : nullptr
+          )) {
         return false;
       }
 

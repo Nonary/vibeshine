@@ -817,6 +817,15 @@ namespace video {
       return device->nvenc->set_bitrate(bitrate_kbps);
     }
 
+    void set_hdr_metadata(const SS_HDR_METADATA &metadata) override {
+      if (!device || !device->nvenc) {
+        return;
+      }
+      device->hdr_metadata = metadata;
+      device->hdr_metadata_valid = true;
+      device->nvenc->set_hdr_metadata(metadata);
+    }
+
     nvenc::nvenc_encoded_frame encode_frame(uint64_t frame_index) {
       if (!device || !device->nvenc) {
         return {};
