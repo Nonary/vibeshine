@@ -249,6 +249,13 @@ namespace video {
     virtual bool set_bitrate(int bitrate_kbps) {
       return false;
     }
+
+    /**
+     * @brief Replace static HDR mastering metadata used for subsequent encoded frames.
+     * @param metadata New mastering-display and content-light metadata.
+     */
+    virtual void set_hdr_metadata(const SS_HDR_METADATA &) {
+    }
   };
 
   // encoders
