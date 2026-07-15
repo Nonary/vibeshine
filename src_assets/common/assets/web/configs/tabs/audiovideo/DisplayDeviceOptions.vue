@@ -494,11 +494,11 @@ function clearSnapshotHotkey(): void {
 
           <!-- Snapshot for recovery -->
           <template v-if="config.dd_configuration_option !== 'disabled'">
-            <div class="px-0 text-sm font-medium">Save a display snapshot (improves stability)</div>
+            <div class="px-0 text-sm font-medium">
+              {{ $t('troubleshooting.dd_golden_title') }}
+            </div>
             <p class="text-[11px] opacity-60 mt-1">
               {{ $t('troubleshooting.dd_golden_help') }}
-              Saving a snapshot of your ideal monitor setup helps Vibeshine recover when Windows
-              fails to restore displays after streaming.
             </p>
 
             <div
@@ -528,7 +528,7 @@ function clearSnapshotHotkey(): void {
                       ? $t('troubleshooting.dd_golden_status_present')
                       : goldenExists === false
                         ? $t('troubleshooting.dd_golden_status_missing')
-                        : 'Checking…'
+                        : $t('apps.framegen.health_checking')
                   }}
                 </span>
               </div>

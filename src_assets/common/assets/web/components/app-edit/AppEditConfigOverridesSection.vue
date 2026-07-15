@@ -4,38 +4,50 @@
   >
     <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
       <div class="space-y-1">
-        <h3 class="text-base font-semibold text-dark dark:text-light">Setting Overrides</h3>
+        <h3 class="text-base font-semibold text-dark dark:text-light">
+          {{ $t('apps.overrides.title') }}
+        </h3>
         <p class="text-[12px] leading-relaxed opacity-70">{{ descriptionText }}</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <n-tag size="small" type="primary">{{ activeOverrideCount }} active</n-tag>
-        <n-button size="small" type="primary" @click="openAddSettings">Add Setting</n-button>
-        <n-button v-if="showResetAll" size="small" tertiary @click="clearAll">Delete All</n-button>
+        <n-tag size="small" type="primary">{{ $t('_common.active') }}: {{ activeOverrideCount }}</n-tag>
+        <n-button size="small" type="primary" @click="openAddSettings">
+          {{ $t('apps.overrides.add_setting') }}
+        </n-button>
+        <n-button v-if="showResetAll" size="small" tertiary @click="clearAll">
+          {{ $t('_common.clear_all') }}
+        </n-button>
       </div>
     </div>
 
     <div class="min-w-0 space-y-3">
       <div class="override-summary-row">
         <div class="min-w-0 space-y-1">
-          <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">Active Overrides</h4>
+          <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">
+            {{ $t('apps.overrides.active_overrides') }}
+          </h4>
           <p class="text-[12px] opacity-60 leading-relaxed">
-            Adjust the values below to override the current global setting only for this
-            {{ scopeSummaryLabel }}.
+            {{ $t('apps.overrides.adjustment_hint', { scope: scopeSummaryLabel }) }}
           </p>
         </div>
-        <div class="configured-count">{{ activeOverrideCount }} configured</div>
+        <div class="configured-count">
+          {{ $t('apps.overrides.configured_count', { count: activeOverrideCount }) }}
+        </div>
       </div>
 
       <div
         v-if="overrideEntries.length === 0"
         class="rounded-xl border border-dashed border-dark/15 dark:border-light/15 px-4 py-8 text-center space-y-3"
       >
-        <div class="text-sm font-medium">No {{ scopeSummaryLabel }}-specific overrides yet.</div>
+        <div class="text-sm font-medium">
+          {{ $t('apps.overrides.no_overrides', { scope: scopeSummaryLabel }) }}
+        </div>
         <p class="mx-auto max-w-xl text-[12px] leading-relaxed opacity-60">
-          Add settings from the picker, then tune them here using the same controls as the main
-          configuration tabs.
+          {{ $t('apps.overrides.no_overrides_hint') }}
         </p>
-        <n-button size="small" type="primary" @click="openAddSettings">Add Setting</n-button>
+        <n-button size="small" type="primary" @click="openAddSettings">
+          {{ $t('apps.overrides.add_setting') }}
+        </n-button>
       </div>
 
       <div
@@ -50,12 +62,14 @@
             :desc="entry.desc"
             size="small"
             monospace
-            placeholder="e.g. 1920x1080"
+            placeholder="1920×1080"
             :model-value="forcedResolution"
             @update:model-value="(v) => setForcedResolution(String(v || ''))"
           >
             <template #actions>
-              <n-button size="tiny" tertiary @click="removeOverride(entry.key)">Delete</n-button>
+              <n-button size="tiny" tertiary @click="removeOverride(entry.key)">
+                {{ $t('_common.delete') }}
+              </n-button>
             </template>
             <template #meta>
               <span class="hidden sm:inline">
@@ -74,12 +88,14 @@
             size="small"
             monospace
             inputmode="numeric"
-            placeholder="e.g. 60"
+            placeholder="60"
             :model-value="forcedRefreshRate"
             @update:model-value="(v) => setForcedRefreshRate(String(v || ''))"
           >
             <template #actions>
-              <n-button size="tiny" tertiary @click="removeOverride(entry.key)">Delete</n-button>
+              <n-button size="tiny" tertiary @click="removeOverride(entry.key)">
+                {{ $t('_common.delete') }}
+              </n-button>
             </template>
             <template #meta>
               <span class="hidden sm:inline">
@@ -99,7 +115,9 @@
             @update:model-value="(v) => setForcedHdr(String(v || ''))"
           >
             <template #actions>
-              <n-button size="tiny" tertiary @click="removeOverride(entry.key)">Delete</n-button>
+              <n-button size="tiny" tertiary @click="removeOverride(entry.key)">
+                {{ $t('_common.delete') }}
+              </n-button>
             </template>
             <template #meta>
               <span class="hidden sm:inline">
@@ -123,14 +141,16 @@
             @update:model-value="(v) => setRenderedOverrideValue(entry.key, v)"
           >
             <template #actions>
-              <n-button size="tiny" tertiary @click="removeOverride(entry.key)">Delete</n-button>
+              <n-button size="tiny" tertiary @click="removeOverride(entry.key)">
+                {{ $t('_common.delete') }}
+              </n-button>
             </template>
             <template #meta>
               <span class="hidden sm:inline">
                 <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }} ·
               </span>
               <span>
-                Inherited:
+                {{ $t('_common.inherited') }}:
                 <span class="font-mono">{{ formatValueForKey(entry.key, entry.globalValue) }}</span>
               </span>
             </template>
@@ -145,20 +165,22 @@
             size="small"
             monospace
             :autosize="{ minRows: 2, maxRows: 10 }"
-            placeholder="JSON value"
+            :placeholder="$t('apps.overrides.json_value_placeholder')"
             :model-value="jsonDraft(entry.key)"
             @update:model-value="(v) => updateJsonDraft(entry.key, v)"
             @blur="() => commitJson(entry.key)"
           >
             <template #actions>
-              <n-button size="tiny" tertiary @click="removeOverride(entry.key)">Delete</n-button>
+              <n-button size="tiny" tertiary @click="removeOverride(entry.key)">
+                {{ $t('_common.delete') }}
+              </n-button>
             </template>
             <template #meta>
               <span class="hidden sm:inline">
                 <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }} ·
               </span>
               <span>
-                Inherited:
+                {{ $t('_common.inherited') }}:
                 <span class="font-mono">{{ formatValueForKey(entry.key, entry.globalValue) }}</span>
               </span>
             </template>
@@ -187,15 +209,14 @@
             <div class="flex min-w-0 items-start gap-2">
               <n-button size="small" quaternary @click="cancelAddSettings">
                 <i class="fas fa-arrow-left text-[12px]" />
-                <span class="ml-1">Back</span>
+                <span class="ml-1">{{ $t('_common.back') }}</span>
               </n-button>
               <div class="min-w-0 space-y-1">
                 <div class="text-base font-semibold text-dark dark:text-light">
-                  Add Setting Overrides
+                  {{ $t('apps.overrides.picker_title') }}
                 </div>
                 <p class="text-[12px] leading-relaxed opacity-70">
-                  Browse all supported settings, stage the ones you want, then save to add them to
-                  this {{ scopeSummaryLabel }}.
+                  {{ $t('apps.overrides.picker_subtitle', { scope: scopeSummaryLabel }) }}
                 </p>
               </div>
             </div>
@@ -206,7 +227,7 @@
                 :class="pickerPaneToggleClass('browse')"
                 @click="setPickerPane('browse')"
               >
-                <span>Browse Settings</span>
+                <span>{{ $t('_common.browse') }}</span>
                 <span class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-0.5 text-[10px]">
                   {{ filteredAvailableCount }}
                 </span>
@@ -216,7 +237,7 @@
                 :class="pickerPaneToggleClass('editor')"
                 @click="setPickerPane('editor')"
               >
-                <span>Configure Picks</span>
+                <span>{{ $t('apps.overrides.configure_picks') }}</span>
                 <span class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-0.5 text-[10px]">
                   {{ modalOverrideEntries.length }}
                 </span>
@@ -224,8 +245,7 @@
             </div>
 
             <div class="text-[12px] leading-relaxed opacity-60 xl:hidden">
-              Browse supported settings first, then switch to Configure Picks when you want to
-              review or fine-tune what you selected.
+              {{ $t('apps.overrides.picker_mobile_hint') }}
             </div>
           </div>
         </div>
@@ -242,10 +262,10 @@
               <div class="flex items-center justify-between gap-3">
                 <div class="space-y-1">
                   <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">
-                    Override Editor
+                    {{ $t('apps.overrides.override_editor') }}
                   </h4>
                   <p class="text-[12px] leading-relaxed opacity-60">
-                    Added settings appear here immediately so you can refine them before saving.
+                    {{ $t('apps.overrides.new_settings_hint') }}
                   </p>
                 </div>
                 <div
@@ -266,21 +286,22 @@
                   >
                     <i class="fas fa-hand-point-right text-sm" />
                   </div>
-                  <div class="mt-3 text-sm font-medium">Start by picking settings from the browser.</div>
+                  <div class="mt-3 text-sm font-medium">
+                    {{ $t('apps.overrides.empty_picker') }}
+                  </div>
                   <p class="mx-auto mt-2 max-w-xl text-[12px] leading-relaxed opacity-60">
-                    Select a section or search on the right, click Add on the settings you want,
-                    then refine them here before saving.
+                    {{ $t('apps.overrides.picker_empty_hint') }}
                   </p>
                   <div
                     class="mx-auto mt-4 max-w-sm rounded-xl border border-dark/10 bg-dark/5 p-3 text-left dark:border-light/10 dark:bg-light/5"
                   >
                     <div class="text-[11px] font-semibold uppercase tracking-wide opacity-60">
-                      Getting started
+                      {{ $t('apps.overrides.getting_started') }}
                     </div>
                     <ol class="mt-2 space-y-1 text-[12px] leading-relaxed opacity-70">
-                      <li>1. Search or pick a section on the right.</li>
-                      <li>2. Click Add on each setting you want to override.</li>
-                      <li>3. Review the selected list here, then save.</li>
+                      <li>1. {{ $t('apps.overrides.picker_empty_step_search') }}</li>
+                      <li>2. {{ $t('apps.overrides.picker_empty_step_add') }}</li>
+                      <li>3. {{ $t('apps.overrides.picker_empty_step_refine') }}</li>
                     </ol>
                   </div>
                 </div>
@@ -300,13 +321,13 @@
                     :desc="entry.desc"
                     size="small"
                     monospace
-                    placeholder="e.g. 1920x1080"
+                    placeholder="1920×1080"
                     :model-value="draftForcedResolution"
                     @update:model-value="(v) => setDraftForcedResolution(String(v || ''))"
                   >
                     <template #actions>
                       <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
-                        Delete
+                        {{ $t('_common.delete') }}
                       </n-button>
                     </template>
                     <template #meta>
@@ -327,13 +348,13 @@
                     size="small"
                     monospace
                     inputmode="numeric"
-                    placeholder="e.g. 60"
+                    placeholder="60"
                     :model-value="draftForcedRefreshRate"
                     @update:model-value="(v) => setDraftForcedRefreshRate(String(v || ''))"
                   >
                     <template #actions>
                       <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
-                        Delete
+                        {{ $t('_common.delete') }}
                       </n-button>
                     </template>
                     <template #meta>
@@ -357,7 +378,7 @@
                   >
                     <template #actions>
                       <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
-                        Delete
+                        {{ $t('_common.delete') }}
                       </n-button>
                     </template>
                     <template #meta>
@@ -383,7 +404,7 @@
                   >
                     <template #actions>
                       <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
-                        Delete
+                        {{ $t('_common.delete') }}
                       </n-button>
                     </template>
                     <template #meta>
@@ -391,7 +412,7 @@
                         <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }} ·
                       </span>
                       <span>
-                        Inherited:
+                        {{ $t('_common.inherited') }}:
                         <span class="font-mono">{{
                           formatValueForKey(entry.key, entry.globalValue)
                         }}</span>
@@ -408,14 +429,14 @@
                     size="small"
                     monospace
                     :autosize="{ minRows: 2, maxRows: 10 }"
-                    placeholder="JSON value"
+                    :placeholder="$t('apps.overrides.json_value_placeholder')"
                     :model-value="jsonDraftFor('draft', entry.key)"
                     @update:model-value="(v) => updateJsonDraftFor('draft', entry.key, v)"
                     @blur="() => commitJsonFor('draft', entry.key)"
                   >
                     <template #actions>
                       <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
-                        Delete
+                        {{ $t('_common.delete') }}
                       </n-button>
                     </template>
                     <template #meta>
@@ -423,7 +444,7 @@
                         <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }} ·
                       </span>
                       <span>
-                        Inherited:
+                        {{ $t('_common.inherited') }}:
                         <span class="font-mono">{{
                           formatValueForKey(entry.key, entry.globalValue)
                         }}</span>
@@ -447,18 +468,19 @@
                 <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div class="space-y-1">
                     <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">
-                      Browse Available Settings
+                      {{ $t('apps.overrides.browse_available') }}
                     </h4>
                     <p class="text-[12px] opacity-70 leading-relaxed">
-                      Explore every supported override by section. Search is optional and only
-                      narrows the list.
+                      {{ $t('apps.overrides.browse_available_hint') }}
                     </p>
                   </div>
                   <div class="self-start text-[11px] opacity-60">
-                    {{ filteredAvailableCount }} showing
-                    <span v-if="filteredAvailableCount !== availableEntries.length">
-                      of {{ availableEntries.length }}
-                    </span>
+                    {{
+                      $t('apps.overrides.showing_count', {
+                        shown: filteredAvailableCount,
+                        total: availableEntries.length,
+                      })
+                    }}
                   </div>
                 </div>
 
@@ -468,7 +490,7 @@
                     type="text"
                     clearable
                     class="min-w-0 flex-1"
-                    placeholder="Filter by setting name, key, description, or option value"
+                    :placeholder="$t('apps.overrides.filter_placeholder')"
                     @keydown.enter.prevent="addFirstFilteredEntry"
                   >
                     <template #suffix>
@@ -482,7 +504,7 @@
                     class="self-start md:shrink-0"
                     @click="resetFilters"
                   >
-                    Clear Filters
+                    {{ $t('clients.filters_clear') }}
                   </n-button>
                 </div>
               </div>
@@ -501,7 +523,7 @@
                   >
                     <div class="p-2">
                       <div class="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wide opacity-60">
-                        Sections
+                        {{ $t('apps.overrides.sections') }}
                       </div>
                       <div class="space-y-1">
                         <button
@@ -509,7 +531,7 @@
                           :class="filterNavClass(selectedGroupId === ALL_GROUPS_ID)"
                           @click="selectAvailableGroup(ALL_GROUPS_ID)"
                         >
-                          <span class="truncate">All sections</span>
+                          <span class="truncate">{{ $t('apps.overrides.all_sections') }}</span>
                           <span
                             class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-0.5 text-[10px] opacity-70"
                           >
@@ -550,7 +572,7 @@
                           :class="filterNavClass(selectedGroupId === ALL_GROUPS_ID)"
                           @click="selectAvailableGroup(ALL_GROUPS_ID)"
                         >
-                          <span class="truncate">All sections</span>
+                          <span class="truncate">{{ $t('apps.overrides.all_sections') }}</span>
                           <span
                             class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-0.5 text-[10px] opacity-70"
                           >
@@ -621,7 +643,7 @@
                                     class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary"
                                   >
                                     <i class="fas fa-plus text-[10px]" />
-                                    Add
+                                    {{ $t('_common.add') }}
                                   </span>
                                 </div>
                               </div>
@@ -644,19 +666,19 @@
                         <div class="text-sm font-medium">
                           {{
                             availableEntries.length === 0
-                              ? 'All supported settings are already added.'
-                              : 'No settings match the current filters.'
+                              ? $t('apps.overrides.all_settings_added')
+                              : $t('apps.overrides.no_matching_settings')
                           }}
                         </div>
                         <p class="text-[12px] opacity-60 leading-relaxed">
                           {{
                             availableEntries.length === 0
-                              ? 'Delete an existing override to free up its setting slot.'
-                              : 'Try a broader term or switch back to all sections.'
+                              ? $t('apps.overrides.all_settings_added_hint')
+                              : $t('apps.overrides.no_matching_settings_hint')
                           }}
                         </p>
                         <n-button v-if="hasFilterControls" size="small" tertiary @click="resetFilters">
-                          Reset Filters
+                          {{ $t('clients.filters_clear') }}
                         </n-button>
                       </div>
                     </div>
@@ -675,13 +697,15 @@
           <div class="text-[12px] leading-relaxed opacity-70">
             <span class="xl:hidden">{{ compactPickerFooterText }}</span>
             <span class="hidden xl:inline">
-              Review the override fields, then save when you are done.
+              {{ $t('apps.overrides.picker_footer') }}
             </span>
           </div>
           <div class="flex flex-wrap items-center justify-end gap-2">
-            <n-button size="small" tertiary @click="cancelAddSettings">Cancel</n-button>
+            <n-button size="small" tertiary @click="cancelAddSettings">{{
+              $t('_common.cancel')
+            }}</n-button>
             <n-button size="small" type="primary" @click="savePendingAdditions">
-              <span>Save</span>
+              <span>{{ $t('_common.save') }}</span>
               <span
                 class="ml-2 inline-flex min-w-[1.5rem] items-center justify-center rounded-full bg-white/20 px-1.5 py-0.5 text-[10px] font-semibold"
               >
@@ -757,24 +781,18 @@ const props = withDefaults(
   },
 );
 
-const descriptionText = computed(() => {
-  if (props.description) return props.description;
-  const scope = String(props.scopeLabel || 'application')
-    .toLowerCase()
-    .trim();
-  if (scope === 'client') {
-    return 'Override global settings for this client. Client overrides take precedence over app overrides and global config.';
-  }
-  return 'Override global settings for this application only. Network, security, and file-path settings are intentionally excluded.';
-});
-
 const scopeSummaryLabel = computed(() =>
   String(props.scopeLabel || 'application')
     .toLowerCase()
     .trim() === 'client'
-    ? 'client'
-    : 'application',
+    ? t('apps.overrides.scope_client')
+    : t('apps.overrides.scope_application'),
 );
+
+const descriptionText = computed(() => {
+  if (props.description) return props.description;
+  return t('apps.overrides.adjustment_hint', { scope: scopeSummaryLabel.value });
+});
 
 const configStore = useConfigStore();
 const configRef = (configStore as any).config;
@@ -988,15 +1006,36 @@ function prettifyKey(key: string): string {
     .join(' ');
 }
 
+const OVERRIDE_LABEL_KEYS: Record<string, string> = {
+  dd_virtual_display_scale: 'config.virtual_display_scale_label',
+};
+const OVERRIDE_DESC_KEYS: Record<string, string> = {
+  dd_virtual_display_scale: 'config.virtual_display_scale_desc',
+};
+
+function groupNameFor(groupId: string, fallback: string): string {
+  const keys: Record<string, string> = {
+    general: 'settings.tabs.general',
+    stats: 'navbar.stats',
+    input: 'settings.tabs.input',
+    av: 'settings.tabs.audio_video',
+    network: 'settings.tabs.network',
+    files: 'settings.tabs.files',
+    playnite: 'navbar.playnite',
+    advanced: 'settings.tabs.advanced',
+  };
+  return keys[groupId] ? t(keys[groupId]) : fallback;
+}
+
 function labelFor(key: string): string {
-  const k = `config.${key}`;
+  const k = OVERRIDE_LABEL_KEYS[key] ?? `config.${key}`;
   const v = t(k);
   if (!v || v === k) return prettifyKey(key);
   return v;
 }
 
 function descFor(key: string): string {
-  const k = `config.${key}_desc`;
+  const k = OVERRIDE_DESC_KEYS[key] ?? `config.${key}_desc`;
   const v = t(k);
   if (!v || v === k) return '';
   return v;
@@ -1333,7 +1372,7 @@ const allEntries = computed<Entry[]>(() => {
   const platform = platformKey();
   for (const tab of tabList) {
     const groupId = String((tab as any)?.id ?? '');
-    const groupName = String((tab as any)?.name ?? groupId);
+    const groupName = groupNameFor(groupId, String((tab as any)?.name ?? groupId));
     const options = (tab as any)?.options ?? {};
     if (!options || typeof options !== 'object') continue;
     for (const key of Object.keys(options)) {
@@ -1567,8 +1606,8 @@ const hasFilterControls = computed(
 );
 const compactPickerFooterText = computed(() =>
   pickerPane.value === 'editor'
-    ? 'Review and fine-tune the picked settings, then save when you are done.'
-    : 'Browse supported settings and add what you need. Open Configure Picks when you are ready to review them.',
+    ? t('apps.overrides.picker_footer_editor')
+    : t('apps.overrides.picker_footer_browse'),
 );
 
 async function scrollBrowseResultsToTop() {
@@ -1699,7 +1738,7 @@ function mapEntries(keys: string[]): Entry[] {
         desc: base?.desc ?? '',
         path: base?.path ?? k,
         groupId: base?.groupId ?? 'unknown',
-        groupName: base?.groupName ?? 'Unknown',
+        groupName: base?.groupName ?? t('_common.unknown'),
         synthetic: base?.synthetic,
         globalValue: base?.globalValue,
         options: base?.options ?? [],
@@ -1767,18 +1806,18 @@ function renderedOverrideValue(key: string): unknown {
 }
 
 function entryTypeLabel(key: string): string {
-  if (isSyntheticKey(key)) return 'Shortcut';
+  if (isSyntheticKey(key)) return t('apps.overrides.type.shortcut');
   switch (editorKind(key, browseModalOpen.value ? 'draft' : 'live')) {
     case 'boolean':
-      return 'Toggle';
+      return t('apps.overrides.type.toggle');
     case 'select':
-      return 'Choice';
+      return t('apps.overrides.type.choice');
     case 'number':
-      return 'Number';
+      return t('apps.overrides.type.number');
     case 'json':
-      return 'JSON';
+      return t('apps.overrides.type.json');
     default:
-      return 'Text';
+      return t('apps.overrides.type.text');
   }
 }
 
@@ -1855,9 +1894,9 @@ function editorKind(
 function overridePlaceholder(key: string, target: EditTarget = 'live'): string {
   switch (editorKind(key, target)) {
     case 'number':
-      return '(number)';
+      return t('apps.overrides.placeholder_number');
     case 'string':
-      return '(value)';
+      return t('apps.overrides.placeholder_value');
     default:
       return '';
   }
@@ -1987,7 +2026,7 @@ function commitJsonFor(target: EditTarget, key: string) {
   } catch (e: any) {
     errors.value = {
       ...errors.value,
-      [key]: e?.message ? String(e.message) : 'Invalid JSON',
+      [key]: e?.message ? String(e.message) : t('validation.invalid_json'),
     };
   }
 }

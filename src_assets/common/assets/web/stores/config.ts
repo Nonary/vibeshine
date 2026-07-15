@@ -710,7 +710,7 @@ export const useConfigStore = defineStore('config', () => {
     manualDirty.value = false;
   }
 
-  function validateManualSave(): { ok: true } | { ok: false; message: string } {
+  function validateManualSave(): { ok: true } | { ok: false; messageKey: string } {
     if (!manualDirty.value) return { ok: true };
     const data = (_data.value ?? {}) as Record<string, unknown>;
 
@@ -728,7 +728,7 @@ export const useConfigStore = defineStore('config', () => {
       if (!resolutionPattern.test(raw)) {
         return {
           ok: false,
-          message: 'Invalid manual resolution. Use WIDTHxHEIGHT (e.g., 2560x1440).',
+          messageKey: 'validation.manual_resolution',
         };
       }
     }
@@ -747,7 +747,7 @@ export const useConfigStore = defineStore('config', () => {
       if (!valid) {
         return {
           ok: false,
-          message: 'Invalid manual refresh rate. Use a positive number, e.g., 60 or 59.94.',
+          messageKey: 'validation.manual_refresh_rate',
         };
       }
     }
@@ -774,8 +774,7 @@ export const useConfigStore = defineStore('config', () => {
           ) {
             return {
               ok: false,
-              message:
-                'Invalid resolution in Display mode remapping. Use WIDTHxHEIGHT (e.g., 1920x1080) or leave blank.',
+              messageKey: 'validation.remap_resolution',
             };
           }
         }
@@ -789,14 +788,14 @@ export const useConfigStore = defineStore('config', () => {
         if (!checkNumber(item?.['requested_fps']) || !checkNumber(item?.['final_refresh_rate'])) {
           return {
             ok: false,
-            message: 'Invalid refresh rate in remapping. Use a positive number or leave blank.',
+            messageKey: 'validation.remap_refresh_rate',
           };
         }
         const finalRate = item?.['final_refresh_rate'];
         if (!finalRate || String(finalRate).trim() === '') {
           return {
             ok: false,
-            message: 'For refresh-rate-only mappings, Final refresh rate is required.',
+            messageKey: 'validation.remap_refresh_required',
           };
         }
       }
@@ -807,7 +806,7 @@ export const useConfigStore = defineStore('config', () => {
         if (!checkNumber(item?.['requested_fps']) || !checkNumber(item?.['final_refresh_rate'])) {
           return {
             ok: false,
-            message: 'Invalid refresh rate in remapping. Use a positive number or leave blank.',
+            messageKey: 'validation.remap_refresh_rate',
           };
         }
         const finalRes = item?.['final_resolution'];
@@ -817,7 +816,7 @@ export const useConfigStore = defineStore('config', () => {
         if (!hasFinalRes && !hasFinalFps) {
           return {
             ok: false,
-            message: 'For mixed mappings, specify at least one Final field.',
+            messageKey: 'validation.remap_mixed_final_required',
           };
         }
       }
@@ -831,7 +830,7 @@ export const useConfigStore = defineStore('config', () => {
         if (!finalRes || String(finalRes).trim() === '') {
           return {
             ok: false,
-            message: 'For resolution-only mappings, Final resolution is required.',
+            messageKey: 'validation.remap_resolution_required',
           };
         }
       }
@@ -845,7 +844,7 @@ export const useConfigStore = defineStore('config', () => {
       // Validate manual-save fields before attempting to persist
       const v = validateManualSave();
       if (!v.ok) {
-        validationError.value = v.message || 'Validation failed for pending changes.';
+        validationError.value = v.messageKey;
         savingState.value = 'error';
         return false;
       }
