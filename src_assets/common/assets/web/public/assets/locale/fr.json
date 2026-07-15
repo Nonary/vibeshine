@@ -1090,6 +1090,12 @@
     "noticeTitle": "Cadence d'images fluide",
     "noticeCopy": "Vibeshine applique le limiteur sélectionné au démarrage du stream et restaure vos paramètres de pilote à la fin du stream. RTSS offre la cadence la plus stable sur les écrans physiques ; le limiteur du pilote NVIDIA sert de solution de repli.",
     "virtual": {
+      "modeEnabled": "Activé (recommandé)",
+      "modeDisabled": "Désactivé",
+      "modeLegacy": "Hérité (taux fixe de 2×)",
+      "summaryEnabled": "Des taux de rafraîchissement plus élevés aident Vibeshine à capturer les jeux plus fluidement. L'écran utilise 4× lorsqu'un jeu est actif et revient à 1× sur le bureau, sans modifier les FPS du flux.",
+      "summaryDisabled": "Les ajustements automatiques du taux de rafraîchissement et le limiteur d'écran virtuel associé sont désactivés. L'écran reste à son taux normal de 1×.",
+      "summaryLegacy": "L'écran utilise un taux fixe de 2× pendant tout le flux, comme dans les versions précédentes. Son taux de rafraîchissement ne change pas lorsque les jeux démarrent ou se ferment.",
       "title": "Pourquoi les écrans virtuels ont besoin d'un limiteur d'images",
       "why": "Vibeshine exécute les écrans virtuels à 4× la fréquence de rafraîchissement du stream et les capture avec Windows Graphics Capture (WGC). Avec cette marge de rafraîchissement, WGC capture les jeux à génération d'images (génération d'images DLSS/FSR, Lossless Scaling, Smooth Motion) sans à-coups, sans saccades et sans latence supplémentaire — et sans les réglages manuels de correction de capture qu'exigeaient les anciennes versions de Vibeshine.",
       "whyCap": "La seule chose que le jeu ne doit pas faire, c'est rendre sans limite : sur un affichage 4×, il produit bien plus d'images que le stream ne peut en livrer, les temps de frame deviennent erratiques — saccades visibles sur votre client — et le GPU tourne à plein régime, ce qui affame l'encodeur et ajoute de la latence. Un plafond d'images aligné sur le FPS du stream comble cet écart et maintient une diffusion fluide.",

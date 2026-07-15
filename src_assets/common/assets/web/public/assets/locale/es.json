@@ -1090,6 +1090,12 @@
     "noticeTitle": "Ritmo de fotogramas fluido",
     "noticeCopy": "Vibeshine aplica el limitador que elijas al iniciar la transmisión y restaura la configuración del controlador cuando esta termina. RTSS ofrece el ritmo más estable en pantallas físicas; el limitador del controlador NVIDIA es la alternativa de respaldo.",
     "virtual": {
+      "modeEnabled": "Activado (recomendado)",
+      "modeDisabled": "Desactivado",
+      "modeLegacy": "Heredado (frecuencia fija de 2×)",
+      "summaryEnabled": "Las frecuencias de actualización más altas ayudan a Vibeshine a capturar los juegos con mayor fluidez. La pantalla usa 4× mientras hay un juego activo y vuelve a 1× en el escritorio, sin cambiar los FPS de la transmisión.",
+      "summaryDisabled": "Los ajustes automáticos de frecuencia de actualización y el limitador de pantalla virtual correspondiente están desactivados. La pantalla se mantiene en su frecuencia normal de 1×.",
+      "summaryLegacy": "La pantalla usa una frecuencia fija de 2× durante toda la transmisión, como en las versiones anteriores. Su frecuencia de actualización no cambia cuando se inician o cierran juegos.",
       "title": "Por qué las pantallas virtuales necesitan un limitador de fotogramas",
       "why": "Vibeshine ejecuta las pantallas virtuales a 4× la frecuencia de actualización de la transmisión y las captura con Windows Graphics Capture (WGC). Con ese margen de frecuencia, WGC captura los juegos con generación de fotogramas (generación de fotogramas DLSS/FSR, Lossless Scaling, Smooth Motion) sin fluctuaciones, tirones ni latencia añadida — y sin los ajustes manuales de corrección de captura que requerían las versiones anteriores de Vibeshine.",
       "whyCap": "Lo único que el juego no debe hacer es renderizar sin límite: en una pantalla a 4× produce muchos más fotogramas de los que la transmisión puede entregar, los tiempos de fotograma se vuelven erráticos —tirones visibles en tu cliente— y la GPU trabaja al máximo, lo que ahoga al codificador y añade latencia. Un límite de fotogramas ajustado a los FPS de la transmisión cierra esa brecha y mantiene una entrega fluida.",

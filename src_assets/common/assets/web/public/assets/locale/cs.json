@@ -1436,6 +1436,12 @@
     "noticeTitle": "Plynulé tempo snímků",
     "noticeCopy": "Vibeshine použije vybraný omezovač při spuštění streamu a po jeho skončení obnoví nastavení ovladače. RTSS poskytuje nejstabilnější tempo na fyzických obrazovkách; omezovač ovladače NVIDIA je záložní volba.",
     "virtual": {
+      "modeEnabled": "Zapnuto (doporučeno)",
+      "modeDisabled": "Vypnuto",
+      "modeLegacy": "Starší režim (pevná 2× frekvence)",
+      "summaryEnabled": "Vyšší obnovovací frekvence pomáhají Vibeshine zachytávat hry plynuleji. Displej používá 4× frekvenci při aktivní hře a na ploše se vrací na 1×, aniž by se změnilo FPS streamu.",
+      "summaryDisabled": "Automatické úpravy obnovovací frekvence a odpovídající omezovač virtuálního displeje jsou vypnuté. Displej zůstává na běžné 1× frekvenci.",
+      "summaryLegacy": "Displej používá pevnou 2× frekvenci po celý stream, stejně jako starší verze. Jeho obnovovací frekvence se nemění při spuštění ani ukončení her.",
       "title": "Proč virtuální obrazovky potřebují omezovač snímků",
       "why": "Vibeshine spouští virtuální obrazovky na 4× obnovovací frekvenci streamu a zachycuje je pomocí Windows Graphics Capture (WGC). S takovou rezervou obnovovací frekvence WGC zachycuje hry s generováním snímků (generování snímků DLSS/FSR, Lossless Scaling, Smooth Motion) bez chvění, trhání a dodatečné latence — a bez ručních nastavení pro opravu zachytávání, která vyžadovaly starší verze Vibeshine.",
       "whyCap": "Jediné, co hra nesmí dělat, je vykreslovat bez omezení: na displeji se 4× frekvencí vytváří mnohem více snímků, než dokáže stream doručit, časy snímků se stanou nepravidelnými — na klientovi se to projeví viditelným trháním — a GPU běží naplno, čímž vyhladoví enkodér a zvyšuje latenci. Limit snímků odpovídající FPS streamu tuto mezeru uzavře a udrží doručování plynulé.",

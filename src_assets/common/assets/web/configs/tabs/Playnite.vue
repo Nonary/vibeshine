@@ -595,7 +595,7 @@
                           tertiary
                           type="error"
                           size="small"
-                          :aria-label="$t('_common.remove') || 'Remove'"
+                          :aria-label="$t('_common.remove')"
                           @click="removeExclusion(game.id)"
                         >
                           <i class="fas fa-trash" />
@@ -607,7 +607,7 @@
                     v-else
                     class="playnite-exclusions-empty"
                     size="small"
-                    :description="$t('_common.no_data') || 'No excluded games'"
+                    :description="$t('playnite.no_exclusions')"
                   />
                 </n-card>
                 <n-text depth="3" class="playnite-source">

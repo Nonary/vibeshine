@@ -420,15 +420,15 @@ export function getConfigSelectOptions(
     case 'frame_limiter_auto_virtual_framegen': {
       const options = [
         {
-          label: translateOr(t, 'frameLimiter.virtual.modeEnabled', 'Enabled (recommended)'),
+          label: t('frameLimiter.virtual.modeEnabled'),
           value: 'enabled',
         },
         {
-          label: translateOr(t, 'frameLimiter.virtual.modeDisabled', 'Disabled'),
+          label: t('frameLimiter.virtual.modeDisabled'),
           value: 'disabled',
         },
         {
-          label: translateOr(t, 'frameLimiter.virtual.modeLegacy', 'Legacy (fixed 2× refresh)'),
+          label: t('frameLimiter.virtual.modeLegacy'),
           value: 'legacy',
         },
       ];

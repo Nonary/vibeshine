@@ -1090,6 +1090,12 @@
     "noticeTitle": "Akıcı kare hızlandırma",
     "noticeCopy": "Vibeshine, seçtiğiniz sınırlayıcıyı akış başlangıcında uygular ve akış bittiğinde sürücü ayarlarınızı geri yükler. RTSS, fiziksel ekranlarda en tutarlı hızlandırmayı sağlar; NVIDIA sürücüsünün sınırlayıcısı yedektir.",
     "virtual": {
+      "modeEnabled": "Etkin (önerilen)",
+      "modeDisabled": "Devre dışı",
+      "modeLegacy": "Eski (sabit 2× yenileme hızı)",
+      "summaryEnabled": "Daha yüksek yenileme hızları Vibeshine'ın oyunları daha akıcı yakalamasına yardımcı olur. Ekran, oyun aktifken 4× kullanır ve akış FPS'sini değiştirmeden masaüstünde 1× değerine döner.",
+      "summaryDisabled": "Otomatik yenileme hızı ayarlamaları ve ilgili sanal ekran sınırlayıcısı kapalıdır. Ekran normal 1× yenileme hızında kalır.",
+      "summaryLegacy": "Ekran, eski sürümlerde olduğu gibi akışın tamamında sabit 2× yenileme hızı kullanır. Oyunlar açıldığında veya kapandığında yenileme hızı değişmez.",
       "title": "Sanal ekranların neden kare sınırlayıcıya ihtiyacı var",
       "why": "Vibeshine, sanal ekranları akışın yenileme hızının 4× katında çalıştırır ve bunları Windows Graphics Capture (WGC) ile yakalar. Bu yenileme payı sayesinde WGC, kare üretimi kullanan oyunları (DLSS/FSR kare üretimi, Lossless Scaling, Smooth Motion) titreme, takılma veya ek gecikme olmadan — ve eski Vibeshine sürümlerinin gerektirdiği manuel yakalama düzeltme ayarlarına gerek kalmadan — yakalar.",
       "whyCap": "Oyunun yapmaması gereken tek şey sınırsız kare üretmektir: 4× bir ekranda akışın iletebileceğinden çok daha fazla kare üretir, kare süreleri düzensizleşir — istemcinizde görünür takılmalara yol açar — ve GPU sonuna kadar yüklenerek kodlayıcıyı aç bırakır ve gecikme ekler. Akışın FPS değerine eşlenmiş bir kare sınırı bu açığı kapatır ve iletimi akıcı tutar.",

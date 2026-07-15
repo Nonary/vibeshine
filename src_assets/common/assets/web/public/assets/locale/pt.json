@@ -1090,6 +1090,12 @@
     "noticeTitle": "Cadência de fotogramas fluida",
     "noticeCopy": "O Vibeshine aplica o limitador selecionado no início do stream e restaura as definições do controlador quando o stream termina. O RTSS oferece a cadência mais consistente em ecrãs físicos; o limitador do controlador NVIDIA é a alternativa de recurso.",
     "virtual": {
+      "modeEnabled": "Ativado (recomendado)",
+      "modeDisabled": "Desativado",
+      "modeLegacy": "Legado (taxa fixa de 2×)",
+      "summaryEnabled": "Taxas de atualização mais elevadas ajudam o Vibeshine a capturar jogos mais fluidamente. O ecrã utiliza 4× enquanto um jogo está ativo e volta a 1× no ambiente de trabalho, sem alterar os FPS da transmissão.",
+      "summaryDisabled": "Os ajustes automáticos da taxa de atualização e o limitador de ecrã virtual correspondente estão desligados. O ecrã mantém a sua taxa normal de 1×.",
+      "summaryLegacy": "O ecrã utiliza uma taxa fixa de 2× durante toda a transmissão, como nas versões anteriores. A taxa de atualização não muda quando os jogos começam ou fecham.",
       "title": "Porque é que os ecrãs virtuais precisam de um limitador de fotogramas",
       "why": "O Vibeshine executa os ecrãs virtuais a 4× a taxa de atualização do stream e capta-os com o Windows Graphics Capture (WGC). Com essa margem de atualização, o WGC capta jogos com geração de fotogramas (geração de fotogramas DLSS/FSR, Lossless Scaling, Smooth Motion) sem oscilações, tremuras nem latência adicional — e sem as definições manuais de correção de captura que as versões antigas do Vibeshine exigiam.",
       "whyCap": "A única coisa que o jogo não deve fazer é renderizar sem limite: num ecrã a 4×, produz muito mais fotogramas do que o stream consegue entregar, os tempos de fotograma tornam-se erráticos — tremura visível no cliente — e a GPU trabalha no máximo, deixando o codificador sem recursos e acrescentando latência. Um limite de fotogramas ajustado aos FPS do stream fecha essa diferença e mantém a entrega fluida.",

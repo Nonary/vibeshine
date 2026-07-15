@@ -1090,6 +1090,12 @@
     "noticeTitle": "Płynne tempo klatek",
     "noticeCopy": "Vibeshine stosuje wybrany ogranicznik na początku strumienia i przywraca ustawienia sterownika po jego zakończeniu. RTSS zapewnia najbardziej spójne tempo na fizycznych ekranach; ogranicznik sterownika NVIDIA jest rozwiązaniem awaryjnym.",
     "virtual": {
+      "modeEnabled": "Włączone (zalecane)",
+      "modeDisabled": "Wyłączone",
+      "modeLegacy": "Starszy tryb (stałe odświeżanie 2×)",
+      "summaryEnabled": "Wyższe częstotliwości odświeżania pomagają Vibeshine płynniej przechwytywać gry. Wyświetlacz używa odświeżania 4× podczas aktywnej gry i wraca do 1× na pulpicie, bez zmiany FPS strumienia.",
+      "summaryDisabled": "Automatyczne dostosowania odświeżania i powiązany ogranicznik wirtualnego wyświetlacza są wyłączone. Wyświetlacz pozostaje przy normalnym odświeżaniu 1×.",
+      "summaryLegacy": "Wyświetlacz używa stałego odświeżania 2× przez cały strumień, tak jak w starszych wersjach. Częstotliwość odświeżania nie zmienia się po uruchomieniu ani zamknięciu gry.",
       "title": "Dlaczego wirtualne ekrany potrzebują ogranicznika klatek",
       "why": "Vibeshine uruchamia wirtualne ekrany z 4× częstotliwością odświeżania strumienia i przechwytuje je za pomocą Windows Graphics Capture (WGC). Przy takim zapasie odświeżania WGC przechwytuje gry z generowaniem klatek (generowanie klatek DLSS/FSR, Lossless Scaling, Smooth Motion) bez drgań, przycinania i dodatkowego opóźnienia — i bez ręcznych ustawień naprawiających przechwytywanie, których wymagały starsze wersje Vibeshine.",
       "whyCap": "Jedyne, czego gra nie może robić, to renderować bez limitu: na ekranie 4× generuje znacznie więcej klatek, niż strumień jest w stanie dostarczyć, czasy klatek stają się nieregularne — co widać jako przycinanie u klienta — a GPU pracuje na pełnych obrotach, głodząc koder i zwiększając opóźnienie. Limit klatek dopasowany do FPS strumienia zamyka tę lukę i utrzymuje płynne dostarczanie obrazu.",

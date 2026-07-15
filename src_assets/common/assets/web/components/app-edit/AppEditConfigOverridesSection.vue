@@ -1203,10 +1203,10 @@ const draftForcedRefreshRate = computed<string>(
   () => getOverrideStringFor('draft', DD_KEYS.manualRefreshRate) ?? '',
 );
 
-const forcedHdrOptions = [
-  { label: 'On', value: 'on' },
-  { label: 'Off', value: 'off' },
-];
+const forcedHdrOptions = computed(() => [
+  { label: t('_common.enabled'), value: 'on' },
+  { label: t('_common.disabled'), value: 'off' },
+]);
 
 const forcedHdr = computed<'on' | 'off'>(() => {
   const req = getOverrideStringFor('live', DD_KEYS.hdrRequestOverride);
@@ -1361,13 +1361,13 @@ const allEntries = computed<Entry[]>(() => {
 
   if (platform === 'windows') {
     const groupId = 'display';
-    const groupName = 'Display';
+    const groupName = t('config.dd_display_overrides');
     out.push(
       {
         key: SYN_KEYS.configureDisplayResolution,
-        label: 'Configure Resolution',
-        desc: 'Configure a specific display resolution during streams (uses display automation behind the scenes).',
-        path: `${groupName} > Configure Resolution`,
+        label: t('config.dd_resolution_option'),
+        desc: t('config.dd_resolution_option_manual_desc'),
+        path: `${groupName} > ${t('config.dd_resolution_option')}`,
         groupId,
         groupName,
         synthetic: true,
@@ -1377,9 +1377,9 @@ const allEntries = computed<Entry[]>(() => {
       },
       {
         key: SYN_KEYS.configureDisplayRefreshRate,
-        label: 'Configure Refresh Rate',
-        desc: 'Configure a specific display refresh rate during streams (uses display automation behind the scenes).',
-        path: `${groupName} > Configure Refresh Rate`,
+        label: t('config.dd_refresh_rate_option'),
+        desc: t('config.dd_refresh_rate_option_manual_desc'),
+        path: `${groupName} > ${t('config.dd_refresh_rate_option')}`,
         groupId,
         groupName,
         synthetic: true,
@@ -1389,15 +1389,15 @@ const allEntries = computed<Entry[]>(() => {
       },
       {
         key: SYN_KEYS.configureDisplayHdr,
-        label: 'Configure HDR',
-        desc: 'Configure HDR on or off during streams (uses display automation behind the scenes).',
-        path: `${groupName} > Configure HDR`,
+        label: t('config.dd_hdr_option'),
+        desc: t('config.dd_hdr_option_auto'),
+        path: `${groupName} > ${t('config.dd_hdr_option')}`,
         groupId,
         groupName,
         synthetic: true,
         globalValue: undefined,
-        options: forcedHdrOptions as any,
-        optionsText: buildOverrideOptionsText(forcedHdrOptions as any),
+        options: forcedHdrOptions.value as any,
+        optionsText: buildOverrideOptionsText(forcedHdrOptions.value as any),
       },
     );
   }

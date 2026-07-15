@@ -1090,6 +1090,12 @@
     "noticeTitle": "Cadência de quadros suave",
     "noticeCopy": "O Vibeshine aplica o limitador selecionado no início do stream e restaura as configurações do driver quando o stream termina. O RTSS oferece a cadência mais consistente em telas físicas; o limitador do driver NVIDIA é a alternativa de reserva.",
     "virtual": {
+      "modeEnabled": "Ativado (recomendado)",
+      "modeDisabled": "Desativado",
+      "modeLegacy": "Legado (taxa fixa de 2×)",
+      "summaryEnabled": "Taxas de atualização mais altas ajudam o Vibeshine a capturar jogos com mais suavidade. A tela usa 4× enquanto um jogo está ativo e volta a 1× na área de trabalho, sem alterar o FPS da transmissão.",
+      "summaryDisabled": "Os ajustes automáticos da taxa de atualização e o limitador de tela virtual correspondente estão desligados. A tela permanece na taxa normal de 1×.",
+      "summaryLegacy": "A tela usa uma taxa fixa de 2× durante toda a transmissão, como nas versões anteriores. A taxa de atualização não muda quando os jogos iniciam ou fecham.",
       "title": "Por que telas virtuais precisam de um limitador de quadros",
       "why": "O Vibeshine executa as telas virtuais a 4× a taxa de atualização do stream e as captura com o Windows Graphics Capture (WGC). Com essa margem de atualização, o WGC captura jogos com geração de quadros (geração de quadros DLSS/FSR, Lossless Scaling, Smooth Motion) sem oscilações, engasgos ou latência adicional — e sem as configurações manuais de correção de captura que as versões antigas do Vibeshine exigiam.",
       "whyCap": "A única coisa que o jogo não deve fazer é renderizar sem limite: em um display a 4×, ele produz muito mais quadros do que o stream consegue entregar, os tempos de quadro ficam erráticos — engasgos visíveis no cliente — e a GPU trabalha no máximo, deixando o codificador sem recursos e adicionando latência. Um limite de quadros ajustado aos FPS do stream fecha essa lacuna e mantém a entrega suave.",

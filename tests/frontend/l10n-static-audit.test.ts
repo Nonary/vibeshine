@@ -75,6 +75,34 @@ describe('l10n static audit', () => {
     );
   });
 
+  it('keeps legacy baseline entries valid when source lines move', () => {
+    const root = fixture({
+      'Example.vue': `<template><section>Save Changes</section></template>`,
+    });
+    const initial = audit(root);
+    const issue = initial.issues.find(
+      (candidate: { rule: string; file?: string; value?: string }) =>
+        candidate.rule === 'hardcoded-template-text' &&
+        candidate.file === 'Example.vue' &&
+        candidate.value === 'Save Changes',
+    );
+    if (!issue) throw new Error('Expected hard-coded text issue');
+
+    const [rule, file, ...rest] = issue.fingerprint.split('|');
+    writeJson(resolve(root, 'baseline.json'), {
+      issues: [{ fingerprint: [rule, file, '999', ...rest].join('|') }],
+    });
+
+    expect(
+      audit(root).unbaselined.some(
+        (candidate: { rule: string; file?: string; value?: string }) =>
+          candidate.rule === 'hardcoded-template-text' &&
+          candidate.file === 'Example.vue' &&
+          candidate.value === 'Save Changes',
+      ),
+    ).toBe(false);
+  });
+
   it('flags script UI properties and fallback misuse', () => {
     const root = fixture({
       'example.ts': `const button = { label: 'Start Stream' }; const value = t('common.ok') || 'OK'; translate('common.ok', 'Okay');`,

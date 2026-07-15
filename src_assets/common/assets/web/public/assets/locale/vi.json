@@ -1083,6 +1083,12 @@
     "noticeTitle": "Điều phối khung hình mượt mà",
     "noticeCopy": "Vibeshine áp dụng bộ giới hạn bạn chọn khi bắt đầu stream và khôi phục thiết lập driver khi stream kết thúc. RTSS mang lại điều phối ổn định nhất trên màn hình vật lý; bộ giới hạn của driver NVIDIA là phương án dự phòng.",
     "virtual": {
+      "modeEnabled": "Đã bật (khuyến nghị)",
+      "modeDisabled": "Đã tắt",
+      "modeLegacy": "Cũ (tần số quét cố định 2×)",
+      "summaryEnabled": "Tần số quét cao hơn giúp Vibeshine chụp game mượt hơn. Màn hình dùng tần số quét 4× khi game hoạt động và trở về 1× trên màn hình nền mà không thay đổi FPS của luồng.",
+      "summaryDisabled": "Các điều chỉnh tần số quét tự động và bộ giới hạn màn hình ảo tương ứng đã tắt. Màn hình vẫn ở tần số quét 1× bình thường.",
+      "summaryLegacy": "Màn hình dùng tần số quét 2× cố định trong toàn bộ luồng, như các phiên bản cũ. Tần số quét không thay đổi khi game khởi chạy hoặc đóng.",
       "title": "Vì sao màn hình ảo cần bộ giới hạn khung hình",
       "why": "Vibeshine chạy màn hình ảo ở mức 4× tần số quét của stream và thu hình chúng bằng Windows Graphics Capture (WGC). Với khoảng dư tần số quét đó, WGC thu các game có frame generation (DLSS/FSR Frame Generation, Lossless Scaling, Smooth Motion) mà không bị jitter, giật hình hay thêm độ trễ — và không cần các thiết lập sửa lỗi thu hình thủ công mà các phiên bản Vibeshine cũ yêu cầu.",
       "whyCap": "Điều duy nhất game không được làm là render không giới hạn: trên màn hình 4×, nó tạo ra nhiều khung hình hơn hẳn mức stream có thể truyền tải, frametime trở nên thất thường — giật hình thấy rõ trên client của bạn — và GPU chạy hết công suất, khiến bộ mã hóa bị thiếu tài nguyên và tăng độ trễ. Một giới hạn khung hình khớp với FPS của stream sẽ khép lại khoảng cách đó và giữ việc truyền tải mượt mà.",

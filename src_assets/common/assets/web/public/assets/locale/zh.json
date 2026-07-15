@@ -1090,6 +1090,12 @@
     "noticeTitle": "流畅的帧间隔",
     "noticeCopy": "Vibeshine 会在串流开始时应用所选的限制器，并在串流结束时还原你的驱动设置。RTSS 在物理显示器上提供最一致的帧间隔；NVIDIA 驱动限制器作为后备方案。",
     "virtual": {
+      "modeEnabled": "已启用（推荐）",
+      "modeDisabled": "已禁用",
+      "modeLegacy": "旧版（固定 2× 刷新率）",
+      "summaryEnabled": "更高的刷新率可帮助 Vibeshine 更流畅地捕获游戏。游戏处于活动状态时，显示器使用 4× 刷新率；在桌面上则恢复为 1×，且不会改变串流 FPS。",
+      "summaryDisabled": "自动刷新率调整及相应的虚拟显示器限制器已关闭。显示器保持正常的 1× 刷新率。",
+      "summaryLegacy": "与旧版本一样，显示器在整个串流期间使用固定的 2× 刷新率。游戏启动或关闭时，刷新率不会改变。",
       "title": "为什么虚拟显示器需要帧率限制器",
       "why": "Vibeshine 会以串流刷新率的 4× 运行虚拟显示器，并使用 Windows Graphics Capture（WGC）进行捕获。凭借这一刷新率余量，WGC 可以在没有抖动、卡顿或额外延迟的情况下捕获帧生成游戏（DLSS/FSR 帧生成、Lossless Scaling、Smooth Motion）——也无需旧版 Vibeshine 所要求的手动捕获修复设置。",
       "whyCap": "游戏唯一不能做的就是不加限制地渲染：在 4× 显示器上，它会产生远超串流所能传送的帧数，帧时间变得紊乱——在客户端上表现为可见的卡顿——同时 GPU 满载运行，挤占编码器资源并增加延迟。与串流 FPS 匹配的帧率上限可以消除这一差距，保持传送流畅。",

@@ -1083,6 +1083,12 @@
     "noticeTitle": "Sima frame pacing",
     "noticeCopy": "A Vibeshine a kiválasztott korlátozót a stream indításakor alkalmazza, és a stream végén visszaállítja az illesztőprogram-beállításaidat. Az RTSS adja a legkövetkezetesebb pacinget a fizikai képernyőkön; az NVIDIA illesztőprogram korlátozója a tartalék.",
     "virtual": {
+      "modeEnabled": "Bekapcsolva (ajánlott)",
+      "modeDisabled": "Kikapcsolva",
+      "modeLegacy": "Örökölt (rögzített 2×-es frissítés)",
+      "summaryEnabled": "A magasabb frissítési gyakoriság segít a Vibeshine-nak simábban rögzíteni a játékokat. A kijelző játék közben 4×-es, az asztalon pedig ismét 1×-es frissítést használ, a stream FPS-ének módosítása nélkül.",
+      "summaryDisabled": "Az automatikus frissítési módosítások és a hozzájuk tartozó virtuális kijelző korlátozója ki vannak kapcsolva. A kijelző a normál 1×-es frissítésen marad.",
+      "summaryLegacy": "A kijelző a teljes stream alatt rögzített 2×-es frissítést használ, ahogy a korábbi verziókban. A frissítési gyakoriság nem változik, amikor a játékok elindulnak vagy bezáródnak.",
       "title": "Miért van szükségük a virtuális képernyőknek képkockakorlátozóra",
       "why": "A Vibeshine a virtuális képernyőket a stream frissítési sebességének 4×-esén futtatja, és a Windows Graphics Capture-rel (WGC) rögzíti őket. Ekkora frissítési ráhagyás mellett a WGC remegés, akadozás és többletkésleltetés nélkül rögzíti a képkockagenerálást használó játékokat (DLSS/FSR Frame Generation, Lossless Scaling, Smooth Motion) — ráadásul azok a kézi rögzítésjavító beállítások sem kellenek hozzá, amelyeket a régebbi Vibeshine-verziók még megköveteltek.",
       "whyCap": "Egyetlen dolgot nem szabad a játéknak tennie: korlát nélkül renderelni. Egy 4×-es kijelzőn ilyenkor jóval több képkockát állít elő, mint amennyit a stream továbbítani tud, a képkockaidők kiszámíthatatlanná válnak — ez a kliensen látható akadozás —, a GPU pedig teljes terhelésen pörög, kiéheztetve a kódolót és növelve a késleltetést. A stream FPS-éhez igazított képkockakorlát megszünteti ezt a rést, és simán tartja a továbbítást.",

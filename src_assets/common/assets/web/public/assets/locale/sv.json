@@ -1090,6 +1090,12 @@
     "noticeTitle": "Smidig frame pacing",
     "noticeCopy": "Vibeshine tillämpar den valda begränsaren vid stream-start och återställer dina drivrutinsinställningar när streamen slutar. RTSS ger den mest konsekventa pacingen på fysiska skärmar; NVIDIA-drivrutinens begränsare är reservlösningen.",
     "virtual": {
+      "modeEnabled": "Aktiverad (rekommenderas)",
+      "modeDisabled": "Inaktiverad",
+      "modeLegacy": "Äldre läge (fast 2×-uppdateringsfrekvens)",
+      "summaryEnabled": "Högre uppdateringsfrekvenser hjälper Vibeshine att spela in spel jämnare. Skärmen använder 4× medan ett spel är aktivt och återgår till 1× på skrivbordet utan att ändra strömmens FPS.",
+      "summaryDisabled": "Automatiska justeringar av uppdateringsfrekvensen och den tillhörande begränsaren för virtuella skärmar är avstängda. Skärmen stannar på sin vanliga 1×-uppdateringsfrekvens.",
+      "summaryLegacy": "Skärmen använder en fast 2×-uppdateringsfrekvens under hela strömmen, som i äldre versioner. Uppdateringsfrekvensen ändras inte när spel startas eller stängs.",
       "title": "Därför behöver virtuella skärmar en bildbegränsare",
       "why": "Vibeshine kör virtuella skärmar vid 4× streamens uppdateringsfrekvens och fångar in dem med Windows Graphics Capture (WGC). Med det utrymmet i uppdateringsfrekvens fångar WGC in spel med frame generation (DLSS/FSR Frame Generation, Lossless Scaling, Smooth Motion) utan jitter, hackningar eller extra latens — och utan de manuella infångningsfixar som äldre Vibeshine-versioner krävde.",
       "whyCap": "Det enda spelet inte får göra är att rendera utan begränsning: på en 4×-skärm producerar det långt fler bildrutor än streamen kan leverera, frametimes blir oregelbundna — med synliga hackningar på din klient — och GPU:n går för fullt, vilket svälter kodaren och lägger till latens. En FPS-gräns som matchar streamens FPS stänger det gapet och håller leveransen smidig.",
