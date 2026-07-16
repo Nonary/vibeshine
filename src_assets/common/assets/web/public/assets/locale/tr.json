@@ -50,7 +50,10 @@
     "inherited": "Devralındı",
     "no_results": "Sonuç yok",
     "options": "Seçenekler",
-    "retry": "Yeniden dene"
+    "retry": "Yeniden dene",
+    "display": "Ekran",
+    "default_parenthetical": "(varsayılan)",
+    "change": "Değiştir"
   },
   "apps": {
     "actions": "Eylemler",
@@ -224,11 +227,12 @@
       "health_display_double_120": "Ekran en fazla {hz} Hz destekler. Vibeshine, 120 FPS akışlarını iki katına çıkarabilir.",
       "health_display_switch_smooth": "Geçerli yenileme hızı {currentHz} Hz. Vibeshine, kare oluşturmanın akıcı kalması için akışlar sırasında {targetHz} Hz'ye geçebilir.",
       "health_display_enforce_or_virtual": "Ekran en fazla {hz} Hz destekler. Daha yüksek yenileme hızını zorlamak için Görüntü Aygıtı Adım 1'i yapılandırın veya Vibeshine sanal ekranına geçmek için aşağıdaki ekran geçersiz kılmasını kullanın.",
-        "health_display_target_needs_virtual": "Geçerli yenileme hızı {hz} Hz. Hedefi en fazla {fps} FPS olan akışlar, Vibeshine sanal ekranını veya daha yüksek yenileme hızına sahip bir ekranı gerektirir.",
+      "health_display_target_needs_virtual": "Geçerli yenileme hızı {hz} Hz. Hedefi en fazla {fps} FPS olan akışlar, Vibeshine sanal ekranını veya daha yüksek yenileme hızına sahip bir ekranı gerektirir.",
       "health_display_120_stutter": "Geçerli yenileme hızı {hz} Hz. Daha yüksek yenileme hızlı bir ekran olmadan 120 FPS kare oluşturma takılabilir. Vibeshine sanal ekranına geçmek için aşağıdaki ekran geçersiz kılmasını kullanın veya akışı daha yüksek yenileme hızlı bir monitöre taşıyın.",
       "health_display_switch_if_active": "Görüntü Aygıtı Adım 1 yalnızca bu monitörü etkin tutarsa Vibeshine en fazla {hz} Hz'ye geçebilir.",
       "health_display_tops_out": "Ekran en fazla {hz} Hz'yi destekler. Vibeshine sanal ekranına geçmek için aşağıdaki ekran geçersiz kılmasını kullanın veya kare oluşturma için 240 Hz'lik bir ekrana geçin.",
-      "health_display_switch_if_configured": "Görüntü Aygıtı Adım 1'de yapılandırılmışsa Vibeshine en fazla {hz} Hz'ye geçebilir."
+      "health_display_switch_if_configured": "Görüntü Aygıtı Adım 1'de yapılandırılmışsa Vibeshine en fazla {hz} Hz'ye geçebilir.",
+      "provider_game_provided": "Oyun tarafından sağlanır"
     },
     "confirm_delete_title": "Uygulamayı Sil",
     "confirm_delete_title_named": "\"{name}\" silinsin mi?",
@@ -321,7 +325,29 @@
     "playnite_source_manual": "Manuel",
     "source_custom": "Özel",
     "source_custom_named": "Özel: \"{name}\"",
-    "untitled": "Başlıksız"
+    "untitled": "Başlıksız",
+    "name_search_placeholder": "Aramak için yazın veya özel bir ad girin",
+    "linked_to_playnite": "Playnite'a bağlı",
+    "custom_application": "Özel uygulama",
+    "cmd_placeholder": "Yürütülebilir komut satırı",
+    "cmd_runtime_desc": "Vibeshine bu işlemi bekler. İşlem kapanınca yayın sona erer.",
+    "detached_cmds_runtime_desc": "Önce çalışan ve bittiklerinde yayını etkin tutan isteğe bağlı komutlar.",
+    "detached_cmds_empty": "Henüz ayrılmış komut yok. Betik veya başlatıcı ayarlamak için Ekle'yi kullanın.",
+    "detached_cmd_number": "Ayrılmış Komut #{number}",
+    "detached_cmd_placeholder": "Yayından önce çalıştırılacak komut",
+    "detached_cmd_runtime_desc": "Ana komuttan önce çalışır. Bu komut sonlansa bile Vibeshine devam eder.",
+    "image_storage_desc": "İsteğe bağlıdır; yalnızca saklanır ve Vibeshine tarafından alınmaz.",
+    "lossless": {
+      "scaling_bcas": "BCAS (anime)",
+      "scaling_sharp_bilinear": "Keskin çift doğrusal",
+      "scaling_integer": "Tamsayı ölçekleme",
+      "scaling_nearest": "En yakın komşu",
+      "anime_size_s": "Küçük",
+      "anime_size_m": "Orta",
+      "anime_size_l": "Büyük",
+      "anime_size_vl": "Çok büyük",
+      "anime_size_ul": "Ultra büyük"
+    }
   },
   "config": {
     "adapter_name": "Adaptör Adı",
@@ -586,7 +612,7 @@
     "sw_preset_ultrafast": "ultra hızlı",
     "sw_preset_veryfast": "çok hızlı",
     "sw_preset_veryslow": "çok yavaş",
-    "sw_tune": "SW Tune",
+    "sw_tune": "SW Ayarı",
     "sw_tune_animation": "animasyon -- çizgi filmler için iyi; daha yüksek deblocking ve daha fazla referans karesi kullanır",
     "sw_tune_desc": "Ön ayardan sonra uygulanan ayarlama seçenekleri. Varsayılan değer sıfır gecikmedir.",
     "sw_tune_fastdecode": "fastdecode -- belirli filtreleri devre dışı bırakarak daha hızlı kod çözme sağlar",
@@ -898,7 +924,22 @@
       "browser_failed": "Bu yola göz atılamadı.",
       "rescan": "Yeniden Tara",
       "use_path": "Bu Yolu Kullan"
-    }
+    },
+    "display_devices_load_failed": "Görüntü aygıtları yüklenemedi",
+    "dd_snapshot_restore_hotkey_placeholder": "Tıklayın ve bir tuş birleşimine basın",
+    "capture_wgc_constant": "Windows Graphics Capture (sabit)",
+    "amd_section_title": "AMD AMF Kodlayıcı",
+    "qsv_section_title": "Intel Quick Sync Kodlayıcı",
+    "vt_section_title": "VideoToolbox Kodlayıcı",
+    "vaapi_section_title": "VA-API Kodlayıcı",
+    "vulkan_section_title": "Vulkan Kodlayıcı",
+    "sw_section_title": "Yazılım Kodlayıcı",
+    "dd_validation_resolution_or_blank": "Geçersiz. GENİŞLİKxYÜKSEKLİK kullanın (örn. {example}, x veya ×) ya da boş bırakın.",
+    "dd_validation_positive_or_blank": "Geçersiz. Pozitif bir sayı kullanın ya da boş bırakın.",
+    "dd_validation_mixed_final_required": "Karma eşlemelerde en az bir Son alan belirtin.",
+    "dd_validation_resolution": "Geçersiz biçim. GENİŞLİKxYÜKSEKLİK kullanın, örn. {example} (x veya ×).",
+    "dd_validation_refresh_rate": "Geçersiz yenileme hızı. 60 veya 59.94 gibi pozitif bir sayı kullanın.",
+    "dd_manual_enforcement_notice": "El ile ayarlanan bir çözünürlük veya yenileme hızı zorlandığında aşağıdaki geçersiz kılmalar devre dışı bırakılır. El ile ayarlanan yenileme hızları zorla uygulanır ve sanal ekranlarda oyuna göre yenileme hızı geçişini geçersiz kılar."
   },
   "index": {
     "description": "Vibeshine, Moonlight için kendi kendine barındırılan bir oyun akışı sunucusudur.",
@@ -922,7 +963,8 @@
     "version_behind": "Derlemeniz en son sürümün {behind} commit gerisinde; güncellemeyi değerlendirin.",
     "version_compare_unknown": "En son sürüme olan commit uzaklığı belirlenemiyor.",
     "version_branch": "Dal: {branch} (commit {commit})",
-    "view_logs": "Sorun Giderme — Günlüklerini Aç"
+    "view_logs": "Sorun Giderme — Günlüklerini Aç",
+    "web_links": "Web Bağlantıları"
   },
   "navbar": {
     "applications": "Uygulamalar",
@@ -1735,7 +1777,9 @@
     "fullscreen_launcher_entry": "bir Playnite (Tam Ekran) başlatıcı girdisi",
     "entries": "Playnite girdileri",
     "missing_plugin_message": "{details} algılandı, ancak Playnite eklentisi artık yüklü değil. Entegrasyonu geri yüklemek için eklentiyi yeniden yükleyin veya Vibeshine içindeki tüm Playnite girdilerini kaldırmak için Playnite oyunlarını temizleyin.",
-    "fullscreen_entry_removed": "Playnite Tam Ekran girdisi kaldırıldı. Playnite Desktop seçeneği Ayarlar → Playnite bölümünde kapatıldı."
+    "fullscreen_entry_removed": "Playnite Tam Ekran girdisi kaldırıldı. Playnite Desktop seçeneği Ayarlar → Playnite bölümünde kapatıldı.",
+    "fullscreen_entry": "Uygulamalara 'Playnite (Tam Ekran)' ekle",
+    "fullscreen_entry_desc": "Etkinleştirildiğinde Vibeshine, Playnite uygulamasını tam ekran masaüstü modunda açan bir başlatıcı girdisi ekler."
   },
   "auth": {
     "title": "API Belirteci Yönetimi",

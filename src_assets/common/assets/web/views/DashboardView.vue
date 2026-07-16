@@ -136,9 +136,7 @@
                     {{ $t('config.crash_dump_title') }}
                   </p>
                   <p class="text-xs opacity-80 m-0">
-                    {{
-                      crashDumpMessage || $t('config.crash_dump_desc')
-                    }}
+                    {{ crashDumpMessage || $t('config.crash_dump_desc') }}
                   </p>
                   <p v-if="crashDumpDetails" class="text-xs opacity-60 m-0">
                     {{ crashDumpDetails }}
@@ -195,14 +193,10 @@
               >
                 <div class="min-w-0">
                   <p class="text-sm m-0 font-medium">
-                    {{
-                      $t('config.vigem_missing_title')
-                    }}
+                    {{ $t('config.vigem_missing_title') }}
                   </p>
                   <p class="text-xs opacity-80 m-0">
-                    {{
-                      $t('config.vigem_missing_desc')
-                    }}
+                    {{ $t('config.vigem_missing_desc') }}
                     <span v-if="vigemVersion" class="ml-2 opacity-60">
                       ({{ $t('config.vigem_detected_version') }}: {{ vigemVersion }})
                     </span>
@@ -239,9 +233,7 @@
                     {{ $t('vulkan_hdr.not_installed_title') }}
                   </p>
                   <p class="text-xs opacity-80 m-0">
-                    {{
-                      $t('vulkan_hdr.not_installed_desc')
-                    }}
+                    {{ $t('vulkan_hdr.not_installed_desc') }}
                   </p>
                 </div>
                 <div class="grid gap-2 sm:flex sm:flex-wrap sm:items-center shrink-0">
@@ -395,9 +387,7 @@
                     >
                       <i class="fas fa-bars-staggered" />
                       <span>{{
-                        showPreNotes
-                          ? $t('index.hide_notes')
-                          : $t('index.view_notes')
+                        showPreNotes ? $t('index.hide_notes') : $t('index.view_notes')
                       }}</span>
                     </n-button>
                     <n-button
@@ -458,9 +448,7 @@
                     >
                       <i class="fas fa-bars-staggered" />
                       <span>{{
-                        showStableNotes
-                          ? $t('index.hide_notes')
-                          : $t('index.view_notes')
+                        showStableNotes ? $t('index.hide_notes') : $t('index.view_notes')
                       }}</span>
                     </n-button>
                     <n-button
@@ -495,7 +483,7 @@
         <n-card>
           <template #header>
             <h2 class="text-xl sm:text-2xl font-semibold tracking-tight mx-auto text-center">
-              Web Links
+              {{ $t('index.web_links') }}
             </h2>
           </template>
           <div class="text-xs space-y-2">
@@ -988,10 +976,7 @@ async function dismissCrashBundle() {
           await refreshCrashDumpStatus();
         }
       }
-      message.error(
-        errMessage ||
-          $t('config.crash_dump_dismiss_error'),
-      );
+      message.error(errMessage || $t('config.crash_dump_dismiss_error'));
     }
   } catch {
     await refreshCrashDumpStatus();

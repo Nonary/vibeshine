@@ -51,7 +51,10 @@
     "inherited": "Kế thừa",
     "no_results": "Không có kết quả",
     "options": "Tùy chọn",
-    "retry": "Thử lại"
+    "retry": "Thử lại",
+    "display": "Màn hình",
+    "default_parenthetical": "(mặc định)",
+    "change": "Thay đổi"
   },
   "apps": {
     "actions": "Hành động",
@@ -81,7 +84,7 @@
     "env_client_audio_config": "Cấu hình âm thanh được yêu cầu bởi client (2.0/5.1/7.1)",
     "env_client_enable_sops": "Client yêu cầu tùy chọn tối ưu hóa trò chơi cho việc streaming tối ưu (có/không)",
     "env_client_fps": "Tốc độ khung hình mỗi giây (FPS) mà client yêu cầu (số nguyên)",
-    "env_client_gcmap": "The requested gamepad mask, in a bitset/bitfield format (int)",
+    "env_client_gcmap": "Mặt nạ tay cầm chơi game được yêu cầu, ở định dạng tập bit/trường bit (số nguyên).",
     "env_client_hdr": "HDR được kích hoạt bởi client (true/false)",
     "env_client_height": "Chiều cao do client yêu cầu (số nguyên)",
     "env_client_host_audio": "Client yêu cầu âm thanh từ host (có/không)",
@@ -138,7 +141,7 @@
       "target_fps_hint": "Chỉ đặt mục này khi bạn cần ghi đè FPS mà client yêu cầu cho Lossless Scaling.",
       "rtss_limit_label": "Ghi đè giới hạn khung hình RTSS",
       "rtss_limit_hint": "Vibeshine mặc định ở mức một nửa yêu cầu của client khi để trống. Yêu cầu RTSS được cài đặt và đang chạy.",
-      "flow_scale_label": "Flow Scale (%)",
+      "flow_scale_label": "Tỷ lệ luồng (%)",
       "flow_scale_hint": "Cường độ pha trộn khung hình (0–100). Vibeshine khuyến nghị 50% làm mặc định cân bằng.",
       "launch_delay_label": "Độ trễ khởi chạy Lossless (giây)",
       "launch_delay_hint": "Chờ thêm vài giây sau khi game khởi động trước khi mở Lossless Scaling. Để trống để dùng độ trễ mặc định 8 giây.",
@@ -225,11 +228,12 @@
       "health_display_double_120": "Màn hình hỗ trợ tối đa {hz} Hz. Vibeshine có thể nhân đôi các luồng 120 FPS.",
       "health_display_switch_smooth": "Tần số quét hiện tại là {currentHz} Hz. Vibeshine có thể chuyển sang {targetHz} Hz trong khi phát luồng để giữ cho quá trình tạo khung hình mượt mà.",
       "health_display_enforce_or_virtual": "Màn hình hỗ trợ tối đa {hz} Hz. Cấu hình Bước 1 của Thiết bị hiển thị để bắt buộc tần số quét cao hơn, hoặc dùng chế độ ghi đè màn hình bên dưới để chuyển sang màn hình ảo Vibeshine.",
-        "health_display_target_needs_virtual": "Tần số quét hiện tại là {hz} Hz. Các luồng có mục tiêu tối đa {fps} FPS cần màn hình ảo Vibeshine hoặc màn hình có tần số quét cao hơn.",
+      "health_display_target_needs_virtual": "Tần số quét hiện tại là {hz} Hz. Các luồng có mục tiêu tối đa {fps} FPS cần màn hình ảo Vibeshine hoặc màn hình có tần số quét cao hơn.",
       "health_display_120_stutter": "Tần số quét hiện tại là {hz} Hz. Việc tạo khung hình 120 FPS có thể bị giật nếu không có màn hình với tần số quét cao hơn. Dùng chế độ ghi đè màn hình bên dưới để chuyển sang màn hình ảo Vibeshine hoặc chuyển luồng sang màn hình có tần số quét cao hơn.",
       "health_display_switch_if_active": "Vibeshine có thể chuyển tối đa đến {hz} Hz nếu Bước 1 của Thiết bị hiển thị chỉ giữ màn hình đó hoạt động.",
       "health_display_tops_out": "Màn hình chỉ đạt tối đa {hz} Hz. Dùng chế độ ghi đè màn hình bên dưới để chuyển sang màn hình ảo Vibeshine hoặc chuyển sang màn hình 240 Hz để tạo khung hình.",
-      "health_display_switch_if_configured": "Vibeshine có thể chuyển tối đa đến {hz} Hz nếu được cấu hình trong Bước 1 của Thiết bị hiển thị."
+      "health_display_switch_if_configured": "Vibeshine có thể chuyển tối đa đến {hz} Hz nếu được cấu hình trong Bước 1 của Thiết bị hiển thị.",
+      "provider_game_provided": "Do trò chơi cung cấp"
     },
     "confirm_delete_title": "Xóa ứng dụng",
     "confirm_delete_title_named": "Xóa \"{name}\"?",
@@ -322,10 +326,32 @@
     "playnite_source_manual": "Thủ công",
     "source_custom": "Tùy chỉnh",
     "source_custom_named": "Tùy chỉnh: \"{name}\"",
-    "untitled": "Không có tiêu đề"
+    "untitled": "Không có tiêu đề",
+    "name_search_placeholder": "Nhập để tìm kiếm hoặc nhập tên tùy chỉnh",
+    "linked_to_playnite": "Đã liên kết với Playnite",
+    "custom_application": "Ứng dụng tùy chỉnh",
+    "cmd_placeholder": "Dòng lệnh thực thi",
+    "cmd_runtime_desc": "Vibeshine chờ tiến trình này. Khi tiến trình đóng, luồng phát sẽ kết thúc.",
+    "detached_cmds_runtime_desc": "Các lệnh tùy chọn chạy trước và giữ luồng phát hoạt động khi chúng kết thúc.",
+    "detached_cmds_empty": "Chưa có lệnh tách rời. Dùng Thêm để thiết lập tập lệnh hoặc trình khởi chạy.",
+    "detached_cmd_number": "Lệnh tách rời #{number}",
+    "detached_cmd_placeholder": "Lệnh thực thi trước luồng phát",
+    "detached_cmd_runtime_desc": "Chạy trước lệnh chính. Vibeshine vẫn tiếp tục ngay cả khi lệnh này thoát.",
+    "image_storage_desc": "Tùy chọn; chỉ được lưu và không do Vibeshine tải về.",
+    "lossless": {
+      "scaling_bcas": "BCAS (anime)",
+      "scaling_sharp_bilinear": "Song tuyến sắc nét",
+      "scaling_integer": "Tỷ lệ số nguyên",
+      "scaling_nearest": "Lân cận gần nhất",
+      "anime_size_s": "Nhỏ",
+      "anime_size_m": "Trung bình",
+      "anime_size_l": "Lớn",
+      "anime_size_vl": "Rất lớn",
+      "anime_size_ul": "Cực lớn"
+    }
   },
   "config": {
-    "adapter_name": "Adapter Name",
+    "adapter_name": "Tên bộ điều hợp",
     "adapter_name_desc_linux_1": "Chọn GPU cụ thể để sử dụng cho quá trình capture.",
     "adapter_name_desc_linux_2": "Tìm tất cả các thiết bị hỗ trợ VAAPI",
     "adapter_name_desc_linux_3": "Thay thế ``renderD129`` bằng thiết bị từ trên để liệt kê tên và khả năng của thiết bị. Để được hỗ trợ bởi Vibeshine, thiết bị cần phải có ít nhất:",
@@ -561,7 +587,7 @@
     "port_http_port_note": "Sử dụng cổng này để kết nối với Moonlight.",
     "port_note": "Lưu ý",
     "port_port": "Cảng",
-    "port_protocol": "Quy trình",
+    "port_protocol": "Giao thức",
     "port_tcp": "Giao thức truyền tải liên kết (TCP)",
     "port_udp": "UDP (Giao thức dữ liệu không định hướng)",
     "port_warning": "Việc phơi bày giao diện người dùng web (Web UI) ra internet là một rủi ro bảo mật! Hãy tiếp tục với rủi ro của riêng bạn!",
@@ -615,7 +641,7 @@
     "virtual_sink": "Bồn rửa ảo",
     "virtual_sink_desc": "Chỉ định thủ công thiết bị âm thanh ảo để sử dụng. Nếu không được thiết lập, thiết bị sẽ được chọn tự động. Chúng tôi khuyến nghị mạnh mẽ để để trống trường này để sử dụng tính năng chọn thiết bị tự động!",
     "virtual_sink_placeholder": "Loa phát trực tuyến Steam",
-    "vt_coder": "VideoToolbox Coder",
+    "vt_coder": "Bộ mã hóa VideoToolbox",
     "vt_realtime": "VideoToolbox Mã hóa thời gian thực",
     "vt_software": "Phần mềm VideoToolbox cho mã hóa video",
     "vt_software_allowed": "Được phép",
@@ -891,7 +917,22 @@
       "browser_failed": "Không thể duyệt đường dẫn này.",
       "rescan": "Quét lại",
       "use_path": "Dùng đường dẫn này"
-    }
+    },
+    "display_devices_load_failed": "Không thể tải thiết bị hiển thị",
+    "dd_snapshot_restore_hotkey_placeholder": "Nhấp rồi nhấn một tổ hợp phím",
+    "capture_wgc_constant": "Windows Graphics Capture (cố định)",
+    "amd_section_title": "Bộ mã hóa AMD AMF",
+    "qsv_section_title": "Bộ mã hóa Intel Quick Sync",
+    "vt_section_title": "Bộ mã hóa VideoToolbox",
+    "vaapi_section_title": "Bộ mã hóa VA-API",
+    "vulkan_section_title": "Bộ mã hóa Vulkan",
+    "sw_section_title": "Bộ mã hóa phần mềm",
+    "dd_validation_resolution_or_blank": "Không hợp lệ. Dùng RỘNGxCAO (ví dụ: {example}, x hoặc ×) hoặc để trống.",
+    "dd_validation_positive_or_blank": "Không hợp lệ. Dùng số dương hoặc để trống.",
+    "dd_validation_mixed_final_required": "Với ánh xạ hỗn hợp, hãy chỉ định ít nhất một trường cuối.",
+    "dd_validation_resolution": "Định dạng không hợp lệ. Dùng RỘNGxCAO, ví dụ: {example} (x hoặc ×).",
+    "dd_validation_refresh_rate": "Tần số quét không hợp lệ. Dùng số dương, ví dụ: 60 hoặc 59.94.",
+    "dd_manual_enforcement_notice": "Các tùy chọn ghi đè bên dưới bị vô hiệu hóa khi độ phân giải hoặc tần số quét thủ công đang được áp dụng bắt buộc. Tần số quét thủ công được áp dụng cưỡng chế và ghi đè việc chuyển tần số theo trò chơi trên màn hình ảo."
   },
   "index": {
     "description": "Vibeshine là một nền tảng phát trực tiếp game tự chủ cho Moonlight.",
@@ -915,7 +956,8 @@
     "version_behind": "Bản dựng của bạn chậm hơn bản phát hành mới nhất {behind} commit; hãy cân nhắc cập nhật.",
     "version_compare_unknown": "Không thể xác định khoảng cách commit đến bản phát hành mới nhất.",
     "version_branch": "Nhánh: {branch} (commit {commit})",
-    "view_logs": "Mở Khắc phục sự cố — Nhật ký"
+    "view_logs": "Mở Khắc phục sự cố — Nhật ký",
+    "web_links": "Liên kết web"
   },
   "navbar": {
     "applications": "Ứng dụng",
@@ -1018,7 +1060,7 @@
     "dd_export_golden_desc": "Tạo bản sao lưu của bố cục màn hình Windows hiện tại. Bản sao lưu này được dùng để khôi phục màn hình của bạn một cách an toàn nếu Windows không giữ các thiết lập của bạn.",
     "dd_export_golden_success": "Đã xuất ảnh chụp golden của màn hình.",
     "dd_export_golden_error": "Không xuất được ảnh chụp golden của màn hình.",
-    "dd_golden_title": "Golden Display Restore",
+    "dd_golden_title": "Khôi phục cấu hình màn hình chuẩn",
     "dd_golden_help": "Lưu một ảnh chụp của bố cục màn hình Windows hiện tại (màn hình nào đang bật, màn hình chính, độ phân giải, HDR). Vibeshine dùng ảnh này nếu các thiết lập màn hình của bạn không được giữ — ví dụ sau khi khởi động lại hoặc tại màn hình đăng nhập. Điều này giảm khả năng quay lại một PC với màn hình chính vẫn đang tắt.",
     "dd_golden_status_present": "Đã có ảnh chụp",
     "dd_golden_status_missing": "Không tìm thấy ảnh chụp",
@@ -1728,7 +1770,9 @@
     "fullscreen_launcher_entry": "một mục trình khởi chạy Playnite (toàn màn hình)",
     "entries": "mục Playnite",
     "missing_plugin_message": "Đã phát hiện {details}, nhưng plugin Playnite không còn được cài đặt. Hãy cài đặt lại plugin để khôi phục tích hợp hoặc xóa các trò chơi Playnite để xóa tất cả mục Playnite khỏi Vibeshine.",
-    "fullscreen_entry_removed": "Đã xóa mục Playnite Toàn màn hình. Tùy chọn Playnite Desktop đã bị tắt trong Cài đặt → Playnite."
+    "fullscreen_entry_removed": "Đã xóa mục Playnite Toàn màn hình. Tùy chọn Playnite Desktop đã bị tắt trong Cài đặt → Playnite.",
+    "fullscreen_entry": "Thêm “Playnite (Toàn màn hình)” vào Ứng dụng",
+    "fullscreen_entry_desc": "Khi bật, Vibeshine sẽ thêm một mục khởi chạy để mở Playnite ở chế độ toàn màn hình."
   },
   "auth": {
     "title": "Quản lý token API",

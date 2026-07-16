@@ -50,7 +50,10 @@
     "inherited": "Herdado",
     "no_results": "Sem resultados",
     "options": "Opções",
-    "retry": "Tentar novamente"
+    "retry": "Tentar novamente",
+    "display": "Ecrã",
+    "default_parenthetical": "(padrão)",
+    "change": "Alterar"
   },
   "apps": {
     "actions": "Ações.",
@@ -228,7 +231,8 @@
       "health_display_120_stutter": "A taxa de atualização atual é de {hz} Hz. A geração de fotogramas a 120 FPS pode apresentar interrupções sem um ecrã com uma taxa de atualização mais elevada. Use a substituição de ecrã abaixo para mudar para o ecrã virtual do Vibeshine ou mova o stream para um monitor com uma taxa de atualização mais elevada.",
       "health_display_switch_if_active": "O Vibeshine pode mudar até {hz} Hz se o Passo 1 do dispositivo de ecrã mantiver apenas esse monitor ativo.",
       "health_display_tops_out": "O ecrã atinge no máximo {hz} Hz. Use a substituição de ecrã abaixo para mudar para o ecrã virtual do Vibeshine ou mude para um ecrã de 240 Hz para a geração de fotogramas.",
-      "health_display_switch_if_configured": "O Vibeshine pode mudar até {hz} Hz se estiver configurado no Passo 1 do dispositivo de ecrã."
+      "health_display_switch_if_configured": "O Vibeshine pode mudar até {hz} Hz se estiver configurado no Passo 1 do dispositivo de ecrã.",
+      "provider_game_provided": "Fornecido pelo jogo"
     },
     "confirm_delete_title": "Eliminar aplicação",
     "confirm_delete_title_named": "Eliminar \"{name}\"?",
@@ -321,7 +325,29 @@
     "playnite_source_manual": "Manual",
     "source_custom": "Personalizada",
     "source_custom_named": "Personalizada: \"{name}\"",
-    "untitled": "Sem título"
+    "untitled": "Sem título",
+    "name_search_placeholder": "Escreva para pesquisar ou introduza um nome personalizado",
+    "linked_to_playnite": "Ligada ao Playnite",
+    "custom_application": "Aplicação personalizada",
+    "cmd_placeholder": "Linha de comandos do executável",
+    "cmd_runtime_desc": "O Vibeshine aguarda este processo. Quando termina, a transmissão é encerrada.",
+    "detached_cmds_runtime_desc": "Comandos opcionais executados primeiro que mantêm a transmissão ativa quando terminam.",
+    "detached_cmds_empty": "Ainda não existem comandos separados. Use Adicionar para configurar scripts ou iniciadores.",
+    "detached_cmd_number": "Comando separado n.º {number}",
+    "detached_cmd_placeholder": "Comando a executar antes da transmissão",
+    "detached_cmd_runtime_desc": "É executado antes do comando principal. O Vibeshine continua mesmo que este comando termine.",
+    "image_storage_desc": "Opcional; apenas armazenado e não obtido pelo Vibeshine.",
+    "lossless": {
+      "scaling_bcas": "BCAS (anime)",
+      "scaling_sharp_bilinear": "Bilinear nítido",
+      "scaling_integer": "Escala inteira",
+      "scaling_nearest": "Vizinho mais próximo",
+      "anime_size_s": "Pequeno",
+      "anime_size_m": "Médio",
+      "anime_size_l": "Grande",
+      "anime_size_vl": "Muito grande",
+      "anime_size_ul": "Ultragrande"
+    }
   },
   "config": {
     "adapter_name": "Nome do adaptador",
@@ -392,7 +418,7 @@
     "coder_cabac": "cabac -- contexto adaptável de programação aritmética binária - qualidade superior",
     "coder_cavlc": "cavlc -- código adaptável de comprimento de variável de contexto - decodificação mais rápida",
     "configuration": "Configuração",
-    "controller": "Enable Gamepad Input",
+    "controller": "Ativar entrada de comando",
     "controller_desc": "Permite que os convidados controlem o sistema de host com controle / controle do gamepad",
     "credentials_file": "Arquivo de credenciais",
     "credentials_file_desc": "Armazenar Usuário/Senha separadamente do arquivo de estado da Vibeshine.",
@@ -523,7 +549,7 @@
     "nvenc_preset_desc": "Valores maiores melhoram a compressão (qualidade em taxa de bits dada) ao custo de maior latência de codificação. Recomendado para mudar apenas quando limitado por rede ou descodificador, caso contrário, o efeito semelhante pode ser alcançado aumentando a taxa de bits.",
     "nvenc_realtime_hags": "Use prioridade em tempo real em agendamento de gpu acelerado por hardware",
     "nvenc_realtime_hags_desc": "Atualmente os motoristas da NVIDIA podem congelar no codificador quando o HAGS estiver ativado, a prioridade em tempo real é usada e a utilização da VRAM está próxima do máximo. Desabilitar esta opção reduz a prioridade ao alto, contornando o congelamento ao custo de desempenho reduzido quando a GPU está fortemente carregada.",
-    "nvenc_spatial_aq": "Spatial AQ",
+    "nvenc_spatial_aq": "AQ espacial",
     "nvenc_spatial_aq_desc": "Atribuir valores mais elevados de QP a regiões planas do vídeo. Recomendado para permitir o streaming em taxas de bits mais baixas.",
     "nvenc_twopass": "Modo de duas passagens",
     "nvenc_twopass_desc": "Adiciona passe de codificação preliminar. Isso permite detectar mais vetores de movimento, distribuir melhor a taxa de bits pelo quadro e aderir de forma mais rigorosa aos limites de bits. Desabilitar não é recomendado uma vez que isso pode levar a uma superação de bits ocasional e a perda de pacotes subsequentes.",
@@ -552,15 +578,15 @@
     "port_http_port_note": "Use esta porta para conectar com o Luar.",
     "port_note": "Observação",
     "port_port": "Porta",
-    "port_protocol": "Protocol",
+    "port_protocol": "Protocolo",
     "port_tcp": "TCP",
     "port_udp": "UDP",
     "port_warning": "Expor a interface da web à internet é um risco de segurança! Proceda por sua própria conta e risco!",
-    "port_web_ui": "Web UI",
+    "port_web_ui": "Interface Web",
     "qp": "Parâmetro de Quantização",
     "qp_desc": "Alguns dispositivos podem não suportar Taxa de Bits Constante. Para esses dispositivos, QP é usado. Valores maiores significam mais compressão, mas menos qualidade.",
     "qsv_coder": "Programador QuickSync (H264)",
-    "qsv_preset": "QuickSync Preset",
+    "qsv_preset": "Predefinição do QuickSync",
     "qsv_preset_fast": "rápido (baixa qualidade)",
     "qsv_preset_faster": "mais rápido (menor qualidade)",
     "qsv_preset_medium": "médio (padrão)",
@@ -606,7 +632,7 @@
     "virtual_sink": "Pia Virtual",
     "virtual_sink_desc": "Especifique manualmente um dispositivo de áudio virtual para usar. Se não for definido, o dispositivo é escolhido automaticamente. Recomendamos fortemente deixar este campo em branco para usar a seleção automática de dispositivo!",
     "virtual_sink_placeholder": "Alto-falantes de streaming Steam",
-    "vt_coder": "VideoToolbox Coder",
+    "vt_coder": "Codificador VideoToolbox",
     "vt_realtime": "Codificação em Tempo Real VideoToolbox",
     "vt_software": "Codificação VideoToolbox Software",
     "vt_software_allowed": "Permitido",
@@ -898,7 +924,22 @@
       "browser_failed": "Não foi possível navegar neste caminho.",
       "rescan": "Voltar a analisar",
       "use_path": "Usar este caminho"
-    }
+    },
+    "display_devices_load_failed": "Falha ao carregar dispositivos de visualização",
+    "dd_snapshot_restore_hotkey_placeholder": "Clique e prima uma combinação",
+    "capture_wgc_constant": "Windows Graphics Capture (constante)",
+    "amd_section_title": "Codificador AMD AMF",
+    "qsv_section_title": "Codificador Intel Quick Sync",
+    "vt_section_title": "Codificador VideoToolbox",
+    "vaapi_section_title": "Codificador VA-API",
+    "vulkan_section_title": "Codificador Vulkan",
+    "sw_section_title": "Codificador de software",
+    "dd_validation_resolution_or_blank": "Inválido. Use LARGURAxALTURA (por ex., {example}, x ou ×) ou deixe em branco.",
+    "dd_validation_positive_or_blank": "Inválido. Use um número positivo ou deixe em branco.",
+    "dd_validation_mixed_final_required": "Para mapeamentos mistos, especifique pelo menos um campo final.",
+    "dd_validation_resolution": "Formato inválido. Use LARGURAxALTURA, por ex., {example} (x ou ×).",
+    "dd_validation_refresh_rate": "Taxa de atualização inválida. Use um número positivo, por ex., 60 ou 59.94.",
+    "dd_manual_enforcement_notice": "As substituições abaixo ficam desativadas enquanto estiver a ser imposta uma resolução ou taxa de atualização manual. As taxas manuais são aplicadas à força e sobrepõem-se à mudança de taxa baseada no jogo nos ecrãs virtuais."
   },
   "index": {
     "description": "O sol é um anfitrião de jogos auto-hospedado para o Moonlight.",
@@ -922,7 +963,8 @@
     "version_behind": "A sua build está {behind} commits atrás da versão mais recente; considere atualizar.",
     "version_compare_unknown": "Não foi possível determinar a distância de commits até à versão mais recente.",
     "version_branch": "Ramo: {branch} (commit {commit})",
-    "view_logs": "Abrir resolução de problemas — logs"
+    "view_logs": "Abrir resolução de problemas — logs",
+    "web_links": "Ligações Web"
   },
   "navbar": {
     "applications": "Aplicações",
@@ -1153,7 +1195,7 @@
     "sync_limiter_help_disadvantages": "Desvantagens",
     "sync_limiter_help_usage": "Melhor caso de utilização",
     "sync_limiter_async_short": "Async",
-    "sync_limiter_async_latency": "+1-2 ms vs Reflex",
+    "sync_limiter_async_latency": "+1-2 ms em relação ao Reflex",
     "sync_limiter_async_stutter": "Praticamente eliminado",
     "sync_limiter_async_advantages": "Temporização estável independentemente do alinhamento de atualização; muito fluido em combinações estranhas de FPS ou Hz",
     "sync_limiter_async_disadvantages": "Latência ligeiramente superior à de Front Edge ou Reflex",
@@ -1735,7 +1777,9 @@
     "fullscreen_launcher_entry": "uma entrada do iniciador Playnite (ecrã inteiro)",
     "entries": "entradas do Playnite",
     "missing_plugin_message": "Detetado {details}, mas o plugin do Playnite já não está instalado. Reinstale o plugin para restaurar a integração ou limpe os jogos do Playnite para remover todas as entradas do Playnite do Vibeshine.",
-    "fullscreen_entry_removed": "A entrada Playnite Fullscreen foi removida. A opção Playnite Desktop foi desativada em Definições → Playnite."
+    "fullscreen_entry_removed": "A entrada Playnite Fullscreen foi removida. A opção Playnite Desktop foi desativada em Definições → Playnite.",
+    "fullscreen_entry": "Adicionar «Playnite (ecrã inteiro)» às aplicações",
+    "fullscreen_entry_desc": "Quando ativado, o Vibeshine adiciona uma entrada que abre o Playnite no modo de ambiente de trabalho em ecrã inteiro."
   },
   "auth": {
     "title": "Gestão de tokens de API",

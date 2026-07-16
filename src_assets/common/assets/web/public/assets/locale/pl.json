@@ -50,7 +50,10 @@
     "inherited": "Dziedziczone",
     "no_results": "Brak wyników",
     "options": "Opcje",
-    "retry": "Spróbuj ponownie"
+    "retry": "Spróbuj ponownie",
+    "display": "Wyświetlacz",
+    "default_parenthetical": "(domyślnie)",
+    "change": "Zmień"
   },
   "apps": {
     "actions": "Działania",
@@ -228,7 +231,8 @@
       "health_display_120_stutter": "Bieżąca częstotliwość odświeżania wynosi {hz} Hz. Generowanie klatek 120 FPS może się zacinać bez ekranu o wyższej częstotliwości odświeżania. Użyj poniższego zastąpienia ekranu, aby przełączyć się na wirtualny ekran Vibeshine, lub przenieś strumień na monitor o wyższej częstotliwości odświeżania.",
       "health_display_switch_if_active": "Vibeshine może przełączyć się do {hz} Hz, jeśli Krok 1 ustawień ekranu zachowa aktywność tylko tego monitora.",
       "health_display_tops_out": "Maksymalna częstotliwość odświeżania ekranu wynosi {hz} Hz. Użyj poniższego zastąpienia ekranu, aby przełączyć się na wirtualny ekran Vibeshine, albo przełącz się na ekran 240 Hz do generowania klatek.",
-      "health_display_switch_if_configured": "Vibeshine może przełączyć się do {hz} Hz, jeśli zostanie to skonfigurowane w Kroku 1 ustawień ekranu."
+      "health_display_switch_if_configured": "Vibeshine może przełączyć się do {hz} Hz, jeśli zostanie to skonfigurowane w Kroku 1 ustawień ekranu.",
+      "provider_game_provided": "Zapewniane przez grę"
     },
     "confirm_delete_title": "Usuń aplikację",
     "confirm_delete_title_named": "Usunąć „{name}”?",
@@ -321,7 +325,29 @@
     "playnite_source_manual": "Ręczna",
     "source_custom": "Niestandardowa",
     "source_custom_named": "Niestandardowa: \"{name}\"",
-    "untitled": "Bez tytułu"
+    "untitled": "Bez tytułu",
+    "name_search_placeholder": "Wpisz, aby wyszukać, lub podaj własną nazwę",
+    "linked_to_playnite": "Połączono z Playnite",
+    "custom_application": "Niestandardowa aplikacja",
+    "cmd_placeholder": "Wiersz polecenia pliku wykonywalnego",
+    "cmd_runtime_desc": "Vibeshine czeka na ten proces. Po jego zamknięciu strumień się kończy.",
+    "detached_cmds_runtime_desc": "Opcjonalne polecenia uruchamiane jako pierwsze, które po zakończeniu utrzymują strumień.",
+    "detached_cmds_empty": "Brak odłączonych poleceń. Użyj Dodaj, aby skonfigurować skrypty lub programy uruchamiające.",
+    "detached_cmd_number": "Odłączone polecenie nr {number}",
+    "detached_cmd_placeholder": "Polecenie do wykonania przed strumieniem",
+    "detached_cmd_runtime_desc": "Uruchamia się przed poleceniem głównym. Vibeshine kontynuuje, nawet jeśli to polecenie się zakończy.",
+    "image_storage_desc": "Opcjonalne; tylko przechowywane i niepobierane przez Vibeshine.",
+    "lossless": {
+      "scaling_bcas": "BCAS (anime)",
+      "scaling_sharp_bilinear": "Ostre dwuliniowe",
+      "scaling_integer": "Skalowanie całkowite",
+      "scaling_nearest": "Najbliższy sąsiad",
+      "anime_size_s": "Mały",
+      "anime_size_m": "Średni",
+      "anime_size_l": "Duży",
+      "anime_size_vl": "Bardzo duży",
+      "anime_size_ul": "Ultraduży"
+    }
   },
   "config": {
     "adapter_name": "Nazwa adaptera",
@@ -337,7 +363,7 @@
     "address_family_ipv4": "Tylko IPv4",
     "always_send_scancodes": "Zawsze wysyłaj kody skanowania",
     "always_send_scancodes_desc": "Wysyłanie kody skanów zwiększa kompatybilność z grami i aplikacjami, ale może powodować nieprawidłowe wprowadzanie danych z klawiatury przez niektórych klientów, którzy nie używają układu klawiatury Angielski (Stany Zjednoczone). Włącz, jeśli wprowadzanie danych z klawiatury w ogóle nie działa w niektórych aplikacjach. Wyłącz, jeśli klawisze na kliencie generują nieprawidłowe dane wejściowe na hoście.",
-    "amd_coder": "AMF Coder (H264)",
+    "amd_coder": "Koder AMF (H264)",
     "amd_coder_desc": "Umożliwia wybór kodowania entropijnego w celu nadania priorytetu jakości lub szybkości kodowania. Tylko H.264.",
     "amd_enforce_hrd": "Wymuszanie AMF Hypothetical Reference Decoder (HRD)",
     "amd_enforce_hrd_desc": "Zwiększa ograniczenia kontroli szybkości, aby spełnić wymagania modelu HRD. Zmniejsza to znacznie przepełnienie bitrate, ale może powodować artefakty kodowania lub obniżenie jakości na niektórych kartach.",
@@ -505,7 +531,7 @@
     "log_path": "Ścieżka pliku dziennika",
     "log_path_desc": "Plik, w którym przechowywane są bieżące dzienniki Vibeshine.",
     "min_log_level": "Poziom logowania",
-    "min_log_level_0": "Verbose",
+    "min_log_level_0": "Szczegółowy",
     "min_log_level_1": "Debug",
     "min_log_level_2": "Informacja",
     "min_log_level_3": "Ostrzeżenie",
@@ -543,7 +569,7 @@
     "nvenc_preset_desc": "Wyższe liczby poprawiają kompresję (jakość przy danym bitrate) kosztem zwiększonego opóźnienia kodowania. Zaleca się zmianę tylko wtedy, gdy jest to ograniczone przez sieć lub dekoder, w przeciwnym razie podobny efekt można osiągnąć poprzez zwiększenie bitrate.",
     "nvenc_realtime_hags": "Użycie priorytetu czasu rzeczywistego w harmonogramie sprzętowej akceleracji procesora graficznego",
     "nvenc_realtime_hags_desc": "Obecnie sterowniki NVIDIA mogą zawieszać się w koderze, gdy włączony jest HAGS, używany jest priorytet czasu rzeczywistego, a wykorzystanie pamięci VRAM jest bliskie maksimum. Wyłączenie tej opcji obniża priorytet do wysokiego, omijając zamrożenie kosztem zmniejszonej wydajności przechwytywania, gdy GPU jest mocno obciążony.",
-    "nvenc_spatial_aq": "Spatial AQ",
+    "nvenc_spatial_aq": "Przestrzenne AQ",
     "nvenc_spatial_aq_desc": "Przypisuje wyższe wartości QP do płaskich regionów wideo. Zalecane włączenie podczas streamowania przy niższych przepływnościach.",
     "nvenc_twopass": "Tryb dwuprzebiegowy",
     "nvenc_twopass_desc": "Dodaje wstępne przejście kodowania. Pozwala to wykryć więcej wektorów ruchu, lepiej rozłożyć przepływność w ramce i ściślej przestrzegać limitów przepływności. Wyłączenie tej funkcji nie jest zalecane, ponieważ może to prowadzić do sporadycznych przekroczeń przepływności i późniejszej utraty pakietów.",
@@ -577,7 +603,7 @@
     "port_tcp": "TCP",
     "port_udp": "UDP",
     "port_warning": "Wystawienie interfejsu użytkownika na Internet stanowi zagrożenie dla bezpieczeństwa! Postępuj na własne ryzyko!",
-    "port_web_ui": "Web UI",
+    "port_web_ui": "Interfejs webowy",
     "qp": "Parametr kwantyzacji",
     "qp_desc": "Niektóre urządzenia mogą nie obsługiwać stałej szybkości transmisji. W przypadku tych urządzeń zamiast tego używana jest wartość QP. Wyższa wartość oznacza większą kompresję, ale niższą jakość.",
     "qsv_coder": "Koder QuickSync (H264)",
@@ -898,7 +924,22 @@
       "browser_failed": "Nie można przeglądać tej ścieżki.",
       "rescan": "Ponów skanowanie",
       "use_path": "Użyj tej ścieżki"
-    }
+    },
+    "display_devices_load_failed": "Nie udało się wczytać urządzeń wyświetlających",
+    "dd_snapshot_restore_hotkey_placeholder": "Kliknij i naciśnij kombinację klawiszy",
+    "capture_wgc_constant": "Windows Graphics Capture (stałe)",
+    "amd_section_title": "Koder AMD AMF",
+    "qsv_section_title": "Koder Intel Quick Sync",
+    "vt_section_title": "Koder VideoToolbox",
+    "vaapi_section_title": "Koder VA-API",
+    "vulkan_section_title": "Koder Vulkan",
+    "sw_section_title": "Koder programowy",
+    "dd_validation_resolution_or_blank": "Nieprawidłowe. Użyj SZEROKOŚĆxWYSOKOŚĆ (np. {example}, x lub ×) albo pozostaw puste.",
+    "dd_validation_positive_or_blank": "Nieprawidłowe. Użyj liczby dodatniej albo pozostaw puste.",
+    "dd_validation_mixed_final_required": "Dla mapowań mieszanych podaj co najmniej jedno pole końcowe.",
+    "dd_validation_resolution": "Nieprawidłowy format. Użyj SZEROKOŚĆxWYSOKOŚĆ, np. {example} (x lub ×).",
+    "dd_validation_refresh_rate": "Nieprawidłowa częstotliwość odświeżania. Użyj liczby dodatniej, np. 60 lub 59.94.",
+    "dd_manual_enforcement_notice": "Poniższe nadpisania są wyłączone, gdy wymuszona jest ręczna rozdzielczość lub częstotliwość odświeżania. Ręczne częstotliwości odświeżania są stosowane wymuszenie i zastępują zależne od gry przełączanie odświeżania na ekranach wirtualnych."
   },
   "index": {
     "description": "Vibeshine jest samodzielnym hostem strumienia gry dla Moonlight.",
@@ -922,7 +963,8 @@
     "version_behind": "Twoja kompilacja jest {behind} commitów za najnowszym wydaniem; rozważ aktualizację.",
     "version_compare_unknown": "Nie można określić odległości w commitach od najnowszego wydania.",
     "version_branch": "Gałąź: {branch} (commit {commit})",
-    "view_logs": "Otwórz rozwiązywanie problemów — logi"
+    "view_logs": "Otwórz rozwiązywanie problemów — logi",
+    "web_links": "Łącza internetowe"
   },
   "navbar": {
     "applications": "Aplikacje",
@@ -1735,7 +1777,9 @@
     "fullscreen_launcher_entry": "wpis uruchamiacza Playnite (pełny ekran)",
     "entries": "wpisy Playnite",
     "missing_plugin_message": "Wykryto {details}, ale wtyczka Playnite nie jest już zainstalowana. Zainstaluj ją ponownie, aby przywrócić integrację, lub wyczyść gry Playnite, aby usunąć wszystkie wpisy Playnite z Vibeshine.",
-    "fullscreen_entry_removed": "Wpis Playnite Fullscreen został usunięty. Opcja Playnite Desktop została wyłączona w Ustawienia → Playnite."
+    "fullscreen_entry_removed": "Wpis Playnite Fullscreen został usunięty. Opcja Playnite Desktop została wyłączona w Ustawienia → Playnite.",
+    "fullscreen_entry": "Dodaj „Playnite (pełny ekran)” do aplikacji",
+    "fullscreen_entry_desc": "Po włączeniu Vibeshine doda pozycję uruchamiającą Playnite w pełnoekranowym trybie pulpitu."
   },
   "auth": {
     "title": "Zarządzanie tokenami API",

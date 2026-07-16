@@ -50,7 +50,10 @@
     "inherited": "繼承",
     "no_results": "沒有結果",
     "options": "選項",
-    "retry": "重試"
+    "retry": "重試",
+    "display": "顯示器",
+    "default_parenthetical": "（預設）",
+    "change": "變更"
   },
   "apps": {
     "actions": "行動",
@@ -224,11 +227,12 @@
       "health_display_double_120": "此顯示器最高支援 {hz} Hz。Vibeshine 可將 120 FPS 串流加倍。",
       "health_display_switch_smooth": "目前更新率為 {currentHz} Hz。Vibeshine 可在串流期間切換到 {targetHz} Hz，以保持畫格生成流暢。",
       "health_display_enforce_or_virtual": "此顯示器最高支援 {hz} Hz。請設定「顯示裝置」步驟 1 以強制使用更高更新率，或使用下方的顯示器覆寫項目切換至 Vibeshine 虛擬顯示器。",
-        "health_display_target_needs_virtual": "目前更新率為 {hz} Hz。目標最高為 {fps} FPS 的串流需要 Vibeshine 虛擬顯示器或更高更新率的顯示器。",
+      "health_display_target_needs_virtual": "目前更新率為 {hz} Hz。目標最高為 {fps} FPS 的串流需要 Vibeshine 虛擬顯示器或更高更新率的顯示器。",
       "health_display_120_stutter": "目前更新率為 {hz} Hz。在沒有更高更新率顯示器的情況下，120 FPS 畫格生成可能會卡頓。請使用下方的顯示器覆寫項目切換至 Vibeshine 虛擬顯示器，或將串流移至更新率更高的顯示器。",
       "health_display_switch_if_active": "如果「顯示裝置」步驟 1 僅讓該顯示器保持啟用，Vibeshine 可切換至最高 {hz} Hz。",
       "health_display_tops_out": "此顯示器最高只有 {hz} Hz。請使用下方的顯示器覆寫項目切換至 Vibeshine 虛擬顯示器，或切換到 240 Hz 顯示器以進行畫格生成。",
-      "health_display_switch_if_configured": "如果已在「顯示裝置」步驟 1 中設定，Vibeshine 可切換至最高 {hz} Hz。"
+      "health_display_switch_if_configured": "如果已在「顯示裝置」步驟 1 中設定，Vibeshine 可切換至最高 {hz} Hz。",
+      "provider_game_provided": "由遊戲提供"
     },
     "confirm_delete_title": "刪除應用程式",
     "confirm_delete_title_named": "刪除「{name}」？",
@@ -321,7 +325,29 @@
     "playnite_source_manual": "手動",
     "source_custom": "自訂",
     "source_custom_named": "自訂：「{name}」",
-    "untitled": "未命名"
+    "untitled": "未命名",
+    "name_search_placeholder": "輸入以搜尋或輸入自訂名稱",
+    "linked_to_playnite": "已連結至 Playnite",
+    "custom_application": "自訂應用程式",
+    "cmd_placeholder": "可執行檔命令列",
+    "cmd_runtime_desc": "Vibeshine 會等待此程序。程序關閉時，串流結束。",
+    "detached_cmds_runtime_desc": "先執行的選用命令；命令結束後仍會維持串流。",
+    "detached_cmds_empty": "尚無分離命令。請使用「新增」設定指令碼或啟動器。",
+    "detached_cmd_number": "分離命令 #{number}",
+    "detached_cmd_placeholder": "串流前執行的命令",
+    "detached_cmd_runtime_desc": "在主要命令之前執行。即使此命令結束，Vibeshine 仍會繼續。",
+    "image_storage_desc": "選用；僅儲存，Vibeshine 不會擷取。",
+    "lossless": {
+      "scaling_bcas": "BCAS（動漫）",
+      "scaling_sharp_bilinear": "銳利雙線性",
+      "scaling_integer": "整數縮放",
+      "scaling_nearest": "最近鄰",
+      "anime_size_s": "小",
+      "anime_size_m": "中",
+      "anime_size_l": "大",
+      "anime_size_vl": "很大",
+      "anime_size_ul": "超大"
+    }
   },
   "config": {
     "adapter_name": "顯示卡名稱",
@@ -523,7 +549,7 @@
     "nvenc_preset_desc": "數值越高，在增加編碼延遲的情況下，可提高壓縮率（在指定位元率下的品質）。建議僅在受限於網路或解碼器時才進行調整，否則可以透過增加位元率來達成類似的效果。",
     "nvenc_realtime_hags": "在硬體加速 GPU 排程中使用即時優先順序",
     "nvenc_realtime_hags_desc": "目前NVIDIA 驅動程式在啟用 HAGS、使用即時優先權且 VRAM 使用率接近最大值時，可能會在編碼器中凍結。停用此選項會將優先權降低至高，藉此避開凍結，但在 GPU 重度負載時擷取效能會降低。",
-    "nvenc_spatial_aq": "Spatial AQ",
+    "nvenc_spatial_aq": "空間 AQ",
     "nvenc_spatial_aq_desc": "為視訊的平坦區域指定較高的 QP 值。建議在以較低位元率串流時啟用。",
     "nvenc_twopass": "兩次編碼模式",
     "nvenc_twopass_desc": "新增初步編碼過程，能夠檢測更多的運動向量，將位元率更均勻地分佈於畫面，並更精確地遵守位元率限制。建議不要停用這個功能，因為停用後可能會偶爾出現位元率超過限制，並導致資料包丟失。",
@@ -556,7 +582,7 @@
     "port_tcp": "TCP",
     "port_udp": "UDP",
     "port_warning": "將 Web UI 暴露於網際網路存在安全風險！請自行承擔風險！",
-    "port_web_ui": "Web UI",
+    "port_web_ui": "網頁介面",
     "qp": "量化參數",
     "qp_desc": "某些裝置可能不支援 Constant Bit Rate。對於這些裝置，會使用 QP 來取代。值越高表示壓縮越多，但品質越低。",
     "qsv_coder": "QuickSync 編碼器（H264）",
@@ -899,7 +925,22 @@
       "browser_failed": "無法瀏覽此路徑。",
       "rescan": "重新掃描",
       "use_path": "使用此路徑"
-    }
+    },
+    "display_devices_load_failed": "無法載入顯示裝置",
+    "dd_snapshot_restore_hotkey_placeholder": "按一下並按下組合鍵",
+    "capture_wgc_constant": "Windows Graphics Capture（固定）",
+    "amd_section_title": "AMD AMF 編碼器",
+    "qsv_section_title": "Intel Quick Sync 編碼器",
+    "vt_section_title": "VideoToolbox 編碼器",
+    "vaapi_section_title": "VA-API 編碼器",
+    "vulkan_section_title": "Vulkan 編碼器",
+    "sw_section_title": "軟體編碼器",
+    "dd_validation_resolution_or_blank": "無效。請使用「寬度x高度」（例如 {example}，x 或 ×），或留空。",
+    "dd_validation_positive_or_blank": "無效。請輸入正數或留空。",
+    "dd_validation_mixed_final_required": "對於混合對應，請至少指定一個最終欄位。",
+    "dd_validation_resolution": "格式無效。請使用「寬度x高度」，例如 {example}（x 或 ×）。",
+    "dd_validation_refresh_rate": "更新率無效。請輸入正數，例如 60 或 59.94。",
+    "dd_manual_enforcement_notice": "強制使用手動解析度或更新率時，以下覆寫設定將停用。手動更新率會被強制套用，並覆寫虛擬顯示器上依遊戲切換更新率的行為。"
   },
   "index": {
     "description": "Vibeshine 是 Moonlight 的自架遊戲串流主機。",
@@ -923,7 +964,8 @@
     "version_behind": "你的建置落後最新發行版 {behind} 個提交；建議更新。",
     "version_compare_unknown": "無法判斷與最新發行版的提交距離。",
     "version_branch": "分支：{branch} (提交 {commit})",
-    "view_logs": "開啟疑難排解 — 記錄檔"
+    "view_logs": "開啟疑難排解 — 記錄檔",
+    "web_links": "網頁連結"
   },
   "navbar": {
     "applications": "應用程式",
@@ -1736,7 +1778,9 @@
     "fullscreen_launcher_entry": "一個 Playnite（全螢幕）啟動器項目",
     "entries": "Playnite 項目",
     "missing_plugin_message": "偵測到 {details}，但 Playnite 外掛程式已不再安裝。請重新安裝外掛程式以還原整合，或清除 Playnite 遊戲以從 Vibeshine 移除所有 Playnite 項目。",
-    "fullscreen_entry_removed": "已移除 Playnite 全螢幕項目。已在「設定 → Playnite」中關閉 Playnite Desktop 選項。"
+    "fullscreen_entry_removed": "已移除 Playnite 全螢幕項目。已在「設定 → Playnite」中關閉 Playnite Desktop 選項。",
+    "fullscreen_entry": "將「Playnite（全螢幕）」新增至應用程式",
+    "fullscreen_entry_desc": "啟用後，Vibeshine 會新增一個啟動項目，以全螢幕桌面模式開啟 Playnite。"
   },
   "auth": {
     "title": "API 權杖管理",

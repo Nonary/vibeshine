@@ -50,7 +50,10 @@
     "inherited": "継承",
     "no_results": "結果がありません",
     "options": "オプション",
-    "retry": "再試行"
+    "retry": "再試行",
+    "display": "ディスプレイ",
+    "default_parenthetical": "(デフォルト)",
+    "change": "変更"
   },
   "apps": {
     "actions": "アクション",
@@ -228,7 +231,8 @@
       "health_display_120_stutter": "現在のリフレッシュレートは {hz} Hz です。120 FPS のフレーム生成は、高リフレッシュレートのディスプレイがないとカクつく可能性があります。下のディスプレイオーバーライドを使用して Vibeshine 仮想ディスプレイに切り替えるか、ストリームをより高リフレッシュレートのモニターへ移動してください。",
       "health_display_switch_if_active": "ディスプレイデバイスのステップ 1 でそのモニターだけをアクティブなままにしている場合、Vibeshine は最大 {hz} Hz に切り替えられます。",
       "health_display_tops_out": "このディスプレイの上限は {hz} Hz です。下のディスプレイオーバーライドを使用して Vibeshine 仮想ディスプレイに切り替えるか、フレーム生成用に 240 Hz ディスプレイへ切り替えてください。",
-      "health_display_switch_if_configured": "ディスプレイデバイスのステップ 1 で設定されている場合、Vibeshine は最大 {hz} Hz に切り替えられます。"
+      "health_display_switch_if_configured": "ディスプレイデバイスのステップ 1 で設定されている場合、Vibeshine は最大 {hz} Hz に切り替えられます。",
+      "provider_game_provided": "ゲーム提供"
     },
     "confirm_delete_title": "アプリケーションを削除",
     "confirm_delete_title_named": "「{name}」を削除しますか？",
@@ -321,7 +325,29 @@
     "playnite_source_manual": "手動",
     "source_custom": "カスタム",
     "source_custom_named": "カスタム: \"{name}\"",
-    "untitled": "無題"
+    "untitled": "無題",
+    "name_search_placeholder": "検索するか、カスタム名を入力してください",
+    "linked_to_playnite": "Playnite にリンク済み",
+    "custom_application": "カスタムアプリケーション",
+    "cmd_placeholder": "実行ファイルのコマンドライン",
+    "cmd_runtime_desc": "Vibeshine はこのプロセスを待機します。プロセスが終了するとストリームも終了します。",
+    "detached_cmds_runtime_desc": "最初に実行され、終了後もストリームを維持する任意のコマンドです。",
+    "detached_cmds_empty": "デタッチコマンドはまだありません。［追加］でスクリプトやランチャーを設定してください。",
+    "detached_cmd_number": "デタッチコマンド #{number}",
+    "detached_cmd_placeholder": "ストリーム開始前に実行するコマンド",
+    "detached_cmd_runtime_desc": "メインコマンドより前に実行されます。このコマンドが終了しても Vibeshine は続行します。",
+    "image_storage_desc": "任意。保存のみ行われ、Vibeshine は取得しません。",
+    "lossless": {
+      "scaling_bcas": "BCAS（アニメ）",
+      "scaling_sharp_bilinear": "シャープバイリニア",
+      "scaling_integer": "整数スケーリング",
+      "scaling_nearest": "最近傍法",
+      "anime_size_s": "小",
+      "anime_size_m": "中",
+      "anime_size_l": "大",
+      "anime_size_vl": "特大",
+      "anime_size_ul": "超特大"
+    }
   },
   "config": {
     "adapter_name": "アダプター名",
@@ -472,7 +498,7 @@
     "high_resolution_scrolling_desc": "有効にすると、VibeshineはMoonlightのクライアントから高解像度スクロールイベントを通過します。 これは、高解像度スクロールイベントで高速にスクロールする古いアプリケーションでは無効にすることができます。",
     "install_steam_audio_drivers": "Steam オーディオドライバをインストール",
     "install_steam_audio_drivers_desc": "Steamがインストールされている場合、Steam Streaming Speakersドライバが自動的にインストールされ、5.1/7.1 サラウンドサウンドとホストオーディオのミュートがサポートされます。",
-    "key_repeat_delay": "Key Repeat Delay",
+    "key_repeat_delay": "キーリピート遅延",
     "key_repeat_delay_desc": "キーを繰り返す速度を制御します。キーを繰り返すまでの時間をミリ秒単位で設定します。",
     "key_repeat_frequency": "キーの繰り返し周波数",
     "key_repeat_frequency_desc": "キーが毎秒繰り返される頻度。この設定可能なオプションは10進数をサポートします。",
@@ -523,7 +549,7 @@
     "nvenc_preset_desc": "数値が高いほど、符号化遅延の増加を犠牲にして圧縮(一定のビットレートでの品質)が向上します。 ネットワークまたはデコーダによって制限されている場合にのみ変更することをお勧めします, そうでなければ、ビットレートを増やすことによって、同様の効果を達成することができます.",
     "nvenc_realtime_hags": "ハードウェアアクセラレーションGPUスケジューリングでリアルタイム優先度を使用する",
     "nvenc_realtime_hags_desc": "現在、NVIDIAドライバは、HAGSが有効で、リアルタイムプライオリティが使用され、VRAM使用率が最大に近い場合、エンコーダでフリーズすることがあります。このオプションを無効にすると、優先順位が高に下がり、GPUに大きな負荷がかかったときのキャプチャパフォーマンスの低下と引き換えに、フリーズを回避できます。",
-    "nvenc_spatial_aq": "Spatial AQ",
+    "nvenc_spatial_aq": "空間 AQ",
     "nvenc_spatial_aq_desc": "より高いQP値をビデオのフラットリージョンに割り当てます。低ビットレートでストリーミングする際に有効にすることをお勧めします。",
     "nvenc_twopass": "Two-passモード",
     "nvenc_twopass_desc": "予備的なエンコードパスを追加します。これは、より多くのモーションベクトルを検出することができます。より良いフレーム全体でビットレートを分配し、より厳密にビットレート制限に従います。 これは時折ビットレートオーバーシュートやその後のパケット損失につながる可能性があるため、無効にすることは推奨されません。",
@@ -552,15 +578,15 @@
     "port_http_port_note": "Moonlight に接続するには、このポートを使用してください。",
     "port_note": "メモ",
     "port_port": "ポート",
-    "port_protocol": "Protocol",
+    "port_protocol": "プロトコル",
     "port_tcp": "TCP",
     "port_udp": "UDP",
     "port_warning": "Web UIをインターネットに公開することはセキュリティ上のリスクです! ご自身の責任で進めてください!",
-    "port_web_ui": "Web UI",
+    "port_web_ui": "ウェブUI",
     "qp": "量子化パラメータ",
     "qp_desc": "デバイスによっては、Constant Bit Rateをサポートしていない可能性があります。これらのデバイスでは、QPが代わりに使用されます。値が高いほど圧縮が多くなりますが、品質が低下します。",
-    "qsv_coder": "QuickSync Coder (H264)",
-    "qsv_preset": "QuickSync Preset",
+    "qsv_coder": "QuickSync コーダー (H264)",
+    "qsv_preset": "QuickSync プリセット",
     "qsv_preset_fast": "より速く (低品質)",
     "qsv_preset_faster": "最速（低品質）",
     "qsv_preset_medium": "ミディアム（デフォルト）",
@@ -603,10 +629,10 @@
     "upnp_desc": "インターネット経由でストリーミングするポート転送を自動的に設定します",
     "vaapi_strict_rc_buffer": "AMD GPUでH.264/HEVCのフレームビットレート制限を厳密に強制する",
     "vaapi_strict_rc_buffer_desc": "このオプションを有効にすると、シーンの変更中にネットワーク上でフレームがドロップされるのを避けることができますが、移動中にビデオの品質が低下する可能性があります。",
-    "virtual_sink": "Virtual Sink",
+    "virtual_sink": "仮想オーディオシンク",
     "virtual_sink_desc": "使用する仮想オーディオデバイスを手動で指定します。未設定の場合は、デバイスが自動的に選択されます。 自動デバイス選択を使用するには、このフィールドを空白のままにすることを強くお勧めします!",
     "virtual_sink_placeholder": "Steamストリーミングスピーカー",
-    "vt_coder": "VideoToolbox Coder",
+    "vt_coder": "VideoToolbox コーダー",
     "vt_realtime": "VideoToolbox リアルタイムエンコーディング",
     "vt_software": "VideoToolbox ソフトウェアエンコーディング",
     "vt_software_allowed": "許可",
@@ -898,7 +924,22 @@
       "browser_failed": "このパスを参照できませんでした。",
       "rescan": "再スキャン",
       "use_path": "このパスを使用"
-    }
+    },
+    "display_devices_load_failed": "ディスプレイデバイスの読み込みに失敗しました",
+    "dd_snapshot_restore_hotkey_placeholder": "クリックしてキーの組み合わせを押してください",
+    "capture_wgc_constant": "Windows Graphics Capture (固定)",
+    "amd_section_title": "AMD AMF エンコーダー",
+    "qsv_section_title": "Intel Quick Sync エンコーダー",
+    "vt_section_title": "VideoToolbox エンコーダー",
+    "vaapi_section_title": "VA-API エンコーダー",
+    "vulkan_section_title": "Vulkan エンコーダー",
+    "sw_section_title": "ソフトウェアエンコーダー",
+    "dd_validation_resolution_or_blank": "無効です。幅x高さ（例: {example}、x または ×）を使用するか、空欄にしてください。",
+    "dd_validation_positive_or_blank": "無効です。正の数を使用するか、空欄にしてください。",
+    "dd_validation_mixed_final_required": "混合マッピングでは、最終フィールドを少なくとも1つ指定してください。",
+    "dd_validation_resolution": "形式が無効です。幅x高さを使用してください（例: {example}、x または ×）。",
+    "dd_validation_refresh_rate": "リフレッシュレートが無効です。60 または 59.94 などの正の数を使用してください。",
+    "dd_manual_enforcement_notice": "手動の解像度またはリフレッシュレートが強制されている間、以下のオーバーライドは無効になります。手動のリフレッシュレートは強制的に適用され、仮想ディスプレイでのゲーム連動リフレッシュレート切り替えより優先されます。"
   },
   "index": {
     "description": "サンシャインはムーンライトのための自己ホストゲームストリームホストです。",
@@ -922,7 +963,8 @@
     "version_behind": "このビルドは最新リリースより {behind} コミット遅れています。更新を検討してください。",
     "version_compare_unknown": "最新リリースまでのコミット距離を判定できません。",
     "version_branch": "ブランチ: {branch}（コミット {commit}）",
-    "view_logs": "トラブルシューティング — ログを開く"
+    "view_logs": "トラブルシューティング — ログを開く",
+    "web_links": "Web リンク"
   },
   "navbar": {
     "applications": "アプリケーション",
@@ -1735,7 +1777,9 @@
     "fullscreen_launcher_entry": "Playnite（フルスクリーン）ランチャーのエントリ",
     "entries": "Playnite エントリ",
     "missing_plugin_message": "{details} を検出しましたが、Playnite プラグインは既にインストールされていません。プラグインを再インストールして連携を復元するか、Playnite のゲームを削除して Vibeshine からすべての Playnite エントリを削除してください。",
-    "fullscreen_entry_removed": "Playnite Fullscreen のエントリが削除されました。設定 → Playnite で Playnite Desktop オプションがオフになりました。"
+    "fullscreen_entry_removed": "Playnite Fullscreen のエントリが削除されました。設定 → Playnite で Playnite Desktop オプションがオフになりました。",
+    "fullscreen_entry": "「Playnite（フルスクリーン）」をアプリケーションに追加",
+    "fullscreen_entry_desc": "有効にすると、Playnite をフルスクリーンのデスクトップモードで開くランチャー項目が Vibeshine に追加されます。"
   },
   "auth": {
     "title": "API トークン管理",

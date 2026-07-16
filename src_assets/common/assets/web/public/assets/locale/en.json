@@ -50,7 +50,10 @@
     "inherited": "Inherited",
     "no_results": "No results",
     "options": "Options",
-    "retry": "Retry"
+    "retry": "Retry",
+    "display": "Display",
+    "default_parenthetical": "(default)",
+    "change": "Change"
   },
   "apps": {
     "actions": "Actions",
@@ -249,7 +252,8 @@
       "health_display_120_stutter": "Current refresh is {hz} Hz. 120 FPS frame generation may stutter without a higher refresh display. Use the display override below to switch to the Vibeshine virtual display or move the stream to a higher-refresh monitor.",
       "health_display_switch_if_active": "Vibeshine can switch up to {hz} Hz if Display Device Step 1 keeps only that monitor active.",
       "health_display_tops_out": "Display tops out at {hz} Hz. Use the display override below to switch to the Vibeshine virtual display or switch to a 240 Hz display for frame generation.",
-      "health_display_switch_if_configured": "Vibeshine can switch up to {hz} Hz if configured in Display Device Step 1."
+      "health_display_switch_if_configured": "Vibeshine can switch up to {hz} Hz if configured in Display Device Step 1.",
+      "provider_game_provided": "Game Provided"
     },
     "add_application": "Add Application",
     "no_applications_yet": "No applications yet",
@@ -321,7 +325,29 @@
     "playnite_source_manual": "Manual",
     "source_custom": "Custom",
     "source_custom_named": "Custom: \"{name}\"",
-    "untitled": "Untitled"
+    "untitled": "Untitled",
+    "name_search_placeholder": "Type to search or enter a custom name",
+    "linked_to_playnite": "Linked to Playnite",
+    "custom_application": "Custom application",
+    "cmd_placeholder": "Executable command line",
+    "cmd_runtime_desc": "Vibeshine waits for this process. When it closes, the stream ends.",
+    "detached_cmds_runtime_desc": "Optional commands that run first and keep the stream alive when they finish.",
+    "detached_cmds_empty": "No detached commands yet. Use Add to set up prep scripts or launchers.",
+    "detached_cmd_number": "Detached Command #{number}",
+    "detached_cmd_placeholder": "Command to execute before the stream",
+    "detached_cmd_runtime_desc": "Runs before the primary command. Vibeshine continues even if this command exits.",
+    "image_storage_desc": "Optional; stored only and not fetched by Vibeshine.",
+    "lossless": {
+      "scaling_bcas": "BCAS (Anime)",
+      "scaling_sharp_bilinear": "Sharp Bilinear",
+      "scaling_integer": "Integer Scale",
+      "scaling_nearest": "Nearest Neighbour",
+      "anime_size_s": "Small",
+      "anime_size_m": "Medium",
+      "anime_size_l": "Large",
+      "anime_size_vl": "Very Large",
+      "anime_size_ul": "Ultra Large"
+    }
   },
   "offline": {
     "title": "Lost Connection to Vibeshine",
@@ -895,7 +921,22 @@
       "browser_failed": "Could not browse this path.",
       "rescan": "Rescan",
       "use_path": "Use This Path"
-    }
+    },
+    "display_devices_load_failed": "Failed to load display devices",
+    "dd_snapshot_restore_hotkey_placeholder": "Click and press a combo",
+    "capture_wgc_constant": "Windows Graphics Capture (constant)",
+    "amd_section_title": "AMD AMF Encoder",
+    "qsv_section_title": "Intel Quick Sync Encoder",
+    "vt_section_title": "VideoToolbox Encoder",
+    "vaapi_section_title": "VA-API Encoder",
+    "vulkan_section_title": "Vulkan Encoder",
+    "sw_section_title": "Software Encoder",
+    "dd_validation_resolution_or_blank": "Invalid. Use WIDTHxHEIGHT (e.g., {example}, x or ×) or leave blank.",
+    "dd_validation_positive_or_blank": "Invalid. Use a positive number or leave blank.",
+    "dd_validation_mixed_final_required": "For mixed mappings, specify at least one Final field.",
+    "dd_validation_resolution": "Invalid format. Use WIDTHxHEIGHT, e.g., {example} (x or ×).",
+    "dd_validation_refresh_rate": "Invalid refresh rate. Use a positive number, e.g., 60 or 59.94.",
+    "dd_manual_enforcement_notice": "Overrides below are disabled while manual resolution or refresh rate is enforced. Manual refresh rates are applied forcefully and override game-aware refresh switching on virtual displays."
   },
   "index": {
     "description": "Vibeshine is a self-hosted game stream host for Moonlight.",
@@ -919,7 +960,8 @@
     "vigembus_not_installed_desc": "Virtual gamepad support will not work without the ViGEmBus driver. Click the button below to install it.",
     "vigembus_not_installed_title": "ViGEmBus Driver Not Installed",
     "vigembus_outdated_desc": "You are running an outdated version of ViGEmBus (v{version}). Version 1.17 or higher is required for proper gamepad support. Click the button below to update.",
-    "vigembus_outdated_title": "ViGEmBus Driver Outdated"
+    "vigembus_outdated_title": "ViGEmBus Driver Outdated",
+    "web_links": "Web Links"
   },
   "resources": {
     "title": "Resources"
@@ -1412,7 +1454,9 @@
     "fullscreen_launcher_entry": "a Playnite (Fullscreen) launcher entry",
     "entries": "Playnite entries",
     "missing_plugin_message": "Detected {details}, but the Playnite plugin is no longer installed. Reinstall the plugin to restore integration, or purge Playnite games to remove all Playnite entries from Vibeshine.",
-    "fullscreen_entry_removed": "Playnite Fullscreen entry removed. The Playnite Desktop option was turned off in Settings → Playnite."
+    "fullscreen_entry_removed": "Playnite Fullscreen entry removed. The Playnite Desktop option was turned off in Settings → Playnite.",
+    "fullscreen_entry": "Add 'Playnite (Fullscreen)' to Applications",
+    "fullscreen_entry_desc": "When enabled, Vibeshine adds a launcher entry that opens Playnite in fullscreen desktop mode."
   },
   "password": {
     "confirm_password": "Confirm Password",

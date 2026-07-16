@@ -50,7 +50,10 @@
     "inherited": "Herdado",
     "no_results": "Nenhum resultado",
     "options": "Opções",
-    "retry": "Tentar novamente"
+    "retry": "Tentar novamente",
+    "display": "Tela",
+    "default_parenthetical": "(padrão)",
+    "change": "Alterar"
   },
   "apps": {
     "actions": "Ações",
@@ -228,7 +231,8 @@
       "health_display_120_stutter": "A taxa de atualização atual é {hz} Hz. A geração de quadros a 120 FPS pode apresentar engasgos sem um display com taxa de atualização mais alta. Use a substituição de display abaixo para alternar para o display virtual do Vibeshine ou mova o stream para um monitor com taxa de atualização mais alta.",
       "health_display_switch_if_active": "O Vibeshine pode alternar para até {hz} Hz se o Passo 1 do Dispositivo de Exibição mantiver apenas esse monitor ativo.",
       "health_display_tops_out": "O display atinge no máximo {hz} Hz. Use a substituição de display abaixo para alternar para o display virtual do Vibeshine ou mude para um display de 240 Hz para a geração de quadros.",
-      "health_display_switch_if_configured": "O Vibeshine pode alternar para até {hz} Hz se estiver configurado no Passo 1 do Dispositivo de Exibição."
+      "health_display_switch_if_configured": "O Vibeshine pode alternar para até {hz} Hz se estiver configurado no Passo 1 do Dispositivo de Exibição.",
+      "provider_game_provided": "Fornecido pelo jogo"
     },
     "confirm_delete_title": "Eliminar aplicação",
     "confirm_delete_title_named": "Excluir \"{name}\"?",
@@ -321,7 +325,29 @@
     "playnite_source_manual": "Manual",
     "source_custom": "Personalizado",
     "source_custom_named": "Personalizado: \"{name}\"",
-    "untitled": "Sem título"
+    "untitled": "Sem título",
+    "name_search_placeholder": "Digite para pesquisar ou insira um nome personalizado",
+    "linked_to_playnite": "Vinculado ao Playnite",
+    "custom_application": "Aplicativo personalizado",
+    "cmd_placeholder": "Linha de comando do executável",
+    "cmd_runtime_desc": "O Vibeshine aguarda esse processo. Quando ele fecha, a transmissão termina.",
+    "detached_cmds_runtime_desc": "Comandos opcionais executados primeiro que mantêm a transmissão ativa quando terminam.",
+    "detached_cmds_empty": "Ainda não há comandos separados. Use Adicionar para configurar scripts ou inicializadores.",
+    "detached_cmd_number": "Comando separado nº {number}",
+    "detached_cmd_placeholder": "Comando a executar antes da transmissão",
+    "detached_cmd_runtime_desc": "Executado antes do comando principal. O Vibeshine continua mesmo que esse comando termine.",
+    "image_storage_desc": "Opcional; apenas armazenado e não buscado pelo Vibeshine.",
+    "lossless": {
+      "scaling_bcas": "BCAS (anime)",
+      "scaling_sharp_bilinear": "Bilinear nítido",
+      "scaling_integer": "Escala inteira",
+      "scaling_nearest": "Vizinho mais próximo",
+      "anime_size_s": "Pequeno",
+      "anime_size_m": "Médio",
+      "anime_size_l": "Grande",
+      "anime_size_vl": "Muito grande",
+      "anime_size_ul": "Ultragrande"
+    }
   },
   "config": {
     "adapter_name": "Nome do adaptador",
@@ -586,7 +612,7 @@
     "sw_preset_ultrafast": "ultrarrápido",
     "sw_preset_veryfast": "muito rápido",
     "sw_preset_veryslow": "muito lento",
-    "sw_tune": "SW Tune",
+    "sw_tune": "Ajuste de SW",
     "sw_tune_animation": "animação -- bom para desenhos animados; usa deblocking mais alto e mais quadros de referência",
     "sw_tune_desc": "Opções de ajuste, que são aplicadas após a predefinição. O padrão é zerolatência.",
     "sw_tune_fastdecode": "fastdecode -- permite uma decodificação mais rápida ao desativar determinados filtros",
@@ -898,7 +924,22 @@
       "browser_failed": "Não foi possível navegar neste caminho.",
       "rescan": "Verificar novamente",
       "use_path": "Usar este caminho"
-    }
+    },
+    "display_devices_load_failed": "Falha ao carregar dispositivos de exibição",
+    "dd_snapshot_restore_hotkey_placeholder": "Clique e pressione uma combinação",
+    "capture_wgc_constant": "Windows Graphics Capture (constante)",
+    "amd_section_title": "Codificador AMD AMF",
+    "qsv_section_title": "Codificador Intel Quick Sync",
+    "vt_section_title": "Codificador VideoToolbox",
+    "vaapi_section_title": "Codificador VA-API",
+    "vulkan_section_title": "Codificador Vulkan",
+    "sw_section_title": "Codificador de software",
+    "dd_validation_resolution_or_blank": "Inválido. Use LARGURAxALTURA (por exemplo, {example}, x ou ×) ou deixe em branco.",
+    "dd_validation_positive_or_blank": "Inválido. Use um número positivo ou deixe em branco.",
+    "dd_validation_mixed_final_required": "Para mapeamentos mistos, especifique pelo menos um campo final.",
+    "dd_validation_resolution": "Formato inválido. Use LARGURAxALTURA, por exemplo, {example} (x ou ×).",
+    "dd_validation_refresh_rate": "Taxa de atualização inválida. Use um número positivo, por exemplo, 60 ou 59.94.",
+    "dd_manual_enforcement_notice": "As substituições abaixo ficam desativadas enquanto uma resolução ou taxa de atualização manual estiver sendo forçada. As taxas manuais são aplicadas à força e substituem a mudança de taxa baseada no jogo em telas virtuais."
   },
   "index": {
     "description": "O Vibeshine é um host de fluxo de jogos auto-hospedado para o Moonlight.",
@@ -922,7 +963,8 @@
     "version_behind": "Sua build está {behind} commits atrás da versão mais recente; considere atualizar.",
     "version_compare_unknown": "Não foi possível determinar a distância em commits até a versão mais recente.",
     "version_branch": "Ramo: {branch} (commit {commit})",
-    "view_logs": "Abrir Solução de problemas — Logs"
+    "view_logs": "Abrir Solução de problemas — Logs",
+    "web_links": "Links da web"
   },
   "navbar": {
     "applications": "Aplicativos",
@@ -1153,7 +1195,7 @@
     "sync_limiter_help_disadvantages": "Desvantagens",
     "sync_limiter_help_usage": "Melhor Caso de Uso",
     "sync_limiter_async_short": "Async",
-    "sync_limiter_async_latency": "+1-2 ms vs Reflex",
+    "sync_limiter_async_latency": "+1-2 ms em comparação com o Reflex",
     "sync_limiter_async_stutter": "Praticamente eliminado",
     "sync_limiter_async_advantages": "Tempos estáveis independentemente do alinhamento de atualização; muito suave em combinações estranhas de FPS ou Hz",
     "sync_limiter_async_disadvantages": "Latência ligeiramente maior do que Front Edge ou Reflex",
@@ -1735,7 +1777,9 @@
     "fullscreen_launcher_entry": "uma entrada do inicializador Playnite (tela cheia)",
     "entries": "entradas do Playnite",
     "missing_plugin_message": "Detectado {details}, mas o plugin do Playnite não está mais instalado. Reinstale o plugin para restaurar a integração ou limpe os jogos do Playnite para remover todas as entradas do Playnite do Vibeshine.",
-    "fullscreen_entry_removed": "A entrada Playnite Fullscreen foi removida. A opção Playnite Desktop foi desativada em Configurações → Playnite."
+    "fullscreen_entry_removed": "A entrada Playnite Fullscreen foi removida. A opção Playnite Desktop foi desativada em Configurações → Playnite.",
+    "fullscreen_entry": "Adicionar “Playnite (tela cheia)” aos aplicativos",
+    "fullscreen_entry_desc": "Quando ativado, o Vibeshine adiciona uma entrada que abre o Playnite no modo de área de trabalho em tela cheia."
   },
   "auth": {
     "title": "Gerenciamento de tokens de API",

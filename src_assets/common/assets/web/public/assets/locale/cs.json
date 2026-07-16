@@ -50,7 +50,10 @@
     "inherited": "Zděděno",
     "no_results": "Žádné výsledky",
     "options": "Možnosti",
-    "retry": "Zkusit znovu"
+    "retry": "Zkusit znovu",
+    "display": "Displej",
+    "default_parenthetical": "(výchozí)",
+    "change": "Změnit"
   },
   "apps": {
     "actions": "Akce",
@@ -158,7 +161,7 @@
       "target_fps_hint": "Nastavte toto pouze tehdy, když potřebujete přepsat FPS požadované klientem pro Lossless Scaling.",
       "rtss_limit_label": "Přepsání limitu snímků RTSS",
       "rtss_limit_hint": "Vibeshine při ponechání prázdného použije polovinu požadavku klienta. Vyžaduje nainstalovaný a spuštěný RTSS.",
-      "flow_scale_label": "Flow Scale (%)",
+      "flow_scale_label": "Měřítko toku (%)",
       "flow_scale_hint": "Síla prolínání snímků (0–100). Vibeshine doporučuje 50 % jako vyváženou výchozí hodnotu.",
       "launch_delay_label": "Zpoždění spuštění Lossless (sekundy)",
       "launch_delay_hint": "Počkejte další sekundy po spuštění hry, než se otevře Lossless Scaling. Ponechte prázdné pro použití výchozího 8sekundového zpoždění.",
@@ -249,7 +252,8 @@
       "health_display_120_stutter": "Aktuální obnovovací frekvence je {hz} Hz. Generování snímků při 120 FPS může bez displeje s vyšší obnovovací frekvencí trhat. Pomocí níže uvedeného přepsání displeje přepněte na virtuální displej Vibeshine nebo přesuňte stream na monitor s vyšší obnovovací frekvencí.",
       "health_display_switch_if_active": "Vibeshine může přepnout až na {hz} Hz, pokud krok 1 zařízení displeje ponechá aktivní pouze tento monitor.",
       "health_display_tops_out": "Displej končí na {hz} Hz. Pomocí níže uvedeného přepsání displeje přepněte na virtuální displej Vibeshine nebo pro generování snímků přepněte na displej s 240 Hz.",
-      "health_display_switch_if_configured": "Vibeshine může přepnout až na {hz} Hz, pokud je to nastaveno v kroku 1 zařízení displeje."
+      "health_display_switch_if_configured": "Vibeshine může přepnout až na {hz} Hz, pokud je to nastaveno v kroku 1 zařízení displeje.",
+      "provider_game_provided": "Poskytuje hra"
     },
     "add_application": "Přidat aplikaci",
     "no_applications_yet": "Zatím žádné aplikace",
@@ -321,7 +325,29 @@
     "playnite_source_manual": "Ruční",
     "source_custom": "Vlastní",
     "source_custom_named": "Vlastní: \"{name}\"",
-    "untitled": "Bez názvu"
+    "untitled": "Bez názvu",
+    "name_search_placeholder": "Začněte psát a vyhledejte nebo zadejte vlastní název",
+    "linked_to_playnite": "Propojeno s Playnite",
+    "custom_application": "Vlastní aplikace",
+    "cmd_placeholder": "Příkazový řádek spustitelného souboru",
+    "cmd_runtime_desc": "Vibeshine čeká na tento proces. Po jeho ukončení stream skončí.",
+    "detached_cmds_runtime_desc": "Volitelné příkazy, které se spustí jako první a po dokončení udržují stream aktivní.",
+    "detached_cmds_empty": "Zatím nejsou žádné odpojené příkazy. Pomocí Přidat nastavte skripty nebo spouštěče.",
+    "detached_cmd_number": "Odpojený příkaz č. {number}",
+    "detached_cmd_placeholder": "Příkaz, který se spustí před streamem",
+    "detached_cmd_runtime_desc": "Spustí se před hlavním příkazem. Vibeshine pokračuje, i když tento příkaz skončí.",
+    "image_storage_desc": "Volitelné; pouze se uloží a Vibeshine jej nestahuje.",
+    "lossless": {
+      "scaling_bcas": "BCAS (anime)",
+      "scaling_sharp_bilinear": "Ostré bilineární",
+      "scaling_integer": "Celočíselné škálování",
+      "scaling_nearest": "Nejbližší soused",
+      "anime_size_s": "Malá",
+      "anime_size_m": "Střední",
+      "anime_size_l": "Velká",
+      "anime_size_vl": "Velmi velká",
+      "anime_size_ul": "Mimořádně velká"
+    }
   },
   "offline": {
     "title": "Ztratilo se spojení se Vibeshine",
@@ -505,13 +531,13 @@
     "app_display_status_inactive": "neaktivní",
     "virtual_display_layout_exclusive": "Exkluzivní",
     "virtual_display_layout_exclusive_desc": "Deaktivujte všechny ostatní monitory, aby zůstal viditelný pouze virtuální displej Vibeshine.",
-    "virtual_display_layout_extended": "Extended",
+    "virtual_display_layout_extended": "Rozšířené",
     "virtual_display_layout_extended_desc": "Udržujte své fyzické monitory aktivní a jednoduše přidejte virtuální displej jako další obrazovku.",
     "virtual_display_layout_extended_primary": "Rozšířený + Primární",
     "virtual_display_layout_extended_primary_desc": "Rozšiřte plochu a udělejte z virtuálního zobrazení primární monitor (hlavní panel, přihlášení atd.).",
-    "virtual_display_layout_extended_isolated": "Extended + Isolated",
+    "virtual_display_layout_extended_isolated": "Rozšířená + izolovaná",
     "virtual_display_layout_extended_isolated_desc": "Rozšiřte pracovní plochu, ale zaparkujte virtuální displej daleko, aby se do něj myš nikdy nezatoulala.",
-    "virtual_display_layout_extended_primary_isolated": "Extended + Primary (Isolated)",
+    "virtual_display_layout_extended_primary_isolated": "Rozšířená + primární (izolovaná)",
     "virtual_display_layout_extended_primary_isolated_desc": "Kombinujte primární + izolaci: udělejte z virtuální obrazovky primární a zároveň ji udržujte mimo dosah fyzických monitorů.",
     "virtual_display_status_label": "Ovladač virtuálního displeje Vibeshine:",
     "virtual_display_status_hint": "Použijte virtuální displej Vibeshine k automatickému roztočení virtuálního monitoru s vysokou obnovou. Pokud ovladač hlásí chybu, před streamováním přeinstalujte Vibeshine nebo opravte ovladač.",
@@ -564,8 +590,8 @@
     "fec_percentage_desc": "Procento paketů pro opravu chyb v každém datovém paketu v každém videosnímku. Vyšší hodnoty mohou korigovat větší ztráty síťových paketů, ale za cenu zvýšení využití šířky pásma.",
     "frame_limiter_fps_limit": "Omezovač rámečku FPS limit",
     "frame_limiter_fps_limit_desc": "Volitelný globální limit FPS pro omezovač snímků. Chcete-li použít požadované FPS streamu, nastavte na 0.",
-    "frame_limiter_auto_virtual_framegen": "Auto-limit virtual frame generation",
-    "frame_limiter_auto_virtual_framegen_desc": "Run virtual-display WGC frame generation at 4x refresh and apply a matching stream-start frame cap for stable pacing.",
+    "frame_limiter_auto_virtual_framegen": "Plynulejší snímání pro virtuální displeje",
+    "frame_limiter_auto_virtual_framegen_desc": "Při hraní her používá 4× obnovovací frekvenci a na ploše 1×. Režim Starší zachovává pevnou 2× obnovovací frekvenci; režim Zakázáno vypíná tyto úpravy a odpovídající omezovač.",
     "ffmpeg_auto": "auto -- nechat ffmpeg rozhodnout (výchozí)",
     "file_apps": "Soubor aplikací",
     "file_apps_desc": "Soubor, ve kterém jsou uloženy aktuální aplikace Vibeshine.",
@@ -758,7 +784,7 @@
     "virtual_sink": "Virtuální zvuk",
     "virtual_sink_desc": "Ručně zadejte virtuální zvukové zařízení, které chcete použít. Pokud není nastaveno, je zařízení vybráno automaticky. Důrazně doporučujeme ponechat toto pole prázdné, chcete-li použít automatický výběr zařízení!",
     "virtual_sink_placeholder": "Streamovací reproduktory služby Steam",
-    "vt_coder": "VideoToolbox Coder",
+    "vt_coder": "Kodér VideoToolbox",
     "vt_realtime": "Video Toolbox v reálném čase enkódování",
     "vt_software": "Softwarové kódování video nástrojů",
     "vt_software_allowed": "Povoleno",
@@ -908,7 +934,22 @@
       "browser_failed": "Tuto cestu se nepodařilo procházet.",
       "rescan": "Znovu prohledat",
       "use_path": "Použít tuto cestu"
-    }
+    },
+    "display_devices_load_failed": "Nepodařilo se načíst zobrazovací zařízení",
+    "dd_snapshot_restore_hotkey_placeholder": "Klikněte a stiskněte klávesovou zkratku",
+    "capture_wgc_constant": "Windows Graphics Capture (konstantní)",
+    "amd_section_title": "Kodér AMD AMF",
+    "qsv_section_title": "Kodér Intel Quick Sync",
+    "vt_section_title": "Kodér VideoToolbox",
+    "vaapi_section_title": "Kodér VA-API",
+    "vulkan_section_title": "Kodér Vulkan",
+    "sw_section_title": "Softwarový kodér",
+    "dd_validation_resolution_or_blank": "Neplatné. Použijte ŠÍŘKAxVÝŠKA (např. {example}, x nebo ×), nebo ponechte prázdné.",
+    "dd_validation_positive_or_blank": "Neplatné. Použijte kladné číslo, nebo ponechte prázdné.",
+    "dd_validation_mixed_final_required": "U smíšeného mapování zadejte alespoň jedno konečné pole.",
+    "dd_validation_resolution": "Neplatný formát. Použijte ŠÍŘKAxVÝŠKA, např. {example} (x nebo ×).",
+    "dd_validation_refresh_rate": "Neplatná obnovovací frekvence. Použijte kladné číslo, např. 60 nebo 59.94.",
+    "dd_manual_enforcement_notice": "Níže uvedené přepisy jsou zakázány, dokud je vynuceno ruční rozlišení nebo obnovovací frekvence. Ruční obnovovací frekvence se použijí vynuceně a mají přednost před přepínáním obnovovací frekvence podle hry na virtuálních displejích."
   },
   "index": {
     "description": "Sluneční stream je hostitelem pro Měsíční světlo.",
@@ -932,7 +973,8 @@
     "vigembus_not_installed_desc": "Podpora virtuálního gamepadu nebude fungovat bez ovladače ViGEmBus. Pro jeho instalaci klikněte na tlačítko níže.",
     "vigembus_not_installed_title": "Ovladač ViGEmBus není nainstalován",
     "vigembus_outdated_desc": "Používáte zastaralou verzi ViGEmBus (v{version}). Pro správnou podporu gamepadu je vyžadována verze 1.17 nebo vyšší. Pro aktualizaci klikněte na tlačítko níže.",
-    "vigembus_outdated_title": "ViGEmBus Driver je zastaralý"
+    "vigembus_outdated_title": "ViGEmBus Driver je zastaralý",
+    "web_links": "Webové odkazy"
   },
   "resources": {
     "title": "Zdroje"
@@ -1251,7 +1293,9 @@
     "fullscreen_launcher_entry": "položka spouštěče Playnite (na celou obrazovku)",
     "entries": "položky Playnite",
     "missing_plugin_message": "Bylo zjištěno {details}, ale doplněk Playnite již není nainstalován. Přeinstalujte doplněk, abyste obnovili integraci, nebo vyčistěte hry Playnite a odeberte všechny položky Playnite z Vibeshine.",
-    "fullscreen_entry_removed": "Položka Playnite v režimu celé obrazovky byla odebrána. Možnost Playnite Desktop byla vypnuta v Nastavení → Playnite."
+    "fullscreen_entry_removed": "Položka Playnite v režimu celé obrazovky byla odebrána. Možnost Playnite Desktop byla vypnuta v Nastavení → Playnite.",
+    "fullscreen_entry": "Přidat „Playnite (celá obrazovka)“ do aplikací",
+    "fullscreen_entry_desc": "Je-li tato možnost povolena, Vibeshine přidá spouštěcí položku, která otevře Playnite v celoobrazovkovém režimu."
   },
   "password": {
     "confirm_password": "Potvrzení hesla",
@@ -1502,8 +1546,8 @@
     "frame_limiter_disable_vsync_desc": "Je-li povoleno, Vibeshine nastaví nastavení VSYNC ovladače NVIDIA na Vypnuto po dobu trvání streamu a poté obnoví předchozí hodnotu. Pokud přepisy NVIDIA nejsou k dispozici, Vibeshine vynutí, aby displej běžel na nejvyšší obnovovací frekvenci, což představuje záložní řešení pro maximální úsilí.",
     "frame_limiter_fps_limit": "Omezovač rámečku FPS limit",
     "frame_limiter_fps_limit_desc": "Volitelný globální limit FPS pro omezovač snímků. Chcete-li použít požadované FPS streamu, nastavte na 0.",
-    "frame_limiter_auto_virtual_framegen": "Auto-limit virtual frame generation",
-    "frame_limiter_auto_virtual_framegen_desc": "Run virtual-display WGC frame generation at 4x refresh and apply a matching stream-start frame cap for stable pacing.",
+    "frame_limiter_auto_virtual_framegen": "Plynulejší snímání pro virtuální displeje",
+    "frame_limiter_auto_virtual_framegen_desc": "Při hraní her používá 4× obnovovací frekvenci a na ploše 1×. Režim Starší zachovává pevnou 2× obnovovací frekvenci; režim Zakázáno vypíná tyto úpravy a odpovídající omezovač.",
     "provider_label": "Poskytovatel omezovače rámců",
     "provider_desc": "Auto upřednostňuje RTSS, kdykoli je detekováno, a v případě potřeby se vrátí k omezovači ovládacího panelu NVIDIA. Omezovač NVIDIA se nedoporučuje, protože nemůže zaručit dokonalé tempo snímků.",
     "provider_auto": "Auto (preferuji RTSS)",
@@ -1543,7 +1587,7 @@
     "sync_limiter_help_blurb": "Doporučuje se asynchronní. Přidává malé množství latence, ale téměř odstraňuje mikrostuttering, který je pro diváky obvykle patrnější.",
     "sync_limiter_help_mode": "Režim",
     "sync_limiter_help_latency": "Přidaná latence (typická)",
-    "sync_limiter_help_stutter": "Microstutter / Pacing",
+    "sync_limiter_help_stutter": "Mikrozáseky / časování snímků",
     "sync_limiter_help_advantages": "Výhody",
     "sync_limiter_help_disadvantages": "Nevýhody",
     "sync_limiter_help_usage": "Nejlepší případ použití",
@@ -1558,7 +1602,7 @@
     "sync_limiter_front_stutter": "Může znovu zavést chvění, pokud FPS není dělitel obnovy",
     "sync_limiter_front_advantages": "Absolutně nejnižší latence, pokud se FPS rovnoměrně rozdělí na obnovení; vyžadováno pro Scanline Sync",
     "sync_limiter_front_disadvantages": "Přidává latenci při vazbě na CPU, protože hotové snímky čekají; křehké tempo u nesprávných čepiček",
-    "sync_limiter_front_use": "Lossless Scaling, NVIDIA Smooth Motion, AMD frame generation, and mixed-GPU framegen pacing. DLSS/FSR game-provided frame generation requires virtual display for reliable WGC capture.",
+    "sync_limiter_front_use": "Lossless Scaling, NVIDIA Smooth Motion, generování snímků AMD a časování generování snímků při použití více GPU. Generování snímků poskytované hrou DLSS/FSR vyžaduje pro spolehlivé zachytávání WGC virtuální displej.",
     "sync_limiter_back_short": "Zadní okraj",
     "sync_limiter_back_latency": "Střední (+2–3 ms)",
     "sync_limiter_back_stutter": "Snížené trhání; může koktat, když počet snímků naroste",

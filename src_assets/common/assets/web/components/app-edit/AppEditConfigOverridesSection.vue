@@ -10,7 +10,9 @@
         <p class="text-[12px] leading-relaxed opacity-70">{{ descriptionText }}</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <n-tag size="small" type="primary">{{ $t('_common.active') }}: {{ activeOverrideCount }}</n-tag>
+        <n-tag size="small" type="primary"
+          >{{ $t('_common.active') }}: {{ activeOverrideCount }}</n-tag
+        >
         <n-button size="small" type="primary" @click="openAddSettings">
           {{ $t('apps.overrides.add_setting') }}
         </n-button>
@@ -258,428 +260,433 @@
               :class="pickerPaneClass('editor')"
               class="min-h-0 flex-col rounded-xl border border-dark/10 dark:border-light/10 bg-light/70 dark:bg-white/5"
             >
-            <div class="border-b border-dark/10 px-4 py-4 dark:border-light/10">
-              <div class="flex items-center justify-between gap-3">
-                <div class="space-y-1">
-                  <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">
-                    {{ $t('apps.overrides.override_editor') }}
-                  </h4>
-                  <p class="text-[12px] leading-relaxed opacity-60">
-                    {{ $t('apps.overrides.new_settings_hint') }}
-                  </p>
-                </div>
-                <div
-                  class="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-medium text-primary"
-                >
-                  {{ modalOverrideEntries.length }}
-                </div>
-              </div>
-            </div>
-
-            <div class="vb-scroll min-h-0 flex-1">
-              <div v-if="modalOverrideEntries.length === 0" class="px-4 py-4">
-                <div
-                  class="rounded-xl border border-dashed border-dark/15 dark:border-light/15 bg-white/40 px-4 py-6 text-center dark:bg-surface/30"
-                >
+              <div class="border-b border-dark/10 px-4 py-4 dark:border-light/10">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="space-y-1">
+                    <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">
+                      {{ $t('apps.overrides.override_editor') }}
+                    </h4>
+                    <p class="text-[12px] leading-relaxed opacity-60">
+                      {{ $t('apps.overrides.new_settings_hint') }}
+                    </p>
+                  </div>
                   <div
-                    class="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary"
+                    class="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-medium text-primary"
                   >
-                    <i class="fas fa-hand-point-right text-sm" />
+                    {{ modalOverrideEntries.length }}
                   </div>
-                  <div class="mt-3 text-sm font-medium">
-                    {{ $t('apps.overrides.empty_picker') }}
-                  </div>
-                  <p class="mx-auto mt-2 max-w-xl text-[12px] leading-relaxed opacity-60">
-                    {{ $t('apps.overrides.picker_empty_hint') }}
-                  </p>
+                </div>
+              </div>
+
+              <div class="vb-scroll min-h-0 flex-1">
+                <div v-if="modalOverrideEntries.length === 0" class="px-4 py-4">
                   <div
-                    class="mx-auto mt-4 max-w-sm rounded-xl border border-dark/10 bg-dark/5 p-3 text-left dark:border-light/10 dark:bg-light/5"
+                    class="rounded-xl border border-dashed border-dark/15 dark:border-light/15 bg-white/40 px-4 py-6 text-center dark:bg-surface/30"
                   >
-                    <div class="text-[11px] font-semibold uppercase tracking-wide opacity-60">
-                      {{ $t('apps.overrides.getting_started') }}
+                    <div
+                      class="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary"
+                    >
+                      <i class="fas fa-hand-point-right text-sm" />
                     </div>
-                    <ol class="mt-2 space-y-1 text-[12px] leading-relaxed opacity-70">
-                      <li>1. {{ $t('apps.overrides.picker_empty_step_search') }}</li>
-                      <li>2. {{ $t('apps.overrides.picker_empty_step_add') }}</li>
-                      <li>3. {{ $t('apps.overrides.picker_empty_step_refine') }}</li>
-                    </ol>
+                    <div class="mt-3 text-sm font-medium">
+                      {{ $t('apps.overrides.empty_picker') }}
+                    </div>
+                    <p class="mx-auto mt-2 max-w-xl text-[12px] leading-relaxed opacity-60">
+                      {{ $t('apps.overrides.picker_empty_hint') }}
+                    </p>
+                    <div
+                      class="mx-auto mt-4 max-w-sm rounded-xl border border-dark/10 bg-dark/5 p-3 text-left dark:border-light/10 dark:bg-light/5"
+                    >
+                      <div class="text-[11px] font-semibold uppercase tracking-wide opacity-60">
+                        {{ $t('apps.overrides.getting_started') }}
+                      </div>
+                      <ol class="mt-2 space-y-1 text-[12px] leading-relaxed opacity-70">
+                        <li>1. {{ $t('apps.overrides.picker_empty_step_search') }}</li>
+                        <li>2. {{ $t('apps.overrides.picker_empty_step_add') }}</li>
+                        <li>3. {{ $t('apps.overrides.picker_empty_step_refine') }}</li>
+                      </ol>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  v-else
+                  class="m-4 rounded-xl border border-dark/10 dark:border-light/10 bg-white/60 dark:bg-surface/40 divide-y divide-dark/10 dark:divide-light/10"
+                >
+                  <div v-for="entry in modalOverrideEntries" :key="entry.key" class="px-4 py-4">
+                    <ConfigInputField
+                      v-if="
+                        isSyntheticKey(entry.key) &&
+                        entry.key === SYN_KEYS.configureDisplayResolution
+                      "
+                      :id="`modal-${entry.key}`"
+                      :label="entry.label"
+                      :desc="entry.desc"
+                      size="small"
+                      monospace
+                      placeholder="1920×1080"
+                      :model-value="draftForcedResolution"
+                      @update:model-value="(v) => setDraftForcedResolution(String(v || ''))"
+                    >
+                      <template #actions>
+                        <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
+                          {{ $t('_common.delete') }}
+                        </n-button>
+                      </template>
+                      <template #meta>
+                        <span class="hidden sm:inline">
+                          <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }}
+                        </span>
+                      </template>
+                    </ConfigInputField>
+
+                    <ConfigInputField
+                      v-else-if="
+                        isSyntheticKey(entry.key) &&
+                        entry.key === SYN_KEYS.configureDisplayRefreshRate
+                      "
+                      :id="`modal-${entry.key}`"
+                      :label="entry.label"
+                      :desc="entry.desc"
+                      size="small"
+                      monospace
+                      inputmode="numeric"
+                      placeholder="60"
+                      :model-value="draftForcedRefreshRate"
+                      @update:model-value="(v) => setDraftForcedRefreshRate(String(v || ''))"
+                    >
+                      <template #actions>
+                        <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
+                          {{ $t('_common.delete') }}
+                        </n-button>
+                      </template>
+                      <template #meta>
+                        <span class="hidden sm:inline">
+                          <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }}
+                        </span>
+                      </template>
+                    </ConfigInputField>
+
+                    <ConfigSelectField
+                      v-else-if="
+                        isSyntheticKey(entry.key) && entry.key === SYN_KEYS.configureDisplayHdr
+                      "
+                      :id="`modal-${entry.key}`"
+                      :label="entry.label"
+                      :desc="entry.desc"
+                      size="small"
+                      :options="forcedHdrOptions"
+                      :model-value="draftForcedHdr"
+                      @update:model-value="(v) => setDraftForcedHdr(String(v || ''))"
+                    >
+                      <template #actions>
+                        <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
+                          {{ $t('_common.delete') }}
+                        </n-button>
+                      </template>
+                      <template #meta>
+                        <span class="hidden sm:inline">
+                          <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }}
+                        </span>
+                      </template>
+                    </ConfigSelectField>
+
+                    <ConfigFieldRenderer
+                      v-else-if="editorKind(entry.key, 'draft') !== 'json'"
+                      :setting-key="entry.key"
+                      :label="entry.label"
+                      :desc="entry.desc"
+                      :options="selectOptions(entry.key, 'draft')"
+                      :default-value="entry.globalValue"
+                      :size="'small'"
+                      :model-value="renderedOverrideValueFor('draft', entry.key)"
+                      :placeholder="overridePlaceholder(entry.key, 'draft')"
+                      :filterable="editorKind(entry.key, 'draft') === 'select'"
+                      :monospace="editorKind(entry.key, 'draft') === 'string'"
+                      @update:model-value="
+                        (v) => setRenderedOverrideValueFor('draft', entry.key, v)
+                      "
+                    >
+                      <template #actions>
+                        <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
+                          {{ $t('_common.delete') }}
+                        </n-button>
+                      </template>
+                      <template #meta>
+                        <span class="hidden sm:inline">
+                          <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }} ·
+                        </span>
+                        <span>
+                          {{ $t('_common.inherited') }}:
+                          <span class="font-mono">{{
+                            formatValueForKey(entry.key, entry.globalValue)
+                          }}</span>
+                        </span>
+                      </template>
+                    </ConfigFieldRenderer>
+
+                    <ConfigInputField
+                      v-else
+                      :id="`modal-${entry.key}`"
+                      :label="entry.label"
+                      :desc="entry.desc"
+                      type="textarea"
+                      size="small"
+                      monospace
+                      :autosize="{ minRows: 2, maxRows: 10 }"
+                      :placeholder="$t('apps.overrides.json_value_placeholder')"
+                      :model-value="jsonDraftFor('draft', entry.key)"
+                      @update:model-value="(v) => updateJsonDraftFor('draft', entry.key, v)"
+                      @blur="() => commitJsonFor('draft', entry.key)"
+                    >
+                      <template #actions>
+                        <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
+                          {{ $t('_common.delete') }}
+                        </n-button>
+                      </template>
+                      <template #meta>
+                        <span class="hidden sm:inline">
+                          <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }} ·
+                        </span>
+                        <span>
+                          {{ $t('_common.inherited') }}:
+                          <span class="font-mono">{{
+                            formatValueForKey(entry.key, entry.globalValue)
+                          }}</span>
+                        </span>
+                      </template>
+                      <div v-if="jsonErrorFor('draft', entry.key)" class="text-[11px] text-danger">
+                        {{ jsonErrorFor('draft', entry.key) }}
+                      </div>
+                    </ConfigInputField>
                   </div>
                 </div>
               </div>
-
-              <div
-                v-else
-                class="m-4 rounded-xl border border-dark/10 dark:border-light/10 bg-white/60 dark:bg-surface/40 divide-y divide-dark/10 dark:divide-light/10"
-              >
-                <div v-for="entry in modalOverrideEntries" :key="entry.key" class="px-4 py-4">
-                  <ConfigInputField
-                    v-if="
-                      isSyntheticKey(entry.key) && entry.key === SYN_KEYS.configureDisplayResolution
-                    "
-                    :id="`modal-${entry.key}`"
-                    :label="entry.label"
-                    :desc="entry.desc"
-                    size="small"
-                    monospace
-                    placeholder="1920×1080"
-                    :model-value="draftForcedResolution"
-                    @update:model-value="(v) => setDraftForcedResolution(String(v || ''))"
-                  >
-                    <template #actions>
-                      <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
-                        {{ $t('_common.delete') }}
-                      </n-button>
-                    </template>
-                    <template #meta>
-                      <span class="hidden sm:inline">
-                        <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }}
-                      </span>
-                    </template>
-                  </ConfigInputField>
-
-                  <ConfigInputField
-                    v-else-if="
-                      isSyntheticKey(entry.key) &&
-                      entry.key === SYN_KEYS.configureDisplayRefreshRate
-                    "
-                    :id="`modal-${entry.key}`"
-                    :label="entry.label"
-                    :desc="entry.desc"
-                    size="small"
-                    monospace
-                    inputmode="numeric"
-                    placeholder="60"
-                    :model-value="draftForcedRefreshRate"
-                    @update:model-value="(v) => setDraftForcedRefreshRate(String(v || ''))"
-                  >
-                    <template #actions>
-                      <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
-                        {{ $t('_common.delete') }}
-                      </n-button>
-                    </template>
-                    <template #meta>
-                      <span class="hidden sm:inline">
-                        <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }}
-                      </span>
-                    </template>
-                  </ConfigInputField>
-
-                  <ConfigSelectField
-                    v-else-if="
-                      isSyntheticKey(entry.key) && entry.key === SYN_KEYS.configureDisplayHdr
-                    "
-                    :id="`modal-${entry.key}`"
-                    :label="entry.label"
-                    :desc="entry.desc"
-                    size="small"
-                    :options="forcedHdrOptions"
-                    :model-value="draftForcedHdr"
-                    @update:model-value="(v) => setDraftForcedHdr(String(v || ''))"
-                  >
-                    <template #actions>
-                      <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
-                        {{ $t('_common.delete') }}
-                      </n-button>
-                    </template>
-                    <template #meta>
-                      <span class="hidden sm:inline">
-                        <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }}
-                      </span>
-                    </template>
-                  </ConfigSelectField>
-
-                  <ConfigFieldRenderer
-                    v-else-if="editorKind(entry.key, 'draft') !== 'json'"
-                    :setting-key="entry.key"
-                    :label="entry.label"
-                    :desc="entry.desc"
-                    :options="selectOptions(entry.key, 'draft')"
-                    :default-value="entry.globalValue"
-                    :size="'small'"
-                    :model-value="renderedOverrideValueFor('draft', entry.key)"
-                    :placeholder="overridePlaceholder(entry.key, 'draft')"
-                    :filterable="editorKind(entry.key, 'draft') === 'select'"
-                    :monospace="editorKind(entry.key, 'draft') === 'string'"
-                    @update:model-value="(v) => setRenderedOverrideValueFor('draft', entry.key, v)"
-                  >
-                    <template #actions>
-                      <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
-                        {{ $t('_common.delete') }}
-                      </n-button>
-                    </template>
-                    <template #meta>
-                      <span class="hidden sm:inline">
-                        <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }} ·
-                      </span>
-                      <span>
-                        {{ $t('_common.inherited') }}:
-                        <span class="font-mono">{{
-                          formatValueForKey(entry.key, entry.globalValue)
-                        }}</span>
-                      </span>
-                    </template>
-                  </ConfigFieldRenderer>
-
-                  <ConfigInputField
-                    v-else
-                    :id="`modal-${entry.key}`"
-                    :label="entry.label"
-                    :desc="entry.desc"
-                    type="textarea"
-                    size="small"
-                    monospace
-                    :autosize="{ minRows: 2, maxRows: 10 }"
-                    :placeholder="$t('apps.overrides.json_value_placeholder')"
-                    :model-value="jsonDraftFor('draft', entry.key)"
-                    @update:model-value="(v) => updateJsonDraftFor('draft', entry.key, v)"
-                    @blur="() => commitJsonFor('draft', entry.key)"
-                  >
-                    <template #actions>
-                      <n-button size="tiny" tertiary @click="removeDraftOverride(entry.key)">
-                        {{ $t('_common.delete') }}
-                      </n-button>
-                    </template>
-                    <template #meta>
-                      <span class="hidden sm:inline">
-                        <span class="font-mono">{{ entry.key }}</span> · {{ entry.groupName }} ·
-                      </span>
-                      <span>
-                        {{ $t('_common.inherited') }}:
-                        <span class="font-mono">{{
-                          formatValueForKey(entry.key, entry.globalValue)
-                        }}</span>
-                      </span>
-                    </template>
-                    <div v-if="jsonErrorFor('draft', entry.key)" class="text-[11px] text-danger">
-                      {{ jsonErrorFor('draft', entry.key) }}
-                    </div>
-                  </ConfigInputField>
-                </div>
-              </div>
-            </div>
             </aside>
 
             <div
               :class="pickerPaneClass('browse')"
               class="min-h-0 min-w-0 flex-col rounded-xl border border-dark/10 dark:border-light/10 bg-white/60 dark:bg-white/5"
             >
-            <div class="border-b border-dark/10 px-4 py-3 dark:border-light/10">
-              <div class="space-y-2.5">
-                <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                  <div class="space-y-1">
-                    <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">
-                      {{ $t('apps.overrides.browse_available') }}
-                    </h4>
-                    <p class="text-[12px] opacity-70 leading-relaxed">
-                      {{ $t('apps.overrides.browse_available_hint') }}
-                    </p>
-                  </div>
-                  <div class="self-start text-[11px] opacity-60">
-                    {{
-                      $t('apps.overrides.showing_count', {
-                        shown: filteredAvailableCount,
-                        total: availableEntries.length,
-                      })
-                    }}
-                  </div>
-                </div>
-
-                <div class="flex flex-col gap-2 md:flex-row md:items-center">
-                  <n-input
-                    v-model:value="searchQuery"
-                    type="text"
-                    clearable
-                    class="min-w-0 flex-1"
-                    :placeholder="$t('apps.overrides.filter_placeholder')"
-                    @keydown.enter.prevent="addFirstFilteredEntry"
-                  >
-                    <template #suffix>
-                      <i class="fas fa-magnifying-glass text-[12px] opacity-60" />
-                    </template>
-                  </n-input>
-                  <n-button
-                    v-if="hasFilterControls"
-                    size="small"
-                    tertiary
-                    class="self-start md:shrink-0"
-                    @click="resetFilters"
-                  >
-                    {{ $t('clients.filters_clear') }}
-                  </n-button>
-                </div>
-              </div>
-            </div>
-
-            <div class="min-h-0 flex-1 p-3">
-              <div
-                class="grid h-full min-h-0 gap-3 xl:grid-cols-[12.5rem_minmax(0,1fr)] 2xl:grid-cols-[13.5rem_minmax(0,1fr)]"
-              >
-                <aside
-                  v-if="browseHasMultipleGroups"
-                  class="hidden min-h-0 xl:flex xl:flex-col"
-                >
-                  <div
-                    class="vb-scroll flex-1 min-h-0 rounded-xl border border-dark/10 bg-light/70 dark:border-light/10 dark:bg-surface/40"
-                  >
-                    <div class="p-2">
-                      <div class="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wide opacity-60">
-                        {{ $t('apps.overrides.sections') }}
-                      </div>
-                      <div class="space-y-1">
-                        <button
-                          type="button"
-                          :class="filterNavClass(selectedGroupId === ALL_GROUPS_ID)"
-                          @click="selectAvailableGroup(ALL_GROUPS_ID)"
-                        >
-                          <span class="truncate">{{ $t('apps.overrides.all_sections') }}</span>
-                          <span
-                            class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-0.5 text-[10px] opacity-70"
-                          >
-                            {{ availableEntries.length }}
-                          </span>
-                        </button>
-                        <button
-                          v-for="group in availableGroups"
-                          :key="group.id"
-                          type="button"
-                          :class="filterNavClass(selectedGroupId === group.id)"
-                          @click="selectAvailableGroup(group.id)"
-                        >
-                          <span class="truncate">{{ group.name }}</span>
-                          <span
-                            class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-0.5 text-[10px] opacity-70"
-                          >
-                            {{ group.count }}
-                          </span>
-                        </button>
-                      </div>
+              <div class="border-b border-dark/10 px-4 py-3 dark:border-light/10">
+                <div class="space-y-2.5">
+                  <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div class="space-y-1">
+                      <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">
+                        {{ $t('apps.overrides.browse_available') }}
+                      </h4>
+                      <p class="text-[12px] opacity-70 leading-relaxed">
+                        {{ $t('apps.overrides.browse_available_hint') }}
+                      </p>
+                    </div>
+                    <div class="self-start text-[11px] opacity-60">
+                      {{
+                        $t('apps.overrides.showing_count', {
+                          shown: filteredAvailableCount,
+                          total: availableEntries.length,
+                        })
+                      }}
                     </div>
                   </div>
-                </aside>
 
-                <div class="min-h-0 min-w-0 flex flex-col">
-                  <div
-                    ref="browseResultsScrollRef"
-                    class="vb-scroll flex-1 min-h-0"
-                  >
-                    <div class="space-y-3 pr-1">
-                      <div
-                        v-if="browseHasMultipleGroups"
-                        class="grid grid-cols-2 gap-1.5 xl:hidden"
-                      >
-                        <button
-                          type="button"
-                          :class="filterNavClass(selectedGroupId === ALL_GROUPS_ID)"
-                          @click="selectAvailableGroup(ALL_GROUPS_ID)"
+                  <div class="flex flex-col gap-2 md:flex-row md:items-center">
+                    <n-input
+                      v-model:value="searchQuery"
+                      type="text"
+                      clearable
+                      class="min-w-0 flex-1"
+                      :placeholder="$t('apps.overrides.filter_placeholder')"
+                      @keydown.enter.prevent="addFirstFilteredEntry"
+                    >
+                      <template #suffix>
+                        <i class="fas fa-magnifying-glass text-[12px] opacity-60" />
+                      </template>
+                    </n-input>
+                    <n-button
+                      v-if="hasFilterControls"
+                      size="small"
+                      tertiary
+                      class="self-start md:shrink-0"
+                      @click="resetFilters"
+                    >
+                      {{ $t('clients.filters_clear') }}
+                    </n-button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="min-h-0 flex-1 p-3">
+                <div
+                  class="grid h-full min-h-0 gap-3 xl:grid-cols-[12.5rem_minmax(0,1fr)] 2xl:grid-cols-[13.5rem_minmax(0,1fr)]"
+                >
+                  <aside v-if="browseHasMultipleGroups" class="hidden min-h-0 xl:flex xl:flex-col">
+                    <div
+                      class="vb-scroll flex-1 min-h-0 rounded-xl border border-dark/10 bg-light/70 dark:border-light/10 dark:bg-surface/40"
+                    >
+                      <div class="p-2">
+                        <div
+                          class="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wide opacity-60"
                         >
-                          <span class="truncate">{{ $t('apps.overrides.all_sections') }}</span>
-                          <span
-                            class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-0.5 text-[10px] opacity-70"
+                          {{ $t('apps.overrides.sections') }}
+                        </div>
+                        <div class="space-y-1">
+                          <button
+                            type="button"
+                            :class="filterNavClass(selectedGroupId === ALL_GROUPS_ID)"
+                            @click="selectAvailableGroup(ALL_GROUPS_ID)"
                           >
-                            {{ availableEntries.length }}
-                          </span>
-                        </button>
-                        <button
-                          v-for="group in availableGroups"
-                          :key="group.id"
-                          type="button"
-                          :class="filterNavClass(selectedGroupId === group.id)"
-                          @click="selectAvailableGroup(group.id)"
-                        >
-                          <span class="truncate">{{ group.name }}</span>
-                          <span
-                            class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-0.5 text-[10px] opacity-70"
-                          >
-                            {{ group.count }}
-                          </span>
-                        </button>
-                      </div>
-
-                      <template v-if="filteredAvailableGroups.length">
-                        <section
-                          v-for="group in filteredAvailableGroups"
-                          :key="group.id"
-                          class="space-y-1.5"
-                        >
-                          <div class="flex items-center justify-between gap-3">
-                            <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">
-                              {{ group.name }}
-                            </h4>
-                            <span class="text-[11px] opacity-50">{{ group.entries.length }}</span>
-                          </div>
-
-                          <div class="grid gap-2 2xl:grid-cols-2">
-                            <button
-                              v-for="entry in group.entries"
-                              :key="entry.key"
-                              type="button"
-                              class="group flex h-full min-h-[8.75rem] flex-col rounded-xl border border-dark/10 dark:border-light/10 bg-light/70 px-3 py-2.5 text-left transition-colors hover:border-primary/35 hover:bg-primary/5 dark:bg-surface/40"
-                              @click="queueOverrideAddition(entry.key)"
+                            <span class="truncate">{{ $t('apps.overrides.all_sections') }}</span>
+                            <span
+                              class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-0.5 text-[10px] opacity-70"
                             >
-                              <div class="flex items-start justify-between gap-3">
-                                <div class="min-w-0 space-y-0.5">
-                                  <div class="text-sm font-semibold leading-snug">
-                                    {{ entry.label }}
-                                  </div>
-                                  <div
-                                    class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] opacity-60"
-                                  >
-                                    <span>{{ entry.groupName }}</span>
-                                    <span class="hidden text-[10px] opacity-40 md:inline"
-                                      >&bull;</span
+                              {{ availableEntries.length }}
+                            </span>
+                          </button>
+                          <button
+                            v-for="group in availableGroups"
+                            :key="group.id"
+                            type="button"
+                            :class="filterNavClass(selectedGroupId === group.id)"
+                            @click="selectAvailableGroup(group.id)"
+                          >
+                            <span class="truncate">{{ group.name }}</span>
+                            <span
+                              class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-0.5 text-[10px] opacity-70"
+                            >
+                              {{ group.count }}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </aside>
+
+                  <div class="min-h-0 min-w-0 flex flex-col">
+                    <div ref="browseResultsScrollRef" class="vb-scroll flex-1 min-h-0">
+                      <div class="space-y-3 pr-1">
+                        <div
+                          v-if="browseHasMultipleGroups"
+                          class="grid grid-cols-2 gap-1.5 xl:hidden"
+                        >
+                          <button
+                            type="button"
+                            :class="filterNavClass(selectedGroupId === ALL_GROUPS_ID)"
+                            @click="selectAvailableGroup(ALL_GROUPS_ID)"
+                          >
+                            <span class="truncate">{{ $t('apps.overrides.all_sections') }}</span>
+                            <span
+                              class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-0.5 text-[10px] opacity-70"
+                            >
+                              {{ availableEntries.length }}
+                            </span>
+                          </button>
+                          <button
+                            v-for="group in availableGroups"
+                            :key="group.id"
+                            type="button"
+                            :class="filterNavClass(selectedGroupId === group.id)"
+                            @click="selectAvailableGroup(group.id)"
+                          >
+                            <span class="truncate">{{ group.name }}</span>
+                            <span
+                              class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-0.5 text-[10px] opacity-70"
+                            >
+                              {{ group.count }}
+                            </span>
+                          </button>
+                        </div>
+
+                        <template v-if="filteredAvailableGroups.length">
+                          <section
+                            v-for="group in filteredAvailableGroups"
+                            :key="group.id"
+                            class="space-y-1.5"
+                          >
+                            <div class="flex items-center justify-between gap-3">
+                              <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">
+                                {{ group.name }}
+                              </h4>
+                              <span class="text-[11px] opacity-50">{{ group.entries.length }}</span>
+                            </div>
+
+                            <div class="grid gap-2 2xl:grid-cols-2">
+                              <button
+                                v-for="entry in group.entries"
+                                :key="entry.key"
+                                type="button"
+                                class="group flex h-full min-h-[8.75rem] flex-col rounded-xl border border-dark/10 dark:border-light/10 bg-light/70 px-3 py-2.5 text-left transition-colors hover:border-primary/35 hover:bg-primary/5 dark:bg-surface/40"
+                                @click="queueOverrideAddition(entry.key)"
+                              >
+                                <div class="flex items-start justify-between gap-3">
+                                  <div class="min-w-0 space-y-0.5">
+                                    <div class="text-sm font-semibold leading-snug">
+                                      {{ entry.label }}
+                                    </div>
+                                    <div
+                                      class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] opacity-60"
                                     >
-                                    <span class="hidden break-all font-mono md:block">
-                                      {{ entry.key }}
+                                      <span>{{ entry.groupName }}</span>
+                                      <span class="hidden text-[10px] opacity-40 md:inline"
+                                        >&bull;</span
+                                      >
+                                      <span class="hidden break-all font-mono md:block">
+                                        {{ entry.key }}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div class="flex shrink-0 items-center gap-2">
+                                    <span
+                                      class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide opacity-70"
+                                    >
+                                      {{ entryTypeLabel(entry.key) }}
+                                    </span>
+                                    <span
+                                      class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary"
+                                    >
+                                      <i class="fas fa-plus text-[10px]" />
+                                      {{ $t('_common.add') }}
                                     </span>
                                   </div>
                                 </div>
-                                <div class="flex shrink-0 items-center gap-2">
-                                  <span
-                                    class="rounded-full bg-dark/5 dark:bg-light/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide opacity-70"
-                                  >
-                                    {{ entryTypeLabel(entry.key) }}
-                                  </span>
-                                  <span
-                                    class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary"
-                                  >
-                                    <i class="fas fa-plus text-[10px]" />
-                                    {{ $t('_common.add') }}
-                                  </span>
-                                </div>
-                              </div>
 
-                              <p
-                                v-if="entry.desc"
-                                class="mt-2 text-[12px] leading-relaxed opacity-70"
-                              >
-                                {{ entry.desc }}
-                              </p>
-                            </button>
+                                <p
+                                  v-if="entry.desc"
+                                  class="mt-2 text-[12px] leading-relaxed opacity-70"
+                                >
+                                  {{ entry.desc }}
+                                </p>
+                              </button>
+                            </div>
+                          </section>
+                        </template>
+
+                        <div
+                          v-else
+                          class="rounded-xl border border-dashed border-dark/15 dark:border-light/15 px-4 py-6 text-center space-y-2"
+                        >
+                          <div class="text-sm font-medium">
+                            {{
+                              availableEntries.length === 0
+                                ? $t('apps.overrides.all_settings_added')
+                                : $t('apps.overrides.no_matching_settings')
+                            }}
                           </div>
-                        </section>
-                      </template>
-
-                      <div
-                        v-else
-                        class="rounded-xl border border-dashed border-dark/15 dark:border-light/15 px-4 py-6 text-center space-y-2"
-                      >
-                        <div class="text-sm font-medium">
-                          {{
-                            availableEntries.length === 0
-                              ? $t('apps.overrides.all_settings_added')
-                              : $t('apps.overrides.no_matching_settings')
-                          }}
+                          <p class="text-[12px] opacity-60 leading-relaxed">
+                            {{
+                              availableEntries.length === 0
+                                ? $t('apps.overrides.all_settings_added_hint')
+                                : $t('apps.overrides.no_matching_settings_hint')
+                            }}
+                          </p>
+                          <n-button
+                            v-if="hasFilterControls"
+                            size="small"
+                            tertiary
+                            @click="resetFilters"
+                          >
+                            {{ $t('clients.filters_clear') }}
+                          </n-button>
                         </div>
-                        <p class="text-[12px] opacity-60 leading-relaxed">
-                          {{
-                            availableEntries.length === 0
-                              ? $t('apps.overrides.all_settings_added_hint')
-                              : $t('apps.overrides.no_matching_settings_hint')
-                          }}
-                        </p>
-                        <n-button v-if="hasFilterControls" size="small" tertiary @click="resetFilters">
-                          {{ $t('clients.filters_clear') }}
-                        </n-button>
                       </div>
                     </div>
                   </div>
@@ -688,30 +695,29 @@
             </div>
           </div>
         </div>
-      </div>
 
-      <div
-        class="sticky bottom-0 z-20 border-t border-dark/10 dark:border-light/10 bg-white/95 px-4 py-3 backdrop-blur dark:bg-surface/95"
-      >
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div class="text-[12px] leading-relaxed opacity-70">
-            <span class="xl:hidden">{{ compactPickerFooterText }}</span>
-            <span class="hidden xl:inline">
-              {{ $t('apps.overrides.picker_footer') }}
-            </span>
-          </div>
-          <div class="flex flex-wrap items-center justify-end gap-2">
-            <n-button size="small" tertiary @click="cancelAddSettings">{{
-              $t('_common.cancel')
-            }}</n-button>
-            <n-button size="small" type="primary" @click="savePendingAdditions">
-              <span>{{ $t('_common.save') }}</span>
-              <span
-                class="ml-2 inline-flex min-w-[1.5rem] items-center justify-center rounded-full bg-white/20 px-1.5 py-0.5 text-[10px] font-semibold"
-              >
-                {{ modalOverrideEntries.length }}
+        <div
+          class="sticky bottom-0 z-20 border-t border-dark/10 dark:border-light/10 bg-white/95 px-4 py-3 backdrop-blur dark:bg-surface/95"
+        >
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="text-[12px] leading-relaxed opacity-70">
+              <span class="xl:hidden">{{ compactPickerFooterText }}</span>
+              <span class="hidden xl:inline">
+                {{ $t('apps.overrides.picker_footer') }}
               </span>
-            </n-button>
+            </div>
+            <div class="flex flex-wrap items-center justify-end gap-2">
+              <n-button size="small" tertiary @click="cancelAddSettings">{{
+                $t('_common.cancel')
+              }}</n-button>
+              <n-button size="small" type="primary" @click="savePendingAdditions">
+                <span>{{ $t('_common.save') }}</span>
+                <span
+                  class="ml-2 inline-flex min-w-[1.5rem] items-center justify-center rounded-full bg-white/20 px-1.5 py-0.5 text-[10px] font-semibold"
+                >
+                  {{ modalOverrideEntries.length }}
+                </span>
+              </n-button>
             </div>
           </div>
         </div>
@@ -998,14 +1004,6 @@ function isAllowedKey(key: string): boolean {
   return ALLOWED_OVERRIDE_KEYS.has(key);
 }
 
-function prettifyKey(key: string): string {
-  return key
-    .split('_')
-    .filter(Boolean)
-    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
-    .join(' ');
-}
-
 const OVERRIDE_LABEL_KEYS: Record<string, string> = {
   dd_virtual_display_scale: 'config.virtual_display_scale_label',
 };
@@ -1023,6 +1021,14 @@ function groupNameFor(groupId: string, fallback: string): string {
     files: 'settings.tabs.files',
     playnite: 'navbar.playnite',
     advanced: 'settings.tabs.advanced',
+    rtss: 'frameLimiter.stepTitle',
+    nv: 'config.nvenc_section_title',
+    qsv: 'config.qsv_section_title',
+    amd: 'config.amd_section_title',
+    vt: 'config.vt_section_title',
+    vaapi: 'config.vaapi_section_title',
+    vulkan: 'config.vulkan_section_title',
+    sw: 'config.sw_section_title',
   };
   return keys[groupId] ? t(keys[groupId]) : fallback;
 }
@@ -1030,7 +1036,7 @@ function groupNameFor(groupId: string, fallback: string): string {
 function labelFor(key: string): string {
   const k = OVERRIDE_LABEL_KEYS[key] ?? `config.${key}`;
   const v = t(k);
-  if (!v || v === k) return prettifyKey(key);
+  if (!v || v === k) return key;
   return v;
 }
 
@@ -1734,7 +1740,7 @@ function mapEntries(keys: string[]): Entry[] {
       const base = byKey.get(k);
       return {
         key: k,
-        label: base?.label ?? prettifyKey(k),
+        label: base?.label ?? labelFor(k),
         desc: base?.desc ?? '',
         path: base?.path ?? k,
         groupId: base?.groupId ?? 'unknown',
@@ -2023,10 +2029,10 @@ function commitJsonFor(target: EditTarget, key: string) {
     const parsed = JSON.parse(raw);
     setOverrideKeyFor(target, key, parsed);
     errors.value = { ...errors.value, [key]: '' };
-  } catch (e: any) {
+  } catch {
     errors.value = {
       ...errors.value,
-      [key]: e?.message ? String(e.message) : t('validation.invalid_json'),
+      [key]: t('validation.invalid_json'),
     };
   }
 }

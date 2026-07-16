@@ -50,7 +50,10 @@
     "inherited": "继承",
     "no_results": "无结果",
     "options": "选项",
-    "retry": "重试"
+    "retry": "重试",
+    "display": "显示器",
+    "default_parenthetical": "（默认）",
+    "change": "更改"
   },
   "apps": {
     "actions": "操作",
@@ -137,7 +140,7 @@
       "target_fps_hint": "仅在需要为 Lossless Scaling 覆盖客户端请求的 FPS 时才设置此项。",
       "rtss_limit_label": "RTSS 帧率上限覆盖",
       "rtss_limit_hint": "留空时 Vibeshine 默认使用客户端请求值的一半。需要安装并运行 RTSS。",
-      "flow_scale_label": "Flow Scale (%)",
+      "flow_scale_label": "光流缩放（%）",
       "flow_scale_hint": "帧混合强度（0–100）。Vibeshine 推荐 50% 作为均衡默认值。",
       "launch_delay_label": "Lossless 启动延迟（秒）",
       "launch_delay_hint": "在游戏启动后额外等待若干秒再打开 Lossless Scaling。留空则使用默认的 8 秒延迟。",
@@ -224,11 +227,12 @@
       "health_display_double_120": "该显示器最高支持 {hz} Hz。Vibeshine 可将 120 FPS 串流加倍。",
       "health_display_switch_smooth": "当前刷新率为 {currentHz} Hz。Vibeshine 可在串流期间切换到 {targetHz} Hz，以保持帧生成流畅。",
       "health_display_enforce_or_virtual": "该显示器最高支持 {hz} Hz。请配置“显示设备”第 1 步以强制使用更高刷新率，或使用下方的显示器覆盖项切换至 Vibeshine 虚拟显示器。",
-        "health_display_target_needs_virtual": "当前刷新率为 {hz} Hz。目标最高为 {fps} FPS 的串流需要 Vibeshine 虚拟显示器或更高刷新率的显示器。",
+      "health_display_target_needs_virtual": "当前刷新率为 {hz} Hz。目标最高为 {fps} FPS 的串流需要 Vibeshine 虚拟显示器或更高刷新率的显示器。",
       "health_display_120_stutter": "当前刷新率为 {hz} Hz。在没有更高刷新率显示器的情况下，120 FPS 帧生成可能会卡顿。请使用下方的显示器覆盖项切换至 Vibeshine 虚拟显示器，或将串流移至刷新率更高的显示器。",
       "health_display_switch_if_active": "如果“显示设备”第 1 步仅使该显示器保持活动状态，Vibeshine 可切换至最高 {hz} Hz。",
       "health_display_tops_out": "该显示器最高仅为 {hz} Hz。请使用下方的显示器覆盖项切换至 Vibeshine 虚拟显示器，或切换到 240 Hz 显示器以进行帧生成。",
-      "health_display_switch_if_configured": "如果已在“显示设备”第 1 步中配置，Vibeshine 可切换至最高 {hz} Hz。"
+      "health_display_switch_if_configured": "如果已在“显示设备”第 1 步中配置，Vibeshine 可切换至最高 {hz} Hz。",
+      "provider_game_provided": "由游戏提供"
     },
     "confirm_delete_title": "删除应用",
     "confirm_delete_title_named": "删除“{name}”？",
@@ -321,7 +325,29 @@
     "playnite_source_manual": "手动",
     "source_custom": "自定义",
     "source_custom_named": "自定义：“{name}”",
-    "untitled": "未命名"
+    "untitled": "未命名",
+    "name_search_placeholder": "输入以搜索或输入自定义名称",
+    "linked_to_playnite": "已链接到 Playnite",
+    "custom_application": "自定义应用程序",
+    "cmd_placeholder": "可执行文件命令行",
+    "cmd_runtime_desc": "Vibeshine 会等待此进程。进程关闭时，串流结束。",
+    "detached_cmds_runtime_desc": "先运行的可选命令；命令结束后仍会保持串流活动。",
+    "detached_cmds_empty": "尚无分离命令。使用“添加”设置脚本或启动器。",
+    "detached_cmd_number": "分离命令 #{number}",
+    "detached_cmd_placeholder": "串流前执行的命令",
+    "detached_cmd_runtime_desc": "在主命令之前运行。即使此命令退出，Vibeshine 也会继续。",
+    "image_storage_desc": "可选；仅保存，Vibeshine 不会获取。",
+    "lossless": {
+      "scaling_bcas": "BCAS（动漫）",
+      "scaling_sharp_bilinear": "锐利双线性",
+      "scaling_integer": "整数缩放",
+      "scaling_nearest": "最近邻",
+      "anime_size_s": "小",
+      "anime_size_m": "中",
+      "anime_size_l": "大",
+      "anime_size_vl": "很大",
+      "anime_size_ul": "超大"
+    }
   },
   "config": {
     "adapter_name": "适配器名称",
@@ -898,7 +924,22 @@
       "browser_failed": "无法浏览此路径。",
       "rescan": "重新扫描",
       "use_path": "使用此路径"
-    }
+    },
+    "display_devices_load_failed": "加载显示设备失败",
+    "dd_snapshot_restore_hotkey_placeholder": "点击并按下组合键",
+    "capture_wgc_constant": "Windows Graphics Capture（恒定）",
+    "amd_section_title": "AMD AMF 编码器",
+    "qsv_section_title": "Intel Quick Sync 编码器",
+    "vt_section_title": "VideoToolbox 编码器",
+    "vaapi_section_title": "VA-API 编码器",
+    "vulkan_section_title": "Vulkan 编码器",
+    "sw_section_title": "软件编码器",
+    "dd_validation_resolution_or_blank": "无效。请使用“宽度x高度”（例如 {example}，x 或 ×），或留空。",
+    "dd_validation_positive_or_blank": "无效。请输入正数或留空。",
+    "dd_validation_mixed_final_required": "对于混合映射，请至少指定一个最终字段。",
+    "dd_validation_resolution": "格式无效。请使用“宽度x高度”，例如 {example}（x 或 ×）。",
+    "dd_validation_refresh_rate": "刷新率无效。请输入正数，例如 60 或 59.94。",
+    "dd_manual_enforcement_notice": "强制使用手动分辨率或刷新率时，以下覆盖设置将被禁用。手动刷新率会被强制应用，并覆盖虚拟显示器上根据游戏切换刷新率的行为。"
   },
   "index": {
     "description": "Vibeshine 是供 Moonlight 使用的自建游戏串流服务。",
@@ -922,7 +963,8 @@
     "version_behind": "你的构建比最新版本落后 {behind} 个提交；建议更新。",
     "version_compare_unknown": "无法确定与最新版本的提交距离。",
     "version_branch": "分支：{branch}（提交 {commit}）",
-    "view_logs": "打开故障排除 — 日志"
+    "view_logs": "打开故障排除 — 日志",
+    "web_links": "网页链接"
   },
   "navbar": {
     "applications": "应用程序",
@@ -1735,7 +1777,9 @@
     "fullscreen_launcher_entry": "一个 Playnite（全屏）启动器条目",
     "entries": "Playnite 条目",
     "missing_plugin_message": "检测到 {details}，但 Playnite 插件已不再安装。请重新安装插件以恢复集成，或清除 Playnite 游戏以从 Vibeshine 中移除所有 Playnite 条目。",
-    "fullscreen_entry_removed": "已移除 Playnite 全屏条目。“Playnite Desktop”选项已在“设置 → Playnite”中关闭。"
+    "fullscreen_entry_removed": "已移除 Playnite 全屏条目。“Playnite Desktop”选项已在“设置 → Playnite”中关闭。",
+    "fullscreen_entry": "将“Playnite（全屏）”添加到应用程序",
+    "fullscreen_entry_desc": "启用后，Vibeshine 会添加一个启动项，以全屏桌面模式打开 Playnite。"
   },
   "auth": {
     "title": "API 令牌管理",

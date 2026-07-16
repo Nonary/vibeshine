@@ -78,7 +78,7 @@
           </label>
           <n-select
             v-model:value="losslessScalingModeModel"
-            :options="LOSSLESS_SCALING_OPTIONS"
+            :options="losslessScalingOptions"
             size="small"
             :clearable="false"
           />
@@ -169,7 +169,7 @@
           </label>
           <n-select
             v-model:value="losslessAnimeSizeModel"
-            :options="LOSSLESS_ANIME_SIZES"
+            :options="losslessAnimeSizes"
             size="small"
             :clearable="false"
           />
@@ -231,6 +231,7 @@
 
 <script setup lang="ts">
 import { computed, ref, toRef } from 'vue';
+import { useI18n } from 'vue-i18n';
 import type { Anime4kSize, AppForm, LosslessScalingMode } from './types';
 import {
   LOSSLESS_ANIME_SIZES,
@@ -253,6 +254,14 @@ import {
 } from 'naive-ui';
 
 const form = defineModel<AppForm>('form', { required: true });
+const { t } = useI18n();
+const localizeOptions = <T,>(options: Array<{ label?: string; labelKey?: string; value: T }>) =>
+  options.map((option) => ({
+    label: option.labelKey ? t(option.labelKey) : (option.label ?? String(option.value)),
+    value: option.value,
+  }));
+const losslessScalingOptions = computed(() => localizeOptions(LOSSLESS_SCALING_OPTIONS));
+const losslessAnimeSizes = computed(() => localizeOptions(LOSSLESS_ANIME_SIZES));
 const losslessPerformanceModeModel = defineModel<boolean>('losslessPerformanceMode', {
   required: true,
 });
