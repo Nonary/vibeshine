@@ -8,13 +8,13 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <winsock2.h>
 #include <d3d11.h>
 #include <memory>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
-#include <winsock2.h>
 
 // local includes
 #include "misc_utils.h"
