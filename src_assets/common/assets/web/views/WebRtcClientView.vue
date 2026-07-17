@@ -513,7 +513,13 @@ import { useI18n } from 'vue-i18n';
 import { NTag, NSwitch, NInputNumber, NAlert, useDialog, useMessage } from 'naive-ui';
 import { WebRtcHttpApi } from '@/services/webrtcApi';
 import { WebRtcClient } from '@/utils/webrtc/client';
-import { computeVideoFrameRenderDelayMs, decideLatencyFenceReset } from '@/utils/webrtc/latency';
+import {
+  computeVideoFrameCaptureToDisplayAgeMs,
+  computeVideoFrameRenderDelayMs,
+  decideLatencyFenceReset,
+  selectPreferredVideoLatencySignal,
+  type VideoLatencyControlSource,
+} from '@/utils/webrtc/latency';
 import {
   applyGamepadFeedback,
   attachInputCapture,
@@ -1073,6 +1079,12 @@ const videoFrameMetrics = ref<{
   lastDelayMs?: number;
   avgDelayMs?: number;
   maxDelayMs?: number;
+  lastCaptureToDisplayAgeMs?: number;
+  avgCaptureToDisplayAgeMs?: number;
+  maxCaptureToDisplayAgeMs?: number;
+  lastCaptureToDisplayDriftMs?: number;
+  avgCaptureToDisplayDriftMs?: number;
+  lastCaptureToDisplaySampleAtMs?: number;
 }>({});
 
 const videoPacingMetrics = ref<{
@@ -1102,6 +1114,9 @@ type DiagnosticsSample = {
   presentedDelta?: number | null;
   renderIntervalMs?: number;
   renderDelayMs?: number;
+  captureToDisplayAgeMs?: number;
+  captureToDisplayDriftMs?: number;
+  latencyControlSource?: VideoLatencyControlSource;
   fpsReceived?: number;
   fpsDecoded?: number;
   framesDropped?: number;
@@ -1150,6 +1165,29 @@ const renderIntervalMs = computed(
   () => videoFrameMetrics.value.lastIntervalMs ?? videoFrameMetrics.value.avgIntervalMs,
 );
 
+const CAPTURE_TO_DISPLAY_SIGNAL_MAX_AGE_MS = 2000;
+const VIDEO_FRAME_METRICS_PUBLISH_INTERVAL_MS = 100;
+
+function currentCaptureToDisplayFreshness(): { ageMs: number; driftMs: number } | undefined {
+  const { lastCaptureToDisplayAgeMs, lastCaptureToDisplayDriftMs, lastCaptureToDisplaySampleAtMs } =
+    videoFrameMetrics.value;
+  if (
+    typeof lastCaptureToDisplayAgeMs !== 'number' ||
+    !Number.isFinite(lastCaptureToDisplayAgeMs) ||
+    typeof lastCaptureToDisplayDriftMs !== 'number' ||
+    !Number.isFinite(lastCaptureToDisplayDriftMs) ||
+    typeof lastCaptureToDisplaySampleAtMs !== 'number' ||
+    !Number.isFinite(lastCaptureToDisplaySampleAtMs)
+  ) {
+    return undefined;
+  }
+
+  if (performance.now() - lastCaptureToDisplaySampleAtMs > CAPTURE_TO_DISPLAY_SIGNAL_MAX_AGE_MS) {
+    return undefined;
+  }
+  return { ageMs: lastCaptureToDisplayAgeMs, driftMs: lastCaptureToDisplayDriftMs };
+}
+
 const LATENCY_SAMPLE_WINDOW_MS = 30000;
 const LATENCY_SMOOTH_TAU_MS = 2000;
 const LATENCY_FAST_TAU_MS = 300;
@@ -1166,6 +1204,10 @@ const oneWayRttMs = computed(() =>
 const videoPlayoutDelayMs = computed(
   () => stats.value.videoPlayoutDelayMs ?? stats.value.videoJitterBufferMs,
 );
+const videoLatencySignal = computed(() => {
+  const freshness = currentCaptureToDisplayFreshness();
+  return selectPreferredVideoLatencySignal(freshness?.driftMs, videoPlayoutDelayMs.value);
+});
 const smoothedVideoFps = ref<number | undefined>(undefined);
 let lastVideoFpsSampleAt: number | null = null;
 
@@ -1179,6 +1221,8 @@ const displayVideoFps = computed(
 );
 
 const estimatedLatencyMs = computed(() => {
+  const freshness = currentCaptureToDisplayFreshness();
+  if (freshness) return freshness.ageMs;
   const parts = [oneWayRttMs.value, videoPlayoutDelayMs.value, stats.value.videoDecodeMs].filter(
     (value) => typeof value === 'number',
   ) as number[];
@@ -1286,6 +1330,11 @@ const VIDEO_RENDER_RESET_FRAME_MARGIN = 5;
 const VIDEO_BUFFER_RESET_SUSTAIN_MS = 900;
 const VIDEO_RENDER_RESET_SUSTAIN_MS = 900;
 const VIDEO_BUFFER_RESET_COOLDOWN_MS = 4000;
+const VIDEO_LATENCY_RESYNC_COOLDOWN_MS = VIDEO_BUFFER_RESET_COOLDOWN_MS;
+// Capture-to-display age includes normal encode and network delay. Track its
+// low-water mark, allowing it to rise only gradually, so controls react to
+// browser queue growth instead of a stable network baseline.
+const CAPTURE_TO_DISPLAY_BASELINE_RISE_MS_PER_SEC = 10;
 type VideoLatencyProfile = {
   drainSustainMs: number;
   drainReleaseSustainMs: number;
@@ -1296,9 +1345,6 @@ type VideoLatencyProfile = {
   riseLimitMultiplier: number;
   riseLimitMinMs: number;
   drainFrameReduction: number;
-  playbackRateMax: number;
-  playbackRateBoostMax: number;
-  playbackRateDecayPerSec: number;
   targetFallRateMsPerSec: number;
   targetRiseRateMsPerSec: number;
   startupTargetMs: number;
@@ -1310,20 +1356,10 @@ type VideoLatencyProfile = {
   runawayResetFrameMargin?: number;
 };
 
-function isSafariBrowser(): boolean {
-  try {
-    const ua = navigator.userAgent ?? '';
-    const vendor = navigator.vendor ?? '';
-    if (!/\bsafari\//i.test(ua)) return false;
-    if (!/apple/i.test(vendor)) return false;
-    if (/\b(chrome|chromium|crios|fxios|edgios|edg|opr|opera)\b/i.test(ua)) return false;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const DEFAULT_VIDEO_LATENCY_PROFILE: VideoLatencyProfile = {
+// Keep the control policy capability- and measurement-driven. Browser-specific
+// timing profiles make a latency recovery depend on UA detection instead of
+// the actual displayed-frame freshness.
+const videoLatencyProfile: VideoLatencyProfile = {
   drainSustainMs: 350,
   drainReleaseSustainMs: 800,
   startupDrainMs: 20000,
@@ -1333,9 +1369,6 @@ const DEFAULT_VIDEO_LATENCY_PROFILE: VideoLatencyProfile = {
   riseLimitMultiplier: 1.5,
   riseLimitMinMs: 8,
   drainFrameReduction: 0.5,
-  playbackRateMax: 1.12,
-  playbackRateBoostMax: 1.2,
-  playbackRateDecayPerSec: 0.12,
   targetFallRateMsPerSec: Number.POSITIVE_INFINITY,
   targetRiseRateMsPerSec: Number.POSITIVE_INFINITY,
   startupTargetMs: 0,
@@ -1346,35 +1379,6 @@ const DEFAULT_VIDEO_LATENCY_PROFILE: VideoLatencyProfile = {
   runawayResetSustainMs: 900,
   runawayResetFrameMargin: 10,
 };
-
-const SAFARI_VIDEO_LATENCY_PROFILE: VideoLatencyProfile = {
-  drainSustainMs: 180,
-  drainReleaseSustainMs: 550,
-  startupDrainMs: 25000,
-  startupReleaseSustainMs: 1400,
-  modeSwitchDrainMs: 9000,
-  riseGuardMs: 10000,
-  riseLimitMultiplier: 1.1,
-  riseLimitMinMs: 6,
-  drainFrameReduction: 1.0,
-  playbackRateMax: 1.16,
-  playbackRateBoostMax: 1.24,
-  playbackRateDecayPerSec: 0.15,
-  targetFallRateMsPerSec: 240,
-  targetRiseRateMsPerSec: 80,
-  startupTargetMs: 0,
-  runawayDrainTriggerMs: 80,
-  runawayDrainSustainMs: 250,
-  runawayDrainWindowMs: 12000,
-  runawayResetThresholdMs: 160,
-  runawayResetSustainMs: 1500,
-  runawayResetFrameMargin: 8,
-};
-
-const safariLatencyTuningEnabled = isSafariBrowser();
-const videoLatencyProfile: VideoLatencyProfile = safariLatencyTuningEnabled
-  ? SAFARI_VIDEO_LATENCY_PROFILE
-  : DEFAULT_VIDEO_LATENCY_PROFILE;
 let audioDrainOverloadedSince: number | null = null;
 let audioDrainReleaseSince: number | null = null;
 let audioDrainActive = false;
@@ -1393,11 +1397,40 @@ let effectiveVideoTargetMs: number | undefined = undefined;
 let lastVideoTargetAdjustAt: number | null = null;
 let videoStartupDrainUntil: number | null = null;
 let videoStartupDrainReleaseSince: number | null = null;
-let lastVideoPlayoutSample: { ts: number; value: number } | null = null;
-let lastPlaybackRateUpdateAt: number | null = null;
-let modeSwitchDrainUntil: number | null = null;
+let lastVideoLatencySample: {
+  ts: number;
+  value: number;
+  source: VideoLatencyControlSource;
+} | null = null;
 let videoRunawayDrainSince: number | null = null;
 let videoRunawayDrainLatched = false;
+let videoCaptureToDisplayBaselineMs: number | null = null;
+let lastVideoCaptureToDisplaySampleAtMs: number | null = null;
+let lastVideoLatencyResyncAt: number | null = null;
+let lastVideoPacingMetricsPublishedAtMs: number | null = null;
+
+function resetVideoCaptureToDisplayFreshness(): void {
+  videoCaptureToDisplayBaselineMs = null;
+  lastVideoCaptureToDisplaySampleAtMs = null;
+}
+
+function updateVideoCaptureToDisplayDrift(ageMs: number, nowMs: number): number {
+  if (videoCaptureToDisplayBaselineMs == null) {
+    videoCaptureToDisplayBaselineMs = ageMs;
+  } else if (ageMs <= videoCaptureToDisplayBaselineMs) {
+    videoCaptureToDisplayBaselineMs = ageMs;
+  } else {
+    const previousAt = lastVideoCaptureToDisplaySampleAtMs ?? nowMs;
+    const elapsedMs = Math.max(0, nowMs - previousAt);
+    const maxBaselineIncrease = (CAPTURE_TO_DISPLAY_BASELINE_RISE_MS_PER_SEC * elapsedMs) / 1000;
+    videoCaptureToDisplayBaselineMs = Math.min(
+      ageMs,
+      videoCaptureToDisplayBaselineMs + maxBaselineIncrease,
+    );
+  }
+  lastVideoCaptureToDisplaySampleAtMs = nowMs;
+  return Math.max(0, ageMs - videoCaptureToDisplayBaselineMs);
+}
 
 function setAudioDrainActive(active: boolean): void {
   if (audioDrainActive === active) return;
@@ -1522,9 +1555,10 @@ function resetVideoDrainState(): void {
   videoRunawayOverloadedSince = null;
   videoStartupDrainUntil = null;
   videoStartupDrainReleaseSince = null;
-  lastVideoPlayoutSample = null;
+  lastVideoLatencySample = null;
   videoRunawayDrainSince = null;
   videoRunawayDrainLatched = false;
+  resetVideoCaptureToDisplayFreshness();
   const baseTargetMs = resolveVideoBaseTargetMs();
   setVideoDrainMode('off', baseTargetMs);
 }
@@ -1555,9 +1589,26 @@ function resetVideoLatencyFenceState(): void {
   videoBufferOverloadedSince = null;
   videoRenderOverloadedSince = null;
   videoRunawayOverloadedSince = null;
+  lastVideoLatencySample = null;
+  resetVideoCaptureToDisplayFreshness();
+}
+
+function requestVideoLatencyResync(): void {
+  if (!isConnected.value || client.inputChannelState !== 'open') return;
+  const now = Date.now();
+  if (
+    lastVideoLatencyResyncAt != null &&
+    now - lastVideoLatencyResyncAt < VIDEO_LATENCY_RESYNC_COOLDOWN_MS
+  ) {
+    return;
+  }
+  if (!client.sendInput(JSON.stringify({ type: 'latency_resync' }))) return;
+  lastVideoLatencyResyncAt = now;
+  pushVideoEvent('video-latency-resync');
 }
 
 function handleVideoLatencyReset(label: string, drainReason: string): void {
+  requestVideoLatencyResync();
   resetVideoLatencyFenceState();
   pushVideoEvent(label);
   resetVideoElement();
@@ -1565,18 +1616,6 @@ function handleVideoLatencyReset(label: string, drainReason: string): void {
     videoLatencyProfile.runawayDrainWindowMs ?? videoLatencyProfile.modeSwitchDrainMs,
     drainReason,
   );
-}
-
-function setVideoPlaybackRate(rate: number): void {
-  const el = videoEl.value;
-  if (!el) return;
-  const clamped = Math.max(1, Math.min(videoLatencyProfile.playbackRateBoostMax, rate));
-  if (Math.abs((el.playbackRate ?? 1) - clamped) < 0.001) return;
-  try {
-    el.playbackRate = clamped;
-  } catch {
-    /* ignore */
-  }
 }
 
 watch(
@@ -1633,13 +1672,15 @@ watch(
 );
 
 watch(
-  () => videoPlayoutDelayMs.value,
-  (videoValue) => {
+  () => [videoLatencySignal.value?.valueMs, videoLatencySignal.value?.source] as const,
+  ([videoValue, videoSource]) => {
     if (!isConnected.value || !isTabActive()) {
       resetVideoDrainState();
       return;
     }
-    if (typeof videoValue !== 'number' || !Number.isFinite(videoValue)) return;
+    if (typeof videoValue !== 'number' || !Number.isFinite(videoValue) || videoSource == null) {
+      return;
+    }
     const now = Date.now();
     const baseTargetMs = resolveVideoBaseTargetMs();
     const fps = typeof config.fps === 'number' && Number.isFinite(config.fps) ? config.fps : 60;
@@ -1693,9 +1734,9 @@ watch(
         return;
       }
     }
-    if (lastVideoPlayoutSample) {
-      const deltaMs = now - lastVideoPlayoutSample.ts;
-      const deltaValue = videoValue - lastVideoPlayoutSample.value;
+    if (lastVideoLatencySample?.source === videoSource) {
+      const deltaMs = now - lastVideoLatencySample.ts;
+      const deltaValue = videoValue - lastVideoLatencySample.value;
       if (deltaMs > 0 && deltaValue > 0) {
         const riseRate = (deltaValue * 1000) / deltaMs;
         const riseLimit = Math.max(
@@ -1710,40 +1751,8 @@ watch(
         }
       }
     }
-    lastVideoPlayoutSample = { ts: now, value: videoValue };
+    lastVideoLatencySample = { ts: now, value: videoValue, source: videoSource };
 
-    if (videoEl.value) {
-      const lastAt = lastPlaybackRateUpdateAt ?? now;
-      const deltaMs = Math.max(0, now - lastAt);
-      lastPlaybackRateUpdateAt = now;
-
-      const errorMs = Math.max(0, videoValue - (baseTargetMs + frameMs));
-      const boostActive = modeSwitchDrainUntil != null && now <= modeSwitchDrainUntil;
-      if (boostActive) {
-        const boosted =
-          1 +
-          Math.min(
-            videoLatencyProfile.playbackRateBoostMax - 1,
-            errorMs / Math.max(1, frameMs * 6),
-          );
-        setVideoPlaybackRate(
-          Math.min(videoLatencyProfile.playbackRateBoostMax, Math.max(1, boosted)),
-        );
-      } else if (errorMs > 0) {
-        const desired =
-          1 +
-          Math.min(videoLatencyProfile.playbackRateMax - 1, errorMs / Math.max(1, frameMs * 10));
-        setVideoPlaybackRate(Math.min(videoLatencyProfile.playbackRateMax, Math.max(1, desired)));
-      } else {
-        const current = videoEl.value.playbackRate ?? 1;
-        if (current > 1 && deltaMs > 0) {
-          const decay = (videoLatencyProfile.playbackRateDecayPerSec * deltaMs) / 1000;
-          setVideoPlaybackRate(Math.max(1, current - decay));
-        } else {
-          setVideoPlaybackRate(1);
-        }
-      }
-    }
     if (videoStartupDrainUntil != null) {
       if (now > videoStartupDrainUntil) {
         videoStartupDrainUntil = null;
@@ -1801,8 +1810,14 @@ watch(
 );
 
 watch(
-  () => [videoPlayoutDelayMs.value, renderDelayMs.value, renderIntervalMs.value] as const,
-  ([videoValue, delayValue, intervalValue]) => {
+  () =>
+    [
+      videoLatencySignal.value?.valueMs,
+      videoLatencySignal.value?.source,
+      renderDelayMs.value,
+      renderIntervalMs.value,
+    ] as const,
+  ([videoValue, , delayValue, intervalValue]) => {
     if (!isConnected.value || !isTabActive()) {
       videoBufferOverloadedSince = null;
       videoRenderOverloadedSince = null;
@@ -1945,12 +1960,20 @@ function startDiagnosticsSampling(): void {
   diagnosticsSampleTimer = window.setInterval(() => {
     if (!isConnected.value) return;
     const now = Date.now();
+    const freshness = currentCaptureToDisplayFreshness();
+    const latencySignal = selectPreferredVideoLatencySignal(
+      freshness?.driftMs,
+      videoPlayoutDelayMs.value,
+    );
     const sample: DiagnosticsSample = {
       ts: now,
       pacingDtMs: videoPacingMetrics.value.dtMs ?? null,
       presentedDelta: videoPacingMetrics.value.presentedDelta ?? null,
       renderIntervalMs: renderIntervalMs.value,
       renderDelayMs: renderDelayMs.value,
+      captureToDisplayAgeMs: freshness?.ageMs,
+      captureToDisplayDriftMs: freshness?.driftMs,
+      latencyControlSource: latencySignal?.source,
       fpsReceived: inboundVideoStats.value.fpsReceived,
       fpsDecoded: inboundVideoStats.value.fpsDecoded,
       framesDropped: inboundVideoStats.value.framesDropped,
@@ -2192,7 +2215,6 @@ const onFullscreenChange = () => {
     cancelEscHold();
     releaseFullscreenKeyboardLock();
   }
-  modeSwitchDrainUntil = Date.now() + videoLatencyProfile.modeSwitchDrainMs;
   triggerVideoDrainWindow(videoLatencyProfile.modeSwitchDrainMs, 'fullscreen');
   ensureAudioPlayback('fullscreen');
 };
@@ -2211,7 +2233,6 @@ const onPageHide = () => {
 
 const onVisibilityChange = () => {
   if (document.visibilityState === 'visible') {
-    modeSwitchDrainUntil = Date.now() + videoLatencyProfile.modeSwitchDrainMs;
     triggerVideoDrainWindow(videoLatencyProfile.modeSwitchDrainMs, 'resume');
   }
   ensureAudioPlayback('visibility');
@@ -2331,8 +2352,7 @@ function resetVideoElement(): void {
 
   videoFrameMetrics.value = {};
   videoPacingMetrics.value = {};
-  lastPlaybackRateUpdateAt = null;
-
+  lastVideoPacingMetricsPublishedAtMs = null;
   try {
     el.pause();
   } catch {
@@ -2425,15 +2445,34 @@ function attachVideoDebug(el: HTMLVideoElement): () => void {
 function attachVideoFrameMetrics(el: HTMLVideoElement): () => void {
   const intervalSamples: number[] = [];
   const delaySamples: number[] = [];
+  const captureToDisplayAgeSamples: number[] = [];
+  const captureToDisplayDriftSamples: number[] = [];
   const maxSamples = 120;
   let lastTs: number | null = null;
+  let lastMetricsPublishedAtMs: number | null = null;
 
-  if ('requestVideoFrameCallback' in el) {
+  const publishMetrics = (metrics: typeof videoFrameMetrics.value, now: number, force = false) => {
+    if (
+      !force &&
+      lastMetricsPublishedAtMs != null &&
+      now - lastMetricsPublishedAtMs < VIDEO_FRAME_METRICS_PUBLISH_INTERVAL_MS
+    ) {
+      return;
+    }
+    lastMetricsPublishedAtMs = now;
+    videoFrameMetrics.value = metrics;
+  };
+
+  if (typeof el.requestVideoFrameCallback === 'function') {
     let handle = 0;
     const cb = (now: number, meta: VideoFrameCallbackMetadata) => {
       const interval = lastTs != null ? now - lastTs : null;
       lastTs = now;
       const delay = computeVideoFrameRenderDelayMs(now, meta.expectedDisplayTime);
+      const captureToDisplayAge = computeVideoFrameCaptureToDisplayAgeMs(
+        (meta as { captureTime?: unknown }).captureTime,
+        meta.expectedDisplayTime,
+      );
       const nextMetrics = { ...videoFrameMetrics.value };
       if (interval != null) {
         intervalSamples.push(interval);
@@ -2461,8 +2500,47 @@ function attachVideoFrameMetrics(el: HTMLVideoElement): () => void {
           maxDelayMs: sortedDelay[sortedDelay.length - 1],
         });
       }
-      if (interval != null || delay != null) {
-        videoFrameMetrics.value = nextMetrics;
+      if (captureToDisplayAge != null) {
+        const captureToDisplayDrift = updateVideoCaptureToDisplayDrift(captureToDisplayAge, now);
+        captureToDisplayAgeSamples.push(captureToDisplayAge);
+        captureToDisplayDriftSamples.push(captureToDisplayDrift);
+        if (captureToDisplayAgeSamples.length > maxSamples) captureToDisplayAgeSamples.shift();
+        if (captureToDisplayDriftSamples.length > maxSamples) captureToDisplayDriftSamples.shift();
+        Object.assign(nextMetrics, {
+          lastCaptureToDisplayAgeMs: captureToDisplayAge,
+          avgCaptureToDisplayAgeMs:
+            captureToDisplayAgeSamples.reduce((a, b) => a + b, 0) /
+            captureToDisplayAgeSamples.length,
+          maxCaptureToDisplayAgeMs: Math.max(...captureToDisplayAgeSamples),
+          lastCaptureToDisplayDriftMs: captureToDisplayDrift,
+          avgCaptureToDisplayDriftMs:
+            captureToDisplayDriftSamples.reduce((a, b) => a + b, 0) /
+            captureToDisplayDriftSamples.length,
+          lastCaptureToDisplaySampleAtMs: now,
+        });
+      } else {
+        const hadCaptureToDisplayAge =
+          typeof nextMetrics.lastCaptureToDisplayAgeMs === 'number' ||
+          typeof nextMetrics.lastCaptureToDisplayDriftMs === 'number';
+        captureToDisplayAgeSamples.length = 0;
+        captureToDisplayDriftSamples.length = 0;
+        resetVideoCaptureToDisplayFreshness();
+        Object.assign(nextMetrics, {
+          lastCaptureToDisplayAgeMs: undefined,
+          avgCaptureToDisplayAgeMs: undefined,
+          maxCaptureToDisplayAgeMs: undefined,
+          lastCaptureToDisplayDriftMs: undefined,
+          avgCaptureToDisplayDriftMs: undefined,
+          lastCaptureToDisplaySampleAtMs: undefined,
+        });
+        if (interval != null || delay != null) {
+          publishMetrics(nextMetrics, now, hadCaptureToDisplayAge);
+        }
+        handle = el.requestVideoFrameCallback(cb);
+        return;
+      }
+      if (interval != null || delay != null || captureToDisplayAge != null) {
+        publishMetrics(nextMetrics, now);
       }
       handle = el.requestVideoFrameCallback(cb);
     };
@@ -2482,10 +2560,13 @@ function attachVideoFrameMetrics(el: HTMLVideoElement): () => void {
       if (interval != null) {
         intervalSamples.push(interval);
         if (intervalSamples.length > maxSamples) intervalSamples.shift();
-        videoFrameMetrics.value = {
-          lastIntervalMs: interval,
-          avgIntervalMs: intervalSamples.reduce((a, b) => a + b, 0) / intervalSamples.length,
-        };
+        publishMetrics(
+          {
+            lastIntervalMs: interval,
+            avgIntervalMs: intervalSamples.reduce((a, b) => a + b, 0) / intervalSamples.length,
+          },
+          now,
+        );
       }
     }
     rafId = requestAnimationFrame(raf);
@@ -2507,7 +2588,7 @@ function attachVideoPacingProbe(
     rtpTimestamp?: number;
   }) => void,
 ): () => void {
-  if ('requestVideoFrameCallback' in el) {
+  if (typeof el.requestVideoFrameCallback === 'function') {
     let handle = 0;
     let lastNow: number | null = null;
     let lastPresented: number | null = null;
@@ -2816,6 +2897,7 @@ async function disconnect() {
   inputBufferedAmount.value = null;
   videoFrameMetrics.value = {};
   videoPacingMetrics.value = {};
+  lastVideoPacingMetricsPublishedAtMs = null;
   inboundVideoStats.value = {};
   diagnosticsSamples.value = [];
   stopDiagnosticsSampling();
@@ -2825,8 +2907,6 @@ async function disconnect() {
   }
   smoothedVideoFps.value = undefined;
   lastVideoFpsSampleAt = null;
-  lastPlaybackRateUpdateAt = null;
-  modeSwitchDrainUntil = null;
   detachInputCapture();
   if (videoEl.value) {
     try {
@@ -2853,6 +2933,7 @@ async function disconnect() {
   videoRunawayDrainLatched = false;
   resetVideoLatencyFenceState();
   lastVideoBufferResetAt = null;
+  lastVideoLatencyResyncAt = null;
   sessionId.value = null;
   serverSession.value = null;
   resetServerRates();
@@ -2983,6 +3064,17 @@ watch(videoEl, (el) => {
   detachVideoEvents = attachVideoDebug(el);
   detachVideoFrames = attachVideoFrameMetrics(el);
   detachVideoPacing = attachVideoPacingProbe(el, (sample) => {
+    const now =
+      typeof sample.now === 'number' && Number.isFinite(sample.now)
+        ? sample.now
+        : performance.now();
+    if (
+      lastVideoPacingMetricsPublishedAtMs != null &&
+      now - lastVideoPacingMetricsPublishedAtMs < VIDEO_FRAME_METRICS_PUBLISH_INTERVAL_MS
+    ) {
+      return;
+    }
+    lastVideoPacingMetricsPublishedAtMs = now;
     videoPacingMetrics.value = sample;
   });
   detachVideoFullscreenEvents = attachVideoFullscreenEvents(el);
