@@ -355,7 +355,9 @@ function Write-DebugLog {
 
 # UI bridge: static C# helper to run Playnite API calls on the UI thread without requiring a PS runspace there
 try {
-  if (-not ([System.Management.Automation.PSTypeName]'UIBridge').Type) {
+  # Add-Type definitions are process-wide. Keep this type versioned so a plugin
+  # update can replace the bridge while Playnite is still running.
+  if (-not ([System.Management.Automation.PSTypeName]'SunshinePlayniteUIBridgeV2').Type) {
     Add-Type -TypeDefinition @"
 using System;
 using System.Collections;
@@ -363,7 +365,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Windows.Threading;
 
-public static class UIBridge
+public static class SunshinePlayniteUIBridgeV2
 {
     public static Dispatcher Dispatcher;
     public static object Api;
@@ -577,10 +579,31 @@ public static class UIBridge
     }
 }
 "@ -ReferencedAssemblies @('WindowsBase')
-    Write-Log "Loaded UIBridge"
+    Write-Log "Loaded SunshinePlayniteUIBridgeV2"
   }
 }
-catch { Write-Log "Failed to load UIBridge: $($_.Exception.Message)" }
+catch { Write-Log "Failed to load SunshinePlayniteUIBridgeV2: $($_.Exception.Message)" }
+
+function Initialize-PlayniteUIBridgeV2FromLegacy {
+  # A script-extension update can import this module in a background runspace
+  # after the original UIBridge has already been initialized in Playnite's UI
+  # runspace. Reuse those process-wide references so the new bridge can launch
+  # games without requiring a Playnite restart.
+  try {
+    if ([SunshinePlayniteUIBridgeV2]::Api) { return }
+    $legacyType = ([System.Management.Automation.PSTypeName]'UIBridge').Type
+    if (-not $legacyType) { return }
+    $legacyDispatcher = $legacyType.GetField('Dispatcher').GetValue($null)
+    $legacyApi = $legacyType.GetField('Api').GetValue($null)
+    if (-not $legacyDispatcher -or -not $legacyApi) { return }
+    [SunshinePlayniteUIBridgeV2]::Init($legacyDispatcher, $legacyApi)
+    Write-Log 'Initialized SunshinePlayniteUIBridgeV2 from the legacy bridge'
+  } catch {
+    Write-DebugLog "Could not initialize SunshinePlayniteUIBridgeV2 from the legacy bridge: $($_.Exception.Message)"
+  }
+}
+
+Initialize-PlayniteUIBridgeV2FromLegacy
 
 function Get-LaunchEnvironmentEntries {
   param($Message)
@@ -1233,13 +1256,15 @@ function Start-LauncherConnReader {
         $obj = $line | ConvertFrom-Json -ErrorAction Stop
         if ($obj.type -eq 'command' -and $obj.command -eq 'launch' -and $obj.id) {
           Register-SunshineLaunchedGame -Id $obj.id
+          Initialize-PlayniteUIBridgeV2FromLegacy
           $launchEnvironment = Get-LaunchEnvironmentEntries -Message $obj
-          [UIBridge]::StartGameByGuidStringOnUIThread([string]$obj.id, $launchEnvironment)
+          [SunshinePlayniteUIBridgeV2]::StartGameByGuidStringOnUIThread([string]$obj.id, $launchEnvironment)
           Write-Log "LauncherConn[$Guid]: launch dispatched for $($obj.id)"
         }
         elseif ($obj.type -eq 'command' -and $obj.command -eq 'set-environment') {
+          Initialize-PlayniteUIBridgeV2FromLegacy
           $launchEnvironment = Get-LaunchEnvironmentEntries -Message $obj
-          [UIBridge]::SetPersistentEnvironmentOnUIThread($Guid, $launchEnvironment)
+          [SunshinePlayniteUIBridgeV2]::SetPersistentEnvironmentOnUIThread($Guid, $launchEnvironment)
           Write-Log "LauncherConn[$Guid]: fullscreen environment applied ($($launchEnvironment.Count) variables)"
         }
         elseif ($obj.type -and $obj.command) {
@@ -1256,7 +1281,7 @@ function Start-LauncherConnReader {
     }
   }
   finally {
-    try { [UIBridge]::ClearPersistentEnvironmentOnUIThread($Guid) } catch {}
+    try { [SunshinePlayniteUIBridgeV2]::ClearPersistentEnvironmentOnUIThread($Guid) } catch {}
     try { if ($Conn.Reader) { $Conn.Reader.Dispose() } } catch {}
     try { if ($Conn.Writer) { $Conn.Writer.Dispose() } } catch {}
     try { if ($Conn.Stream) { $Conn.Stream.Dispose() } } catch {}
@@ -1539,9 +1564,10 @@ function Start-ConnectorLoop {
         if ($obj.type -eq 'command' -and $obj.command -eq 'launch' -and $obj.id) {
           try {
             Register-SunshineLaunchedGame -Id $obj.id
+            Initialize-PlayniteUIBridgeV2FromLegacy
             $launchEnvironment = Get-LaunchEnvironmentEntries -Message $obj
-            [UIBridge]::StartGameByGuidStringOnUIThread([string]$obj.id, $launchEnvironment)
-            Write-Log "Dispatched launch to UI thread via UIBridge.StartGameByGuidStringOnUIThread"
+            [SunshinePlayniteUIBridgeV2]::StartGameByGuidStringOnUIThread([string]$obj.id, $launchEnvironment)
+            Write-Log "Dispatched launch to UI thread via SunshinePlayniteUIBridgeV2.StartGameByGuidStringOnUIThread"
           } catch { Write-Log "Failed to dispatch launch: $($_.Exception.Message)" }
         } elseif ($obj.type -eq 'command' -and $obj.command -eq 'stop') {
           try {
@@ -1590,12 +1616,12 @@ function OnApplicationStarted() {
       if (-not $dispatcher) {
         try { $dispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher } catch {}
       }
-      [UIBridge]::Init($dispatcher, $PlayniteApi)
-      $hasDisp = ([bool][UIBridge]::Dispatcher)
-      $hasApi = ([bool][UIBridge]::Api)
-      Write-Log ("UIBridge initialized: Dispatcher={0} Api={1}" -f $hasDisp, $hasApi)
+      [SunshinePlayniteUIBridgeV2]::Init($dispatcher, $PlayniteApi)
+      $hasDisp = ([bool][SunshinePlayniteUIBridgeV2]::Dispatcher)
+      $hasApi = ([bool][SunshinePlayniteUIBridgeV2]::Api)
+      Write-Log ("SunshinePlayniteUIBridgeV2 initialized: Dispatcher={0} Api={1}" -f $hasDisp, $hasApi)
     }
-    catch { Write-Log "Failed to initialize UIBridge: $($_.Exception.Message)" }
+    catch { Write-Log "Failed to initialize SunshinePlayniteUIBridgeV2: $($_.Exception.Message)" }
     # Start background connector in a dedicated PowerShell runspace for proper function/variable scope
     try {
       Ensure-ScriptVar -Name 'Bg' -Default $null
@@ -1647,7 +1673,7 @@ function OnApplicationStarted() {
         $rs.SessionStateProxy.SetVariable('Cts', $script:Cts)
         # Ensure connector runspace can access the shared launcher connections table
         try { $rs.SessionStateProxy.SetVariable('LauncherConns', $global:LauncherConns) } catch {}
-        # No need to pass UI objects; UIBridge holds static references accessible across runspaces
+        # No need to pass UI objects; the bridge holds static references accessible across runspaces
         $ps = [System.Management.Automation.PowerShell]::Create()
         $ps.Runspace = $rs
         if ($modulePath) { $ps.AddScript("Import-Module -Force '$modulePath'") | Out-Null }
