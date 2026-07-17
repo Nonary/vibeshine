@@ -12,9 +12,9 @@
 #include <optional>
 
 // platform includes
+#include <winsock2.h>
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
-#include <winsock2.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>

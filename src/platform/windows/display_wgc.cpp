@@ -6,9 +6,9 @@
 // standard includes
 #include <algorithm>
 #include <chrono>
+#include <winsock2.h>
 #include <dxgi1_2.h>
 #include <optional>
-#include <winsock2.h>
 #include <wrl/client.h>
 
 // local includes
