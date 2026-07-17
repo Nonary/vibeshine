@@ -167,8 +167,6 @@ namespace webrtc_stream {
     constexpr int kDefaultAudioPacketMs = 10;
     constexpr std::size_t kEncodedPrefixLogLimit = 5;
     constexpr auto kKeyframeRequestInterval = std::chrono::milliseconds {100};
-    constexpr std::size_t kKeyframeConsecutiveDrops = 3;
-    constexpr auto kKeyframeResyncInterval = std::chrono::seconds {2};
     constexpr auto kVideoPacingSlackLatency = std::chrono::milliseconds {0};
     constexpr auto kVideoPacingSlackBalanced = std::chrono::milliseconds {2};
     constexpr auto kVideoPacingSlackSmooth = std::chrono::milliseconds {3};
@@ -179,15 +177,10 @@ namespace webrtc_stream {
     constexpr auto kAudioMaxFrameAge = std::chrono::milliseconds {kDefaultAudioPacketMs * kMaxAudioFrames};
     constexpr auto kWebrtcStartupKeyframeHold = std::chrono::milliseconds {3000};
     constexpr auto kWebrtcStartupKeyframeDeadline = std::chrono::milliseconds {8000};
-    constexpr auto kWebrtcStartupExitKeyframeFreshness = std::chrono::milliseconds {250};
+    constexpr auto kWebrtcStartupExitKeyframeFreshness = std::chrono::milliseconds {1000};
     constexpr std::size_t kVideoInflightFramesMin = 2;
     constexpr std::size_t kVideoInflightFramesMax = 6;
     constexpr std::size_t kVideoInflightKeyframeExtra = 2;
-    constexpr auto kWebrtcIdleGracePeriod = std::chrono::minutes {5};
-    // While a virtual display is active the physical monitors may be disabled
-    // (exclusive layout); keep the post-disconnect grace period short so they
-    // are restored promptly instead of staying dark for the full idle window.
-    constexpr auto kWebrtcIdleGracePeriodVirtualDisplay = std::chrono::seconds {15};
 
     struct SharedEncodedPayloadReleaseContext {
       std::shared_ptr<std::vector<std::uint8_t>> payload;
@@ -731,7 +724,6 @@ namespace webrtc_stream {
     struct WebRtcCaptureState {
       std::mutex mutex;
       std::atomic_bool active {false};
-      std::atomic_bool idle_shutdown_pending {false};
       std::shared_ptr<safe::mail_raw_t> mail;
       std::shared_ptr<rtsp_stream::launch_session_t> launch_session;
       std::thread video_thread;
@@ -1567,6 +1559,12 @@ namespace webrtc_stream {
     class D3D11Nv12Converter;
 #endif
 
+    struct Av1FmtpParams {
+      std::string profile {"0"};
+      std::string level_idx {"5"};
+      std::string tier {"0"};
+    };
+
     struct Session {
       SessionState state;
       video::config_t video_config;
@@ -1581,6 +1579,9 @@ namespace webrtc_stream {
       std::string local_answer_type;
       std::string negotiation_error;
 #ifdef SUNSHINE_ENABLE_WEBRTC
+      std::shared_ptr<lwrtc_factory_t> factory;
+      std::optional<Av1FmtpParams> av1_fmtp;
+      std::optional<std::string> hevc_fmtp;
       lwrtc_peer_t *peer = nullptr;
       std::shared_ptr<SessionIceContext> ice_context;
       std::shared_ptr<lwrtc_audio_source_t> audio_source;
@@ -1617,7 +1618,6 @@ namespace webrtc_stream {
       std::shared_ptr<platf::img_t> last_video_frame;
       std::optional<std::chrono::steady_clock::time_point> last_video_push;
       bool needs_keyframe = false;
-      std::size_t consecutive_drops = 0;
       std::optional<std::chrono::steady_clock::time_point> startup_keyframe_until;
       std::optional<std::chrono::steady_clock::time_point> startup_keyframe_deadline;
       std::optional<std::chrono::steady_clock::time_point> last_keyframe_request;
@@ -1638,11 +1638,7 @@ namespace webrtc_stream {
     std::mutex session_mutex;
     std::unordered_map<std::string, Session> sessions;
     std::condition_variable local_answer_cv;
-    std::atomic<std::uint64_t> webrtc_idle_shutdown_token {0};
     std::atomic_uint active_sessions {0};
-#ifdef SUNSHINE_ENABLE_WEBRTC
-    std::atomic_uint active_peers {0};
-#endif
     std::atomic_bool rtsp_sessions_active {false};
 
     struct RtspCaptureConfig {
@@ -1745,6 +1741,38 @@ namespace webrtc_stream {
       BOOST_LOG(debug) << "WebRTC: keyframe requested (" << reason << ')';
     }
 
+    void reset_video_pacing_after_dependency_gap(
+      Session &session,
+      std::chrono::steady_clock::time_point now
+    ) {
+      session.video_pacing_state.anchor_capture.reset();
+      session.video_pacing_state.anchor_send.reset();
+      session.video_pacing_state.last_drift_reset = now;
+      session.video_pacing_state.recovery_prefer_latest_until.reset();
+      session.last_video_push.reset();
+    }
+
+    void mark_video_dependency_gap(
+      Session &session,
+      std::chrono::steady_clock::time_point now,
+      std::string_view reason
+    ) {
+      const bool was_waiting_for_keyframe = session.needs_keyframe;
+      session.needs_keyframe = true;
+      reset_video_pacing_after_dependency_gap(session, now);
+
+      if (!was_waiting_for_keyframe) {
+        BOOST_LOG(debug) << "WebRTC: waiting for keyframe after encoded frame gap id="
+                         << session.state.id << " reason=" << reason;
+      }
+
+      if (!session.last_keyframe_request ||
+          now - *session.last_keyframe_request >= kKeyframeRequestInterval) {
+        session.last_keyframe_request = now;
+        request_keyframe(reason);
+      }
+    }
+
     int codec_to_video_format(const std::optional<std::string> &codec) {
       if (!codec) {
         return 0;
@@ -1788,27 +1816,6 @@ namespace webrtc_stream {
         return;
       }
       config.framerate = rtsp_config->video.framerate;
-    }
-
-    struct Av1FmtpParams {
-      std::string profile {"0"};
-      std::string level_idx {"5"};
-      std::string tier {"0"};
-    };
-
-    bool av1_params_equal(
-      const std::optional<Av1FmtpParams> &left,
-      const std::optional<Av1FmtpParams> &right
-    ) {
-      if (left.has_value() != right.has_value()) {
-        return false;
-      }
-      if (!left) {
-        return true;
-      }
-      return left->profile == right->profile &&
-             left->level_idx == right->level_idx &&
-             left->tier == right->tier;
     }
 
     std::string_view trim_ascii(std::string_view value) {
@@ -2537,7 +2544,6 @@ namespace webrtc_stream {
       webrtc_capture.app_id.reset();
       webrtc_capture.config_key.reset();
       webrtc_capture.stream_start_params.reset();
-      webrtc_capture.idle_shutdown_pending.store(false, std::memory_order_release);
       webrtc_capture.active.store(false, std::memory_order_release);
 
 #ifdef _WIN32
@@ -2597,15 +2603,9 @@ namespace webrtc_stream {
     }
 
     std::optional<std::string> start_webrtc_capture(const SessionOptions &options) {
-      webrtc_idle_shutdown_token.fetch_add(1, std::memory_order_acq_rel);
       std::lock_guard<std::mutex> lock(webrtc_capture.mutex);
       const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
       const auto rtsp_config = rtsp_active ? snapshot_rtsp_capture_config() : std::nullopt;
-      const bool was_idle_shutdown_pending =
-        webrtc_capture.idle_shutdown_pending.exchange(false, std::memory_order_acq_rel);
-      if (webrtc_capture.active.load(std::memory_order_acquire) && !was_idle_shutdown_pending) {
-        return std::nullopt;
-      }
 
       const int current_app_id = proc::proc.running();
       const int raw_requested_app_id = options.app_id.value_or(0);
@@ -2629,7 +2629,7 @@ namespace webrtc_stream {
       }
 
       const int effective_app_id = requested_app_id > 0 ? requested_app_id : current_app_id;
-      webrtc_capture.stream_start_params = compute_stream_start_params(options, effective_app_id);
+      auto stream_start_params = compute_stream_start_params(options, effective_app_id);
       const int audio_channels = options.audio_channels.value_or(kDefaultAudioChannels);
       const bool prefer_10bit_sdr = resolve_prefer_10bit_sdr(options);
       auto video_config = build_video_config(options, prefer_10bit_sdr);
@@ -2637,11 +2637,9 @@ namespace webrtc_stream {
       apply_rtsp_video_overrides(video_config, rtsp_config);
       apply_rtx_hdr_stream_policy(video_config);
       const auto desired_key = build_capture_config_key(effective_app_id, video_config, options);
-      const bool force_reconfigure = was_idle_shutdown_pending;
 
       if (
         webrtc_capture.active.load(std::memory_order_acquire) &&
-        !force_reconfigure &&
         webrtc_capture.config_key &&
         *webrtc_capture.config_key == desired_key
       ) {
@@ -2649,11 +2647,14 @@ namespace webrtc_stream {
       }
 
       if (webrtc_capture.active.load(std::memory_order_acquire)) {
-        // Reconfigure: a new capture starts right after, so don't treat this as a
-        // final teardown (no forced display restore between stop and restart).
-        stop_webrtc_capture_locked(!rtsp_active, false);
+        BOOST_LOG(warning) << "WebRTC: rejected session with capture settings that differ from an active capture";
+        return std::string {
+          "Another WebRTC capture is active with different video or audio settings. "
+          "Disconnect it before switching codec, resolution, frame rate, bitrate, HDR, or audio mode."
+        };
       }
 
+      webrtc_capture.stream_start_params = std::move(stream_start_params);
       auto launch_session = build_launch_session(options, effective_app_id, audio_channels, prefer_10bit_sdr);
 
       const bool allow_display_changes = !rtsp_active && !resume_only;
@@ -3047,13 +3048,6 @@ namespace webrtc_stream {
       delete ctx;
     }
 
-    std::mutex webrtc_mutex;
-    lwrtc_factory_t *webrtc_factory = nullptr;
-    std::optional<lwrtc_video_codec_t> webrtc_factory_codec;
-    std::optional<Av1FmtpParams> webrtc_factory_av1_params;
-    std::optional<Av1FmtpParams> webrtc_desired_av1_params;
-    std::optional<std::string> webrtc_factory_hevc_fmtp;
-    std::optional<std::string> webrtc_desired_hevc_fmtp;
     std::mutex webrtc_media_mutex;
     std::condition_variable webrtc_media_cv;
     std::thread webrtc_media_thread;
@@ -3089,116 +3083,60 @@ namespace webrtc_stream {
       return LWRTC_VIDEO_CODEC_H264;
     }
 
-    bool ensure_webrtc_factory_locked(std::optional<lwrtc_video_codec_t> preferred_codec = std::nullopt) {
-      const auto desired_av1_params = webrtc_desired_av1_params;
-      const auto desired_hevc_fmtp = webrtc_desired_hevc_fmtp;
-      if (webrtc_factory) {
-        if (preferred_codec && webrtc_factory_codec && *preferred_codec != *webrtc_factory_codec) {
-          if (active_peers.load(std::memory_order_acquire) == 0) {
-            BOOST_LOG(info) << "WebRTC: resetting factory to switch codec";
-            lwrtc_factory_release(webrtc_factory);
-            webrtc_factory = nullptr;
-            webrtc_factory_codec.reset();
-            webrtc_factory_av1_params.reset();
-            webrtc_factory_hevc_fmtp.reset();
-          } else {
-            BOOST_LOG(warning) << "WebRTC: codec switch requested while peers are active";
-          }
-        }
-        if (webrtc_factory && preferred_codec &&
-            *preferred_codec == LWRTC_VIDEO_CODEC_AV1 &&
-            webrtc_factory_codec &&
-            *webrtc_factory_codec == LWRTC_VIDEO_CODEC_AV1 &&
-            !av1_params_equal(desired_av1_params, webrtc_factory_av1_params)) {
-          if (active_peers.load(std::memory_order_acquire) == 0) {
-            BOOST_LOG(info) << "WebRTC: resetting factory to update AV1 parameters";
-            lwrtc_factory_release(webrtc_factory);
-            webrtc_factory = nullptr;
-            webrtc_factory_codec.reset();
-            webrtc_factory_av1_params.reset();
-            webrtc_factory_hevc_fmtp.reset();
-          } else {
-            BOOST_LOG(warning) << "WebRTC: AV1 parameter update requested while peers are active";
-          }
-        }
-        if (webrtc_factory && preferred_codec &&
-            *preferred_codec == LWRTC_VIDEO_CODEC_H265 &&
-            webrtc_factory_codec &&
-            *webrtc_factory_codec == LWRTC_VIDEO_CODEC_H265 &&
-            desired_hevc_fmtp != webrtc_factory_hevc_fmtp) {
-          if (active_peers.load(std::memory_order_acquire) == 0) {
-            BOOST_LOG(info) << "WebRTC: resetting factory to update HEVC parameters";
-            lwrtc_factory_release(webrtc_factory);
-            webrtc_factory = nullptr;
-            webrtc_factory_codec.reset();
-            webrtc_factory_av1_params.reset();
-            webrtc_factory_hevc_fmtp.reset();
-          } else {
-            BOOST_LOG(warning) << "WebRTC: HEVC parameter update requested while peers are active";
-          }
-        }
-        if (webrtc_factory) {
-          return true;
-        }
+    bool ensure_session_factory(Session &session) {
+      if (session.factory) {
+        return true;
       }
 
-      const auto passthrough_codec = preferred_codec.value_or(LWRTC_VIDEO_CODEC_H264);
-      BOOST_LOG(debug) << "WebRTC: initializing peer connection factory with passthrough encoder (codec="
-                       << lwrtc_codec_name(passthrough_codec) << ")";
-      webrtc_factory = lwrtc_factory_create();
-      if (!webrtc_factory) {
+      const auto passthrough_codec =
+        session_codec_to_lwrtc(session.state).value_or(LWRTC_VIDEO_CODEC_H264);
+      BOOST_LOG(debug) << "WebRTC: initializing session peer connection factory id="
+                       << session.state.id << " codec=" << lwrtc_codec_name(passthrough_codec);
+      auto *factory = lwrtc_factory_create();
+      if (!factory) {
         BOOST_LOG(error) << "WebRTC: failed to allocate peer connection factory";
         return false;
       }
 
       // Enable passthrough mode to use pre-encoded H.264/HEVC frames
       // This must be called BEFORE lwrtc_factory_initialize()
-      if (!lwrtc_factory_enable_passthrough(webrtc_factory, passthrough_codec)) {
-        BOOST_LOG(warning) << "WebRTC: failed to enable passthrough mode";
-        // Continue anyway - will fall back to raw frame mode
-      }
-
-      if (passthrough_codec == LWRTC_VIDEO_CODEC_AV1 && desired_av1_params) {
-        if (!lwrtc_factory_set_passthrough_av1_params(
-              webrtc_factory,
-              desired_av1_params->profile.c_str(),
-              desired_av1_params->level_idx.c_str(),
-              desired_av1_params->tier.c_str()
-            )) {
-          BOOST_LOG(warning) << "WebRTC: failed to set AV1 fmtp parameters";
-        } else {
-          BOOST_LOG(debug) << "WebRTC: using AV1 fmtp parameters profile=" << desired_av1_params->profile
-                           << " level-idx=" << desired_av1_params->level_idx
-                           << " tier=" << desired_av1_params->tier;
-        }
-      }
-      if (passthrough_codec == LWRTC_VIDEO_CODEC_H265 && desired_hevc_fmtp) {
-        if (!lwrtc_factory_set_passthrough_hevc_fmtp(webrtc_factory, desired_hevc_fmtp->c_str())) {
-          BOOST_LOG(warning) << "WebRTC: failed to set HEVC fmtp parameters";
-        } else {
-          BOOST_LOG(debug) << "WebRTC: using HEVC fmtp parameters " << *desired_hevc_fmtp;
-        }
-      }
-
-      if (!lwrtc_factory_initialize(webrtc_factory)) {
-        BOOST_LOG(error) << "WebRTC: failed to create peer connection factory";
-        lwrtc_factory_release(webrtc_factory);
-        webrtc_factory = nullptr;
+      if (!lwrtc_factory_enable_passthrough(factory, passthrough_codec)) {
+        BOOST_LOG(error) << "WebRTC: failed to enable passthrough mode";
+        lwrtc_factory_release(factory);
         return false;
       }
 
-      webrtc_factory_codec = passthrough_codec;
-      webrtc_factory_av1_params =
-        (passthrough_codec == LWRTC_VIDEO_CODEC_AV1) ? desired_av1_params : std::nullopt;
-      webrtc_factory_hevc_fmtp =
-        (passthrough_codec == LWRTC_VIDEO_CODEC_H265) ? desired_hevc_fmtp : std::nullopt;
-      BOOST_LOG(debug) << "WebRTC: peer connection factory ready";
-      return true;
-    }
+      if (passthrough_codec == LWRTC_VIDEO_CODEC_AV1 && session.av1_fmtp) {
+        if (!lwrtc_factory_set_passthrough_av1_params(
+              factory,
+              session.av1_fmtp->profile.c_str(),
+              session.av1_fmtp->level_idx.c_str(),
+              session.av1_fmtp->tier.c_str()
+            )) {
+          BOOST_LOG(warning) << "WebRTC: failed to set AV1 fmtp parameters";
+        } else {
+          BOOST_LOG(debug) << "WebRTC: using AV1 fmtp parameters profile=" << session.av1_fmtp->profile
+                           << " level-idx=" << session.av1_fmtp->level_idx
+                           << " tier=" << session.av1_fmtp->tier;
+        }
+      }
+      if (passthrough_codec == LWRTC_VIDEO_CODEC_H265 && session.hevc_fmtp) {
+        if (!lwrtc_factory_set_passthrough_hevc_fmtp(factory, session.hevc_fmtp->c_str())) {
+          BOOST_LOG(warning) << "WebRTC: failed to set HEVC fmtp parameters";
+        } else {
+          BOOST_LOG(debug) << "WebRTC: using HEVC fmtp parameters " << *session.hevc_fmtp;
+        }
+      }
 
-    bool ensure_webrtc_factory(std::optional<lwrtc_video_codec_t> preferred_codec = std::nullopt) {
-      std::lock_guard lg {webrtc_mutex};
-      return ensure_webrtc_factory_locked(preferred_codec);
+      if (!lwrtc_factory_initialize(factory)) {
+        BOOST_LOG(error) << "WebRTC: failed to create peer connection factory";
+        lwrtc_factory_release(factory);
+        return false;
+      }
+
+      session.factory = make_lwrtc_ptr<lwrtc_factory_t, lwrtc_factory_release>(factory);
+      BOOST_LOG(debug) << "WebRTC: session peer connection factory ready id=" << session.state.id;
+      return true;
     }
 
     lwrtc_constraints_t *create_constraints() {
@@ -3225,17 +3163,17 @@ namespace webrtc_stream {
     }
 
     lwrtc_peer_t *create_peer_connection(
-      const SessionState &state,
+      Session &session,
       SessionIceContext *ice_context
     ) {
       BOOST_LOG(debug) << "WebRTC: create_peer_connection enter";
-      if (!ensure_webrtc_factory(session_codec_to_lwrtc(state))) {
+      if (!ensure_session_factory(session)) {
         return nullptr;
       }
 
       lwrtc_config_t config {};
-      config.offer_to_receive_audio = state.audio ? 1 : 0;
-      config.offer_to_receive_video = state.video ? 1 : 0;
+      config.offer_to_receive_audio = session.state.audio ? 1 : 0;
+      config.offer_to_receive_video = session.state.video ? 1 : 0;
 
       BOOST_LOG(debug) << "WebRTC: create_peer_connection constraints";
       auto *constraints = create_constraints();
@@ -3246,7 +3184,7 @@ namespace webrtc_stream {
 
       BOOST_LOG(debug) << "WebRTC: create_peer_connection lwrtc_factory_create_peer";
       auto *peer = lwrtc_factory_create_peer(
-        webrtc_factory,
+        session.factory.get(),
         &config,
         constraints,
         &on_ice_candidate,
@@ -3945,7 +3883,6 @@ namespace webrtc_stream {
           std::chrono::nanoseconds pacing_slack {};
           bool pace = true;
           std::string session_id;
-          bool clear_keyframe_on_success = false;
           std::size_t max_inflight_frames = 0;
         };
 
@@ -4030,32 +3967,38 @@ namespace webrtc_stream {
             if (session.encoded_video_source) {
               bool startup_keyframe_active = false;
               if (session.startup_keyframe_until || session.startup_keyframe_deadline) {
+                const bool hold_elapsed =
+                  !session.startup_keyframe_until || now >= *session.startup_keyframe_until;
                 const bool deadline_elapsed =
                   session.startup_keyframe_deadline && now >= *session.startup_keyframe_deadline;
                 const bool keyframe_fresh =
                   session.last_keyframe_sent &&
                   now - *session.last_keyframe_sent <= kWebrtcStartupExitKeyframeFreshness;
+                const bool keyframe_sent_after_hold =
+                  hold_elapsed && session.last_keyframe_sent &&
+                  (!session.startup_keyframe_until ||
+                   *session.last_keyframe_sent >= *session.startup_keyframe_until);
 
-                if (keyframe_fresh || deadline_elapsed) {
+                if (keyframe_fresh && keyframe_sent_after_hold) {
                   const bool had_keyframe_sent = session.last_keyframe_sent.has_value();
                   session.startup_keyframe_until.reset();
                   session.startup_keyframe_deadline.reset();
-                  if (keyframe_fresh) {
-                    session.needs_keyframe = false;
-                  } else if (deadline_elapsed) {
-                    session.needs_keyframe = false;
-                    BOOST_LOG(debug) << "WebRTC: startup keyframe-only window forced end id=" << session.state.id
-                                     << " had_keyframe_sent=" << had_keyframe_sent;
-                  }
+                  session.needs_keyframe = false;
                   BOOST_LOG(debug) << "WebRTC: startup keyframe-only window ended id=" << session.state.id
                                    << " had_keyframe_sent=" << had_keyframe_sent
                                    << " needs_keyframe=" << session.needs_keyframe;
+                } else if (deadline_elapsed) {
+                  session.startup_keyframe_until.reset();
+                  session.startup_keyframe_deadline.reset();
+                  session.needs_keyframe = true;
+                  BOOST_LOG(warning) << "WebRTC: startup keyframe-only window deadline elapsed id="
+                                     << session.state.id << "; continuing to wait for a decodable keyframe";
                 } else {
                   startup_keyframe_active = true;
                 }
               }
 
-              const bool waiting_for_keyframe = session.needs_keyframe || startup_keyframe_active;
+              bool waiting_for_keyframe = session.needs_keyframe || startup_keyframe_active;
               bool queued_keyframe = false;
               const int fps = std::max(1, session.video_config.framerate);
               const auto frame_interval = std::chrono::nanoseconds(1s) / fps;
@@ -4082,10 +4025,16 @@ namespace webrtc_stream {
                 }
                 return now - *mapped;
               };
-              auto drop_oldest_frame = [&](bool keep_keyframes) {
-                if (session.video_frames.drop_oldest(keep_keyframes)) {
-                  session.state.video_dropped++;
+              auto drop_oldest_frame = [&](bool keep_keyframes, std::string_view reason) {
+                if (!session.video_frames.drop_oldest(keep_keyframes)) {
+                  return false;
                 }
+                session.state.video_dropped++;
+                if (!keep_keyframes) {
+                  mark_video_dependency_gap(session, now, reason);
+                  waiting_for_keyframe = true;
+                }
+                return true;
               };
               if (session.video_pacing_state.recovery_prefer_latest_until &&
                   now >= *session.video_pacing_state.recovery_prefer_latest_until) {
@@ -4097,7 +4046,7 @@ namespace webrtc_stream {
                   if (!current_age || *current_age <= max_frame_age) {
                     break;
                   }
-                  drop_oldest_frame(waiting_for_keyframe);
+                  drop_oldest_frame(waiting_for_keyframe, "stale encoded frame drop");
                 }
                 session.video_pacing_state.recovery_prefer_latest_until = now + max_frame_age;
               }
@@ -4111,27 +4060,16 @@ namespace webrtc_stream {
                 drift_reset_recently;
               if (pacing.mode == video_pacing_mode_e::balanced && behind) {
                 while (session.video_frames.size() > 1) {
-                  drop_oldest_frame(waiting_for_keyframe);
+                  drop_oldest_frame(waiting_for_keyframe, "encoded pacing backlog");
                 }
                 session.video_pacing_state.recovery_prefer_latest_until = now + max_frame_age;
               }
               const bool recovery_active =
                 session.video_pacing_state.recovery_prefer_latest_until &&
                 now < *session.video_pacing_state.recovery_prefer_latest_until;
-              const bool lagging = behind || recovery_active;
-              if (lagging && !waiting_for_keyframe) {
-                const bool keyframe_stale =
-                  !session.last_keyframe_sent ||
-                  now - *session.last_keyframe_sent >= kKeyframeResyncInterval;
-                if (keyframe_stale &&
-                    (!session.last_keyframe_request ||
-                     now - *session.last_keyframe_request >= kKeyframeRequestInterval)) {
-                  session.last_keyframe_request = now;
-                  request_keyframe("pacing recovery");
-                }
-              }
               auto handle_frame = [&](EncodedVideoFrame &&frame) {
                 if (waiting_for_keyframe && !frame.idr) {
+                  session.state.video_dropped++;
                   return;
                 }
                 if (waiting_for_keyframe) {
@@ -4176,18 +4114,8 @@ namespace webrtc_stream {
                 const bool target_too_old = target_send + max_frame_age < now;
                 if (pacing.drop_old_frames && target_too_old && !session.video_frames.empty()) {
                   session.state.video_dropped++;
-                  if (frame.idr) {
-                    session.needs_keyframe = true;
-                    session.consecutive_drops = 0;
-                  } else if (pacing.mode != video_pacing_mode_e::latency) {
-                    session.consecutive_drops++;
-                    if (session.consecutive_drops >= kKeyframeConsecutiveDrops) {
-                      session.needs_keyframe = true;
-                      session.consecutive_drops = 0;
-                    }
-                  } else {
-                    session.consecutive_drops = 0;
-                  }
+                  mark_video_dependency_gap(session, now, "stale encoded frame send skip");
+                  waiting_for_keyframe = true;
                   return;
                 }
                 if (target_too_old) {
@@ -4235,8 +4163,6 @@ namespace webrtc_stream {
                 work.pacing_slack = pacing.slack;
                 work.pace = pace_frame;
                 work.session_id = session.state.id;
-                work.clear_keyframe_on_success =
-                  waiting_for_keyframe && frame.idr && !startup_keyframe_active;
                 work.max_inflight_frames = std::clamp<std::size_t>(
                   static_cast<std::size_t>(std::max(1, session.video_pacing.max_age_frames)) * 2,
                   kVideoInflightFramesMin,
@@ -4263,15 +4189,23 @@ namespace webrtc_stream {
                 }
               }
               if (prefer_latest) {
+                const auto queued_before_latest = session.video_frames.size();
                 EncodedVideoFrame latest;
                 if (session.video_frames.pop_latest(latest)) {
+                  if (queued_before_latest > 1) {
+                    session.state.video_dropped += queued_before_latest - 1;
+                  }
+                  if (queued_before_latest > 1 && !latest.idr) {
+                    mark_video_dependency_gap(session, now, "encoded latest-frame skip");
+                    waiting_for_keyframe = true;
+                  }
                   handle_frame(std::move(latest));
                 }
               } else {
                 EncodedVideoFrame frame;
                 while (session.video_frames.pop(frame)) {
                   handle_frame(std::move(frame));
-                  if (waiting_for_keyframe) {
+                  if (waiting_for_keyframe && queued_keyframe) {
                     break;
                   }
                 }
@@ -4280,7 +4214,7 @@ namespace webrtc_stream {
                 const bool keyframe_fresh =
                   session.last_keyframe_sent &&
                   now - *session.last_keyframe_sent <= kWebrtcStartupExitKeyframeFreshness;
-                if (!queued_keyframe || !keyframe_fresh) {
+                if (!queued_keyframe && !keyframe_fresh) {
                   if (!session.last_keyframe_request ||
                       now - *session.last_keyframe_request >= kKeyframeRequestInterval) {
                     session.last_keyframe_request = now;
@@ -4310,6 +4244,21 @@ namespace webrtc_stream {
             break;
           }
           auto send_now = std::chrono::steady_clock::now();
+          if (work.pace && work.target_send > send_now + work.pacing_slack) {
+            sleep_for_with_audio(work.target_send - send_now - work.pacing_slack);
+            send_now = std::chrono::steady_clock::now();
+          }
+          if (!work.session_id.empty()) {
+            std::lock_guard lg {session_mutex};
+            auto it = sessions.find(work.session_id);
+            if (it == sessions.end()) {
+              continue;
+            }
+            if (it->second.needs_keyframe && !work.is_keyframe) {
+              it->second.state.video_dropped++;
+              continue;
+            }
+          }
           if (work.inflight && work.max_inflight_frames > 0) {
             const auto inflight_now = work.inflight->load(std::memory_order_relaxed);
             const auto max_inflight =
@@ -4322,36 +4271,11 @@ namespace webrtc_stream {
                 auto it = sessions.find(work.session_id);
                 if (it != sessions.end()) {
                   it->second.state.video_dropped++;
-                  if (work.is_keyframe) {
-                    it->second.needs_keyframe = true;
-                    it->second.consecutive_drops = 0;
-                  } else if (it->second.video_pacing.mode != video_pacing_mode_e::latency) {
-                    it->second.consecutive_drops++;
-                    if (it->second.consecutive_drops >= kKeyframeConsecutiveDrops) {
-                      it->second.needs_keyframe = true;
-                      it->second.consecutive_drops = 0;
-                    }
-                  } else {
-                    it->second.consecutive_drops = 0;
-                  }
-                  it->second.video_pacing_state.anchor_capture.reset();
-                  it->second.video_pacing_state.anchor_send.reset();
-                  it->second.video_pacing_state.last_drift_reset = send_now;
-                  it->second.last_video_push.reset();
-                  if (it->second.needs_keyframe &&
-                      (!it->second.last_keyframe_request ||
-                       send_now - *it->second.last_keyframe_request >= kKeyframeRequestInterval)) {
-                    it->second.last_keyframe_request = send_now;
-                    request_keyframe("sender backlog");
-                  }
+                  mark_video_dependency_gap(it->second, send_now, "sender backlog");
                 }
               }
               continue;
             }
-          }
-          if (work.pace && work.target_send > send_now + work.pacing_slack) {
-            sleep_for_with_audio(work.target_send - send_now - work.pacing_slack);
-            send_now = std::chrono::steady_clock::now();
           }
           if (work.inflight) {
             work.inflight->fetch_add(1, std::memory_order_relaxed);
@@ -4374,20 +4298,26 @@ namespace webrtc_stream {
             release_shared_encoded_payload,
             payload_ref
           );
-          if (pushed && !work.session_id.empty()) {
+          if (!work.session_id.empty()) {
             std::lock_guard lg {session_mutex};
             auto it = sessions.find(work.session_id);
             if (it != sessions.end()) {
-              it->second.consecutive_drops = 0;
-              if (work.is_keyframe) {
-                it->second.last_keyframe_sent = std::chrono::steady_clock::now();
-              }
-              if (work.clear_keyframe_on_success) {
-                it->second.needs_keyframe = false;
-                // Reset pacing state on keyframe delivery to recover from any accumulated drift
-                it->second.video_pacing_state.anchor_capture.reset();
-                it->second.video_pacing_state.anchor_send.reset();
-                it->second.last_video_push.reset();
+              const auto completed_at = std::chrono::steady_clock::now();
+              if (!pushed) {
+                it->second.state.video_dropped++;
+                mark_video_dependency_gap(it->second, completed_at, "encoded source rejected frame");
+              } else if (work.is_keyframe) {
+                it->second.last_keyframe_sent = completed_at;
+                const bool startup_active =
+                  it->second.startup_keyframe_until || it->second.startup_keyframe_deadline;
+                if (it->second.needs_keyframe && !startup_active) {
+                  it->second.needs_keyframe = false;
+                  it->second.video_pacing_state.anchor_capture.reset();
+                  it->second.video_pacing_state.anchor_send.reset();
+                  it->second.video_pacing_state.last_drift_reset.reset();
+                  it->second.video_pacing_state.recovery_prefer_latest_until.reset();
+                  it->second.last_video_push.reset();
+                }
               }
             }
           }
@@ -4418,60 +4348,11 @@ namespace webrtc_stream {
       webrtc_media_running.store(false, std::memory_order_release);
     }
 
-    void reset_webrtc_factory() {
-      std::lock_guard lg {webrtc_mutex};
-      if (webrtc_factory) {
-        BOOST_LOG(debug) << "WebRTC: releasing peer connection factory";
-        lwrtc_factory_release(webrtc_factory);
-        webrtc_factory = nullptr;
-        webrtc_factory_codec.reset();
-        webrtc_factory_av1_params.reset();
-        webrtc_factory_hevc_fmtp.reset();
-      }
-    }
-
-    void schedule_webrtc_idle_shutdown() {
-      webrtc_capture.idle_shutdown_pending.store(true, std::memory_order_release);
-      const auto token = webrtc_idle_shutdown_token.fetch_add(1, std::memory_order_acq_rel) + 1;
-      std::chrono::steady_clock::duration grace_period = kWebrtcIdleGracePeriod;
-#ifdef _WIN32
-      const auto virtual_displays = VDISPLAY::enumerateVirtualDisplays();
-      const bool virtual_display_active = std::any_of(
-        virtual_displays.begin(),
-        virtual_displays.end(),
-        [](const VDISPLAY::VirtualDisplayInfo &info) {
-          return info.is_active;
-        }
-      );
-      if (virtual_display_active) {
-        BOOST_LOG(info) << "WebRTC: last session closed with an active virtual display; "
-                        << "shortening idle shutdown grace period to restore displays promptly.";
-        grace_period = kWebrtcIdleGracePeriodVirtualDisplay;
-      }
-#endif
-      task_pool.pushDelayed(
-        [token]() {
-          if (webrtc_idle_shutdown_token.load(std::memory_order_acquire) != token) {
-            return;
-          }
-          if (has_active_sessions()) {
-            return;
-          }
-          if (active_peers.load(std::memory_order_acquire) != 0) {
-            return;
-          }
-
-          reset_webrtc_factory();
-        },
-        grace_period
-      );
-    }
-
     bool attach_media_tracks(Session &session) {
-      std::lock_guard webrtc_lock {webrtc_mutex};
-      if (!session.peer || !ensure_webrtc_factory_locked(session_codec_to_lwrtc(session.state))) {
+      if (!session.peer || !session.factory) {
         return false;
       }
+      auto *factory = session.factory.get();
 
       BOOST_LOG(debug) << "WebRTC: attach_media_tracks enter id=" << session.state.id;
       const std::string audio_stream_id = "sunshine-audio-" + session.state.id;
@@ -4480,7 +4361,7 @@ namespace webrtc_stream {
 
       if (session.state.audio && !session.audio_source) {
         session.audio_source = make_lwrtc_ptr<lwrtc_audio_source_t, lwrtc_audio_source_release>(
-          lwrtc_audio_source_create(webrtc_factory)
+          lwrtc_audio_source_create(factory)
         );
         if (!session.audio_source) {
           BOOST_LOG(error) << "WebRTC: failed to create audio source for " << session.state.id;
@@ -4515,7 +4396,7 @@ namespace webrtc_stream {
       if (session.state.audio && !session.audio_track) {
         const std::string track_id = "audio-" + session.state.id;
         session.audio_track =
-          lwrtc_audio_track_create(webrtc_factory, session.audio_source.get(), track_id.c_str());
+          lwrtc_audio_track_create(factory, session.audio_source.get(), track_id.c_str());
         if (!session.audio_track) {
           BOOST_LOG(error) << "WebRTC: failed to create audio track for " << session.state.id;
           return false;
@@ -4531,7 +4412,7 @@ namespace webrtc_stream {
         const auto codec = session_codec_to_encoded(session.state);
         session.encoded_video_source = make_lwrtc_ptr<lwrtc_encoded_video_source_t, lwrtc_encoded_video_source_release>(
           lwrtc_encoded_video_source_create(
-            webrtc_factory,
+            factory,
             codec,
             session.video_config.width,
             session.video_config.height
@@ -4585,7 +4466,7 @@ namespace webrtc_stream {
       if (session.state.video && !session.video_track) {
         const std::string track_id = "video-" + session.state.id;
         session.video_track = lwrtc_encoded_video_track_create(
-          webrtc_factory,
+          factory,
           session.encoded_video_source.get(),
           track_id.c_str()
         );
@@ -4839,6 +4720,7 @@ namespace webrtc_stream {
   bool close_session(std::string_view id) {
 #ifdef SUNSHINE_ENABLE_WEBRTC
     BOOST_LOG(debug) << "WebRTC: close_session enter id=" << id;
+    std::shared_ptr<lwrtc_factory_t> factory;
     lwrtc_peer_t *peer = nullptr;
     std::shared_ptr<SessionIceContext> ice_context;
     lwrtc_audio_track_t *audio_track = nullptr;
@@ -4859,6 +4741,7 @@ namespace webrtc_stream {
         return false;
       }
 #ifdef SUNSHINE_ENABLE_WEBRTC
+      factory = std::move(it->second.factory);
       peer = it->second.peer;
       ice_context = it->second.ice_context;
       audio_track = it->second.audio_track;
@@ -4890,7 +4773,6 @@ namespace webrtc_stream {
       }
       lwrtc_peer_close(peer);
       lwrtc_peer_release(peer);
-      active_peers.fetch_sub(1, std::memory_order_relaxed);
     }
     if (input_channel) {
       lwrtc_data_channel_unregister_observer(input_channel);
@@ -4903,6 +4785,10 @@ namespace webrtc_stream {
     if (video_track) {
       lwrtc_video_track_release(video_track);
     }
+    encoded_video_source.reset();
+    video_source.reset();
+    audio_source.reset();
+    factory.reset();
     if (last_session) {
       stop_media_thread();
       reset_input_context();
@@ -4919,7 +4805,6 @@ namespace webrtc_stream {
         platf::streaming_will_stop();
       }
       stop_webrtc_capture_if_idle();
-      schedule_webrtc_idle_shutdown();
     }
 #endif
     BOOST_LOG(debug) << "WebRTC: close_session exit id=" << id;
@@ -4970,10 +4855,8 @@ namespace webrtc_stream {
         return;
       }
     }
-    webrtc_idle_shutdown_token.fetch_add(1, std::memory_order_acq_rel);
     stop_media_thread();
     reset_input_context();
-    reset_webrtc_factory();
 #endif
     stop_webrtc_capture_if_idle();
   }
@@ -5001,6 +4884,7 @@ namespace webrtc_stream {
       frame.idr = packet.is_idr();
       frame.after_ref_frame_invalidation = packet.after_ref_frame_invalidation;
       frame.timestamp = packet.frame_timestamp;
+      const bool frame_is_idr = frame.idr;
 
       const auto now = std::chrono::steady_clock::now();
       const bool recovery_active =
@@ -5019,11 +4903,16 @@ namespace webrtc_stream {
         }
       }
       if (prefer_latest_enqueue) {
+        bool dropped_dependency = false;
         while (!session.video_frames.empty()) {
           if (!session.video_frames.drop_oldest()) {
             break;
           }
           session.state.video_dropped++;
+          dropped_dependency = true;
+        }
+        if (dropped_dependency && !frame_is_idr) {
+          mark_video_dependency_gap(session, now, "encoded queue drop");
         }
       }
 
@@ -5036,6 +4925,9 @@ namespace webrtc_stream {
       session.state.last_video_frame_index = packet.frame_index();
       if (dropped) {
         session.state.video_dropped++;
+        if (!frame_is_idr) {
+          mark_video_dependency_gap(session, now, "encoded queue overflow");
+        }
       }
     }
 #ifdef SUNSHINE_ENABLE_WEBRTC
@@ -5233,10 +5125,7 @@ namespace webrtc_stream {
 #ifdef SUNSHINE_ENABLE_WEBRTC
       if (it->second.state.codec && boost::iequals(*it->second.state.codec, "av1")) {
         const auto av1_offer = parse_av1_offer(sdp);
-        {
-          std::lock_guard lg {webrtc_mutex};
-          webrtc_desired_av1_params = av1_offer.fmtp;
-        }
+        it->second.av1_fmtp = av1_offer.fmtp;
         if (!av1_offer.offered) {
           BOOST_LOG(error) << "WebRTC: AV1 requested but offer does not include AV1";
           return false;
@@ -5250,10 +5139,7 @@ namespace webrtc_stream {
       }
       if (it->second.state.codec && boost::iequals(*it->second.state.codec, "hevc")) {
         const auto hevc_offer = parse_hevc_offer(sdp);
-        {
-          std::lock_guard lg {webrtc_mutex};
-          webrtc_desired_hevc_fmtp = hevc_offer.fmtp;
-        }
+        it->second.hevc_fmtp = hevc_offer.fmtp;
         if (!hevc_offer.offered) {
           BOOST_LOG(error) << "WebRTC: HEVC requested but offer does not include H265";
           return false;
@@ -5272,14 +5158,13 @@ namespace webrtc_stream {
           it->second.ice_context = std::move(ice_context);
         }
         BOOST_LOG(debug) << "WebRTC: creating peer id=" << session_id;
-        auto new_peer = create_peer_connection(it->second.state, it->second.ice_context.get());
+        auto new_peer = create_peer_connection(it->second, it->second.ice_context.get());
         if (!new_peer) {
           BOOST_LOG(error) << "WebRTC: failed to create peer id=" << session_id;
           return false;
         }
         it->second.peer = new_peer;
         created_peer = true;
-        active_peers.fetch_add(1, std::memory_order_relaxed);
       }
       if (!it->second.data_channel_context) {
         auto data_context = std::make_shared<SessionDataChannelContext>();
@@ -5299,7 +5184,6 @@ namespace webrtc_stream {
           lwrtc_peer_close(it->second.peer);
           lwrtc_peer_release(it->second.peer);
           it->second.peer = nullptr;
-          active_peers.fetch_sub(1, std::memory_order_relaxed);
         }
         return false;
       }
