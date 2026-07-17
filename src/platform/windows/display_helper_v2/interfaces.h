@@ -17,6 +17,9 @@ namespace display_helper::v2 {
     virtual ApplyStatus apply_topology(const ActiveTopology &topology) = 0;
     virtual EnumeratedDeviceList enumerate(display_device::DeviceEnumerationDetail detail) = 0;
     virtual ActiveTopology capture_topology() = 0;
+    /// Validate a topology stored in a restore snapshot. Structurally invalid
+    /// snapshots must be rejected; transient OS validation failures should be
+    /// retried by apply_snapshot rather than discarded permanently.
     virtual bool validate_topology(const ActiveTopology &topology) = 0;
     virtual Snapshot capture_snapshot() = 0;
     virtual bool apply_snapshot(const Snapshot &snapshot) = 0;
@@ -30,8 +33,7 @@ namespace display_helper::v2 {
 
     // --- legacy engine capabilities (defaulted so test fakes only override what they assert on) ---
 
-    /// Cheap structural validity check (isTopologyValid), as opposed to the
-    /// OS-level SDC_VALIDATE performed by validate_topology().
+    /// Cheap structural validity check (isTopologyValid).
     virtual bool topology_is_valid(const ActiveTopology &topology) {
       return !topology.empty();
     }

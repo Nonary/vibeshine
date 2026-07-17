@@ -41,6 +41,10 @@ namespace platf::display_helper_client {
   // Save the current OS display state to session_current (rotate current->previous) without applying config.
   bool send_snapshot_current(const std::string &json_payload = {});
 
+  // Save the current OS display state and wait for the v2 helper's result.
+  // Legacy helpers do not implement this acknowledgement.
+  bool send_snapshot_current_and_wait(const std::string &json_payload = {}, int timeout_ms = 3000);
+
   // Reset helper-side persistence/state (best-effort)
   bool send_reset();
 

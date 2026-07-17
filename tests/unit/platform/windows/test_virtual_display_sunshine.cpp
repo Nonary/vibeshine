@@ -84,6 +84,22 @@ TEST(SunshineVirtualDisplay, StableVirtualDisplayUuidKeepsCanonicalUuidBytes) {
   );
 }
 
+TEST(SunshineVirtualDisplay, RecoveryJournalRawUuidRoundTripsDriverGuidBytes) {
+  constexpr std::string_view raw_guid = "EAADBAA7-AFE9-2232-FF17-F29CD76380DD";
+
+  const auto parsed = uuid_util::uuid_t::parse_raw(std::string {raw_guid});
+
+  EXPECT_EQ(parsed.string(), raw_guid);
+  EXPECT_FALSE(parsed == uuid_util::uuid_t::parse(std::string {raw_guid}));
+}
+
+TEST(SunshineVirtualDisplay, RecoveryJournalRawUuidRejectsMalformedString) {
+  EXPECT_THROW(
+    uuid_util::uuid_t::parse_raw("EAADBAA7-AFE9-2232-FF17-F29CD76380DG"),
+    std::invalid_argument
+  );
+}
+
 TEST(SunshineVirtualDisplay, StableVirtualDisplayUuidDerivesNonCanonicalClientId) {
   const auto first = VDISPLAY::virtualDisplayUuidFromStableId("0123456789ABCDEF");
   const auto second = VDISPLAY::virtualDisplayUuidFromStableId("0123456789ABCDEF");

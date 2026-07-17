@@ -1488,8 +1488,14 @@ namespace display_helper_integration {
       return false;
     }
     BOOST_LOG(info) << "Display helper: sending SNAPSHOT_CURRENT request.";
-    const bool ok = platf::display_helper_client::send_snapshot_current(build_snapshot_exclude_payload());
-    BOOST_LOG(info) << "Display helper: SNAPSHOT_CURRENT dispatch result=" << (ok ? "true" : "false");
+    const auto payload = build_snapshot_exclude_payload();
+    const bool legacy_helper = use_legacy_helper_engine();
+    const bool ok = legacy_helper ?
+                      platf::display_helper_client::send_snapshot_current(payload) :
+                      platf::display_helper_client::send_snapshot_current_and_wait(payload);
+    BOOST_LOG(info) << "Display helper: SNAPSHOT_CURRENT "
+                    << (legacy_helper ? "dispatch" : "completion")
+                    << " result=" << (ok ? "true" : "false");
     return ok;
   }
 

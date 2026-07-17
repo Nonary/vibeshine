@@ -2870,6 +2870,17 @@ namespace VDISPLAY_SUNSHINE {
       }
     }
 
+    std::optional<uuid_util::uuid_t> parse_raw_uuid_string(const std::string &value) {
+      if (value.empty()) {
+        return std::nullopt;
+      }
+      try {
+        return uuid_util::uuid_t::parse_raw(value);
+      } catch (...) {
+        return std::nullopt;
+      }
+    }
+
     enum class VirtualDisplayRecoveryPhase {
       prepared,
       active,
@@ -3313,7 +3324,11 @@ namespace VDISPLAY_SUNSHINE {
         }
 
         const auto guid_string = serialized["guid"].get<std::string>();
-        const auto guid = parse_uuid_string(guid_string);
+        // The journal stores uuid_t::string(), which preserves the GUID's raw
+        // memory bytes rather than the canonical GUID field order accepted by
+        // parse_uuid_string(). Keep that exact byte sequence so the persisted
+        // display_id continues to validate after restart.
+        const auto guid = parse_raw_uuid_string(guid_string);
         const auto display_id = parse_uint64_decimal(serialized["display_id"].get<std::string>());
         const auto capability = owner_capability_from_hex(serialized["owner_capability"].get<std::string>());
         const auto phase_string = serialized["phase"].get<std::string>();

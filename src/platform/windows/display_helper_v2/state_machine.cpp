@@ -242,6 +242,10 @@ namespace display_helper::v2 {
     verification_result_callback_ = std::move(callback);
   }
 
+  void StateMachine::set_snapshot_result_callback(std::function<void(bool)> callback) {
+    snapshot_result_callback_ = std::move(callback);
+  }
+
   void StateMachine::set_exit_callback(std::function<void(int)> callback) {
     exit_callback_ = std::move(callback);
   }
@@ -422,6 +426,9 @@ namespace display_helper::v2 {
     // (72b0d996): the snapshot would capture the un-restored state.
     if (restore_pending()) {
       BOOST_LOG(info) << "Skipping current session snapshot refresh while restore is pending.";
+      if (snapshot_result_callback_) {
+        snapshot_result_callback_(false);
+      }
       return;
     }
 
@@ -429,7 +436,10 @@ namespace display_helper::v2 {
       update_blacklist(command.payload.exclude_devices);
     }
 
-    (void) snapshots_.refresh_current_preserving_previous(exclusions_vector());
+    const bool saved = snapshots_.refresh_current_preserving_previous(exclusions_vector());
+    if (snapshot_result_callback_) {
+      snapshot_result_callback_(saved);
+    }
   }
 
   void StateMachine::handle_reset_command(const ResetCommand &) {

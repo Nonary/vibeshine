@@ -267,6 +267,7 @@ namespace {
     std::deque<display_helper::v2::Message> messages;
     std::optional<display_helper::v2::ApplyStatus> apply_result;
     std::optional<bool> verification_result;
+    std::optional<bool> snapshot_result;
     std::optional<int> exit_code;
 
     display_helper::v2::SystemPorts system_ports {workarounds, task_manager, heartbeat, clock, cancellation};
@@ -316,6 +317,9 @@ namespace {
       });
       state_machine.set_verification_result_callback([this](bool success) {
         verification_result = success;
+      });
+      state_machine.set_snapshot_result_callback([this](bool success) {
+        snapshot_result = success;
       });
       state_machine.set_exit_callback([this](int code) {
         exit_code = code;
@@ -864,6 +868,8 @@ TEST(DisplayHelperV2StateMachine, SnapshotCurrentRefreshesPreservingPrevious) {
   auto stored_current = harness.storage.load(display_helper::v2::SnapshotTier::Current);
   ASSERT_TRUE(stored_current.has_value());
   EXPECT_EQ(*stored_current, current);
+  ASSERT_TRUE(harness.snapshot_result.has_value());
+  EXPECT_TRUE(*harness.snapshot_result);
 }
 
 // f3841ad8: APPLY with no session baseline on disk must self-capture the
@@ -942,6 +948,8 @@ TEST(DisplayHelperV2StateMachine, SnapshotCurrentSkippedWhileRestorePending) {
   auto stored_current = harness.storage.load(display_helper::v2::SnapshotTier::Current);
   ASSERT_TRUE(stored_current.has_value());
   EXPECT_EQ(stored_current->m_topology.front().front(), "old");
+  ASSERT_TRUE(harness.snapshot_result.has_value());
+  EXPECT_FALSE(*harness.snapshot_result);
 }
 
 // 3b7a52c4 / 0add1f80: paused sessions with revert_on_disconnect=false must keep
@@ -1025,6 +1033,8 @@ TEST(DisplayHelperV2StateMachine, SnapshotCurrentRefreshFailureKeepsBaseline) {
   ASSERT_TRUE(stored_current.has_value());
   EXPECT_EQ(*stored_current, previous);
   EXPECT_FALSE(harness.storage.load(display_helper::v2::SnapshotTier::Previous).has_value());
+  ASSERT_TRUE(harness.snapshot_result.has_value());
+  EXPECT_FALSE(*harness.snapshot_result);
 }
 
 #endif  // _WIN32

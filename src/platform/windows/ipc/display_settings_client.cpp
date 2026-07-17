@@ -64,6 +64,7 @@ namespace platf::display_helper_client {
     VerificationResult = 9,  ///< Helper acknowledgement for verification completion (payload: [u8 success]); v2 engine only.
     RefreshRate = 10,  ///< Change only one display's refresh rate.
     RefreshRateResult = 11,  ///< Helper acknowledgement for RefreshRate (payload: [u8 success]).
+    SnapshotResult = 12,  ///< Helper acknowledgement for SnapshotCurrent (payload: [u8 success]).
     Ping = 0xFE,  ///< Health check message; expects a response.
     Stop = 0xFF  ///< Request helper process to terminate gracefully.
   };
@@ -108,7 +109,8 @@ namespace platf::display_helper_client {
         }
 
         if (msg_type == static_cast<uint8_t>(MsgType::Ping) ||
-            msg_type == static_cast<uint8_t>(MsgType::VerificationResult)) {
+            msg_type == static_cast<uint8_t>(MsgType::VerificationResult) ||
+            msg_type == static_cast<uint8_t>(MsgType::SnapshotResult)) {
           continue;
         }
 
@@ -159,7 +161,8 @@ namespace platf::display_helper_client {
         }
 
         if (msg_type == static_cast<uint8_t>(MsgType::Ping) ||
-            msg_type == static_cast<uint8_t>(MsgType::ApplyResult)) {
+            msg_type == static_cast<uint8_t>(MsgType::ApplyResult) ||
+            msg_type == static_cast<uint8_t>(MsgType::SnapshotResult)) {
           continue;
         }
 
@@ -197,10 +200,59 @@ namespace platf::display_helper_client {
         }
         if (msg_type == static_cast<uint8_t>(MsgType::Ping) ||
             msg_type == static_cast<uint8_t>(MsgType::ApplyResult) ||
-            msg_type == static_cast<uint8_t>(MsgType::VerificationResult)) {
+            msg_type == static_cast<uint8_t>(MsgType::VerificationResult) ||
+            msg_type == static_cast<uint8_t>(MsgType::SnapshotResult)) {
           continue;
         }
       }
+      return std::nullopt;
+    }
+
+    std::optional<bool> wait_for_snapshot_result_locked(platf::dxgi::INamedPipe &pipe, int timeout_ms) {
+      using namespace std::chrono;
+
+      if (timeout_ms <= 0) {
+        return std::nullopt;
+      }
+
+      const auto deadline = steady_clock::now() + milliseconds(timeout_ms);
+      std::array<uint8_t, 2048> buffer {};
+      while (steady_clock::now() < deadline) {
+        const auto now = steady_clock::now();
+        auto remaining = duration_cast<milliseconds>(deadline - now);
+        if (remaining.count() < 0) {
+          remaining = milliseconds(0);
+        }
+        size_t bytes_read = 0;
+        const auto result = pipe.receive(
+          buffer,
+          bytes_read,
+          static_cast<int>(std::max<long long>(remaining.count(), 100LL))
+        );
+        if (result == platf::dxgi::PipeResult::Timeout) {
+          continue;
+        }
+        if (result != platf::dxgi::PipeResult::Success || bytes_read == 0) {
+          BOOST_LOG(error) << "Display helper IPC: failed waiting for SNAPSHOT_CURRENT result";
+          return std::nullopt;
+        }
+
+        const auto msg_type = buffer[0];
+        if (msg_type == static_cast<uint8_t>(MsgType::SnapshotResult)) {
+          return bytes_read >= 2 && buffer[1] != 0;
+        }
+        if (msg_type == static_cast<uint8_t>(MsgType::Ping) ||
+            msg_type == static_cast<uint8_t>(MsgType::ApplyResult) ||
+            msg_type == static_cast<uint8_t>(MsgType::VerificationResult) ||
+            msg_type == static_cast<uint8_t>(MsgType::RefreshRateResult)) {
+          continue;
+        }
+
+        BOOST_LOG(debug) << "Display helper IPC: ignoring unexpected message type=" << static_cast<int>(msg_type)
+                         << " while awaiting SNAPSHOT_CURRENT result";
+      }
+
+      BOOST_LOG(error) << "Display helper IPC: timed out waiting for SNAPSHOT_CURRENT result";
       return std::nullopt;
     }
 
@@ -506,6 +558,29 @@ namespace platf::display_helper_client {
     if (pipe && send_message(*pipe, MsgType::SnapshotCurrent, payload)) {
       return true;
     }
+    return false;
+  }
+
+  bool send_snapshot_current_and_wait(const std::string &json_payload, int timeout_ms) {
+    BOOST_LOG(debug) << "Display helper IPC: SNAPSHOT_CURRENT request queued with completion wait";
+    std::unique_lock<std::mutex> lk(pipe_mutex());
+    if (!ensure_connected_locked()) {
+      BOOST_LOG(warning) << "Display helper IPC: SNAPSHOT_CURRENT aborted - no connection";
+      return false;
+    }
+
+    std::vector<uint8_t> payload(json_payload.begin(), json_payload.end());
+    auto &pipe = pipe_singleton();
+    if (!pipe || !send_message(*pipe, MsgType::SnapshotCurrent, payload)) {
+      return false;
+    }
+    if (auto result = wait_for_snapshot_result_locked(*pipe, timeout_ms)) {
+      return *result;
+    }
+
+    BOOST_LOG(warning) << "Display helper IPC: dropping cached connection after missing SNAPSHOT_CURRENT result";
+    pipe->disconnect();
+    pipe.reset();
     return false;
   }
 

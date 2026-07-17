@@ -112,7 +112,22 @@ namespace display_helper::v2 {
       return false;
     }
 
-    return validate_topology_with_os(topology);
+    try {
+      if (!display_device_->isTopologyValid(topology)) {
+        return false;
+      }
+
+      // SDC_VALIDATE is useful diagnostics, but it can return access denied
+      // while Windows is transitioning the desktop after a virtual display is
+      // removed. The snapshot is still structurally valid and must reach the
+      // real apply path, which can recover and retry the display stack.
+      if (!validate_topology_with_os(topology)) {
+        BOOST_LOG(warning) << "Display helper v2: OS topology probe failed; preserving structurally valid restore snapshot for retry.";
+      }
+      return true;
+    } catch (...) {
+      return false;
+    }
   }
 
   Snapshot WinDisplaySettings::capture_snapshot() {
@@ -169,17 +184,38 @@ namespace display_helper::v2 {
                     << "\n  primary device: " << (snapshot.m_primary_device.empty() ? "(none)" : snapshot.m_primary_device);
 
     try {
-      (void) display_device_->setTopology(snapshot.m_topology);
-      (void) display_device_->setDisplayModes(snapshot.m_modes);
-      (void) display_device_->setHdrStates(snapshot.m_hdr_states);
+      // Do not suppress failures here. RecoveryOperation treats a failed apply
+      // as retryable; reporting success after Windows rejected every operation
+      // prevented that recovery path from observing the real failure.
+      if (!display_device_->setTopology(snapshot.m_topology)) {
+        BOOST_LOG(warning) << "apply_snapshot: failed to restore topology";
+        return false;
+      }
+      if (!snapshot.m_modes.empty() && !display_device_->setDisplayModes(snapshot.m_modes)) {
+        BOOST_LOG(warning) << "apply_snapshot: failed to restore display modes";
+        return false;
+      }
+      if (!snapshot.m_hdr_states.empty() && !display_device_->setHdrStates(snapshot.m_hdr_states)) {
+        BOOST_LOG(warning) << "apply_snapshot: failed to restore HDR states";
+        return false;
+      }
       if (!snapshot.m_primary_device.empty()) {
-        (void) display_device_->setAsPrimary(snapshot.m_primary_device);
+        if (!display_device_->setAsPrimary(snapshot.m_primary_device)) {
+          BOOST_LOG(warning) << "apply_snapshot: failed to restore primary display";
+          return false;
+        }
       }
       for (const auto &[device_id, point] : snapshot.m_origins) {
-        (void) display_device_->setDisplayOrigin(device_id, point);
+        if (!display_device_->setDisplayOrigin(device_id, point)) {
+          BOOST_LOG(warning) << "apply_snapshot: failed to restore origin for " << device_id;
+          return false;
+        }
       }
       if (layout_rotations && !layout_rotations->empty()) {
-        return apply_layout_rotations(*layout_rotations);
+        if (!apply_layout_rotations(*layout_rotations)) {
+          BOOST_LOG(warning) << "apply_snapshot: failed to restore display rotations";
+          return false;
+        }
       }
       BOOST_LOG(info) << "apply_snapshot: completed";
       return true;

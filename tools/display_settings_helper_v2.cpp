@@ -63,6 +63,7 @@ namespace {
     VerificationResult = 9,
     RefreshRate = 10,
     RefreshRateResult = 11,
+    SnapshotResult = 12,
     Ping = 0xFE,
     Stop = 0xFF,
   };
@@ -622,6 +623,14 @@ int run_v2_helper(int argc, char *argv[]) {
     std::vector<uint8_t> payload;
     payload.push_back(success ? 1u : 0u);
     send_framed_content(*pipe, MsgType::VerificationResult, payload);
+  });
+  state_machine.set_snapshot_result_callback([&](bool success) {
+    auto *pipe = active_pipe.load(std::memory_order_acquire);
+    if (!pipe) {
+      return;
+    }
+    std::array<std::uint8_t, 1> payload {static_cast<std::uint8_t>(success ? 1u : 0u)};
+    send_framed_content(*pipe, MsgType::SnapshotResult, payload);
   });
 
   display_helper::v2::DebouncedTrigger debouncer(std::chrono::milliseconds(500));
