@@ -558,6 +558,36 @@ TEST(DisplayHelperV2StateMachine, DisplayEventInMonitoringStateTriggersReapply) 
   EXPECT_EQ(harness.dispatcher.apply_request.monitor_positions.front().first, "virtual_new");
 }
 
+TEST(DisplayHelperV2StateMachine, DisplayEventInMonitoringStateWithSameVirtualDeviceDoesNotReapply) {
+  StateMachineHarness harness;
+  display_helper::v2::ApplyRequest request;
+  request.configuration = display_device::SingleDisplayConfiguration {};
+  request.configuration->m_device_id = "virtual_current";
+  request.topology = display_device::ActiveTopology {{request.configuration->m_device_id}};
+  request.virtual_layout = "extended";
+  harness.virtual_display.current_device_id = "virtual_current";
+
+  harness.state_machine.handle_message(display_helper::v2::ApplyCommand {request, harness.cancellation.current_generation()});
+
+  display_helper::v2::ApplyOutcome apply_ok;
+  apply_ok.status = display_helper::v2::ApplyStatus::Ok;
+  harness.dispatcher.apply_completion(apply_ok);
+  harness.drain_messages();
+
+  harness.dispatcher.verification_completion(true);
+  harness.drain_messages();
+
+  ASSERT_EQ(harness.state_machine.state(), display_helper::v2::State::VirtualDisplayMonitoring);
+  const int apply_dispatches_before = harness.dispatcher.apply_dispatch_count;
+
+  harness.state_machine.handle_message(display_helper::v2::DisplayEventMessage {
+    display_helper::v2::DisplayEvent::DisplayChange,
+    harness.cancellation.current_generation()});
+
+  EXPECT_EQ(harness.state_machine.state(), display_helper::v2::State::VirtualDisplayMonitoring);
+  EXPECT_EQ(harness.dispatcher.apply_dispatch_count, apply_dispatches_before);
+}
+
 // Test: Non-virtual display still goes to Waiting state after successful apply.
 TEST(DisplayHelperV2StateMachine, NonVirtualDisplayGoesToWaitingState) {
   StateMachineHarness harness;

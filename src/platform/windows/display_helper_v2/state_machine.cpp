@@ -584,6 +584,17 @@ namespace display_helper::v2 {
 
     // Virtual display monitoring: re-apply configuration when device crashes/recovers
     if (state_ == State::VirtualDisplayMonitoring) {
+      if (current_request_.configuration) {
+        const std::string resolved = virtual_display_.device_id();
+        if (!resolved.empty() && boost::iequals(current_request_.configuration->m_device_id, resolved)) {
+          // Refresh-only mode changes generate the same display events as a
+          // virtual-display restart. The device is still the one we configured,
+          // so reapplying the full request would undo the adaptive refresh rate.
+          BOOST_LOG(debug) << "Display helper: display event while monitoring virtual display ignored (device id unchanged).";
+          return;
+        }
+      }
+
       BOOST_LOG(info) << "Display helper: display event while monitoring virtual display, re-applying configuration.";
       retarget_virtual_display_device_id_if_needed();
       apply_attempt_ = 1;
