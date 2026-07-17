@@ -731,6 +731,9 @@ namespace webrtc_stream {
     struct WebRtcCaptureState {
       std::mutex mutex;
       std::atomic_bool active {false};
+#ifdef _WIN32
+      std::atomic_bool owns_frame_limiter {false};
+#endif
       std::shared_ptr<safe::mail_raw_t> mail;
       std::shared_ptr<rtsp_stream::launch_session_t> launch_session;
       std::thread video_thread;
@@ -2750,6 +2753,14 @@ namespace webrtc_stream {
       webrtc_capture.active.store(false, std::memory_order_release);
 
 #ifdef _WIN32
+      if (webrtc_capture.owns_frame_limiter.exchange(false, std::memory_order_acq_rel)) {
+        const bool keep_rtss_running =
+          rtsp_sessions_active.load(std::memory_order_relaxed) || proc::proc.running() > 0;
+        platf::frame_limiter_streaming_stop(keep_rtss_running);
+      }
+#endif
+
+#ifdef _WIN32
       if (allow_platform_teardown) {
         const bool is_paused = proc::proc.running() > 0;
         if (final_teardown && !is_paused) {
@@ -2980,10 +2991,12 @@ namespace webrtc_stream {
       if (!webrtc_capture.active.load(std::memory_order_acquire)) {
         return;
       }
-      if (rtsp_sessions_active.load(std::memory_order_relaxed)) {
+      if (has_active_sessions()) {
         return;
       }
-      stop_webrtc_capture_locked(true, true);
+      const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
+      BOOST_LOG(debug) << "WebRTC: stopping idle capture (rtsp_active=" << rtsp_active << ')';
+      stop_webrtc_capture_locked(!rtsp_active, true);
     }
 
 #ifdef SUNSHINE_ENABLE_WEBRTC
@@ -4954,6 +4967,7 @@ namespace webrtc_stream {
         .virtual_display_refresh_multiplier = config::frame_limiter.fixed_virtual_display_refresh_multiplier(),
       });
       platf::frame_limiter_streaming_start(policy);
+      webrtc_capture.owns_frame_limiter.store(true, std::memory_order_release);
 #endif
       platf::streaming_will_start();
     }
@@ -5068,8 +5082,6 @@ namespace webrtc_stream {
       if (!rtsp_active) {
         VDISPLAY::restorePhysicalHdrProfiles();
         platf::rtss_set_sync_limiter_override(std::nullopt);
-        const bool keep_rtss_running = proc::proc.running() > 0;
-        platf::frame_limiter_streaming_stop(keep_rtss_running);
       }
   #endif
       if (!rtsp_sessions_active.load(std::memory_order_relaxed)) {
