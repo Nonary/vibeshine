@@ -2849,6 +2849,45 @@ namespace webrtc_stream {
       }
 
       const int effective_app_id = requested_app_id > 0 ? requested_app_id : current_app_id;
+      const bool capture_already_active = webrtc_capture.active.load(std::memory_order_acquire);
+
+      // Match the normal launch path's configuration precedence before deriving any
+      // capture or limiter policy: global config, then application, then client.
+      // An existing capture owns the process-wide runtime config, so additional
+      // WebRTC sessions must reuse it rather than mutating the active stream.
+      bool runtime_overrides_applied = false;
+      bool keep_runtime_overrides = false;
+      auto runtime_overrides_guard = util::fail_guard([&]() {
+        if (!runtime_overrides_applied || keep_runtime_overrides) {
+          return;
+        }
+        config::clear_runtime_config_overrides();
+        if (!rtsp_sessions_active.load(std::memory_order_relaxed) &&
+            !webrtc_capture.active.load(std::memory_order_acquire)) {
+          config::apply_config_now();
+        } else {
+          config::mark_deferred_reload();
+        }
+      });
+
+      if (!rtsp_active && !capture_already_active) {
+        std::unordered_map<std::string, std::string> overrides;
+        if (effective_app_id > 0) {
+          if (auto app_ctx = proc::proc.resolve_app(effective_app_id)) {
+            overrides = app_ctx->config_overrides;
+          }
+        }
+        if (options.client_uuid && !options.client_uuid->empty()) {
+          for (auto &[key, value] : nvhttp::get_client_config_overrides(*options.client_uuid)) {
+            overrides.insert_or_assign(std::move(key), std::move(value));
+          }
+        }
+
+        config::set_runtime_config_overrides(std::move(overrides));
+        runtime_overrides_applied = true;
+        config::apply_config_now();
+      }
+
       auto stream_start_params = compute_stream_start_params(options, effective_app_id);
       const int audio_channels = options.audio_channels.value_or(kDefaultAudioChannels);
       const bool prefer_10bit_sdr = resolve_prefer_10bit_sdr(options);
@@ -2990,6 +3029,7 @@ namespace webrtc_stream {
       webrtc_capture.audio_thread = std::thread([mail, audio_config]() mutable {
         audio::capture(mail, audio_config, nullptr);
       });
+      keep_runtime_overrides = true;
       ++webrtc_capture.pending_session_creations;
       return std::nullopt;
     }
