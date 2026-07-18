@@ -3173,6 +3173,20 @@ namespace webrtc_stream {
       );
     }
 
+    void on_data_channel_state(void *user, int state) {
+      auto *ctx = static_cast<SessionDataChannelContext *>(user);
+      if (!ctx || !ctx->active.load(std::memory_order_acquire) ||
+          state != LWRTC_DATA_CHANNEL_CLOSED) {
+        return;
+      }
+
+      auto session_id = ctx->id;
+      BOOST_LOG(debug) << "WebRTC: input data channel closed; scheduling session teardown id=" << session_id;
+      task_pool.push([session_id = std::move(session_id)]() {
+        close_session(session_id);
+      });
+    }
+
     void on_data_channel(void *user, lwrtc_data_channel_t *channel) {
       auto *ctx = static_cast<SessionDataChannelContext *>(user);
       if (!ctx || !ctx->active.load(std::memory_order_acquire) || !channel) {
@@ -3207,7 +3221,7 @@ namespace webrtc_stream {
           it->second.data_channel_context->last_mouse_move_seq.store(0, std::memory_order_release);
           it->second.data_channel_context->last_mouse_move_at_ms.store(0, std::memory_order_release);
         }
-        lwrtc_data_channel_register_observer(channel, nullptr, &on_data_channel_message, ctx);
+        lwrtc_data_channel_register_observer(channel, &on_data_channel_state, &on_data_channel_message, ctx);
       }
     }
 
