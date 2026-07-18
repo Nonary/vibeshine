@@ -730,7 +730,10 @@ namespace webrtc_stream {
 
     struct WebRtcCaptureState {
       std::mutex mutex;
+      std::condition_variable teardown_cv;
+      bool teardown_in_progress {false};
       std::atomic_bool active {false};
+      std::size_t pending_session_creations {0};
 #ifdef _WIN32
       std::atomic_bool owns_frame_limiter {false};
 #endif
@@ -2817,7 +2820,10 @@ namespace webrtc_stream {
     }
 
     std::optional<std::string> start_webrtc_capture(const SessionOptions &options) {
-      std::lock_guard<std::mutex> lock(webrtc_capture.mutex);
+      std::unique_lock<std::mutex> lock(webrtc_capture.mutex);
+      webrtc_capture.teardown_cv.wait(lock, []() {
+        return !webrtc_capture.teardown_in_progress;
+      });
       const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
       const auto rtsp_config = rtsp_active ? snapshot_rtsp_capture_config() : std::nullopt;
 
@@ -2857,6 +2863,7 @@ namespace webrtc_stream {
         webrtc_capture.config_key &&
         *webrtc_capture.config_key == desired_key
       ) {
+        ++webrtc_capture.pending_session_creations;
         return std::nullopt;
       }
 
@@ -2983,20 +2990,45 @@ namespace webrtc_stream {
       webrtc_capture.audio_thread = std::thread([mail, audio_config]() mutable {
         audio::capture(mail, audio_config, nullptr);
       });
+      ++webrtc_capture.pending_session_creations;
       return std::nullopt;
     }
 
     void stop_webrtc_capture_if_idle() {
-      std::lock_guard<std::mutex> lock(webrtc_capture.mutex);
+      std::unique_lock<std::mutex> lock(webrtc_capture.mutex);
       if (!webrtc_capture.active.load(std::memory_order_acquire)) {
         return;
       }
-      if (has_active_sessions()) {
+      if (
+        has_active_sessions() ||
+        webrtc_capture.pending_session_creations != 0
+      ) {
         return;
       }
       const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
-      BOOST_LOG(debug) << "WebRTC: stopping idle capture (rtsp_active=" << rtsp_active << ')';
-      stop_webrtc_capture_locked(!rtsp_active, true);
+      if (rtsp_active) {
+        if (webrtc_capture.teardown_in_progress) {
+          return;
+        }
+        webrtc_capture.teardown_in_progress = true;
+        BOOST_LOG(debug) << "WebRTC: scheduling idle capture shutdown without disturbing the active RTSP session.";
+        task_pool.push([]() {
+          std::unique_lock<std::mutex> teardown_lock(webrtc_capture.mutex);
+          if (
+            webrtc_capture.active.load(std::memory_order_acquire) &&
+            !has_active_sessions() &&
+            webrtc_capture.pending_session_creations == 0
+          ) {
+            stop_webrtc_capture_locked(false, true);
+          }
+          webrtc_capture.teardown_in_progress = false;
+          teardown_lock.unlock();
+          webrtc_capture.teardown_cv.notify_all();
+        });
+        return;
+      }
+      BOOST_LOG(debug) << "WebRTC: stopping idle capture with final platform teardown.";
+      stop_webrtc_capture_locked(true, true);
     }
 
 #ifdef SUNSHINE_ENABLE_WEBRTC
@@ -4907,9 +4939,21 @@ namespace webrtc_stream {
     const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
     bool first_session = false;
     {
-      std::lock_guard lg {session_mutex};
-      sessions.emplace(snapshot.id, std::move(session));
-      first_session = active_sessions.fetch_add(1, std::memory_order_relaxed) == 0;
+      std::lock_guard<std::mutex> capture_lock(webrtc_capture.mutex);
+      if (webrtc_capture.pending_session_creations == 0) {
+        BOOST_LOG(error) << "WebRTC: create_session called without a capture reservation";
+        return std::nullopt;
+      }
+      --webrtc_capture.pending_session_creations;
+      if (!webrtc_capture.active.load(std::memory_order_acquire)) {
+        BOOST_LOG(error) << "WebRTC: capture stopped before the reserved session could be created";
+        return std::nullopt;
+      }
+      {
+        std::lock_guard lg {session_mutex};
+        sessions.emplace(snapshot.id, std::move(session));
+        first_session = active_sessions.fetch_add(1, std::memory_order_relaxed) == 0;
+      }
     }
     BOOST_LOG(debug) << "WebRTC: create_session exit id=" << snapshot.id;
 
