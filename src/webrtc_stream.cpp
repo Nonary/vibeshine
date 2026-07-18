@@ -4295,12 +4295,20 @@ namespace webrtc_stream {
                 }
                 return true;
               };
+              // Dropping a pre-encoded delta frame breaks the decoder reference chain. The
+              // balanced and smoothness modes therefore recover pacing drift by rebasing the
+              // send clock and preserving the queued chain. Latency mode may still choose to
+              // skip frames, but never while waiting for the IDR needed to resume delivery.
+              auto allow_encoded_frame_skip = [&]() {
+                return pacing.mode == video_pacing_mode_e::latency && !waiting_for_keyframe;
+              };
               if (session.video_pacing_state.recovery_prefer_latest_until &&
                   now >= *session.video_pacing_state.recovery_prefer_latest_until) {
                 session.video_pacing_state.recovery_prefer_latest_until.reset();
               }
-              if (auto age = oldest_queued_age(); age && *age > max_frame_age) {
-                while (session.video_frames.size() > 0) {
+              if (auto age = oldest_queued_age();
+                  allow_encoded_frame_skip() && age && *age > max_frame_age) {
+                while (session.video_frames.size() > 0 && !waiting_for_keyframe) {
                   auto current_age = oldest_queued_age();
                   if (!current_age || *current_age <= max_frame_age) {
                     break;
@@ -4309,23 +4317,17 @@ namespace webrtc_stream {
                 }
                 session.video_pacing_state.recovery_prefer_latest_until = now + max_frame_age;
               }
-              const bool drift_reset_recently =
-                session.video_pacing_state.last_drift_reset &&
-                now - *session.video_pacing_state.last_drift_reset <= max_frame_age;
               auto oldest_age_after = oldest_queued_age();
               const bool behind =
                 session.video_frames.size() >= kMaxVideoFrames ||
-                (oldest_age_after && *oldest_age_after > max_frame_age) ||
-                drift_reset_recently;
+                (oldest_age_after && *oldest_age_after > max_frame_age);
               if (pacing.mode == video_pacing_mode_e::balanced && behind) {
-                while (session.video_frames.size() > 1) {
-                  drop_oldest_frame(waiting_for_keyframe, "encoded pacing backlog");
-                }
-                session.video_pacing_state.recovery_prefer_latest_until = now + max_frame_age;
+                session.video_pacing_state.anchor_capture.reset();
+                session.video_pacing_state.anchor_send.reset();
+                session.video_pacing_state.last_drift_reset = now;
+                session.video_pacing_state.recovery_prefer_latest_until.reset();
+                session.last_video_push.reset();
               }
-              const bool recovery_active =
-                session.video_pacing_state.recovery_prefer_latest_until &&
-                now < *session.video_pacing_state.recovery_prefer_latest_until;
               auto handle_frame = [&](EncodedVideoFrame &&frame) {
                 if (waiting_for_keyframe && !frame.idr) {
                   session.state.video_dropped++;
@@ -4371,7 +4373,7 @@ namespace webrtc_stream {
                                 (capture_time - *session.video_pacing_state.anchor_capture);
                 }
                 const bool target_too_old = target_send + max_frame_age < now;
-                if (pacing.drop_old_frames && target_too_old && !session.video_frames.empty()) {
+                if (allow_encoded_frame_skip() && target_too_old && !session.video_frames.empty()) {
                   session.state.video_dropped++;
                   mark_video_dependency_gap(session, now, "stale encoded frame send skip");
                   waiting_for_keyframe = true;
@@ -4446,10 +4448,10 @@ namespace webrtc_stream {
                     prefer_latest = true;
                     break;
                   case video_pacing_mode_e::balanced:
-                    prefer_latest = behind || recovery_active;
-                    break;
                   case video_pacing_mode_e::smoothness:
-                    prefer_latest = recovery_active;
+                    // Skipping an encoded frame here would invalidate every following delta
+                    // frame. Preserve the chain and let handle_frame() rebase late pacing.
+                    prefer_latest = false;
                     break;
                 }
               }
