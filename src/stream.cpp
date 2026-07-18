@@ -166,7 +166,7 @@ namespace stream {
           return;
         }
 
-        if (session::running_sessions.load(std::memory_order_acquire) != 0 || webrtc_stream::has_active_sessions()) {
+        if (session::running_sessions.load(std::memory_order_acquire) != 0 || webrtc_stream::has_active_or_pending_sessions()) {
           return;
         }
 
@@ -779,7 +779,7 @@ namespace stream {
   }
 
   bool stream_start_actions_still_needed() {
-    return session::running_sessions.load(std::memory_order_acquire) != 0 || webrtc_stream::has_active_sessions();
+    return session::running_sessions.load(std::memory_order_acquire) != 0 || webrtc_stream::has_active_or_pending_sessions();
   }
 
   void defer_stream_start_actions(deferred_stream_start_t deferred) {
@@ -2570,7 +2570,7 @@ namespace stream {
 #endif
         }
 
-        const bool webrtc_active = webrtc_stream::has_active_sessions();
+        const bool webrtc_active = webrtc_stream::has_active_or_pending_sessions();
 #ifdef _WIN32
         // App teardown may have reached us before the RTSP session finished.
         // Consume that deferred request only after the app and every stream are gone.
@@ -2721,7 +2721,7 @@ namespace stream {
 
       // If this is the first session, invoke the platform callbacks
       if (++running_sessions == 1) {
-        if (!webrtc_stream::has_active_sessions()) {
+        if (!webrtc_stream::has_active_or_pending_sessions()) {
           webrtc_stream::set_rtsp_capture_config(session.config.monitor, session.config.audio);
         }
         webrtc_stream::set_rtsp_sessions_active(true);

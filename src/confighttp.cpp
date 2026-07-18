@@ -251,7 +251,7 @@ namespace confighttp {
     }
 
     bool has_active_stream_sessions() {
-      return rtsp_stream::session_count() > 0 || webrtc_stream::has_active_sessions();
+      return rtsp_stream::session_count() > 0 || webrtc_stream::has_active_or_pending_sessions();
     }
 
     bool is_rtx_hdr_live_key(std::string_view key) {
@@ -3004,6 +3004,18 @@ namespace confighttp {
         if (input.contains("app_id")) {
           options.app_id = input.at("app_id").get<int>();
         }
+        if (input.contains("client_uuid")) {
+          if (!input.at("client_uuid").is_string()) {
+            bad_request(response, request, "client_uuid must be a string");
+            return;
+          }
+          auto client_uuid = input.at("client_uuid").get<std::string>();
+          if (client_uuid.empty() || !nvhttp::has_client_uuid(client_uuid)) {
+            bad_request(response, request, "Unknown paired client UUID");
+            return;
+          }
+          options.client_uuid = std::move(client_uuid);
+        }
         if (input.contains("resume")) {
           options.resume = input.at("resume").get<bool>();
         }
@@ -3089,7 +3101,7 @@ namespace confighttp {
 #ifdef _WIN32
       // Lifecycle gap: if capture start fails after a virtual display was created/applied but
       // before a session exists, ensure we don't leave the virtual display behind.
-      if (rtsp_stream::session_count() == 0 && !webrtc_stream::has_active_sessions()) {
+      if (rtsp_stream::session_count() == 0 && !webrtc_stream::has_active_or_pending_sessions()) {
         (void) platf::virtual_display_cleanup::run(
           "webrtc_session_start_failed",
           config::video.dd.config_revert_on_disconnect

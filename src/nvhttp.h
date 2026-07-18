@@ -201,6 +201,7 @@ namespace nvhttp {
    * @return true if the client was found and updated.
    */
   bool set_client_enabled(std::string_view uuid, bool enabled);
+  bool has_client_uuid(std::string_view uuid);
   std::string get_cert_by_uuid(std::string_view uuid);
 
   /**

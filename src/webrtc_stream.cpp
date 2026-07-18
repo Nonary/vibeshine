@@ -733,7 +733,7 @@ namespace webrtc_stream {
       std::condition_variable teardown_cv;
       bool teardown_in_progress {false};
       std::atomic_bool active {false};
-      std::size_t pending_session_creations {0};
+      std::atomic_size_t pending_session_creations {0};
 #ifdef _WIN32
       std::atomic_bool owns_frame_limiter {false};
 #endif
@@ -2902,7 +2902,7 @@ namespace webrtc_stream {
         webrtc_capture.config_key &&
         *webrtc_capture.config_key == desired_key
       ) {
-        ++webrtc_capture.pending_session_creations;
+        webrtc_capture.pending_session_creations.fetch_add(1, std::memory_order_release);
         return std::nullopt;
       }
 
@@ -3033,7 +3033,7 @@ namespace webrtc_stream {
         audio::capture(mail, audio_config, nullptr);
       });
       keep_runtime_overrides = true;
-      ++webrtc_capture.pending_session_creations;
+      webrtc_capture.pending_session_creations.fetch_add(1, std::memory_order_release);
       return std::nullopt;
     }
 
@@ -3044,7 +3044,7 @@ namespace webrtc_stream {
       }
       if (
         has_active_sessions() ||
-        webrtc_capture.pending_session_creations != 0
+        webrtc_capture.pending_session_creations.load(std::memory_order_acquire) != 0
       ) {
         return;
       }
@@ -3060,7 +3060,7 @@ namespace webrtc_stream {
           if (
             webrtc_capture.active.load(std::memory_order_acquire) &&
             !has_active_sessions() &&
-            webrtc_capture.pending_session_creations == 0
+            webrtc_capture.pending_session_creations.load(std::memory_order_acquire) == 0
           ) {
             stop_webrtc_capture_locked(false, true);
           }
@@ -4945,6 +4945,13 @@ namespace webrtc_stream {
     return active_sessions.load(std::memory_order_relaxed) > 0;
   }
 
+  bool has_active_or_pending_sessions() {
+    if (webrtc_capture.pending_session_creations.load(std::memory_order_acquire) > 0) {
+      return true;
+    }
+    return active_sessions.load(std::memory_order_acquire) > 0;
+  }
+
   std::optional<std::string> ensure_capture_started(const SessionOptions &options) {
     return start_webrtc_capture(options);
   }
@@ -4999,12 +5006,12 @@ namespace webrtc_stream {
     bool first_session = false;
     {
       std::lock_guard<std::mutex> capture_lock(webrtc_capture.mutex);
-      if (webrtc_capture.pending_session_creations == 0) {
+      if (webrtc_capture.pending_session_creations.load(std::memory_order_acquire) == 0) {
         BOOST_LOG(error) << "WebRTC: create_session called without a capture reservation";
         return std::nullopt;
       }
-      --webrtc_capture.pending_session_creations;
       if (!webrtc_capture.active.load(std::memory_order_acquire)) {
+        webrtc_capture.pending_session_creations.fetch_sub(1, std::memory_order_release);
         BOOST_LOG(error) << "WebRTC: capture stopped before the reserved session could be created";
         return std::nullopt;
       }
@@ -5013,6 +5020,7 @@ namespace webrtc_stream {
         sessions.emplace(snapshot.id, std::move(session));
         first_session = active_sessions.fetch_add(1, std::memory_order_relaxed) == 0;
       }
+      webrtc_capture.pending_session_creations.fetch_sub(1, std::memory_order_release);
     }
     BOOST_LOG(debug) << "WebRTC: create_session exit id=" << snapshot.id;
 

@@ -3320,6 +3320,16 @@ namespace nvhttp {
     return updated;
   }
 
+  bool has_client_uuid(std::string_view uuid) {
+    std::lock_guard<std::mutex> lock(client_mutex);
+    for (const auto &named_cert : client_root.named_devices) {
+      if (named_cert.uuid == uuid) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   std::string get_cert_by_uuid(std::string_view uuid) {
     std::lock_guard<std::mutex> lock(client_mutex);
     for (const auto &named_cert : client_root.named_devices) {
@@ -3348,7 +3358,16 @@ namespace nvhttp {
     std::lock_guard<std::mutex> lock(client_mutex);
     for (const auto &named_cert : client_root.named_devices) {
       if (named_cert.uuid == uuid) {
-        return named_cert.config_overrides;
+        auto overrides = named_cert.config_overrides;
+#ifdef _WIN32
+        if (!named_cert.hdr_profile.empty() && !overrides.contains("rtx_hdr_peak_brightness")) {
+          if (const auto profile_peak = VDISPLAY::hdr_profile_peak_luminance_nits(named_cert.hdr_profile)) {
+            const auto effective_peak = std::clamp<std::uint32_t>(*profile_peak, 400, 2000);
+            overrides.insert_or_assign("rtx_hdr_peak_brightness", std::to_string(effective_peak));
+          }
+        }
+#endif
+        return overrides;
       }
     }
     return {};
