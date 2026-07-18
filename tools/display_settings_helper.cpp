@@ -5055,6 +5055,11 @@ namespace {
     try {
       auto j = nlohmann::json::parse(json);
       if (j.is_object()) {
+        // v2 capability detection adds a backward-compatible correlation
+        // token to every APPLY.  The legacy engine has no asynchronous
+        // verification phase, so discard it before deserializing the public
+        // display configuration and retain the original untagged response.
+        j.erase("sunshine_apply_id");
         if (j.contains("wa_hdr_toggle")) {
           wa_hdr_toggle = j["wa_hdr_toggle"].get<bool>();
           j.erase("wa_hdr_toggle");

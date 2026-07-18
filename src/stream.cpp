@@ -2447,7 +2447,7 @@ namespace stream {
       BOOST_LOG(debug) << "Display helper: waiting for apply/validation gate before starting capture.";
       rtsp_stream::launch_session_t::display_helper_gate_status_e gate_status {};
       try {
-        constexpr auto kGateTimeout = std::chrono::seconds(7);
+        constexpr auto kGateTimeout = display_helper_integration::kApplyVerificationGateWaitTimeout;
         if (session->display_helper_gate.wait_for(kGateTimeout) == std::future_status::ready) {
           gate_status = session->display_helper_gate.get();
         } else {

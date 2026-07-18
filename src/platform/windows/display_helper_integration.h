@@ -6,17 +6,29 @@
 
 #include "src/config.h"
 #include "src/display_helper_builder.h"
+#include "src/platform/windows/display_helper_v2/timing.h"
 #include "src/rtsp.h"
 
 #include <display_device/types.h>
 #include <chrono>
+#include <cstdint>
 #include <optional>
 #include <vector>
 
 namespace display_helper_integration {
+  /// Per-APPLY identity for the v2 capture gate. It is intentionally owned by
+  /// the launching session rather than looked up through mutable global state.
+  struct ApplyVerificationTicket {
+    std::uint64_t generation {0};
+    std::uint64_t helper_request_id {0};
+    std::uint64_t client_wait_generation {0};
+    std::uint64_t connection_generation {0};
+    bool uses_v2_helper {false};
+  };
+
   // Launch the helper (if needed) and process the provided builder request.
   // Returns true if the helper accepted the command; false to allow fallback.
-  bool apply(const DisplayApplyRequest &request);
+  bool apply(const DisplayApplyRequest &request, ApplyVerificationTicket *verification_ticket = nullptr);
 
   // Returns true if a deferred APPLY request is currently queued.
   bool has_pending_apply();
@@ -64,9 +76,17 @@ namespace display_helper_integration {
     Unknown
   };
 
+  // Keep capture gated until the same conservative whole-operation envelope
+  // used by the v2 IPC acknowledgement has finished.
+  inline constexpr auto kApplyVerificationTimeout = display_helper::v2::timing::kApplyOperationEnvelope;
+  inline constexpr auto kApplyVerificationGateWaitTimeout =
+    kApplyVerificationTimeout + display_helper::v2::timing::kApplyGateConsumerSlack;
+
   // Wait for helper verification to finish after APPLY (v2 engine only).
   // Returns Unknown on timeout, legacy engine, or when verification is unavailable.
-  ApplyVerificationStatus wait_for_apply_verification(std::chrono::milliseconds timeout);
+  ApplyVerificationStatus wait_for_apply_verification(
+    const ApplyVerificationTicket &ticket,
+    std::chrono::milliseconds timeout);
 
   // True when the most recent successful APPLY is verified and has no pending
   // HDR/topology workaround that requires the settling fallback.
