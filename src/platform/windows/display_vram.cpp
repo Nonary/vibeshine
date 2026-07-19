@@ -2516,6 +2516,7 @@ namespace platf::dxgi {
     img->capture_mutex.reset();
     img->data = nullptr;
     img->encoder_texture_handle.reset();
+    img->frame_lease.reset();
 
     // Initialize format-dependent fields
     img->pixel_pitch = get_pixel_pitch();
