@@ -193,13 +193,9 @@ namespace platf::dxgi {
         _frame_metadata = nullptr;
       }
 
-      clear_deferred_releases();
       _shared_textures.fill(nullptr);
       _keyed_mutexes.fill(nullptr);
-      _ready_fences.fill(nullptr);
-      _capture_context4 = nullptr;
       _shared_texture_handles.fill(nullptr);
-      _ready_fence_handles.fill(nullptr);
       _frame_ready_event.close();
       _frame_metadata_mapping.close();
 
@@ -267,13 +263,9 @@ namespace platf::dxgi {
     }
     _frame_ready_event.close();
     _frame_metadata_mapping.close();
-    clear_deferred_releases();
     _shared_textures.fill(nullptr);
     _keyed_mutexes.fill(nullptr);
-    _ready_fences.fill(nullptr);
-    _capture_context4 = nullptr;
     _shared_texture_handles.fill(nullptr);
-    _ready_fence_handles.fill(nullptr);
     _locked_texture_slot = WGC_IPC_TEXTURE_SLOT_COUNT;
     _locked_frame_id = 0;
     _last_frame_id = 0;
@@ -476,13 +468,9 @@ namespace platf::dxgi {
         UnmapViewOfFile(_frame_metadata);
         _frame_metadata = nullptr;
       }
-      clear_deferred_releases();
       _shared_textures.fill(nullptr);
       _keyed_mutexes.fill(nullptr);
-      _ready_fences.fill(nullptr);
-      _capture_context4 = nullptr;
       _shared_texture_handles.fill(nullptr);
-      _ready_fence_handles.fill(nullptr);
       _frame_ready_event.close();
       _frame_metadata_mapping.close();
       if (_process_helper) {
@@ -621,14 +609,13 @@ namespace platf::dxgi {
   }
 
   capture_e ipc_session_t::lock_frame(winrt::com_ptr<ID3D11Texture2D> &gpu_tex_out, uint64_t &frame_qpc_out) {
-    if (!_shared_textures[0] || !_ready_fences[0] || !_frame_metadata || !_capture_context4) {
+    if (!_shared_textures[0] || !_keyed_mutexes[0] || !_frame_metadata) {
       _force_reinit = true;
       _initialized = false;
       return capture_e::reinit;
     }
 
-    process_deferred_releases();
-
+    std::chrono::steady_clock::duration mutex_wait {};
     for (size_t attempt = 0; attempt < WGC_IPC_TEXTURE_SLOT_COUNT * 2; ++attempt) {
       frame_metadata_snapshot_t snapshot;
       if (!read_frame_metadata_snapshot(_frame_metadata, snapshot) ||
@@ -651,19 +638,22 @@ namespace platf::dxgi {
         continue;
       }
 
-      const HRESULT hr = _capture_context4->Wait(_ready_fences[slot].get(), static_cast<uint64_t>(slot_snapshot.frame_id));
-      if (FAILED(hr)) {
-        BOOST_LOG(error) << "Failed to queue WGC producer-ready wait [0x"sv << util::hex(hr).to_string_view() << "]; forcing re-init";
+      const auto mutex_wait_start = std::chrono::steady_clock::now();
+      const HRESULT hr = _keyed_mutexes[slot]->AcquireSync(0, 3000);
+      mutex_wait += std::chrono::steady_clock::now() - mutex_wait_start;
+      if (hr == WAIT_ABANDONED) {
+        BOOST_LOG(error) << "Helper process abandoned a WGC IPC slot mutex, implying it may have crashed or was forcefully terminated.";
+        (void) _keyed_mutexes[slot]->ReleaseSync(0);
         release_frame_slot(slot, slot_snapshot.frame_id);
         _should_swap_to_dxgi = false;
         _force_reinit = true;
         _initialized = false;
         return capture_e::reinit;
       }
-      const HRESULT ownership_hr = _keyed_mutexes[slot]->AcquireSync(0, 3000);
-      if (ownership_hr != S_OK && ownership_hr != WAIT_ABANDONED) {
-        BOOST_LOG(error) << "Failed to acquire WGC RAM ring ownership [0x"sv << util::hex(ownership_hr).to_string_view() << "]; forcing re-init";
+      if (hr != S_OK) {
+        BOOST_LOG(error) << "Failed to acquire WGC IPC slot mutex [0x"sv << util::hex(hr).to_string_view() << "]; forcing re-init";
         release_frame_slot(slot, slot_snapshot.frame_id);
+        _should_swap_to_dxgi = false;
         _force_reinit = true;
         _initialized = false;
         return capture_e::reinit;
@@ -677,9 +667,15 @@ namespace platf::dxgi {
       frame_qpc_out = _frame_qpc;
 
       const auto frame_count = _frames_acquired.fetch_add(1, std::memory_order_relaxed) + 1;
-      if (frame_count == 1 || frame_count % 600 == 0) {
-        BOOST_LOG(debug) << "WGC IPC fenced lock: frame=" << frame_count
-                         << " frame_id=" << _last_frame_id;
+      const auto mutex_wait_ms = std::chrono::duration<double, std::milli>(mutex_wait).count();
+      if (mutex_wait_ms > 1.0) {
+        _slow_mutex_waits.fetch_add(1, std::memory_order_relaxed);
+      }
+      if (frame_count == 1 || frame_count % 600 == 0 || mutex_wait_ms > 1.0) {
+        BOOST_LOG(debug) << "WGC IPC lock timing: frame=" << frame_count
+                         << " mutex_wait_ms=" << mutex_wait_ms
+                         << " frame_id=" << _last_frame_id
+                         << " slow_mutex_waits=" << _slow_mutex_waits.load(std::memory_order_relaxed);
       }
 
       return capture_e::ok;
@@ -690,13 +686,11 @@ namespace platf::dxgi {
 
   capture_e ipc_session_t::claim_frame(shared_frame_t &frame_out) {
     frame_out = {};
-    if (!_shared_textures[0] || !_ready_fences[0] || !_frame_metadata) {
+    if (!_shared_textures[0] || !_keyed_mutexes[0] || !_frame_metadata) {
       _force_reinit = true;
       _initialized = false;
       return capture_e::reinit;
     }
-
-    process_deferred_releases();
 
     for (size_t attempt = 0; attempt < WGC_IPC_TEXTURE_SLOT_COUNT * 2; ++attempt) {
       frame_metadata_snapshot_t snapshot;
@@ -719,13 +713,14 @@ namespace platf::dxgi {
         release_frame_slot(slot, slot_snapshot.frame_id);
         continue;
       }
-      if (!_shared_texture_handles[slot] || !_ready_fence_handles[slot]) {
-        BOOST_LOG(error) << "Missing direct-ring handles for WGC slot " << slot;
+      if (!_shared_texture_handles[slot]) {
+        BOOST_LOG(error) << "Missing encoder handle for WGC shared texture-ring slot " << slot;
         release_frame_slot(slot, slot_snapshot.frame_id);
         _force_reinit = true;
         _initialized = false;
         return capture_e::reinit;
       }
+
       auto session = shared_from_this();
       std::shared_ptr<wgc_texture_slot_release_sink_t> release_sink {
         std::move(session),
@@ -735,11 +730,9 @@ namespace platf::dxgi {
       frame_out.texture = _shared_textures[slot];
       frame_out.keyed_mutex = _keyed_mutexes[slot];
       frame_out.encoder_texture_handle = _shared_texture_handles[slot];
-      frame_out.ready_fence_handle = _ready_fence_handles[slot];
       frame_out.lease = wgc_texture_slot_lease_t {std::move(release_sink), slot, slot_snapshot.frame_id};
       frame_out.texture_slot = slot;
       frame_out.frame_id = static_cast<uint64_t>(slot_snapshot.frame_id);
-      frame_out.ready_value = frame_out.frame_id;
       frame_out.frame_qpc = static_cast<uint64_t>(slot_snapshot.frame_qpc);
 
       _last_frame_id = slot_snapshot.frame_id;
@@ -755,9 +748,8 @@ namespace platf::dxgi {
     if (_locked_texture_slot < WGC_IPC_TEXTURE_SLOT_COUNT) {
       const HRESULT hr = _keyed_mutexes[_locked_texture_slot]->ReleaseSync(0);
       if (FAILED(hr)) {
-        BOOST_LOG(error) << "Failed to release WGC RAM ring ownership [0x"sv << util::hex(hr).to_string_view() << ']';
+        BOOST_LOG(warning) << "Failed to release WGC IPC slot mutex [0x"sv << util::hex(hr).to_string_view() << ']';
         _force_reinit = true;
-        _initialized = false;
       } else {
         release_frame_slot(_locked_texture_slot, _locked_frame_id);
       }
@@ -779,67 +771,6 @@ namespace platf::dxgi {
     (void) platf::dxgi::release_wgc_texture_slot(slot_metadata, frame_id);
   }
 
-  namespace {
-    bool all_consumer_fences_retired(const std::vector<wgc_consumer_completion_t> &completions) {
-      return std::all_of(completions.begin(), completions.end(), [](const wgc_consumer_completion_t &completion) {
-        // A removed device reports UINT64_MAX, which correctly treats the read as
-        // finished: the slot contents are unreachable and reinit is already pending.
-        return completion.fence->GetCompletedValue() >= completion.value;
-      });
-    }
-  }  // namespace
-
-  void ipc_session_t::defer_slot_release(wgc_texture_slot_lease_t lease, std::vector<wgc_consumer_completion_t> completions) {
-    if (lease.slot() >= WGC_IPC_TEXTURE_SLOT_COUNT) {
-      return;
-    }
-
-    // Fast path: consumer GPU reads already retired, so the lease destructor can
-    // return the slot right now without ever blocking the calling thread.
-    if (all_consumer_fences_retired(completions)) {
-      return;
-    }
-
-    // The lease's sink holds a strong reference to this session; storing it inside
-    // the session would create a cycle. Keep only the slot coordinates and release
-    // through release_frame_slot(), which ignores stale generations after a reinit.
-    deferred_slot_release_t entry;
-    entry.slot = lease.slot();
-    entry.frame_id = lease.frame_id();
-    entry.completions = std::move(completions);
-    entry.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    lease.abandon();
-
-    std::lock_guard lock(_deferred_mutex);
-    _deferred_releases.push_back(std::move(entry));
-  }
-
-  void ipc_session_t::process_deferred_releases() {
-    std::lock_guard lock(_deferred_mutex);
-    if (_deferred_releases.empty()) {
-      return;
-    }
-
-    const auto now = std::chrono::steady_clock::now();
-    std::erase_if(_deferred_releases, [&](deferred_slot_release_t &entry) {
-      if (all_consumer_fences_retired(entry.completions)) {
-        release_frame_slot(entry.slot, entry.frame_id);
-        return true;
-      }
-      if (now >= entry.deadline) {
-        BOOST_LOG(error) << "WGC consumer completion fence timed out; quarantining ring slot " << entry.slot;
-        invalidate_gpu_sync();
-        return true;
-      }
-      return false;
-    });
-  }
-
-  void ipc_session_t::clear_deferred_releases() {
-    std::lock_guard lock(_deferred_mutex);
-    _deferred_releases.clear();
-  }
-
   bool ipc_session_t::setup_shared_resources_from_shared_handles(const shared_handle_data_t &handle_data) {
     if (!_device) {
       BOOST_LOG(error) << "No D3D11 device available for WGC shared-resource setup";
@@ -854,12 +785,6 @@ namespace platf::dxgi {
     for (HANDLE texture_handle : handle_data.texture_handles) {
       if (!texture_handle || texture_handle == INVALID_HANDLE_VALUE) {
         BOOST_LOG(error) << "Invalid WGC shared texture-ring handle data provided";
-        return false;
-      }
-    }
-    for (HANDLE fence_handle : handle_data.ready_fence_handles) {
-      if (!fence_handle || fence_handle == INVALID_HANDLE_VALUE) {
-        BOOST_LOG(error) << "Invalid WGC producer-ready fence handle data provided";
         return false;
       }
     }
@@ -892,15 +817,10 @@ namespace platf::dxgi {
     };
 
     std::array<std::shared_ptr<winrt::handle>, WGC_IPC_TEXTURE_SLOT_COUNT> duplicated_texture_handles;
-    std::array<std::shared_ptr<winrt::handle>, WGC_IPC_TEXTURE_SLOT_COUNT> duplicated_ready_fence_handles;
     for (size_t slot = 0; slot < WGC_IPC_TEXTURE_SLOT_COUNT; ++slot) {
       auto handle = duplicate_helper_handle(handle_data.texture_handles[slot], "texture-ring slot");
       if (handle) {
         duplicated_texture_handles[slot] = std::make_shared<winrt::handle>(std::move(handle));
-      }
-      auto fence_handle = duplicate_helper_handle(handle_data.ready_fence_handles[slot], "producer-ready fence");
-      if (fence_handle) {
-        duplicated_ready_fence_handles[slot] = std::make_shared<winrt::handle>(std::move(fence_handle));
       }
     }
     auto duplicated_event_handle = duplicate_helper_handle(handle_data.frame_event_handle, "frame event");
@@ -913,33 +833,15 @@ namespace platf::dxgi {
         return false;
       }
     }
-    for (const auto &fence_handle : duplicated_ready_fence_handles) {
-      if (!fence_handle) {
-        return false;
-      }
-    }
 
     auto device1 = _device.try_as<ID3D11Device1>();
     if (!device1) {
       BOOST_LOG(error) << "Failed to get ID3D11Device1 interface for duplicated handle";
       return false;
     }
-    auto device5 = _device.try_as<ID3D11Device5>();
-    if (!device5) {
-      BOOST_LOG(error) << "Failed to get ID3D11Device5 interface for WGC fences";
-      return false;
-    }
-    winrt::com_ptr<ID3D11DeviceContext> immediate_context;
-    _device->GetImmediateContext(immediate_context.put());
-    auto capture_context4 = immediate_context.try_as<ID3D11DeviceContext4>();
-    if (!capture_context4) {
-      BOOST_LOG(error) << "Failed to get ID3D11DeviceContext4 interface for WGC fences";
-      return false;
-    }
 
     std::array<winrt::com_ptr<ID3D11Texture2D>, WGC_IPC_TEXTURE_SLOT_COUNT> textures;
     std::array<winrt::com_ptr<IDXGIKeyedMutex>, WGC_IPC_TEXTURE_SLOT_COUNT> keyed_mutexes;
-    std::array<winrt::com_ptr<ID3D11Fence>, WGC_IPC_TEXTURE_SLOT_COUNT> ready_fences;
     for (size_t slot = 0; slot < WGC_IPC_TEXTURE_SLOT_COUNT; ++slot) {
       winrt::com_ptr<IUnknown> unknown;
       HRESULT hr = device1->OpenSharedResource1(duplicated_texture_handles[slot]->get(), __uuidof(IUnknown), winrt::put_abi(unknown));
@@ -960,12 +862,7 @@ namespace platf::dxgi {
       }
       keyed_mutexes[slot] = textures[slot].try_as<IDXGIKeyedMutex>();
       if (!keyed_mutexes[slot]) {
-        BOOST_LOG(error) << "Failed to query WGC ring ownership mutex for slot " << slot;
-        return false;
-      }
-      hr = device5->OpenSharedFence(duplicated_ready_fence_handles[slot]->get(), __uuidof(ID3D11Fence), ready_fences[slot].put_void());
-      if (FAILED(hr) || !ready_fences[slot]) {
-        BOOST_LOG(error) << "Failed to open WGC producer-ready fence for slot " << slot << ": 0x" << std::hex << hr;
+        BOOST_LOG(error) << "Failed to get keyed mutex interface from WGC shared texture-ring slot " << slot;
         return false;
       }
     }
@@ -988,10 +885,7 @@ namespace platf::dxgi {
 
     _shared_textures = std::move(textures);
     _keyed_mutexes = std::move(keyed_mutexes);
-    _ready_fences = std::move(ready_fences);
-    _capture_context4 = std::move(capture_context4);
     _shared_texture_handles = std::move(duplicated_texture_handles);
-    _ready_fence_handles = std::move(duplicated_ready_fence_handles);
     _width = handle_data.width;
     _height = handle_data.height;
 

@@ -37,7 +37,6 @@
 
 // platform includes
 #include <d3d11.h>
-#include <d3d11_4.h>
 #include <dxgi1_2.h>
 #include <inspectable.h>  // For IInspectable
 #include <KnownFolders.h>
@@ -805,16 +804,14 @@ public:
  * @brief Shared resource management class to handle texture, memory mapping, and events.
  *
  * This class manages shared D3D11 resources for inter-process communication with the main
- * Sunshine process. It creates shared ring textures and producer-ready fences plus a shared
- * metadata view and frame-ready event for realtime cross-process delivery.
+ * Sunshine process. It creates a shared texture with a keyed mutex plus a shared metadata
+ * view and frame-ready event for realtime cross-process delivery.
  */
 class SharedResourceManager {
 private:
   std::array<winrt::com_ptr<ID3D11Texture2D>, platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT> _shared_textures;  ///< Shared D3D11 texture ring for frame data
-  std::array<winrt::com_ptr<IDXGIKeyedMutex>, platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT> _keyed_mutexes;  ///< Required ownership primitive for NT-shared D3D11 textures.
+  std::array<winrt::com_ptr<IDXGIKeyedMutex>, platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT> _keyed_mutexes;  ///< Keyed mutexes for synchronization
   std::array<winrt::handle, platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT> _shared_handles;  ///< Shared handles for cross-process sharing
-  std::array<winrt::com_ptr<ID3D11Fence>, platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT> _ready_fences;  ///< Per-slot producer-ready timelines.
-  std::array<winrt::handle, platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT> _ready_fence_handles;  ///< Shared handles for producer-ready fences.
   winrt::handle _frame_ready_event;  ///< Auto-reset event signaled after each published frame
   winrt::handle _frame_metadata_mapping;  ///< Shared memory containing latest frame metadata
   platf::dxgi::frame_metadata_t *_frame_metadata = nullptr;  ///< Mapped frame metadata view
@@ -848,7 +845,7 @@ public:
   SharedResourceManager &operator=(SharedResourceManager &&) = delete;
 
   /**
-   * @brief Creates a shared D3D11 texture for fenced inter-process sharing.
+   * @brief Creates a shared D3D11 texture with keyed mutex for inter-process sharing.
    *
    * @param device Pointer to the D3D11 device used for texture creation.
    * @param texture_width Width of the texture in pixels.
@@ -870,11 +867,7 @@ public:
     tex_desc.Usage = D3D11_USAGE_DEFAULT;
     tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
     // Use NT shared handles exclusively
-    // D3D11 NT shared handles require the keyed-mutex flag. Explicit fences
-    // still define producer readiness and final consumer completion; the
-    // keyed mutex satisfies the resource ownership contract while each device
-    // accesses the shared allocation.
-    tex_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    tex_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 
     HRESULT hr = device->CreateTexture2D(&tex_desc, nullptr, _shared_textures[slot].put());
     if (FAILED(hr)) {
@@ -884,10 +877,18 @@ public:
     return true;
   }
 
+  /**
+   * @brief Acquires a keyed mutex interface from the shared texture for synchronization.
+   * @return true if the keyed mutex was successfully acquired; false otherwise.
+   */
   bool create_keyed_mutex(size_t slot) {
+    if (!_shared_textures[slot]) {
+      return false;
+    }
+
     _keyed_mutexes[slot] = _shared_textures[slot].try_as<IDXGIKeyedMutex>();
     if (!_keyed_mutexes[slot]) {
-      BOOST_LOG(error) << "Failed to query keyed mutex for WGC ring slot " << slot;
+      BOOST_LOG(error) << "Failed to get keyed mutex";
       return false;
     }
     return true;
@@ -914,27 +915,6 @@ public:
     HRESULT hr = dxgi_resource1->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, _shared_handles[slot].put());
     if (FAILED(hr)) {
       BOOST_LOG(error) << "Failed to create shared handle: " << hr;
-      return false;
-    }
-    return true;
-  }
-
-  bool create_ready_fence(const winrt::com_ptr<ID3D11Device> &device, size_t slot) {
-    auto device5 = device.try_as<ID3D11Device5>();
-    if (!device5) {
-      BOOST_LOG(error) << "WGC direct-ring synchronization requires ID3D11Device5";
-      return false;
-    }
-
-    HRESULT hr = device5->CreateFence(0, D3D11_FENCE_FLAG_SHARED, __uuidof(ID3D11Fence), _ready_fences[slot].put_void());
-    if (FAILED(hr)) {
-      BOOST_LOG(error) << "Failed to create WGC producer-ready fence: " << std::format(": 0x{:08X}", hr);
-      return false;
-    }
-
-    hr = _ready_fences[slot]->CreateSharedHandle(nullptr, GENERIC_ALL, nullptr, _ready_fence_handles[slot].put());
-    if (FAILED(hr)) {
-      BOOST_LOG(error) << "Failed to share WGC producer-ready fence: " << std::format(": 0x{:08X}", hr);
       return false;
     }
     return true;
@@ -986,7 +966,7 @@ public:
   }
 
   /**
-   * @brief Initializes all shared resource components: textures, fences, handles, and signals.
+   * @brief Initializes all shared resource components: texture, keyed mutex, and handle.
    *
    * @param device Pointer to the D3D11 device used for resource creation.
    * @param texture_width Width of the texture in pixels.
@@ -998,8 +978,7 @@ public:
     for (size_t slot = 0; slot < platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT; ++slot) {
       if (!create_shared_texture(device, slot, texture_width, texture_height, format) ||
           !create_keyed_mutex(slot) ||
-          !create_shared_handle(slot) ||
-          !create_ready_fence(device, slot)) {
+          !create_shared_handle(slot)) {
         return false;
       }
     }
@@ -1014,7 +993,6 @@ public:
     platf::dxgi::shared_handle_data_t data = {};
     for (size_t slot = 0; slot < platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT; ++slot) {
       data.texture_handles[slot] = const_cast<HANDLE>(_shared_handles[slot].get());
-      data.ready_fence_handles[slot] = const_cast<HANDLE>(_ready_fence_handles[slot].get());
     }
     data.frame_event_handle = const_cast<HANDLE>(_frame_ready_event.get());
     data.frame_metadata_handle = const_cast<HANDLE>(_frame_metadata_mapping.get());
@@ -1086,35 +1064,13 @@ public:
     );
   }
 
-  LONG64 next_frame_id() const {
-    return _frame_metadata ? InterlockedCompareExchange64(&_frame_metadata->frame_id, 0, 0) + 1 : 0;
-  }
-
-  bool signal_ready(ID3D11DeviceContext *context, size_t texture_slot, uint64_t frame_id) {
-    if (!context || texture_slot >= platf::dxgi::WGC_IPC_TEXTURE_SLOT_COUNT || !_ready_fences[texture_slot]) {
-      return false;
-    }
-    winrt::com_ptr<ID3D11DeviceContext4> context4;
-    const HRESULT query_hr = context->QueryInterface(__uuidof(ID3D11DeviceContext4), context4.put_void());
-    if (FAILED(query_hr) || !context4) {
-      BOOST_LOG(error) << "WGC direct-ring synchronization requires ID3D11DeviceContext4";
-      return false;
-    }
-    const HRESULT hr = context4->Signal(_ready_fences[texture_slot].get(), frame_id);
-    if (FAILED(hr)) {
-      BOOST_LOG(error) << "Failed to signal WGC producer-ready fence: " << std::format(": 0x{:08X}", hr);
-      return false;
-    }
-    context->Flush();
-    return true;
-  }
-
-  void publish_frame_metadata(uint64_t frame_qpc, size_t texture_slot, LONG64 frame_id) {
+  void publish_frame_metadata(uint64_t frame_qpc, size_t texture_slot) {
     if (!_frame_metadata) {
       return;
     }
 
     InterlockedIncrement64(&_frame_metadata->sequence);
+    const auto frame_id = InterlockedCompareExchange64(&_frame_metadata->frame_id, 0, 0) + 1;
     auto &slot = _frame_metadata->slots[texture_slot];
     InterlockedExchange64(&slot.frame_qpc, static_cast<LONG64>(frame_qpc));
     InterlockedExchange64(&slot.frame_id, frame_id);
@@ -1141,6 +1097,10 @@ public:
     return _shared_textures[slot];
   }
 
+  /**
+   * @brief Gets the keyed mutex interface com_ptr for the shared texture.
+   * @return const winrt::com_ptr<IDXGIKeyedMutex>& (may be empty if not initialized).
+   */
   const winrt::com_ptr<IDXGIKeyedMutex> &get_keyed_mutex(size_t slot) const {
     return _keyed_mutexes[slot];
   }
@@ -1775,8 +1735,8 @@ private:
       return;
     }
 
-    // A busy consumer leaves its slot leased in shared metadata. The callback
-    // skips leased slots so WGC never retains a frame-pool buffer for them.
+    // Each IPC slot has an independent keyed mutex. A busy consumer only makes
+    // this callback skip that slot; it never makes WGC retain a frame-pool buffer.
     copy_frame_to_shared_texture(frame_tex, frame_qpc, sample_timing);
   }
 
@@ -1790,8 +1750,8 @@ private:
       return;
     }
 
-    // Serialize helper D3D submission and metadata publication so frame
-    // generations and per-slot ready-fence values remain ordered.
+    // Serialize all helper D3D work before taking the cross-process keyed
+    // mutex, keeping the shared-slot critical section to one copy submission.
     const auto context_wait_start = sample_timing ? std::optional {std::chrono::steady_clock::now()} : std::nullopt;
     std::unique_lock context_lock(_d3d_context_mutex);
     const auto context_wait = context_wait_start ?
@@ -1809,11 +1769,6 @@ private:
       return;
     }
     const auto texture_slot = reservation->slot;
-    const auto frame_id = _deps->resource_manager.next_frame_id();
-    if (frame_id <= 0) {
-      _deps->resource_manager.abandon_texture_slot(*reservation);
-      return;
-    }
 
     auto copy_plan = _dirty_regions_enabled.load(std::memory_order_acquire) ?
                        _damage_tracker.plan_for_slot(texture_slot) :
@@ -1825,16 +1780,19 @@ private:
     }
 
     const auto mutex_wait_start = sample_timing ? std::optional {std::chrono::steady_clock::now()} : std::nullopt;
-    const HRESULT acquire_hr = _deps->resource_manager.get_keyed_mutex(texture_slot)->AcquireSync(0, 0);
+    const HRESULT hr = _deps->resource_manager.get_keyed_mutex(texture_slot)->AcquireSync(0, 0);
     const auto mutex_wait = mutex_wait_start ?
                               std::optional {std::chrono::steady_clock::now() - *mutex_wait_start} :
                               std::nullopt;
-    if (acquire_hr != S_OK && acquire_hr != WAIT_ABANDONED) {
+    if (hr != S_OK && hr != WAIT_ABANDONED) {
       _deps->resource_manager.abandon_texture_slot(*reservation);
-      if (acquire_hr != WAIT_TIMEOUT) {
-        BOOST_LOG(error) << "Failed to acquire WGC ring ownership: " << std::format(": 0x{:08X}", acquire_hr);
+      if (hr != WAIT_TIMEOUT) {
+        BOOST_LOG(error) << "Failed to acquire WGC IPC slot mutex: " << std::format(": 0x{:08X}", hr);
       }
       return;
+    }
+    if (hr == WAIT_ABANDONED) {
+      BOOST_LOG(error) << "Keyed mutex was abandoned; continuing with lock held";
     }
 
     // A concurrent frame may have made dirty-region reporting invalid after
@@ -1845,14 +1803,12 @@ private:
     }
 
     const auto shared_mutex_hold_start = sample_timing ? std::optional {std::chrono::steady_clock::now()} : std::nullopt;
-    auto abandon_slot = util::fail_guard([&]() {
-      _deps->resource_manager.abandon_texture_slot(*reservation);
-    });
-    auto release_mutex = util::fail_guard([&]() {
-      const HRESULT hr = _deps->resource_manager.get_keyed_mutex(texture_slot)->ReleaseSync(0);
-      if (FAILED(hr)) {
-        BOOST_LOG(error) << "Failed to release WGC ring ownership: " << std::format(": 0x{:08X}", hr);
+    auto release_shared_mutex = util::fail_guard([&]() {
+      const HRESULT rel_hr = _deps->resource_manager.get_keyed_mutex(texture_slot)->ReleaseSync(0);
+      if (FAILED(rel_hr)) {
+        BOOST_LOG(warning) << "Failed to release mutex key 0: " << std::format(": 0x{:08X}", rel_hr);
       }
+      _deps->resource_manager.abandon_texture_slot(*reservation);
     });
 
     // WGC frame surfaces cannot be shared directly. A full copy initializes a
@@ -1878,30 +1834,17 @@ private:
                                std::optional {std::chrono::steady_clock::now() - *copy_start} :
                                std::nullopt;
 
-    // From this point the previous contents are gone. A fence failure must
-    // quarantine the slot as writing; restoring a reclaimed ready state would
-    // associate old metadata with overwritten pixels.
-    abandon_slot.disable();
-    if (!_deps->resource_manager.signal_ready(_deps->d3d_context.get(), texture_slot, static_cast<uint64_t>(frame_id))) {
-      BOOST_LOG(error) << "Stopping WGC helper after producer-ready fence failure";
-      signal_capture_item_closed();
-      return;
-    }
-    const HRESULT release_hr = _deps->resource_manager.get_keyed_mutex(texture_slot)->ReleaseSync(0);
-    release_mutex.disable();
-    if (FAILED(release_hr)) {
-      BOOST_LOG(error) << "Failed to release WGC ring ownership after ready signal: " << std::format(": 0x{:08X}", release_hr);
-      signal_capture_item_closed();
+    const HRESULT rel_hr = _deps->resource_manager.get_keyed_mutex(texture_slot)->ReleaseSync(0);
+    release_shared_mutex.disable();
+    if (FAILED(rel_hr)) {
+      BOOST_LOG(warning) << "Failed to release mutex key 0: " << std::format(": 0x{:08X}", rel_hr);
+      _deps->resource_manager.abandon_texture_slot(*reservation);
       return;
     }
     const auto shared_mutex_hold = shared_mutex_hold_start ?
                                      std::optional {std::chrono::steady_clock::now() - *shared_mutex_hold_start} :
                                      std::nullopt;
     _damage_tracker.mark_copied(texture_slot);
-    // Metadata becomes visible only after the ready-fence signal has been
-    // submitted and flushed, while this callback still owns publication order.
-    _deps->resource_manager.publish_frame_metadata(frame_qpc, texture_slot, frame_id);
-    _deps->resource_manager.signal_frame_ready();
     damage_lock.unlock();
     context_lock.unlock();
 
@@ -1915,6 +1858,10 @@ private:
       _copied_pixels.fetch_add(copied_pixels, std::memory_order_relaxed);
     }
 
+    // Publish after releasing the keyed mutex. Once the slot is visible as ready,
+    // Sunshine can lease it directly to encoder consumers without a second copy.
+    _deps->resource_manager.publish_frame_metadata(frame_qpc, texture_slot);
+    _deps->resource_manager.signal_frame_ready();
     const auto published = _published_frames.fetch_add(1, std::memory_order_relaxed) + 1;
 
     if (sample_timing) {
