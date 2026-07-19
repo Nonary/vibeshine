@@ -1324,7 +1324,6 @@ const AUDIO_BUFFER_RESET_SUSTAIN_MS = 3000;
 const AUDIO_BUFFER_RESET_COOLDOWN_MS = 15000;
 const VIDEO_BUFFER_RESET_THRESHOLD_MS = 140;
 const VIDEO_RENDER_RESET_THRESHOLD_MS = 100;
-const VIDEO_INTERVAL_RESET_THRESHOLD_MS = 100;
 const VIDEO_BUFFER_RESET_FRAME_MARGIN = 6;
 const VIDEO_RENDER_RESET_FRAME_MARGIN = 5;
 const VIDEO_BUFFER_RESET_SUSTAIN_MS = 900;
@@ -1815,9 +1814,8 @@ watch(
       videoLatencySignal.value?.valueMs,
       videoLatencySignal.value?.source,
       renderDelayMs.value,
-      renderIntervalMs.value,
     ] as const,
-  ([videoValue, , delayValue, intervalValue]) => {
+  ([videoValue, , delayValue]) => {
     if (!isConnected.value || !isTabActive()) {
       videoBufferOverloadedSince = null;
       videoRenderOverloadedSince = null;
@@ -1855,28 +1853,20 @@ watch(
       frameMs,
       VIDEO_RENDER_RESET_FRAME_MARGIN,
     );
-    const intervalThresholdMs = resolveFrameBoundedThresholdMs(
-      VIDEO_INTERVAL_RESET_THRESHOLD_MS,
-      baseTargetMs,
-      frameMs,
-      VIDEO_RENDER_RESET_FRAME_MARGIN,
-    );
+    // rVFC callback spacing describes the cadence of newly presented frames,
+    // not how late a frame reached the compositor. Dynamic encoders can
+    // intentionally produce fewer frames than the requested FPS, so use only
+    // actual render lateness for this fence. Interval metrics remain available
+    // for diagnostics.
     const renderLagValue =
       typeof delayValue === 'number' &&
       Number.isFinite(delayValue) &&
       delayValue >= renderThresholdMs
         ? delayValue
-        : typeof intervalValue === 'number' &&
-            Number.isFinite(intervalValue) &&
-            intervalValue >= intervalThresholdMs
-          ? intervalValue
-          : undefined;
+        : undefined;
     const renderDecision = decideLatencyFenceReset({
       valueMs: renderLagValue,
-      thresholdMs:
-        renderLagValue === intervalValue && renderLagValue !== delayValue
-          ? intervalThresholdMs
-          : renderThresholdMs,
+      thresholdMs: renderThresholdMs,
       sustainMs: VIDEO_RENDER_RESET_SUSTAIN_MS,
       cooldownMs: VIDEO_BUFFER_RESET_COOLDOWN_MS,
       overloadedSinceMs: videoRenderOverloadedSince,
