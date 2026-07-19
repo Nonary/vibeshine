@@ -558,36 +558,72 @@ namespace platf::dxgi {
         return -1;
       }
 
-      // Acquire encoder mutex to synchronize with capture code.
-      // Use a finite timeout to avoid hard-deadlocks during display re-init / device loss.
-      auto status = img_ctx.encoder_mutex->AcquireSync(0, 3000);
-      if (status == WAIT_TIMEOUT) {
-        BOOST_LOG(error) << "Timed out acquiring encoder mutex; capture/encoder sync likely wedged";
-        return -1;
-      }
-      if (status != S_OK && status != WAIT_ABANDONED) {
-        BOOST_LOG(error) << "Failed to acquire encoder mutex [0x"sv << util::hex(status).to_string_view() << ']';
-        return -1;
-      }
-      if (status == WAIT_ABANDONED) {
-        BOOST_LOG(error) << "Encoder mutex was abandoned; continuing with lock held";
+      const bool fenced_wgc_frame = img.wgc_frame_sync != nullptr;
+      if (fenced_wgc_frame) {
+        if (initialize_wgc_fence_context(img, img_ctx)) {
+          img.wgc_frame_sync->mark_failed();
+          return -1;
+        }
+        const HRESULT hr = device_ctx4->Wait(img_ctx.wgc_ready_fence.get(), img.wgc_ready_value);
+        if (FAILED(hr)) {
+          BOOST_LOG(error) << "Failed to queue WGC producer-ready fence wait [0x"sv << util::hex(hr).to_string_view() << ']';
+          img.wgc_frame_sync->mark_failed();
+          return -1;
+        }
       }
 
-      bool encoder_mutex_held = true;
-      auto release_encoder_mutex_now = [&]() {
-        if (!encoder_mutex_held) {
+      // NT-shared D3D11 textures require keyed ownership even though fences
+      // define producer readiness and final GPU completion.
+      const auto ownership_status = img_ctx.encoder_mutex->AcquireSync(0, 3000);
+      if (ownership_status == WAIT_TIMEOUT) {
+        BOOST_LOG(error) << "Timed out acquiring encoder texture ownership";
+        if (fenced_wgc_frame) {
+          img.wgc_frame_sync->mark_failed();
+        }
+        return -1;
+      }
+      if (ownership_status != S_OK && ownership_status != WAIT_ABANDONED) {
+        BOOST_LOG(error) << "Failed to acquire encoder texture ownership [0x"sv << util::hex(ownership_status).to_string_view() << ']';
+        if (fenced_wgc_frame) {
+          img.wgc_frame_sync->mark_failed();
+        }
+        return -1;
+      }
+
+      bool ring_read_pending = true;
+      auto complete_ring_read_now = [&]() {
+        if (!ring_read_pending) {
           return true;
         }
-        const HRESULT hr = img_ctx.encoder_mutex->ReleaseSync(0);
+        HRESULT hr = S_OK;
+        if (fenced_wgc_frame) {
+          const auto value = ++consumer_fence_value;
+          hr = device_ctx4->Signal(consumer_fence.get(), value);
+          if (SUCCEEDED(hr)) {
+            img.wgc_frame_sync->register_consumer(consumer_fence.get(), value);
+          } else {
+            img.wgc_frame_sync->mark_failed();
+          }
+        }
+        const HRESULT ownership_hr = img_ctx.encoder_mutex->ReleaseSync(0);
+        if (FAILED(ownership_hr) && SUCCEEDED(hr)) {
+          hr = ownership_hr;
+          if (fenced_wgc_frame) {
+            img.wgc_frame_sync->mark_failed();
+          }
+        }
+        if (fenced_wgc_frame) {
+          device_ctx->Flush();
+        }
         if (FAILED(hr)) {
-          BOOST_LOG(warning) << "Failed to release encoder mutex [0x"sv << util::hex(hr).to_string_view() << ']';
+          BOOST_LOG(warning) << "Failed to complete capture texture read [0x"sv << util::hex(hr).to_string_view() << ']';
           return false;
         }
-        encoder_mutex_held = false;
+        ring_read_pending = false;
         return true;
       };
-      auto release_encoder_mutex = util::fail_guard([&]() {
-        (void) release_encoder_mutex_now();
+      auto complete_ring_read = util::fail_guard([&]() {
+        (void) complete_ring_read_now();
       });
 
       // Clear render target view(s) once so that the aspect ratio mismatch "bars" appear black
@@ -663,7 +699,7 @@ namespace platf::dxgi {
             device_ctx->CopyResource(img_ctx.truehdr_input_texture.get(), img_ctx.encoder_texture.get());
             encode_input_res = &img_ctx.truehdr_input_res;
             truehdr_input_texture = img_ctx.truehdr_input_texture.get();
-            truehdr_private_input_ready = release_encoder_mutex_now();
+            truehdr_private_input_ready = complete_ring_read_now();
           } else if (!truehdr_failure_logged) {
             BOOST_LOG(warning) << "RTX HDR: streaming unconverted frame because private TrueHDR input setup failed.";
             truehdr_failure_logged = true;
@@ -787,9 +823,9 @@ namespace platf::dxgi {
       }
 #endif
 
-      // Release encoder mutex to allow capture code to reuse this image
-      if (release_encoder_mutex_now()) {
-        release_encoder_mutex.disable();
+      // Publish the earliest GPU-safe completion point for this ring read.
+      if (complete_ring_read_now()) {
+        complete_ring_read.disable();
       }
 
       unbind_shader_resource();
@@ -1410,19 +1446,23 @@ namespace platf::dxgi {
       texture2d_t encoder_texture;
       shader_res_t encoder_input_res;
       keyed_mutex_t encoder_mutex;
+      winrt::com_ptr<ID3D11Fence> wgc_ready_fence;
       texture2d_t truehdr_input_texture;
       shader_res_t truehdr_input_res;
 
       std::weak_ptr<winrt::handle> encoder_texture_handle_weak;
+      std::weak_ptr<winrt::handle> wgc_ready_fence_handle_weak;
 
       void reset() {
         capture_texture_p = nullptr;
         encoder_texture.reset();
         encoder_input_res.reset();
         encoder_mutex.reset();
+        wgc_ready_fence = nullptr;
         truehdr_input_texture.reset();
         truehdr_input_res.reset();
         encoder_texture_handle_weak.reset();
+        wgc_ready_fence_handle_weak.reset();
       }
     };
 
@@ -1455,7 +1495,6 @@ namespace platf::dxgi {
         return -1;
       }
 
-      // Get the keyed mutex to synchronize with the capture code
       status = img_ctx.encoder_texture->QueryInterface(__uuidof(IDXGIKeyedMutex), (void **) &img_ctx.encoder_mutex);
       if (FAILED(status)) {
         BOOST_LOG(error) << "Failed to query IDXGIKeyedMutex [0x"sv << util::hex(status).to_string_view() << ']';
@@ -1473,6 +1512,49 @@ namespace platf::dxgi {
 
       img_ctx.encoder_texture_handle_weak = img.encoder_texture_handle;
 
+      return 0;
+    }
+
+    int initialize_wgc_fence_context(const img_d3d_t &img, encoder_img_ctx_t &img_ctx) {
+      if (!img.wgc_ready_fence_handle || !img.wgc_ready_fence_handle->get()) {
+        BOOST_LOG(error) << "Missing WGC producer-ready fence handle";
+        return -1;
+      }
+
+      if (!device5) {
+        const HRESULT hr = device->QueryInterface(__uuidof(ID3D11Device5), device5.put_void());
+        if (FAILED(hr)) {
+          device5 = nullptr;
+        }
+      }
+      if (!device_ctx4) {
+        const HRESULT hr = device_ctx->QueryInterface(__uuidof(ID3D11DeviceContext4), device_ctx4.put_void());
+        if (FAILED(hr)) {
+          device_ctx4 = nullptr;
+        }
+      }
+      if (!device5 || !device_ctx4) {
+        BOOST_LOG(error) << "WGC direct-ring synchronization requires D3D11 fence interfaces";
+        return -1;
+      }
+
+      if (!consumer_fence) {
+        const HRESULT hr = device5->CreateFence(0, D3D11_FENCE_FLAG_NONE, __uuidof(ID3D11Fence), consumer_fence.put_void());
+        if (FAILED(hr)) {
+          BOOST_LOG(error) << "Failed to create WGC consumer completion fence [0x"sv << util::hex(hr).to_string_view() << ']';
+          return -1;
+        }
+      }
+
+      if (!img_ctx.wgc_ready_fence || img_ctx.wgc_ready_fence_handle_weak.lock() != img.wgc_ready_fence_handle) {
+        img_ctx.wgc_ready_fence = nullptr;
+        const HRESULT hr = device5->OpenSharedFence(img.wgc_ready_fence_handle->get(), __uuidof(ID3D11Fence), img_ctx.wgc_ready_fence.put_void());
+        if (FAILED(hr)) {
+          BOOST_LOG(error) << "Failed to open WGC producer-ready fence [0x"sv << util::hex(hr).to_string_view() << ']';
+          return -1;
+        }
+        img_ctx.wgc_ready_fence_handle_weak = img.wgc_ready_fence_handle;
+      }
       return 0;
     }
 
@@ -1709,6 +1791,10 @@ namespace platf::dxgi {
     // Keep the underlying D3D device/context alive until after all dependent resources have been released.
     device_t device;
     device_ctx_t device_ctx;
+    winrt::com_ptr<ID3D11Device5> device5;
+    winrt::com_ptr<ID3D11DeviceContext4> device_ctx4;
+    winrt::com_ptr<ID3D11Fence> consumer_fence;
+    uint64_t consumer_fence_value = 0;
 
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
     // NVIDIA TrueHDR (RTX HDR) SDR->HDR. Lazily created on the first HDR frame.

@@ -10,11 +10,14 @@
 #include <chrono>
 #include <winsock2.h>
 #include <d3d11.h>
+#include <d3d11_4.h>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 // local includes
 #include "misc_utils.h"
@@ -50,9 +53,8 @@ namespace platf::dxgi {
   /**
    * Move-only ownership of a helper texture-ring slot.
    *
-   * The lease is moved into the aliasing image owner returned to encoders. Its
-   * destructor returns the slot only after the final image consumer releases
-   * that owner.
+   * The direct-ring frame owner holds the lease until every image reference is
+   * gone and every registered consumer-completion fence has reached its value.
    */
   class wgc_texture_slot_lease_t {
   public:
@@ -90,6 +92,20 @@ namespace platf::dxgi {
       return *this;
     }
 
+    void abandon() noexcept {
+      _sink.reset();
+      _slot = WGC_IPC_TEXTURE_SLOT_COUNT;
+      _frame_id = 0;
+    }
+
+    size_t slot() const noexcept {
+      return _slot;
+    }
+
+    LONG64 frame_id() const noexcept {
+      return _frame_id;
+    }
+
   private:
     void release() noexcept {
       if (_sink) {
@@ -105,13 +121,21 @@ namespace platf::dxgi {
     LONG64 _frame_id = 0;
   };
 
+  /** One encoder consumer's GPU-completion point for a leased ring slot. */
+  struct wgc_consumer_completion_t {
+    winrt::com_ptr<ID3D11Fence> fence;
+    uint64_t value = 0;
+  };
+
   struct shared_frame_t {
     winrt::com_ptr<ID3D11Texture2D> texture;
     winrt::com_ptr<IDXGIKeyedMutex> keyed_mutex;
     std::shared_ptr<winrt::handle> encoder_texture_handle;
+    std::shared_ptr<winrt::handle> ready_fence_handle;
     wgc_texture_slot_lease_t lease;
     size_t texture_slot = WGC_IPC_TEXTURE_SLOT_COUNT;
     uint64_t frame_id = 0;
+    uint64_t ready_value = 0;
     uint64_t frame_qpc = 0;
   };
 
@@ -168,8 +192,8 @@ namespace platf::dxgi {
     capture_e lock_frame(winrt::com_ptr<ID3D11Texture2D> &gpu_tex_out, uint64_t &frame_qpc_out);
 
     /**
-     * @brief Claim the latest helper-owned texture-ring slot for direct encoder use.
-     * The returned lease keeps the slot immutable until all consumers release it.
+     * @brief Claim the latest helper-owned texture-ring slot for direct use.
+     * The returned lease keeps the slot immutable until all fenced consumers complete.
      */
     capture_e claim_frame(shared_frame_t &frame_out);
 
@@ -193,6 +217,18 @@ namespace platf::dxgi {
     bool should_reinit() const {
       return _force_reinit.load();
     }
+
+    void invalidate_gpu_sync() {
+      _force_reinit = true;
+      _initialized = false;
+    }
+
+    /**
+     * @brief Hand a ring-slot lease back without blocking on consumer GPU completion.
+     * Releases immediately when every consumer fence has already retired; otherwise
+     * the slot stays leased and the capture thread reaps it on a later frame claim.
+     */
+    void defer_slot_release(wgc_texture_slot_lease_t lease, std::vector<wgc_consumer_completion_t> completions);
 
     /**
      * @brief Get the width of the shared texture.
@@ -242,9 +278,20 @@ namespace platf::dxgi {
     bool setup_shared_resources_from_shared_handles(const shared_handle_data_t &handle_data);
 
     /**
-     * @brief Return a leased slot to the helper after its last encoder consumer exits.
+     * @brief Return a leased slot to the helper after its GPU consumers complete.
      */
     void release_frame_slot(size_t slot, LONG64 frame_id);
+
+    /**
+     * @brief Non-blocking sweep of deferred slot releases whose consumer fences retired.
+     * Quarantines (and forces reinit for) any slot whose fences miss the deadline.
+     */
+    void process_deferred_releases();
+
+    /**
+     * @brief Drop all deferred releases without touching slot metadata (teardown/reinit path).
+     */
+    void clear_deferred_releases();
 
     void release_wgc_texture_slot(size_t slot, LONG64 frame_id) override {
       release_frame_slot(slot, frame_id);
@@ -271,10 +318,24 @@ namespace platf::dxgi {
     // --- members ---
     std::unique_ptr<ProcessHandler> _process_helper;  ///< Helper process owner.
     std::unique_ptr<AsyncNamedPipe> _pipe;  ///< Async control/message pipe.
-    std::array<winrt::com_ptr<IDXGIKeyedMutex>, WGC_IPC_TEXTURE_SLOT_COUNT> _keyed_mutexes;  ///< Keyed mutexes for the shared texture ring.
+    std::array<winrt::com_ptr<IDXGIKeyedMutex>, WGC_IPC_TEXTURE_SLOT_COUNT> _keyed_mutexes;  ///< Ownership interfaces for NT-shared ring textures.
     std::array<winrt::com_ptr<ID3D11Texture2D>, WGC_IPC_TEXTURE_SLOT_COUNT> _shared_textures;  ///< Shared textures duplicated from helper.
-    std::array<std::shared_ptr<winrt::handle>, WGC_IPC_TEXTURE_SLOT_COUNT> _shared_texture_handles;  ///< Stable local handle owners for encoder devices.
+    std::array<winrt::com_ptr<ID3D11Fence>, WGC_IPC_TEXTURE_SLOT_COUNT> _ready_fences;  ///< Producer-ready fences opened on the capture device for RAM consumers.
+    std::array<std::shared_ptr<winrt::handle>, WGC_IPC_TEXTURE_SLOT_COUNT> _shared_texture_handles;  ///< Stable local owners for duplicated shared handles.
+    std::array<std::shared_ptr<winrt::handle>, WGC_IPC_TEXTURE_SLOT_COUNT> _ready_fence_handles;  ///< Stable local owners for helper producer-ready fences.
     winrt::com_ptr<ID3D11Device> _device;  ///< D3D11 device pointer (not owned).
+    winrt::com_ptr<ID3D11DeviceContext4> _capture_context4;  ///< Cached immediate context for producer-ready fence waits.
+
+    /** A leased slot whose consumer GPU reads had not retired when the frame owner died. */
+    struct deferred_slot_release_t {
+      size_t slot = WGC_IPC_TEXTURE_SLOT_COUNT;
+      LONG64 frame_id = 0;
+      std::vector<wgc_consumer_completion_t> completions;
+      std::chrono::steady_clock::time_point deadline;
+    };
+
+    std::mutex _deferred_mutex;  ///< Guards _deferred_releases (frame owners die on encoder threads).
+    std::vector<deferred_slot_release_t> _deferred_releases;  ///< Slots awaiting consumer-fence retirement.
     winrt::handle _frame_ready_event;  ///< Duplicated auto-reset event signaled by the helper per frame.
     winrt::handle _frame_metadata_mapping;  ///< Duplicated shared-memory mapping for frame metadata.
     frame_metadata_t *_frame_metadata = nullptr;  ///< Mapped frame metadata view.

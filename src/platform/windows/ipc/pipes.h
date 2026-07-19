@@ -50,6 +50,7 @@ namespace platf::dxgi {
   /**
    * @brief Structure for sharing texture-ring handles and frame metadata via IPC.
    * @param texture_handles Shared texture handles for the producer/consumer ring.
+   * @param ready_fence_handles Shared producer-ready fence handles, one per ring slot.
    * @param frame_event_handle Auto-reset event signaled when a new frame is ready.
    * @param frame_metadata_handle File-mapping handle containing latest frame metadata.
    * @param width Width of the texture.
@@ -57,6 +58,7 @@ namespace platf::dxgi {
    */
   struct shared_handle_data_t {
     HANDLE texture_handles[WGC_IPC_TEXTURE_SLOT_COUNT];
+    HANDLE ready_fence_handles[WGC_IPC_TEXTURE_SLOT_COUNT];
     HANDLE frame_event_handle;
     HANDLE frame_metadata_handle;
     UINT width;
