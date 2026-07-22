@@ -118,6 +118,7 @@ namespace webrtc_stream {
       const auto generation = g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
       std::thread([timeout, generation, reason = std::move(reason), enforce_display_restore, virtual_display_guid_bytes]() {
         std::this_thread::sleep_for(timeout);
+        stream::session::cleanup_reservation_t cleanup_reservation;
 
         if (g_paused_display_cleanup_generation.load(std::memory_order_acquire) != generation) {
           return;
@@ -1741,6 +1742,7 @@ namespace webrtc_stream {
     std::unordered_map<std::string, Session> sessions;
     std::condition_variable local_answer_cv;
     std::atomic_uint active_sessions {0};
+    std::atomic_uint teardown_sessions {0};
     std::atomic_bool rtsp_sessions_active {false};
 
     struct RtspCaptureConfig {
@@ -3139,6 +3141,22 @@ namespace webrtc_stream {
       }
       BOOST_LOG(debug) << "WebRTC: stopping idle capture with final platform teardown.";
       stop_webrtc_capture_locked(true, true);
+#ifdef _WIN32
+      VDISPLAY::restorePhysicalHdrProfiles();
+      platf::rtss_set_sync_limiter_override(std::nullopt);
+#endif
+      platf::streaming_will_stop();
+    }
+
+    void cancel_pending_webrtc_session_creation() {
+      stream::session::cleanup_reservation_t cleanup_reservation;
+      {
+        std::lock_guard<std::mutex> lock(webrtc_capture.mutex);
+        if (webrtc_capture.pending_session_creations.load(std::memory_order_acquire) != 0) {
+          webrtc_capture.pending_session_creations.fetch_sub(1, std::memory_order_release);
+        }
+      }
+      stop_webrtc_capture_if_idle();
     }
 
 #ifdef SUNSHINE_ENABLE_WEBRTC
@@ -5019,6 +5037,14 @@ namespace webrtc_stream {
     return active_sessions.load(std::memory_order_acquire) > 0;
   }
 
+  bool has_capture_active() {
+    return webrtc_capture.active.load(std::memory_order_acquire);
+  }
+
+  bool has_teardown_in_progress() {
+    return teardown_sessions.load(std::memory_order_acquire) > 0;
+  }
+
   std::optional<std::string> ensure_capture_started(const SessionOptions &options) {
     return start_webrtc_capture(options);
   }
@@ -5153,6 +5179,14 @@ namespace webrtc_stream {
   }
 
   bool close_session(std::string_view id) {
+    bool teardown_reserved = false;
+    auto teardown_reservation = util::fail_guard([&]() {
+      if (teardown_reserved) {
+        teardown_sessions.fetch_sub(1, std::memory_order_acq_rel);
+        teardown_reserved = false;
+      }
+    });
+
 #ifdef SUNSHINE_ENABLE_WEBRTC
     BOOST_LOG(debug) << "WebRTC: close_session enter id=" << id;
     std::shared_ptr<lwrtc_factory_t> factory;
@@ -5177,6 +5211,8 @@ namespace webrtc_stream {
       if (it == sessions.end()) {
         return false;
       }
+      teardown_sessions.fetch_add(1, std::memory_order_acq_rel);
+      teardown_reserved = true;
 #ifdef SUNSHINE_ENABLE_WEBRTC
       factory = std::move(it->second.factory);
       peer = it->second.peer;
@@ -5196,7 +5232,10 @@ namespace webrtc_stream {
       remaining_bitrate_kbps = aggregate_webrtc_encoder_bitrate_locked();
 #endif
       removed = true;
-      last_session = active_sessions.fetch_sub(1, std::memory_order_relaxed) == 1;
+      // Publish the teardown reservation before removing the active owner.
+      // An HTTP observer that acquires active_sessions == 0 must also observe
+      // the preceding teardown_sessions increment.
+      last_session = active_sessions.fetch_sub(1, std::memory_order_acq_rel) == 1;
     }
     if (removed) {
       local_answer_cv.notify_all();
@@ -5252,6 +5291,14 @@ namespace webrtc_stream {
     if (!last_session && remaining_bitrate_kbps) {
       publish_webrtc_encoder_bitrate(*remaining_bitrate_kbps);
     }
+#endif
+    BOOST_LOG(debug) << "WebRTC: close_session exit id=" << id;
+
+    // Record history while the old capture/runtime and teardown reservation
+    // remain live, so HTTP capability probes cannot enter during that tail.
+    session_history::end_session(std::string {id});
+
+#ifdef SUNSHINE_ENABLE_WEBRTC
     if (last_session) {
       stop_media_thread();
       reset_input_context();
@@ -5268,10 +5315,6 @@ namespace webrtc_stream {
       stop_webrtc_capture_if_idle();
     }
 #endif
-    BOOST_LOG(debug) << "WebRTC: close_session exit id=" << id;
-
-    // Record session end in persistent history
-    session_history::end_session(std::string {id});
 
     return true;
   }
@@ -5296,6 +5339,7 @@ namespace webrtc_stream {
   }
 
   void shutdown_all_sessions() {
+    stream::session::cleanup_reservation_t cleanup_reservation;
     std::vector<std::string> ids;
     {
       std::lock_guard lg {session_mutex};

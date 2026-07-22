@@ -218,8 +218,31 @@ namespace nvhttp {
       return has_any_active_display();
     }
 
+    bool has_stream_session_activity();
+    bool has_active_or_stopping_stream_session();
+
     video::advertised_encoder_capabilities_t advertised_encoder_capabilities_for_http() {
       if (video::has_successful_encoder_probe()) {
+        return video::advertised_encoder_capabilities(false);
+      }
+
+      // Session starts publish their pending owner while holding this gate.
+      // Hold it through the idle decision and temporary-display probe so a
+      // new start cannot enter between the counter samples below.
+      std::unique_lock<std::mutex> lifecycle_lock(
+        stream_lifecycle_mutex(),
+        std::try_to_lock
+      );
+      if (!lifecycle_lock.owns_lock()) {
+        BOOST_LOG(debug) << "Skipping HTTP encoder capability probe while stream lifecycle work owns the gate.";
+        return video::advertised_encoder_capabilities(false);
+      }
+      if (video::has_successful_encoder_probe()) {
+        return video::advertised_encoder_capabilities(false);
+      }
+
+      if (has_active_or_stopping_stream_session()) {
+        BOOST_LOG(debug) << "Skipping HTTP encoder capability probe while a streaming session is active or stopping.";
         return video::advertised_encoder_capabilities(false);
       }
 
@@ -232,6 +255,7 @@ namespace nvhttp {
     }
 
     void cleanup_virtual_display_state() {
+      stream::session::cleanup_reservation_t cleanup_reservation;
       if (!has_active_virtual_display()) {
         BOOST_LOG(debug) << "Skipping virtual display cleanup after cancel because no active virtual display exists.";
         return;
@@ -239,16 +263,42 @@ namespace nvhttp {
       (void) platf::virtual_display_cleanup::run("cancel", config::video.dd.config_revert_on_disconnect);
     }
 
-    bool has_active_or_stopping_stream_session() {
+    bool has_stream_session_activity() {
       // RTSP removes STOPPING sessions from session_count() before stream::session::join()
-      // returns; the worker count keeps display-helper work away from teardown-owned displays.
-      return rtsp_stream::session_count() > 0 ||
+      // returns; pending launches/creations reserve the process-wide runtime layer
+      // before either protocol publishes an active session.
+      return rtsp_stream::has_pending_launch_or_startup() ||
+             rtsp_stream::session_count_no_cleanup() > 0 ||
              stream::session::running_sessions.load(std::memory_order_acquire) != 0 ||
-             webrtc_stream::has_active_sessions();
+             stream::session::teardown_sessions.load(std::memory_order_acquire) != 0 ||
+             webrtc_stream::has_active_or_pending_sessions() ||
+             webrtc_stream::has_capture_active() ||
+             webrtc_stream::has_teardown_in_progress();
+    }
+
+    bool has_active_or_stopping_stream_session() {
+      // Sample the generic/VDD cleanup signals on both sides of the protocol
+      // activity snapshot. This closes both counter handoffs:
+      //   launch: generic reservation -> pending protocol owner
+      //   teardown: protocol owner -> generic cleanup reservation
+      // Each writer publishes the successor before releasing the predecessor.
+      if (platf::virtual_display_cleanup::in_progress() ||
+          stream::session::cleanup_reservations.load(std::memory_order_acquire) != 0) {
+        return true;
+      }
+      if (has_stream_session_activity()) {
+        return true;
+      }
+      return platf::virtual_display_cleanup::in_progress() ||
+             stream::session::cleanup_reservations.load(std::memory_order_acquire) != 0;
     }
 
     void cleanup_virtual_display_if_idle() {
       try {
+        // Serialize the final owner check through cleanup. RTSP launch already
+        // holds launch_request_mutex before entering this path; lifecycle is
+        // the next canonical gate and also excludes a concurrent WebRTC start.
+        std::unique_lock<std::mutex> lifecycle_lock(stream_lifecycle_mutex());
         if (has_active_or_stopping_stream_session()) {
           BOOST_LOG(info) << "Skipping virtual display cleanup because a streaming session is active or stopping.";
           return;
@@ -2327,6 +2377,11 @@ namespace nvhttp {
   void launch(bool &host_audio, resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
+#ifdef _WIN32
+    // Keep encoder probes blocked across the complete failure unwind: virtual
+    // display removal, response publication, and any final helper restore.
+    stream::session::cleanup_reservation_t cleanup_reservation;
+#endif
     pt::ptree tree;
     bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
@@ -2504,7 +2559,8 @@ namespace nvhttp {
     );
 
     auto virtual_display_teardown_guard = util::fail_guard([&]() {
-      if (has_active_or_stopping_stream_session()) {
+      stream::session::cleanup_reservation_t cleanup_reservation;
+      if (has_stream_session_activity()) {
         return;
       }
 
@@ -2704,6 +2760,11 @@ namespace nvhttp {
   void resume(bool &host_audio, resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
+#ifdef _WIN32
+    // See launch(): the response fail guard can restore through the helper
+    // after the virtual-display teardown guard has already completed.
+    stream::session::cleanup_reservation_t cleanup_reservation;
+#endif
     pt::ptree tree;
     bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
@@ -2837,7 +2898,8 @@ namespace nvhttp {
     );
 
     auto virtual_display_teardown_guard = util::fail_guard([&]() {
-      if (has_active_or_stopping_stream_session()) {
+      stream::session::cleanup_reservation_t cleanup_reservation;
+      if (has_stream_session_activity()) {
         return;
       }
 
@@ -3021,6 +3083,12 @@ namespace nvhttp {
 
   void cancel(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
+
+#ifdef _WIN32
+    // Reserve cleanup before sampling process/session state and retain it
+    // through session teardown, app termination, and final display cleanup.
+    stream::session::cleanup_reservation_t cleanup_reservation;
+#endif
 
     pt::ptree tree;
     auto g = util::fail_guard([&]() {

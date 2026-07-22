@@ -650,6 +650,8 @@ namespace rtsp_stream {
     }
 
     void finish_startup() {
+      stream::session::cleanup_reservation_t cleanup_reservation;
+      std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
       startup_tasks.fetch_sub(1, std::memory_order_acq_rel);
     }
 
@@ -681,6 +683,8 @@ namespace rtsp_stream {
       raised_timer.expires_after(config::stream.ping_timeout);
       raised_timer.async_wait([this](const boost::system::error_code &ec) {
         if (!ec) {
+          stream::session::cleanup_reservation_t cleanup_reservation;
+          std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
           auto discarded = launch_event.pop(0s);
           if (discarded) {
             set_pending_vulkan_hdr_layer_stream(false);
@@ -695,6 +699,8 @@ namespace rtsp_stream {
      * @param launch_session_id The ID of the session to clear.
      */
     void session_clear(uint32_t launch_session_id) {
+      stream::session::cleanup_reservation_t cleanup_reservation;
+      std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
       // We currently only support a single pending RTSP session,
       // so the ID should always match the one for that session.
       auto launch_session = launch_event.view(0s);
