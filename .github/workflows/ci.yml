@@ -198,8 +198,8 @@ jobs:
       symbol_release_draft: true
       symbol_release_prefix: shine
       require_signpath_signing: ${{ needs.release-candidate.outputs.should_release == 'true' }}
-      signpath_signing_policy_slug: ${{ needs.release-candidate.outputs.should_release == 'true' && 'release-sign' || 'test-sign' }}
-      # A release-sign request requires manual approval. Leave 15 minutes of
+      signpath_signing_policy_slug: ${{ needs.release-candidate.outputs.should_release == 'true' && 'release-signing' || 'test-signing' }}
+      # A release-signing request requires manual approval. Leave 15 minutes of
       # the hosted runner's six-hour limit for job setup and artifact handling.
       signpath_wait_for_completion_timeout_in_seconds: ${{ needs.release-candidate.outputs.should_release == 'true' && 20700 || 1800 }}
       require_truehdr_runtime: ${{ needs.release-candidate.outputs.should_release == 'true' }}

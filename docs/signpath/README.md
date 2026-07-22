@@ -37,11 +37,11 @@ the unsigned artifact is uploaded to GitHub Actions first and submitted by
 `github-artifact-id`, so SignPath verifies GitHub produced the build. See
 `.github/workflows/ci-windows.yml`.
 
-Release runs use the `release-sign` policy. Because that policy requires
+Release runs use the `release-signing` policy. Because that policy requires
 manual approval, each signing job waits up to 5 hours 45 minutes for approval
 and completion. Approve both requests in order: the MSI request first, followed
 by the setup-EXE request after the signed MSI has been embedded. Non-release and
-installer-tester runs continue to use `test-sign` with a 30-minute timeout.
+installer-tester runs continue to use `test-signing` with a 30-minute timeout.
 
 A literal single request would require migrating off the custom bootstrapper to a
 **WiX Burn** bundle (which SignPath can deep-sign), losing the custom installer
