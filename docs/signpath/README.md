@@ -7,7 +7,7 @@ artifact-configuration XML so the signing rules are auditable in version control
 > **The SignPath portal is the source of truth.** The XML files here are copies
 > for review. Changing them does **not** change signing behavior — you must edit
 > the matching *artifact configuration* in the SignPath portal
-> (Organization → Project `Vibepollo` → Artifact configurations).
+> (Organization → Project `Vibeshine` → Artifact configurations).
 
 ## Why two signing requests ("the whole package, setup and all")
 
@@ -36,6 +36,12 @@ Both requests use SignPath's GitHub trusted-build connector (origin verification
 the unsigned artifact is uploaded to GitHub Actions first and submitted by
 `github-artifact-id`, so SignPath verifies GitHub produced the build. See
 `.github/workflows/ci-windows.yml`.
+
+Release runs use the `release-sign` policy. Because that policy requires
+manual approval, each signing job waits up to 5 hours 45 minutes for approval
+and completion. Approve both requests in order: the MSI request first, followed
+by the setup-EXE request after the signed MSI has been embedded. Non-release and
+installer-tester runs continue to use `test-sign` with a 30-minute timeout.
 
 A literal single request would require migrating off the custom bootstrapper to a
 **WiX Burn** bundle (which SignPath can deep-sign), losing the custom installer
@@ -131,7 +137,7 @@ or a newly added binary missing from Strategy-1 enumeration) before release.
    `msi-file.artifact-config.xml` (deep-signs first-party PEs, excludes vendors).
 2. Create/confirm the `setup-exe` artifact configuration matches
    `setup-exe.artifact-config.xml` (PE Authenticode).
-3. Confirm the GitHub trusted-build system is linked to project `Vibepollo`.
+3. Confirm the GitHub trusted-build system is linked to project `Vibeshine`.
 4. Trigger `tester-windows-installer.yml` (or a release candidate) and confirm the
    verification gate passes.
 
