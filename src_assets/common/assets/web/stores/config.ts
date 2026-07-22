@@ -171,6 +171,7 @@ const defaultGroups = [
       bind_address: '',
       port: 47989,
       origin_web_ui_allowed: 'lan',
+      csrf_allowed_origins: '',
       external_ip: '',
       lan_encryption_mode: 0,
       wan_encryption_mode: 1,
