@@ -161,18 +161,6 @@ jobs:
           # testing
           cat ./homebrew/sunshine.rb
 
-      - name: Setup Xvfb
-        if: matrix.release != true && runner.os == 'Linux'
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y \
-            xvfb
-
-          export DISPLAY=:1
-          Xvfb ${DISPLAY} -screen 0 1024x768x24 &
-
-          echo "DISPLAY=${DISPLAY}" >> "${GITHUB_ENV}"
-
       - run: echo "::add-matcher::.github/matchers/gcc-strip3.json"
       - name: Validate Homebrew Formula
         id: test
@@ -187,19 +175,6 @@ jobs:
           token: ${{ secrets.GH_TOKEN }}
           validate: true
       - run: echo "::remove-matcher owner=gcc-strip3::"
-
-      - name: Upload coverage artifact
-        if: >-
-          always() &&
-          matrix.release != true &&
-          (steps.test.outcome == 'success' || steps.test.outcome == 'failure')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: coverage-Homebrew-${{ matrix.os_name }}-${{ matrix.os_version }}
-          path: |
-            ${{ steps.test.outputs.testpath }}/coverage.xml
-            ${{ steps.test.outputs.testpath }}/tests/test_results.xml
-          if-no-files-found: error
 
       - name: Patch homebrew formula
         # remove version from formula as it's not necessary for release versions
