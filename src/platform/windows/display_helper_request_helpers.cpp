@@ -97,6 +97,7 @@ namespace display_helper_integration::helpers {
       snapshot.appid = session.appid;
       snapshot.app_metadata = session.app_metadata;
       snapshot.client_display_mode_override = session.client_display_mode_override;
+      snapshot.client_display_refresh_millihz = session.client_display_refresh_millihz;
       snapshot.virtual_display = session.virtual_display;
       snapshot.virtual_display_failed = session.virtual_display_failed;
       snapshot.virtual_display_mode_override = session.virtual_display_mode_override;
@@ -110,6 +111,7 @@ namespace display_helper_integration::helpers {
       snapshot.gen1_framegen_fix = session.gen1_framegen_fix;
       snapshot.gen2_framegen_fix = session.gen2_framegen_fix;
       snapshot.framegen_refresh_rate = session.framegen_refresh_rate;
+      snapshot.framegen_refresh_millihz = session.framegen_refresh_millihz;
       snapshot.framegen_refresh_multiplier = session.framegen_refresh_multiplier;
       return snapshot;
     }

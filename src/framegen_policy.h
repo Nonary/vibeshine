@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <string>
@@ -15,6 +16,8 @@ namespace framegen {
 
   struct stream_start_policy_t {
     int fps = 0;
+    // Exact per-client display-mode rate. Zero means use the streamed FPS.
+    std::uint32_t frame_limit_millihz = 0;
     std::string frame_generation_provider {"lossless-scaling"};
     std::optional<int> lossless_rtss_limit;
     bool smooth_motion = false;
@@ -26,11 +29,13 @@ namespace framegen {
     bool auto_virtual_framegen_limiter = false;
     bool frame_generation_enabled = false;
     std::optional<int> framegen_refresh_rate;
+    std::optional<std::uint32_t> framegen_refresh_millihz;
     int refresh_multiplier = 1;
   };
 
   struct stream_start_policy_input_t {
     int fps = 0;
+    std::uint32_t display_refresh_millihz = 0;
     bool frame_generation_enabled = false;
     bool gen1_framegen_fix = false;
     bool gen2_framegen_fix = false;
@@ -93,9 +98,28 @@ namespace framegen {
     return fps * multiplier;
   }
 
+  inline std::uint32_t saturating_refresh_millihz(std::uint32_t millihz, int multiplier) {
+    if (millihz == 0 || multiplier <= 1) {
+      return millihz;
+    }
+    if (millihz > std::numeric_limits<std::uint32_t>::max() / static_cast<std::uint32_t>(multiplier)) {
+      return std::numeric_limits<std::uint32_t>::max();
+    }
+    return millihz * static_cast<std::uint32_t>(multiplier);
+  }
+
+  inline int rounded_fps_from_millihz(std::uint32_t millihz) {
+    constexpr std::uint32_t kMillihzPerHertz = 1000;
+    const auto rounded = (static_cast<std::uint64_t>(millihz) + kMillihzPerHertz / 2) / kMillihzPerHertz;
+    return rounded > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) ?
+             std::numeric_limits<int>::max() :
+             static_cast<int>(rounded);
+  }
+
   inline stream_start_policy_t make_stream_start_policy(const stream_start_policy_input_t &input) {
     stream_start_policy_t policy;
     policy.fps = input.fps;
+    policy.frame_limit_millihz = input.display_refresh_millihz;
     policy.frame_generation_provider = normalize_provider(input.frame_generation_provider);
     policy.lossless_rtss_limit = input.lossless_rtss_limit;
     policy.smooth_motion = policy.frame_generation_provider == "nvidia-smooth-motion";
@@ -129,7 +153,14 @@ namespace framegen {
       policy.auto_virtual_framegen_limiter = input.auto_virtual_framegen_limiter;
       policy.refresh_multiplier = std::max(1, input.virtual_display_refresh_multiplier);
       if (policy.refresh_multiplier > 1 && policy.fps > 0) {
-        policy.framegen_refresh_rate = saturating_refresh_fps(policy.fps, policy.refresh_multiplier);
+        const auto base_millihz = input.display_refresh_millihz > 0 ?
+                                      input.display_refresh_millihz :
+                                      saturating_refresh_millihz(static_cast<std::uint32_t>(policy.fps), 1000);
+        const auto refresh_millihz = saturating_refresh_millihz(base_millihz, policy.refresh_multiplier);
+        if (refresh_millihz > 0) {
+          policy.framegen_refresh_millihz = refresh_millihz;
+          policy.framegen_refresh_rate = rounded_fps_from_millihz(refresh_millihz);
+        }
       }
     }
 

@@ -189,6 +189,8 @@ namespace rtsp_stream {
     snapshot->unique_id = source.unique_id;
     snapshot->client_uuid = source.client_uuid;
     snapshot->device_name = source.device_name;
+    snapshot->client_display_mode_override = source.client_display_mode_override;
+    snapshot->client_display_refresh_millihz = source.client_display_refresh_millihz;
     snapshot->enable_hdr = source.enable_hdr;
     snapshot->prefer_sdr_10bit = source.prefer_sdr_10bit;
     snapshot->force_sdr = source.force_sdr;
@@ -198,6 +200,9 @@ namespace rtsp_stream {
     snapshot->gen2_framegen_fix = source.gen2_framegen_fix;
     snapshot->frame_generation_enabled = source.frame_generation_enabled;
     snapshot->lossless_scaling_framegen = source.lossless_scaling_framegen;
+    snapshot->framegen_refresh_rate = source.framegen_refresh_rate;
+    snapshot->framegen_refresh_millihz = source.framegen_refresh_millihz;
+    snapshot->framegen_refresh_multiplier = source.framegen_refresh_multiplier;
     snapshot->frame_generation_provider = source.frame_generation_provider;
     snapshot->lossless_scaling_target_fps = source.lossless_scaling_target_fps;
     snapshot->lossless_scaling_rtss_limit = source.lossless_scaling_rtss_limit;

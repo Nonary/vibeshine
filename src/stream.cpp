@@ -8,13 +8,17 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <future>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <queue>
+#include <system_error>
 #include <thread>
 #include <type_traits>
 
@@ -462,6 +466,7 @@ namespace stream {
   struct session_t {
     config_t config;
     int stream_fps = 0;
+    std::uint32_t client_display_refresh_millihz = 0;
 
     safe::mail_t mail;
 
@@ -2742,6 +2747,7 @@ namespace stream {
         }
         const auto policy = framegen::make_stream_start_policy({
           .fps = session.config.monitor.framerate,
+          .display_refresh_millihz = session.client_display_refresh_millihz,
           .frame_generation_enabled = session.config.frame_generation_enabled,
           .gen1_framegen_fix = session.config.gen1_framegen_fix,
           .gen2_framegen_fix = session.config.gen2_framegen_fix,
@@ -2800,6 +2806,7 @@ namespace stream {
 
       session->config = config;
       session->stream_fps = session->config.monitor.framerate;
+      session->client_display_refresh_millihz = launch_session.client_display_refresh_millihz;
 
 #ifdef _WIN32
       session->virtual_display.active = launch_session.virtual_display;

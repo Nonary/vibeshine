@@ -14,12 +14,15 @@
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <future>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
@@ -298,6 +301,7 @@ namespace nvhttp {
       auto make_framegen_policy = [&](bool uses_virtual_display) {
         return framegen::make_stream_start_policy({
           .fps = launch_session->fps,
+          .display_refresh_millihz = launch_session->client_display_refresh_millihz,
           .frame_generation_enabled = launch_session->frame_generation_enabled,
           .gen1_framegen_fix = launch_session->gen1_framegen_fix,
           .gen2_framegen_fix = launch_session->gen2_framegen_fix,
@@ -321,6 +325,7 @@ namespace nvhttp {
       auto apply_framegen_refresh_policy = [&](bool uses_virtual_display) {
         const auto framegen_policy = make_framegen_policy(uses_virtual_display);
         launch_session->framegen_refresh_rate = framegen_policy.framegen_refresh_rate;
+        launch_session->framegen_refresh_millihz = framegen_policy.framegen_refresh_millihz;
         launch_session->framegen_refresh_multiplier = framegen_policy.refresh_multiplier;
       };
       BOOST_LOG(debug) << "Display helper: session prep client='" << launch_session->client_name
@@ -463,10 +468,11 @@ namespace nvhttp {
           return;
         }
 
-        if (proc::vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
+        if (proc::vDisplayDriverStatus.load(std::memory_order_acquire) != VDISPLAY::DRIVER_STATUS::OK) {
           proc::initVDisplayDriver();
-          if (proc::vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
-            BOOST_LOG(warning) << "SudaVDA driver unavailable (status=" << static_cast<int>(proc::vDisplayDriverStatus) << "). Continuing with best-effort virtual display creation.";
+          const auto driver_status = proc::vDisplayDriverStatus.load(std::memory_order_acquire);
+          if (driver_status != VDISPLAY::DRIVER_STATUS::OK) {
+            BOOST_LOG(warning) << "SudaVDA driver unavailable (status=" << static_cast<int>(driver_status) << "). Continuing with best-effort virtual display creation.";
           }
         }
         if (!config::video.adapter_name.empty()) {
@@ -558,23 +564,18 @@ namespace nvhttp {
             virtual_display_hdr_requested = source_hdr_requested;
           }
         }
-        uint32_t base_vd_fps = launch_session->fps > 0 ? static_cast<uint32_t>(launch_session->fps) : 0u;
-        uint32_t base_vd_fps_millihz = base_vd_fps;
-        if (base_vd_fps_millihz > 0 && base_vd_fps_millihz < 1000u) {
-          base_vd_fps_millihz *= 1000u;
-        }
-        uint32_t vd_fps = 0;
-        if (launch_session->framegen_refresh_rate && *launch_session->framegen_refresh_rate > 0) {
-          vd_fps = static_cast<uint32_t>(*launch_session->framegen_refresh_rate);
-        } else if (base_vd_fps > 0) {
-          vd_fps = base_vd_fps;
-        } else {
+        const uint32_t base_vd_fps_millihz = launch_session->client_display_refresh_millihz > 0 ?
+                                                   launch_session->client_display_refresh_millihz :
+                                                   (launch_session->fps > 0 ?
+                                                      framegen::saturating_refresh_millihz(static_cast<uint32_t>(launch_session->fps), 1000) :
+                                                      0u);
+        uint32_t vd_fps = rtsp_stream::effective_display_refresh_millihz(*launch_session);
+        if (vd_fps == 0) {
           vd_fps = 60000u;
         }
-        if (vd_fps < 1000u) {
-          vd_fps *= 1000u;
-        }
-        const bool framegen_refresh_active = launch_session->framegen_refresh_rate && *launch_session->framegen_refresh_rate > 0;
+        const bool framegen_refresh_active =
+          (launch_session->framegen_refresh_millihz && *launch_session->framegen_refresh_millihz > 0) ||
+          (launch_session->framegen_refresh_rate && *launch_session->framegen_refresh_rate > 0);
         const int refresh_multiplier =
           framegen_refresh_active ? rtsp_stream::framegen_refresh_multiplier(*launch_session) : 1;
         if (base_vd_fps_millihz > 0 && refresh_multiplier > 1) {
@@ -741,6 +742,7 @@ namespace nvhttp {
           launch_session->virtual_display_device_id.clear();
           launch_session->virtual_display_ready_since.reset();
           launch_session->framegen_refresh_rate.reset();
+          launch_session->framegen_refresh_millihz.reset();
           launch_session->framegen_refresh_multiplier = 1;
           BOOST_LOG(warning) << "Virtual display creation failed.";
         }
@@ -1335,6 +1337,7 @@ namespace nvhttp {
     launch_session->frame_generation_enabled = false;
     launch_session->lossless_scaling_framegen = false;
     launch_session->framegen_refresh_rate.reset();
+    launch_session->framegen_refresh_millihz.reset();
     launch_session->framegen_refresh_multiplier = 1;
     launch_session->lossless_scaling_target_fps.reset();
     launch_session->lossless_scaling_rtss_limit.reset();
@@ -1349,6 +1352,7 @@ namespace nvhttp {
     launch_session->client_name.clear();
     launch_session->hdr_profile.reset();
     launch_session->client_display_mode_override = false;
+    launch_session->client_display_refresh_millihz = 0;
     launch_session->client_requests_virtual_display = false;
     launch_session->virtual_display_failed = false;
     launch_session->hdr_profile.reset();
@@ -1398,48 +1402,105 @@ namespace nvhttp {
 
     launch_session->host_audio = host_audio;
     auto client_settings = get_named_cert_by_uuid(launch_session->client_uuid);
-    auto parse_mode_string = [&](const std::string &mode_str) -> bool {
-      std::stringstream mode(mode_str);
-      int x = 0;
-      std::string segment;
+    struct parsed_display_mode_t {
       int width = 0;
       int height = 0;
-      int fps = 0;
-      while (std::getline(mode, segment, 'x')) {
-        if (x == 0) {
-          width = std::atoi(segment.c_str());
-        } else if (x == 1) {
-          height = std::atoi(segment.c_str());
-        } else if (x == 2) {
-          const double raw_fps = std::atof(segment.c_str());
-          int parsed = 0;
-          if (raw_fps > 0) {
-            parsed = static_cast<int>(raw_fps + 0.5);
-            // If someone provided millihz-style FPS (e.g. 60000), normalize to Hz.
-            if (parsed >= 1000 && parsed % 1000 == 0) {
-              parsed /= 1000;
-            }
-          }
-          fps = parsed;
+      std::uint32_t refresh_millihz = 0;
+    };
+
+    const auto parse_mode_string = [](const std::string &mode_str) -> std::optional<parsed_display_mode_t> {
+      constexpr std::uint32_t kMinRefreshMillihz = 10'000;
+      constexpr std::uint32_t kMaxRefreshMillihz = 1'000'000;
+
+      const auto parse_unsigned = [](std::string_view value, std::uint32_t maximum, std::uint32_t &result) {
+        if (value.empty()) {
+          return false;
         }
-        ++x;
+        std::uint64_t parsed = 0;
+        for (const char ch : value) {
+          if (ch < '0' || ch > '9') {
+            return false;
+          }
+          const auto digit = static_cast<unsigned int>(ch - '0');
+          if (digit > maximum || parsed > (maximum - digit) / 10) {
+            return false;
+          }
+          parsed = parsed * 10 + digit;
+        }
+        result = static_cast<std::uint32_t>(parsed);
+        return true;
+      };
+
+      const auto first_separator = mode_str.find('x');
+      const auto second_separator = first_separator == std::string::npos ? std::string::npos : mode_str.find('x', first_separator + 1);
+      if (first_separator == std::string::npos || second_separator == std::string::npos ||
+          mode_str.find('x', second_separator + 1) != std::string::npos) {
+        return std::nullopt;
       }
-      if (x < 3) {
-        return false;
+
+      std::uint32_t width = 0;
+      std::uint32_t height = 0;
+      if (!parse_unsigned(std::string_view(mode_str).substr(0, first_separator), static_cast<std::uint32_t>(std::numeric_limits<int>::max()), width) ||
+          !parse_unsigned(std::string_view(mode_str).substr(first_separator + 1, second_separator - first_separator - 1), static_cast<std::uint32_t>(std::numeric_limits<int>::max()), height)) {
+        return std::nullopt;
       }
-      launch_session->width = width;
-      launch_session->height = height;
-      launch_session->fps = fps;
-      return true;
+
+      const std::string_view refresh_text {mode_str.data() + second_separator + 1, mode_str.size() - second_separator - 1};
+      const auto decimal_point = refresh_text.find('.');
+      std::uint32_t refresh_millihz = 0;
+      if (decimal_point == std::string_view::npos) {
+        std::uint32_t raw_refresh = 0;
+        if (!parse_unsigned(refresh_text, kMaxRefreshMillihz, raw_refresh)) {
+          return std::nullopt;
+        }
+        // Plain 1000 means 1000 Hz, while the larger legacy values (for
+        // example 60000) retain their millihertz interpretation.
+        refresh_millihz = raw_refresh > 1000 ? raw_refresh : raw_refresh * 1000;
+      } else {
+        if (refresh_text.find('.', decimal_point + 1) != std::string_view::npos) {
+          return std::nullopt;
+        }
+        std::uint32_t whole_hertz = 0;
+        std::uint32_t fractional_millihz = 0;
+        const auto fractional = refresh_text.substr(decimal_point + 1);
+        if (fractional.empty() || fractional.size() > 3 ||
+            !parse_unsigned(refresh_text.substr(0, decimal_point), 1000, whole_hertz) ||
+            !parse_unsigned(fractional, 999, fractional_millihz)) {
+          return std::nullopt;
+        }
+        const auto scale = fractional.size() == 1 ? 100u : fractional.size() == 2 ? 10u : 1u;
+        refresh_millihz = whole_hertz * 1000 + fractional_millihz * scale;
+      }
+
+      if (width == 0 || height == 0 || refresh_millihz < kMinRefreshMillihz || refresh_millihz > kMaxRefreshMillihz) {
+        return std::nullopt;
+      }
+
+      return parsed_display_mode_t {
+        .width = static_cast<int>(width),
+        .height = static_cast<int>(height),
+        .refresh_millihz = refresh_millihz,
+      };
     };
 
     // Start with the client requested mode
-    (void) parse_mode_string(get_arg(args, "mode", "0x0x0"));
+    if (const auto requested_mode = parse_mode_string(get_arg(args, "mode", "0x0x0"))) {
+      launch_session->width = requested_mode->width;
+      launch_session->height = requested_mode->height;
+      launch_session->fps = framegen::rounded_fps_from_millihz(requested_mode->refresh_millihz);
+    }
 
     // Apply client display mode override if present
     if (client_settings && !client_settings->display_mode.empty()) {
-      if (parse_mode_string(client_settings->display_mode)) {
+      if (const auto display_mode = parse_mode_string(client_settings->display_mode)) {
+        // The override supplies the physical/virtual display mode, while the
+        // client-requested FPS remains the stream cadence. This lets a 120 FPS
+        // stream use a precise 59.94 Hz presentation/RTSS limit instead of
+        // silently downshifting the encoder to 60 FPS.
+        launch_session->width = display_mode->width;
+        launch_session->height = display_mode->height;
         launch_session->client_display_mode_override = true;
+        launch_session->client_display_refresh_millihz = display_mode->refresh_millihz;
       } else {
         BOOST_LOG(warning) << "Failed to parse client display mode override: " << client_settings->display_mode;
       }
@@ -1507,6 +1568,7 @@ namespace nvhttp {
     }
 
     launch_session->framegen_refresh_rate.reset();
+    launch_session->framegen_refresh_millihz.reset();
     launch_session->framegen_refresh_multiplier = 1;
     launch_session->enable_sops = util::from_view(get_arg(args, "sops", "0"));
     launch_session->surround_info = (int) util::from_view(get_arg(args, "surroundAudioInfo", "196610"));
@@ -2539,7 +2601,7 @@ namespace nvhttp {
     );
     tree.put("root.gamesession", 1);
 #ifdef _WIN32
-    tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK);
+    tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus.load(std::memory_order_acquire) == VDISPLAY::DRIVER_STATUS::OK);
 #else
     tree.put("root.VirtualDisplayDriverReady", false);
 #endif
@@ -2838,7 +2900,7 @@ namespace nvhttp {
     );
     tree.put("root.resume", 1);
     #ifdef _WIN32
-    tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK);
+    tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus.load(std::memory_order_acquire) == VDISPLAY::DRIVER_STATUS::OK);
 #else
     tree.put("root.VirtualDisplayDriverReady", false);
 #endif
