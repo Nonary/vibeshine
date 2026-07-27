@@ -135,5 +135,7 @@ certificate by the [SignPath Foundation](https://signpath.org?utm_source=foundat
 
 * **Committer and reviewer:** [Nonary](https://github.com/Nonary)
 * **Approver:** [Nonary](https://github.com/Nonary)
-* **Privacy:** Vibeshine will not transfer information to other networked systems unless specifically requested by the
-  user or the person installing or operating it.
+* **Privacy:** Vibeshine transfers information to networked systems only for functionality requested by the user or
+  operator; it does not transmit user or runtime data to SignPath. Separately, SignPath's GitHub integration receives
+  the build artifacts, signing-request details, and GitHub-provided build-origin metadata needed to sign official
+  releases.
