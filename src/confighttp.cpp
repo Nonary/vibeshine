@@ -2297,11 +2297,9 @@ namespace confighttp {
         }
       }
 
-      std::optional<bool> prefer_10bit_sdr;
+      bool prefer_10bit_sdr = false;
       if (input_tree.contains("prefer_10bit_sdr") && !input_tree["prefer_10bit_sdr"].is_null()) {
         prefer_10bit_sdr = input_tree["prefer_10bit_sdr"].get<bool>();
-      } else {
-        prefer_10bit_sdr.reset();
       }
 
       output_tree["status"] = nvhttp::update_device_info(

@@ -644,23 +644,13 @@
                   </n-form-item>
 
                   <n-form-item :label="t('config.prefer_10bit_sdr')">
-                    <n-select
-                      v-model:value="client.editPrefer10BitSdr"
-                      :options="prefer10BitSdrOptions"
-                      clearable
-                      :placeholder="t('config.prefer_10bit_sdr_follow_global')"
-                    />
+                    <n-checkbox v-model:checked="client.editPrefer10BitSdr" size="small">
+                      <span class="text-sm">{{ t('config.prefer_10bit_sdr_label') }}</span>
+                    </n-checkbox>
                     <template #feedback>
                       <span class="text-xs opacity-70">{{
                         t('config.prefer_10bit_sdr_desc')
                       }}</span>
-                      <span
-                        v-if="client.editPrefer10BitSdr === null"
-                        class="text-xs opacity-70 block"
-                      >
-                        {{ t('config.prefer_10bit_sdr_follow_global') }}
-                        ({{ globalPrefer10BitSdr ? t('_common.enabled') : t('_common.disabled') }})
-                      </span>
                     </template>
                   </n-form-item>
 
@@ -810,7 +800,6 @@ type ClientVirtualDisplayLayout =
   | 'extended_isolated'
   | 'extended_primary_isolated'
   | null;
-type ClientPrefer10BitSdrOverride = 'enabled' | 'disabled' | null;
 type ClientSortMode = 'recent' | 'name' | 'status';
 type ClientStatusFilter = 'all' | 'connected' | 'offline';
 
@@ -855,7 +844,7 @@ interface ClientViewModel {
   displayMode: string;
   outputOverride: string;
   alwaysUseVirtualDisplay: boolean;
-  prefer10BitSdr: ClientPrefer10BitSdrOverride;
+  prefer10BitSdr: boolean;
   virtualDisplayMode: ClientVirtualDisplayMode;
   virtualDisplayLayout: ClientVirtualDisplayLayout;
   configOverrides: Record<string, unknown>;
@@ -869,7 +858,7 @@ interface ClientViewModel {
   editPhysicalOutputOverride: string | null;
   editVirtualDisplayMode: ClientVirtualDisplayMode;
   editVirtualDisplayLayout: ClientVirtualDisplayLayout;
-  editPrefer10BitSdr: ClientPrefer10BitSdrOverride;
+  editPrefer10BitSdr: boolean;
   editConfigOverrides: Record<string, unknown>;
 }
 
@@ -894,7 +883,7 @@ interface ClientUpdatePayload {
   virtual_display_mode: string | null;
   virtual_display_layout: string | null;
   config_overrides?: Record<string, unknown>;
-  prefer_10bit_sdr?: boolean;
+  prefer_10bit_sdr: boolean;
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -905,14 +894,6 @@ const router = useRouter();
 const message = useMessage();
 const configStore = useConfigStore();
 const apiTokensSectionRef = ref<HTMLElement | null>(null);
-const globalPrefer10BitSdr = computed<boolean>(() =>
-  toBool(configValue('prefer_10bit_sdr'), false),
-);
-const prefer10BitSdrOptions = computed(() => [
-  { label: t('_common.enabled'), value: 'enabled' },
-  { label: t('_common.disabled'), value: 'disabled' },
-]);
-
 const clients = ref<ClientViewModel[]>([]);
 const clientsLoading = ref<boolean>(true);
 const clientsReady = ref<boolean>(false);
@@ -1036,12 +1017,7 @@ function createClientViewModel(entry: ClientApiEntry): ClientViewModel {
     !Array.isArray(entry.config_overrides)
       ? JSON.parse(JSON.stringify(entry.config_overrides))
       : {};
-  const prefer10: ClientPrefer10BitSdrOverride =
-    entry.prefer_10bit_sdr === undefined || entry.prefer_10bit_sdr === null
-      ? null
-      : toBool(entry.prefer_10bit_sdr, false)
-        ? 'enabled'
-        : 'disabled';
+  const prefer10 = toBool(entry.prefer_10bit_sdr, false);
   const virtualMode = parseClientVirtualDisplayMode(entry.virtual_display_mode ?? '');
   const virtualLayout = parseClientVirtualDisplayLayout(entry.virtual_display_layout ?? '');
   const overrideEnabled =
@@ -1684,6 +1660,7 @@ async function saveClient(client: ClientViewModel): Promise<void> {
       always_use_virtual_display: false,
       virtual_display_mode: '',
       virtual_display_layout: '',
+      prefer_10bit_sdr: client.editPrefer10BitSdr,
     };
 
     if (!client.editDisplayOverrideEnabled) {
@@ -1723,9 +1700,6 @@ async function saveClient(client: ClientViewModel): Promise<void> {
             ),
           )
         : {};
-    if (client.editPrefer10BitSdr !== null) {
-      payload.prefer_10bit_sdr = client.editPrefer10BitSdr === 'enabled';
-    }
     payload.hdr_profile = String(client.editHdrProfile ?? '').trim();
 
     const r = await http.post('./api/clients/update', payload, { validateStatus: () => true });
@@ -1743,12 +1717,7 @@ async function saveClient(client: ClientViewModel): Promise<void> {
     client.virtualDisplayMode = parseClientVirtualDisplayMode(payload.virtual_display_mode);
     client.virtualDisplayLayout = parseClientVirtualDisplayLayout(payload.virtual_display_layout);
     client.hdrProfile = payload.hdr_profile || '';
-    client.prefer10BitSdr =
-      payload.prefer_10bit_sdr === undefined
-        ? null
-        : payload.prefer_10bit_sdr
-          ? 'enabled'
-          : 'disabled';
+    client.prefer10BitSdr = payload.prefer_10bit_sdr;
     client.configOverrides =
       payload.config_overrides &&
       typeof payload.config_overrides === 'object' &&

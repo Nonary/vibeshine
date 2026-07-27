@@ -836,7 +836,7 @@ namespace nvhttp {
     std::string virtual_display_layout_override;
     bool always_use_virtual_display = false;
     bool enabled = true;
-    std::optional<bool> prefer_10bit_sdr;
+    bool prefer_10bit_sdr = false;
     std::optional<std::int64_t> last_seen;
     std::unordered_map<std::string, std::string> config_overrides;
   };
@@ -934,8 +934,8 @@ namespace nvhttp {
       if (named_cert.always_use_virtual_display) {
         named_cert_node.put("always_use_virtual_display"s, true);
       }
-      if (named_cert.prefer_10bit_sdr.has_value()) {
-        named_cert_node.put("prefer_10bit_sdr"s, *named_cert.prefer_10bit_sdr);
+      if (named_cert.prefer_10bit_sdr) {
+        named_cert_node.put("prefer_10bit_sdr"s, true);
       }
       if (named_cert.last_seen.has_value()) {
         named_cert_node.put("last_seen"s, *named_cert.last_seen);
@@ -1087,11 +1087,7 @@ namespace nvhttp {
           named_cert.virtual_display_layout_override = el.get<std::string>("virtual_display_layout", "");
           named_cert.always_use_virtual_display = el.get<bool>("always_use_virtual_display", false);
           named_cert.enabled = el.get<bool>("enabled", true);
-          if (auto prefer_10bit_sdr = el.get_optional<bool>("prefer_10bit_sdr")) {
-            named_cert.prefer_10bit_sdr = *prefer_10bit_sdr;
-          } else {
-            named_cert.prefer_10bit_sdr.reset();
-          }
+          named_cert.prefer_10bit_sdr = el.get<bool>("prefer_10bit_sdr", false);
           if (auto last_seen = el.get_optional<std::int64_t>("last_seen")) {
             named_cert.last_seen = *last_seen;
           } else {
@@ -1157,7 +1153,7 @@ namespace nvhttp {
     named_cert.virtual_display_layout_override.clear();
     named_cert.always_use_virtual_display = false;
     named_cert.enabled = true;
-    named_cert.prefer_10bit_sdr.reset();
+    named_cert.prefer_10bit_sdr = false;
     named_cert.last_seen.reset();
     named_cert.config_overrides.clear();
     {
@@ -1637,9 +1633,7 @@ namespace nvhttp {
     launch_session->continuous_audio = util::from_view(get_arg(args, "continuousAudio", "0"));
     launch_session->gcmap = (int) util::from_view(get_arg(args, "gcmap", "0"));
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
-    launch_session->prefer_sdr_10bit = client_settings && client_settings->prefer_10bit_sdr.has_value() ?
-                                         *client_settings->prefer_10bit_sdr :
-                                         config::video.prefer_10bit_sdr;
+    launch_session->prefer_sdr_10bit = client_settings && client_settings->prefer_10bit_sdr;
 #ifdef _WIN32
     {
       using override_e = config::video_t::dd_t::hdr_request_override_e;
@@ -2227,9 +2221,7 @@ namespace nvhttp {
       named_cert_node["virtual_display_mode"] = named_cert.virtual_display_mode_override;
       named_cert_node["virtual_display_layout"] = named_cert.virtual_display_layout_override;
       named_cert_node["always_use_virtual_display"] = named_cert.always_use_virtual_display;
-      if (named_cert.prefer_10bit_sdr.has_value()) {
-        named_cert_node["prefer_10bit_sdr"] = *named_cert.prefer_10bit_sdr;
-      }
+      named_cert_node["prefer_10bit_sdr"] = named_cert.prefer_10bit_sdr;
       if (named_cert.last_seen.has_value()) {
         named_cert_node["last_seen"] = *named_cert.last_seen;
       }
@@ -3349,7 +3341,7 @@ namespace nvhttp {
     const std::string &virtual_display_mode,
     const std::string &virtual_display_layout,
     std::optional<std::unordered_map<std::string, std::string>> config_overrides,
-    const std::optional<bool> prefer_10bit_sdr,
+    const bool prefer_10bit_sdr,
     const std::optional<std::string> hdr_profile
   ) {
     if (uuid.empty()) {
@@ -3467,14 +3459,14 @@ namespace nvhttp {
     return rtsp_stream::disconnect_client_sessions(uuid);
   }
 
-  std::optional<bool> get_client_prefer_10bit_sdr_override(const std::string &uuid) {
+  bool get_client_prefer_10bit_sdr(const std::string &uuid) {
     std::lock_guard<std::mutex> lock(client_mutex);
     for (const auto &named_cert : client_root.named_devices) {
       if (named_cert.uuid == uuid) {
         return named_cert.prefer_10bit_sdr;
       }
     }
-    return std::nullopt;
+    return false;
   }
 
   std::unordered_map<std::string, std::string> get_client_config_overrides(const std::string &uuid) {
