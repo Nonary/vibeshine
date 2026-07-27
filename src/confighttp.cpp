@@ -20,6 +20,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <variant>
@@ -417,11 +418,18 @@ namespace confighttp {
    * @param response The HTTP response object.
    * @param output_tree The JSON tree to send.
    */
-  void send_response(resp_https_t response, const nlohmann::json &output_tree) {
+  void send_response(resp_https_t response, const nlohmann::json &output_tree, std::string_view cache_control) {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "application/json; charset=utf-8");
+    if (!cache_control.empty()) {
+      headers.emplace("Cache-Control", cache_control);
+    }
     add_cors_headers(headers);
     response->write(success_ok, output_tree.dump(), headers);
+  }
+
+  void send_response(resp_https_t response, const nlohmann::json &output_tree) {
+    send_response(response, output_tree, {});
   }
 
   nlohmann::json load_webrtc_ice_servers() {
@@ -2090,7 +2098,9 @@ namespace confighttp {
     output_tree["named_certs"] = named_certs;
     output_tree["status"] = true;
     output_tree["platform"] = SUNSHINE_PLATFORM;
-    send_response(response, output_tree);
+    // The list changes immediately after pair/unpair. Avoid serving an old empty
+    // list from an HTTP cache after the client state has changed.
+    send_response(response, output_tree, "no-store");
   }
 
 #ifdef _WIN32
