@@ -17,6 +17,11 @@
 #include <vector>
 
 namespace display_helper_integration {
+  enum class ApplyRetryPolicy {
+    Full,
+    StreamStart
+  };
+
   /// Per-APPLY identity for the v2 capture gate. It is intentionally owned by
   /// the launching session rather than looked up through mutable global state.
   struct ApplyVerificationTicket {
@@ -36,7 +41,9 @@ namespace display_helper_integration {
   bool apply(
     const DisplayApplyRequest &request,
     ApplyVerificationTicket *verification_ticket = nullptr,
-    std::function<bool()> cancellation_predicate = {});
+    std::function<bool()> cancellation_predicate = {},
+    ApplyRetryPolicy retry_policy = ApplyRetryPolicy::Full,
+    std::chrono::steady_clock::time_point startup_deadline = {});
 
   // Returns true if a deferred APPLY request is currently queued.
   bool has_pending_apply();
@@ -55,7 +62,10 @@ namespace display_helper_integration {
 
   // Attempt to cancel any pending restore/revert requests on a running helper.
   // Returns true if a DISARM command was sent successfully.
-  bool disarm_pending_restore(std::function<bool()> cancellation_predicate = {});
+  bool disarm_pending_restore(
+    std::function<bool()> cancellation_predicate = {},
+    std::chrono::steady_clock::time_point operation_deadline =
+      std::chrono::steady_clock::time_point::max());
 
   // Request the helper to export current OS settings as golden restore snapshot.
   bool export_golden_restore();
@@ -64,7 +74,10 @@ namespace display_helper_integration {
   bool reset_persistence();
 
   // Ask the helper to capture the current display snapshot without applying changes.
-  bool snapshot_current_display_state();
+  bool snapshot_current_display_state(
+    std::function<bool()> cancellation_predicate = {},
+    std::chrono::steady_clock::time_point operation_deadline =
+      std::chrono::steady_clock::time_point::max());
 
   // Enumerate display devices via helper (or return nullopt on failure).
   std::optional<display_device::EnumeratedDeviceList> enumerate_devices(
@@ -86,11 +99,15 @@ namespace display_helper_integration {
     Unknown
   };
 
-  // APPLY acknowledgement and verification share this single stream-start
-  // budget; verification receives only the time left after APPLY.
+  // Full-policy APPLY acknowledgement and verification share this budget;
+  // verification receives only the time left after APPLY.
   inline constexpr auto kApplyVerificationTimeout = display_helper::v2::timing::kApplyStartupBudget;
+  // RTSP stream-start APPLYs use a shorter shared deadline so capture can begin
+  // before the client's first-video timeout, even when APPLY itself is slow.
+  inline constexpr auto kStreamStartApplyVerificationTimeout =
+    display_helper::v2::timing::kStreamStartApplyBudget;
   inline constexpr auto kApplyVerificationGateWaitTimeout =
-    kApplyVerificationTimeout + display_helper::v2::timing::kApplyGateConsumerSlack;
+    kStreamStartApplyVerificationTimeout + display_helper::v2::timing::kApplyGateConsumerSlack;
 
   // Wait for helper verification to finish after APPLY (v2 engine only).
   // Returns Unknown on timeout, legacy engine, or when verification is unavailable.
