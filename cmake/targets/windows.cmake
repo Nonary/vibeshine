@@ -57,6 +57,7 @@ add_custom_command(
             "${CMAKE_SOURCE_DIR}/packaging/windows/bootstrapper/app.manifest"
             "${CMAKE_SOURCE_DIR}/LICENSE"
             "${CMAKE_SOURCE_DIR}/sunshine.ico"
+            "${SUNSHINE_WINDOWS_VERSIONINFO_STAMP}"
             generate_windows_versioninfo
     COMMENT "Building lightweight Vibeshine uninstaller UI"
 )
