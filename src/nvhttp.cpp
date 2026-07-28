@@ -345,10 +345,29 @@ namespace nvhttp {
         launch_session->virtual_display_mode_override.value_or(config::video.virtual_display_mode);
       const bool shared_virtual_display_mode =
         requested_virtual_display_mode == config::video_t::virtual_display_mode_e::shared;
+      auto shared_virtual_display_uuid = VDISPLAY::persistentVirtualDisplayUuid();
+      if (shared_virtual_display_mode && !http::shared_virtual_display_guid.empty()) {
+        try {
+          shared_virtual_display_uuid =
+            uuid_util::uuid_t::parse(http::shared_virtual_display_guid);
+        } catch (...) {
+          // Creation uses the same persistent fallback and repairs the stored value.
+        }
+      }
       const std::string virtual_display_stable_id =
-        (!shared_virtual_display_mode && !launch_session->client_uuid.empty()) ?
-          launch_session->client_uuid :
-          launch_session->unique_id;
+        shared_virtual_display_mode ?
+          shared_virtual_display_uuid.string() :
+          (!launch_session->client_uuid.empty() ?
+             launch_session->client_uuid :
+             launch_session->unique_id);
+      const auto virtual_display_stable_uuid =
+        VDISPLAY::virtualDisplayUuidFromStableId(virtual_display_stable_id);
+      GUID virtual_display_stable_guid {};
+      std::memcpy(
+        &virtual_display_stable_guid,
+        virtual_display_stable_uuid.b8,
+        sizeof(virtual_display_stable_guid)
+      );
       bool has_app_output_override = app_output_override.has_value();
       auto make_framegen_policy = [&](bool uses_virtual_display) {
         return framegen::make_stream_start_policy({
@@ -391,14 +410,43 @@ namespace nvhttp {
                        << "'.";
 
       if (!no_active_sessions) {
+        const auto previous_virtual_display_device_id = launch_session->virtual_display_device_id;
         launch_session->virtual_display = false;
-        launch_session->virtual_display_failed = false;
+        launch_session->virtual_display_failed = request_virtual_display;
         launch_session->virtual_display_guid_bytes.fill(0);
         launch_session->virtual_display_device_id.clear();
         launch_session->virtual_display_ready_since.reset();
         launch_session->virtual_display_recreated_on_demand = false;
         launch_session->virtual_display_needs_resume_apply = false;
-        BOOST_LOG(info) << "Display helper: another session is active; joining existing capture target without display changes.";
+        if (request_virtual_display) {
+          const auto existing_device =
+            VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(
+              virtual_display_stable_id,
+              previous_virtual_display_device_id,
+              launch_session->client_name,
+              false
+            );
+          if (existing_device &&
+              VDISPLAY::configuredRenderAdapterMatchesVirtualDisplay(
+                virtual_display_stable_guid,
+                "active RTSP/shared virtual display reuse"
+              )) {
+            launch_session->virtual_display = true;
+            launch_session->virtual_display_failed = false;
+            launch_session->virtual_display_device_id = *existing_device;
+            launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
+            apply_framegen_refresh_policy(true);
+            BOOST_LOG(info) << "Display helper: another session is active; joining its validated virtual capture target (device_id="
+                            << *existing_device << ").";
+          } else if (existing_device) {
+            BOOST_LOG(error) << "Existing virtual display does not match the configured capture adapter; refusing to claim shared-session virtual-display reuse.";
+          } else {
+            BOOST_LOG(warning) << "Another session is active, but no reusable virtual display was found for this request.";
+          }
+        } else {
+          apply_framegen_refresh_policy(false);
+          BOOST_LOG(info) << "Display helper: another session is active; joining its existing capture target without display changes.";
+        }
         return;
       }
 
@@ -413,21 +461,32 @@ namespace nvhttp {
         if (request_virtual_display) {
           if (auto existing_device =
                 VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(virtual_display_stable_id, launch_session->virtual_display_device_id, launch_session->client_name, false)) {
-            launch_session->virtual_display = true;
-            launch_session->virtual_display_failed = false;
-            launch_session->virtual_display_device_id = *existing_device;
-            launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
-            launch_session->virtual_display_needs_resume_apply = true;
-            config::set_runtime_output_name_override(*existing_device);
-            pending_output_override = *existing_device;
-            apply_framegen_refresh_policy(true);
-            BOOST_LOG(info) << "Display helper: preserving virtual display capture target for resume (device_id="
-                            << *existing_device << ").";
-            BOOST_LOG(debug) << "Display helper: preserving capture target and refreshing display state for resume.";
-            return;
+            if (VDISPLAY::configuredRenderAdapterMatchesVirtualDisplay(
+                  virtual_display_stable_guid,
+                  "RTSP resume virtual display reuse"
+                )) {
+              launch_session->virtual_display = true;
+              launch_session->virtual_display_failed = false;
+              launch_session->virtual_display_device_id = *existing_device;
+              launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
+              launch_session->virtual_display_needs_resume_apply = true;
+              config::set_runtime_output_name_override(*existing_device);
+              pending_output_override = *existing_device;
+              apply_framegen_refresh_policy(true);
+              BOOST_LOG(info) << "Display helper: preserving virtual display capture target for resume (device_id="
+                              << *existing_device << ").";
+              BOOST_LOG(debug) << "Display helper: preserving capture target and refreshing display state for resume.";
+              return;
+            }
+
+            launch_session->virtual_display = false;
+            launch_session->virtual_display_failed = true;
+            launch_session->virtual_display_device_id.clear();
+            launch_session->virtual_display_ready_since.reset();
+            BOOST_LOG(warning) << "Display helper: existing resume virtual display is on a different or unknown adapter; recreating it on demand.";
           }
 
-          BOOST_LOG(info) << "Display helper: resume requested virtual display capture but no active virtual display was found;"
+          BOOST_LOG(info) << "Display helper: resume requested virtual display capture but no reusable virtual display was found;"
                           << " recreating one on demand.";
           launch_session->virtual_display_recreated_on_demand = true;
         } else {
@@ -501,27 +560,6 @@ namespace nvhttp {
           return;
         }
 
-        if (!no_active_sessions) {
-          auto existing_device =
-            VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(virtual_display_stable_id, launch_session->virtual_display_device_id, launch_session->client_name, false);
-          if (existing_device) {
-            launch_session->virtual_display = true;
-            launch_session->virtual_display_failed = false;
-            launch_session->virtual_display_device_id = *existing_device;
-            launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
-            BOOST_LOG(info) << "Virtual display already active (device_id=" << *existing_device
-                            << "). Skipping additional creation because another session is running.";
-          } else {
-            launch_session->virtual_display = false;
-            launch_session->virtual_display_failed = false;
-            launch_session->virtual_display_device_id.clear();
-            launch_session->virtual_display_ready_since.reset();
-            BOOST_LOG(info) << "Skipping virtual display creation because another session is running and no reusable device was found.";
-          }
-          launch_session->virtual_display_guid_bytes.fill(0);
-          return;
-        }
-
         if (proc::vDisplayDriverStatus.load(std::memory_order_acquire) != VDISPLAY::DRIVER_STATUS::OK) {
           proc::initVDisplayDriver();
           const auto driver_status = proc::vDisplayDriverStatus.load(std::memory_order_acquire);
@@ -529,12 +567,6 @@ namespace nvhttp {
             BOOST_LOG(warning) << "SudaVDA driver unavailable (status=" << static_cast<int>(driver_status) << "). Continuing with best-effort virtual display creation.";
           }
         }
-        if (!config::video.adapter_name.empty()) {
-          (void) VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name));
-        } else {
-          (void) VDISPLAY::setRenderAdapterWithMostDedicatedMemory();
-        }
-
         auto parse_uuid = [](const std::string &value) -> std::optional<uuid_util::uuid_t> {
           if (value.empty()) {
             return std::nullopt;
@@ -1156,6 +1188,11 @@ namespace nvhttp {
               named_cert.config_overrides[k] = v.get_value<std::string>();
             }
           }
+          {
+            std::unordered_map<std::string, std::string> normalized_overrides;
+            config::merge_config_overrides(normalized_overrides, named_cert.config_overrides);
+            named_cert.config_overrides = std::move(normalized_overrides);
+          }
           client.named_devices.emplace_back(named_cert);
         }
       }
@@ -1370,6 +1407,11 @@ namespace nvhttp {
   }
 
   std::mutex launch_request_mutex;
+  std::mutex stream_lifecycle_gate;
+
+  std::mutex &stream_lifecycle_mutex() {
+    return stream_lifecycle_gate;
+  }
 
   std::string resolve_known_client_uuid_from_launch_id(const std::string &launch_unique_id) {
     if (launch_unique_id.empty()) {
@@ -2374,7 +2416,7 @@ namespace nvhttp {
     }
   }
 
-  void launch(bool &host_audio, resp_https_t response, req_https_t request) {
+  void launch(bool &host_audio, resp_https_t response, req_https_t request, int current_appid) {
     print_req<SunshineHTTPS>(request);
 
 #ifdef _WIN32
@@ -2419,7 +2461,6 @@ namespace nvhttp {
     auto requested_app = proc::proc.resolve_app(appid_str, appuuid_str);
     auto appid = requested_app ? util::from_view(requested_app->id) : util::from_view(appid_str);
 
-    auto current_appid = proc::proc.running();
     if (current_appid > 0) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 400);
@@ -2428,14 +2469,55 @@ namespace nvhttp {
       return;
     }
 
+    if (rtsp_stream::has_pending_launch_or_startup()) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "Another RTSP session launch is pending");
+      return;
+    }
+
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
 
-    const bool no_active_sessions = !has_active_or_stopping_stream_session();
+    const bool no_active_sessions = !has_stream_session_activity();
     const auto request_client_identity = resolve_client_identity_from_request(request);
     // Runtime overrides are global process state. Do not reapply them while
     // another RTSP session is active, otherwise a second client can mutate
     // active stream limits (e.g. fps/encoding-related settings) mid-session.
     const bool update_runtime_overrides = no_active_sessions;
+
+    // Build the requested layer even when another stream owns the process-wide
+    // runtime config. A shared capture may only be joined when its adapter pair
+    // is compatible with the one that is already active.
+    std::unordered_map<std::string, std::string> requested_runtime_overrides;
+    if (requested_app) {
+      config::merge_config_overrides(requested_runtime_overrides, requested_app->config_overrides);
+    }
+
+    std::string client_uuid = request_client_identity.uuid;
+    const auto launch_client_uuid = resolve_known_client_uuid_from_launch_id(get_arg(args, "uniqueid", ""));
+    if (client_uuid.empty()) {
+      client_uuid = launch_client_uuid;
+    } else if (!launch_client_uuid.empty() && is_placeholder_client_name(request_client_identity.name)) {
+      BOOST_LOG(warning) << "Ignoring placeholder TLS client identity '" << request_client_identity.name
+                         << "' for runtime overrides; using launch uniqueid " << launch_client_uuid << ".";
+      client_uuid = launch_client_uuid;
+    }
+    const auto client_settings = get_named_cert_by_uuid(client_uuid);
+    if (client_settings) {
+      config::merge_config_overrides(requested_runtime_overrides, client_settings->config_overrides);
+    }
+
+    if (!update_runtime_overrides &&
+        !config::adapter_config_overrides_compatible_with_active(requested_runtime_overrides)) {
+      BOOST_LOG(warning) << "Rejecting shared launch with a capture adapter selection that differs from the active stream.";
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put(
+        "root.<xmlattr>.status_message",
+        "Another stream is active with a different capture adapter selection"
+      );
+      return;
+    }
 
     // Apply per-application runtime config overrides before we build session metadata or
     // prepare display/capture so the effective config is used everywhere.
@@ -2449,7 +2531,7 @@ namespace nvhttp {
       config::clear_runtime_config_overrides();
 
       // Restore global config immediately when safe; otherwise defer.
-      if (!has_active_or_stopping_stream_session()) {
+      if (!has_stream_session_activity()) {
         config::apply_config_now();
       } else {
         config::mark_deferred_reload();
@@ -2458,27 +2540,7 @@ namespace nvhttp {
 
     if (update_runtime_overrides) {
       try {
-        // Find the target app and apply its config overrides (if any), then layer on client overrides.
-        std::unordered_map<std::string, std::string> overrides;
-        if (requested_app) {
-          overrides = requested_app->config_overrides;
-        }
-
-        std::string client_uuid = request_client_identity.uuid;
-        const auto launch_client_uuid = resolve_known_client_uuid_from_launch_id(get_arg(args, "uniqueid", ""));
-        if (client_uuid.empty()) {
-          client_uuid = launch_client_uuid;
-        } else if (!launch_client_uuid.empty() && is_placeholder_client_name(request_client_identity.name)) {
-          BOOST_LOG(warning) << "Ignoring placeholder TLS client identity '" << request_client_identity.name
-                             << "' for runtime overrides; using launch uniqueid " << launch_client_uuid << ".";
-          client_uuid = launch_client_uuid;
-        }
-        const auto client_settings = get_named_cert_by_uuid(client_uuid);
-        if (client_settings) {
-          for (const auto &[k, v] : client_settings->config_overrides) {
-            overrides.insert_or_assign(k, v);
-          }
-        }
+        auto overrides = requested_runtime_overrides;
 
 #ifdef _WIN32
         // "Auto" client peak brightness follows the selected Windows HDR calibration
@@ -2516,6 +2578,9 @@ namespace nvhttp {
 
     // Prevent interleaving with hot-apply while we prep/start a session
     auto _hot_apply_gate = config::acquire_apply_read_gate();
+    if (no_active_sessions) {
+      config::record_active_adapter_config();
+    }
 
 #ifdef _WIN32
     const auto display_startup_deadline =
@@ -2544,7 +2609,6 @@ namespace nvhttp {
       config::set_runtime_output_name_override(std::nullopt);
 #ifdef _WIN32
       stream::cancel_paused_display_cleanup();
-      webrtc_stream::cancel_paused_display_cleanup();
 #endif
     }
 
@@ -2743,6 +2807,9 @@ namespace nvhttp {
     tree.put("root.VirtualDisplayDriverReady", false);
 #endif
 
+    stream::session::arm_shared_runtime_cleanup(
+      launch_session->virtual_display_guid_bytes
+    );
     rtsp_stream::launch_session_raise(launch_session);
 #ifdef _WIN32
     pending_vulkan_hdr_layer_guard.disable();
@@ -2757,7 +2824,7 @@ namespace nvhttp {
     revert_display_configuration = false;
   }
 
-  void resume(bool &host_audio, resp_https_t response, req_https_t request) {
+  void resume(bool &host_audio, resp_https_t response, req_https_t request, int current_appid) {
     print_req<SunshineHTTPS>(request);
 
 #ifdef _WIN32
@@ -2783,7 +2850,6 @@ namespace nvhttp {
       }
     });
 
-    auto current_appid = proc::proc.running();
     if (current_appid == 0) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 503);
@@ -2807,8 +2873,43 @@ namespace nvhttp {
     // Newer Moonlight clients send localAudioPlayMode on /resume too,
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
-    const bool no_active_sessions = !has_active_or_stopping_stream_session();
+    if (rtsp_stream::has_pending_launch_or_startup()) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "Another RTSP session launch is pending");
+      return;
+    }
+
+    const bool no_active_sessions = !has_stream_session_activity();
     const auto request_client_identity = resolve_client_identity_from_request(request);
+
+    std::unordered_map<std::string, std::string> requested_runtime_overrides;
+    if (auto running_app = proc::proc.resolve_app(current_appid)) {
+      config::merge_config_overrides(requested_runtime_overrides, running_app->config_overrides);
+    }
+
+    std::string client_uuid = request_client_identity.uuid;
+    const auto resume_client_uuid = resolve_known_client_uuid_from_launch_id(get_arg(args, "uniqueid", ""));
+    if (client_uuid.empty()) {
+      client_uuid = resume_client_uuid;
+    } else if (!resume_client_uuid.empty() && is_placeholder_client_name(request_client_identity.name)) {
+      client_uuid = resume_client_uuid;
+    }
+    if (const auto client_settings = get_named_cert_by_uuid(client_uuid)) {
+      config::merge_config_overrides(requested_runtime_overrides, client_settings->config_overrides);
+    }
+
+    if (!no_active_sessions &&
+        !config::adapter_config_overrides_compatible_with_active(requested_runtime_overrides)) {
+      BOOST_LOG(warning) << "Rejecting shared resume with a capture adapter selection that differs from the active stream.";
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put(
+        "root.<xmlattr>.status_message",
+        "Another stream is active with a different capture adapter selection"
+      );
+      return;
+    }
 
     bool runtime_overrides_reapplied = false;
     auto previous_runtime_overrides = config::runtime_config_overrides_snapshot();
@@ -2817,7 +2918,7 @@ namespace nvhttp {
         return;
       }
       config::set_runtime_config_overrides(std::move(previous_runtime_overrides));
-      if (!has_active_or_stopping_stream_session()) {
+      if (!has_stream_session_activity()) {
         config::apply_config_now();
       } else {
         config::mark_deferred_reload();
@@ -2825,25 +2926,7 @@ namespace nvhttp {
     });
 
     if (no_active_sessions) {
-      std::unordered_map<std::string, std::string> overrides;
-      if (auto running_app = proc::proc.resolve_app(current_appid)) {
-        overrides = running_app->config_overrides;
-      }
-
-      std::string client_uuid = request_client_identity.uuid;
-      const auto resume_client_uuid = resolve_known_client_uuid_from_launch_id(get_arg(args, "uniqueid", ""));
-      if (client_uuid.empty()) {
-        client_uuid = resume_client_uuid;
-      } else if (!resume_client_uuid.empty() && is_placeholder_client_name(request_client_identity.name)) {
-        client_uuid = resume_client_uuid;
-      }
-      if (const auto client_settings = get_named_cert_by_uuid(client_uuid)) {
-        for (const auto &[key, value] : client_settings->config_overrides) {
-          overrides.insert_or_assign(key, value);
-        }
-      }
-
-      config::set_runtime_config_overrides(std::move(overrides));
+      config::set_runtime_config_overrides(std::move(requested_runtime_overrides));
       config::apply_config_now();
       runtime_overrides_reapplied = true;
     }
@@ -2858,11 +2941,13 @@ namespace nvhttp {
 #ifdef _WIN32
     if (no_active_sessions) {
       stream::cancel_paused_display_cleanup();
-      webrtc_stream::cancel_paused_display_cleanup();
     }
 #endif
     // Prevent interleaving with hot-apply while we prep/resume a session
     auto _hot_apply_gate = config::acquire_apply_read_gate();
+    if (no_active_sessions) {
+      config::record_active_adapter_config();
+    }
 
 #ifdef _WIN32
     const auto display_startup_deadline =
@@ -3072,6 +3157,9 @@ namespace nvhttp {
     tree.put("root.VirtualDisplayDriverReady", false);
 #endif
 
+    stream::session::arm_shared_runtime_cleanup(
+      launch_session->virtual_display_guid_bytes
+    );
     rtsp_stream::launch_session_raise(launch_session);
 #ifdef _WIN32
     virtual_display_teardown_guard.disable();
@@ -3102,20 +3190,19 @@ namespace nvhttp {
     tree.put("root.cancel", 1);
     tree.put("root.<xmlattr>.status_code", 200);
 
-    rtsp_stream::terminate_sessions();
-
     const bool has_running_app = proc::proc.running() > 0;
 #ifdef _WIN32
     const bool preserve_deferred_launch =
       has_running_app &&
       proc::proc.is_launch_deferred() &&
-      rtsp_stream::session_count() == 0;
+      rtsp_stream::session_count_no_cleanup() == 0;
     if (preserve_deferred_launch) {
       BOOST_LOG(info) << "Cancel requested while app launch is deferred; preserving deferred app and virtual display state.";
     }
 #else
     constexpr bool preserve_deferred_launch = false;
 #endif
+    rtsp_stream::terminate_sessions(preserve_deferred_launch);
 
     if (has_running_app && !preserve_deferred_launch) {
       proc::proc.terminate();
@@ -3369,14 +3456,20 @@ namespace nvhttp {
     https_server.resource["^/appasset$"]["GET"] = appasset;
     https_server.resource["^/launch$"]["GET"] = [&host_audio, run_blocking_nvhttp](auto resp, auto req) {
       run_blocking_nvhttp([&host_audio, resp = std::move(resp), req = std::move(req)]() mutable {
-        std::lock_guard lock {launch_request_mutex};
-        launch(host_audio, std::move(resp), std::move(req));
+        std::lock_guard launch_lock {launch_request_mutex};
+        (void) proc::proc.running();
+        std::lock_guard lifecycle_lock {stream_lifecycle_gate};
+        const int current_appid = proc::proc.current_app_id();
+        launch(host_audio, std::move(resp), std::move(req), current_appid);
       });
     };
     https_server.resource["^/resume$"]["GET"] = [&host_audio, run_blocking_nvhttp](auto resp, auto req) {
       run_blocking_nvhttp([&host_audio, resp = std::move(resp), req = std::move(req)]() mutable {
-        std::lock_guard lock {launch_request_mutex};
-        resume(host_audio, std::move(resp), std::move(req));
+        std::lock_guard launch_lock {launch_request_mutex};
+        (void) proc::proc.running();
+        std::lock_guard lifecycle_lock {stream_lifecycle_gate};
+        const int current_appid = proc::proc.current_app_id();
+        resume(host_audio, std::move(resp), std::move(req), current_appid);
       });
     };
     https_server.resource["^/cancel$"]["GET"] = [run_blocking_nvhttp](auto resp, auto req) {
@@ -3477,6 +3570,11 @@ namespace nvhttp {
     const auto trimmed_output_override = boost::algorithm::trim_copy(output_name_override);
     const auto trimmed_vd_mode = boost::algorithm::trim_copy(virtual_display_mode);
     const auto trimmed_vd_layout = boost::algorithm::trim_copy(virtual_display_layout);
+    if (config_overrides) {
+      std::unordered_map<std::string, std::string> normalized_overrides;
+      config::merge_config_overrides(normalized_overrides, *config_overrides);
+      config_overrides = std::move(normalized_overrides);
+    }
 
     bool updated = false;
     {

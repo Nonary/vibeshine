@@ -177,6 +177,11 @@ namespace proc {
      */
     int running();
 
+    /**
+     * @return A side-effect-free snapshot of the current application ID.
+     */
+    int current_app_id() const;
+
     ~proc_t();
 
     // Return a snapshot copy to avoid concurrent access races
@@ -194,7 +199,10 @@ namespace proc {
     running_app_state_t running_app_state() const;
     bool running_app_contains_pid(uint32_t pid);
 #endif
-    void terminate(bool skip_display_revert = false);
+    void terminate(
+      bool skip_display_revert = false,
+      bool stream_lifecycle_lock_held = false
+    );
 
     // Hot-update app list and environment without disrupting a running app
     void update_apps(std::vector<ctx_t> &&apps, bp::environment &&env);
@@ -211,7 +219,7 @@ namespace proc {
     bp::environment release_env();
 
   private:
-    int launch_app_commands();
+    int launch_app_commands(bool stream_lifecycle_lock_held);
 
     std::atomic<int> _app_id;
 

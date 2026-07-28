@@ -106,54 +106,7 @@ namespace webrtc_stream {
       return version;
     }
 
-#ifdef _WIN32
-    std::atomic_uint64_t g_paused_display_cleanup_generation {0};
-
-    void schedule_paused_display_cleanup(
-      std::chrono::seconds timeout,
-      std::string reason,
-      bool enforce_display_restore,
-      std::optional<std::array<std::uint8_t, 16>> virtual_display_guid_bytes = std::nullopt
-    ) {
-      const auto generation = g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
-      std::thread([timeout, generation, reason = std::move(reason), enforce_display_restore, virtual_display_guid_bytes]() {
-        std::this_thread::sleep_for(timeout);
-        stream::session::cleanup_reservation_t cleanup_reservation;
-
-        if (g_paused_display_cleanup_generation.load(std::memory_order_acquire) != generation) {
-          return;
-        }
-
-        if (has_active_sessions() || stream::session::running_sessions.load(std::memory_order_acquire) != 0) {
-          return;
-        }
-
-        if (proc::proc.running() <= 0) {
-          return;
-        }
-
-        BOOST_LOG(info) << "Display cleanup: paused stream timeout reached; removing virtual display(s) (reason="
-                        << reason << ").";
-        const auto cleanup = platf::virtual_display_cleanup::run(
-          "paused_session_timeout",
-          enforce_display_restore,
-          platf::virtual_display_cleanup::revert_order_t::remove_before_restore,
-          true,
-          virtual_display_guid_bytes
-        );
-        if (cleanup.helper_revert_dispatched) {
-          display_helper_integration::stop_watchdog();
-        }
-      }).detach();
-    }
-#endif
   }  // namespace
-
-  void cancel_paused_display_cleanup() {
-#ifdef _WIN32
-    g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel);
-#endif
-  }
 
   bool add_local_candidate(std::string_view id, std::string mid, int mline_index, std::string candidate);
   bool set_local_answer(std::string_view id, const std::string &sdp, const std::string &type);
@@ -258,8 +211,31 @@ namespace webrtc_stream {
       const bool metadata_requests_virtual = session->app_metadata && session->app_metadata->virtual_screen;
       bool request_virtual_display =
         session->virtual_display || config_requests_virtual || metadata_requests_virtual;
+      const auto requested_virtual_display_mode =
+        session->virtual_display_mode_override.value_or(config::video.virtual_display_mode);
+      const bool shared_virtual_display_mode =
+        requested_virtual_display_mode == config::video_t::virtual_display_mode_e::shared;
+      auto shared_virtual_display_uuid = VDISPLAY::persistentVirtualDisplayUuid();
+      if (shared_virtual_display_mode && !http::shared_virtual_display_guid.empty()) {
+        try {
+          shared_virtual_display_uuid =
+            uuid_util::uuid_t::parse(http::shared_virtual_display_guid);
+        } catch (...) {
+          // Creation uses the same persistent fallback and repairs the stored value.
+        }
+      }
       const std::string virtual_display_stable_id =
-        !session->unique_id.empty() ? session->unique_id : session->client_uuid;
+        shared_virtual_display_mode ?
+          shared_virtual_display_uuid.string() :
+          (!session->unique_id.empty() ? session->unique_id : session->client_uuid);
+      const auto virtual_display_stable_uuid =
+        VDISPLAY::virtualDisplayUuidFromStableId(virtual_display_stable_id);
+      GUID virtual_display_stable_guid {};
+      std::memcpy(
+        &virtual_display_stable_guid,
+        virtual_display_stable_uuid.b8,
+        sizeof(virtual_display_stable_guid)
+      );
       bool has_app_output_override = app_output_override.has_value();
       auto make_framegen_policy = [&](bool uses_virtual_display) {
         return framegen::make_stream_start_policy({
@@ -310,16 +286,27 @@ namespace webrtc_stream {
         if (request_virtual_display) {
           if (auto existing_device =
                 VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(virtual_display_stable_id, session->virtual_display_device_id, session->client_name, false)) {
-            session->virtual_display = true;
-            session->virtual_display_failed = false;
-            session->virtual_display_device_id = *existing_device;
-            session->virtual_display_ready_since = std::chrono::steady_clock::now();
-            session->virtual_display_needs_resume_apply = true;
-            config::set_runtime_output_name_override(session->virtual_display_device_id);
-            apply_framegen_refresh_policy(true);
-            BOOST_LOG(info) << "Display helper: preserving virtual display capture target for WebRTC resume (device_id="
-                            << *existing_device << ").";
-            BOOST_LOG(debug) << "Display helper: preserving capture target and refreshing display state for WebRTC resume.";
+            if (VDISPLAY::configuredRenderAdapterMatchesVirtualDisplay(
+                  virtual_display_stable_guid,
+                  "active WebRTC/shared virtual display reuse"
+                )) {
+              session->virtual_display = true;
+              session->virtual_display_failed = false;
+              session->virtual_display_device_id = *existing_device;
+              session->virtual_display_ready_since = std::chrono::steady_clock::now();
+              session->virtual_display_needs_resume_apply = true;
+              config::set_runtime_output_name_override(session->virtual_display_device_id);
+              apply_framegen_refresh_policy(true);
+              BOOST_LOG(info) << "Display helper: preserving virtual display capture target for WebRTC resume (device_id="
+                              << *existing_device << ").";
+              BOOST_LOG(debug) << "Display helper: preserving capture target and refreshing display state for WebRTC resume.";
+            } else {
+              session->virtual_display = false;
+              session->virtual_display_failed = true;
+              session->virtual_display_device_id.clear();
+              session->virtual_display_ready_since.reset();
+              BOOST_LOG(error) << "Existing WebRTC virtual display does not match the configured capture adapter; refusing shared-session reuse.";
+            }
             return;
           }
 
@@ -352,12 +339,6 @@ namespace webrtc_stream {
             << "SudaVDA driver unavailable (status=" << static_cast<int>(driver_status)
             << "). Continuing with best-effort virtual display creation.";
         }
-      }
-
-      if (!config::video.adapter_name.empty()) {
-        (void) VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name));
-      } else {
-        (void) VDISPLAY::setRenderAdapterWithMostDedicatedMemory();
       }
 
       auto parse_uuid = [](const std::string &value) -> std::optional<uuid_util::uuid_t> {
@@ -793,13 +774,8 @@ namespace webrtc_stream {
 
     struct WebRtcCaptureState {
       std::mutex mutex;
-      std::condition_variable teardown_cv;
-      bool teardown_in_progress {false};
       std::atomic_bool active {false};
       std::atomic_size_t pending_session_creations {0};
-#ifdef _WIN32
-      std::atomic_bool owns_frame_limiter {false};
-#endif
       std::shared_ptr<safe::mail_raw_t> mail;
       std::shared_ptr<rtsp_stream::launch_session_t> launch_session;
       std::thread video_thread;
@@ -2452,6 +2428,7 @@ namespace webrtc_stream {
       config.width = options.width.value_or(kDefaultWidth);
       config.height = options.height.value_or(kDefaultHeight);
       config.framerate = options.fps.value_or(kDefaultFps);
+      config.framerateX100 = config.framerate * 100;
       int bitrate = options.bitrate_kbps.value_or(0);
       if (bitrate <= 0) {
         bitrate = config::video.max_bitrate > 0 ? config::video.max_bitrate : 20000;
@@ -2566,7 +2543,9 @@ namespace webrtc_stream {
       if (using_lossless_provider) {
         if (lossless_scaling_rtss_limit && *lossless_scaling_rtss_limit > 0) {
           params.lossless_rtss_limit = lossless_scaling_rtss_limit;
-        } else if (lossless_scaling_target_fps && *lossless_scaling_target_fps > 0) {
+        } else if (using_lossless_provider &&
+                   lossless_scaling_target_fps &&
+                   *lossless_scaling_target_fps > 0) {
           int computed = (int) std::lround(*lossless_scaling_target_fps * 0.5);
           if (computed > 0) {
             params.lossless_rtss_limit = computed;
@@ -2793,7 +2772,35 @@ namespace webrtc_stream {
       return key;
     }
 
-    void stop_webrtc_capture_locked(bool allow_platform_teardown, bool final_teardown) {
+#ifdef _WIN32
+    void acquire_webrtc_frame_limiter_locked(const WebRtcStreamStartParams &start_params) {
+      const auto policy = framegen::make_stream_start_policy({
+        .fps = start_params.fps,
+        .display_refresh_millihz = start_params.fps > 0 ?
+                                    static_cast<std::uint32_t>(start_params.fps) * 1000u :
+                                    0u,
+        .frame_generation_enabled = start_params.frame_generation_enabled,
+        .gen1_framegen_fix = start_params.gen1_framegen_fix,
+        .gen2_framegen_fix = start_params.gen2_framegen_fix,
+        .lossless_scaling_framegen = start_params.lossless_scaling_framegen,
+        .lossless_rtss_limit = start_params.lossless_rtss_limit,
+        .frame_generation_provider = start_params.frame_generation_provider,
+        .uses_virtual_display = start_params.uses_virtual_display,
+        .capture_mode = config::video.capture,
+        .auto_capture_uses_wgc = platf::dxgi::should_use_wgc_default(),
+        .auto_virtual_framegen_limiter = config::frame_limiter.virtual_display_limiter_enabled(),
+        .virtual_display_refresh_multiplier = config::frame_limiter.fixed_virtual_display_refresh_multiplier(),
+      });
+      platf::frame_limiter_streaming_start(
+        platf::frame_limiter_owner::webrtc,
+        policy
+      );
+    }
+#endif
+
+    std::optional<std::array<std::uint8_t, 16>> stop_webrtc_capture_locked(
+      bool shared_runtime_owned
+    ) {
       if (webrtc_capture.mail) {
         auto shutdown_event = webrtc_capture.mail->event<bool>(mail::shutdown);
         shutdown_event->raise(true);
@@ -2825,78 +2832,37 @@ namespace webrtc_stream {
       webrtc_capture.active.store(false, std::memory_order_release);
 
 #ifdef _WIN32
-      if (webrtc_capture.owns_frame_limiter.exchange(false, std::memory_order_acq_rel)) {
-        const bool keep_rtss_running =
-          rtsp_sessions_active.load(std::memory_order_relaxed) || proc::proc.running() > 0;
-        platf::frame_limiter_streaming_stop(keep_rtss_running);
-      }
+      const bool keep_rtss_running =
+        shared_runtime_owned ||
+        rtsp_sessions_active.load(std::memory_order_relaxed) ||
+        proc::proc.current_app_id() > 0;
+      platf::frame_limiter_streaming_stop(
+        platf::frame_limiter_owner::webrtc,
+        keep_rtss_running
+      );
 #endif
 
-#ifdef _WIN32
-      if (allow_platform_teardown) {
-        const bool is_paused = proc::proc.running() > 0;
-        if (final_teardown && !is_paused) {
-          // WebRTC already restores on final teardown; consume any app-triggered
-          // request so it cannot leak into a later streaming session.
-          (void) proc::consume_deferred_display_revert();
-        }
-        // config_revert_on_disconnect only governs reverting while an app is still
-        // running (paused session). When the stream is fully over with no app left,
-        // the physical display configuration must always be restored — otherwise a
-        // desktop WebRTC session leaves the monitors disabled with nothing else
-        // (e.g. app termination) ever dispatching the revert.
-        const bool revert_enabled = config::video.dd.config_revert_on_disconnect || (final_teardown && !is_paused);
-        const int paused_timeout_secs = std::max(0, config::video.dd.paused_virtual_display_timeout_secs);
-        const bool delay_virtual_display_cleanup_due_to_pause = is_paused && !revert_enabled && paused_timeout_secs > 0;
-        const bool keep_virtual_display_due_to_pause = is_paused && !revert_enabled && paused_timeout_secs == 0;
-        if (delay_virtual_display_cleanup_due_to_pause) {
-          BOOST_LOG(info) << "Display cleanup: WebRTC session paused with revert-on-disconnect disabled; "
-                          << "scheduling virtual display removal without display restore in " << paused_timeout_secs << "s.";
-          schedule_paused_display_cleanup(
-            std::chrono::seconds(paused_timeout_secs),
-            "webrtc_session_paused",
-            false,
-            virtual_display_guid_bytes
-          );
-        } else if (keep_virtual_display_due_to_pause) {
-          BOOST_LOG(debug) << "Display cleanup: WebRTC session is paused; keeping virtual display alive (config_revert_on_disconnect=false, paused timeout disabled).";
-        } else {
-          g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel);
-          const auto cleanup_reason = is_paused && !revert_enabled ? "webrtc_session_paused" : "webrtc_capture_stop";
-          const auto cleanup = platf::virtual_display_cleanup::run(
-            cleanup_reason,
-            revert_enabled,
-            platf::virtual_display_cleanup::revert_order_t::remove_before_restore,
-            true,
-            virtual_display_guid_bytes
-          );
-          if (cleanup.helper_revert_dispatched) {
-            display_helper_integration::stop_watchdog();
-          } else if (revert_enabled) {
-            BOOST_LOG(debug) << "Display helper: revert dispatch failed during WebRTC cleanup.";
-          } else if (is_paused) {
-            BOOST_LOG(info) << "Display cleanup: WebRTC session paused with revert-on-disconnect disabled; "
-                            << "removed virtual display(s) without restoring physical display configuration.";
-          }
-        }
-      }
-#endif
-
-      if (allow_platform_teardown) {
-        config::set_runtime_output_name_override(std::nullopt);
-        config::maybe_apply_deferred();
-      }
+      // Final display, configuration, and platform cleanup is centralized in
+      // stream::session::finalize_shared_runtime_if_idle().
+      return virtual_display_guid_bytes;
     }
 
     std::optional<std::string> start_webrtc_capture(const SessionOptions &options) {
+      // RTSP launch requests hold the same gate from their first session-state
+      // observation until launch_session_raise() publishes the pending owner.
+      // Take it before the WebRTC mutex to keep one lock order and prevent two
+      // first sessions from applying different process-wide runtime layers.
+      (void) proc::proc.running();
+      std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
+      const int current_app_id = proc::proc.current_app_id();
+      if (rtsp_stream::has_pending_launch_or_startup()) {
+        return std::string {"RTSP session launch is pending"};
+      }
+
       std::unique_lock<std::mutex> lock(webrtc_capture.mutex);
-      webrtc_capture.teardown_cv.wait(lock, []() {
-        return !webrtc_capture.teardown_in_progress;
-      });
       const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
       const auto rtsp_config = rtsp_active ? snapshot_rtsp_capture_config() : std::nullopt;
 
-      const int current_app_id = proc::proc.running();
       const int raw_requested_app_id = options.app_id.value_or(0);
       const auto requested_app_ctx = raw_requested_app_id > 0 ? proc::proc.resolve_app(raw_requested_app_id) : std::optional<proc::ctx_t> {};
       const int requested_app_id = requested_app_ctx ? (int) util::from_view(requested_app_ctx->id) : raw_requested_app_id;
@@ -2920,6 +2886,26 @@ namespace webrtc_stream {
       const int effective_app_id = requested_app_id > 0 ? requested_app_id : current_app_id;
       const bool capture_already_active = webrtc_capture.active.load(std::memory_order_acquire);
 
+      std::unordered_map<std::string, std::string> requested_runtime_overrides;
+      if (effective_app_id > 0) {
+        if (auto app_ctx = proc::proc.resolve_app(effective_app_id)) {
+          config::merge_config_overrides(requested_runtime_overrides, app_ctx->config_overrides);
+        }
+      }
+      if (options.client_uuid && !options.client_uuid->empty()) {
+        const auto client_overrides = nvhttp::get_client_config_overrides(*options.client_uuid);
+        config::merge_config_overrides(requested_runtime_overrides, client_overrides);
+      }
+
+      if ((rtsp_active || capture_already_active) &&
+          !config::adapter_config_overrides_compatible_with_active(requested_runtime_overrides)) {
+        BOOST_LOG(warning) << "WebRTC: rejected shared capture with a different adapter selection";
+        return std::string {
+          "Another stream is active with a different capture adapter selection. "
+          "Disconnect it before switching capture adapters."
+        };
+      }
+
       // Match the normal launch path's configuration precedence before deriving any
       // capture or limiter policy: global config, then application, then client.
       // An existing capture owns the process-wide runtime config, so additional
@@ -2940,19 +2926,7 @@ namespace webrtc_stream {
       });
 
       if (!rtsp_active && !capture_already_active) {
-        std::unordered_map<std::string, std::string> overrides;
-        if (effective_app_id > 0) {
-          if (auto app_ctx = proc::proc.resolve_app(effective_app_id)) {
-            overrides = app_ctx->config_overrides;
-          }
-        }
-        if (options.client_uuid && !options.client_uuid->empty()) {
-          for (auto &[key, value] : nvhttp::get_client_config_overrides(*options.client_uuid)) {
-            overrides.insert_or_assign(std::move(key), std::move(value));
-          }
-        }
-
-        config::set_runtime_config_overrides(std::move(overrides));
+        config::set_runtime_config_overrides(std::move(requested_runtime_overrides));
         runtime_overrides_applied = true;
         config::apply_config_now();
       }
@@ -2964,13 +2938,16 @@ namespace webrtc_stream {
       auto audio_config = build_audio_config(options);
       apply_rtsp_video_overrides(video_config, rtsp_config);
       apply_rtx_hdr_stream_policy(video_config);
-      const auto desired_key = build_capture_config_key(effective_app_id, video_config, options);
+      auto desired_key = build_capture_config_key(effective_app_id, video_config, options);
 
       if (
         webrtc_capture.active.load(std::memory_order_acquire) &&
         webrtc_capture.config_key &&
         *webrtc_capture.config_key == desired_key
       ) {
+#ifdef _WIN32
+        acquire_webrtc_frame_limiter_locked(stream_start_params);
+#endif
         webrtc_capture.pending_session_creations.fetch_add(1, std::memory_order_release);
         return std::nullopt;
       }
@@ -3005,14 +2982,18 @@ namespace webrtc_stream {
         }
       }
 
+      desired_key = build_capture_config_key(effective_app_id, video_config, options);
+
       if (!rtsp_active) {
 #ifdef _WIN32
         stream::cancel_paused_display_cleanup();
-        webrtc_stream::cancel_paused_display_cleanup();
 #endif
         // Ensure the latest config is applied before starting capture.
         config::maybe_apply_deferred();
         auto _hot_apply_gate = config::acquire_apply_read_gate();
+        if (!capture_already_active) {
+          config::record_active_adapter_config();
+        }
 
 #ifdef _WIN32
         prepare_virtual_display_for_webrtc_session(launch_session, allow_display_changes);
@@ -3102,61 +3083,106 @@ namespace webrtc_stream {
         audio::capture(mail, audio_config, nullptr);
       });
       keep_runtime_overrides = true;
+#ifdef _WIN32
+      acquire_webrtc_frame_limiter_locked(*webrtc_capture.stream_start_params);
+#endif
+      stream::session::arm_shared_runtime_cleanup(
+        launch_session->virtual_display_guid_bytes
+      );
       webrtc_capture.pending_session_creations.fetch_add(1, std::memory_order_release);
       return std::nullopt;
     }
 
-    void stop_webrtc_capture_if_idle() {
-      std::unique_lock<std::mutex> lock(webrtc_capture.mutex);
-      if (!webrtc_capture.active.load(std::memory_order_acquire)) {
-        return;
-      }
-      if (
-        has_active_sessions() ||
-        webrtc_capture.pending_session_creations.load(std::memory_order_acquire) != 0
-      ) {
-        return;
-      }
-      const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
-      if (rtsp_active) {
-        if (webrtc_capture.teardown_in_progress) {
-          return;
-        }
-        webrtc_capture.teardown_in_progress = true;
-        BOOST_LOG(debug) << "WebRTC: scheduling idle capture shutdown without disturbing the active RTSP session.";
-        task_pool.push([]() {
-          std::unique_lock<std::mutex> teardown_lock(webrtc_capture.mutex);
-          if (
-            webrtc_capture.active.load(std::memory_order_acquire) &&
-            !has_active_sessions() &&
-            webrtc_capture.pending_session_creations.load(std::memory_order_acquire) == 0
-          ) {
-            stop_webrtc_capture_locked(false, true);
-          }
-          webrtc_capture.teardown_in_progress = false;
-          teardown_lock.unlock();
-          webrtc_capture.teardown_cv.notify_all();
-        });
-        return;
-      }
-      BOOST_LOG(debug) << "WebRTC: stopping idle capture with final platform teardown.";
-      stop_webrtc_capture_locked(true, true);
-#ifdef _WIN32
-      VDISPLAY::restorePhysicalHdrProfiles();
-      platf::rtss_set_sync_limiter_override(std::nullopt);
+#ifdef SUNSHINE_ENABLE_WEBRTC
+    void stop_media_thread();
 #endif
-      platf::streaming_will_stop();
+
+    void release_webrtc_teardown_reservation(bool *teardown_reserved) {
+      if (!teardown_reserved || !*teardown_reserved) {
+        return;
+      }
+      teardown_sessions.fetch_sub(1, std::memory_order_acq_rel);
+      *teardown_reserved = false;
+    }
+
+    bool stop_webrtc_capture_if_idle_with_lifecycle_lock(
+      bool *teardown_reserved = nullptr
+    ) {
+      std::unique_lock<std::mutex> lock(webrtc_capture.mutex);
+      // Declared after both locks so every return releases the observable
+      // WebRTC teardown reservation before another final teardown can enter.
+      auto reservation_release = util::fail_guard([&]() {
+        release_webrtc_teardown_reservation(teardown_reserved);
+      });
+      const bool capture_active =
+        webrtc_capture.active.load(std::memory_order_acquire);
+      const bool webrtc_session_owned =
+        has_active_sessions() ||
+        webrtc_capture.pending_session_creations.load(std::memory_order_acquire) != 0;
+      if (webrtc_session_owned) {
+        return false;
+      }
+#ifdef SUNSHINE_ENABLE_WEBRTC
+      // These are process-wide WebRTC resources, not properties of the
+      // session that happened to observe the previous 1 -> 0 transition.
+      // Stop them only after a fresh lifecycle-protected owner check so a
+      // newly published compatible session cannot lose its media/input state.
+      stop_media_thread();
+      reset_input_context();
+#endif
+      const bool rtsp_owns_runtime =
+        rtsp_sessions_active.load(std::memory_order_acquire) ||
+        rtsp_stream::has_pending_launch_or_startup() ||
+        rtsp_stream::session_count_no_cleanup() > 0 ||
+        stream::session::running_sessions.load(std::memory_order_acquire) != 0 ||
+        stream::session::teardown_sessions.load(std::memory_order_acquire) != 0;
+      std::optional<std::array<std::uint8_t, 16>> virtual_display_guid_bytes;
+      if (capture_active) {
+        if (rtsp_owns_runtime) {
+          BOOST_LOG(debug) << "WebRTC: stopping idle capture without disturbing an active, pending, or tearing-down RTSP session.";
+        } else {
+          BOOST_LOG(debug) << "WebRTC: stopping idle capture and checking for final shared platform teardown.";
+        }
+        virtual_display_guid_bytes = stop_webrtc_capture_locked(rtsp_owns_runtime);
+      }
+      const stream::session::shared_runtime_finalize_context_t finalize_context {
+        .ignore_current_webrtc_teardown = teardown_reserved && *teardown_reserved,
+        .apply_deferred_config = false,
+        .force_display_revert_when_idle = true,
+        .virtual_display_guid_bytes = virtual_display_guid_bytes,
+      };
+      const bool finalized_shared_runtime = stream::session::finalize_shared_runtime_if_idle(
+        "webrtc_capture_stop",
+        finalize_context
+      );
+      if (finalized_shared_runtime) {
+        // Bridge observability across the protocol-counter release without
+        // making config's activity predicate block this proven-idle apply.
+        stream::session::cleanup_reservation_t cleanup_reservation;
+        // Cleanup is complete. Release the current protocol teardown before
+        // consulting config's comprehensive activity predicate, otherwise the
+        // final owner would indefinitely defer its own pending reload.
+        release_webrtc_teardown_reservation(teardown_reserved);
+        config::maybe_apply_deferred();
+      }
+      return finalized_shared_runtime;
+    }
+
+    void stop_webrtc_capture_if_idle(bool *teardown_reserved = nullptr) {
+      std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
+      (void) stop_webrtc_capture_if_idle_with_lifecycle_lock(teardown_reserved);
     }
 
     void cancel_pending_webrtc_session_creation() {
       stream::session::cleanup_reservation_t cleanup_reservation;
+      std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
       {
         std::lock_guard<std::mutex> lock(webrtc_capture.mutex);
         if (webrtc_capture.pending_session_creations.load(std::memory_order_acquire) != 0) {
           webrtc_capture.pending_session_creations.fetch_sub(1, std::memory_order_release);
         }
       }
-      stop_webrtc_capture_if_idle();
+      (void) stop_webrtc_capture_if_idle_with_lifecycle_lock();
     }
 
 #ifdef SUNSHINE_ENABLE_WEBRTC
@@ -4233,7 +4259,6 @@ namespace webrtc_stream {
   #endif
 
     void ensure_media_thread();
-    void stop_media_thread();
 
     void media_thread_main() {
       using namespace std::chrono_literals;
@@ -5045,12 +5070,23 @@ namespace webrtc_stream {
     return teardown_sessions.load(std::memory_order_acquire) > 0;
   }
 
+  unsigned int teardown_session_count() {
+    return teardown_sessions.load(std::memory_order_acquire);
+  }
+
   std::optional<std::string> ensure_capture_started(const SessionOptions &options) {
     return start_webrtc_capture(options);
   }
 
   std::optional<SessionState> create_session(const SessionOptions &options) {
     BOOST_LOG(debug) << "WebRTC: create_session enter";
+    auto reservation_guard = util::fail_guard([]() {
+      cancel_pending_webrtc_session_creation();
+    });
+    // Keep the pending-to-active transfer and first platform-start callback in
+    // the same lifecycle critical section. On an early return this lock is
+    // destroyed before reservation_guard invokes the cancellation path.
+    std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
     const auto rtsp_config = rtsp_sessions_active.load(std::memory_order_relaxed) ? snapshot_rtsp_capture_config() : std::nullopt;
     Session session;
     session.state.id = uuid_util::uuid_t::generate().string();
@@ -5104,7 +5140,6 @@ namespace webrtc_stream {
         return std::nullopt;
       }
       if (!webrtc_capture.active.load(std::memory_order_acquire)) {
-        webrtc_capture.pending_session_creations.fetch_sub(1, std::memory_order_release);
         BOOST_LOG(error) << "WebRTC: capture stopped before the reserved session could be created";
         return std::nullopt;
       }
@@ -5114,9 +5149,8 @@ namespace webrtc_stream {
         first_session = active_sessions.fetch_add(1, std::memory_order_relaxed) == 0;
       }
       webrtc_capture.pending_session_creations.fetch_sub(1, std::memory_order_release);
+      reservation_guard.disable();
     }
-    BOOST_LOG(debug) << "WebRTC: create_session exit id=" << snapshot.id;
-
     // Record session in persistent history
     {
       session_history::session_metadata_t meta;
@@ -5139,52 +5173,21 @@ namespace webrtc_stream {
       session_history::begin_session(meta);
     }
 
-    if (first_session && !rtsp_active) {
-#ifdef _WIN32
-      WebRtcStreamStartParams start_params;
-      {
-        std::lock_guard<std::mutex> lock(webrtc_capture.mutex);
-        if (webrtc_capture.stream_start_params) {
-          start_params = *webrtc_capture.stream_start_params;
-        }
-      }
-      if (start_params.fps == 0) {
-        const int current_app_id = proc::proc.running();
-        const int raw_requested_app_id = options.app_id.value_or(0);
-        const auto requested_app_ctx = raw_requested_app_id > 0 ? proc::proc.resolve_app(raw_requested_app_id) : std::optional<proc::ctx_t> {};
-        const int requested_app_id = requested_app_ctx ? (int) util::from_view(requested_app_ctx->id) : raw_requested_app_id;
-        const int effective_app_id = requested_app_id > 0 ? requested_app_id : current_app_id;
-        start_params = compute_stream_start_params(options, effective_app_id);
-      }
-      const auto policy = framegen::make_stream_start_policy({
-        .fps = start_params.fps,
-        .frame_generation_enabled = start_params.frame_generation_enabled,
-        .gen1_framegen_fix = start_params.gen1_framegen_fix,
-        .gen2_framegen_fix = start_params.gen2_framegen_fix,
-        .lossless_scaling_framegen = start_params.lossless_scaling_framegen,
-        .lossless_rtss_limit = start_params.lossless_rtss_limit,
-        .frame_generation_provider = start_params.frame_generation_provider,
-        .uses_virtual_display = start_params.uses_virtual_display,
-        .capture_mode = config::video.capture,
-        .auto_capture_uses_wgc = platf::dxgi::should_use_wgc_default(),
-        .auto_virtual_framegen_limiter = config::frame_limiter.virtual_display_limiter_enabled(),
-        .virtual_display_refresh_multiplier = config::frame_limiter.fixed_virtual_display_refresh_multiplier(),
-      });
-      platf::frame_limiter_streaming_start(policy);
-      webrtc_capture.owns_frame_limiter.store(true, std::memory_order_release);
-#endif
-      platf::streaming_will_start();
+    if (first_session) {
+      stream::session::start_shared_platform_if_needed();
     }
+    BOOST_LOG(debug) << "WebRTC: create_session exit id=" << snapshot.id;
     return snapshot;
   }
 
   bool close_session(std::string_view id) {
     bool teardown_reserved = false;
     auto teardown_reservation = util::fail_guard([&]() {
-      if (teardown_reserved) {
-        teardown_sessions.fetch_sub(1, std::memory_order_acq_rel);
-        teardown_reserved = false;
+      if (!teardown_reserved) {
+        return;
       }
+      std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
+      (void) stop_webrtc_capture_if_idle_with_lifecycle_lock(&teardown_reserved);
     });
 
 #ifdef SUNSHINE_ENABLE_WEBRTC
@@ -5206,36 +5209,39 @@ namespace webrtc_stream {
     bool removed = false;
     bool last_session = false;
     {
-      std::lock_guard lg {session_mutex};
-      auto it = sessions.find(std::string {id});
-      if (it == sessions.end()) {
-        return false;
+      std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
+      {
+        std::lock_guard lg {session_mutex};
+        auto it = sessions.find(std::string {id});
+        if (it == sessions.end()) {
+          return false;
+        }
+        teardown_sessions.fetch_add(1, std::memory_order_acq_rel);
+        teardown_reserved = true;
+#ifdef SUNSHINE_ENABLE_WEBRTC
+        factory = std::move(it->second.factory);
+        peer = it->second.peer;
+        ice_context = it->second.ice_context;
+        audio_track = it->second.audio_track;
+        video_track = it->second.video_track;
+        audio_source = std::move(it->second.audio_source);
+        video_source = std::move(it->second.video_source);
+        encoded_video_source = std::move(it->second.encoded_video_source);
+        input_channel = it->second.input_channel;
+        data_channel_context = it->second.data_channel_context;
+        keyframe_context = it->second.keyframe_context;
+        rate_context = it->second.rate_context;
+#endif
+        sessions.erase(it);
+#ifdef SUNSHINE_ENABLE_WEBRTC
+        remaining_bitrate_kbps = aggregate_webrtc_encoder_bitrate_locked();
+#endif
+        removed = true;
+        // Publish the teardown reservation before removing the active owner.
+        // An HTTP observer that acquires active_sessions == 0 must also observe
+        // the preceding teardown_sessions increment.
+        last_session = active_sessions.fetch_sub(1, std::memory_order_acq_rel) == 1;
       }
-      teardown_sessions.fetch_add(1, std::memory_order_acq_rel);
-      teardown_reserved = true;
-#ifdef SUNSHINE_ENABLE_WEBRTC
-      factory = std::move(it->second.factory);
-      peer = it->second.peer;
-      ice_context = it->second.ice_context;
-      audio_track = it->second.audio_track;
-      video_track = it->second.video_track;
-      audio_source = std::move(it->second.audio_source);
-      video_source = std::move(it->second.video_source);
-      encoded_video_source = std::move(it->second.encoded_video_source);
-      input_channel = it->second.input_channel;
-      data_channel_context = it->second.data_channel_context;
-      keyframe_context = it->second.keyframe_context;
-      rate_context = it->second.rate_context;
-#endif
-      sessions.erase(it);
-#ifdef SUNSHINE_ENABLE_WEBRTC
-      remaining_bitrate_kbps = aggregate_webrtc_encoder_bitrate_locked();
-#endif
-      removed = true;
-      // Publish the teardown reservation before removing the active owner.
-      // An HTTP observer that acquires active_sessions == 0 must also observe
-      // the preceding teardown_sessions increment.
-      last_session = active_sessions.fetch_sub(1, std::memory_order_acq_rel) == 1;
     }
     if (removed) {
       local_answer_cv.notify_all();
@@ -5295,26 +5301,15 @@ namespace webrtc_stream {
     BOOST_LOG(debug) << "WebRTC: close_session exit id=" << id;
 
     // Record history while the old capture/runtime and teardown reservation
-    // remain live, so HTTP capability probes cannot enter during that tail.
+    // remain live. A new session therefore cannot mistake a post-finalization
+    // history tail for a shared runtime it can safely join.
     session_history::end_session(std::string {id});
-
-#ifdef SUNSHINE_ENABLE_WEBRTC
-    if (last_session) {
-      stop_media_thread();
-      reset_input_context();
-  #ifdef _WIN32
-      const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
-      if (!rtsp_active) {
-        VDISPLAY::restorePhysicalHdrProfiles();
-        platf::rtss_set_sync_limiter_override(std::nullopt);
-      }
-  #endif
-      if (!rtsp_sessions_active.load(std::memory_order_relaxed)) {
-        platf::streaming_will_stop();
-      }
-      stop_webrtc_capture_if_idle();
+    if (teardown_reserved) {
+      std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
+      // Earlier concurrent closes see the other teardown owner and release
+      // their own reservation; the last close naturally performs finalization.
+      (void) stop_webrtc_capture_if_idle_with_lifecycle_lock(&teardown_reserved);
     }
-#endif
 
     return true;
   }
@@ -5353,16 +5348,6 @@ namespace webrtc_stream {
       close_session(id);
     }
 
-#ifdef SUNSHINE_ENABLE_WEBRTC
-    {
-      std::lock_guard lg {session_mutex};
-      if (!sessions.empty()) {
-        return;
-      }
-    }
-    stop_media_thread();
-    reset_input_context();
-#endif
     stop_webrtc_capture_if_idle();
   }
 

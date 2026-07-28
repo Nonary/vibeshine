@@ -47,6 +47,7 @@
   #include "display_helper_integration.h"
 #endif
 #include "logging.h"
+#include "nvhttp.h"
 #include "platform/common.h"
 #ifdef _WIN32
   #include "config_playnite.h"
@@ -1188,7 +1189,7 @@ namespace proc {
   int proc_t::execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session) {
     // Ensure starting from a clean slate
     const bool skip_display_revert = launch_session && launch_session->display_config_preapplied;
-    terminate(skip_display_revert);
+    terminate(skip_display_revert, true);
 
 #ifdef _WIN32
     std::optional<std::filesystem::path> resolved_lossless_exe_path;
@@ -1477,14 +1478,14 @@ namespace proc {
     }
 #endif
 
-    return launch_app_commands();
+    return launch_app_commands(true);
   }
 
-  int proc_t::launch_app_commands() {
+  int proc_t::launch_app_commands(bool stream_lifecycle_lock_held) {
     std::error_code ec;
     // Executed when returning from function
     auto fg = util::fail_guard([&]() {
-      terminate();
+      terminate(false, stream_lifecycle_lock_held);
     });
 
 #ifdef _WIN32
@@ -1870,7 +1871,7 @@ namespace proc {
       }
       BOOST_LOG(info) << "User session detected; resuming deferred launch for app '" << _app.name << "'.";
       _deferred_launch = false;
-      int err = launch_app_commands();
+      int err = launch_app_commands(false);
       if (err != 0) {
         BOOST_LOG(error) << "Deferred launch failed; terminating session.";
         return 0;
@@ -1902,6 +1903,10 @@ namespace proc {
     }
 
     return 0;
+  }
+
+  int proc_t::current_app_id() const {
+    return _app_id.load(std::memory_order_acquire);
   }
 
   bool proc_t::foreground_window_matches_running_app() {
@@ -1987,7 +1992,16 @@ namespace proc {
 #endif
   }
 
-  void proc_t::terminate(bool skip_display_revert) {
+  void proc_t::terminate(
+    bool skip_display_revert,
+    bool stream_lifecycle_lock_held
+  ) {
+    std::unique_lock<std::mutex> stream_lifecycle_lock;
+    if (!stream_lifecycle_lock_held) {
+      stream_lifecycle_lock =
+        std::unique_lock<std::mutex> {nvhttp::stream_lifecycle_mutex()};
+    }
+
     // App termination can remove a display directly and can continue through
     // process, undo-command, helper, watchdog, and deferred-config cleanup.
     // Keep HTTP encoder probing out of that entire tail.
@@ -2090,7 +2104,7 @@ namespace proc {
     _pipe.reset();
 
     const bool other_streaming_session_active =
-      rtsp_stream::session_count() > 0 || webrtc_stream::has_active_sessions();
+      stream::session::has_shared_runtime_owner();
 
 #ifdef _WIN32
     if (_virtual_display_active) {
@@ -2102,11 +2116,7 @@ namespace proc {
           BOOST_LOG(info) << "Virtual display cleanup completed after app termination.";
         }
       } else {
-        if (!VDISPLAY::removeVirtualDisplay(_virtual_display_guid)) {
-          BOOST_LOG(warning) << "Failed to remove virtual display.";
-        } else {
-          BOOST_LOG(info) << "Virtual display removed.";
-        }
+        BOOST_LOG(info) << "Deferring virtual display removal after app termination because shared stream runtime is still owned.";
       }
       std::memset(&_virtual_display_guid, 0, sizeof(_virtual_display_guid));
       _virtual_display_active = false;
@@ -2130,7 +2140,7 @@ namespace proc {
 #ifdef _WIN32
       clear_deferred_display_revert();
       const bool reverted = display_helper_integration::revert();
-      if (reverted && rtsp_stream::session_count() == 0) {
+      if (reverted && rtsp_stream::session_count_no_cleanup() == 0) {
         BOOST_LOG(debug) << "Display helper: stopping watchdog after app termination.";
         display_helper_integration::stop_watchdog();
       }
@@ -2150,7 +2160,7 @@ namespace proc {
     // If we can safely hot-apply immediately, restore global config now; otherwise defer.
     if (has_run) {
       config::clear_runtime_config_overrides();
-      if (rtsp_stream::session_count() == 0) {
+      if (!other_streaming_session_active) {
         config::apply_config_now();
       } else {
         config::mark_deferred_reload();
