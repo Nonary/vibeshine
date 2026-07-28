@@ -154,8 +154,12 @@ namespace net {
   std::string addr_to_url_escaped_string(boost::asio::ip::address address) {
     address = normalize_address(address);
     if (address.is_v6()) {
+      auto host = address.to_string();
+      if (const auto scope_separator = host.find('%'); scope_separator != std::string::npos) {
+        host.replace(scope_separator, 1, "%25");
+      }
       std::stringstream ss;
-      ss << '[' << address.to_string() << ']';
+      ss << '[' << host << ']';
       return ss.str();
     } else {
       return address.to_string();
