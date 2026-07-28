@@ -1266,22 +1266,64 @@ namespace platf {
       return retain_exclusive();
     }
     const bool hooks_loaded_for_probe = !hooks_already_loaded;
-    const auto flags = get_hook_flags();
-    if (hooks_loaded_for_probe &&
-        g_hooks.module &&
-        g_hook_call_state->active_calls.load(std::memory_order_acquire) == 0) {
-      FreeLibrary(g_hooks.module);
-      g_hooks = {};
-    }
-    if (!flags) {
+    auto unload_probe_hooks = [&]() {
+      if (hooks_loaded_for_probe &&
+          g_hooks.module &&
+          g_hook_call_state->active_calls.load(std::memory_order_acquire) == 0) {
+        FreeLibrary(g_hooks.module);
+        g_hooks = {};
+      }
+    };
+
+    const auto initial_flags = get_hook_flags();
+    if (!initial_flags) {
+      unload_probe_hooks();
       BOOST_LOG(warning) << "RTSS recovery audit could not verify limiter flags.";
+      return retain_exclusive();
+    }
+    if (*initial_flags & k_rtss_flag_limiter_disabled) {
+      unload_probe_hooks();
+      return clear_for_other_provider();
+    }
+
+    bool reload_scheduled = false;
+    if (!reload_profiles_from_disk(true, &reload_scheduled)) {
+      unload_probe_hooks();
+      BOOST_LOG(warning) << (reload_scheduled ?
+                               "RTSS recovery audit did not receive acknowledgement for the profile reload." :
+                               "RTSS recovery audit could not schedule the profile reload.");
+      return retain_exclusive();
+    }
+
+    const auto flags = get_hook_flags();
+    const auto limit = read_profile_value_int(root, k_rtss_limit_profile_key);
+    unload_probe_hooks();
+
+    if (!flags) {
+      BOOST_LOG(warning) << "RTSS recovery audit could not re-verify limiter flags after reload.";
       return retain_exclusive();
     }
     if (*flags & k_rtss_flag_limiter_disabled) {
       return clear_for_other_provider();
     }
+    if (!limit.known) {
+      BOOST_LOG(warning) << "RTSS recovery audit could not read the live Global profile limit.";
+      return retain_exclusive();
+    }
+    if (!limit.value) {
+      BOOST_LOG(warning) << "RTSS recovery audit found no Global profile limit after reload.";
+      return retain_exclusive();
+    }
+    if (*limit.value < 0) {
+      BOOST_LOG(warning) << "RTSS recovery audit found an invalid negative Global profile limit.";
+      return retain_exclusive();
+    }
 
-    BOOST_LOG(warning) << "RTSS recovery audit found a running process with its limiter enabled.";
+    if (*limit.value == 0) {
+      return clear_for_other_provider();
+    }
+
+    BOOST_LOG(warning) << "RTSS recovery audit found a positive live Global profile limit with its limiter enabled.";
     return retain_exclusive();
   }
 
