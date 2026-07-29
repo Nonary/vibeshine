@@ -795,6 +795,10 @@ namespace rtsp_stream {
       return static_cast<int>(_session_state->sessions.size());
     }
 
+    bool has_pending_launch_or_startup() {
+      return static_cast<bool>(launch_event.view(0s)) || startup_count() > 0;
+    }
+
     safe::event_t<std::shared_ptr<launch_session_t>> launch_event;
 
     bool vulkan_hdr_layer_active_locked() {
@@ -1059,6 +1063,10 @@ namespace rtsp_stream {
 
   void launch_session_clear(uint32_t launch_session_id) {
     server.session_clear(launch_session_id);
+  }
+
+  bool has_pending_launch_or_startup() {
+    return server.has_pending_launch_or_startup();
   }
 
   void set_vulkan_hdr_layer_pending_stream(bool active) {

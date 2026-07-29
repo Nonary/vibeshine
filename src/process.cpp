@@ -2913,6 +2913,9 @@ namespace proc {
               }
             }
           }
+          std::unordered_map<std::string, std::string> normalized_overrides;
+          config::merge_config_overrides(normalized_overrides, ctx.config_overrides);
+          ctx.config_overrides = std::move(normalized_overrides);
         } catch (...) {
           // ignore overrides parse errors; continue without them
         }

@@ -7,6 +7,7 @@
 
 // standard includes
 #include <chrono>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
