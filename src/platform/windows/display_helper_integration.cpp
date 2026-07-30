@@ -253,6 +253,14 @@ namespace {
   constexpr int kHelperStartFailuresBeforeCooldown {2};
   constexpr int kMaxDeferredApplyAttempts = 6;
 
+  // Helper liveness probe envelopes. Ordinary callers keep the client's normal
+  // send budget so a reconnect under load still succeeds; only shutdown-class
+  // callers (owned recovery/teardown workers) collapse to the short probe.
+  // The cancellable variant is still used for both because operation_deadline
+  // must be able to cut the probe short, which plain send_ping() cannot do.
+  constexpr int kHelperPingTimeoutMs {5000};
+  constexpr int kShutdownHelperPingTimeoutMs {250};
+
   bool operation_deadline_expired(
     const std::chrono::steady_clock::time_point operation_deadline) {
     return operation_deadline != std::chrono::steady_clock::time_point::max() &&
@@ -279,7 +287,8 @@ namespace {
     bool force_enable = false,
     const std::function<bool()> &cancellation_predicate = {},
     std::chrono::steady_clock::time_point operation_deadline =
-      std::chrono::steady_clock::time_point::max());
+      std::chrono::steady_clock::time_point::max(),
+    bool shutdown_class_caller = false);
   const char *virtual_layout_to_string(const display_helper_integration::VirtualDisplayArrangement layout);
 
   bool helper_process_running(
@@ -659,7 +668,8 @@ namespace {
   bool wait_for_helper_ipc_ready_locked(
     const std::function<bool()> &cancellation_predicate = {},
     const std::chrono::steady_clock::time_point operation_deadline =
-      std::chrono::steady_clock::time_point::max()) {
+      std::chrono::steady_clock::time_point::max(),
+    const bool shutdown_class_caller = false) {
     const auto deadline = std::min(
       std::chrono::steady_clock::now() + kHelperIpcReadyTimeout,
       operation_deadline
@@ -679,7 +689,7 @@ namespace {
       }
       const bool ping_ok = cancellation_predicate ?
                              platf::display_helper_client::send_ping_cancellable(
-                               250,
+                               shutdown_class_caller ? kShutdownHelperPingTimeoutMs : kHelperPingTimeoutMs,
                                cancellation_predicate,
                                deadline) :
                              platf::display_helper_client::send_ping();
@@ -1088,7 +1098,8 @@ namespace {
     bool force_restart,
     bool force_enable,
     const std::function<bool()> &cancellation_predicate,
-    const std::chrono::steady_clock::time_point operation_deadline) {
+    const std::chrono::steady_clock::time_point operation_deadline,
+    const bool shutdown_class_caller) {
     if (!force_enable && !dd_feature_enabled()) {
       return false;
     }
@@ -1123,7 +1134,7 @@ namespace {
             }
             ping_ok = cancellation_predicate ?
                         platf::display_helper_client::send_ping_cancellable(
-                          250,
+                          shutdown_class_caller ? kShutdownHelperPingTimeoutMs : kHelperPingTimeoutMs,
                           cancellation_predicate,
                           operation_deadline) :
                         platf::display_helper_client::send_ping();
@@ -1347,7 +1358,8 @@ namespace {
     }
     const bool ipc_ready = wait_for_helper_ipc_ready_locked(
       cancellation_predicate,
-      operation_deadline
+      operation_deadline,
+      shutdown_class_caller
     );
     if (ipc_ready) {
       note_helper_start_success();
@@ -1723,7 +1735,8 @@ namespace display_helper_integration {
       ApplyVerificationTicket *verification_ticket,
       const std::function<bool()> &cancellation_predicate = {},
       ApplyRetryPolicy retry_policy = ApplyRetryPolicy::Full,
-      std::chrono::steady_clock::time_point startup_deadline = {}) {
+      std::chrono::steady_clock::time_point startup_deadline = {},
+      bool shutdown_class_caller = false) {
       const auto verification_timeout =
         retry_policy == ApplyRetryPolicy::StreamStart ?
           kStreamStartApplyVerificationTimeout :
@@ -1754,7 +1767,8 @@ namespace display_helper_integration {
           false,
           true,
           startup_cancellation_predicate,
-          startup_deadline
+          startup_deadline,
+          shutdown_class_caller
         );
         if (!helper_ready) {
           BOOST_LOG(warning) << "Display helper: REVERT skipped (helper not reachable).";
@@ -1830,7 +1844,8 @@ namespace display_helper_integration {
         hard_restart,
         true,
         startup_cancellation_predicate,
-        startup_deadline
+        startup_deadline,
+        shutdown_class_caller
       );
       if (!helper_ready && hard_restart) {
         if (startup_cancellation_predicate()) {
@@ -1841,7 +1856,8 @@ namespace display_helper_integration {
           false,
           true,
           startup_cancellation_predicate,
-          startup_deadline
+          startup_deadline,
+          shutdown_class_caller
         );
       }
       if (!helper_ready) {
@@ -1852,7 +1868,8 @@ namespace display_helper_integration {
           hard_restart,
           true,
           startup_cancellation_predicate,
-          startup_deadline
+          startup_deadline,
+          shutdown_class_caller
         );
       }
 
@@ -1883,7 +1900,8 @@ namespace display_helper_integration {
           &client_wait_generation,
           &connection_generation,
           startup_cancellation_predicate,
-          static_cast<int>(remaining_apply_budget.count()));
+          static_cast<int>(remaining_apply_budget.count()),
+          shutdown_class_caller);
         BOOST_LOG(info) << "Display helper: APPLY dispatch result=" << (ok ? "true" : "false");
         if (ok && startup_cancellation_predicate()) {
           BOOST_LOG(debug) << "Display helper: APPLY completion was cancelled before its session state was published.";
@@ -2050,7 +2068,8 @@ namespace display_helper_integration {
     ApplyVerificationTicket *verification_ticket,
     std::function<bool()> cancellation_predicate,
     ApplyRetryPolicy retry_policy,
-    std::chrono::steady_clock::time_point startup_deadline) {
+    std::chrono::steady_clock::time_point startup_deadline,
+    const bool shutdown_class_caller) {
     const auto verification_timeout =
       retry_policy == ApplyRetryPolicy::StreamStart ?
         kStreamStartApplyVerificationTimeout :
@@ -2091,7 +2110,8 @@ namespace display_helper_integration {
       verification_ticket,
       cancellation_predicate,
       retry_policy,
-      startup_deadline
+      startup_deadline,
+      shutdown_class_caller
     );
   }
 
@@ -2308,7 +2328,17 @@ namespace display_helper_integration {
     }
 
     BOOST_LOG(info) << "Display helper: applying deferred configuration for session " << pending.session_id << ".";
-    const bool ok = apply_internal(pending.request, false, nullptr, cancellation_predicate);
+    // This entry point's predicate belongs to an owned shutdown worker by
+    // contract, so a caller that supplies one is shutdown-class.
+    const bool ok = apply_internal(
+      pending.request,
+      false,
+      nullptr,
+      cancellation_predicate,
+      ApplyRetryPolicy::Full,
+      {},
+      static_cast<bool>(cancellation_predicate)
+    );
     if (ok && stream_was_live_when_claimed && session) {
       if (const auto generation = active_session_generation_for(*session)) {
         // This retry may complete after start_watchdog() observed no active

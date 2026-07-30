@@ -48,6 +48,13 @@ namespace platf::display_helper_client {
     // connect budget (anonymous transport, then named fallback) when the helper is
     // down: that stalls the poll loop for seconds per attempt.
     constexpr int kRefreshRateConnectTimeoutMs = 600;
+    // Per-stage cap for SNAPSHOT_CURRENT. A bounded snapshot shares the caller's
+    // stream-start budget, so without its own cap a slow snapshot can consume the
+    // whole budget and leave nothing for APPLY.
+    constexpr int kSnapshotResultTimeoutMs = 3000;
+    // Retiring a stale connection is a lock acquisition, not helper work, so it
+    // gets its own short budget: the deadlines that lead here are already spent.
+    constexpr int kStaleConnectionRetireTimeoutMs = 250;
 
     bool shutdown_requested() {
       if (!mail::man) {
@@ -1369,7 +1376,8 @@ namespace platf::display_helper_client {
     std::uint64_t *wait_generation_out,
     std::uint64_t *connection_generation_out,
     std::function<bool()> cancellation_predicate,
-    int operation_timeout_ms) {
+    int operation_timeout_ms,
+    bool shutdown_class_caller) {
     BOOST_LOG(debug) << "Display helper IPC: APPLY request queued (json_len=" << json.size() << ")";
     const bool operation_is_bounded = operation_timeout_ms > 0;
     const auto operation_deadline =
@@ -1424,20 +1432,18 @@ namespace platf::display_helper_client {
       return false;
     }
 
+    if (operation_is_bounded && remaining_timeout_ms(operation_deadline) <= 0) {
+      return false;
+    }
+
     // Hold this session's response reader before sending APPLY. A superseded
     // v2 verification wait releases it in short slices; a known legacy helper
     // deliberately keeps its untagged lane serial until the old reply arrives.
-    int connect_timeout_cap_ms = kConnectTimeoutMs;
-    if (operation_is_bounded) {
-      const int remaining = remaining_timeout_ms(operation_deadline);
-      if (remaining <= 0) {
-        return false;
-      }
-      connect_timeout_cap_ms =
-        cancellation_predicate ? kShutdownIpcTimeoutMs : kConnectTimeoutMs;
-    } else if (cancellation_predicate) {
-      connect_timeout_cap_ms = kShutdownIpcTimeoutMs;
-    }
+    // Every APPLY now arrives with a synthesized deadline predicate, so the
+    // predicate can no longer stand in for "this caller is shutting down": only
+    // an explicit shutdown-class caller may collapse to the short IPC caps.
+    const int connect_timeout_cap_ms =
+      shutdown_class_caller ? kShutdownIpcTimeoutMs : kConnectTimeoutMs;
     const auto session =
       operation_is_bounded ?
         connected_session_within(
@@ -1475,7 +1481,7 @@ namespace platf::display_helper_client {
           })) {
       return false;
     }
-    const int send_cap = cancellation_predicate ? kShutdownIpcTimeoutMs : kSendTimeoutMs;
+    const int send_cap = shutdown_class_caller ? kShutdownIpcTimeoutMs : kSendTimeoutMs;
     std::uint64_t sent_connection_generation = 0;
     if (!send_serialized_within(
           session,
@@ -1524,10 +1530,13 @@ namespace platf::display_helper_client {
       return false;
     }
     if (operation_is_bounded) {
+      // The operation deadline is what expired to get here, so retiring the
+      // pipe needs its own budget; otherwise the stale connection survives and
+      // a late queued ApplyResult is read as the next request's answer.
       drop_connection_if_current_within(
         session,
         "missing APPLY result",
-        operation_deadline
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(kStaleConnectionRetireTimeoutMs)
       );
     } else {
       drop_connection_if_current(session, "missing APPLY result");
@@ -1795,9 +1804,16 @@ namespace platf::display_helper_client {
     const std::chrono::steady_clock::time_point operation_deadline,
     std::function<bool()> cancellation_predicate) {
     BOOST_LOG(debug) << "Display helper IPC: bounded SNAPSHOT_CURRENT request queued";
+    // The snapshot shares the caller's stream-start budget while holding the
+    // single response reader, so it keeps the same per-stage cap the unbounded
+    // path uses. Without it a slow snapshot starves the APPLY that follows.
+    const auto stage_deadline = std::min(
+      operation_deadline,
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(kSnapshotResultTimeoutMs)
+    );
     const auto operation_cancelled = [&] {
       return (cancellation_predicate && cancellation_predicate()) ||
-             std::chrono::steady_clock::now() >= operation_deadline;
+             std::chrono::steady_clock::now() >= stage_deadline;
     };
     if (operation_cancelled()) {
       return false;
@@ -1805,7 +1821,7 @@ namespace platf::display_helper_client {
 
     const auto wait_generation = apply_wait_generation().load(std::memory_order_acquire);
     const auto session = connected_session_within(
-      operation_deadline,
+      stage_deadline,
       kConnectTimeoutMs,
       operation_cancelled
     );
@@ -1855,7 +1871,7 @@ namespace platf::display_helper_client {
         !lock_response_reader_until(
           session,
           response_lock,
-          operation_deadline,
+          stage_deadline,
           cancelled)) {
       return false;
     }
@@ -1863,7 +1879,7 @@ namespace platf::display_helper_client {
           session,
           MsgType::SnapshotCurrent,
           payload,
-          operation_deadline,
+          stage_deadline,
           wait_generation,
           kSendTimeoutMs,
           nullptr,
@@ -1875,7 +1891,7 @@ namespace platf::display_helper_client {
       return true;
     }
 
-    const int remaining = remaining_timeout_ms(operation_deadline);
+    const int remaining = remaining_timeout_ms(stage_deadline);
     if (remaining > 0) {
       if (auto result = wait_for_snapshot_result_locked(
             session,
@@ -1886,11 +1902,16 @@ namespace platf::display_helper_client {
         return *result;
       }
     }
-    if (!cancelled()) {
+    // Budget exhaustion is the normal way to reach this point, so it must not
+    // suppress retiring the pipe; only a genuine supersession leaves it usable.
+    const bool superseded = (cancellation_predicate && cancellation_predicate()) ||
+                            !session_is_current(session) ||
+                            apply_wait_generation().load(std::memory_order_acquire) != wait_generation;
+    if (!superseded) {
       drop_connection_if_current_within(
         session,
         "missing bounded SNAPSHOT_CURRENT result",
-        operation_deadline
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(kStaleConnectionRetireTimeoutMs)
       );
     }
     return false;

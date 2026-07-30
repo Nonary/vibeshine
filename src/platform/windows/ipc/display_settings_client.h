@@ -23,7 +23,11 @@ namespace platf::display_helper_client {
     std::uint64_t *wait_generation_out = nullptr,
     std::uint64_t *connection_generation_out = nullptr,
     std::function<bool()> cancellation_predicate = {},
-    int operation_timeout_ms = 0);
+    int operation_timeout_ms = 0,
+    // Shutdown-class callers (owned recovery/teardown workers) collapse the
+    // connect and send caps to kShutdownIpcTimeoutMs. Ordinary applies always
+    // carry a cancellation predicate now, so it cannot imply this by itself.
+    bool shutdown_class_caller = false);
 
   // Wait for helper verification result after APPLY (v2 engine only).
   // Returns nullopt on timeout/unavailable.

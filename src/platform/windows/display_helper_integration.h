@@ -35,15 +35,17 @@ namespace display_helper_integration {
 
   // Launch the helper (if needed) and process the provided builder request.
   // Returns true if the helper accepted the command; false to allow fallback.
-  // A cancellation predicate is intended for recovery workers during shutdown.
-  // It interrupts helper IPC waits and disables the potentially blocking
-  // in-process fallback for that caller.
+  // A cancellation predicate interrupts helper IPC waits and disables the
+  // potentially blocking in-process fallback for that caller. Stream starts
+  // also supply one, so shutdown-class callers (owned recovery/teardown
+  // workers that must give up in well under a second) say so explicitly.
   bool apply(
     const DisplayApplyRequest &request,
     ApplyVerificationTicket *verification_ticket = nullptr,
     std::function<bool()> cancellation_predicate = {},
     ApplyRetryPolicy retry_policy = ApplyRetryPolicy::Full,
-    std::chrono::steady_clock::time_point startup_deadline = {});
+    std::chrono::steady_clock::time_point startup_deadline = {},
+    bool shutdown_class_caller = false);
 
   // Returns true if a deferred APPLY request is currently queued.
   bool has_pending_apply();
