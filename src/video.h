@@ -407,8 +407,8 @@ namespace video {
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
 
-  bool has_attempted_encoder_probe(const std::string &probe_display_name = {});
-  bool has_successful_encoder_probe(const std::string &probe_display_name = {});
+  bool has_attempted_encoder_probe();
+  bool has_successful_encoder_probe();
 
   struct advertised_encoder_capabilities_t {
     int hevc_mode = 0;
@@ -416,10 +416,7 @@ namespace video {
     std::array<bool, 3> yuv444_for_codec {};
   };
 
-  advertised_encoder_capabilities_t advertised_encoder_capabilities(
-    bool probe_before_negative = false,
-    const std::string &probe_display_name = {}
-  );
+  advertised_encoder_capabilities_t advertised_encoder_capabilities(bool probe_before_negative = false);
 
   void capture(
     safe::mail_t mail,
@@ -427,7 +424,7 @@ namespace video {
     void *channel_data
   );
 
-  bool validate_encoder(encoder_t &encoder, bool expect_failure, const std::string &probe_display_name = {});
+  bool validate_encoder(encoder_t &encoder, bool expect_failure);
 
   /**
    * @brief Probe encoders and select the preferred encoder.
@@ -437,7 +434,7 @@ namespace video {
    *
    * @warning This is only safe to call when there is no client actively streaming.
    */
-  int probe_encoders(const std::string &probe_display_name = {});
+  int probe_encoders();
 
   // Several NTSC standard refresh rates are hardcoded here, because their
   // true rate requires a denominator of 1001. ffmpeg's av_d2q() would assume it could
