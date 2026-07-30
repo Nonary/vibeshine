@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <sstream>
 
+// lib includes
+#include <boost/algorithm/string/trim.hpp>
+
 // local includes
 #include "config.h"
 #include "logging.h"
@@ -120,7 +123,10 @@ namespace net {
   std::string get_bind_address(const af_e af) {
     // If bind_address is configured, use it
     if (!config::sunshine.bind_address.empty()) {
-      return config::sunshine.bind_address;
+      const auto configured = boost::algorithm::trim_copy(config::sunshine.bind_address);
+      if (!configured.empty()) {
+        return configured;
+      }
     }
 
     // Otherwise use the wildcard address for the given address family
