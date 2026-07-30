@@ -872,6 +872,17 @@ namespace stream {
   }
 
   bool apply_deferred_stream_start_actions_if_ready() {
+    {
+      // The control-broadcast thread polls this every iteration at critical priority.
+      // Check the cheap flag before any syscall or the process-wide lifecycle gate so a
+      // long-running launch/teardown holding that gate cannot stall client input feedback.
+      // The authoritative re-check below still runs under the gate.
+      std::lock_guard<std::mutex> lock(deferred_stream_start_mutex());
+      if (!deferred_stream_start_state()) {
+        return false;
+      }
+    }
+
     if (!user_session_ready()) {
       return false;
     }
@@ -2781,18 +2792,27 @@ namespace stream {
       // The alternative is that Sunshine can never start another session until it's manually restarted.
       // Name the join stage for the watchdog so a crash bundle says outright what hung
       // (e.g. vibeshine#187 took dump archaeology to learn it was the video thread).
-      auto hung_stage = std::make_shared<std::atomic<const char *>>("video thread");
-      join_deadline_t join_deadline {hung_stage};
+      {
+        auto hung_stage = std::make_shared<std::atomic<const char *>>("video thread");
+        join_deadline_t join_deadline {hung_stage};
 
-      BOOST_LOG(debug) << "Waiting for video to end..."sv;
-      session.videoThread.join();
-      hung_stage->store("audio thread");
-      BOOST_LOG(debug) << "Waiting for audio to end..."sv;
-      session.audioThread.join();
-      hung_stage->store("control end");
-      BOOST_LOG(debug) << "Waiting for control to end..."sv;
-      session.controlEnd.view();
-      hung_stage->store("post-join cleanup");
+        BOOST_LOG(debug) << "Waiting for video to end..."sv;
+        session.videoThread.join();
+        hung_stage->store("audio thread");
+        BOOST_LOG(debug) << "Waiting for audio to end..."sv;
+        session.audioThread.join();
+        hung_stage->store("control end");
+        BOOST_LOG(debug) << "Waiting for control to end..."sv;
+        session.controlEnd.view();
+      }
+      // Watchdog coverage ends with the thread joins, which are the unbounded and
+      // unrecoverable part. Everything below waits on the process-wide lifecycle
+      // gate, which other threads legitimately hold for much longer than
+      // kJoinDeadline: proc_t::terminate() blocks per undo command, nvhttp
+      // launch/resume runs execute() plus two encoder probes under it, and the
+      // WebRTC start holds it across a 15s apply-verification budget. Trapping on
+      // that is a false positive that would kill every other live stream.
+
       // Reset input on session stop to avoid stuck repeated keys
       BOOST_LOG(debug) << "Resetting Input..."sv;
       input::reset(session.input);
