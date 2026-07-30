@@ -326,13 +326,30 @@ namespace nvhttp {
              stream::session::cleanup_reservations.load(std::memory_order_acquire) != 0;
     }
 
+    // Same idleness test as has_active_or_stopping_stream_session() minus the
+    // generic cleanup-reservation term. Teardown-path callers hold a reservation
+    // across their whole request, so that term reports their own frame as
+    // activity and makes the predicate unconditionally true; launch()/resume()
+    // teardown guards are reservation-insensitive for the same reason. A
+    // concurrent virtual-display cleanup is still honoured, double-sampled
+    // around the activity snapshot to close the same handoff.
+    bool has_stream_session_activity_or_display_cleanup() {
+      if (platf::virtual_display_cleanup::in_progress()) {
+        return true;
+      }
+      if (has_stream_session_activity()) {
+        return true;
+      }
+      return platf::virtual_display_cleanup::in_progress();
+    }
+
     void cleanup_virtual_display_if_idle() {
       try {
         // Serialize the final owner check through cleanup. RTSP launch already
         // holds launch_request_mutex before entering this path; lifecycle is
         // the next canonical gate and also excludes a concurrent WebRTC start.
         std::unique_lock<std::mutex> lifecycle_lock(stream_lifecycle_mutex());
-        if (has_active_or_stopping_stream_session()) {
+        if (has_stream_session_activity_or_display_cleanup()) {
           BOOST_LOG(info) << "Skipping virtual display cleanup because a streaming session is active or stopping.";
           return;
         }
@@ -901,7 +918,15 @@ namespace nvhttp {
                   if (cancelled()) {
                     return {};
                   }
-                  if (display_helper_integration::apply(*request, nullptr, cancelled)) {
+                  // This recovery worker is torn down with the session, so it
+                  // keeps the short shutdown-class helper IPC timeouts.
+                  if (display_helper_integration::apply(
+                        *request,
+                        nullptr,
+                        cancelled,
+                        display_helper_integration::ApplyRetryPolicy::Full,
+                        {},
+                        true)) {
                     BOOST_LOG(info) << "Virtual display recovery: re-applied session display configuration (including exclusivity) after recreation.";
                     applied = true;
                     break;
@@ -2914,7 +2939,10 @@ namespace nvhttp {
       }
     });
 
-    if (current_appid == 0) {
+    // proc_t::terminate() leaves the app id at -1 and nothing resets it to 0, so any
+    // non-positive id means nothing is running. Comparing against 0 alone would let a
+    // stale /resume run the whole resume path for an app that no longer exists.
+    if (current_appid <= 0) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 503);
       tree.put("root.<xmlattr>.status_message", "No running app to resume");
@@ -3415,6 +3443,11 @@ namespace nvhttp {
     http_server_t http_server;
     thread_pool_util::ThreadPool blocking_route_pool;
     blocking_route_pool.start(1);
+    // Discovery routes are observation-only, so they must not queue behind the mutating
+    // routes. A launch/resume/cancel handler can hold the lifecycle gate across unbounded
+    // work, and on a single FIFO worker that made the host undiscoverable until restart.
+    thread_pool_util::ThreadPool discovery_route_pool;
+    discovery_route_pool.start(1);
 
     // Verify certificates after establishing connection
     https_server.verify = [add_cert](SSL *ssl, const boost::asio::ip::tcp::endpoint &remote_endpoint) {
@@ -3498,8 +3531,8 @@ namespace nvhttp {
       tree.put("root.<xmlattr>.status_message"s, "The client is not authorized. Certificate verification failed."s);
     };
 
-    auto run_blocking_nvhttp = [&blocking_route_pool](auto task) {
-      blocking_route_pool.push([task = std::move(task)]() mutable {
+    auto run_on_blocking_pool = [](thread_pool_util::ThreadPool &pool, auto task) {
+      pool.push([task = std::move(task)]() mutable {
         try {
           task();
         } catch (const std::exception &e) {
@@ -3510,10 +3543,18 @@ namespace nvhttp {
       });
     };
 
+    auto run_blocking_nvhttp = [&blocking_route_pool, run_on_blocking_pool](auto task) {
+      run_on_blocking_pool(blocking_route_pool, std::move(task));
+    };
+
+    auto run_discovery_nvhttp = [&discovery_route_pool, run_on_blocking_pool](auto task) {
+      run_on_blocking_pool(discovery_route_pool, std::move(task));
+    };
+
     https_server.default_resource["GET"] = not_found<SunshineHTTPS>;
     https_server.default_resource["POST"] = not_found<SunshineHTTPS>;
-    https_server.resource["^/serverinfo$"]["GET"] = [run_blocking_nvhttp](auto resp, auto req) {
-      run_blocking_nvhttp([resp = std::move(resp), req = std::move(req)]() mutable {
+    https_server.resource["^/serverinfo$"]["GET"] = [run_discovery_nvhttp](auto resp, auto req) {
+      run_discovery_nvhttp([resp = std::move(resp), req = std::move(req)]() mutable {
         serverinfo<SunshineHTTPS>(std::move(resp), std::move(req));
       });
     };
@@ -3525,8 +3566,8 @@ namespace nvhttp {
     };
     https_server.resource["^/unpair/?$"]["GET"] = unpair<SunshineHTTPS>;
     https_server.resource["^/unpair/?$"]["POST"] = unpair<SunshineHTTPS>;
-    https_server.resource["^/applist$"]["GET"] = [run_blocking_nvhttp](auto resp, auto req) {
-      run_blocking_nvhttp([resp = std::move(resp), req = std::move(req)]() mutable {
+    https_server.resource["^/applist$"]["GET"] = [run_discovery_nvhttp](auto resp, auto req) {
+      run_discovery_nvhttp([resp = std::move(resp), req = std::move(req)]() mutable {
         applist(std::move(resp), std::move(req));
       });
     };
@@ -3564,8 +3605,8 @@ namespace nvhttp {
 
     http_server.default_resource["GET"] = not_found<SimpleWeb::HTTP>;
     http_server.default_resource["POST"] = not_found<SimpleWeb::HTTP>;
-    http_server.resource["^/serverinfo$"]["GET"] = [run_blocking_nvhttp](auto resp, auto req) {
-      run_blocking_nvhttp([resp = std::move(resp), req = std::move(req)]() mutable {
+    http_server.resource["^/serverinfo$"]["GET"] = [run_discovery_nvhttp](auto resp, auto req) {
+      run_discovery_nvhttp([resp = std::move(resp), req = std::move(req)]() mutable {
         serverinfo<SimpleWeb::HTTP>(std::move(resp), std::move(req));
       });
     };
@@ -3611,6 +3652,8 @@ namespace nvhttp {
     tcp.join();
     blocking_route_pool.stop();
     blocking_route_pool.join();
+    discovery_route_pool.stop();
+    discovery_route_pool.join();
   }
 
   void erase_all_clients() {
