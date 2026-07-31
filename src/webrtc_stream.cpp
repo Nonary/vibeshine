@@ -5267,7 +5267,6 @@ namespace webrtc_stream {
     );
 
     SessionState snapshot = session.state;
-    const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
     bool first_session = false;
     {
       std::lock_guard<std::mutex> capture_lock(webrtc_capture.mutex);
