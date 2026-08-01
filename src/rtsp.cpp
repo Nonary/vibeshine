@@ -194,6 +194,7 @@ namespace rtsp_stream {
     snapshot->enable_hdr = source.enable_hdr;
     snapshot->prefer_sdr_10bit = source.prefer_sdr_10bit;
     snapshot->force_sdr = source.force_sdr;
+    snapshot->client_vrr_requested = source.client_vrr_requested;
     snapshot->virtual_display = source.virtual_display;
     snapshot->virtual_display_guid_bytes = source.virtual_display_guid_bytes;
     snapshot->gen1_framegen_fix = source.gen1_framegen_fix;
@@ -1482,6 +1483,7 @@ namespace rtsp_stream {
       config.monitor.dynamicRange = (int) util::from_view(args.at("x-nv-video[0].dynamicRangeMode"sv));
       config.monitor.chromaSamplingType = (int) util::from_view(args.at("x-ss-video[0].chromaSamplingType"sv));
       config.monitor.enableIntraRefresh = (int) util::from_view(args.at("x-ss-video[0].intraRefresh"sv));
+      config.monitor.vrr_low_latency = session->client_vrr_requested;
 
       if (config.monitor.framerate > 1000) {
         config.monitor.encodingFramerate = config.monitor.framerate;
@@ -1553,6 +1555,10 @@ namespace rtsp_stream {
     if (session->continuous_audio) {
       BOOST_LOG(info) << "Client requested continuous audio"sv;
       config.audio.flags[audio::config_t::CONTINUOUS_AUDIO] = true;
+    }
+
+    if (config.monitor.vrr_low_latency) {
+      BOOST_LOG(info) << "Client requested VRR low-latency stream policy";
     }
 
     const bool prefer_10bit_sdr = effective_10bit_sdr_requested(*session);

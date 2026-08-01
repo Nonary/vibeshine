@@ -300,7 +300,12 @@ namespace stream {
     // zero padding, such as AV1 (Sunshine extension).
     boost::endian::little_uint16_at lastPayloadLen;
 
-    std::uint8_t unknown[2];
+    // Vibeshine extension, carried in bytes other hosts leave zeroed.
+    // Host capture latency in 1/10 ms units: compositor present to capture
+    // dequeue. This wait is NOT included in frame_processing_latency, whose
+    // meaning must stay stable for existing consumers; clients can sum the
+    // two fields. Zero when the capture backend cannot provide both stamps.
+    boost::endian::little_uint16_at frame_capture_latency;
   };
 
   static_assert(
@@ -1945,13 +1950,13 @@ namespace stream {
         frame_header.lastPayloadLen = session->config.packetsize - sizeof(NV_VIDEO_PACKET);
       }
 
+      auto duration_to_latency = [](const std::chrono::steady_clock::duration &duration) {
+        const auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+        return (uint16_t) std::clamp<decltype(duration_us)>((duration_us + 50) / 100, 0, std::numeric_limits<uint16_t>::max());
+      };
+
       auto host_processing_timestamp = packet->host_processing_timestamp ? packet->host_processing_timestamp : packet->frame_timestamp;
       if (host_processing_timestamp) {
-        auto duration_to_latency = [](const std::chrono::steady_clock::duration &duration) {
-          const auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-          return (uint16_t) std::clamp<decltype(duration_us)>((duration_us + 50) / 100, 0, std::numeric_limits<uint16_t>::max());
-        };
-
         uint16_t latency = duration_to_latency(std::chrono::steady_clock::now() - *host_processing_timestamp);
         frame_header.frame_processing_latency = latency;
         frame_processing_latency_logger.collect_and_log(latency / 10.);
@@ -1959,6 +1964,22 @@ namespace stream {
       } else {
         frame_header.frame_processing_latency = 0;
         session->stats.last_encode_latency_us10.store(0, std::memory_order_relaxed);
+      }
+
+      // TODO(merge): compile-only change, not built or runtime-validated yet.
+      // Repeated frames (capture timeouts, constant-capture idle forwards)
+      // must keep arriving here with reset/equal stamps so they report zero:
+      // Moonlight excludes zeros from its capture-latency average, and a stale
+      // present stamp on a repeat would poison the stat during below-cap or
+      // idle stretches. Verify that holds for every capture backend on merge.
+      //
+      // When only frame_timestamp exists, frame_processing_latency above is
+      // already anchored at compositor present, so leaving this zero avoids
+      // double-counting the capture wait.
+      if (packet->host_processing_timestamp && packet->frame_timestamp) {
+        frame_header.frame_capture_latency = duration_to_latency(*packet->host_processing_timestamp - *packet->frame_timestamp);
+      } else {
+        frame_header.frame_capture_latency = 0;
       }
 
       auto fecPercentage = config::stream.fec_percentage;
