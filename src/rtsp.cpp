@@ -195,6 +195,7 @@ namespace rtsp_stream {
     snapshot->prefer_sdr_10bit = source.prefer_sdr_10bit;
     snapshot->force_sdr = source.force_sdr;
     snapshot->client_vrr_requested = source.client_vrr_requested;
+    snapshot->client_latency_telemetry = source.client_latency_telemetry;
     snapshot->virtual_display = source.virtual_display;
     snapshot->virtual_display_guid_bytes = source.virtual_display_guid_bytes;
     snapshot->gen1_framegen_fix = source.gen1_framegen_fix;
@@ -1464,6 +1465,7 @@ namespace rtsp_stream {
       config.audioQosType = (int) util::from_view(args.at("x-nv-aqos.qosTrafficType"sv));
       config.videoQosType = (int) util::from_view(args.at("x-nv-vqos[0].qosTrafficType"sv));
       config.encryptionFlagsEnabled = (uint32_t) util::from_view(args.at("x-ss-general.encryptionEnabled"sv));
+      config.clientLatencyTelemetry = session->client_latency_telemetry;
 
       // Legacy clients use nvFeatureFlags to indicate support for audio encryption
       if (util::from_view(args.at("x-nv-general.featureFlags"sv)) & 0x20) {

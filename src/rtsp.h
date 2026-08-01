@@ -80,6 +80,10 @@ namespace rtsp_stream {
     // Moonlight's VRR request passed its launch-time VSync, display-refresh,
     // and adaptive-headroom checks. The renderer may still fall back later.
     bool client_vrr_requested = false;
+    // Opt-in for Vibeshine's extended video frame header. This keeps the
+    // protocol change invisible to clients that only understand the standard
+    // 8-byte Sunshine header.
+    bool client_latency_telemetry = false;
     bool client_display_mode_override;
     // Exact refresh requested by a per-client display-mode override, expressed
     // in millihertz. fps remains the existing whole-number compatibility value.

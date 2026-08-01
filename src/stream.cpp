@@ -277,12 +277,14 @@ namespace stream {
 
 #pragma pack(push, 1)
 
-  struct video_short_frame_header_t {
+  struct video_frame_header_t {
     uint8_t *payload() {
       return (uint8_t *) (this + 1);
     }
 
-    std::uint8_t headerType;  // Always 0x01 for short headers
+    // 0x01 selects the standard 8-byte header. 0x81 selects the 24-byte
+    // 7.1.431 long header when the client negotiated latency telemetry.
+    std::uint8_t headerType;
 
     // Sunshine extension
     // Frame processing latency, in 1/10 ms units
@@ -306,11 +308,20 @@ namespace stream {
     // meaning must stay stable for existing consumers; clients can sum the
     // two fields. Zero when the capture backend cannot provide both stamps.
     boost::endian::little_uint16_at frame_capture_latency;
+
+    // Vibeshine extended-header telemetry, in 1/10 ms units. This is the
+    // preceding frame's measured time from the host-processing timestamp
+    // sample through header/FEC/encryption preparation and the first send
+    // call. Using the preceding sample avoids a circular dependency: this
+    // value itself is protected by the current frame's FEC.
+    boost::endian::little_uint16_at frame_transport_prep_latency;
+
+    std::array<std::uint8_t, 14> reserved;
   };
 
   static_assert(
-    sizeof(video_short_frame_header_t) == 8,
-    "Short frame header must be 8 bytes"
+    sizeof(video_frame_header_t) == 24,
+    "Extended frame header must be 24 bytes"
   );
 
   struct video_packet_raw_t {
@@ -572,6 +583,7 @@ namespace stream {
 
       std::optional<crypto::cipher::gcm_t> cipher;
       std::uint64_t gcm_iv_counter;
+      std::uint16_t last_transport_prep_latency = 0;
 
       safe::mail_raw_t::event_t<bool> idr_events;
       safe::mail_raw_t::event_t<std::pair<int64_t, int64_t>> invalidate_ref_frames_events;
@@ -1940,12 +1952,15 @@ namespace stream {
         }
       }
 
-      video_short_frame_header_t frame_header = {};
-      frame_header.headerType = 0x01;  // Short header type
+      video_frame_header_t frame_header = {};
+      const std::size_t frame_header_size = session->config.clientLatencyTelemetry ?
+                                              sizeof(frame_header) :
+                                              8;
+      frame_header.headerType = session->config.clientLatencyTelemetry ? 0x81 : 0x01;
       frame_header.frameType = packet->is_idr()                     ? 2 :
                                packet->after_ref_frame_invalidation ? 5 :
                                                                       1;
-      frame_header.lastPayloadLen = (payload.size() + sizeof(frame_header)) % (session->config.packetsize - sizeof(NV_VIDEO_PACKET));
+      frame_header.lastPayloadLen = (payload.size() + frame_header_size) % (session->config.packetsize - sizeof(NV_VIDEO_PACKET));
       if (frame_header.lastPayloadLen == 0) {
         frame_header.lastPayloadLen = session->config.packetsize - sizeof(NV_VIDEO_PACKET);
       }
@@ -1955,9 +1970,10 @@ namespace stream {
         return (uint16_t) std::clamp<decltype(duration_us)>((duration_us + 50) / 100, 0, std::numeric_limits<uint16_t>::max());
       };
 
+      const auto frame_header_timestamp = std::chrono::steady_clock::now();
       auto host_processing_timestamp = packet->host_processing_timestamp ? packet->host_processing_timestamp : packet->frame_timestamp;
       if (host_processing_timestamp) {
-        uint16_t latency = duration_to_latency(std::chrono::steady_clock::now() - *host_processing_timestamp);
+        uint16_t latency = duration_to_latency(frame_header_timestamp - *host_processing_timestamp);
         frame_header.frame_processing_latency = latency;
         frame_processing_latency_logger.collect_and_log(latency / 10.);
         session->stats.last_encode_latency_us10.store(latency, std::memory_order_relaxed);
@@ -1982,12 +1998,16 @@ namespace stream {
         frame_header.frame_capture_latency = 0;
       }
 
+      if (session->config.clientLatencyTelemetry) {
+        frame_header.frame_transport_prep_latency = session->video.last_transport_prep_latency;
+      }
+
       auto fecPercentage = config::stream.fec_percentage;
 
       // Insert space for packet headers
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
       auto payload_blocksize = blocksize - sizeof(video_packet_raw_t);
-      auto payload_new = concat_and_insert(sizeof(video_packet_raw_t), payload_blocksize, std::string_view {(char *) &frame_header, sizeof(frame_header)}, payload);
+      auto payload_new = concat_and_insert(sizeof(video_packet_raw_t), payload_blocksize, std::string_view {(char *) &frame_header, frame_header_size}, payload);
 
       payload = std::string_view {(char *) payload_new.data(), payload_new.size()};
 
@@ -2206,6 +2226,12 @@ namespace stream {
                 }
               }
               frame_send_batch_latency_logger.second_point_now_and_log();
+
+              if (ratecontrol_frame_packets_sent == 0 && session->config.clientLatencyTelemetry) {
+                session->video.last_transport_prep_latency = duration_to_latency(
+                  std::chrono::steady_clock::now() - frame_header_timestamp
+                );
+              }
 
               ratecontrol_group_packets_sent += current_batch_size;
               ratecontrol_frame_packets_sent += current_batch_size;

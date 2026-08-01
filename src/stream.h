@@ -88,6 +88,7 @@ namespace stream {
     int videoQosType;
 
     uint32_t encryptionFlagsEnabled;
+    bool clientLatencyTelemetry;
 
     std::optional<int> gcmap;
     bool gen1_framegen_fix;
