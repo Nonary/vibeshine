@@ -1573,6 +1573,7 @@ namespace nvhttp {
     launch_session->lossless_scaling_rtss_limit.reset();
     launch_session->frame_generation_provider = "lossless-scaling";
     launch_session->device_name = config::nvhttp.sunshine_name;
+    launch_session->client_vrr_requested = false;
     launch_session->virtual_display = false;
     launch_session->virtual_display_guid_bytes.fill(0);
     launch_session->virtual_display_device_id.clear();
@@ -1806,6 +1807,7 @@ namespace nvhttp {
     launch_session->continuous_audio = util::from_view(get_arg(args, "continuousAudio", "0"));
     launch_session->gcmap = (int) util::from_view(get_arg(args, "gcmap", "0"));
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
+    launch_session->client_vrr_requested = util::from_view(get_arg(args, "clientVrrRequested", "0"));
     launch_session->prefer_sdr_10bit = client_settings && client_settings->prefer_10bit_sdr;
 #ifdef _WIN32
     {
