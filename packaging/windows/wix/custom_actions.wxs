@@ -44,7 +44,7 @@
           <Component Id="StartMenuShortcut" Guid="{A3B4C5D6-E7F8-4A5B-9C2D-3E4F5A6B7C8D}">
             <Shortcut Id="VibeshineStartMenuShortcut"
                       Name="Vibeshine"
-                      Description="Launch Vibeshine Web UI"
+                      Description="Open Vibeshine configuration API"
                       Target="[INSTALL_ROOT]sunshine.exe"
                       Icon="ProductIcon.ico"
                       Arguments="--shortcut"

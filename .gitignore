@@ -44,10 +44,8 @@ build/
 cmake-*/
 docs/doxyconfig*
 
-# npm
+# Node package installs
 node_modules/
-package-lock.json
-!src_assets/common/assets/web/package-lock.json
 
 # Translations
 *.mo
