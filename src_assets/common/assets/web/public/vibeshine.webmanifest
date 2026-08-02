@@ -1,10 +1,10 @@
 {
-  "id": "/stream",
+  "id": "/v2/stream",
   "name": "Vibeshine Browser Stream",
   "short_name": "Vibeshine",
   "description": "Low-latency remote streaming from Vibeshine",
-  "start_url": "/stream",
-  "scope": "/",
+  "start_url": "/v2/stream",
+  "scope": "/v2/",
   "display": "fullscreen",
   "display_override": ["fullscreen", "standalone"],
   "background_color": "#090b10",
@@ -12,7 +12,7 @@
   "orientation": "any",
   "icons": [
     {
-      "src": "/images/sunshine.ico",
+      "src": "/v2/images/sunshine.ico",
       "sizes": "any",
       "type": "image/x-icon"
     }
