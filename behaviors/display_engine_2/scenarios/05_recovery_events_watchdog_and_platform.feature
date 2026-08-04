@@ -3,6 +3,8 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
   The display engine protects the user's desktop while a streamed display
   configuration may be active, then restores it safely when a session or the
   operating system becomes unhealthy.
+  Durations in this feature are current suggested defaults and may be tuned, but
+  the stated ordering, attempt ceilings, attribution, and terminal outcomes are fixed.
 
   Rule: A desktop that may have changed remains recoverable
 
@@ -25,14 +27,16 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       Given the helper starts in restore mode after a reboot or later logon
       And no current, previous, or golden baseline exists
       When the helper evaluates available restore candidates
-      Then it clears the no-op recovery state and completes the restore launch
+      Then it clears the in-process no-op recovery state and requests durable-safeguard cleanup
       And it exits instead of waiting indefinitely for a candidate that does not exist
+      But a cleanup failure may leave the replaceable safeguard present and does not prevent this no-baseline launch from exiting
 
     Scenario: Ordinary recovery has a bounded grace and primary opportunity
       Given a protected desktop needs recovery after an ordinary client revert or lost control connection
       When recovery is not an immediate restore-startup request
       Then it gives a replacement session the default 5-second grace opportunity before beginning restoration
-      And recovery attempts remain eligible for the default 2-minute primary recovery window
+      And the default 2-minute primary recovery window begins when recovery is armed rather than after that grace
+      And ordinary recovery therefore has roughly 115 seconds of that original window remaining after the default grace
       And an immediate restore-startup request begins without that grace
       And tuning either duration preserves the replacement opportunity, a finite primary retry window, cancellation responsiveness, and the requirement for confirmed restoration
 
@@ -44,11 +48,12 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
 
     Scenario: A canceled recovery keeps protection for an uncertain desktop
       Given recovery has passed the point at which topology, modes, HDR, primary display, or layout may change
-      And durable recovery protection is present
+      And a durable safeguard was successfully created or already exists
       When recovery or its validation is canceled or superseded
       Then no obsolete completion may declare the desktop restored
       And recovery protection remains armed because the exact mutation boundary is unknown
-      And the durable safeguard remains until a confirmed recovery, verified replacement session, explicit disarm, or reset safely owns the result
+      And the durable safeguard remains until a confirmed recovery, verified replacement session, or explicit safe disarm owns the result
+      And an ordered Reset of staged persistence does not by itself own or prove a safe desktop
 
     Scenario: A canceled apply retains protection when it may have touched the desktop
       Given an apply is superseded after it may have changed the desktop
@@ -73,15 +78,23 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       And it applies recorded rotation or layout only after the preceding restore stages succeed
       And failure at any stage does not report the desktop as restored
 
+    Scenario: A partially applicable saved layout still fails the candidate as a whole
+      Given a recovery candidate contains saved layout or rotation changes for multiple displays
+      And one saved identity or rotation cannot be prepared while another can be changed
+      When recovery applies the optional layout stage
+      Then it may apply the compatible saved change while reporting the layout stage unsuccessful as a whole
+      And the partially changed desktop remains protected and unconfirmed for retry or fallback
+
     Scenario: A restore candidate is confirmed only after stable and quiet observations
       Given a recovery candidate appears to match the current desktop at one observation
       When recovery decides whether that candidate is already restored or has just been restored
-      Then it requires two equal nonempty desktop observations separated by the default 150 ms sampling interval
+      Then it requires two equal desktop observations whose topology and modes are not both empty, separated by the default 150 ms sampling interval
       And it acquires that pair within a default window of up to 2 seconds
       And it requires any recorded layout or rotation to match only during recovery confirmation
-      And it requires the restored desktop to remain unchanged through the default 750 ms quiet period
-      And a changing or incomplete desktop remains recoverable rather than being reported as restored
-      And those defaults may change only when they preserve the equal-nonempty observation gate, quiet-period confirmation, cancellation responsiveness, and the same terminal recovery result
+      And it then requires a default 750 ms quiet period whose repeated snapshots match a newly captured stable quiet-period baseline
+      And it does not compare that fresh quiet baseline back to the candidate or recheck layout during the quiet period
+      And drift between the candidate check and quiet baseline may pass if the newly observed desktop remains stable
+      And those defaults may change only when they preserve the repeated-observation gate, the same comparison boundaries, cancellation responsiveness, and the same terminal recovery result
 
     Scenario: Recovery uses at most two safe restore applications for one candidate
       Given a recovery candidate has not already been stably confirmed
@@ -89,7 +102,7 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       Then it may apply the candidate once and validate it
       And before a second and final safe restore application it waits the default 700 ms double-check interval and checks whether the desktop already matches
       And it does not apply that candidate more than twice in the same recovery attempt
-      And cancellation during either application, confirmation, or double-check leaves recovery and durable protection armed
+      And cancellation during either application, confirmation, or double-check leaves recovery armed and preserves any successfully created or already existing durable safeguard
 
     Scenario: Transient OS validation does not discard a structurally valid restore candidate
       Given a saved recovery candidate has valid topology structure
@@ -102,8 +115,8 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       Given a restore operation completed with a candidate that appeared successful
       But final recovery validation finds that the desktop no longer matches the candidate
       When the helper handles the validation failure
-      Then it keeps recovery protection and the durable safeguard in place
-      And it returns to protected retry behavior in the current scheduler window rather than claiming a safe terminal state
+      Then it keeps recovery protection and preserves any successfully created or already existing durable safeguard
+      And it returns to protected retry behavior in the current active recovery window rather than claiming a safe terminal state
       And a later relevant display event may open or extend its default 30-second event window
 
     Scenario: Final recovery validation waits for the desktop to settle and remains cancellable
@@ -112,6 +125,14 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       Then it rechecks the current desktop after the default 250 ms settling delay
       And cancellation before that check prevents a restored terminal result
       And tuning that delay may not bypass the final match check, convert cancellation into success, or remove recovery protection before confirmation
+
+    Scenario: Final recovery validation does not recheck saved layout or rotation
+      Given candidate-local confirmation matched the saved topology, settings, and any saved layout or rotation
+      And the candidate then reached final recovery validation
+      When layout or rotation drifts after its candidate-local check
+      But the snapshot topology, modes, HDR, primary display, and origins still match after the default 250 ms final settle
+      Then final recovery may still be accepted
+      And the contract does not guarantee that saved layout or rotation remained correct through final acceptance
 
   Rule: Lost control connections respect the session's restore policy
 
@@ -145,6 +166,14 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       And no old ordinary stabilization check may race or override that settlement decision
       And tuning those slots preserves bounded checks, repair only for the current recoverable session, and cancellation safety
 
+    Scenario: The final disconnected repair is accepted without another observation
+      Given the default 250 ms disconnected check failed and its repair did not settle the requested configuration
+      And the default 750 ms disconnected check also failed
+      When the final repair reapplies the current requested configuration and its Apply result is successful
+      Then the session is accepted as steady and remains protected for recovery
+      And no additional post-repair observation is required before that acceptance
+      But a failed or cancelled final repair is not converted into this accepted result
+
   Rule: The heartbeat detects a lost helper client without racing a healthy one
 
     Scenario: Heartbeat monitoring honors the optional startup window
@@ -177,15 +206,24 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       When Windows reports <signal>
       Then the event opens or extends a default 30-second event recovery window for the current recovery
       And the next eligible recovery attempt starts without carrying an old backoff delay
+      And each supported signal enters the same coalesced changed-display opportunity rather than selecting a different recovery policy
       And changing that window may not let an event restore an unarmed or stale session, bypass cancellation, or declare an unconfirmed desktop restored
 
       Examples:
         | signal |
         | a display configuration change |
-        | monitor power resume or monitor power-on |
-        | display-device arrival |
-        | display-device removal |
-        | display-device nodes changed |
+        | a monitor-interface device arrival |
+        | a complete monitor-interface device removal |
+        | display device nodes changing |
+        | automatic system resume |
+        | monitor power changing to on |
+
+    Scenario: Unavailable Windows event sources do not manufacture recovery opportunities
+      Given the helper can otherwise continue Apply, verification, and recovery work
+      When the Windows display-event listener cannot start
+      Then helper operation continues without synthetic display events
+      And event-driven recovery and virtual-display repair opportunities are unavailable until helper restart because listener startup is attempted only once per helper lifetime
+      And if only device or monitor-power notification registration is unavailable, the corresponding event category is unavailable without disabling unrelated event categories
 
     Scenario: Recovery retries only within its allowed windows
       Given recovery is armed and a restore attempt cannot be validated
@@ -215,23 +253,53 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       And that opportunity retains the recovery or session identity that owned the notification when it arrived
       And changing the quiet window may not relabel an old event for a newer Apply, start a stale restore, or bypass cancellation and target safety
 
-    Scenario: A changed virtual identity during Apply is coalesced before delayed reapply
+    Scenario: A changed virtual identity during Apply is retargeted after the delivered event opportunity
       Given a current virtual-display Apply or verification observes a changed usable virtual identity
-      And no other display mutation is active
-      When display events for that change arrive less than the default 250 ms apart
-      Then they produce at most one reapply restart for that interval
-      And the applicable restart begins after the default 100 ms delay
-      And the reapply first retargets the current virtual identity
+      When the outer 500-millisecond event quiet window delivers the applicable event opportunity
+      Then the reapply first retargets the current virtual identity
+      And an active mutation reaches its result boundary before a queued replacement Apply begins
+      But without an active mutation the replacement Apply begins after the default 100-millisecond delay
       And cancellation, a stale event, a same-identity event, or a newer session cannot use that delayed restart to mutate another session's desktop
 
   Rule: Durable recovery survives helper loss but is cleaned up safely
 
-    Scenario: The durable restore safeguard is armed before a possible desktop mutation
-      Given a request is about to alter topology, display settings, or reset a virtual display
+    Scenario: Apply attempts a durable safeguard before its first mutation
+      Given an Apply is about to alter topology or display settings
       When Windows may first observe that mutation
-      Then a durable restore safeguard is armed before the mutation boundary
-      And the safeguard starts the helper in restore mode at a later user logon if needed
-      And it works for a resolved interactive user or a safe all-users logon fallback
+      Then the engine attempts to create the durable restore safeguard and records its result before the mutation boundary
+      And only reported successful creation is recorded as durable protection for a later restore-mode launch
+      But that recorded success does not itself prove the registered definition can launch the helper correctly
+      And failed creation is known before mutation but does not itself prevent the mutation or make the desktop safe
+
+    Scenario: Candidate recovery relies on an existing safeguard rather than refreshing one
+      Given a recovery candidate is about to restore topology, settings, or layout
+      When recovery reaches its first candidate mutation
+      Then it relies on the already armed recovery lease and any already existing durable safeguard
+      And it does not create or refresh a durable safeguard at that candidate mutation boundary
+
+    Scenario: The durable safeguard has one replaceable restore definition
+      Given durable recovery is required for a possibly changed desktop
+      When the safeguard is created or refreshed
+      Then it uses the single compatibility identity "VibeshineDisplayRestore" whose existing definition is replaced or updated idempotently
+      And it attempts author text "Sunshine Display Helper", description text "Automatically restores display settings after reboot", and logon-trigger identity "SunshineDisplayHelperLogonTrigger"
+      And it attempts to start the helper path returned by the fixed-capacity executable-path query with the sole restore argument "--restore"
+      And it attempts ordinary user privilege, hidden execution, start-when-available behavior, no execution time limit, and continued eligibility across battery transitions
+      And it attempts a logon trigger for the identity resolved at safeguard creation time
+      But a reported registration success does not guarantee that optional definition sections were obtained or that every requested property was retained because those acquisition and property-write failures are not surfaced
+      And executable paths that reach the fixed path-capacity boundary are not rejected as truncated before registration
+
+    Scenario: Durable safeguard creation failures remain visible at their boundary
+      Given the helper creates or updates the durable restore safeguard
+      When the durable scheduling facility is unavailable, required trigger or launch objects cannot be constructed at a checked boundary, the current helper executable cannot be resolved, or the assembled safeguard cannot be registered
+      Then create or update reports failure rather than claiming durable protection
+      And a failed create does not prove that the desktop is safe or that no stale safeguard exists
+      But failure to obtain unchecked registration information, settings, logon-trigger, or principal sections, or failure while writing their unchecked properties, launch path, or arguments, can still be followed by reported registration success
+
+    Scenario: Durable safeguard deletion is idempotent but reports checked failures
+      Given the helper deletes the durable restore safeguard
+      When the durable scheduling facility is unavailable or deletion reports an unexpected error
+      Then deletion reports failure
+      But deleting an already missing safeguard succeeds idempotently
 
     Scenario: Cancellation before the durable mutation boundary may clear provisional recovery
       Given durable recovery was prepared before a possible desktop mutation
@@ -239,10 +307,12 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       Then the provisional durable safeguard may be cleared because the desktop was not changed
 
     Scenario: Cancellation after the durable mutation boundary retains recovery
-      Given durable recovery was armed before a possible desktop mutation
+      Given recovery ownership was armed before a possible desktop mutation
       And Windows may already have observed that mutation
       When cancellation arrives before a safe terminal outcome
-      Then the safeguard remains until a confirmed recovery, verified replacement, explicit safe disarm, or reset owns the desktop
+      Then recovery remains armed until a confirmed recovery, verified replacement, or explicit safe disarm owns the desktop
+      And any successfully created or already existing durable safeguard remains available for that recovery
+      And an ordered Reset may clean staged persistence but does not release live recovery ownership
       And a restore task that cannot be armed never permits a claim that the desktop is safe merely because in-process recovery remains available
 
     Scenario: Failure to arm durable recovery does not masquerade as a safe desktop
@@ -251,36 +321,39 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       Then the helper retains in-process recovery protection and its recovery-required state
       And it does not treat the session as safely restored or safely disarmed solely because task creation failed
 
-    Scenario: Durable restore targets the affected resolved user
+    Scenario: Durable restore derives its logon identity at safeguard creation time
       Given a durable restore safeguard is required at a later logon
-      When the affected interactive user can be resolved
-      Then that user's later logon is eligible to start recovery
-      And an unrelated user's logon does not stand in for the resolved user
+      When no explicit affected-user identity is supplied by the production display lifecycle
+      Then identity resolution first uses the active console-session user, then the helper process user, then a resolvable current account identity
+      And the first non-service SID found becomes the requested trigger and principal identity
+      And the contract does not claim that this derived identity tracks a separately recorded affected user
 
     Scenario: Durable restore has a safe no-user fallback
       Given a durable restore safeguard is required at a later logon
-      When no affected interactive user can be resolved
-      Then the next ordinary user logon is eligible to start recovery without relying on localized account-name text
-      And the safeguard remains available when logon is delayed or the device is running on battery
+      When the active-console, process, and account-resolution sequence yields no non-service SID
+      Then creation leaves the logon trigger's user identity unscoped, binds the principal group to SID "S-1-5-32-545", and registers with group-logon semantics without localized account-name text
+      And it attempts next-ordinary-logon, start-when-available, and battery eligibility
+      But unchecked trigger, principal, or settings failures mean reported registration success does not guarantee those fallback behaviors were retained
 
-    Scenario: Durable safeguard cleanup is idempotent
-      Given recovery has reached a safe terminal outcome and no durable safeguard exists
+    Scenario: Durable safeguard cleanup is idempotent only after absence is reached
+      Given recovery has reached a safe terminal outcome, the durable scheduling facility is reachable, and no named safeguard exists
       When cleanup is requested again
-      Then cleanup succeeds as a no-op
+      Then a missing-safeguard deletion result succeeds as a no-op
       And it does not recreate recovery work or change the confirmed desktop
 
     Scenario: A confirmed recovery cleans up only the safeguards it no longer needs
       Given recovery has restored a saved baseline and validation succeeds
       When the desktop is confirmed to match the restored baseline
       Then heartbeat monitoring and retry scheduling are disarmed
-      And the durable restore safeguard is removed
-      And the helper refreshes the Windows shell so the restored desktop is visible coherently
+      And the helper first refreshes the Windows shell so the restored desktop is visible coherently
+      And removal of the durable restore safeguard is requested after that shell refresh
+      But an unsuccessful removal is not rechecked and may leave the safeguard present even though the confirmed recovery proceeds
 
     Scenario: Durable cleanup preserves the recovery fallback ordering until confirmation
       Given recovery has eligible Current, Previous, and Golden fallback candidates
       When a candidate fails or remains unconfirmed
-      Then recovery preserves the configured candidate order and durable safeguard for the next eligible fallback or event-driven retry
-      And it does not delete the durable safeguard, Current, or Previous state merely because an earlier candidate was attempted
+      Then recovery preserves the configured candidate order and any successfully created or already existing durable safeguard for the next eligible fallback or event-driven retry
+      And it does not delete such a durable safeguard, Current, or Previous state merely because an earlier candidate was attempted
 
     Scenario: A confirmed golden restoration retires session fallbacks before final recovery validation
       Given golden recovery has restored and stably confirmed a golden baseline
@@ -289,37 +362,26 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       Then it retires the obsolete current and previous session baselines before that validation completes
       And a later validation failure keeps recovery protection but does not recreate those retired fallbacks
 
-    Scenario: Successful post-recovery session cleanup permits a fresh Apply
-      Given recovery validation has confirmed that the desktop is restored
-      And the session retains prior Apply state that must be cleared before another configuration request
-      When that cleanup succeeds
+    Scenario: Candidate-local session cleanup precedes final recovery validation
+      Given a Golden or session candidate has passed its candidate-local confirmation
+      And staged session state remains from an earlier Apply
+      When recovery processes that candidate result
+      Then it attempts to reset the staged session state before dispatching final recovery validation
+      And a successful reset remains in effect even if final recovery validation later fails
+      But a failed reset is recorded while final recovery validation still proceeds
+
+    Scenario: A successful retry of candidate-local cleanup permits a fresh Apply
+      Given candidate-local staged-state cleanup failed but final recovery validation confirmed the desktop is restored
+      When the helper retries that cleanup and it succeeds
       Then a later Apply starts without stale session display state
 
-    Scenario: Failed post-recovery session cleanup cannot serve another Apply
-      Given recovery validation has confirmed that the desktop is restored
-      And the session retains prior Apply state that must be cleared before another configuration request
-      When that cleanup cannot be completed
+    Scenario: Repeated candidate-local cleanup failure cannot serve another Apply
+      Given candidate-local staged-state cleanup failed and final recovery validation confirmed the desktop is restored
+      When the cleanup retry cannot be completed
       Then the helper does not run a subsequent Apply against that stale state
       And it finishes the current helper lifecycle so a fresh session can own the next Apply
 
   Rule: Virtual display changes are recovered without losing the physical desktop
-
-    Scenario: A virtual-display reset protects the desktop before cycling the driver
-      Given a virtual-display apply requests a reset because the virtual display needs recovery
-      When the reset starts
-      Then durable recovery protection is armed before the virtual driver is disabled
-      And after disabling the driver it waits the default 500 ms before re-enabling it
-      And the driver is re-enabled before the requested configuration is retried
-      And after re-enabling the driver it waits the default 1,000 ms before Apply continues
-      And a virtual-display-reset-needed result may start another reset only after the default 30-second reset cooldown, rather than cycling the driver indefinitely
-
-    Scenario: A canceled or failed virtual-display reset leaves a recoverable outcome
-      Given a protected virtual-display reset has disabled the driver
-      When the reset is canceled, its wait fails, or the following apply fails
-      Then the helper attempts to re-enable the disabled virtual driver before reporting the failure
-      And the desktop remains protected for recovery even if re-enabling the driver fails
-      And cancellation during either the 500 ms disable wait or 1,000 ms re-enable wait does not begin the following Apply
-      And a later recovery or verified replacement is required before the safeguard is removed
 
     Scenario: A same-identity virtual display event verifies before reapplying
       Given a verified virtual-display session is being monitored
@@ -339,20 +401,23 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       And the virtual driver now resolves to a different usable device identity
       When a virtual display event arrives
       Then the helper rediscovers and retargets the session to that virtual display identity
+      And any explicit topology member or monitor-position override that named the previous virtual identity follows the new identity
       And it reapplies the requested configuration only to the rediscovered virtual target
       And a late event from an earlier session cannot retarget the newer desktop session
 
     Scenario: A matching virtual identity is recognized conservatively
       Given virtual-display supervision needs to resolve a Windows display identity
-      When an available display has the SudoVDA friendly name or EDID manufacturer "SMK" with product code "D1CE"
+      When an available display has the friendly name "SudoMaker Virtual Display Adapter" or EDID manufacturer "SMK" with product code "D1CE", compared case-insensitively
       Then it recognizes that display as a compatible virtual display
       And it prefers an active primary compatible identity when more than one compatible identity is available
-      And recovery-side supervision respects the separately configured virtual re-enable cooldown without using a cooldown as health confirmation
+      And otherwise it prefers an active compatible identity over an inactive one
+      And it returns the selected display's stable device identifier when present, otherwise its display name
 
     Scenario: No matching virtual identity does not create a target
       Given virtual-display supervision needs to resolve a Windows display identity
-      When no available display has the SudoVDA friendly name or EDID manufacturer "SMK" with product code "D1CE"
+      When no compatible display is found or display discovery is unavailable or fails
       Then it does not invent a virtual identity or retarget a physical display
+      And it yields no virtual identity rather than falling back to a physical display
       And recovery-side supervision treats the unresolved virtual target as unavailable rather than healthy
 
   Rule: Platform-visible cleanup happens only for confirmed display outcomes
@@ -361,16 +426,29 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       Given an Apply has been verified successful for the active, current session
       When it completes its platform-visible cleanup
       Then the shell is refreshed after that verified display change
-      And if the session requested HDR blanking, HDR states are temporarily blanked after verification using the default 1-second duration rather than for every intermediate Apply attempt
+      And if the session requested HDR blanking, a serialized workaround attempts the default 1-second operation over every active display observed HDR-enabled rather than only the resolved target or every intermediate Apply attempt
       And if the session did not request HDR blanking, it does not blank HDR states
-      And an HDR-workaround failure leaves the verified Apply result unchanged
+      And topology or HDR-state discovery failure may end the launched workaround without changing any display
+      And failures inside a successfully launched workaround leave the verified Apply result unchanged
+      But failure to launch the workaround execution itself is not caught at this boundary and has no unchanged-result guarantee
       And a confirmed restore refreshes the shell only after it validates the restored desktop
       And shell refresh is best effort and does not hold the verified Apply or restore result open
       But stale, cancelled, failed, or unverified Apply and restore completions do not blank HDR or refresh the shell
 
-    Scenario: Consecutive HDR blanking requests remain temporary and non-overlapping
+    Scenario: Shell refresh uses its ordered best-effort compatibility notifications
+      Given a verified Apply or confirmed recovery requests platform-visible shell refresh
+      When Windows is notified of the display change
+      Then association-change notification occurs before icon-setting reset
+      And setting-change broadcasts for "ShellState" then "IconMetrics" occur before the display-change broadcast
+      And each explicit broadcast uses the default 100-millisecond abort-if-hung allowance without making its result authoritative
+      And the display-change broadcast carries current screen dimensions and observed color depth, using 32 bits per pixel when that depth cannot be observed
+      And any failed notification remains best effort and does not revise the verified display outcome
+
+    Scenario: Consecutive HDR blanking requests are serialized but restoration is best effort
       Given a verified current session is within a requested temporary HDR-blanking interval
       When a later verified current session also requests HDR blanking
       Then the later workaround does not overlap the earlier blanking interval
-      And each accepted workaround returns HDR state handling to its normal path after its configured temporary duration
+      And an accepted blanking operation remains owned until its temporary interval completes
+      And only after the complete disable request succeeds does it wait and attempt to restore every HDR state it changed
+      But a failed blank or restore operation is swallowed and may leave one or more affected displays in the state Windows last accepted
       And failure of either workaround does not revise either verified Apply result

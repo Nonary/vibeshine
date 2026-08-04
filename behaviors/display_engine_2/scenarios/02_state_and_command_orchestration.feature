@@ -16,13 +16,14 @@ Feature: Display engine v2 state and command orchestration
         | waiting                              | a valid Apply                                | applying, verifying, waiting, or virtual-display monitoring | verified, terminal apply failure, or a protected session awaiting recovery |
         | waiting                              | an explicit Revert with a candidate          | restoring, confirming restoration, waiting, or recovery-waiting | confirmed restore, or armed recovery awaiting a display event        |
         | any live protected session          | Disarm without an unconfirmed restore        | waiting                                                     | protection is removed unless an earlier cancelled mutation remains unknown |
-        | waiting or a protected live session | Reset                                        | the existing lifecycle condition followed by its current terminal condition | staged state is cleared, or the current helper lifecycle ends on required cleanup failure |
+        | waiting or a protected live session | Reset                                        | the existing lifecycle condition followed by its current terminal condition | staged state is cleared, an ordinary failure releases its barrier, or required cleanup failure ends the helper lifecycle |
         | virtual-display monitoring          | a relevant display change                    | verifying or applying, then virtual-display monitoring      | the existing session is retained or its configuration is repaired        |
 
-    Scenario: Status values keep invalid, unavailable, retryable, verification, reset-required, and terminal failures distinct
+    Scenario: Reachable helper Apply outcomes keep invalid, retryable, verification, and fatal failures distinct
       Given a request reaches a terminal apply decision
-      When its outcome is successful, helper-unavailable, invalid-request, verification-failed, needs-virtual-display-reset, retryable, or fatal
-      Then the observable result preserves that outcome category until a documented retry, reset, or SDR fallback takes ownership
+      When its outcome is successful, invalid-request, verification-failed, retryable, or fatal
+      Then the observable result preserves that outcome category until a documented retry or SDR fallback takes ownership
+      And caller-side helper unavailability remains a separate outcome of failing to start or communicate with the helper rather than a fabricated helper Apply status
       And a replacement request cannot receive the prior request's category or result identity
 
     Scenario Outline: Apply maps each display-preparation outcome to its required public status
@@ -33,7 +34,7 @@ Feature: Display engine v2 state and command orchestration
 
       Examples:
         | stage                         | condition                                                        | public-status      | next-behavior                                                        |
-        | obtaining display context     | no usable display context is available                           | helper-unavailable | the request reaches its unavailable terminal handling                |
+        | obtaining display context     | no usable display context is available                           | retryable          | the request follows its retry schedule without reporting success      |
         | activating requested topology | the requested topology is rejected                               | verification-failed | the request follows verification-failure retry or terminal handling  |
         | activating requested topology | an unexpected platform exception occurs                          | fatal              | the request reaches fatal terminal handling                           |
         | preparing session baseline    | saving the preparation baseline fails                              | retryable          | the request follows its retry schedule without reporting success      |
@@ -75,15 +76,15 @@ Feature: Display engine v2 state and command orchestration
       Examples:
         | profile                                | default-envelope                                                                 | invariant                                                                                  |
         | pre-Apply baseline capture             | 3 capture/save attempts, with 50 ms between failed attempts                    | Apply continues after failure; no failed capture replaces a known-good baseline             |
-        | Apply retry                             | 3 total attempts; retries after 500 ms then 1,000 ms                           | no retry may let an obsolete request or session report success or remove recovery after mutation    |
+        | Apply retry                             | 3 total attempts for each effective HDR or SDR phase; retries after 500 ms then 1,000 ms | no retry may let an obsolete request or session report success or remove recovery after mutation    |
         | topology activation                    | up to 2 attempts; each waits up to 5 s for a usable accepted topology           | a successful call alone is insufficient; the required target must be usable before success  |
         | topology recovery between attempts     | 500 ms settling after display-stack recovery                                    | cancellation stops later stages and a possible mutation remains recovery-protected           |
-        | initial Apply verification             | two matching observations separated by 250 ms                                   | capture opens only after the current request verifies; an older result never opens it        |
+        | initial Apply verification             | two matching observations separated by 250 ms                                   | only the current request can publish verification; failed or unknown remains nonverified while callers retain their documented fallback, and an older result never opens the current gate |
         | post-Apply settling                    | immediate repair option, then 750 ms; HDR adds 2,500 ms and 5,500 ms stages     | a verified session stays verified if a later best-effort repair fails                        |
         | recent-disconnect settlement           | 5 s from Apply start; then 250 ms and 750 ms verify-before-repair checks        | it replaces ordinary settling rather than racing it; restoration is avoided if the change stuck |
         | explicit Revert grace                  | 5 s before the first restore, or 0 ms for immediate restore mode                | a later Apply or protected unconfirmed restore retains its documented precedence             |
         | recovery retry window                  | 2 min primary window; events reopen at least 30 s; backoff 0,1,3,5,10,15,20,30 s | expiry pauses attempts until another display event; it never declares an unconfirmed desktop restored |
-        | heartbeat recovery                     | 30 s optional period, 30 s missed-ping period, then 2 min recovery deadline    | a valid ping or replacement connection cancels the old deadline                               |
+        | heartbeat recovery                     | 30 s optional period, 30 s missed-ping period, a 2 min recovery deadline, then 5 s replacement grace | a valid ping or replacement connection cancels the old deadline; restore starts only after the current mutation boundary |
 
     Scenario: A default duration cannot weaken command precedence or desktop protection
       Given any default retry, grace, stabilization, or recovery duration has been changed
@@ -95,12 +96,23 @@ Feature: Display engine v2 state and command orchestration
 
   Rule: A new apply request establishes the current session intent
 
-    Scenario: An apply request without a configuration is rejected before display application
-      Given the display engine can evaluate a new session request
-      When a client applies a request that has no display configuration
+    Scenario: An already-dispatched Apply command without a configuration is rejected before display application
+      Given an internal Apply command has already reached the state engine
+      When that dispatched command has no display configuration
       Then the client receives an invalid-request apply result for that request
       And the engine does not start a display application for that request
       And the engine remains ready for a later valid request
+
+    Scenario: An invalid dispatched Apply still supersedes prior recovery work and publishes exclusions but not recovery policy
+      Given an internal Apply command without a display configuration carries an exclusion update and different recovery-policy values
+      And earlier operations, restore scheduling, or request-local restore progress may still exist
+      When that Apply reaches configuration validation
+      Then it has already cleared older explicit recovery intent, cancelled current operations, disarmed restore scheduling, reset request-local restore progress, and armed a fresh heartbeat
+      And its exclusion update is already the current baseline-filtering policy
+      But its golden-ordering and restore-on-disconnect values do not replace the previously published recovery policy
+      And it reports invalid-request without beginning a display application
+      But any unresolved earlier desktop-recovery obligation remains live even though its current schedule and request progress were reset
+      And a later disconnect or heartbeat may reopen that recovery under the previously published restore policy
 
     Scenario: A valid apply request supersedes unfinished autonomous recovery
       Given recovery protection is pending from an earlier session
@@ -108,6 +120,14 @@ Feature: Display engine v2 state and command orchestration
       Then the new request becomes the current session intent
       And unfinished recovery work cannot restore the desktop in place of that new intent
       And the request's restore-on-disconnect and snapshot-exclusion choices take effect before later recovery decisions
+
+    Scenario: A failed replacement Apply still owns the published recovery policy
+      Given a protected session already has a desktop recovery obligation
+      And a replacement Apply selects different golden-ordering or restore-on-disconnect behavior
+      When that replacement becomes current but later fails before verification
+      Then the earlier desktop obligation remains protected when it is still unresolved
+      And later automatic recovery decisions use the replacement request's published policy
+      And the failed replacement does not silently restore the superseded session's policy
 
     Scenario: Apply continues when all three fallback baseline captures cannot succeed
       Given a valid Apply request has no current session baseline
@@ -167,18 +187,12 @@ Feature: Display engine v2 state and command orchestration
       Then it makes at most 3 total Apply attempts with retries after 500 ms and 1,000 ms
       And it reports the terminal apply and verification outcomes when the retry allowance is exhausted
 
-    Scenario: A virtual-display reset outcome is handled before ordinary failure completion
-      Given a valid apply request requires a virtual display
-      When the display operation reports that a virtual-display reset is needed
-      Then the engine performs one reset-and-reapply when no reset was performed in the preceding 30 seconds
-      And it otherwise keeps the reset-required outcome terminal for that Apply attempt
-      And the eventual result remains associated with the original request
-
     Scenario: A virtual HDR request may fall back to SDR after the three-attempt HDR budget
       Given a virtual-display apply request asks for HDR
       And the 3 standard Apply attempts have been exhausted without confirmation
       When the request is still eligible for the one-time HDR fallback
       Then the engine retries the display request with effective SDR
+      And the effective SDR phase receives its own bounded allowance of at most 3 Apply attempts
       And it still requires confirmation before reporting success
 
     Scenario: A failure after a possible mutation keeps the desktop protected
@@ -255,6 +269,29 @@ Feature: Display engine v2 state and command orchestration
       And it repairs only when the 250 ms then 750 ms checks show that the result did not stick
       And the transient checks do not race ordinary post-apply stabilization work
 
+    Scenario: The final transient-disconnect repair has no later observation gate
+      Given the 250 ms and 750 ms transient-disconnect checks each found that the requested display result did not stick
+      And the failed 750 ms check started the final bounded repair
+      When that repair operation reports success
+      Then the engine retains the session as verified and protected without scheduling another display observation
+      And this terminal settlement path does not guarantee that the repaired desktop was observed after the repair
+
+    Scenario Outline: A virtual-display event cannot bypass an active display mutation
+      Given a monitored virtual-display session has a display mutation in progress
+      When an event resolves to <identity-result>
+      Then <active-mutation-result>
+      And the active mutation retains its authoritative completion boundary
+
+      Examples:
+        | identity-result                  | active-mutation-result                                                                  |
+        | the same managed identity        | no separate repair is added because the active result will receive its settling check  |
+        | a different managed identity     | the request is retargeted and one repair waits behind the active mutation               |
+
+    Scenario: A same-identity event during virtual Apply yields to current verification
+      Given a virtual-display request is applying or being verified
+      When a display event still resolves to the request's current managed identity
+      Then the engine lets the in-progress result be verified without restarting it solely for that event
+
   Rule: Autonomous signals yield to current control intent
 
     Scenario Outline: Simultaneous command classes have observable precedence
@@ -272,6 +309,25 @@ Feature: Display engine v2 state and command orchestration
         | a live recovery                          | duplicate disconnect recovery                    | the duplicate joins the current recovery without extending its grace period                      |
         | a current session                       | a stale display event or stale heartbeat          | the stale event is ignored and cannot redirect the current session                               |
         | any accepted Stop                        | later input                                      | the engine enters terminal lifecycle handling; later input cannot revive the old session         |
+
+    Scenario Outline: Only a contiguous eligible command burst may take precedence over an asynchronous completion
+      Given <completion> becomes ready to handle
+      And <following-inputs> are the uninterrupted burst received immediately after it
+      When the helper establishes processing order
+      Then <ordering-result>
+      And the first non-priority input remains an ordering boundary that later commands cannot cross
+
+      Examples:
+        | completion                         | following-inputs                                      | ordering-result                                                                       |
+        | any asynchronous completion        | Apply, Revert, Disarm, or Reset                        | those commands are handled in arrival order before the completion                     |
+        | a stabilization-check completion   | Apply, Revert, Disarm, Reset, Refresh Rate, or Ping    | those commands are handled in arrival order before the stabilization result           |
+        | any asynchronous completion        | Snapshot Current, Golden export, Stop, or an event     | the completion is handled before that first ineligible input                          |
+
+    Scenario: Continuous input traffic cannot starve lifecycle timers
+      Given command, event, or completion messages keep arriving without an idle interval
+      When the helper handles each input opportunity
+      Then it advances heartbeat and recovery-scheduler timers before handling the next opportunity
+      And sustained traffic alone cannot postpone a due liveness or recovery decision indefinitely
 
     Scenario: Recovery is reopened by events without bypassing the current recovery boundary
       Given recovery is armed and its current retry window has expired
@@ -292,11 +348,11 @@ Feature: Display engine v2 state and command orchestration
       Then the engine joins the existing recovery instead of starting another one
       And it does not restart the recovery grace or discard the active restore outcome
 
-    Scenario: A heartbeat timeout yields to a newer queued Apply intent
+    Scenario: A heartbeat timeout yields to a newer pending Apply intent
       Given a possibly mutating display operation is active
-      And a newer Apply request is queued behind that operation
+      And a newer Apply request is pending behind that operation
       When a heartbeat timeout arrives for the older session
-      Then the timeout does not replace the queued Apply with autonomous recovery
+      Then the timeout does not replace the pending Apply with autonomous recovery
       And the newer Apply remains the next current control intent after the safety boundary
 
     Scenario: A heartbeat timeout honors a session that opted out of automatic restoration
@@ -320,16 +376,30 @@ Feature: Display engine v2 state and command orchestration
       Then the engine begins recovery after any active display mutation reaches a safe boundary
       And the explicit revert is not discarded as a disconnect-policy decision
 
-    Scenario: A revert with no saved restore candidate exits cleanly
-      Given no restore candidate is available for the session
-      When a revert is requested
-      Then the engine does not begin a restore attempt without a candidate
-      And it clears the associated recovery state before the helper reaches its clean terminal lifecycle outcome
+    Scenario Outline: Revert updates golden-first policy only when that field is supplied
+      Given the current recovery policy has <prior-golden-first>
+      When an explicit Revert carries <golden-first-field>
+      Then later candidate ordering uses <effective-golden-first>
+      And the Revert's separate prefer-Golden-when-Current-is-missing choice is published for that request
 
-    Scenario: An attempted recovery without a usable candidate remains armed for later display events
-      Given a Revert has begun recovery from an apparent restore candidate
-      When recovery reaches a non-successful terminal result
-      Then the engine retains recovery protection in its recovery-waiting state with its retry window and backoff state
+      Examples:
+        | prior-golden-first     | golden-first-field       | effective-golden-first                    |
+        | Golden-first enabled   | no golden-first field    | the enabled value retained from before    |
+        | Golden-first disabled  | no golden-first field    | the disabled value retained from before   |
+        | either prior value     | explicit enabled         | enabled                                   |
+        | either prior value     | explicit disabled        | disabled                                  |
+
+    Scenario: A Revert with no persisted restore tier exits cleanly
+      Given the Current, Previous, and Golden persistence paths are all absent
+      When a Revert is requested
+      Then the engine does not begin a restore attempt
+      And it cancels current operations, clears recovery state, and requests a successful helper exit
+
+    Scenario: Any present restore tier can arm recovery even when no usable candidate loads
+      Given at least one Current, Previous, or Golden persistence path exists
+      When normal recovery completes without confirming a candidate
+      Then the engine remains armed in its recovery-waiting state with its retry window and backoff state
+      And path presence alone does not claim that any candidate was usable or restored
       And a later current control intent may supersede that waiting recovery safely
 
     Scenario: Disarm does not abandon an unconfirmed restore
@@ -362,17 +432,24 @@ Feature: Display engine v2 state and command orchestration
       Then the updated exclusion policy is used for the snapshot
       And the client receives the success or failure result for the same request identity
 
-    Scenario: Golden export is accepted only while the desktop is stable
-      Given no display mutation or recovery is active
+    Scenario: Golden export is accepted when no tracked Apply or recovery is active
+      Given no tracked display mutation or recovery is active
       When a client requests a golden baseline export
-      Then the engine captures the golden baseline using the current exclusion policy
+      Then the engine runs one Golden export operation using up to 3 complete filtered capture-and-save attempts, waiting 50 ms after each of the first 2 failures, under the current exclusion policy
       And a successful export makes the new golden baseline eligible for future recovery decisions
+      And acceptance does not prove that an external actor left the desktop stable across observations
 
     Scenario: Refresh rate rejects invalid or conflicting mutation requests
       Given a client asks to change a refresh rate
       When the request has no device, a zero rate component, or conflicts with an active display mutation
       Then the engine returns a failed refresh-rate result for that request
       And it does not let the refresh request race the active display transaction
+
+    Scenario: A pending stabilization check rejects refresh changes outside its display scope
+      Given a verified Apply has a post-Apply stabilization check pending
+      When a valid refresh-rate request names a display outside that Apply's explicit or resolved duplicate-group scope
+      Then the engine returns a failed refresh-rate result for that request
+      And it leaves the current stabilization decision in control without mutating the unrelated display
 
     Scenario: Refresh rate is serialized and correlated when it is permitted
       Given the display engine is not applying or restoring
@@ -386,6 +463,7 @@ Feature: Display engine v2 state and command orchestration
       When that refresh-rate mutation completes <outcome>
       Then the engine retires earlier settling checks that used the pre-refresh request
       And it performs the applicable later settling decision before allowing obsolete verification to control the session
+      And an unsuccessful refresh is not treated as proof that the desktop remained unchanged
 
       Examples:
         | outcome          |
@@ -398,12 +476,39 @@ Feature: Display engine v2 state and command orchestration
       Then reset waits until that display mutation reaches its completion boundary
       And it does not cancel the active display change or discard its recovery protection
 
+    Scenario: Reset may clear staged state while read-only verification continues
+      Given Apply has finished its display mutation and its read-only verification is in progress
+      When a current-session Reset is accepted
+      Then staged-state cleanup may begin without cancelling that verification
+      And the verification still owns its request outcome while Reset owns only its cleanup result
+
     Scenario: A successful ordered reset releases only the current deferred control intent
       Given reset is ordered behind display work
       And a current deferred control command is waiting for that reset
       When reset completes successfully
       Then the engine clears the staged display-session state before honoring the deferred command
       And any superseded deferred control intent is not revived
+
+    Scenario: Every accepted Reset remains an ordered barrier
+      Given one Reset is already waiting or being completed
+      When another current-session Reset is accepted
+      Then the later Reset remains ordered after the earlier one instead of being folded into session intent
+      And a following Apply, Revert, or Disarm cannot pass either accepted Reset
+
+    Scenario: A Reset completion remains authoritative after newer cancellation
+      Given an accepted Reset has reached its non-cancellable cleanup boundary
+      And later control intent advances ordinary display-work cancellation
+      When the Reset completion arrives
+      Then the engine retires that Reset barrier according to its actual success or failure
+      And it does not discard the completion as stale display work
+
+    Scenario: An ordinary Reset failure releases its barrier without claiming cleanup
+      Given Reset was requested outside the mandatory cleanup after a confirmed recovery
+      And a later control intent is waiting behind it
+      When Reset fails
+      Then the staged display-session state is not reported as cleared
+      But the ordinary Reset barrier is retired and the later intent may proceed
+      And only the separate mandatory recovery-cleanup failure path requires a fresh helper lifecycle
 
     Scenario: A recovery terminal outcome waits for its ordered reset before helper exit
       Given a confirmed recovery needs display-session cleanup

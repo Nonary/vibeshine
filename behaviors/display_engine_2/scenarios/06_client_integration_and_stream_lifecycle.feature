@@ -96,14 +96,32 @@ Feature: Display engine v2 client integration and stream lifecycle
         | a configured shared mode        |
         | application virtual-screen metadata |
 
+    Scenario: Virtual stable identity follows configured sharing scope
+      Given a session requires a virtual display
+      When Sunshine derives the stable virtual identity
+      Then per-client mode uses the client UUID when nonempty and otherwise uses the session unique identity
+      And shared mode uses the persistent shared identity rather than either per-client identity
+
+    Scenario: Invalid saved virtual identity is repaired within its scope
+      Given virtual creation needs a parseable stable identity
+      When shared mode has a missing or invalid saved shared identity, or a non-client session identity is invalid
+      Then Sunshine uses its persistent virtual identity and updates the applicable shared or session identity
+      And a nonempty per-client UUID still remains the per-client display identity
+
+    Scenario: Virtual target resolution follows its constrained identity order
+      Given a virtual session needs a capture target
+      When Sunshine resolves the target identity
+      Then it tries the session's known virtual display, the client name, and the configured output hint in that order
+      And it does not substitute an arbitrary managed virtual display unless the client name is empty
+
     Scenario: A resolved virtual target remains the target of the virtual Apply
       Given a virtual session has a resolved active virtual target identity
       When Sunshine creates the virtual Apply request
       Then the request and published session retain that virtual target identity
       And it does not redirect the request to an arbitrary physical target
 
-    Scenario: Unavailable virtual identity produces no arbitrary display mutation
-      Given a virtual session has no resolved virtual target identity
+    Scenario: Unavailable named virtual identity produces no arbitrary display mutation
+      Given a named virtual session has no resolved virtual target identity
       And no configured output provides a valid fallback target
       When Sunshine cannot form a valid virtual Apply request
       Then it returns no display request or a safe unsuccessful outcome
@@ -115,6 +133,19 @@ Feature: Display engine v2 client integration and stream lifecycle
       When Sunshine builds the request
       Then it may retain that configured physical output as the explicit fallback target
       And it does not substitute another physical target when that explicit output is unavailable
+
+    Scenario: Virtual creation defaults only missing mode components
+      Given a virtual display must be created for a session
+      And effective positive dimensions or refresh may be unavailable
+      When Sunshine forms its initial creation mode
+      Then missing dimensions default to 1920 by 1080 and missing refresh defaults to 60000 millihertz
+      And HDR begins as no state change unless source-display policy explicitly resolves enabled or disabled
+
+    Scenario: Virtual creation publishes only a resolved successful identity
+      Given virtual creation completes with immediate or later identity evidence
+      When Sunshine adopts the creation result
+      Then only a successful nonempty identity becomes the runtime output and adapter-verification target
+      And failure clears virtual ownership without changing the active display selection
 
     Scenario: A valid virtual Apply preserves effective dimensions and frame rate
       Given a virtual request has a valid target configuration and positive session dimensions or frame rate
@@ -219,6 +250,19 @@ Feature: Display engine v2 client integration and stream lifecycle
       Then it creates only the limited target configuration required by that compatibility behavior
       And it does not reinterpret disabled configuration as a general display-configuration request
 
+    Scenario Outline: Dummy-plug desktop classification follows application launch intent
+      Given a dummy-plug compatibility decision has <application evidence>
+      When Sunshine classifies the session as desktop or non-desktop
+      Then it treats the session as <classification>
+      And the classification controls whether the non-desktop limited configuration is eligible
+
+      Examples:
+        | application evidence                                      | classification |
+        | a resolved app with neither command nor Playnite identity | desktop        |
+        | a resolved app with a command or Playnite identity        | non-desktop    |
+        | no resolved app and a nonpositive app identity            | desktop        |
+        | no resolved app and a positive app identity               | non-desktop    |
+
   Rule: Session topology preserves explicit display relationships safely
 
     Scenario: A physical ensure-only request names only its explicit physical target
@@ -234,6 +278,13 @@ Feature: Display engine v2 client integration and stream lifecycle
       Then it names that virtual target as the only display
       And it does not inject unrelated physical displays
 
+    Scenario: Exclusive virtual intent upgrades disabled preparation
+      Given virtual intent uses exclusive layout
+      And ordinary device preparation is disabled
+      When Sunshine builds a valid virtual request
+      Then preparation becomes ensure only that virtual display
+      And nonexclusive layouts retain their own activation and primary intent
+
     Scenario: An extended virtual layout merges a saved topology without duplicate virtual membership
       Given a nonexclusive virtual session has a saved topology and a resolved virtual target
       When Sunshine supplies topology intent
@@ -244,8 +295,8 @@ Feature: Display engine v2 client integration and stream lifecycle
       Given extended non-primary layout finds that the virtual target became primary
       And physical display evidence is available
       When Sunshine supplies monitor placement intent
-      Then it restores one physical display as primary and places the virtual target beside it
-      And it leaves placement unchanged when the required display evidence is unavailable
+      Then it returns the first usable nonvirtual display to the origin and places the virtual target immediately to its right by that display's width
+      And it leaves placement unchanged when evidence is unavailable or the virtual target is not observed primary
 
     Scenario: Extended-primary layout does not impose non-primary physical restoration
       Given a virtual session uses extended-primary layout
@@ -257,14 +308,14 @@ Feature: Display engine v2 client integration and stream lifecycle
       Given a virtual session uses isolated non-primary extended layout
       When display evidence is available
       Then Sunshine preserves physical display positions
-      And it places the virtual target safely outside their reachable pointer space
+      And it places the virtual target at the default 64000 isolation anchor without coordinate overflow
 
     Scenario: Primary isolated layout keeps the virtual target primary and separates physical pointer space
       Given a virtual session uses extended-primary-isolated layout
       And physical display evidence is available
       When Sunshine supplies monitor placement intent
-      Then it keeps the virtual target at the primary origin
-      And it moves physical displays into safely separated pointer space without coordinate overflow
+      Then it keeps the virtual target at the primary origin and finds the minimum physical x and y coordinates
+      And it translates every physical origin equally until those minima reach the default 64000 isolation anchor, saturating additions instead of overflowing
 
     Scenario: Missing topology or display evidence leaves placement safe and partial
       Given required virtual identity, saved topology, or display evidence is unavailable
@@ -275,8 +326,8 @@ Feature: Display engine v2 client integration and stream lifecycle
     Scenario: Pre-virtual refresh restoration carries physical target rates only
       Given a virtual session retained refresh rates from before virtual display creation
       When Sunshine builds topology-related refresh restoration intent
-      Then it includes rates for physical targets only
-      And it excludes the current virtual target rate from that restoration
+      Then a nonisolated layout includes physical target rates while an isolated layout includes none
+      And it excludes the resolved virtual target case-insensitively from any retained rates
 
   Rule: Engine selection and helper availability are safe and default-deadline limited
 
@@ -293,6 +344,8 @@ Feature: Display engine v2 client integration and stream lifecycle
         | legacy    | prerelease      | legacy          |
         | automatic | prerelease      | v2              |
         | automatic | stable          | legacy          |
+        | invalid   | prerelease      | v2              |
+        | invalid   | stable          | legacy          |
 
     Scenario: A valid explicit apply requests helper availability
       Given a valid display apply request was built for a session
@@ -306,17 +359,17 @@ Feature: Display engine v2 client integration and stream lifecycle
       Then it may start the helper needed to deliver that restoration intent
       And it returns whether the helper accepted the request
 
-    Scenario: A responsive existing helper is reused
-      Given a compatible helper is already running and responsive
+    Scenario: An existing helper with accepted liveness delivery is reused
+      Given a compatible helper is already running and accepts a liveness frame
       When Sunshine needs to dispatch a new request
       Then it reuses that helper as the current control service
       And it does not create a competing helper instance
 
-    Scenario: A nonresponsive helper is not trusted as ready
-      Given an existing helper appears available but does not pass its 5-second ordinary liveness check
+    Scenario: A helper that rejects both ordinary liveness deliveries is not trusted as ready
+      Given an existing helper appears available but does not accept either of two ordinary liveness deliveries separated by the default 200 milliseconds
       When Sunshine needs display control
-      Then it stops relying on the stale control path
-      And it reports the helper unavailable until a safe restart or later recovery succeeds
+      Then it retires the connection but leaves the existing helper running because restoration may still be in progress
+      And it records a start failure and reports the helper unavailable until later recovery succeeds
 
     Scenario: A stream-start restart avoids interrupting an unconfirmed restore
       Given a stream-start request finds an unconfirmed restore still in progress
@@ -330,9 +383,22 @@ Feature: Display engine v2 client integration and stream lifecycle
       Then Sunshine attempts a safe replacement of the stale helper
       And it proceeds only if the replacement helper becomes ready within the caller's budget
 
+    Scenario Outline: Apply helper acquisition preserves its outer retry order under one deadline
+      Given <apply kind> needs a helper and no acquisition attempt has yet succeeded
+      When Sunshine performs the caller-visible acquisition sequence
+      Then it attempts <sequence>
+      And it checks cancellation between attempts and never extends the original shared Apply deadline
+      And the five overlap launches inside one hard-restart attempt do not add another outer acquisition attempt
+
+      Examples:
+        | apply kind                                             | sequence                                             |
+        | stream start with no unconfirmed restore to protect    | hard restart, then ordinary reuse or start, then one final hard restart |
+        | stream start with an unconfirmed restore to protect    | ordinary reuse or start, then one final ordinary reuse or start         |
+        | ordinary non-stream Apply                              | ordinary reuse or start, then one final ordinary reuse or start         |
+
     Scenario: Repeated helper start failures enter a cooldown
-      Given helper startup has failed repeatedly without a successful start
-      When another request attempts to start the helper during the cooldown
+      Given helper startup has failed twice consecutively without a successful start
+      When another request attempts to start the helper during the default 30-second cooldown
       Then Sunshine returns helper unavailability without a hot restart loop
       And a later successful helper start clears the failure condition
 
@@ -340,6 +406,7 @@ Feature: Display engine v2 client integration and stream lifecycle
       Given a previously healthy display-helper path has one start failure
       When Sunshine immediately needs display control again
       Then it allows one immediate retry before cooldown suppression applies
+      And only a second consecutive start failure arms the cooldown
 
     Scenario: A system context without a user session does not apply to an unsafe desktop
       Given Sunshine is running as the system account without an interactive user session
@@ -373,11 +440,51 @@ Feature: Display engine v2 client integration and stream lifecycle
       Then it determines v2 or legacy response compatibility from that reply
       And it does not infer the live response format only from the configured engine preference
 
-    Scenario: A reply for another request is never consumed as the current result
-      Given a current request is awaiting a correlated result
+    Scenario: A reply with current attribution evidence remains request-specific
+      Given a current request is awaiting a correlated result on a known v2 connection
       When a response for a different request becomes available
       Then Sunshine preserves that response only for its matching operation
       And it continues waiting for the current request's own result or deadline
+
+    Scenario: A live connection retains at most 32 recognized result frames
+      Given Apply, Verification, Refresh, or Snapshot result frames arrive before the current waiter can consume them
+      When the live connection already retains 32 recognized result frames
+      Then each additional recognized result frame evicts the oldest retained frame
+      And malformed or unattributable recognized results consume the same capacity and can evict a valid awaited result
+      And an evicted awaited result becomes unavailable rather than being fabricated
+
+    Scenario: Connection retirement discards every retained reply
+      Given a live helper connection has retained result frames
+      When Sunshine retires that connection
+      Then all of that connection's retained results lose authority together
+      And a replacement connection cannot consume them
+
+    Scenario Outline: Unknown apply compatibility is learned from bounded evidence
+      Given the live connection's Apply response compatibility is unknown
+      When the first applicable Apply result is <reply form>
+      Then Sunshine classifies it as <classification>
+      And the result follows <current-request effect>
+
+      Examples:
+        | reply form                                                        | classification | current-request effect                              |
+        | an untagged result                                                 | legacy         | its synchronous success or failure is consumed      |
+        | a tagged result matching the current request                       | v2             | its matching success or failure is consumed         |
+        | a tagged result among the 64 most recently issued other Apply ids   | v2 traffic     | it is preserved or ignored as stale, not consumed   |
+        | a long failure carrying an unknown id not in that recent history    | legacy         | the compatible failure is consumed                  |
+
+    Scenario: Unknown-protocol stale classification has a bounded limitation
+      Given more than 64 later Apply identifiers have aged an old issued identifier out of recent history
+      And response compatibility is still unknown
+      When a long failed tagged response for that old identifier arrives
+      Then it may be classified as a legacy-compatible failure
+      And only a connection already known as v2 guarantees exact identifier matching without that limitation
+
+    Scenario: Recently issued Apply identity history is process-global and send-qualified
+      Given an Apply has a nonzero identifier
+      When its frame is sent successfully
+      Then the identifier enters a process-global newest-64 history used only while Apply response compatibility is unknown
+      And connection retirement does not clear that history
+      But a failed send does not add the identifier, and the sixty-fifth newer successful send evicts the oldest identity
 
     Scenario: A superseding control request cannot inherit an outstanding untagged reply
       Given a helper has not established v2 response correlation
@@ -427,9 +534,16 @@ Feature: Display engine v2 client integration and stream lifecycle
     Scenario: An ordinary uncancelled apply may use the supported local fallback
       Given a non-stream-start apply has no cancellation condition
       And the helper is unavailable outside the system-without-user-session case
-      When the session has the context required by the supported fallback
-      Then Sunshine may apply through the supported local display path
-      And it reports whether that fallback completed successfully
+      When both a session, a configuration, and an interactive display context are available
+      Then the core display-settings result alone determines fallback success
+      And after core success it observes a named target or requested virtual-display activation for up to the default 6 seconds when that evidence is relevant
+      And activation observation, optional topology, and position failures after core success remain best effort and do not change the successful result
+
+    Scenario: The local fallback does not promise helper-equivalent follow-up work
+      Given an ordinary eligible apply reaches the local fallback
+      When its core display-settings operation succeeds
+      Then Sunshine may publish the successful session even if target activation verification or optional placement remains unconfirmed
+      And physical refresh-restoration overrides are not consumed by this fallback path
 
     Scenario: A deadline-limited revert shares one caller deadline
       Given a stream-start or shutdown caller requests revert with a deadline
@@ -440,17 +554,17 @@ Feature: Display engine v2 client integration and stream lifecycle
     Scenario: A prompt disarm uses only a live helper connection
       Given a stream-start path must quickly cancel very recent restore activity
       When no cached helper connection is immediately usable
-      Then Sunshine reports that disarm was not delivered within the prompt budget
-      And it does not spend the stream-start budget on connection setup
+      Then Sunshine reports that disarm was not delivered within the default 150-millisecond prompt budget
+      And it does not spend the stream-start budget on connection setup or repeat the prompt intent inside the same default 150-millisecond throttle
 
     Scenario: A failed prompt disarm does not leave recent restore activity uncontrolled
-      Given a recent restore is expected and prompt disarm could not be delivered
+      Given a restore has been pending for less than the default 5-second grace boundary and prompt disarm could not be delivered
       When intervention is needed to prevent uncontrolled restore activity
       Then Sunshine stops the stale helper rather than allowing uncontrolled restore activity to continue
       And it clears only the restore expectation associated with that intervention
 
     Scenario: An older restore is allowed to finish instead of being overwritten by prompt disarm
-      Given restoration has progressed beyond the short startup grace period
+      Given restoration has progressed for the default 5-second grace boundary or longer
       When a later stream-start path attempts prompt disarm
       Then Sunshine does not cancel that unconfirmed restore through the prompt path
       And the next apply or confirmed recovery determines the desktop outcome
@@ -498,10 +612,16 @@ Feature: Display engine v2 client integration and stream lifecycle
       And it does not accept a correlated result intended for another operation
 
     Scenario: Caller maintenance commands report helper availability without fabricating success
-      Given Sunshine requests golden export, persistence reset, disarm, or stop
+      Given Sunshine requests golden export, persistence reset, or disarm
       When the helper cannot be reached or the command cannot be dispatched
       Then the caller receives failure for that command
       And no command is reported successful merely because a prior helper session existed
+
+    Scenario: Stop remains a callable compatibility operation
+      Given a caller explicitly uses the public helper Stop operation
+      When the live connection accepts that request
+      Then the helper performs its defined clean shutdown behavior
+      And ordinary Sunshine stream and watchdog lifecycle does not imply that it invokes Stop
 
     Scenario: Log-level synchronization is scoped to the live helper connection
       Given Sunshine has already synchronized the requested v2 log level to the live helper connection
@@ -518,11 +638,18 @@ Feature: Display engine v2 client integration and stream lifecycle
       Then Sunshine may defer that eligible resolution apply
       And it does not apply the resolution to an arbitrary system-context desktop
 
-    Scenario: Ineligible requests are not placed into deferred resolution work
+    Scenario: Ordinary unavailable display access defers only resolution work
       Given an apply has no session or no resolution change
-      When helper dispatch is unavailable
+      When system-without-user startup or ordinary local display access is unavailable
       Then Sunshine does not create deferred resolution work for that request
       And it returns the immediate caller outcome
+
+    Scenario: Lock-screen helper-send failure may defer broader session intent
+      Given a helper was reached for a session Apply
+      And delivery fails while the lock screen is active
+      When Sunshine preserves work for the interactive desktop
+      Then it may defer the session request even when no resolution change is present
+      And this lock-screen exception does not make sessionless work eligible
 
     Scenario: Deferred resolution work retains session intent without retaining a dead session
       Given an eligible resolution apply is deferred
@@ -556,7 +683,7 @@ Feature: Display engine v2 client integration and stream lifecycle
 
     Scenario: Deferred resolution retries stop after their allowed attempts
       Given a live deferred resolution apply repeatedly fails after readiness
-      When its retry allowance is exhausted
+      When its sixth allowed attempt fails
       Then Sunshine removes the pending request
       And it does not retry indefinitely or resurrect the ended stream's display intent
 
@@ -602,26 +729,40 @@ Feature: Display engine v2 client integration and stream lifecycle
       Given a stream-start apply has a current v2 verification ticket
       When its matching verification reports failure
       Then the capture gate reports a failed display target
-      And the stream-start path starts capture after the 8-second shared soft gate completes
+      And the producer resolves the gate immediately so capture need not consume the remaining 8-second shared maximum
       And it does not treat that result as capture-ready
 
-    Scenario: An unknown stream-start verification completes the 8-second gate without claiming success
-      Given a stream-start apply has a legacy, unavailable, superseded, or timed-out verification result
-      When the 8-second shared gate completes
+    Scenario Outline: An unknown stream-start verification may resolve before the shared maximum
+      Given a stream-start apply has <unknown condition>
+      When verification resolves as unknown
       Then the gate records that it gave up waiting rather than that the target was verified
-      And the stream-start path proceeds with capture after that soft gate
+      And the stream-start path proceeds as soon as the gate future resolves
+      And only an outstanding attributable result may consume the remaining 8-second shared Apply-plus-verification budget
+
+      Examples:
+        | unknown condition                                      |
+        | a legacy or otherwise unusable ticket that returns immediately |
+        | a superseded request whose ownership check returns early        |
+        | an unavailable result that may return before its deadline        |
+        | a result still absent when the remaining deadline expires        |
 
     Scenario: A recent HDR apply delays capture only until HDR is active or its 3-second wait ends
       Given the most recent display apply requested HDR
-      When capture is about to start
+      When asynchronous capture reinitialization or synchronous opening reaches its Windows stability wait
       Then Sunshine waits for the output to report HDR until 3 seconds after the successful apply
       And it starts capture with the observed SDR fallback if HDR does not become active in time
 
     Scenario: A recent non-HDR display apply waits for verification or the 1.5-second settle fallback
       Given display topology recently changed without a pending HDR request
-      When capture is about to start
+      When asynchronous capture reinitialization or synchronous opening reaches its Windows stability wait
       Then Sunshine waits only until the apply is capture-stable or 1.5 seconds after the successful apply
       And it does not extend capture delay indefinitely
+
+    Scenario: Initial asynchronous capture does not run the recent-Apply stability helper
+      Given the asynchronous capture path is opening its display for the first time
+      When display topology recently changed
+      Then it proceeds through its own enumeration, virtual-readiness, open, and retry cycle without the HDR or 1.5-second recent-Apply stability wait
+      And later asynchronous reinitialization remains eligible for that Windows-sensitive wait
 
     Scenario: Capture stability is proof only for the current eligible apply
       Given a display apply has been verified
@@ -641,7 +782,7 @@ Feature: Display engine v2 client integration and stream lifecycle
       Then it continues adapter-scoped encoder capability probing without further display-gate delay
       And it does not report a capability failure solely because the display was not verified
 
-  Rule: Helper watchdog lifecycle belongs to the active stream
+  Rule: Helper supervision cadence follows RTSP-session and launched-process evidence
 
     Scenario Outline: Helper supervision uses the observed active and suspended check cadences
       Given display-helper supervision has <supervision condition>
@@ -651,8 +792,8 @@ Feature: Display engine v2 client integration and stream lifecycle
 
       Examples:
         | supervision condition                                      | check cadence |
-        | an active stream or no remaining launched process          | 10 seconds    |
-        | no active stream while one or more launched processes run  | 20 seconds    |
+        | no counted RTSP session while a launched application identifier remains, including WebRTC-only activity | 20 seconds |
+        | every other combination of counted RTSP sessions and launched-application state                       | 5 seconds  |
 
     Scenario: Starting supervision reuses an existing watchdog for a newer active stream
       Given helper supervision is already running
@@ -663,7 +804,7 @@ Feature: Display engine v2 client integration and stream lifecycle
     Scenario: A watchdog liveness failure reconnects without reapplying an old display request
       Given helper supervision detects that its current helper connection is unusable
       When it restores helper communication successfully
-      Then it confirms helper reachability for ongoing supervision
+      Then it accepts successful delivery of a liveness request as sufficient for ongoing supervision without waiting for its acknowledgement
       And it does not automatically replay a previous stream's display apply
 
     Scenario: Supervision pauses helper use while display control is disabled
@@ -672,12 +813,12 @@ Feature: Display engine v2 client integration and stream lifecycle
       Then Sunshine releases the helper connection for that period
       And it does not keep restarting display control until the feature is enabled again
 
-    Scenario: Ordinary watchdog stop preserves supervision for an active or pending replacement stream
+    Scenario: Ordinary watchdog stop preserves only the production active-or-pending predicates
       Given a prior stream asks to stop helper supervision
-      And another stream is active or pending
       When the ordinary stop is processed
-      Then Sunshine leaves supervision running for the live stream
-      And it does not clear the new stream's display session
+      Then any nonzero shared running-session count or active-or-pending WebRTC session leaves supervision running
+      And a pending RTSP launch with no running session is not included in that predicate
+      And such a pending RTSP launch is protected only when the separate active-session generation mismatch identifies the stop as stale
 
     Scenario: A stale watchdog stop cannot clean up a newer display session
       Given supervision ownership belongs to a newer active stream
@@ -731,55 +872,18 @@ Feature: Display engine v2 client integration and stream lifecycle
 
   Rule: Helper selection, readiness, and restart use observed caller defaults
 
-    Scenario Outline: Engine selection persists the accepted setting and resolves automatic mode predictably
-      Given the persisted display-helper engine setting is <stored setting>
-      And the release channel is <release channel>
-      When Sunshine prepares display control
-      Then it selects <effective engine>
-      And an invalid stored setting is treated as automatic rather than as a new engine choice
-
-      Examples:
-        | stored setting | release channel | effective engine |
-        | v2             | stable          | v2               |
-        | legacy         | prerelease      | legacy           |
-        | automatic      | prerelease      | v2               |
-        | automatic      | stable          | legacy           |
-        | invalid        | prerelease      | v2               |
-        | invalid        | stable          | legacy           |
-
-    Scenario Outline: Display-control settings retain their observed product defaults
-      Given a new installation has no saved value for <setting>
-      When Sunshine creates a display-control request or lifecycle decision
-      Then <setting> defaults to <default>
-      And the user-visible default remains distinct from any helper wire default
-
-      Examples:
-        | setting                              | default                          |
-        | display-helper engine                | automatic                        |
-        | revert on client disconnect          | disabled                         |
-        | always restore from golden           | enabled                          |
-        | paused virtual-display cleanup delay | 7200 seconds                    |
-        | permanent virtual-display count      | 0                               |
-        | dummy-plug HDR workaround            | disabled                         |
-
-    Scenario Outline: Helper readiness uses the caller class's default liveness envelope
-      Given Sunshine needs a helper for a <caller class> operation
-      When no usable live helper has yet answered its liveness request
+    Scenario Outline: Helper readiness uses the caller kind's default liveness envelope
+      Given Sunshine needs a helper for a <caller kind> operation
+      When no usable live helper has yet accepted its liveness delivery
       Then Sunshine permits readiness and liveness work for at most <default envelope>
       And cancellation or the caller's earlier deadline returns unavailable without later publishing success
 
       Examples:
-        | caller class             | default envelope |
+        | caller kind              | default envelope |
         | ordinary apply or probe   | 5 seconds        |
         | helper startup readiness  | 5 seconds        |
         | shutdown or teardown      | 250 milliseconds |
         | stream-start fast disarm  | 150 milliseconds |
-
-    Scenario: A ready helper is reused only after current liveness succeeds
-      Given the selected helper is already present
-      When its 5-second ordinary liveness request succeeds
-      Then Sunshine reuses that helper for the new eligible request
-      And a failed, cancelled, or expired liveness request does not certify it as ready
 
     Scenario: Helper readiness failure returns unavailable after the default 5-second envelope
       Given an eligible request needs a helper that cannot become live
@@ -787,29 +891,65 @@ Feature: Display engine v2 client integration and stream lifecycle
       Then Sunshine returns helper unavailable
       And it does not publish a display session, verification ticket, or successful maintenance result
 
-    Scenario: Two consecutive start failures suppress restart for 30 seconds
-      Given two consecutive helper starts have failed
-      When another ordinary request arrives before 30 seconds have elapsed since the most recent failure
-      Then Sunshine returns helper unavailable without another start attempt
-      And a single failure does not enter that cooldown
-
     Scenario: A restart removes unsafe stale ownership before reuse
       Given a helper is nonresponsive and no protected restoration must continue
       When Sunshine restarts display control for a new request
       Then the earlier helper identity and unresolved replies are retired before the replacement is used
       And a later result from the retired identity cannot publish or verify the new request
 
+    Scenario: A hard restart preserves a helper that accepts the fast probe
+      Given a caller requests a hard helper restart
+      When the existing helper accepts a cache-only liveness frame within the default 100 milliseconds
+      Then Sunshine reuses it instead of terminating it
+      And no replacement launch is attempted
+
+    Scenario: A hard restart bounds retirement before replacement
+      Given a requested hard restart cannot deliver its default 100-millisecond cache-only liveness frame
+      When Sunshine prepares replacement
+      Then it retires the old connection, requests termination, observes exit for at most 2 seconds, and allows a default 100-millisecond resource-settle interval
+      And cancellation or the caller deadline can end each wait without starting successor work
+
+    Scenario: Prelaunch stale-helper cleanup is cancellation-bound and best effort
+      Given Sunshine is about to launch a genuinely new helper
+      When it clears known duplicate helper ownership
+      Then cancellation or deadline expiry aborts the launch
+      And inability to enumerate, open, terminate, or observe some stale instance is recorded but may proceed to launch and singleton resolution
+
+    Scenario: A new helper receives one concrete launch policy
+      Given Sunshine is permitted to start display control for the current user context
+      When it launches a new helper
+      Then it supplies the selected concrete engine and a log level clamped from zero through six and persists that engine choice for restore startup
+      And system-context launch fallback is enabled only when no interactive user session is available
+
+    Scenario: Hard-restart launch overlap has five extra attempts
+      Given a hard-restart replacement launch initially overlaps old ownership
+      When the initial launch attempt fails
+      Then Sunshine permits at most five additional launch attempts at default 150-millisecond intervals
+      And cancellation or deadline expiry ends the sequence as unavailable
+
+    Scenario: New helper early exit is observed in six short checks
+      Given a helper launch was accepted
+      When Sunshine observes startup for six default 50-millisecond checks
+      Then any ordinary early exit records a start failure and returns unavailable
+      And only the established singleton-conflict exit is eligible for its special retry
+
+    Scenario: Singleton-conflict startup receives one delayed retry
+      Given a newly launched helper exits with the established singleton-conflict result
+      When Sunshine applies the startup race workaround
+      Then it waits the default 1-second cleanup interval, launches once more, and allows a default 300-millisecond settle interval
+      And a failed retry launch, cancellation, or deadline expiry returns unavailable without another singleton retry
+
+    Scenario: Successful launch still requires bounded control readiness
+      Given a new helper survives early-exit observation
+      When Sunshine completes the default 200-millisecond initialization interval
+      Then it attempts accepted control liveness at a default 100-millisecond cadence for no more than 5 seconds
+      And success clears the failure streak while timeout records one start failure
+
     Scenario: Forced stopping waits no longer than 2 seconds for observed exit
       Given Sunshine must force-stop an obsolete helper
       When the stop is issued
       Then Sunshine waits up to 2 seconds for its exit before completing local cleanup
       And a missed exit observation does not let its late reply own later work
-
-    Scenario: Virtual display re-enable is rate-limited for 3 seconds
-      Given Sunshine has just re-enabled virtual-display support
-      When another re-enable trigger arrives within 3 seconds
-      Then Sunshine does not repeat the re-enable action
-      And the rate limit does not claim that a different active session is healthy
 
   Rule: Direct callers preserve shared deadline and ownership rules
 
@@ -829,94 +969,10 @@ Feature: Display engine v2 client integration and stream lifecycle
     Scenario: The RTSP capture consumer receives only one second beyond its producer budget
       Given RTSP stream start owns an 8-second apply-verification gate
       When capture waits for the gate
-      Then capture waits at most 9 seconds from gate creation
+      Then capture waits at most 9 seconds from the capture consumer's own wait start rather than from gate creation
       And a late gate result is recorded as gave-up rather than as verified capture readiness
 
-    Scenario: A failed verification is explicit but does not hard-block RTSP capture
-      Given RTSP capture is waiting for a current verification ticket
-      When verification is failed
-      Then the gate returns failed and capture still starts after the gate
-
-    Scenario Outline: An unavailable RTSP verification is unknown or gave-up, not failed
-      Given RTSP capture is waiting for a current verification ticket
-      When verification is <unavailable condition>
-      Then the gate returns unknown or gave-up and capture still starts after the gate
-
-      Examples:
-        | unavailable condition |
-        | unavailable           |
-        | legacy                |
-        | cancelled             |
-        | superseded            |
-        | late                  |
-
-    Scenario: WebRTC treats a nonverified apply as nonfatal without calling it verified
-      Given WebRTC receives an accepted display apply
-      When its 15-second shared verification budget ends failed, unknown, unavailable, or cancelled
-      Then it continues its capability preparation when other prerequisites allow
-      And it does not report the display request as verified
-
-    Scenario: A direct local display fallback is forbidden for latency-sensitive stream start
-      Given an RTSP stream-start display request cannot obtain helper service by its 8-second deadline
-      When Sunshine chooses the safe caller result
-      Then it returns an unsuccessful display apply and retains the existing capture target
-      And it does not perform the potentially blocking direct display fallback
-
-    Scenario: A direct local display fallback remains limited to eligible ordinary work
-      Given a non-stream-start apply is uncancelled and helper service is unavailable
-      When an interactive display context supports direct display work
-      Then Sunshine may use that direct fallback and reports its actual result
-      And a system context without an interactive user session never applies it to an arbitrary desktop
-
-    Scenario: Prompt disarm uses a 150-millisecond budget and throttle
-      Given stream start detects a very recent pending restoration
-      When it asks the already-live helper to disarm it
-      Then dispatch completes or fails within 150 milliseconds
-      And repeated prompt disarm attempts within 150 milliseconds do not create repeated control intent
-
-    Scenario: Prompt disarm respects the 5-second restoration grace boundary
-      Given restoration has been pending for less than 5 seconds
-      When stream start cannot deliver its prompt disarm
-      Then Sunshine may stop the stale helper to prevent uncontrolled restoration
-
-    Scenario: An older restoration is not overwritten by the prompt disarm path
-      Given restoration has progressed for 5 seconds or more
-      When a later stream start attempts prompt disarm
-      Then Sunshine lets that restore finish or be superseded by explicit later display intent
-      And it does not stop that restoration through the prompt disarm path
-
-    Scenario: Deferred resolution starts after readiness and ends after six attempts
-      Given eligible resolution work was deferred while no interactive user session existed
-      When an interactive session becomes available and the stream remains active or pending
-      Then Sunshine waits 2 seconds before the first attempt
-      And failed attempts retry after 500 milliseconds doubled per attempt and capped at 10 seconds
-      And Sunshine removes the deferred work after the sixth failed attempt
-
-    Scenario: A newer lifecycle decision cancels deferred resolution ownership
-      Given a deferred resolution apply exists for one stream
-      When that stream ends or a normal apply, revert, or replacement deferred request supersedes it
-      Then Sunshine removes or replaces the old deferred work before it can alter the desktop
-      And an old completion cannot adopt watchdog supervision or active-session state
-
-  Rule: Capture, probing, and supervision retain soft-gate outcomes
-
-    Scenario: Capture settling retains explicit time and fallback outcome
-      Given a successful non-HDR display apply was less than 1.5 seconds ago
-      When capture initializes
-      Then it waits only until the current apply is capture-stable or 1.5 seconds have elapsed
-      And it starts capture after the fallback without marking an unverified apply stable
-
-    Scenario: HDR capture settling preserves the observed SDR fallback
-      Given a successful apply requested HDR and the output is not yet HDR-active
-      When capture initializes
-      Then it waits only until HDR becomes active or 3 seconds have elapsed since the apply
-      And it starts capture using observed SDR behavior if HDR is still inactive
-
-    Scenario: HTTP capability probing treats the display gate as nonfatal
-      Given HTTP capability probing has a current virtual-display session
-      When its supplied display-gate deadline ends pending, failed, unknown, unavailable, cancelled, or with an observation error
-      Then it continues adapter-scoped encoder capability probing when the selected target is otherwise ready
-      And it does not publish a capability failure solely from the uncertain display gate
+  Rule: Capability probing preserves stream ownership and adapter attribution
 
     Scenario: HTTP probing does not disrupt stream lifecycle ownership
       Given encoder capability evidence is not already cached for the selected adapter
@@ -930,18 +986,646 @@ Feature: Display engine v2 client integration and stream lifecycle
       Then only the observed adapter may own a new successful capability result
       And a pending or virtual-display hint cannot create a cross-adapter positive result
 
-    Scenario: Watchdog adoption and teardown retain current session ownership
-      Given supervision changes from one active stream to another
-      When the newer stream adopts supervision or the older stream stops
-      Then only the current stream may retain supervision and its display state
-      And a stale stop, late liveness result, or failed cleanup cannot remove the newer stream's ownership
+  Rule: RTSP display preparation preserves first-owner ordering and target precedence
 
-    Scenario: Log synchronization is repeated only after helper replacement
-      Given a selected v2 helper has received the current requested log level
-      When the same level is requested on the same live helper identity
-      Then Sunshine may omit a duplicate update
+    Scenario: First-session preparation snapshots before display discovery
+      Given the first RTSP session has no earlier display owner
+      And a very recent restore may still need prompt disarm
+      When Sunshine begins display preparation
+      Then it prompt-disarms the recent restore and attempts Snapshot Current before any display enumeration or output-existence check
+      And only after that snapshot attempt may an application output override become active
 
-    Scenario: A replacement v2 helper receives the requested log level
-      Given a selected v2 helper identity was replaced
-      When Sunshine relies on the replacement for display control
-      Then Sunshine synchronizes the requested level before relying on the replacement's logs
+    Scenario: First-session snapshot failure is nonfatal and deadline bounded
+      Given Snapshot Current is attempted for the first RTSP session
+      When snapshot completion fails or remains unavailable within the shared 8-second stream-start deadline
+      Then Sunshine continues later display preparation with the remaining deadline
+      And a concurrent later session does not replace the shared restore baseline
+
+    Scenario: A virtual-selection application output becomes virtual intent
+      Given an application output override names the product's virtual-display selection
+      When Sunshine prepares the session target
+      Then it treats the value as virtual intent instead of a literal physical output
+      And it does not publish that selection text as the capture output
+
+    Scenario: Frame-generation-required virtual display defeats a physical application target
+      Given an application selects a physical output
+      And effective frame-generation policy requires virtual display
+      When Sunshine prepares the session target
+      Then virtual intent wins and the application physical override is cleared for that session
+      And frame-generation refresh policy is derived for the virtual target
+
+    Scenario: RTSP application output suppresses only lower-priority virtual intent
+      Given an application selects a physical output
+      And frame generation does not require virtual display
+      When RTSP resolves virtual intent
+      Then the application target suppresses configured virtual mode only when the client did not explicitly request virtual
+      And it does not overwrite an already explicit per-session virtual-mode choice
+
+    Scenario: WebRTC application output has its narrower virtual exception
+      Given a WebRTC application selects a physical output
+      And frame generation does not require virtual display
+      When WebRTC resolves virtual intent
+      Then the application target suppresses other virtual intent without a separate client-explicit exception
+      And frame-generation-required virtual display remains the higher-priority exception
+
+    Scenario Outline: Configured physical output fallback distinguishes absence from inactivity
+      Given no higher-priority virtual intent is active
+      And the configured physical output is <output condition>
+      When the first RTSP session prepares display selection
+      Then Sunshine chooses <result>
+      And an application-specific physical target is never silently substituted
+
+      Examples:
+        | output condition                                                 | result                                                |
+        | known missing with no application target                         | virtual-display fallback                              |
+        | known missing with an application target                         | the application target without automatic substitution |
+        | present but inactive with no interactive helper session          | virtual-display fallback                              |
+        | present but inactive with an available activation path           | helper activation of the configured output            |
+        | uncertain because enumeration failed                             | the configured output without manufactured fallback   |
+
+    Scenario: No physical display may trigger automatic virtual intent
+      Given no prior target rule requested a virtual display
+      And the selected backend reports automatic virtual enablement is eligible because no physical display is available
+      When Sunshine completes RTSP display selection
+      Then it requests a virtual display
+      And the choice remains subject to normal creation success and identity publication rules
+
+    Scenario: A newcomer cannot reconfigure another stream's display ownership
+      Given another stream already owns shared display state
+      When a new RTSP session prepares its target
+      Then a nonvirtual newcomer joins the current capture target without display changes
+      And a virtual newcomer may join only a stable-identity match on the configured capture adapter
+
+    Scenario: Invalid shared virtual reuse is an explicit setup failure
+      Given another stream owns display state
+      And the newcomer requests virtual display but finds no stable-identity match or the existing virtual target does not match the configured capture adapter
+      When Sunshine evaluates shared reuse
+      Then it marks virtual setup failed and does not claim the target
+      And it neither creates nor reconfigures a display for that newcomer
+
+    Scenario: Resume reuses only a validated virtual target
+      Given ordinary display changes are disabled for resume
+      And the session requests virtual display
+      When Sunshine finds an active stable-identity target on the configured capture adapter
+      Then it republishes that target and marks it for a refresh Apply
+      And an adapter mismatch rejects the target instead of claiming cross-adapter ownership
+
+    Scenario: Resume may recreate a missing required virtual target
+      Given ordinary display changes are disabled for resume
+      And no validated reusable virtual target exists
+      When the session still requires virtual display
+      Then Sunshine may recreate it on demand and Apply the refreshed session intent
+      And a physical resume override is merely republished without arbitrary display substitution
+
+    Scenario: Nonexclusive virtual creation preserves only available precreation evidence
+      Given RTSP is about to create a nonexclusive virtual display
+      When Sunshine samples the current physical desktop
+      Then it best-effort retains topology and each physical refresh, preserving rational rates and converting decimal rates to thousandths
+      And missing topology or mode evidence omits only that restoration metadata while exclusive layout retains no topology snapshot
+
+    Scenario: Recreated RTSP virtual display gets five bounded Apply attempts
+      Given owned virtual-display recovery recreates an RTSP target
+      When Sunshine rebuilds the session display intent
+      Then it prompt-disarms before each of at most five Apply attempts with default waits of 250, 500, 750, 1000, and 1250 milliseconds after failures
+      And cancellation stops the sequence while an owned recreated target requests capture reinitialization after success or exhaustion without fabricating Apply success
+
+    Scenario: Recreated WebRTC virtual display uses the same bounded reapply contract
+      Given owned virtual-display recovery recreates a WebRTC target
+      When Sunshine rebuilds the session display intent
+      Then it prompt-disarms before each of at most five Apply attempts with the same progressive default waits
+      And capture reinitialization remains eligible after exhaustion while the failed Apply is not reported successful
+
+    Scenario: WebRTC changes displays only when it owns an eligible start
+      Given WebRTC is preparing capture
+      When RTSP is active or the WebRTC request is resume-only
+      Then ordinary display changes are suppressed
+      And Apply occurs only for normal exclusive ownership, on-demand virtual recreation, or a required virtual refresh
+
+    Scenario: WebRTC verification is a nonfatal 15-second soft gate
+      Given an eligible WebRTC display Apply was accepted
+      When verification does not confirm the target within the shared 15-second default budget
+      Then WebRTC continues later capability preparation when otherwise possible
+      And it records no verified display claim for the failed, unknown, unavailable, or cancelled result
+
+  Rule: Virtual backend and adapter selection never silently cross policy boundaries
+
+    Scenario: The selected virtual backend owns all virtual-display operations
+      Given configuration selects one supported virtual-display backend
+      When Sunshine creates, enumerates, monitors, or removes virtual displays
+      Then those operations remain on the selected backend
+      And failure does not silently fall through to the other backend
+
+    Scenario: Configured render-adapter preference must resolve and be accepted exactly
+      Given virtual-display creation has a configured adapter name and optional paired device identity
+      When Sunshine selects the render adapter
+      Then the exact preferred adapter must resolve and the selected backend must accept it
+      And an unresolved or rejected preference fails without choosing an arbitrary adapter
+
+    Scenario: Startup may initialize virtual support for a displayless host
+      Given the selected backend reports no physical display and automatic enablement is eligible
+      When process startup reaches display initialization
+      Then Sunshine initializes virtual-display support
+      And a shutdown request may abort before the next startup stage
+
+    Scenario: Startup cleans an unowned active virtual display
+      Given process startup observes an active virtual display
+      And no RTSP or WebRTC session owns it
+      When startup recovery runs
+      Then Sunshine requests virtual-display cleanup using the configured restoration policy
+      And a shutdown request may abort after that cleanup stage
+
+  Rule: Deferred virtual output publication remains lease-owned and capture ordered
+
+    Scenario: Every output publication has distinct rollback ownership
+      Given current or deferred runtime output may already be published
+      When a later publish or clear changes output ownership
+      Then the ownership generation advances even when the later value names the same display
+      And conditional rollback can clear only the exact current or deferred publication it owns
+
+    Scenario: Unqualified output clear removes current and deferred choices
+      Given current and deferred runtime output choices exist
+      When Sunshine performs an unqualified clear
+      Then both choices are removed
+      And an older conditional rollback cannot remove a later publication
+
+    Scenario Outline: Lock-screen virtual output chooses continuity before deferral
+      Given a virtual runtime output is published while the lock screen is active
+      And <physical condition>
+      When Sunshine decides whether to publish immediately
+      Then it <publication result>
+      And ownership remains associated with the publication's lease
+
+      Examples:
+        | physical condition                         | publication result                                                     |
+        | a usable active physical fallback exists  | defers the virtual output and clears the current runtime output         |
+        | no usable active physical fallback exists | publishes the virtual output immediately to avoid losing capture        |
+
+    Scenario: Unlock promotes only the latest deferred output
+      Given a leased virtual output remains deferred through the lock screen
+      When the interactive desktop becomes available
+      Then Sunshine atomically promotes that still-current deferred output
+      And superseded or cancelled ownership cannot publish or retarget capture
+
+    Scenario: Deferred Apply precedes capture retarget after unlock
+      Given unlock has promoted a deferred virtual output
+      And display Apply work remains pending
+      When Sunshine prepares capture retargeting
+      Then it retries pending Apply at default 250-millisecond checks for at most 8 seconds before requesting capture reinitialization
+      And timeout permits retarget with Apply still pending while cancellation suppresses retarget entirely
+
+  Rule: Capture target choice preserves physical safety and bounded virtual readiness
+
+    Scenario: Lock screen with an active physical display prevents virtual preference
+      Given the lock screen is active and at least one physical display is active
+      When capture chooses between physical and virtual targets
+      Then it prefers physical capture
+      And configured virtual mode or an enumerated virtual display does not override that safety choice
+
+    Scenario: A present runtime output override is authoritative for virtual preference
+      Given a runtime output override is present
+      When capture evaluates target preference
+      Then it prefers virtual only when the nonempty override identifies a virtual display
+      And it does not consult lower-priority configured virtual preference for that decision
+
+    Scenario Outline: Capture chooses virtual without a runtime override only from eligible evidence
+      Given no runtime output override is present
+      And installed virtual-display support and at least one enumerated virtual display are available
+      When capture evaluates <evidence>
+      Then virtual preference is <preference>
+      And absent backend support or absent virtual devices always yields physical preference
+
+      Examples:
+        | evidence                                                                      | preference |
+        | active output identifies virtual                                              | enabled    |
+        | configured mode is per client or shared                                       | enabled    |
+        | automatic virtual activation is enabled                                       | enabled    |
+        | some virtual display is active and no physical display is active               | enabled    |
+        | active physical and virtual displays coexist without another virtual trigger  | disabled   |
+
+    Scenario: Virtual capture name prefers active logical identity
+      Given virtual capture is preferred
+      When Sunshine resolves the desired capture name
+      Then it selects the first active virtual display with a logical name, otherwise the first enumerated virtual display with a logical name
+      And a device without a logical capture name is not claimed as the desired capture target
+
+    Scenario: Missing preferred virtual target has a bounded safe fallback
+      Given virtual capture is preferred but its logical target is unresolved or absent from the capture list
+      When Sunshine waits the default 3 seconds for that target to appear
+      Then it uses the existing safe selection after the wait if the target remains unavailable
+      And an empty capture list remains unavailable rather than claiming readiness
+
+    Scenario: Initial asynchronous capture retries until success or capture shutdown
+      Given asynchronous capture is opening its initial display
+      When enumeration, preferred-virtual readiness, or the direct display-open attempt does not produce a usable display
+      Then it re-enumerates, reevaluates preferred-virtual readiness, makes one direct open attempt when ready, and waits 50 milliseconds after a failed cycle
+      And it repeats without a fixed attempt cap until a display opens or capture shutdown cancels the loop
+
+    Scenario Outline: Each reinitialization or synchronous capture-open invocation uses a bounded progressive attempt group
+      Given asynchronous reinitialization or synchronous opening invokes one display reopen <apply recency>
+      When every attempt in that invocation fails
+      Then it uses <attempt profile>
+      And that invocation returns failure to its outer shutdown-owned reopen cycle without adding a cancellation outcome
+
+      Examples:
+        | apply recency                                  | attempt profile                                              |
+        | no successful Apply within the preceding 5 seconds | 2 attempts with 200 and 300 millisecond waits             |
+        | a successful Apply within the preceding 5 seconds   | 5 attempts with 300, 400, 500, 600, and 700 millisecond waits |
+
+    Scenario: Reinitialization and synchronous opening repeat bounded attempt groups until success or shutdown
+      Given asynchronous reinitialization or synchronous capture opening remains active
+      When one bounded progressive attempt group returns without opening a display
+      Then the enclosing reopen cycle refreshes display evidence and may invoke the same bounded group again
+      And no fixed number of groups ends that cycle before a display opens or capture shutdown is observed between groups
+
+    Scenario: Asynchronous capture reinitialization preserves teardown and retarget ordering
+      Given active asynchronous capture must reinitialize its display
+      When it crosses the reinitialization boundary
+      Then every encoder device releases its shared capture surfaces before the shared surfaces are released
+      And the active display is released before the recent-Apply stability wait and display re-enumeration
+      And preferred-virtual readiness is checked before a pending explicit nonnegative display switch is consumed against the refreshed list
+      And only then does the bounded progressive reopen profile run
+      And capture shutdown is observed between outer reopen cycles
+      But shutdown arriving during an invocation that succeeds may still allow the reopened display to be published before the next shutdown boundary
+
+    Scenario Outline: Empty display reenumeration handles stale names by Apply recency
+      Given capture reenumeration returns empty after a previously nonempty list
+      When <condition>
+      Then Sunshine <result>
+      And it does not mix the two fallback lists
+
+      Examples:
+        | condition                                                            | result                                                        |
+        | a successful Apply was within 5 seconds and mapped configured output is nonempty | replaces stale names with only that configured target |
+        | no such recent Apply or no nonempty configured target                 | restores the old list and reports refresh failure             |
+
+    Scenario: First empty display enumeration retains the configured candidate
+      Given both the prior and reenumerated capture lists are empty
+      When Sunshine refreshes capture targets
+      Then it retains the mapped configured output as the sole candidate even when that name is empty
+      And selection remains unverified until capture can open it
+
+    Scenario: Refreshed capture selection has a strict fallback order
+      Given capture has a refreshed nonempty display list
+      When Sunshine chooses the current index case-insensitively
+      Then it prefers a found nonempty runtime output override, then preserves the prior display, then prefers configured output if the prior disappeared, then uses the first result
+      And a missing runtime override target falls through without pretending it matched another identity
+
+  Rule: Authenticated display APIs preserve compatibility and failure distinctions
+
+    Scenario Outline: Display enumeration detail follows query precedence
+      Given an authenticated display-enumeration request has <query>
+      When Sunshine selects enumeration detail
+      Then it uses <detail>
+      And presence of detail prevents the legacy full query from overriding it
+
+      Examples:
+        | query                                  | detail  |
+        | no detail or full query                | minimal |
+        | detail=full                            | full    |
+        | detail=anything-else and full=true     | minimal |
+        | no detail and full=1                   | full    |
+        | no detail and full=true                | full    |
+        | no detail and full=yes                 | full    |
+
+    Scenario: Minimal and full enumeration expose different device sets
+      Given an authenticated caller requests display devices
+      When minimal or full detail is selected
+      Then minimal detail omits devices without current mode information
+      And full detail may retain inactive devices and extended display evidence
+
+    Scenario: Enumeration failure and response failure remain distinct
+      Given an authenticated caller requests display devices
+      When underlying enumeration fails
+      Then the successful JSON value is an empty list
+      And an exception while parsing or producing the outer response instead returns status false with an enumeration error
+
+    Scenario: Display enumeration always requires authentication
+      Given a display-enumeration request is not authenticated
+      When it reaches the display API
+      Then authentication failure is returned before enumeration
+      And neither minimal nor full display evidence is exposed
+
+    Scenario: Frame-generation EDID lookup chooses the first nonempty hint alias
+      Given an authenticated EDID refresh request may contain device_id, device, id, and display hints
+      When Sunshine trims and resolves the first nonempty hint in that order
+      Then a missing hint is a bad request
+      And later aliases do not override an earlier nonempty hint
+
+    Scenario: Frame-generation target parsing preserves defaults unless a valid custom value exists
+      Given an authenticated EDID refresh request may contain a comma-separated targets value
+      When Sunshine trims each item and its leading signed decimal conversion yields a positive in-range integer
+      Then that converted value is accepted even if unconsumed suffix text remains, and at least one accepted value replaces the default ordered targets 120, 180, 240, and 288
+      And empty, conversion-failing, overflowing, or nonpositive items are ignored while no accepted custom value leaves the defaults unchanged
+      And compatibility examples remain:
+        | token   | result       |
+        | +120    | accept 120   |
+        | 120.5   | accept 120   |
+        | 120junk | accept 120   |
+        | 0       | ignore       |
+        | -120    | ignore       |
+        | junk    | ignore       |
+
+    Scenario: EDID lookup resolves identity and label predictably
+      Given a nonempty EDID device hint is available
+      When Sunshine matches it case-insensitively against device identity, logical display name, or friendly name
+      Then an unknown display returns status false
+      And a match reports its resolved identity with label preference friendly name, then logical name, then device identity
+
+    Scenario Outline: Missing or structurally insufficient EDID remains unknown
+      Given the resolved display has <EDID condition>
+      When Sunshine evaluates the requested refresh targets
+      Then every target has null support with method unknown
+      And EDID presence is <presence>
+
+      Examples:
+        | EDID condition             | presence |
+        | no readable EDID           | false    |
+        | nonempty but too-short EDID | true    |
+
+    Scenario: EDID refresh evidence is reduced to usable maxima
+      Given the resolved display has readable EDID timing evidence
+      When Sunshine evaluates it
+      Then it derives the greatest valid vertical-range maximum and detailed-timing maximum, including valid extension detailed timings and doubled interlaced rates
+      And nonfinite, nonpositive, or invalid-total evidence is ignored
+
+    Scenario: Each requested EDID target is evaluated independently in order
+      Given usable EDID maxima and an ordered target list are available
+      When Sunshine compares each target with the default 0.5-hertz allowance
+      Then vertical-range evidence has precedence, followed by detailed-timing evidence, and a reaching maximum reports true with that method
+      And applicable evidence below the target reports false with that method while no usable maximum reports null with method unknown
+
+    Scenario: EDID success reports optional maxima and ordered target results
+      Given EDID evaluation resolves a display
+      When Sunshine returns the authenticated response
+      Then it reports status, resolved identity and label, EDID presence, and only the maxima that were derived
+      And it preserves requested target order with each target's hertz, true, false, or null support, and method
+
+    Scenario: EDID route exceptions are bad requests
+      Given an authenticated EDID refresh request raises an unexpected parsing or evaluation exception
+      When Sunshine forms the response
+      Then it returns a bad request with the applicable error
+      And it does not fabricate an unsupported result for the display
+
+    Scenario Outline: Display maintenance POST routes require JSON and authentication
+      Given a <operation> request lacks JSON content or authentication
+      When it reaches the display API
+      Then it is rejected before helper maintenance work
+      And an accepted request reports a Boolean status for the operation
+
+      Examples:
+        | operation                    |
+        | persistence reset            |
+        | golden snapshot export       |
+
+    Scenario: Golden export converts exceptions to false status
+      Given an authenticated JSON golden-export request reaches display maintenance
+      When export raises an exception
+      Then the response status is false
+      And no previous export result is reused
+
+  Rule: Golden snapshot status remains diagnostic, ordered, and nonintrusive
+
+    Scenario: Golden status uses the first existing candidate snapshot
+      Given an authenticated status request can inspect ordered active-user, current-process, and common data locations
+      When more than one candidate snapshot exists
+      Then it reports the first existing candidate in that order
+      And later candidates do not merge into that snapshot's status
+
+    Scenario Outline: Golden schema and layout determine upgrade status
+      Given the first existing golden snapshot has <snapshot condition>
+      When Sunshine reports golden status against latest schema version 2
+      Then snapshot version is <version result>
+      And layout and upgrade status are <upgrade result>
+
+      Examples:
+        | snapshot condition                                                   | version result | upgrade result                                      |
+        | version integer 2 or later and a nonempty layout entry that is an integer or has integer or string rotation | that version | layout present and no schema upgrade required |
+        | missing, noninteger, or less-than-one version                         | null           | schema upgrade required                             |
+        | version older than 2                                                  | that version   | schema upgrade required                             |
+        | no qualifying layout entry                                            | parsed version | schema upgrade required                             |
+        | unreadable object                                                     | null           | out of date for unreadable_snapshot                 |
+
+    Scenario: Current comparison is explicit and skipped during streaming
+      Given an authenticated golden-status request has compare_current
+      When its value is not 1, true, or yes case-insensitively, or any stream lifecycle is active
+      Then current comparison is not attempted
+      And ordinary status still reports snapshot and restore-health fields
+
+    Scenario: Current comparison requires a usable physical desktop
+      Given compare_current is explicitly enabled and no stream is active
+      When an active virtual display exists or current physical enumeration is unavailable or yields no usable physical displays
+      Then comparison is unavailable without a mismatch reason
+      And it does not compare stale or virtual topology with the golden snapshot
+
+    Scenario: Current comparison normalizes only eligible physical identities
+      Given compare_current can inspect the current physical desktop
+      When Sunshine forms the current set
+      Then it excludes virtual displays and configured excluded identities and compares trimmed case-insensitive physical identities
+      And only active displays with logical names contribute current mode, HDR, origin, and primary evidence
+
+    Scenario Outline: Golden comparison returns the first mismatch category
+      Given all earlier comparison categories match
+      When <difference> is the first applicable difference
+      Then current mismatch reason is <reason>
+      And no later mismatch category replaces it
+
+      Examples:
+        | difference                                              | reason                |
+        | snapshot has no usable topology or mode identity set    | invalid_snapshot      |
+        | physical identity sets differ                           | display_set_changed   |
+        | width, height, or refresh differs                       | display_mode_changed  |
+        | comparable HDR state differs                            | hdr_changed           |
+        | comparable nonempty primary identity differs            | primary_changed       |
+        | comparable display origin differs                       | layout_changed        |
+
+    Scenario: Golden refresh comparison uses relative tolerance
+      Given snapshot and current refresh values are finite
+      When their absolute difference is no more than one ten-thousandth of the greatest of one hertz and the two absolute refresh values
+      Then refresh is considered matching
+      And a greater difference produces display_mode_changed when earlier categories match
+
+    Scenario: Empty mismatch means an available matching comparison
+      Given explicit current comparison has usable snapshot and physical evidence
+      When every ordered category matches
+      Then comparison is available with an empty mismatch reason
+      And the result does not create an out-of-date reason by itself
+
+    Scenario: Restore health can mark a snapshot out of date
+      Given the selected snapshot has restore-health status
+      When status explicitly marks it out of date or unresolved attempts reach the nonzero threshold and the nonzero failure window has elapsed since first failure
+      Then golden status reports out of date
+      And schema upgrade reason wins when already present, otherwise the reason is restore_failed_for_days
+
+    Scenario: Missing restore health has stable empty fields
+      Given no readable restore-health status accompanies the selected snapshot
+      When Sunshine reports golden status
+      Then counts and thresholds are zero, reasons are empty, and timestamps are null
+      And missing health does not itself mark the snapshot out of date
+
+    Scenario: Golden deletion is best effort across all candidates
+      Given an authenticated golden-delete request can inspect all snapshot and status candidates
+      When Sunshine attempts deletion
+      Then it swallows individual deletion errors and continues through every candidate
+      And deleted is true only if at least one snapshot was removed, not when only a status file was removed
+
+  Rule: Final stream and application ownership determine restoration and cleanup
+
+    Scenario: The final runtime owner clears transient target work first
+      Given the last RTSP or WebRTC runtime owner ends
+      When Sunshine finalizes shared display ownership
+      Then it clears the runtime output, pending Apply work, and deferred stream-start actions before choosing restore or removal
+      And an older deferred action cannot retarget capture after finalization
+
+    Scenario: WebRTC capture teardown latches forced restoration until shared runtime is idle
+      Given WebRTC capture teardown contributes finalization while another shared runtime owner may remain
+      When it records forced display restoration for the next idle boundary
+      Then that request remains latched until shared runtime finally has no owner
+      And a later RTSP final owner may therefore perform the forced Revert even though WebRTC ended earlier
+      And successful shared-runtime finalization clears the latched request for the next ownership cycle
+
+    Scenario: The cancel route preserves its exact teardown order and deferred-launch exception
+      Given an authenticated cancel request samples whether an application is running, launch is deferred, and no RTSP session is counted
+      When all three conditions hold
+      Then it synchronously terminates RTSP sessions while preserving the deferred launch
+      And it skips application termination and skips idle virtual-display cleanup
+      But otherwise it synchronously terminates RTSP sessions first, terminates a sampled running application next, and then requests lifecycle-serialized virtual cleanup only if runtime is idle
+
+    Scenario: Preapplied application replacement skips the old revert
+      Given a replacement session already applied its display configuration before the old application terminates
+      When old application teardown reaches display restoration
+      Then it clears any deferred application revert and skips the old application's Revert
+      And the replacement display ownership remains intact
+
+    Scenario: Application termination without another owner removes before revert
+      Given an application used a virtual display and no other shared stream owner remains
+      When the application terminates
+      Then Sunshine removes virtual displays without restoration first and then requests Revert when applicable
+      And a successful Revert with no RTSP session remaining permits ordinary helper-supervision stop
+
+    Scenario: Application termination with another owner defers restoration
+      Given an application ends while another shared stream owner remains
+      When teardown reaches virtual removal and display restoration
+      Then it neither removes the owned virtual display nor requests immediate Revert
+      And it records deferred restoration for the final stream to consume only after the application is no longer paused
+
+    Scenario: Application termination restores global runtime configuration safely
+      Given an application with runtime overrides terminates
+      When Sunshine clears those overrides
+      Then it applies global configuration immediately if no other stream owner remains
+      And otherwise it marks configuration for deferred reload
+
+    Scenario Outline: A paused final stream follows configured virtual cleanup policy
+      Given the final stream ends while its application remains paused
+      And revert on disconnect is disabled
+      When paused virtual-display timeout is <timeout>
+      Then Sunshine <result>
+      And a delayed removal does not restore physical display configuration
+
+      Examples:
+        | timeout             | result                                                        |
+        | zero                | keeps the virtual display alive for resume                     |
+        | a positive duration | schedules removal after that duration without restoration       |
+
+    Scenario: A newer lifecycle owner cancels delayed paused cleanup
+      Given paused virtual-display removal is waiting for its configured delay
+      When a newer cleanup generation, shared runtime owner, or ended application is observed
+      Then the delayed removal does nothing
+      And it cannot remove a successor session's virtual display
+
+    Scenario: Requested final restore keeps the virtual display alive
+      Given the final stream requires restore because revert-on-disconnect, deferred application revert, or forced idle cleanup is active
+      When Sunshine dispatches Revert
+      Then it keeps the virtual display alive while restoration is requested
+      And failed dispatch also leaves that display available rather than forcing remove-before-restore
+
+    Scenario: Nonpaused final ownership without restore removes only virtual displays
+      Given the final stream is not paused and no restore condition applies
+      When Sunshine finalizes display ownership
+      Then it removes the owned virtual display without restoring the physical database
+      And it later completes ordinary shared platform shutdown
+
+    Scenario: Stream platform start begins helper supervision
+      Given shared streaming platform ownership begins
+      When platform stream-start actions run
+      Then helper supervision starts for the active display lifecycle
+      And duplicate platform ownership does not require duplicate supervision
+
+    Scenario: Stream platform stop preserves paused supervision
+      Given shared streaming platform ownership ends
+      When the application remains paused for resume
+      Then helper supervision remains active to preserve helper heartbeat behavior
+      And an unpaused application permits ordinary supervision stop
+
+  Rule: Virtual cleanup preserves requested order and honest result semantics
+
+    Scenario: Every virtual cleanup disables virtual watchdog feeding first
+      Given a caller begins virtual-display cleanup
+      When cleanup reserves its lifecycle scope
+      Then virtual watchdog feeding is disabled before restoration or removal
+      And cleanup remains observable as in progress for the whole reservation
+
+    Scenario Outline: Cleanup follows the caller's restore order
+      Given display restoration is enforced with <order>
+      When virtual cleanup runs
+      Then it <sequence>
+      And failure in one stage does not silently reverse the requested order
+
+      Examples:
+        | order                 | sequence                                                |
+        | restore before remove | dispatches helper Revert before virtual removal          |
+        | remove before restore | removes virtual displays before dispatching helper Revert |
+
+    Scenario: Restoration waits only for relevant virtual teardown settlement
+      Given an active virtual display existed and restoration still needs removal settlement
+      When removal has been requested
+      Then Sunshine waits up to the default 5 seconds for virtual displays to disappear before restoration fallback
+      And timeout is nonfatal and does not suppress the restoration attempt
+
+    Scenario: Helper-unavailable cleanup falls back to direct database restoration
+      Given cleanup enforces display restoration
+      When helper Revert cannot be dispatched after the requested ordering stage
+      Then Sunshine attempts direct Windows display-database restoration after removal
+      And that fallback's Boolean result becomes the database-restoration result
+
+    Scenario: Dispatched Revert is not verified restoration proof
+      Given cleanup successfully dispatches helper Revert
+      When it reports cleanup results
+      Then helper-revert-dispatched and the broad database-restoration-applied flag are true
+      And those flags mean accepted dispatch rather than confirmed final desktop restoration
+
+    Scenario: Virtual removal success combines specific and tracked removal
+      Given cleanup may name one virtual-display identity and always removes all tracked virtual displays
+      When it reports virtual-displays-removed
+      Then success requires both operations to report success
+      And an absent or all-zero specific identity counts as a successful no-op for the specific removal
+
+    Scenario: Removal-only cleanup never restores the display database
+      Given cleanup is invoked with restoration enforcement disabled
+      When virtual removal finishes
+      Then it does not dispatch Revert or use direct database restoration
+      And the combined virtual removal result remains independently visible
+
+    Scenario: Restore hotkey uses restore-before-remove and forced supervision cleanup
+      Given the configured global restore hotkey is triggered
+      When Sunshine performs emergency display cleanup
+      Then it prefers golden fallback, requests restore before virtual removal, and always force-stops helper supervision afterward
+      And helper unavailability or virtual removal failure does not leave forced supervision running
+
+    Scenario: Process shutdown joins recovery before global display teardown
+      Given process shutdown begins while deferred virtual output or virtual recovery may still own work
+      When Sunshine performs display shutdown
+      Then it stops and finishes deferred-output work and virtual recovery before force-stopping helper supervision
+      And only afterward does it close virtual-display support, preventing late work from using torn-down global state
+
+  Rule: Platform wrappers expose helper availability without changing ordinary fallback policy
+
+    Scenario Outline: Cross-platform helper wrapper results remain explicit
+      Given a caller invokes a display-helper operation on <platform>
+      When helper-specific work is evaluated
+      Then it returns <helper outcome>
+      And the caller <caller consequence>
+
+      Examples:
+        | platform    | helper outcome                                  | caller consequence                                              |
+        | Windows     | the live helper or an explicitly eligible local fallback result | does not add another implicit in-process fallback        |
+        | non-Windows | unavailable, false, or empty enumeration as appropriate         | may continue its ordinary platform display behavior      |

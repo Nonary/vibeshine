@@ -3,6 +3,95 @@ Feature: Display engine v2 helper protocol and session lifecycle
   The display engine v2 helper accepts one current control session and reports
   command outcomes only to the request and session that own them.
 
+  Rule: Helper entry preserves engine choice and best-effort single ownership
+
+    Scenario: An explicit startup engine overrides compatible saved state
+      Given compatible saved state names one display-helper engine
+      And startup supplies a nonempty explicit engine selection
+      When the common helper entry chooses an engine
+      Then it uses the explicit selection instead of the saved selection
+      And the exact value "legacy" selects the legacy engine while every other value selects v2
+
+    Scenario: Restore startup uses the first compatible saved engine
+      Given startup does not supply a nonempty explicit engine selection
+      And ordered compatible state locations contain empty, unusable, and nonempty engine values
+      When the common helper entry chooses an engine
+      Then it uses the first nonempty engine value from the ordered compatible locations
+      And the exact value "legacy" selects the legacy engine while every other value selects v2
+
+    Scenario: Helper entry defaults to v2 without a usable engine choice
+      Given startup has no nonempty explicit engine selection
+      And no compatible state location provides a nonempty engine value
+      When the common helper entry chooses an engine
+      Then it selects v2
+      And corrupt or unreadable saved state does not prevent startup
+
+    Scenario Outline: Saving the selected helper engine avoids unnecessary state changes
+      Given compatible state currently retains <saved state>
+      When Sunshine asks to save <requested value> as the selected helper engine
+      Then <persistence result>
+      And the save operation publishes no success result to its caller
+
+      Examples:
+        | saved state     | requested value                    | persistence result                                      |
+        | any prior value | an empty value                      | the save is ignored and the prior state remains         |
+        | legacy          | the exact value legacy              | the state file is not rewritten                         |
+        | legacy          | a value differing only by casing    | the new exact spelling is written                       |
+        | legacy          | v2                                  | the persisted selection is changed to v2                |
+
+    Scenario Outline: An unusable helper-engine state source has its defined save outcome
+      Given a compatible state location is selected for the helper-engine value
+      When saving a different nonempty selection encounters <state condition>
+      Then <save outcome>
+      And the save operation does not claim success or failure to its caller
+
+      Examples:
+        | state condition                               | save outcome                                                   |
+        | no usable state path                          | the save stops without replacing prior state                   |
+        | an unsafe read or inspection failure          | the save stops without replacing prior state                   |
+        | missing, blank, or readable but corrupt state | compatible state is recreated and the requested value is attempted |
+
+    Scenario Outline: Helper-engine replacement failures preserve their real guarantee boundary
+      Given saving a changed helper-engine selection has reached durable replacement
+      When <failure point>
+      Then <persistence guarantee>
+      And later startup chooses whatever usable persisted value actually remains
+
+      Examples:
+        | failure point                                      | persistence guarantee                                      |
+        | a replacement attempt fails before the target is replaced | the prior target remains available                  |
+        | post-write verification fails after replacement      | no rollback to the prior target is guaranteed            |
+
+    Scenario: Machine-wide singleton ownership is preferred
+      Given no helper currently owns the control service
+      When a helper can claim machine-wide singleton ownership
+      Then that ownership governs the helper instance
+      And it does not also claim per-user singleton ownership
+
+    Scenario: Access denial alone permits per-user singleton fallback
+      Given the helper is denied access to machine-wide singleton ownership
+      When it attempts startup ownership
+      Then it attempts the per-user singleton scope
+      And any other machine-wide ownership failure does not cause that scope fallback
+
+    Scenario: Confirmed singleton ownership prevents a newcomer takeover
+      Given either supported singleton scope reports an existing owner
+      When another helper instance starts
+      Then the existing helper remains the control service
+      And the newcomer exits without taking over display control
+
+    Scenario: Unavailable singleton primitives do not suppress recovery startup
+      Given neither supported singleton scope can provide a usable ownership result
+      When the helper starts
+      Then it continues on a best-effort basis
+      And later control-service ownership still determines whether it can serve requests
+
+    Scenario: Unsupported platforms do not perform helper display control
+      Given the common helper entry runs on a platform without Windows display support
+      When it starts
+      Then it exits successfully without selecting a display engine
+      And it performs no display-control action
+
   Rule: One helper owns the active control service
 
     Scenario: A second helper does not take over an active control service
@@ -22,6 +111,12 @@ Feature: Display engine v2 helper protocol and session lifecycle
       When its default 15-second control-listener wait ends without a client
       Then it renews availability for a later control client
       And it continues already-required display safety behavior throughout the renewed wait
+
+    Scenario: Control availability retains its compatibility fallback order
+      Given the helper is ready to offer its control service
+      When the preferred anonymous endpoint form is unavailable
+      Then it tries the named compatibility form
+      And failure of both forms leaves recovery and safety timers active while control availability is retried
 
     Scenario: Temporary control-endpoint unavailability does not abandon safety behavior
       Given the helper has required display safety behavior in progress
@@ -131,17 +226,45 @@ Feature: Display engine v2 helper protocol and session lifecycle
         | legacy raw command-and-data |
         | length-declared command-and-data |
 
-    Scenario Outline: An invalid Apply configuration fails without mutating the session
+    Scenario: Every transport record has a stable length-prefixed compatibility boundary
+      Given Sunshine and the helper exchange one control or result body
+      When that body is written to the live transport
+      Then four little-endian bytes declare the unsigned body length before the body
+      And the declared body consists of one command or result byte followed by its payload, so the length counts both
+      And declared lengths from 1 byte through 2 MiB are plausible transport records while zero or larger declarations are not
+
+    Scenario: Transport decoding preserves partial, sequential, and malformed records exactly
+      Given transport bytes may contain a partial record, multiple records, or an implausible length declaration
+      When the receiver searches for its next complete record
+      Then a plausible partial record remains buffered across timeout returns for a later receive call to complete
+      And after any successful partial read, that receive call consumes only bytes available without another wait and returns timeout if the record is still incomplete
+      And it returns one complete record at a time while preserving later complete records for later receives
+      And a zero or greater-than-2-MiB declaration drops one leading byte at a time until a plausible boundary is found
+
+    Scenario Outline: An otherwise plausible record larger than its receiver capacity blocks later records
+      Given a complete positive length-prefixed record is no larger than 2 MiB but exceeds the <endpoint> receive capacity of <capacity>
+      And another complete record follows it
+      When the endpoint attempts to receive the first record
+      Then the oversized record is neither consumed nor skipped
+      And the later record remains blocked and receives may repeatedly time out until the connection is retired
+
+      Examples:
+        | endpoint                     | capacity     |
+        | helper request delivery      | 65,536 bytes |
+        | Sunshine result waiting      | 2,048 bytes  |
+
+    Scenario Outline: An Apply rejected by wire decoding never reaches session mutation
       Given an active control client sends an Apply request with a valid request identifier
-      And the requested display configuration is <invalid configuration>
-      When the helper validates the request
+      And the requested display configuration is <wire-invalid configuration>
+      When the helper validates the wire payload before dispatch
       Then it leaves the display session unchanged
+      And it does not dispatch an Apply command to session-state handling
       And it returns a failed Apply result carrying that same request identifier
 
       Examples:
-        | invalid configuration |
-        | malformed             |
-        | incomplete            |
+        | wire-invalid configuration |
+        | malformed                  |
+        | incomplete                 |
 
     Scenario Outline: An empty or unrecognized complete command has no control effect
       Given an active control client
@@ -200,12 +323,73 @@ Feature: Display engine v2 helper protocol and session lifecycle
       When the helper accepts the request
       Then it retains both as the request's display-change intent
 
-    Scenario: Apply ignores incomplete topology groups without inventing a target
-      Given an Apply request contains a valid display configuration
-      And its requested topology contains both complete and incomplete display groups
+    Scenario Outline: Core Apply JSON member names and shapes remain wire-compatible
+      Given an Apply request carries the exact JSON member <member>
+      When the helper parses its core single-display configuration
+      Then that member carries <meaning>
+      And missing, null, malformed, or unknown data retains the separately documented parse result rather than being renamed by a new implementation
+
+      Examples:
+        | member       | meaning |
+        | device_id    | the target identity as a string |
+        | device_prep  | exactly VerifyOnly, EnsureActive, EnsurePrimary, or EnsureOnlyDisplay |
+        | resolution   | null or an object whose width and height JSON numbers are converted to unsigned platform integers |
+        | refresh_rate | null, or an object with type equal to lowercase double and a numeric value, or type equal to lowercase rational and a value object whose numerator and denominator JSON numbers are converted to unsigned platform integers |
+        | hdr_state    | null or exactly Disabled or Enabled |
+
+    Scenario: Core unsigned configuration fields accept every JSON number category before conversion
+      Given core resolution width or height, or core rational numerator or denominator, is a signed-integer, unsigned-integer, or floating JSON number
+      When the dependency converts the core Apply configuration
+      Then it does not first require the unsigned-integer JSON category
+      And representable fractional values truncate toward zero while signed integers use unsigned platform conversion
+      But a particular result for an out-of-range floating value is not a portable clean-room guarantee
+
+    Scenario Outline: Every core Apply member is required even when its value may be null
+      Given an Apply JSON object omits <required member>
+      When the helper parses its core single-display configuration
+      Then core configuration parsing fails and the Apply is not accepted
+      And resolution, refresh_rate, and hdr_state must be present as explicit null when that optional change is absent
+
+      Examples:
+        | required member |
+        | device_id       |
+        | device_prep     |
+        | resolution      |
+        | refresh_rate    |
+        | hdr_state       |
+
+    Scenario: Unknown core JSON members do not create display intent
+      Given an Apply object contains all five valid core members and additional unrecognized members
+      When extension extraction has completed and core configuration is parsed
+      Then unrecognized members are ignored by the core configuration parser
+      And only recognized core and separately documented extension members affect the request
+
+    Scenario Outline: Apply extension names use one fixed extraction sequence independent of JSON text order
+      Given an Apply JSON object contains the exact extension member <member>
+      When the helper evaluates optional request policy in its fixed extraction sequence
+      Then the member represents <meaning>
+      And its recognized, ignored, defaulted, erased, or exceptional type behavior follows the dedicated scenarios below regardless of where that member appeared in the JSON text
+
+      Examples:
+        | member                                      | meaning |
+        | sunshine_apply_id                           | unsigned JSON-integer Apply correlation identity |
+        | sunshine_omit_final_initial_hdr_reapply     | Boolean request to omit the final initial HDR correction |
+        | wa_hdr_toggle                               | Boolean post-verification HDR blanking request |
+        | sunshine_virtual_layout                     | named virtual-display arrangement string |
+        | sunshine_monitor_positions                  | object keyed by device identity whose values contain integer x and y |
+        | sunshine_snapshot_exclude_devices           | baseline-exclusion payload |
+        | sunshine_topology                           | array of duplicate-display groups |
+        | sunshine_always_restore_from_golden         | Boolean golden-first recovery policy |
+        | sunshine_restore_on_disconnect              | Boolean disconnect recovery policy |
+        | sunshine_device_refresh_rate_overrides      | object keyed by device identity whose values contain unsigned-integer num and den |
+
+    Scenario: Apply topology retains every array group containing at least one string
+      Given an Apply request contains a valid display configuration and a topology array
+      And its topology contains array and non-array groups with string and non-string members
       When the helper accepts the request
-      Then it retains only the complete display groups as topology intent
-      And it does not derive a topology target from an incomplete group
+      Then it drops non-array groups and non-string group members
+      And it retains every array group that still contains at least one string, including an empty-string identity
+      And it attaches topology intent only when at least one such group remains
 
     Scenario: A non-list topology does not create topology intent
       Given an Apply request contains a non-list topology value
@@ -213,9 +397,10 @@ Feature: Display engine v2 helper protocol and session lifecycle
       Then it does not attach topology intent to that request
 
     Scenario: Apply retains complete monitor placement instructions
-      Given an Apply request supplies a device identifier and whole-number horizontal and vertical placement
+      Given an Apply request supplies an object-key device identifier and JSON-integer horizontal and vertical placement values that fit a signed platform integer
       When the helper accepts the request
       Then it retains that monitor placement as part of the display-change intent
+      And the object-key device identifier may be empty
 
     Scenario Outline: Incomplete monitor placement is not treated as a placement instruction
       Given an Apply request supplies a monitor placement with <incomplete part>
@@ -227,12 +412,13 @@ Feature: Display engine v2 helper protocol and session lifecycle
         | no device placement record               |
         | no horizontal coordinate                 |
         | no vertical coordinate                   |
-        | a non-whole-number coordinate            |
+        | a non-integer JSON coordinate             |
 
     Scenario: Apply retains complete per-device refresh overrides
-      Given an Apply request supplies a device identifier with a numeric refresh numerator and denominator
+      Given an Apply request supplies an object-key device identifier with unsigned JSON-integer refresh numerator and denominator values that fit an unsigned platform integer
       When the helper accepts the request
       Then it retains that per-device refresh override as part of the display-change intent
+      And an empty device key or zero numerator or denominator is retained here even though the standalone Refresh Rate command rejects those values
 
     Scenario Outline: Incomplete per-device refresh data is not treated as an override
       Given an Apply request supplies a refresh override with <incomplete part>
@@ -244,23 +430,43 @@ Feature: Display engine v2 helper protocol and session lifecycle
         | no override record             |
         | no numerator                   |
         | no denominator                 |
-        | a nonnumeric rate component    |
+        | a non-unsigned-integer JSON rate component |
 
     Scenario: Apply retains an explicit HDR blanking request
       Given an Apply request contains a valid explicit HDR blanking choice
       When the helper accepts the request
       Then it retains that HDR transition choice as display-change intent
 
-    Scenario Outline: An invalid Boolean Apply option does not opt into alternate behavior
-      Given an Apply request contains <invalid option>
-      When the helper accepts the remaining valid request data
-      Then it does not opt into that option's alternate behavior
+    Scenario: A non-Boolean stream-start HDR option is erased and becomes false
+      Given an Apply request contains a non-Boolean stream-start HDR option
+      When the helper extracts optional Apply policy
+      Then it records the option as false, removes that extension before core configuration parsing, and continues extracting later extensions
+
+    Scenario: A non-Boolean golden preference is ignored while later extension parsing continues
+      Given an Apply request contains a non-Boolean golden-baseline preference
+      When the helper extracts optional Apply policy
+      Then it does not replace the default preference or remove that unrecognized extension
+      And it continues extracting later extensions before core configuration parsing ignores the unknown key
+
+    Scenario: A non-Boolean HDR blanking option aborts later extension extraction
+      Given an Apply request contains a non-Boolean HDR blanking choice
+      And layout, placement, exclusions, topology, recovery policy, or refresh overrides occupy later positions in the helper's fixed extraction sequence regardless of JSON text order
+      When Boolean conversion fails
+      Then extension extraction stops before every later extraction position and retains only extension values extracted before the failure
+      And the original JSON still reaches core display-configuration parsing, which may accept its core configuration while ignoring extension keys
+
+    Scenario Outline: Over-range extension integers narrow instead of causing a range failure
+      Given an Apply request contains <over-range value> that still has the required JSON number category
+      And other extension members occupy later positions in the helper's fixed extraction sequence
+      When the helper converts that extension value to <destination>
+      Then it performs the platform narrowing conversion without an explicit range rejection
+      And extension extraction continues through later positions rather than aborting on that value
+      And <portable boundary>
 
       Examples:
-        | invalid option                                      |
-        | a non-Boolean HDR blanking choice                   |
-        | a non-Boolean golden-baseline preference            |
-        | a non-Boolean stream-start HDR option               |
+        | over-range value                                           | destination                  | portable boundary |
+        | a signed or unsigned JSON-integer monitor coordinate outside signed 32-bit range | a signed 32-bit coordinate   | no particular out-of-range signed result is a portable guarantee |
+        | an unsigned JSON-integer refresh component above 4,294,967,295        | an unsigned 32-bit component | the retained value is reduced modulo 4,294,967,296 |
 
     Scenario: Apply retains a named virtual display arrangement
       Given an Apply request contains a valid named virtual display arrangement
@@ -326,8 +532,8 @@ Feature: Display engine v2 helper protocol and session lifecycle
         | a stream-start HDR handling preference             |
         | a baseline exclusion policy                        |
 
-    Scenario: A numeric Apply identifier establishes reply correlation
-      Given an Apply request contains numeric identifier 1001
+    Scenario: An unsigned JSON-integer Apply identifier establishes reply correlation
+      Given an Apply request contains unsigned JSON-integer sunshine_apply_id 1001
       When the helper accepts the request
       Then it retains identifier 1001 for its Apply and verification outcomes
 
@@ -337,11 +543,25 @@ Feature: Display engine v2 helper protocol and session lifecycle
       Then it does not assign an unrelated caller identifier to the request
 
       Examples:
-        | identifier condition     |
-        | no identifier            |
-        | a nonnumeric identifier  |
+        | identifier condition                    |
+        | no sunshine_apply_id                    |
+        | a signed negative sunshine_apply_id     |
+        | a floating-point sunshine_apply_id      |
+        | a nonnumeric sunshine_apply_id          |
+        | sunshine_apply_id equal to zero         |
 
   Rule: Revert and baseline commands honor only valid optional policy
+
+    Scenario Outline: Revert JSON policy names remain wire-compatible
+      Given Revert carries the exact JSON member <member>
+      When the helper parses its optional Boolean policy
+      Then that member controls <meaning>
+      And a missing or non-Boolean member preserves the separately documented default
+
+      Examples:
+        | member                                      | meaning |
+        | sunshine_prefer_golden_if_current_missing   | whether golden may replace a missing Current baseline |
+        | sunshine_always_restore_from_golden         | the optional golden-first override |
 
     Scenario: Revert defaults to golden fallback when the current baseline is unavailable
       Given an active control client sends Revert without an optional preference
@@ -384,6 +604,24 @@ Feature: Display engine v2 helper protocol and session lifecycle
         | Export Golden    | a direct list                                  |
         | Snapshot Current | a list of records that each identify a device |
 
+    Scenario Outline: Baseline JSON metadata names remain wire-compatible
+      Given a baseline command carries the exact JSON member <member>
+      When the helper parses its metadata
+      Then that member represents <meaning>
+      And no renamed alias is inferred beyond the explicitly accepted forms
+
+      Examples:
+        | member                 | meaning |
+        | sunshine_snapshot_id   | unsigned JSON-integer Snapshot Current correlation identity |
+        | exclude_devices        | primary object member containing the exclusion list |
+        | devices                | legacy object-member alias used only when exclude_devices is absent |
+
+    Scenario: Correlated Snapshot Current preserves a bare-array compatibility payload
+      Given a v2 Snapshot Current caller supplies a bare exclusion array
+      When Sunshine adds its nonzero correlation identity
+      Then it wraps that array under the exact exclude_devices member and adds sunshine_snapshot_id
+      And an object payload keeps its existing members while receiving that identifier
+
     Scenario Outline: An explicit empty baseline exclusion list clears command policy
       Given an active control client sends <command> with an explicit empty exclusion list
       When the helper accepts the command
@@ -423,10 +661,8 @@ Feature: Display engine v2 helper protocol and session lifecycle
 
       Examples:
         | status                     |
-        | helper-unavailable          |
         | invalid-request             |
         | verification-failed         |
-        | virtual-display-reset-needed |
         | retryable                   |
         | fatal                       |
 
@@ -582,14 +818,14 @@ Feature: Display engine v2 helper protocol and session lifecycle
 
     Scenario Outline: Only Apply and Refresh Rate reject invalid required request data
       Given an active control session
-      When it sends <command> with <invalid required data>
-      Then the helper rejects that request or returns its failed result without display mutation
-      And an invalid payload has no display-control side effect
+      When it sends <command> with <wire-invalid required data>
+      Then the helper rejects that wire request before state dispatch or returns its immediate failed result without display mutation
+      And that wire-invalid payload has no display-control side effect
       And any result remains attributable only to the sending session
 
       Examples:
-        | command      | invalid required data                                |
-        | Apply        | no parseable display configuration                    |
+        | command      | wire-invalid required data                           |
+        | Apply        | no parseable display configuration                   |
         | Refresh Rate | missing, zero, or incomplete rate or device identity |
 
     Scenario Outline: Compatibility controls still dispatch with unexpected or malformed optional data
@@ -641,8 +877,8 @@ Feature: Display engine v2 helper protocol and session lifecycle
 
       Examples:
         | command          | compatibility form                    | reply behavior                                            |
-        | Apply            | nonzero numeric identifier             | Apply result and verification result with that identifier |
-        | Apply            | absent, nonnumeric, or zero identifier | Apply result using identifier zero; verification uses zero |
+        | Apply            | nonzero unsigned JSON-integer identifier | Apply result and verification result with that identifier |
+        | Apply            | absent, signed, floating, nonnumeric, or zero identifier | Apply result using identifier zero; verification uses zero |
         | Snapshot Current | nonzero unsigned snapshot identifier   | Snapshot result with that identifier                       |
         | Snapshot Current | absent or unusable snapshot identifier | no completion result                                      |
         | Refresh Rate     | v2 marker and nonzero identifier       | Refresh Rate result with that identifier                   |
@@ -657,7 +893,8 @@ Feature: Display engine v2 helper protocol and session lifecycle
     Scenario: A complete length-declared message never borrows trailing data
       Given a length-declared control message contains one complete command and later bytes
       When the helper reads the command
-      Then only the declared command and declared payload determine its control intent
+      Then its first four little-endian bytes declare a positive length counting the following command byte and payload
+      And only the declared command and declared payload determine its control intent
       And later bytes cannot change that command's request identity or outcome
 
     Scenario: A short or malformed length declaration is compatible with the legacy raw form
@@ -741,6 +978,26 @@ Feature: Display engine v2 helper protocol and session lifecycle
       Given a peer sends a Refresh Rate request using the v2 marker
       When it includes positive numerator and denominator, a nonzero identifier, and a nonempty device identity
       Then the result carries that identifier
+
+    Scenario: Refresh Rate request bytes retain their v2 and legacy schemas
+      Given a peer encodes a Refresh Rate request after its command byte
+      When it uses the v2 form
+      Then the payload begins with hexadecimal bytes 53 46 52 32, the ASCII marker SFR2, followed by a little-endian unsigned 32-bit numerator, a little-endian unsigned 32-bit denominator, a little-endian unsigned 64-bit request identifier, and all remaining bytes as the device identity
+      But the legacy form omits the four marker bytes and request identifier while retaining numerator, denominator, and remaining device bytes
+
+    Scenario Outline: Result payload bytes retain their public binary schema
+      Given the helper emits <result>
+      When a compatible peer decodes its payload after the result code
+      Then the payload contains <schema>
+
+      Examples:
+        | result                         | schema                                                                 |
+        | Apply Result                   | one success byte followed by the little-endian unsigned 64-bit Apply identifier, with raw parse-error bytes optionally following a failed parse |
+        | Verification Result            | one success byte followed by the little-endian unsigned 64-bit Apply identifier |
+        | Snapshot Result                | one success byte followed by the little-endian unsigned 64-bit Snapshot identifier |
+        | correlated Refresh Rate Result | one success byte followed by its little-endian unsigned 64-bit identifier |
+        | legacy Refresh Rate Result     | one success byte and no identifier                              |
+        | Ping acknowledgement           | no payload after public code 254                                |
 
     Scenario: Refresh Rate legacy compatibility keeps its untagged result form
       Given a peer sends a Refresh Rate request without the v2 marker

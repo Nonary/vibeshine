@@ -2,6 +2,8 @@
 Feature: Display engine v2 applies and verifies display topology and configuration
   A display change is successful only when its intended usable display state has
   been confirmed; accepting a request alone never proves that Windows applied it.
+  Durations in this feature are current suggested defaults and may be tuned, but
+  the stated ordering, attempt ceilings, target ownership, and terminal outcomes are fixed.
 
   Rule: A configuration-bearing Apply may stage topology or leave it unchanged
 
@@ -33,6 +35,13 @@ Feature: Display engine v2 applies and verifies display topology and configurati
       Then it does not activate the same topology again solely because it was requested
       And it reports success only after the existing configuration is confirmed stable
 
+    Scenario: Missing pre-Apply desktop evidence stops before mutation
+      Given an Apply request contains a display configuration
+      When the current topology is structurally unavailable or the original session settings cannot be retained
+      Then the request reports a retryable non-success before topology or settings mutation
+      And failure to derive a valid topology for the requested configuration instead reports an invalid request
+      And neither outcome may be reported as a verified Apply
+
     Scenario: A request without the required configuration is rejected before display mutation
       Given an Apply request has no display configuration
       When the engine validates the request
@@ -51,8 +60,11 @@ Feature: Display engine v2 applies and verifies display topology and configurati
       Given an Apply request contains a structurally valid topology
       But the operating system initially rejects that topology during validation
       When the engine applies the request
+      Then an operating-system general-failure result receives one compatibility validation attempt using the alternate supplied-topology flag form
+      And other validation errors do not receive that alternate flag-form attempt
       Then it protects the desktop before recovery can affect it
       And it performs one display-stack recovery and the default 500 ms settle before retrying validation
+      And failure of the recovery action itself does not skip the settled revalidation
       And it reports a retryable non-success result if validation is still rejected
       And a changed settle duration may not add another validation retry, start a later mutation after cancellation, or weaken the recovery guard
 
@@ -60,12 +72,20 @@ Feature: Display engine v2 applies and verifies display topology and configurati
       Given an Apply request contains a topology that passed validation
       And its first activation does not become usable
       When the engine applies the request
-      Then it makes at most 2 activation attempts by default
-      And after each attempt it allows at most 5 seconds for the accepted target or duplicate group to become usable
+      Then it makes at most 2 activation attempts
+      And after each attempt it allows the default 5 seconds for the accepted target or duplicate group to become usable
       And it performs display-stack recovery and the default 500 ms settle only between those attempts
       And it reports a retryable non-success result when the second attempt has not produced a usable accepted target
       And the cadence of intermediate readiness observations is not a contract
-      And a tuned attempt or readiness duration may not exceed the attempt cap, accept a missing target, or delay cancellation past the next safe boundary
+      And a tuned readiness duration may not add an activation attempt, accept a missing target, or delay cancellation past the next safe boundary
+
+    Scenario: Exact readiness can confirm a transient activation result
+      Given a structurally and operating-system-valid topology is being activated
+      And the topology application returns false rather than succeeding or throwing an exception
+      But the exact requested topology and intended target group become usable within the current attempt
+      When the engine evaluates readiness
+      Then it accepts that exact ready topology for the settings stage
+      But an exception produces fatal failure and ends the attempt without adopting later readiness
 
     Scenario: A successful Windows-adjusted topology is accepted when the intended target survives
       Given an Apply request has a target display or duplicate group
@@ -91,12 +111,13 @@ Feature: Display engine v2 applies and verifies display topology and configurati
       And it follows the applicable retry or recovery result instead
 
     Scenario: A topology mutation is protected before either activation or recovery can change the desktop
-      Given a topology validation retry, activation, display-stack recovery, settings change, or virtual-display reset could alter the desktop
+      Given a topology validation retry, activation, display-stack recovery, or settings change could alter the desktop
       When the engine reaches the first such mutation boundary
-      Then it arms durable recovery before starting that operation
+      Then it attempts to arm durable recovery and records whether that succeeded before starting that operation
+      And only a successful attempt counts as durable protection
       And cancellation before that boundary starts no mutation and may clear provisional recovery state
       But cancellation after that boundary retains recovery because the desktop may have changed
-      And failure to arm does not certify the desktop as safe, restored, or safely disarmed
+      And failure to arm does not certify the desktop as safe, restored, or safely disarmed and may be retried after the mutation reports its outcome
 
   Rule: Target readiness is distinct from unrelated display readiness
 
@@ -124,13 +145,39 @@ Feature: Display engine v2 applies and verifies display topology and configurati
       Then the named device remains the target for mode, HDR, and primary-display checks
       And a different display is never selected merely because it appears first after reordering
 
-    Scenario: An empty device identifier targets the original primary duplicate group
-      Given the original primary display belongs to a duplicate group
+    Scenario: An empty device identifier selects the first accepted group containing an original-primary candidate
+      Given planning identifies one or more candidate identities from the original primary display group
       And an Apply request omits its device identifier
       When Windows accepts the requested or adjusted topology
-      Then the engine resolves the target as the original primary duplicate group
-      And it checks required mode, refresh, HDR, and primary status against that accepted group
-      And it does not collapse the request to an arbitrary duplicate-group member
+      Then the engine resolves the target as the first accepted topology group containing any planned candidate
+      And accepted group order may determine the result if Windows splits those candidates across adjusted groups
+      And it checks required mode, refresh, HDR, and primary status against the selected accepted group
+
+  Rule: Topology staging preserves settings intent without repeating device activation
+
+    Scenario: Accepted topology is rebased before requested settings are applied
+      Given topology activation has produced a usable accepted topology
+      And the session retained its original mode, HDR, and primary-display restoration values
+      When the engine begins the requested settings stage
+      Then it bases that stage on the topology Windows actually accepted while preserving those original restoration values
+      And an EnsurePrimary preparation request remains EnsurePrimary
+      But VerifyOnly, EnsureActive, and EnsureOnlyDisplay preparation requests all become VerifyOnly for this stage because topology activation is complete
+      And only a successful requested-settings application permits position overrides followed by physical refresh overrides
+      And sticky verification after that best-effort work is still required for final core Apply success
+
+    Scenario Outline: Settings-stage failures retain their caller-visible status
+      Given topology activation has succeeded for an Apply
+      When the requested settings stage encounters <condition>
+      Then it reports <status>
+      And it does not convert that condition into verified success
+
+      Examples:
+        | condition                                                         | status                    |
+        | an unusable accepted topology or settings baseline                | verification failure      |
+        | failure to retain the rebased restoration values                  | retryable non-success     |
+        | a temporarily unavailable display operation                       | retryable non-success     |
+        | a device, primary, mode, or HDR preparation failure               | verification failure      |
+        | an unexpected settings failure                                    | fatal non-success         |
 
   Rule: Failed or cancelled mutations preserve a path back to a safe desktop
 
@@ -146,16 +193,19 @@ Feature: Display engine v2 applies and verifies display topology and configurati
       And topology activation succeeded
       But applying the requested mode, HDR, or primary-display settings fails
       When the engine handles the failed settings stage
-      Then it attempts to restore the captured baseline topology and settings
+      Then it first attempts to restore the captured baseline topology
+      And only after that topology is usable does it restore the baseline modes, HDR, primary display, and origins
+      And it confirms the captured snapshot after those rollback stages
       And it treats the desktop as no longer changed only after that baseline is confirmed restored
 
     Scenario: Apply retries only retryable transaction outcomes
       Given an Apply request reaches a retryable topology, settings, or verification outcome
       When the engine schedules another Apply
-      Then it permits at most 3 total attempts by default
+      Then it permits at most 3 total attempts
       And it waits 500 ms before attempt 2 and 1,000 ms before attempt 3
       And it reports the last topology, settings, or verification non-success after the third attempt
-      And invalid-request, fatal, helper-unavailable, cancellation, or a confirmed rollback result is not converted into another Apply retry
+      And invalid-request, fatal, or cancellation outcomes do not receive another Apply retry
+      And a confirmed rollback does not turn the failed attempt into success and does not remove retry eligibility from a retryable status
       And changing a retry wait may not alter retry eligibility, the three-attempt cap, rollback/recovery ownership, or the terminal status
 
     Scenario: A later topology or settings failure retains the correct recovery result
@@ -184,7 +234,8 @@ Feature: Display engine v2 applies and verifies display topology and configurati
       When the request is cancelled or superseded before its result is confirmed
       Then the engine stops later cancellable stages for that request
       And it treats the desktop as possibly changed
-      And it retains durable recovery protection until a safe terminal outcome is confirmed
+      And recovery remains armed until a safe terminal outcome is confirmed
+      And any successfully created or already existing durable safeguard remains available for that recovery
 
   Rule: Apply restores requested presentation details within safe limits
 
@@ -192,9 +243,10 @@ Feature: Display engine v2 applies and verifies display topology and configurati
       Given an Apply request specifies an HDR state for its resolved target
       And that request explicitly asks for HDR blanking
       When the Apply is verified successful for the current, uncancelled session
-      Then it temporarily blanks HDR states after verification using a default 1-second blank duration
-      And HDR-blank failure does not alter the verified Apply result
-      But it does not blank HDR when the request omitted the option, Apply failed, verification is absent, or the completion is stale or cancelled
+      Then it requests the serialized post-verification workaround with a default 1-second blank duration over the active displays observed HDR-enabled
+      And discovery or failures inside a successfully launched workaround do not alter the verified Apply result
+      But failure to launch the workaround execution is not caught at this boundary and has no unchanged-result guarantee
+      And it does not blank HDR when the request omitted the option, Apply failed, verification is absent, or the completion is stale or cancelled
       And a tuned blank duration may not run before verification or change target, cancellation, recovery, or Apply-result ownership
 
     Scenario: Position overrides are constrained to a usable desktop coordinate range
@@ -210,7 +262,7 @@ Feature: Display engine v2 applies and verifies display topology and configurati
       Given an Apply request contains a position override for an empty or nonempty display identity
       When the engine applies position overrides
       Then an empty identity is ignored without a position attempt
-      And a nonempty identity that is missing, inactive, or temporarily unrepositionable remains bound to that same identity for the default 15-attempt allowance
+      And a nonempty identity that is missing, inactive, or temporarily unrepositionable remains bound to that same identity for the 15-attempt allowance
       And it does not substitute another display identity for either case
       And cancellation stops remaining position attempts
       And any unresolved nonempty override remains a best-effort position outcome after its 15-attempt allowance
@@ -219,12 +271,12 @@ Feature: Display engine v2 applies and verifies display topology and configurati
       Given an Apply request contains a position override for a display whose dimensions cannot currently be read
       When the engine applies the position override
       Then it still constrains each origin to the supported coordinate range
-      And it uses the ordinary upper coordinate ceiling rather than inventing a display size
+      And it uses the ordinary upper coordinate ceiling of 32767 rather than inventing a display size
       And a failed or unavailable position operation remains best effort for that named display
 
     Scenario: Position overrides are best effort after the core configuration change
       Given the requested topology and target configuration are otherwise valid
-      And one active monitor position override cannot be applied in its default 15-attempt settling allowance
+      And one active monitor position override cannot be applied in its 15-attempt settling allowance
       When the engine completes the Apply
       Then it preserves the unresolved position override as a best-effort failure
       And it does not silently retarget another display to satisfy that override
@@ -233,25 +285,38 @@ Feature: Display engine v2 applies and verifies display topology and configurati
     Scenario: Refresh-rate overrides restore physical displays without changing the virtual target
       Given an Apply request includes valid refresh-rate overrides and its requested mode, HDR, and primary-display changes have succeeded
       And one override identifies the configured virtual display and another identifies a physical display
-      When the engine performs the post-configuration work before initial Apply verification
+      When the requested settings application has succeeded and the engine performs post-configuration work before initial sticky verification
       Then it skips the virtual display override
-      And it restores the requested physical display refresh rate when that display is available
+      And it recognizes the configured virtual display only by exact case-sensitive device-identity equality
+      And a differently cased identity is attempted as an ordinary best-effort physical refresh override
+      And it attempts to restore the requested physical display refresh rate when that display is available
+      And an already equivalent rational refresh rate succeeds without another display change
       And it ignores empty device identifiers or invalid zero-valued rates
+      And cancellation is observed before each override and stops that and all remaining refresh work
       And it performs this best-effort restoration after the successful core configuration even when no virtual display was created
       And virtual-display creation is a specific reason for the restoration because it can reset physical refresh rates
 
     Scenario: Physical refresh-rate overrides remain best effort after a successful core configuration
       Given an Apply request includes valid physical-display refresh-rate overrides
       And one physical display cannot accept its requested override
-      When the engine applies the overrides after requested configuration changes and before initial verification
+      When the engine applies the overrides after successful requested settings and before initial sticky verification
       Then it leaves that physical display's override unapplied without changing the virtual target
       And it does not convert an otherwise verified core configuration into a different Apply result solely because that separate override failed
+
+    Scenario: Core verification uses two sticky observations
+      Given requested settings have applied and all best-effort position and physical-refresh work has reached its boundary
+      When the engine performs initial verification
+      Then it waits the default 250 ms settle before the first required-state observation
+      And the resolved target must remain active and every requested mode, refresh, HDR, and primary condition must match at that observation
+      And it waits another default 250 ms before repeating the same required-state observation
+      And success requires both observations for the current uncancelled request
+      And tuning either settle may not remove the second confirmation or accept a stale or cancelled request
 
     Scenario: Refresh and configuration verification require the requested active state
       Given an Apply request requires a resolution, refresh rate, HDR state, or primary status
       And every required property matches on the resolved active target
       When the engine verifies the completed display change
-      Then it verifies the topology and resolved target remain active
+      Then it verifies the resolved target remains active
       And it verifies every requested resolution, refresh, HDR, and primary-display property in that target scope
 
     Scenario: A repeated configuration mismatch fails verification
@@ -279,13 +344,14 @@ Feature: Display engine v2 applies and verifies display topology and configurati
       And requested primary-display status is checked against that explicit representative
       And a matching duplicate-group member does not substitute for a failed representative refresh, HDR, or primary check
 
-    Scenario: An omitted target preserves the original-primary duplicate-group scope
-      Given an Apply omits its device identity and the original primary belongs to an accepted duplicate group
+    Scenario: An omitted target verifies the first accepted group containing an original-primary candidate
+      Given an Apply omits its device identity and planning retained candidate identities from the original primary group
       And it requests a resolution, refresh, HDR state, or primary-display status
       When the engine verifies the successful Apply
-      Then requested resolution, refresh, and HDR state are checked across the resolved original-primary duplicate group
-      And requested primary-display status succeeds when any member of that group is primary
-      And Windows path ordering cannot collapse that group to an arbitrary display
+      Then it selects the first accepted topology group containing any planned candidate
+      And requested resolution, refresh, and HDR state are checked across that selected group
+      And requested primary-display status succeeds when any member of that selected group is primary
+      And if Windows split planned candidates across groups, accepted group ordering may select a different candidate-containing group
 
     Scenario: HDR-disabled verification accepts an unavailable HDR observation
       Given a verified Apply requests HDR disabled for its resolved verification scope
@@ -293,13 +359,14 @@ Feature: Display engine v2 applies and verifies display topology and configurati
       Then the engine accepts that observation as HDR disabled
       But an Apply that requests HDR enabled requires an observed enabled HDR state for every checked display
 
-    Scenario: Refresh verification recognizes equivalent rational rates
+    Scenario: Refresh verification applies its fixed tolerance to rational rates
       Given a verified Apply requests a refresh rate for its resolved verification scope
-      When the observed rate is an equivalent rational value with different numerator and denominator representation
-      Then the engine accepts the equivalent rate
+      When requested and observed rates are rational values with positive denominators
+      Then the engine accepts exact equivalents and any values whose numerical difference is no greater than the fixed 0.9 Hz compatibility tolerance
+      And a zero denominator cannot satisfy refresh verification
 
     Scenario: Refresh verification preserves legacy decimal tolerance
       Given a verified Apply requests a refresh rate for its resolved verification scope
       When either requested or observed rate is a legacy decimal value
-      Then the engine accepts values within the default 0.9 Hz tolerance
+      Then the engine accepts values whose difference is no greater than the fixed 0.9 Hz legacy compatibility tolerance
       And it does not require byte-for-byte refresh-rate identity
