@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router';
 
 import ApplicationView from '@/views/ApplicationView.vue';
+import ApiTokensView from '@/views/ApiTokensView.vue';
 import BrowserStreamView from '@/views/BrowserStreamView.vue';
 import DevicesView from '@/views/DevicesView.vue';
 import IntegrationsView from '@/views/IntegrationsView.vue';
@@ -73,6 +74,12 @@ const router = createRouter({
       name: 'integrations',
       component: IntegrationsView,
       meta: { titleKey: 'ui.nav.integrations' },
+    },
+    {
+      path: '/api-tokens',
+      name: 'api-tokens',
+      component: ApiTokensView,
+      meta: { titleKey: 'ui.nav.api_tokens' },
     },
     {
       path: '/logs',
