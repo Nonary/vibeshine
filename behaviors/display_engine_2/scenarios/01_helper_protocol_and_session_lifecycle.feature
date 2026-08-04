@@ -17,6 +17,12 @@ Feature: Display engine v2 helper protocol and session lifecycle
       Then it remains available to accept a later control client
       And it continues any already-required display safety behavior while waiting
 
+    Scenario: A normal helper renews its listener wait without abandoning safety work
+      Given the normally started helper has no connected control client
+      When its default 15-second control-listener wait ends without a client
+      Then it renews availability for a later control client
+      And it continues already-required display safety behavior throughout the renewed wait
+
     Scenario: Temporary control-endpoint unavailability does not abandon safety behavior
       Given the helper has required display safety behavior in progress
       And it cannot currently offer a control endpoint
@@ -81,7 +87,7 @@ Feature: Display engine v2 helper protocol and session lifecycle
         | missing         |
         | corrupt         |
 
-    Scenario Outline: Startup accepts both supported log-level argument forms
+    Scenario Outline: Startup log-level arguments accept case-insensitive names or one digit
       Given no other display engine v2 helper is active
       When the helper starts with <log-level argument>
       Then the effective log level is <result>
@@ -89,6 +95,7 @@ Feature: Display engine v2 helper protocol and session lifecycle
       Examples:
         | log-level argument  | result                         |
         | "--log-level debug" | the requested debug level      |
+        | "--log-level WARNING" | the requested warning level    |
         | "--log-level=6"     | the requested none level       |
         | "--log-level loud"  | the default informational level |
         | "--log-level=9"     | the default informational level |
@@ -96,10 +103,10 @@ Feature: Display engine v2 helper protocol and session lifecycle
   Rule: The control boundary accepts defined frames and rejects unsafe input
 
     Scenario Outline: A valid command frame retains its caller identity
-      Given an active control client with session epoch 41
+      Given an active control client with control-session identity A
       When it sends a valid <command> command frame
-      Then the helper accepts that command as belonging to epoch 41
-      And any defined reply is sent only to epoch 41
+      Then the helper accepts that command as belonging to control session A
+      And any defined reply is sent only to control session A
 
       Examples:
         | command          |
@@ -159,11 +166,12 @@ Feature: Display engine v2 helper protocol and session lifecycle
         | a zero refresh numerator           |
         | a zero refresh denominator         |
 
-    Scenario: A runtime log-level update is constrained to a supported level
+    Scenario: A runtime log-level update clamps its first numeric byte to the supported range
       Given an active control client
-      When it sends a Log Level value above the supported range
+      When it sends Log Level with a nonempty first numeric byte above the supported range
       Then the helper uses the highest supported log level
       And the update does not act as a display-control command
+      And it does not send a completion result
 
     Scenario: An empty runtime log-level frame preserves the current level
       Given an active control client with an established log level
@@ -500,9 +508,9 @@ Feature: Display engine v2 helper protocol and session lifecycle
   Rule: A replacement client cannot inherit stale control or completion traffic
 
     Scenario Outline: Commands from a retired connection are ignored
-      Given control client A owns session epoch 41
+      Given control client A owns control-session identity A
       And client A is retired because of <retirement cause>
-      When a queued command from epoch 41 is encountered
+      When a pending command from control session A reaches its control boundary
       Then it does not alter the current display session
       And it cannot disarm recovery or replace a restore baseline
 
@@ -513,22 +521,22 @@ Feature: Display engine v2 helper protocol and session lifecycle
         | a liveness timeout     |
 
     Scenario: Late completions cannot reply through a replacement client
-      Given client A started a correlated request in session epoch 41
-      And client B is now the active control client in a later session epoch
+      Given client A started a correlated request in control session A
+      And client B is now the active control client in replacement control session B
       When the result for client A's request arrives
       Then client B receives no result for client A's request
       And the late result cannot be treated as an outcome for client B's request
 
-    Scenario Outline: Obsolete epoch or generation work has no current-session effect
+    Scenario Outline: Superseded work has no current-session effect
       Given work belongs to <obsolete ownership>
       When that work reaches a command or completion boundary
       Then it produces no current-session transition
       And it produces no reply through the current control connection
 
       Examples:
-        | obsolete ownership                           |
-        | a retired control epoch                       |
-        | a generation cancelled by newer control intent |
+        | obsolete ownership                       |
+        | a retired control session                |
+        | work cancelled by newer control intent   |
 
     Scenario Outline: Replacement control intent takes precedence over obsolete completion traffic
       Given a completion from an earlier control intent is pending
@@ -559,7 +567,7 @@ Feature: Display engine v2 helper protocol and session lifecycle
     Scenario: A broken connection leaves only autonomous safety behavior eligible
       Given an active control connection breaks while the helper has display safety work to perform
       When the helper retires that connection
-      Then it removes that connection's queued control commands and reply channel
+      Then it removes that connection's pending control intent and reply authority
       And only helper-owned safety behavior may continue for the retired session
 
   Rule: Stop ends the helper without abandoning required cleanup
@@ -569,3 +577,179 @@ Feature: Display engine v2 helper protocol and session lifecycle
       When it sends Stop
       Then the helper stops accepting further control work
       And it completes required shutdown cleanup before it exits
+
+  Rule: Public command forms retain their compatibility boundary
+
+    Scenario Outline: Only Apply and Refresh Rate reject invalid required request data
+      Given an active control session
+      When it sends <command> with <invalid required data>
+      Then the helper rejects that request or returns its failed result without display mutation
+      And an invalid payload has no display-control side effect
+      And any result remains attributable only to the sending session
+
+      Examples:
+        | command      | invalid required data                                |
+        | Apply        | no parseable display configuration                    |
+        | Refresh Rate | missing, zero, or incomplete rate or device identity |
+
+    Scenario Outline: Compatibility controls still dispatch with unexpected or malformed optional data
+      Given an active control session sends <command> with <payload condition>
+      When the helper receives the command
+      Then it preserves the command's compatible control effect
+      And it uses current or default optional policy where the metadata is unusable
+      And it does not invent a completion result unless that command normally has one
+
+      Examples:
+        | command          | payload condition                                      |
+        | Revert           | malformed, nonobject, or extra optional metadata       |
+        | Reset            | arbitrary extra data                                   |
+        | Disarm           | arbitrary extra data                                   |
+        | Export Golden    | malformed exclusions or arbitrary extra data           |
+        | Snapshot Current | malformed exclusions, unknown metadata, or extra data  |
+        | Ping             | arbitrary extra data                                   |
+        | Stop             | arbitrary extra data                                   |
+
+    Scenario Outline: A parseable Apply uses the documented optional-field defaults
+      Given a parseable Apply configuration omits or has a non-activating <field>
+      When the helper accepts the request
+      Then the effective <field> is <effective behavior>
+      And the request retains no unintended alternate display policy
+
+      Examples:
+        | field                         | effective behavior                                     |
+        | restore-on-disconnect          | enabled                                                |
+        | omit-final-initial-HDR-reapply | disabled                                               |
+        | HDR-blanking Boolean           | disabled when absent                                   |
+        | golden-first Boolean           | absent when not Boolean                                |
+        | virtual-layout text            | absent when not text                                   |
+        | topology                       | absent unless it contains at least one nonempty group  |
+        | monitor position               | absent unless both coordinates are whole numbers       |
+        | per-device refresh override    | absent unless both values are unsigned whole numbers   |
+        | request identifier             | uncorrelated when absent, nonnumeric, or zero          |
+
+    Scenario: A malformed Apply optional field retains parser-compatible failure or fallback behavior
+      Given an Apply includes malformed optional metadata that is not a documented request form
+      When the helper evaluates the complete Apply payload
+      Then it may return a failed Apply result if the remaining payload is not accepted
+      And if the remaining configuration is accepted, the malformed metadata does not opt into its alternate policy
+
+    Scenario Outline: The result form is compatible with the command's correlation form
+      Given a valid <command> was accepted in <compatibility form>
+      When it reaches its terminal observable outcome
+      Then the helper emits <reply behavior>
+      And that reply cannot satisfy a different request or a later control session
+
+      Examples:
+        | command          | compatibility form                    | reply behavior                                            |
+        | Apply            | nonzero numeric identifier             | Apply result and verification result with that identifier |
+        | Apply            | absent, nonnumeric, or zero identifier | Apply result using identifier zero; verification uses zero |
+        | Snapshot Current | nonzero unsigned snapshot identifier   | Snapshot result with that identifier                       |
+        | Snapshot Current | absent or unusable snapshot identifier | no completion result                                      |
+        | Refresh Rate     | v2 marker and nonzero identifier       | Refresh Rate result with that identifier                   |
+        | Refresh Rate     | legacy form or zero identifier         | Refresh Rate result without an identifier                  |
+        | Revert           | any accepted form                      | dispatch-only; no invented completion result               |
+        | Disarm           | any accepted form                      | dispatch-only; no invented completion result               |
+        | Reset            | any accepted form                      | dispatch-only; no invented completion result               |
+        | Export Golden    | any accepted form                      | dispatch-only; no invented completion result               |
+        | Log Level        | any accepted form                      | dispatch-only; no invented completion result               |
+        | Stop             | any accepted form                      | dispatch-only; no invented completion result               |
+
+    Scenario: A complete length-declared message never borrows trailing data
+      Given a length-declared control message contains one complete command and later bytes
+      When the helper reads the command
+      Then only the declared command and declared payload determine its control intent
+      And later bytes cannot change that command's request identity or outcome
+
+    Scenario: A short or malformed length declaration is compatible with the legacy raw form
+      Given a control message does not contain a complete positive length declaration
+      When its first byte identifies a supported command
+      Then the helper interprets the remaining bytes as that command's legacy raw payload
+      And it retains the legacy reply behavior for that payload
+
+    Scenario: A foreign or late reply cannot become a current session result
+      Given a control session has ended or has been replaced
+      When an earlier request reaches a result boundary
+      Then no reply is delivered through the current session
+      And the new session retains sole ownership of its own replies
+
+    Scenario Outline: Public command codes retain their established meanings
+      Given a peer uses the established control-code vocabulary
+      When it sends code <code>
+      Then the helper interprets it as <command>
+      And no other code is accepted as an alias for that command
+
+      Examples:
+        | code | command          |
+        | 1    | Apply            |
+        | 2    | Revert           |
+        | 3    | Reset            |
+        | 4    | Export Golden    |
+        | 5    | Log Level        |
+        | 7    | Disarm           |
+        | 8    | Snapshot Current |
+        | 10   | Refresh Rate     |
+        | 254  | Ping             |
+        | 255  | Stop             |
+
+    Scenario Outline: Public result codes retain their established reply meanings
+      Given a peer receives a result from the helper
+      When the result uses code <code>
+      Then it interprets the result as <result>
+      And it applies the established correlation rule for that result type
+
+      Examples:
+        | code | result              |
+        | 6    | Apply Result        |
+        | 9    | Verification Result |
+        | 11   | Refresh Rate Result |
+        | 12   | Snapshot Result     |
+
+    Scenario Outline: Startup log-level parsing maps accepted text and digit values to seven levels
+      Given helper startup receives <startup value> through either supported startup argument form
+      When the value is parsed case-insensitively
+      Then the effective startup level is <level>
+      And absent or invalid startup input uses informational level
+
+      Examples:
+        | startup value | level         |
+        | verbose       | verbose       |
+        | DEBUG         | debug         |
+        | info          | informational |
+        | warning       | warning       |
+        | error         | error         |
+        | fatal         | fatal         |
+        | none          | none          |
+        | 0             | verbose       |
+        | 6             | none          |
+
+    Scenario Outline: Live Log Level maps its first numeric byte and ignores the rest
+      Given an active control session has an established log level
+      When it sends a nonempty Log Level payload whose first numeric byte is <first byte>
+      Then the live effective level is <level>
+      And later bytes do not change that level
+      And no completion result is sent
+
+      Examples:
+        | first byte | level   |
+        | 0          | verbose |
+        | 1          | debug   |
+        | 6          | none    |
+        | 7          | none    |
+        | 255        | none    |
+
+    Scenario: Refresh Rate v2 correlation requires its established marker and complete fields
+      Given a peer sends a Refresh Rate request using the v2 marker
+      When it includes positive numerator and denominator, a nonzero identifier, and a nonempty device identity
+      Then the result carries that identifier
+
+    Scenario: Refresh Rate legacy compatibility keeps its untagged result form
+      Given a peer sends a Refresh Rate request without the v2 marker
+      When it includes positive numerator and denominator and a nonempty device identity
+      Then the result has no request identifier
+      And it cannot satisfy a later correlated request
+
+    Scenario: Invalid Refresh Rate data produces only an applicable uncorrelated failure
+      Given a peer sends Refresh Rate with a missing or zero rate component or no device identity
+      When the helper evaluates the request
+      Then it returns a failed Refresh Rate result
+      And that result carries an identifier only when a valid nonzero v2 identifier was supplied
