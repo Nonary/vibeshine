@@ -25,7 +25,14 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       Given the helper starts in restore mode after a reboot or later logon
       And no current, previous, or golden baseline exists
       When the helper evaluates available restore candidates
-      Then the helper finishes cleanly instead of retrying forever
+      Then it clears the no-op recovery state and completes the restore launch
+      And it exits instead of waiting indefinitely for a candidate that does not exist
+
+    Scenario: A replacement during revert grace prevents an obsolete restore mutation
+      Given a non-immediate revert is waiting for a replacement session opportunity
+      When a newer Apply or disarm supersedes the revert before restoration begins
+      Then the old recovery does not change the desktop
+      And the newer session intent becomes responsible for the next safe outcome
 
     Scenario: A canceled recovery keeps protection for an uncertain desktop
       Given recovery has passed the point at which topology, modes, HDR, primary display, or layout may change
@@ -47,6 +54,37 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       When a later disarm is requested
       Then the helper does not falsely claim that recovery is complete
       And recovery protection remains until a safe terminal confirmation is available
+
+  Rule: Recovery applies a candidate in a safe, stable sequence
+
+    Scenario: Restore waits for a complete usable desktop before later restore stages
+      Given a recovery candidate contains topology, display settings, and optional layout data
+      When recovery activates the candidate topology
+      Then it waits until the candidate's required display paths are usable before applying later settings
+      And it restores display modes and HDR before primary-display and origin settings
+      And it applies recorded rotation or layout only after the preceding restore stages succeed
+      And failure at any stage does not report the desktop as restored
+
+    Scenario: A restore candidate is confirmed only after stable and quiet observations
+      Given a recovery candidate appears to match the current desktop at one observation
+      When recovery decides whether that candidate is already restored or has just been restored
+      Then it requires repeated stable desktop observations and any required layout match
+      And it requires the restored desktop to remain unchanged through a bounded quiet period
+      And a changing or incomplete desktop remains recoverable rather than being reported as restored
+
+    Scenario: Transient OS validation does not discard a structurally valid restore candidate
+      Given a saved recovery candidate has valid topology structure
+      But an operating-system topology probe is temporarily unavailable while displays are transitioning
+      When recovery evaluates that candidate
+      Then it retains the candidate for the actual bounded restore path
+      And it reports success only if a later topology, settings, and stable-confirmation sequence succeeds
+
+    Scenario: Recovery validation failure returns to protected retry behavior
+      Given a restore operation completed with a candidate that appeared successful
+      But final recovery validation finds that the desktop no longer matches the candidate
+      When the helper handles the validation failure
+      Then it keeps recovery protection and the durable safeguard in place
+      And it returns to bounded event-driven recovery rather than claiming a safe terminal state
 
   Rule: Lost control connections respect the session's restore policy
 
@@ -95,8 +133,7 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       Given recovery is armed after a failed or unconfirmed restore
       And the ordinary recovery window has expired or is waiting for another opportunity
       When Windows reports <signal>
-      Then the event is debounced with the generation that observed it
-      And the event reopens a bounded event recovery window
+      Then the event opens a bounded event recovery window for the current recovery
       And the next eligible recovery attempt starts without carrying an old backoff delay
 
       Examples:
@@ -140,8 +177,27 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       When the desktop is confirmed to match the restored baseline
       Then heartbeat monitoring and retry scheduling are disarmed
       And the durable restore safeguard is removed
-      And a golden-baseline recovery clears obsolete current and previous session baselines
       And the helper refreshes the Windows shell so the restored desktop is visible coherently
+
+    Scenario: A confirmed golden restoration retires session fallbacks before final recovery validation
+      Given golden recovery has restored and stably confirmed a golden baseline
+      And current and previous session baselines were available as fallback candidates
+      When the helper proceeds to final recovery validation
+      Then it retires the obsolete current and previous session baselines before that validation completes
+      And a later validation failure keeps recovery protection but does not recreate those retired fallbacks
+
+    Scenario: Successful post-recovery session cleanup permits a fresh Apply
+      Given recovery validation has confirmed that the desktop is restored
+      And the session retains prior Apply state that must be cleared before another configuration request
+      When that cleanup succeeds
+      Then a later Apply starts without stale session display state
+
+    Scenario: Failed post-recovery session cleanup cannot serve another Apply
+      Given recovery validation has confirmed that the desktop is restored
+      And the session retains prior Apply state that must be cleared before another configuration request
+      When that cleanup cannot be completed
+      Then the helper does not run a subsequent Apply against that stale state
+      And it finishes the current helper lifecycle so a fresh session can own the next Apply
 
   Rule: Virtual display changes are recovered without losing the physical desktop
 
@@ -159,12 +215,26 @@ Feature: Recovery, events, watchdogs, and Windows platform safety
       And the desktop remains protected for recovery even if re-enabling the driver fails
       And a later recovery or verified replacement is required before the safeguard is removed
 
-    Scenario: Virtual display events rediscover the correct target before repair
+    Scenario: A same-identity virtual display event verifies before reapplying
       Given a verified virtual-display session is being monitored
-      When the virtual driver resets, recovers, or presents a different resolved display identity
-      Then the helper rediscovers the virtual display target before reapplying the request
-      And a same-identity event is verified before an unnecessary reapply is attempted
-      And a failed verification repairs lost topology, mode, or HDR configuration without retargeting an arbitrary display
+      And the virtual display continues to resolve to the session's current device identity
+      When a virtual display event arrives
+      Then the helper verifies the existing target before attempting a reapply
+      And a healthy configuration is retained without an unnecessary display reset or reapply
+
+    Scenario: Failed same-identity virtual display verification repairs the existing target
+      Given a verified virtual-display session is being monitored
+      And the virtual display continues to resolve to the session's current device identity
+      When a virtual display event verification fails
+      Then it repairs lost topology, mode, or HDR configuration without retargeting an arbitrary display
+
+    Scenario: A changed-identity virtual display event retargets before reapplying
+      Given a verified virtual-display session is being monitored
+      And the virtual driver now resolves to a different usable device identity
+      When a virtual display event arrives
+      Then the helper rediscovers and retargets the session to that virtual display identity
+      And it reapplies the requested configuration only to the rediscovered virtual target
+      And a late event from an earlier session cannot retarget the newer desktop session
 
   Rule: Platform-visible cleanup happens only for confirmed display outcomes
 

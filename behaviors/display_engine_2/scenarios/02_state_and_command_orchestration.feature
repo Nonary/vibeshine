@@ -5,10 +5,11 @@ Feature: Display engine v2 state and command orchestration
 
   Rule: A new apply request establishes the current session intent
 
-    Scenario: An apply request without a configuration is rejected without changing the session
-      Given the display engine is waiting for a session request
+    Scenario: An apply request without a configuration is rejected before display application
+      Given the display engine can evaluate a new session request
       When a client applies a request that has no display configuration
       Then the client receives an invalid-request apply result for that request
+      And the engine does not start a display application for that request
       And the engine remains ready for a later valid request
 
     Scenario: A valid apply request supersedes unfinished autonomous recovery
@@ -17,6 +18,13 @@ Feature: Display engine v2 state and command orchestration
       Then the new request becomes the current session intent
       And unfinished recovery work cannot restore the desktop in place of that new intent
       And the request's restore-on-disconnect and snapshot-exclusion choices take effect before later recovery decisions
+
+    Scenario: Apply continues when its fallback baseline capture cannot succeed
+      Given a valid Apply request has no current session baseline
+      And bounded fallback capture cannot produce a valid baseline
+      When the engine begins the Apply request
+      Then it continues to process the Apply request instead of rejecting it solely for the capture failure
+      And that Apply request does not guarantee that a later Revert has a current-session baseline to use
 
     Scenario: A later session intent supersedes an older deferred session intent
       Given a display-changing request is still being completed
@@ -126,6 +134,12 @@ Feature: Display engine v2 state and command orchestration
       Then it cannot transition the active session
       And it cannot open a response gate or deliver a result through the replacement session
 
+    Scenario: A stale display or heartbeat event cannot redirect a newer session
+      Given a newer session owns the display engine
+      When a display event or heartbeat event from an older generation or connection arrives
+      Then the event is ignored
+      And it cannot start recovery, disarm protection, or reapply the older session's display request
+
     Scenario: A refresh-rate change invalidates older settling checks for its active request
       Given a verified apply request has a pending stabilization check
       When an allowed refresh-rate change targets that request's display scope
@@ -149,6 +163,40 @@ Feature: Display engine v2 state and command orchestration
       And it repairs only when those bounded checks show that the result did not stick
       And the transient checks do not race ordinary post-apply stabilization work
 
+  Rule: Autonomous signals yield to current control intent
+
+    Scenario: An explicit revert remains required despite later automatic recovery policy
+      Given a client has explicitly requested Revert while an earlier display mutation is still active
+      When a heartbeat timeout occurs before that mutation reaches its safety boundary
+      Then the explicit Revert remains the required recovery intent
+      And autonomous policy cannot replace that intent with a disarm decision
+
+    Scenario: A duplicate disconnect joins an already-running recovery
+      Given a disconnect-triggered recovery is already restoring the desktop
+      When the same control loss is reported again
+      Then the engine joins the existing recovery instead of starting another one
+      And it does not restart the recovery grace or discard the active restore outcome
+
+    Scenario: A heartbeat timeout yields to a newer queued Apply intent
+      Given a possibly mutating display operation is active
+      And a newer Apply request is queued behind that operation
+      When a heartbeat timeout arrives for the older session
+      Then the timeout does not replace the queued Apply with autonomous recovery
+      And the newer Apply remains the next current control intent after the safety boundary
+
+    Scenario: A heartbeat timeout honors a session that opted out of automatic restoration
+      Given a live protected session has disabled restore on disconnect
+      And no explicit Revert is pending
+      When the session heartbeat times out
+      Then the engine does not restore the desktop solely because of that automatic signal
+      And it clears the ordinary recovery state for the opted-out session
+
+    Scenario: A live ping invalidates an earlier heartbeat recovery deadline
+      Given a protected live session is approaching a heartbeat recovery deadline
+      When the client sends a valid Ping
+      Then the engine refreshes session liveness
+      And the earlier missed-heartbeat deadline cannot later start recovery for that live session
+
   Rule: Non-apply commands preserve the same mutation and response boundaries
 
     Scenario: An explicit revert requests recovery even when disconnect restoration is disabled
@@ -157,11 +205,17 @@ Feature: Display engine v2 state and command orchestration
       Then the engine begins recovery after any active display mutation reaches a safe boundary
       And the explicit revert is not discarded as a disconnect-policy decision
 
-    Scenario: A revert with no available restore candidate ends cleanly
+    Scenario: A revert with no saved restore candidate exits cleanly
       Given no restore candidate is available for the session
       When a revert is requested
-      Then the engine does not retry restoration indefinitely
-      And it completes the no-op recovery lifecycle cleanly
+      Then the engine does not begin a restore attempt without a candidate
+      And it clears the associated recovery state before the helper reaches its clean terminal lifecycle outcome
+
+    Scenario: An attempted recovery without a usable candidate remains safely event-sensitive
+      Given a Revert has begun recovery from an apparent restore candidate
+      When recovery reaches a non-successful terminal result
+      Then the engine retains recovery protection in its event-sensitive recovery state
+      And a later current control intent may supersede that waiting recovery safely
 
     Scenario: Disarm does not abandon an unconfirmed restore
       Given an attempted restore has not yet been confirmed
@@ -174,6 +228,12 @@ Feature: Display engine v2 state and command orchestration
       When a client requests disarm
       Then the engine cancels obsolete work
       And it clears recovery protection and returns to a waiting session state
+
+    Scenario: Disarm preserves protection after a cancelled mutation with an unknown desktop outcome
+      Given a cancelled display mutation may have changed the desktop
+      When a client requests Disarm after that work reaches its completion boundary
+      Then the engine cancels obsolete future work without removing the recovery guard
+      And its waiting state does not claim that the desktop is safely unprotected
 
     Scenario: Snapshot and golden export do not overwrite a changing display baseline
       Given an apply or revert is actively changing the display
@@ -206,14 +266,39 @@ Feature: Display engine v2 state and command orchestration
       And the client receives its success or failure result with the originating request identity
       And a successful change in the active request's scope becomes part of later settling behavior
 
+    Scenario Outline: A completed active-session refresh restarts settling checks
+      Given a verified Apply request has an active-session refresh-rate mutation in progress
+      When that refresh-rate mutation completes <outcome>
+      Then the engine retires earlier settling checks that used the pre-refresh request
+      And it performs the applicable later settling decision before allowing obsolete verification to control the session
+
+      Examples:
+        | outcome          |
+        | successfully     |
+        | unsuccessfully   |
+
     Scenario: Reset waits for a display mutation without cancelling it
       Given a display-changing request is active
       When a client requests reset
       Then reset waits until that display mutation reaches its completion boundary
       And it does not cancel the active display change or discard its recovery protection
 
-    Scenario: A failed reset does not admit deferred display mutations into stale state
-      Given reset is clearing staged display-session state before a deferred mutation
+    Scenario: A successful ordered reset releases only the current deferred control intent
+      Given reset is ordered behind display work
+      And a current deferred control command is waiting for that reset
+      When reset completes successfully
+      Then the engine clears the staged display-session state before honoring the deferred command
+      And any superseded deferred control intent is not revived
+
+    Scenario: A recovery terminal outcome waits for its ordered reset before helper exit
+      Given a confirmed recovery needs display-session cleanup
+      And no newer control transaction has superseded that recovery
+      When the engine orders reset as part of its terminal cleanup
+      Then it keeps the helper alive until the ordered reset completes
+      And it reaches the recovery terminal lifecycle outcome only after that cleanup succeeds
+
+    Scenario: A failed recovery-ordered reset requires a fresh helper session
+      Given confirmed recovery ordered reset to clear staged display-session state before another transaction
       When reset fails
       Then the engine does not start the deferred display mutation against that stale state
       And it ends the current helper lifecycle so a fresh session can start cleanly
