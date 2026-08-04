@@ -487,6 +487,7 @@ namespace nvhttp {
         launch_session->virtual_display_guid_bytes.fill(0);
         launch_session->virtual_display_device_id.clear();
         launch_session->virtual_display_ready_since.reset();
+        launch_session->virtual_display_hdr_enabled.reset();
         launch_session->virtual_display_recreated_on_demand = false;
         launch_session->virtual_display_needs_resume_apply = false;
         if (request_virtual_display) {
@@ -506,6 +507,7 @@ namespace nvhttp {
             launch_session->virtual_display_failed = false;
             launch_session->virtual_display_device_id = *existing_device;
             launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
+            launch_session->virtual_display_hdr_enabled.reset();
             apply_framegen_refresh_policy(true);
             BOOST_LOG(info) << "Display helper: another session is active; joining its validated virtual capture target (device_id="
                             << *existing_device << ").";
@@ -540,6 +542,7 @@ namespace nvhttp {
               launch_session->virtual_display_failed = false;
               launch_session->virtual_display_device_id = *existing_device;
               launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
+              launch_session->virtual_display_hdr_enabled.reset();
               launch_session->virtual_display_needs_resume_apply = true;
               config::set_runtime_output_name_override(*existing_device);
               pending_output_override = *existing_device;
@@ -554,6 +557,7 @@ namespace nvhttp {
             launch_session->virtual_display_failed = true;
             launch_session->virtual_display_device_id.clear();
             launch_session->virtual_display_ready_since.reset();
+            launch_session->virtual_display_hdr_enabled.reset();
             BOOST_LOG(warning) << "Display helper: existing resume virtual display is on a different or unknown adapter; recreating it on demand.";
           }
 
@@ -628,6 +632,7 @@ namespace nvhttp {
           launch_session->virtual_display_guid_bytes.fill(0);
           launch_session->virtual_display_device_id.clear();
           launch_session->virtual_display_ready_since.reset();
+          launch_session->virtual_display_hdr_enabled.reset();
           return;
         }
 
@@ -838,6 +843,7 @@ namespace nvhttp {
             }
           }
           launch_session->virtual_display_ready_since = display_info->ready_since;
+          launch_session->virtual_display_hdr_enabled = display_info->hdr_enabled;
           if (display_info->display_name && !display_info->display_name->empty()) {
             BOOST_LOG(info) << "Virtual display created at " << platf::to_utf8(*display_info->display_name);
           } else {
@@ -912,6 +918,7 @@ namespace nvhttp {
                 return {};
               }
               recovery_session->virtual_display_ready_since = result.ready_since;
+              recovery_session->virtual_display_hdr_enabled = result.hdr_enabled;
               if (recovery_session->virtual_display) {
                 constexpr int kMaxApplyAttempts = 5;
                 bool applied = false;
@@ -989,6 +996,7 @@ namespace nvhttp {
           launch_session->virtual_display_guid_bytes.fill(0);
           launch_session->virtual_display_device_id.clear();
           launch_session->virtual_display_ready_since.reset();
+          launch_session->virtual_display_hdr_enabled.reset();
           launch_session->framegen_refresh_rate.reset();
           launch_session->framegen_refresh_millihz.reset();
           launch_session->framegen_refresh_multiplier = 1;
@@ -1662,6 +1670,7 @@ namespace nvhttp {
     launch_session->virtual_display_guid_bytes.fill(0);
     launch_session->virtual_display_device_id.clear();
     launch_session->virtual_display_ready_since.reset();
+    launch_session->virtual_display_hdr_enabled.reset();
     launch_session->app_metadata.reset();
     launch_session->client_uuid.clear();
     launch_session->client_name.clear();
