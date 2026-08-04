@@ -1586,6 +1586,7 @@ function ensureNameSelectionFromForm() {
 }
 
 async function close(options: { rollbackLiveRtxHdr?: boolean } = {}) {
+  showDeleteConfirm.value = false;
   const rollbackLiveRtxHdr = options.rollbackLiveRtxHdr !== false;
   if (rollbackLiveRtxHdr) {
     await restoreOriginalRtxHdrLiveOverrides();
