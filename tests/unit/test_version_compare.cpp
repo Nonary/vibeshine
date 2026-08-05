@@ -3,7 +3,7 @@
  * @brief Unit tests for Vibeshine's semver comparison rules.
  */
 
-#include "../tests_common.h"
+#include <gtest/gtest.h>
 
 #include <src/version_compare.h>
 
