@@ -294,7 +294,12 @@ namespace webrtc_stream {
       if (!allow_display_changes) {
         if (request_virtual_display) {
           if (auto existing_device =
-                VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(virtual_display_stable_id, session->virtual_display_device_id, session->client_name, false)) {
+                VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(
+                  virtual_display_stable_id,
+                  session->virtual_display_device_id,
+                  session->client_name,
+                  VDISPLAY::policy::allow_generic_resume_fallback()
+                )) {
             if (VDISPLAY::configuredRenderAdapterMatchesVirtualDisplay(
                   virtual_display_stable_guid,
                   "active WebRTC/shared virtual display reuse"
@@ -506,7 +511,12 @@ namespace webrtc_stream {
         session->virtual_display_failed = false;
         if (display_info->device_id && !display_info->device_id->empty()) {
           session->virtual_display_device_id = *display_info->device_id;
-        } else if (auto resolved_device = VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(session->unique_id, session->virtual_display_device_id, client_label, false)) {
+        } else if (auto resolved_device = VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(
+                     session->unique_id,
+                     session->virtual_display_device_id,
+                     client_label,
+                     VDISPLAY::policy::allow_generic_resume_fallback()
+                   )) {
           session->virtual_display_device_id = *resolved_device;
         } else {
           session->virtual_display_device_id.clear();
@@ -3154,7 +3164,7 @@ namespace webrtc_stream {
         if (!video::has_successful_encoder_probe()) {
           VDISPLAY::ensure_display_result ensure_result {};
 
-          if (!launch_session->virtual_display) {
+          if (VDISPLAY::policy::should_ensure_probe_display(launch_session->virtual_display)) {
             ensure_result = VDISPLAY::ensure_display();
             if (!ensure_result.ready_for_probe()) {
               return std::string {"No usable display is available on the selected capture adapter."};
