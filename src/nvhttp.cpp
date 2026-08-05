@@ -2458,6 +2458,16 @@ namespace nvhttp {
     tree.put("root.uniqueid", http::unique_id);
     tree.put("root.HttpsPort", net::map_port(PORT_HTTPS));
     tree.put("root.ExternalPort", net::map_port(PORT_HTTP));
+#ifdef _WIN32
+    // Artemis discovers virtual-display support from /serverinfo before launch.
+    // Driver readiness remains a separate runtime state so it can offer recovery
+    // when the Windows device is present but unavailable.
+    tree.put("root.VirtualDisplayCapable", true);
+    tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus.load(std::memory_order_acquire) == VDISPLAY::DRIVER_STATUS::OK);
+#else
+    tree.put("root.VirtualDisplayCapable", false);
+    tree.put("root.VirtualDisplayDriverReady", false);
+#endif
 
     // Only include the MAC address for requests sent from paired clients over HTTPS.
     // For HTTP requests, use a placeholder MAC address that Moonlight knows to ignore.
