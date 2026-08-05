@@ -408,10 +408,16 @@ namespace nvhttp {
         config_requests_virtual =
           *launch_session->virtual_display_mode_override != config::video_t::virtual_display_mode_e::disabled;
       }
-      const bool client_requests_virtual = launch_session->client_requests_virtual_display;
+      const bool client_requests_virtual = launch_session->client_virtual_display_override.value_or(
+        launch_session->client_requests_virtual_display
+      );
       const bool session_requests_virtual = launch_session->app_metadata && launch_session->app_metadata->virtual_screen;
+      const bool launch_requests_physical = launch_session->client_virtual_display_override &&
+                                            !*launch_session->client_virtual_display_override;
       bool request_virtual_display =
-        launch_session->virtual_display || config_requests_virtual || client_requests_virtual || session_requests_virtual;
+        launch_session->virtual_display ||
+        (config_requests_virtual && !launch_requests_physical) ||
+        client_requests_virtual || session_requests_virtual;
       const auto requested_virtual_display_mode =
         launch_session->virtual_display_mode_override.value_or(config::video.virtual_display_mode);
       const bool shared_virtual_display_mode =
@@ -714,8 +720,12 @@ namespace nvhttp {
           std::copy_n(std::cbegin(session_uuid.b8), sizeof(session_uuid.b8), launch_session->virtual_display_guid_bytes.begin());
         }
 
-        uint32_t vd_width = launch_session->width > 0 ? static_cast<uint32_t>(launch_session->width) : 1920u;
-        uint32_t vd_height = launch_session->height > 0 ? static_cast<uint32_t>(launch_session->height) : 1080u;
+        uint32_t vd_width = launch_session->resolution_override ?
+                              static_cast<uint32_t>(launch_session->resolution_override->width) :
+                              (launch_session->width > 0 ? static_cast<uint32_t>(launch_session->width) : 1920u);
+        uint32_t vd_height = launch_session->resolution_override ?
+                               static_cast<uint32_t>(launch_session->resolution_override->height) :
+                               (launch_session->height > 0 ? static_cast<uint32_t>(launch_session->height) : 1080u);
         // Virtual-display creation may eagerly enable HDR. Default to no state change so
         // "Do not change HDR" preserves the retained Windows setting.
         bool virtual_display_hdr_requested = false;
@@ -1678,6 +1688,8 @@ namespace nvhttp {
     launch_session->client_display_mode_override = false;
     launch_session->client_display_refresh_millihz = 0;
     launch_session->client_requests_virtual_display = false;
+    launch_session->client_virtual_display_override.reset();
+    launch_session->resolution_override.reset();
     launch_session->virtual_display_failed = false;
     launch_session->hdr_profile.reset();
 
@@ -1849,6 +1861,44 @@ namespace nvhttp {
         launch_session->hdr_profile = client_settings->hdr_profile;
       }
     }
+
+    if (const auto virtual_display_arg = args.find("virtualDisplay"); virtual_display_arg != std::end(args)) {
+      launch_session->client_virtual_display_override = util::from_view(virtual_display_arg->second) != 0;
+      if (!*launch_session->client_virtual_display_override) {
+        launch_session->virtual_display_mode_override = config::video_t::virtual_display_mode_e::disabled;
+      }
+    }
+
+    const auto scale_factor = util::from_view(get_arg(args, "scaleFactor", "100"));
+    if (scale_factor > 0 && scale_factor != 100 && launch_session->width > 0 && launch_session->height > 0) {
+      const auto scale_dimension = [scale_factor](const int dimension) -> std::optional<int> {
+        const auto unsigned_dimension = static_cast<std::uint64_t>(dimension);
+        const auto unsigned_scale_factor = static_cast<std::uint64_t>(scale_factor);
+        if (unsigned_dimension > std::numeric_limits<std::uint64_t>::max() / unsigned_scale_factor) {
+          return std::nullopt;
+        }
+
+        const auto scaled_dimension = (unsigned_dimension * unsigned_scale_factor) / 100u;
+        const auto even_dimension = scaled_dimension & ~1ull;
+        if (even_dimension == 0 || even_dimension > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+          return std::nullopt;
+        }
+        return static_cast<int>(even_dimension);
+      };
+
+      if (const auto width = scale_dimension(launch_session->width), height = scale_dimension(launch_session->height); width && height) {
+        launch_session->resolution_override = rtsp_stream::launch_session_t::resolution_override_t {
+          .width = *width,
+          .height = *height,
+        };
+        BOOST_LOG(info) << "Using launch resolution override " << *width << "x" << *height
+                        << " for client scaleFactor=" << scale_factor << ".";
+      } else {
+        BOOST_LOG(warning) << "Ignoring invalid client scaleFactor=" << scale_factor
+                           << " for requested mode " << launch_session->width << "x" << launch_session->height << ".";
+      }
+    }
+
     launch_session->unique_id = (get_arg(args, "uniqueid", "unknown"));
     const auto launch_appid_arg = get_arg(args, "appid", "0");
     const auto launch_appuuid_arg = get_arg(args, "appuuid", "");

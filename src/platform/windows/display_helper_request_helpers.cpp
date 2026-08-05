@@ -98,7 +98,9 @@ namespace display_helper_integration::helpers {
       snapshot.app_metadata = session.app_metadata;
       snapshot.client_display_mode_override = session.client_display_mode_override;
       snapshot.client_display_refresh_millihz = session.client_display_refresh_millihz;
+      snapshot.client_virtual_display_override = session.client_virtual_display_override;
       snapshot.virtual_display = session.virtual_display;
+      snapshot.resolution_override = session.resolution_override;
       snapshot.virtual_display_failed = session.virtual_display_failed;
       snapshot.virtual_display_mode_override = session.virtual_display_mode_override;
       snapshot.virtual_display_layout_override = session.virtual_display_layout_override;
@@ -275,11 +277,13 @@ namespace display_helper_integration::helpers {
     builder.set_virtual_display_arrangement(layout_flags.arrangement);
 
     auto &overrides = builder.mutable_session_overrides();
-    if (session_.width > 0) {
-      overrides.width_override = session_.width;
+    const int effective_width = session_.resolution_override ? session_.resolution_override->width : session_.width;
+    const int effective_height = session_.resolution_override ? session_.resolution_override->height : session_.height;
+    if (effective_width > 0) {
+      overrides.width_override = effective_width;
     }
-    if (session_.height > 0) {
-      overrides.height_override = session_.height;
+    if (effective_height > 0) {
+      overrides.height_override = effective_height;
     }
     if (session_.framegen_refresh_rate && *session_.framegen_refresh_rate > 0) {
       overrides.framegen_refresh_override = session_.framegen_refresh_rate;
@@ -289,9 +293,7 @@ namespace display_helper_integration::helpers {
     }
     overrides.virtual_display_override = session_.virtual_display;
 
-    const int effective_width = session_.width;
     BOOST_LOG(debug) << "effective_width: " << effective_width;
-    const int effective_height = session_.height;
     BOOST_LOG(debug) << "effective_height: " << effective_height;
     const int base_fps = session_.fps;
     BOOST_LOG(debug) << "base_fps: " << base_fps;
