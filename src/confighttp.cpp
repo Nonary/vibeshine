@@ -1905,7 +1905,7 @@ namespace confighttp {
         if (input_tree.contains("playnite-id") && input_tree["playnite-id"].is_string()) {
           const auto playnite_id = input_tree["playnite-id"].get<std::string>();
           if (!playnite_id.empty()) {
-            input_tree["uuid"] = platf::playnite::sync::canonical_playnite_app_uuid(playnite_id);
+            input_tree["uuid"] = platf::playnite::sync::policy::canonical_playnite_app_uuid(playnite_id);
           }
         }
       } catch (...) {}
