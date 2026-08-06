@@ -9,10 +9,10 @@
 #include <utility>
 
 // lib includes
-#include <boost/asio.hpp>
 #include <enet/enet.h>
 
 // local includes
+#include "network_policy.h"
 #include "utility.h"
 
 namespace net {
@@ -39,11 +39,6 @@ namespace net {
     WAN  ///< WAN
   };
 
-  enum af_e : int {
-    IPV4,  ///< IPv4 only
-    BOTH  ///< IPv4 and IPv6
-  };
-
   net_e from_enum_string(const std::string_view &view);
   std::string_view to_enum_string(net_e net);
 
@@ -52,32 +47,11 @@ namespace net {
   host_t host_create(af_e af, ENetAddress &addr, std::uint16_t port);
 
   /**
-   * @brief Get the address family enum value from a string.
-   * @param view The config option value.
-   * @return The address family enum value.
-   */
-  af_e af_from_enum_string(const std::string_view &view);
-
-  /**
-   * @brief Get the wildcard binding address for a given address family.
-   * @param af Address family.
-   * @return Normalized address.
-   */
-  std::string_view af_to_any_address_string(af_e af);
-
-  /**
    * @brief Get the binding address to use based on config.
    * @param af Address family.
    * @return The configured bind address or wildcard if not configured.
    */
   std::string get_bind_address(af_e af);
-
-  /**
-   * @brief Get the TCP protocol matching the provided address family.
-   * @param address The address that will be used for binding.
-   * @return IPv4 or IPv6 TCP protocol matching the address.
-   */
-  boost::asio::ip::tcp tcp_protocol_for_address(const boost::asio::ip::address &address);
 
   /**
    * @brief Get the UDP protocol matching the provided address family.
@@ -117,10 +91,4 @@ namespace net {
    */
   int encryption_mode_for_address(boost::asio::ip::address address);
 
-  /**
-   * @brief Returns a string for use as the instance name for mDNS.
-   * @param hostname The hostname to use for instance name generation.
-   * @return Hostname-based instance name or "Sunshine" if hostname is invalid.
-   */
-  std::string mdns_instance_name(const std::string_view &hostname);
 }  // namespace net
