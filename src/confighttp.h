@@ -19,6 +19,7 @@
 #include <nlohmann/json.hpp>
 
 // local includes
+#include "config_http_policy.h"
 #include "http_auth.h"
 #include "thread_safe.h"
 
@@ -30,15 +31,12 @@ namespace confighttp {
   using resp_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response>;
   using req_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request>;
 
-  constexpr auto PORT_HTTPS = 1;
+  constexpr auto PORT_HTTPS = policy::https_port_offset;
   std::string get_web_ui_url(std::string_view path = {});
   void start();
 
   // Token scopes for API tokens used by clients.
-  enum class TokenScope {
-    Read,  ///< Read-only scope: allows GET/HEAD style operations
-    Write  ///< Read-write scope: allows modifying operations (POST/PUT/DELETE)
-  };
+  using TokenScope = policy::TokenScope;
 
   // Authentication helpers
   AuthResult check_auth(const req_https_t &request);
@@ -48,7 +46,7 @@ namespace confighttp {
   bool validate_csrf_token(const resp_https_t &response, const req_https_t &request, const std::string &client_id);
 
   // Token scope helpers
-  TokenScope scope_from_string(std::string_view s);
+  TokenScope scope_from_string(std::string_view scope);
   std::string scope_to_string(TokenScope scope);
 
   // Configuration API endpoints

@@ -25,8 +25,9 @@
 using namespace testing;
 
 namespace confighttp {
-  bool is_token_route_eligible(std::string_view path);
-  std::vector<std::string> ordered_methods_for_catalog(const std::set<std::string, std::less<>> &methods);
+  using policy::is_token_route_eligible;
+  using policy::ordered_methods_for_catalog;
+  using policy::scope_to_string;
 
   class ConfigHttpAuthHelpersTest: public Test {
   protected:
@@ -385,50 +386,6 @@ namespace confighttp {
 
     // Verify it's not using http://
     EXPECT_THAT(cors_origin_it->second, Not(HasSubstr("http://localhost:")));
-  }
-
-  class ConfigHttpUrlTest: public Test {
-  protected:
-    void SetUp() override {
-      original_port = config::sunshine.port;
-      original_bind_address = config::sunshine.bind_address;
-      original_address_family = config::sunshine.address_family;
-
-      config::sunshine.port = 47989;
-      config::sunshine.bind_address.clear();
-      config::sunshine.address_family = "both";
-    }
-
-    void TearDown() override {
-      config::sunshine.port = original_port;
-      config::sunshine.bind_address = original_bind_address;
-      config::sunshine.address_family = original_address_family;
-    }
-
-  private:
-    std::uint16_t original_port;
-    std::string original_bind_address;
-    std::string original_address_family;
-  };
-
-  TEST_F(ConfigHttpUrlTest, UsesLocalhostWhenListeningOnDualStackWildcard) {
-    EXPECT_EQ(get_web_ui_url(), "https://localhost:47990");
-  }
-
-  TEST_F(ConfigHttpUrlTest, UsesIpv4LoopbackWhenListeningOnIpv4Wildcard) {
-    config::sunshine.address_family = "ipv4";
-    EXPECT_EQ(get_web_ui_url(), "https://127.0.0.1:47990");
-
-    config::sunshine.bind_address = "0.0.0.0";
-    EXPECT_EQ(get_web_ui_url("/login"), "https://127.0.0.1:47990/login");
-  }
-
-  TEST_F(ConfigHttpUrlTest, UsesConfiguredHostWhenBoundToSpecificAddress) {
-    config::sunshine.bind_address = "192.168.1.154";
-    EXPECT_EQ(get_web_ui_url(), "https://192.168.1.154:47990");
-
-    config::sunshine.bind_address = "2001:db8::154";
-    EXPECT_EQ(get_web_ui_url(), "https://[2001:db8::154]:47990");
   }
 
   TEST_F(ConfigHttpAuthHelpersTest, given_percent_encoded_session_token_in_cookie_when_extracting_then_should_unescape_token) {

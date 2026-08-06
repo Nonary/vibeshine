@@ -189,37 +189,6 @@ namespace confighttp {
   using resp_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response>;
   using req_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request>;
 
-  bool is_token_route_eligible(std::string_view path) {
-    return path.rfind("/api/", 0) == 0 && path.rfind("/api/auth/", 0) != 0;
-  }
-
-  std::vector<std::string> ordered_methods_for_catalog(const std::set<std::string, std::less<>> &methods) {
-    static constexpr std::array<std::string_view, 5> preferred_order = {
-      "GET",
-      "POST",
-      "PUT",
-      "PATCH",
-      "DELETE"
-    };
-
-    std::vector<std::string> ordered;
-    ordered.reserve(methods.size());
-
-    for (const auto method : preferred_order) {
-      if (methods.contains(std::string(method))) {
-        ordered.emplace_back(method);
-      }
-    }
-
-    for (const auto &method : methods) {
-      if (std::find(preferred_order.begin(), preferred_order.end(), method) == preferred_order.end()) {
-        ordered.push_back(method);
-      }
-    }
-
-    return ordered;
-  }
-
   namespace {
     using token_route_methods_t = std::map<std::string, std::set<std::string, std::less<>>, std::less<>>;
 
@@ -242,7 +211,7 @@ namespace confighttp {
     }
 
     void record_token_route(std::string path, std::string method) {
-      if (!is_token_route_eligible(path)) {
+      if (!policy::is_token_route_eligible(path)) {
         return;
       }
       boost::to_upper(method);
@@ -360,29 +329,15 @@ namespace confighttp {
 
   static std::string get_web_ui_host_for_local_open() {
     const auto address_family = net::af_from_enum_string(config::sunshine.address_family);
-    const auto bind_address = boost::algorithm::trim_copy(config::sunshine.bind_address);
-    if (bind_address.empty()) {
-      return address_family == net::IPV4 ? "127.0.0.1"s : "localhost"s;
-    }
-
-    boost::system::error_code ec;
-    const auto address = boost::asio::ip::make_address(bind_address, ec);
-    if (ec) {
-      return bind_address;
-    }
-
-    if (address.is_unspecified()) {
-      return address.is_v4() ? "127.0.0.1"s : "localhost"s;
-    }
-
-    return net::addr_to_url_escaped_string(address);
+    return policy::get_web_ui_host_for_local_open(
+      config::sunshine.bind_address,
+      address_family == net::IPV4
+    );
   }
 
   std::string get_web_ui_url(std::string_view path) {
     auto port_https = net::map_port(PORT_HTTPS);
-    auto url = std::format("https://{}:{}", get_web_ui_host_for_local_open(), port_https);
-    url += path;
-    return url;
+    return policy::make_web_ui_url(get_web_ui_host_for_local_open(), port_https, path);
   }
 
   // Forward declaration for error helper implemented later
@@ -4926,7 +4881,7 @@ namespace confighttp {
     output_tree["routes"] = nlohmann::json::array();
 
     for (const auto &[path, methods] : catalog) {
-      output_tree["routes"].push_back({{"path", path}, {"methods", ordered_methods_for_catalog(methods)}});
+      output_tree["routes"].push_back({{"path", path}, {"methods", policy::ordered_methods_for_catalog(methods)}});
     }
 
     send_response(response, output_tree);
@@ -5399,41 +5354,12 @@ namespace confighttp {
     // std::jthread (cleanup_thread) auto-joins on destruction, no need for joinable/join
   }
 
-  /**
-   * @brief Converts a string representation of a token scope to its corresponding TokenScope enum value.
-   *
-   * This function takes a string view and returns the matching TokenScope enum value.
-   * Supported string values are "Read", "read", "Write", and "write".
-   * If the input string does not match any known scope, an std::invalid_argument exception is thrown.
-   *
-   * @param s The string view representing the token scope.
-   * @return TokenScope The corresponding TokenScope enum value.
-   * @throws std::invalid_argument If the input string does not match any known scope.
-   */
-  TokenScope scope_from_string(std::string_view s) {
-    if (s == "Read" || s == "read") {
-      return TokenScope::Read;
-    }
-    if (s == "Write" || s == "write") {
-      return TokenScope::Write;
-    }
-    throw std::invalid_argument("Unknown TokenScope: " + std::string(s));
+  TokenScope scope_from_string(std::string_view scope) {
+    return policy::scope_from_string(scope);
   }
 
-  /**
-   * @brief Converts a TokenScope enum value to its string representation.
-   * @param scope The TokenScope enum value to convert.
-   * @return The string representation of the scope.
-   */
   std::string scope_to_string(TokenScope scope) {
-    switch (scope) {
-      case TokenScope::Read:
-        return "Read";
-      case TokenScope::Write:
-        return "Write";
-      default:
-        throw std::invalid_argument("Unknown TokenScope enum value");
-    }
+    return policy::scope_to_string(scope);
   }
 
   /**
