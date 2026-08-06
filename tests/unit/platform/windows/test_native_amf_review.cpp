@@ -495,10 +495,11 @@ namespace {
     amf::lifecycle::native_runtime_gate_t gate;
     if (!gate.try_begin_initialization()) return false;
     const auto start = std::chrono::steady_clock::now();
-    const bool entered = gate.begin_teardown_until(start + 2ms);
+    const auto admission = gate.begin_teardown_until(start + 2ms);
     const auto elapsed = std::chrono::steady_clock::now() - start;
     gate.cancel_initialization();
-    return !entered && elapsed < 2s && !gate.is_quarantined() &&
+    return admission == amf::lifecycle::teardown_admission_e::contended &&
+           elapsed < 2s && !gate.is_quarantined() &&
            gate.runtime_is_idle();
   }
 
