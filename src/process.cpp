@@ -41,8 +41,11 @@
 #include <openssl/sha.h>
 
 // local includes
+#include "app_framegen_config.h"
+#include "app_catalog_policy.h"
 #include "config.h"
 #include "crypto.h"
+#include "deferred_action.h"
 #ifdef _WIN32
   #include "display_helper_integration.h"
 #endif
@@ -853,19 +856,19 @@ namespace proc {
 #ifdef _WIN32
   std::atomic<VDISPLAY::DRIVER_STATUS> vDisplayDriverStatus {VDISPLAY::DRIVER_STATUS::UNKNOWN};
   namespace {
-    std::atomic_bool deferred_display_revert {false};
+    lifecycle::deferred_action_t deferred_display_revert;
   }
 
   void defer_display_revert() {
-    deferred_display_revert.store(true, std::memory_order_release);
+    deferred_display_revert.defer();
   }
 
   bool consume_deferred_display_revert() {
-    return deferred_display_revert.exchange(false, std::memory_order_acq_rel);
+    return deferred_display_revert.consume();
   }
 
   void clear_deferred_display_revert() {
-    deferred_display_revert.store(false, std::memory_order_release);
+    deferred_display_revert.clear();
   }
 
   void onVDisplayWatchdogFailed() {
@@ -2319,79 +2322,30 @@ namespace proc {
    * @return true if the file has a valid PNG signature, false otherwise.
    */
   bool check_valid_png(const std::filesystem::path &path) {
-    // PNG signature as defined in PNG specification
-    // http://www.libpng.org/pub/png/spec/1.2/PNG-Structure.html
-    static constexpr std::array<unsigned char, 8> PNG_SIGNATURE = {
-      0x89,
-      0x50,
-      0x4E,
-      0x47,
-      0x0D,
-      0x0A,
-      0x1A,
-      0x0A
-    };
-
     std::ifstream file(path, std::ios::binary);
     if (!file) {
       return false;
     }
-
-    std::array<unsigned char, 8> header;
-    file.read(reinterpret_cast<char *>(header.data()), 8);
-
-    if (file.gcount() != 8) {
-      return false;
-    }
-
-    return header == PNG_SIGNATURE;
+    std::array<std::uint8_t, 8> header {};
+    file.read(reinterpret_cast<char *>(header.data()), static_cast<std::streamsize>(header.size()));
+    return file.gcount() == static_cast<std::streamsize>(header.size()) && catalog::has_png_signature(header);
   }
 
   std::string validate_app_image_path(std::string app_image_path) {
-    if (app_image_path.empty()) {
-      return DEFAULT_APP_IMAGE_PATH;
-    }
-
-    // get the image extension and convert it to lowercase
-    auto image_extension = std::filesystem::path(app_image_path).extension().string();
-    boost::to_lower(image_extension);
-
-    // return the default box image if the extension is not "png"
-    if (image_extension != ".png") {
-      return DEFAULT_APP_IMAGE_PATH;
-    }
-
-    // check if image is in assets directory
-    if (auto full_image_path = std::filesystem::path(SUNSHINE_ASSETS_DIR) / app_image_path; std::filesystem::exists(full_image_path)) {
-      // Validate PNG signature
-      if (!check_valid_png(full_image_path)) {
-        BOOST_LOG(warning) << "Invalid PNG file at path ["sv << full_image_path << ']';
-        return DEFAULT_APP_IMAGE_PATH;
+    const auto reader = [](const std::string &path) -> std::optional<catalog::byte_buffer_t> {
+      std::ifstream file(path, std::ios::binary);
+      if (!file) {
+        return std::nullopt;
       }
-      return full_image_path.string();
-    }
-
-    if (app_image_path == "./assets/steam.png") {
-      // handle old default steam image definition
-      return SUNSHINE_ASSETS_DIR "/steam.png";
-    }
-
-    // check if specified image exists
-    if (std::error_code code; !std::filesystem::exists(app_image_path, code)) {
-      // return default box image if image does not exist
-      BOOST_LOG(warning) << "Couldn't find app image at path ["sv << app_image_path << ']';
-      return DEFAULT_APP_IMAGE_PATH;
-    }
-
-    // Validate PNG signature
-    if (!check_valid_png(app_image_path)) {
-      BOOST_LOG(warning) << "Invalid PNG file at path ["sv << app_image_path << ']';
-      return DEFAULT_APP_IMAGE_PATH;
-    }
-
-    // image is a png, and not in assets directory
-    // return only "content-type" http header compatible image type
-    return app_image_path;
+      return catalog::byte_buffer_t {
+        std::istreambuf_iterator<char> {file},
+        std::istreambuf_iterator<char> {}};
+    };
+    return catalog::validate_image_path(
+      std::move(app_image_path),
+      SUNSHINE_ASSETS_DIR,
+      DEFAULT_APP_IMAGE_PATH,
+      reader);
   }
 
   std::optional<std::string> calculate_sha256(const std::string &filename) {
@@ -2435,11 +2389,7 @@ namespace proc {
     return result.checksum();
   }
 
-  struct app_id_alias_state_t {
-    std::string current_id;
-    std::string cover_fingerprint;
-    std::set<std::string> aliases;
-  };
+  using app_id_alias_state_t = catalog::alias_state_t;
 
   std::string calculate_numeric_id_from_parts(const std::vector<std::string> &parts, int index) {
     std::stringstream ss;
@@ -2459,10 +2409,7 @@ namespace proc {
   }
 
   std::tuple<std::string, std::string> calculate_cover_versioned_app_id(const std::string &app_uuid, const std::string &cover_fingerprint, int index) {
-    std::vector<std::string> parts {app_uuid, "\n", cover_fingerprint};
-    auto id_no_index = calculate_numeric_id_from_parts(parts);
-    auto id_with_index = calculate_numeric_id_from_parts(parts, index);
-    return std::make_tuple(id_no_index, id_with_index);
+    return catalog::calculate_versioned_ids(app_uuid, cover_fingerprint, index);
   }
 
   std::string calculate_app_cover_fingerprint(std::string app_image_path) {
@@ -2594,67 +2541,21 @@ namespace proc {
     std::set<std::string> &active_uuids,
     bool &alias_state_changed
   ) {
-    const auto legacy_ids = calculate_app_id(app_name, ctx.uuid, ctx.image_path, index);
+    catalog::app_identity_t identity;
+    identity.name = app_name;
+    identity.uuid = ctx.uuid;
     if (ctx.uuid.empty()) {
-      if (ids.count(std::get<0>(legacy_ids)) == 0) {
-        ctx.id = std::get<0>(legacy_ids);
-      } else {
-        ctx.id = std::get<1>(legacy_ids);
+      const auto validated = validate_app_image_path(ctx.image_path);
+      if (validated != DEFAULT_APP_IMAGE_PATH) {
+        identity.legacy_image_identity = calculate_sha256(validated).value_or(validated);
       }
-      ids.insert(ctx.id);
-      return;
+    } else {
+      identity.art_version = calculate_app_cover_fingerprint(ctx.image_path);
     }
-
-    active_uuids.insert(ctx.uuid);
-    ctx.art_version = calculate_app_cover_fingerprint(ctx.image_path);
-
-    auto [state_iter, inserted] = alias_state.try_emplace(
-      ctx.uuid,
-      app_id_alias_state_t {
-        std::get<0>(legacy_ids),
-        ctx.art_version,
-        {}
-      }
-    );
-    auto &state = state_iter->second;
-    if (inserted) {
-      alias_state_changed = true;
-    }
-
-    if (state.cover_fingerprint.empty()) {
-      state.cover_fingerprint = ctx.art_version;
-      alias_state_changed = true;
-    }
-    if (state.current_id.empty()) {
-      state.current_id = std::get<0>(legacy_ids);
-      alias_state_changed = true;
-    }
-
-    if (state.cover_fingerprint != ctx.art_version) {
-      const auto previous_current_id = state.current_id;
-      const auto versioned_ids = calculate_cover_versioned_app_id(ctx.uuid, ctx.art_version, index);
-      state.current_id = ids.count(std::get<0>(versioned_ids)) == 0 ? std::get<0>(versioned_ids) : std::get<1>(versioned_ids);
-      state.cover_fingerprint = ctx.art_version;
-      remember_alias(state, previous_current_id);
-      remember_alias(state, std::get<0>(legacy_ids));
-      alias_state_changed = true;
-    }
-
-    if (ids.count(state.current_id) != 0) {
-      BOOST_LOG(warning) << "App ID collision for UUID ["sv << ctx.uuid << "] and ID [" << state.current_id << "]; assigning indexed compatibility ID.";
-      remember_alias(state, state.current_id);
-      const auto versioned_ids = calculate_cover_versioned_app_id(ctx.uuid, ctx.art_version, index);
-      if (ids.count(std::get<1>(versioned_ids)) == 0) {
-        state.current_id = std::get<1>(versioned_ids);
-      } else {
-        state.current_id = std::get<1>(legacy_ids);
-      }
-      alias_state_changed = true;
-    }
-
-    ctx.id = state.current_id;
-    ctx.id_aliases.assign(state.aliases.begin(), state.aliases.end());
-    ids.insert(ctx.id);
+    catalog::assign_compatible_id(identity, index, ids, alias_state, active_uuids, alias_state_changed);
+    ctx.id = std::move(identity.id);
+    ctx.art_version = std::move(identity.art_version);
+    ctx.id_aliases = std::move(identity.aliases);
   }
 
   void prune_and_filter_app_id_alias_state(
@@ -2663,109 +2564,25 @@ namespace proc {
     const std::set<std::string> &active_uuids,
     bool &alias_state_changed
   ) {
-    for (auto it = alias_state.begin(); it != alias_state.end();) {
-      if (active_uuids.count(it->first) == 0) {
-        it = alias_state.erase(it);
-        alias_state_changed = true;
-      } else {
-        ++it;
-      }
-    }
-
-    std::set<std::string> current_ids;
-    std::map<std::string, int> alias_counts;
+    std::vector<catalog::app_identity_t> identities;
+    identities.reserve(apps.size());
     for (const auto &app : apps) {
-      if (!app.id.empty()) {
-        current_ids.insert(app.id);
-      }
-      if (app.uuid.empty()) {
-        continue;
-      }
-      for (const auto &alias : app.id_aliases) {
-        if (!alias.empty()) {
-          ++alias_counts[alias];
-        }
-      }
+      identities.push_back({app.name, app.uuid, {}, app.art_version, app.id, app.id_aliases});
     }
-
-    for (auto &app : apps) {
-      if (app.uuid.empty()) {
-        continue;
-      }
-
-      std::vector<std::string> filtered_aliases;
-      std::set<std::string> seen_aliases;
-      for (const auto &alias : app.id_aliases) {
-        if (alias.empty() || alias == app.id || !seen_aliases.insert(alias).second) {
-          alias_state_changed = true;
-          continue;
-        }
-        if (current_ids.count(alias) != 0) {
-          BOOST_LOG(warning) << "Dropping app ID alias ["sv << alias << "] for UUID [" << app.uuid << "] because it collides with a current app ID.";
-          alias_state_changed = true;
-          continue;
-        }
-        if (alias_counts[alias] > 1) {
-          BOOST_LOG(warning) << "Dropping app ID alias ["sv << alias << "] for UUID [" << app.uuid << "] because it is shared by multiple apps.";
-          alias_state_changed = true;
-          continue;
-        }
-        filtered_aliases.push_back(alias);
-      }
-
-      if (filtered_aliases != app.id_aliases) {
-        app.id_aliases = std::move(filtered_aliases);
-      }
-
-      if (auto state_iter = alias_state.find(app.uuid); state_iter != alias_state.end()) {
-        state_iter->second.current_id = app.id;
-        state_iter->second.cover_fingerprint = app.art_version;
-        state_iter->second.aliases = std::set<std::string>(app.id_aliases.begin(), app.id_aliases.end());
-      }
+    catalog::prune_and_filter_aliases(identities, alias_state, active_uuids, alias_state_changed);
+    for (std::size_t i = 0; i < apps.size(); ++i) {
+      apps[i].id_aliases = std::move(identities[i].aliases);
     }
   }
 
   std::optional<ctx_t> resolve_app_from_snapshot(const std::vector<ctx_t> &apps, const std::string &appid, const std::string &appuuid) {
-    if (!appuuid.empty()) {
-      auto iter = std::find_if(apps.begin(), apps.end(), [&appuuid](const auto &app) {
-        return app.uuid == appuuid;
-      });
-      if (iter != apps.end()) {
-        return *iter;
-      }
-    }
-
-    std::string appid_trimmed = appid;
-    boost::algorithm::trim(appid_trimmed);
-    if (appid_trimmed.empty() || appid_trimmed == "0") {
-      return std::nullopt;
-    }
-
-    auto current_iter = std::find_if(apps.begin(), apps.end(), [&appid_trimmed](const auto &app) {
-      return app.id == appid_trimmed;
-    });
-    if (current_iter != apps.end()) {
-      return *current_iter;
-    }
-
-    const ctx_t *alias_match = nullptr;
+    std::vector<catalog::app_identity_t> identities;
+    identities.reserve(apps.size());
     for (const auto &app : apps) {
-      if (std::find(app.id_aliases.begin(), app.id_aliases.end(), appid_trimmed) == app.id_aliases.end()) {
-        continue;
-      }
-      if (alias_match) {
-        BOOST_LOG(warning) << "Ignoring ambiguous app ID alias ["sv << appid_trimmed << "] shared by UUIDs ["
-                           << alias_match->uuid << "] and [" << app.uuid << "].";
-        return std::nullopt;
-      }
-      alias_match = &app;
+      identities.push_back({app.name, app.uuid, {}, app.art_version, app.id, app.id_aliases});
     }
-
-    if (alias_match) {
-      return *alias_match;
-    }
-
-    return std::nullopt;
+    const auto resolved = catalog::resolve_app(identities, appid, appuuid);
+    return resolved ? std::optional<ctx_t> {apps[*resolved]} : std::nullopt;
   }
 
   std::tuple<std::string, std::string> calculate_app_id(const std::string &app_name, const std::string &app_uuid, std::string app_image_path, int index) {
@@ -2790,20 +2607,8 @@ namespace proc {
       }
     }
 
-    // Create combined strings for hash
-    std::stringstream ss;
-    for_each(to_hash.begin(), to_hash.end(), [&ss](const std::string &s) {
-      ss << s;
-    });
-    auto input_no_index = ss.str();
-    ss << index;
-    auto input_with_index = ss.str();
-
-    // CRC32 then truncate to signed 32-bit range due to client limitations
-    auto id_no_index = std::to_string(abs((int32_t) calculate_crc32(input_no_index)));
-    auto id_with_index = std::to_string(abs((int32_t) calculate_crc32(input_with_index)));
-
-    return std::make_tuple(id_no_index, id_with_index);
+    const std::string legacy_image_identity = to_hash.size() > 1 ? to_hash[1] : std::string {};
+    return catalog::calculate_ids(app_name, app_uuid, legacy_image_identity, index);
   }
 
   std::optional<proc::proc_t> parse(const std::string &file_name) {
@@ -3118,10 +2923,25 @@ namespace proc {
         ctx.wait_all = wait_all.value_or(true);
         // Default graceful-exit timeout: 10s (Playnite-managed apps are written with this value)
         ctx.exit_timeout = std::chrono::seconds {exit_timeout.value_or(10)};
-        const bool frame_generation_capture_fix_enabled =
-          !frame_generation_explicitly_off && (gen1_framegen_fix.value_or(false) || gen2_framegen_fix.value_or(false));
-        ctx.gen1_framegen_fix = frame_generation_capture_fix_enabled;
-        ctx.gen2_framegen_fix = false;
+        bool used_pure_framegen_parser = false;
+        if (json_tree.is_object() && json_tree.contains("apps") && json_tree["apps"].is_array()) {
+          const auto &json_apps = json_tree["apps"];
+          if (json_index >= 0 && json_index < static_cast<int>(json_apps.size())) {
+            if (const auto parsed_framegen = app_config::parse_framegen_json(json_apps[json_index].dump())) {
+              ctx.frame_generation_enabled = parsed_framegen->enabled;
+              ctx.gen1_framegen_fix = parsed_framegen->gen1_capture_fix;
+              ctx.gen2_framegen_fix = parsed_framegen->gen2_capture_fix;
+              ctx.lossless_scaling_framegen = parsed_framegen->lossless_scaling_framegen;
+              ctx.frame_generation_provider = parsed_framegen->provider;
+              used_pure_framegen_parser = true;
+            }
+          }
+        }
+        if (!used_pure_framegen_parser) {
+          ctx.gen1_framegen_fix =
+            !frame_generation_explicitly_off && (gen1_framegen_fix.value_or(false) || gen2_framegen_fix.value_or(false));
+          ctx.gen2_framegen_fix = false;
+        }
         if (!ctx.lossless_scaling_framegen) {
           ctx.lossless_scaling_target_fps.reset();
           ctx.lossless_scaling_rtss_limit.reset();
