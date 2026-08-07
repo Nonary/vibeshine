@@ -24,6 +24,7 @@ extern "C" {
 #include "config.h"
 #include "globals.h"
 #include "input.h"
+#include "input_validation_policy.h"
 #include "logging.h"
 #include "mouse_input.h"
 #include "platform/common.h"
@@ -226,91 +227,6 @@ namespace input {
     int32_t accumulated_vscroll_delta;
     int32_t accumulated_hscroll_delta;
   };
-
-  struct validated_input_packet_t {
-    std::uint32_t magic = 0;
-    std::size_t total_size = 0;
-  };
-
-  struct packet_size_bounds_t {
-    std::size_t min_total_size = 0;
-    std::size_t max_total_size = 0;
-  };
-
-  std::optional<packet_size_bounds_t> packet_size_bounds(std::uint32_t magic) {
-    switch (magic) {
-      case MOUSE_MOVE_REL_MAGIC_GEN5:
-        return packet_size_bounds_t {sizeof(NV_REL_MOUSE_MOVE_PACKET), sizeof(NV_REL_MOUSE_MOVE_PACKET)};
-      case MOUSE_MOVE_ABS_MAGIC:
-        return packet_size_bounds_t {sizeof(NV_ABS_MOUSE_MOVE_PACKET), sizeof(NV_ABS_MOUSE_MOVE_PACKET)};
-      case MOUSE_BUTTON_DOWN_EVENT_MAGIC_GEN5:
-      case MOUSE_BUTTON_UP_EVENT_MAGIC_GEN5:
-        return packet_size_bounds_t {sizeof(NV_MOUSE_BUTTON_PACKET), sizeof(NV_MOUSE_BUTTON_PACKET)};
-      case SCROLL_MAGIC_GEN5:
-        return packet_size_bounds_t {sizeof(NV_SCROLL_PACKET), sizeof(NV_SCROLL_PACKET)};
-      case SS_HSCROLL_MAGIC:
-        return packet_size_bounds_t {sizeof(SS_HSCROLL_PACKET), sizeof(SS_HSCROLL_PACKET)};
-      case KEY_DOWN_EVENT_MAGIC:
-      case KEY_UP_EVENT_MAGIC:
-        return packet_size_bounds_t {sizeof(NV_KEYBOARD_PACKET), sizeof(NV_KEYBOARD_PACKET)};
-      case UTF8_TEXT_EVENT_MAGIC:
-        return packet_size_bounds_t {sizeof(NV_INPUT_HEADER), sizeof(NV_UNICODE_PACKET)};
-      case MULTI_CONTROLLER_MAGIC_GEN5:
-        return packet_size_bounds_t {sizeof(NV_MULTI_CONTROLLER_PACKET), sizeof(NV_MULTI_CONTROLLER_PACKET)};
-      case SS_TOUCH_MAGIC:
-        return packet_size_bounds_t {sizeof(SS_TOUCH_PACKET), sizeof(SS_TOUCH_PACKET)};
-      case SS_PEN_MAGIC:
-        return packet_size_bounds_t {sizeof(SS_PEN_PACKET), sizeof(SS_PEN_PACKET)};
-      case SS_CONTROLLER_ARRIVAL_MAGIC:
-        return packet_size_bounds_t {sizeof(SS_CONTROLLER_ARRIVAL_PACKET), sizeof(SS_CONTROLLER_ARRIVAL_PACKET)};
-      case SS_CONTROLLER_TOUCH_MAGIC:
-        return packet_size_bounds_t {sizeof(SS_CONTROLLER_TOUCH_PACKET), sizeof(SS_CONTROLLER_TOUCH_PACKET)};
-      case SS_CONTROLLER_MOTION_MAGIC:
-        return packet_size_bounds_t {sizeof(SS_CONTROLLER_MOTION_PACKET), sizeof(SS_CONTROLLER_MOTION_PACKET)};
-      case SS_CONTROLLER_BATTERY_MAGIC:
-        return packet_size_bounds_t {sizeof(SS_CONTROLLER_BATTERY_PACKET), sizeof(SS_CONTROLLER_BATTERY_PACKET)};
-      default:
-        return std::nullopt;
-    }
-  }
-
-  std::optional<validated_input_packet_t> validate_packet(const std::vector<std::uint8_t> &input_data) {
-    const auto payload = std::string_view {
-      reinterpret_cast<const char *>(input_data.data()),
-      input_data.size()
-    };
-    const auto declared_size = util::packet::read_u32_be(payload, 0);
-    const auto magic = util::packet::read_u32_le(payload, sizeof(std::uint32_t));
-    if (!declared_size || !magic) {
-      BOOST_LOG(warning) << "Ignoring short input packet (" << input_data.size() << " bytes)";
-      return std::nullopt;
-    }
-
-    const auto total_size = static_cast<std::size_t>(*declared_size) + sizeof(std::uint32_t);
-    if (total_size != input_data.size()) {
-      BOOST_LOG(warning) << "Ignoring malformed input packet for magic 0x" << util::hex(*magic).to_string_view()
-                         << " (declared=" << total_size << ", actual=" << input_data.size() << ')';
-      return std::nullopt;
-    }
-
-    const auto bounds = packet_size_bounds(*magic);
-    if (!bounds) {
-      BOOST_LOG(warning) << "Ignoring unknown input packet magic 0x" << util::hex(*magic).to_string_view();
-      return std::nullopt;
-    }
-
-    if (total_size < bounds->min_total_size || total_size > bounds->max_total_size) {
-      auto expected_size = std::to_string(bounds->min_total_size);
-      if (bounds->min_total_size != bounds->max_total_size) {
-        expected_size += "-" + std::to_string(bounds->max_total_size);
-      }
-      BOOST_LOG(warning) << "Ignoring malformed input packet for magic 0x" << util::hex(*magic).to_string_view()
-                         << " (size=" << total_size << ", expected " << expected_size << ')';
-      return std::nullopt;
-    }
-
-    return validated_input_packet_t {*magic, total_size};
-  }
 
   /**
    * @brief Apply shortcut based on VKEY
@@ -1037,29 +953,27 @@ namespace input {
    * @return The monitor-local touch port, or std::nullopt if dimensions are invalid.
    */
   std::optional<platf::touch_port_t> monitor_touch_port(const input::touch_port_t &touch_port, std::pair<float, float> &coords) {
-    const float monitor_logical_w = (touch_port.width * touch_port.scalar_inv) / touch_port.scalar_tpcoords;
-    const float monitor_logical_h = (touch_port.height * touch_port.scalar_inv) / touch_port.scalar_tpcoords;
-    if (monitor_logical_w <= 0.0f || monitor_logical_h <= 0.0f) {
+    const auto normalized = validation::normalize_touch_port(
+      {
+        touch_port.offset_x,
+        touch_port.offset_y,
+        touch_port.width,
+        touch_port.height,
+        touch_port.scalar_inv,
+        touch_port.scalar_tpcoords,
+      },
+      coords
+    );
+    if (!normalized) {
       BOOST_LOG(warning) << "Ignoring touch/pen input due to invalid logical touch dimensions"sv;
       return std::nullopt;
     }
 
-    // Linux client_to_touchport() returns desktop-relative coordinates for
-    // inputtino. Windows keeps monitor-local coordinates here and applies the
-    // monitor offset when injecting the pointer.
-#ifdef __linux__
-    coords.first = (coords.first - touch_port.offset_x) / monitor_logical_w;
-    coords.second = (coords.second - touch_port.offset_y) / monitor_logical_h;
-#else
-    coords.first = coords.first / monitor_logical_w;
-    coords.second = coords.second / monitor_logical_h;
-#endif
-
     return platf::touch_port_t {
-      touch_port.offset_x,
-      touch_port.offset_y,
-      static_cast<int>(monitor_logical_w),
-      static_cast<int>(monitor_logical_h)
+      normalized->offset_x,
+      normalized->offset_y,
+      normalized->width,
+      normalized->height,
     };
   }
 
@@ -1777,7 +1691,31 @@ namespace input {
    */
   void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&input_data) {
     bool schedule_input_task = false;
-    if (!validate_packet(input_data)) {
+    const auto validation_result = validation::validate_packet(input_data);
+    if (!validation_result) {
+      switch (validation_result.error) {
+        case validation::packet_validation_error_e::short_header:
+          BOOST_LOG(warning) << "Ignoring short input packet (" << input_data.size() << " bytes)";
+          break;
+        case validation::packet_validation_error_e::declared_size_mismatch:
+          BOOST_LOG(warning) << "Ignoring malformed input packet for magic 0x" << util::hex(validation_result.magic).to_string_view()
+                             << " (declared=" << validation_result.total_size << ", actual=" << input_data.size() << ')';
+          break;
+        case validation::packet_validation_error_e::unknown_magic:
+          BOOST_LOG(warning) << "Ignoring unknown input packet magic 0x" << util::hex(validation_result.magic).to_string_view();
+          break;
+        case validation::packet_validation_error_e::invalid_size: {
+          auto expected_size = std::to_string(validation_result.expected_size.min_total_size);
+          if (validation_result.expected_size.min_total_size != validation_result.expected_size.max_total_size) {
+            expected_size += "-" + std::to_string(validation_result.expected_size.max_total_size);
+          }
+          BOOST_LOG(warning) << "Ignoring malformed input packet for magic 0x" << util::hex(validation_result.magic).to_string_view()
+                             << " (size=" << validation_result.total_size << ", expected " << expected_size << ')';
+          break;
+        }
+        case validation::packet_validation_error_e::none:
+          break;
+      }
       return;
     }
 
@@ -1790,16 +1728,6 @@ namespace input {
       task_pool.push(passthrough_next_message, input);
     }
   }
-
-#ifdef SUNSHINE_TESTS
-  bool validate_packet_for_tests(const std::vector<std::uint8_t> &input_data) {
-    return validate_packet(input_data).has_value();
-  }
-
-  std::optional<platf::touch_port_t> monitor_touch_port_for_tests(const input::touch_port_t &touch_port, std::pair<float, float> &coords) {
-    return monitor_touch_port(touch_port, coords);
-  }
-#endif
 
   void reset(std::shared_ptr<input_t> &input) {
     task_pool.cancel(key_press_repeat_id);
