@@ -223,7 +223,7 @@ namespace {
            h264.minimum_reference_frames == 2 && h264.disable_ltr &&
            h264_odd.blocks_per_slot && *h264_odd.blocks_per_slot == 28 &&
            hevc.enabled && hevc.blocks_per_slot && *hevc.blocks_per_slot == 2 &&
-           hevc.minimum_reference_frames == 0 && !hevc.disable_ltr &&
+           hevc.minimum_reference_frames == 0 && hevc.disable_ltr &&
            av1.enabled && !av1.blocks_per_slot &&
            av1.av1_mode && *av1.av1_mode == amf::lifecycle::av1_continuous_intra_refresh_mode &&
            av1.av1_cycle_frames &&
