@@ -46,6 +46,7 @@
 #include "file_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
+#include "http_pairing_policy.h"
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
@@ -80,7 +81,7 @@ namespace nvhttp {
   crypto::cert_chain_t cert_chain;
 
   std::string cert_subject_name_for_log(const crypto::x509_t &cert) {
-    auto subject_name = crypto::subject_name(cert.get());
+    auto subject_name = pairing_policy::certificate_subject_name(crypto::subject_name(cert.get()));
     if (subject_name.empty()) {
       return "unknown"s;
     }
@@ -1431,25 +1432,11 @@ namespace nvhttp {
   }
 
   bool is_placeholder_client_name(const std::string &name) {
-    const auto trimmed = boost::algorithm::trim_copy(name);
-    return boost::iequals(trimmed, "self");
+    return pairing_policy::is_placeholder_client_name(name);
   }
 
   std::string display_client_name_for_session(const std::string &paired_name, const std::string &device_name, const std::string &host_name) {
-    const auto paired = boost::algorithm::trim_copy(paired_name);
-    const auto device = boost::algorithm::trim_copy(device_name);
-    const auto host = boost::algorithm::trim_copy(host_name);
-
-    if (!paired.empty() && !is_placeholder_client_name(paired)) {
-      return paired;
-    }
-    if (!device.empty() && !is_placeholder_client_name(device)) {
-      return device;
-    }
-    if (!host.empty() && !is_placeholder_client_name(host)) {
-      return host;
-    }
-    return "Sunshine"s;
+    return pairing_policy::display_client_name(paired_name, device_name, host_name);
   }
 
   void add_authorized_client(const std::string &name, std::string &&cert) {
@@ -2058,14 +2045,13 @@ namespace nvhttp {
   }
 
   void getservercert(pair_session_t &sess, pt::ptree &tree, const std::string &pin) {
-    if (sess.last_phase != PAIR_PHASE::NONE) {
-      fail_pair(sess, tree, "Out of order call to getservercert");
-      return;
-    }
-    sess.last_phase = PAIR_PHASE::GETSERVERCERT;
-
-    if (sess.async_insert_pin.salt.size() < 32) {
-      fail_pair(sess, tree, "Salt too short");
+    const auto decision = pairing_policy::begin_get_server_certificate(
+      {static_cast<pairing_policy::phase_e>(sess.last_phase), static_cast<bool>(sess.cipher_key), !sess.serversecret.empty()},
+      sess.async_insert_pin.salt.size()
+    );
+    sess.last_phase = static_cast<PAIR_PHASE>(decision.next_phase);
+    if (!decision.accepted) {
+      fail_pair(sess, tree, std::string {decision.failure_message});
       return;
     }
 
@@ -2082,14 +2068,12 @@ namespace nvhttp {
   }
 
   void clientchallenge(pair_session_t &sess, pt::ptree &tree, const std::string &challenge) {
-    if (sess.last_phase != PAIR_PHASE::GETSERVERCERT) {
-      fail_pair(sess, tree, "Out of order call to clientchallenge");
-      return;
-    }
-    sess.last_phase = PAIR_PHASE::CLIENTCHALLENGE;
-
-    if (!sess.cipher_key) {
-      fail_pair(sess, tree, "Cipher key not set");
+    const auto decision = pairing_policy::begin_client_challenge(
+      {static_cast<pairing_policy::phase_e>(sess.last_phase), static_cast<bool>(sess.cipher_key), !sess.serversecret.empty()}
+    );
+    sess.last_phase = static_cast<PAIR_PHASE>(decision.next_phase);
+    if (!decision.accepted) {
+      fail_pair(sess, tree, std::string {decision.failure_message});
       return;
     }
     crypto::cipher::ecb_t cipher(*sess.cipher_key, false);
@@ -2125,14 +2109,12 @@ namespace nvhttp {
   }
 
   void serverchallengeresp(pair_session_t &sess, pt::ptree &tree, const std::string &encrypted_response) {
-    if (sess.last_phase != PAIR_PHASE::CLIENTCHALLENGE) {
-      fail_pair(sess, tree, "Out of order call to serverchallengeresp");
-      return;
-    }
-    sess.last_phase = PAIR_PHASE::SERVERCHALLENGERESP;
-
-    if (!sess.cipher_key || sess.serversecret.empty()) {
-      fail_pair(sess, tree, "Cipher key or serversecret not set");
+    const auto decision = pairing_policy::begin_server_challenge_response(
+      {static_cast<pairing_policy::phase_e>(sess.last_phase), static_cast<bool>(sess.cipher_key), !sess.serversecret.empty()}
+    );
+    sess.last_phase = static_cast<PAIR_PHASE>(decision.next_phase);
+    if (!decision.accepted) {
+      fail_pair(sess, tree, std::string {decision.failure_message});
       return;
     }
 
@@ -2154,16 +2136,15 @@ namespace nvhttp {
   }
 
   void clientpairingsecret(pair_session_t &sess, std::shared_ptr<safe::queue_t<crypto::x509_t>> &add_cert, pt::ptree &tree, const std::string &client_pairing_secret) {
-    if (sess.last_phase != PAIR_PHASE::SERVERCHALLENGERESP) {
-      fail_pair(sess, tree, "Out of order call to clientpairingsecret");
-      return;
-    }
-    sess.last_phase = PAIR_PHASE::CLIENTPAIRINGSECRET;
-
     auto &client = sess.client;
 
-    if (client_pairing_secret.size() <= 16) {
-      fail_pair(sess, tree, "Client pairing secret too short");
+    const auto begin_decision = pairing_policy::begin_client_pairing_secret(
+      {static_cast<pairing_policy::phase_e>(sess.last_phase), static_cast<bool>(sess.cipher_key), !sess.serversecret.empty()},
+      client_pairing_secret.size()
+    );
+    sess.last_phase = static_cast<PAIR_PHASE>(begin_decision.next_phase);
+    if (!begin_decision.accepted) {
+      fail_pair(sess, tree, std::string {begin_decision.failure_message});
       return;
     }
 
@@ -2171,30 +2152,40 @@ namespace nvhttp {
     std::string_view sign {client_pairing_secret.data() + secret.size(), client_pairing_secret.size() - secret.size()};
 
     auto x509 = crypto::x509(client.cert);
-    if (!x509) {
-      fail_pair(sess, tree, "Invalid client certificate");
-      return;
+    std::string_view x509_sign;
+    crypto::sha256_t hash {};
+    bool same_hash = false;
+    bool verify = false;
+    if (x509 && client_pairing_secret.size() > 16) {
+      x509_sign = crypto::signature(x509);
+      std::string data;
+      data.reserve(sess.serverchallenge.size() + x509_sign.size() + secret.size());
+
+      data.insert(std::end(data), std::begin(sess.serverchallenge), std::end(sess.serverchallenge));
+      data.insert(std::end(data), std::begin(x509_sign), std::end(x509_sign));
+      data.insert(std::end(data), std::begin(secret), std::end(secret));
+
+      hash = crypto::hash(data);
+      same_hash = hash.size() == sess.clienthash.size() && std::equal(hash.begin(), hash.end(), sess.clienthash.begin());
+      verify = crypto::verify256(crypto::x509(client.cert), secret, sign);
     }
-    auto x509_sign = crypto::signature(x509);
 
-    std::string data;
-    data.reserve(sess.serverchallenge.size() + x509_sign.size() + secret.size());
-
-    data.insert(std::end(data), std::begin(sess.serverchallenge), std::end(sess.serverchallenge));
-    data.insert(std::end(data), std::begin(x509_sign), std::end(x509_sign));
-    data.insert(std::end(data), std::begin(secret), std::end(secret));
-
-    auto hash = crypto::hash(data);
-
-    // if hash not correct, probably MITM
-    bool same_hash = hash.size() == sess.clienthash.size() && std::equal(hash.begin(), hash.end(), sess.clienthash.begin());
-    auto verify = crypto::verify256(crypto::x509(client.cert), secret, sign);
-    if (same_hash && verify) {
+    const auto decision = pairing_policy::decide_client_pairing_secret(
+      {static_cast<pairing_policy::phase_e>(sess.last_phase), static_cast<bool>(sess.cipher_key), !sess.serversecret.empty()},
+      static_cast<bool>(x509),
+      same_hash,
+      verify
+    );
+    sess.last_phase = static_cast<PAIR_PHASE>(decision.next_phase);
+    if (decision.accepted) {
       tree.put("root.paired", 1);
       add_cert->raise(crypto::x509(client.cert));
 
       // The client is now successfully paired and will be authorized to connect
       add_authorized_client(client.name, std::move(client.cert));
+    } else if (!decision.failure_message.empty()) {
+      fail_pair(sess, tree, std::string {decision.failure_message});
+      return;
     } else {
       tree.put("root.paired", 0);
     }
