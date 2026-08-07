@@ -84,3 +84,11 @@ include(${CMAKE_MODULE_PATH}/targets/common.cmake)
 
 # packaging
 include(${CMAKE_MODULE_PATH}/packaging/common.cmake)
+
+# Unit tests are part of every project build. Configure packaging first so its
+# globally guarded contracts are initialized in the project scope before test
+# targets consume them.
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
-# This is deliberately a standalone entry point. Normal Sunshine configuration
-# continues to force BUILD_TESTS=OFF and does not add this directory.
+# This directory is also usable as a standalone entry point for focused test
+# work, and is included by the normal project build when BUILD_TESTS is enabled.
 project(VibeshineTests LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -416,6 +416,7 @@ if(WIN32)
             "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_request_policy.cpp"
             "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_session_deferral.cpp"
         LINK_LIBRARIES sunshine_test_displaydevice_headers)
+    sunshine_register_component(NAME test_component_startup_display_policy TEST_SOURCE unit/test_startup_display_policy.cpp)
     sunshine_register_component(NAME test_component_display_helper_v2_async_dispatcher TEST_SOURCE unit/test_display_helper_v2_async_dispatcher.cpp
         PRODUCT_SOURCES
             "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/diagnostics.cpp"
