@@ -3010,10 +3010,6 @@ namespace nvhttp {
           launch_session->hdr_profile ? launch_session->hdr_profile->c_str() : nullptr,
           active_output.empty() ? nullptr : active_output.c_str()
         );
-      } else if (launch_session->virtual_display_failed &&
-                 launch_session->hdr_profile &&
-                 !launch_session->hdr_profile->empty()) {
-        BOOST_LOG(info) << "HDR profile: virtual display initialization failed; not applying the virtual display's profile to the physical fallback target.";
       }
 #else
       display_helper_integration::DisplayApplyBuilder noop_builder;
@@ -3408,10 +3404,6 @@ namespace nvhttp {
             launch_session->hdr_profile ? launch_session->hdr_profile->c_str() : nullptr,
             active_output.empty() ? nullptr : active_output.c_str()
           );
-        } else if (launch_session->virtual_display_failed &&
-                   launch_session->hdr_profile &&
-                   !launch_session->hdr_profile->empty()) {
-          BOOST_LOG(info) << "HDR profile: virtual display initialization failed; not applying the virtual display's profile to the physical fallback target.";
         }
 #else
         display_helper_integration::DisplayApplyBuilder noop_builder;
