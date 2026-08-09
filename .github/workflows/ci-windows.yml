@@ -23,10 +23,6 @@ on:
         required: false
         type: boolean
         default: false
-      build_tests:
-        required: false
-        type: boolean
-        default: true
       release_artifact_retention_days:
         required: false
         type: number
@@ -452,13 +448,13 @@ jobs:
           fi
 
           mkdir -p build
-          # Release tag builds save unsigned artifacts and rely on prior branch/PR testing; other calls retain tests.
+          # Unit tests are part of every configured project build, including release artifacts.
           cmake \
             -B build \
             -G Ninja \
             -S . \
             -DBUILD_WERROR=ON \
-            -DBUILD_TESTS=${{ inputs.build_tests && 'ON' || 'OFF' }} \
+            -DBUILD_TESTS=ON \
             -DBUILD_SUNSHINE_VIRTUAL_DISPLAY_DRIVER=OFF \
             -DBUILD_VIRTUALDISPLAY_PROBE=OFF \
             -DBUILD_VIRTUALDISPLAY_TOOLS=OFF \
