@@ -25,7 +25,10 @@ class ReleaseWorkflowSplitTest(unittest.TestCase):
         self.assertNotIn("release", jobs)
         self.assertIn("awaiting-signing", jobs)
         self.assertIn("should_release", build_inputs["build_only"])
-        self.assertNotIn("build_tests", build_inputs)
+        self.assertEqual(
+            build_inputs["build_tests"],
+            "${{ needs.release-candidate.outputs.should_release != 'true' }}",
+        )
         self.assertNotIn("require_signpath_signing", build_inputs)
         self.assertEqual(
             build_inputs["release_artifact_retention_days"],
@@ -145,7 +148,8 @@ class ReleaseWorkflowSplitTest(unittest.TestCase):
 
         self.assertIn("artifact_source_run_id", inputs)
         self.assertIn("build_only", inputs)
-        self.assertNotIn("build_tests", inputs)
+        self.assertEqual(inputs["build_tests"]["type"], "boolean")
+        self.assertEqual(inputs["build_tests"]["default"], "true")
         self.assertIn("resolve_source_artifacts", jobs)
         self.assertIn("release_artifacts", jobs)
         self.assertIn("inputs.build_only == false", jobs["sign_windows_msi"]["if"])
@@ -196,9 +200,14 @@ class ReleaseWorkflowSplitTest(unittest.TestCase):
         self.assertIn("Upload release provenance", workflow_text)
         self.assertIn("source_build_run_id", workflow_text)
         self.assertIn(
-            "-DBUILD_TESTS=ON",
+            "-DBUILD_TESTS=${{ inputs.build_tests && 'ON' || 'OFF' }}",
             workflow_text,
         )
+        options_text = (ROOT / "cmake" / "prep" / "options.cmake").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('option(BUILD_TESTS "Build unit tests." ON)', options_text)
+        self.assertNotIn("set(BUILD_TESTS", options_text)
         self.assertIn(
             '"${source_path}" != ".github/workflows/ci.yml" && "${source_path}" != ".github/workflows/ci.yml@"*',
             workflow_text,
