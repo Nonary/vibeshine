@@ -1758,21 +1758,12 @@ namespace nvhttp {
       launch_session->client_uuid = get_client_uuid_from_request(request, &launch_session->client_name);
     }
 
-    // Some launch paths may not provide a peer certificate (e.g. non-TLS resume).
-    // Fall back only when the client-provided unique ID is one of our known
-    // paired-client UUIDs. Some clients send a placeholder or host-oriented
-    // uniqueid; treating that as a per-client UUID creates a new Windows monitor
-    // identity and loses DPI/HDR calibration.
+    // A launch uniqueid is client supplied and cannot authorize a caller. The
+    // paired TLS certificate is the only identity used for a session role,
+    // per-client settings, or monitor ownership.
     const auto launch_client_uuid = resolve_known_client_uuid_from_launch_id(get_arg(args, "uniqueid", ""));
-    if (launch_session->client_uuid.empty()) {
-      launch_session->client_uuid = launch_client_uuid;
-      launch_session->client_name = client_name_for_uuid(launch_session->client_uuid);
-    } else if (!launch_client_uuid.empty() && launch_client_uuid != launch_session->client_uuid && is_placeholder_client_name(launch_session->client_name)) {
-      BOOST_LOG(warning) << "Resolved TLS client identity '" << launch_session->client_name
-                         << "' is a placeholder and conflicts with launch uniqueid; using paired client UUID "
-                         << launch_client_uuid << " for this session.";
-      launch_session->client_uuid = launch_client_uuid;
-      launch_session->client_name = client_name_for_uuid(launch_session->client_uuid);
+    if (!launch_client_uuid.empty() && launch_client_uuid != launch_session->client_uuid) {
+      BOOST_LOG(warning) << "Ignoring launch uniqueid that conflicts with the authenticated TLS client identity.";
     }
 
     auto client_name_arg = get_arg(args, "clientName", "");
@@ -2039,6 +2030,9 @@ namespace nvhttp {
       launch_session->rtsp_iv_counter = 0;
     }
     launch_session->rtsp_url_scheme = launch_session->rtsp_cipher ? "rtspenc://"s : "rtsp://"s;
+    if (request) {
+      launch_session->rtsp_source_address = request->remote_endpoint().address().to_string();
+    }
 
     // Generate the unique identifiers for this connection that we will send later during RTSP handshake
     unsigned char raw_payload[8];
@@ -2490,12 +2484,7 @@ namespace nvhttp {
 
     int pair_status = 0;
     if constexpr (std::is_same_v<SunshineHTTPS, T>) {
-      auto args = request->parse_query_string();
-      auto clientID = args.find("uniqueid"s);
-
-      if (clientID != std::end(args)) {
-        pair_status = 1;
-      }
+      pair_status = !resolve_client_identity_from_request(request).uuid.empty();
     }
 
     auto local_endpoint = request->local_endpoint();
@@ -2603,7 +2592,10 @@ namespace nvhttp {
     std::ostringstream data;
 
     pt::write_xml(data, tree);
-    response->write(data.str());
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Cache-Control", "no-store, no-cache, must-revalidate");
+    headers.emplace("Pragma", "no-cache");
+    response->write(SimpleWeb::StatusCode::success_ok, data.str(), headers);
     response->close_connection_after_response = true;
   }
 
@@ -2694,7 +2686,10 @@ namespace nvhttp {
       std::ostringstream data;
 
       pt::write_xml(data, tree);
-      response->write(data.str());
+      SimpleWeb::CaseInsensitiveMultimap headers;
+      headers.emplace("Cache-Control", "no-store, no-cache, must-revalidate");
+      headers.emplace("Pragma", "no-cache");
+      response->write(SimpleWeb::StatusCode::success_ok, data.str(), headers);
       response->close_connection_after_response = true;
     });
 
@@ -2751,6 +2746,9 @@ namespace nvhttp {
     }
   }
 
+  void resume(bool &host_audio, resp_https_t response, req_https_t request, int current_appid);
+  void cancel(resp_https_t response, req_https_t request);
+
   void launch(bool &host_audio, resp_https_t response, req_https_t request, int current_appid) {
     print_req<SunshineHTTPS>(request);
 
@@ -2791,6 +2789,13 @@ namespace nvhttp {
       return;
     }
 
+    if (resolve_client_identity_from_request(request).uuid.empty()) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 403);
+      tree.put("root.<xmlattr>.status_message", "A paired TLS client identity is required");
+      return;
+    }
+
     auto appid_str = get_arg(args, "appid", "0");
     auto appuuid_str = get_arg(args, "appuuid", "");
     // Synthetic controls are host actions, never configured applications. Do
@@ -2798,9 +2803,41 @@ namespace nvhttp {
     // an apps.json id and launch a real process.
     const auto synthetic_control = remote_session::identify(util::from_view(appid_str), appuuid_str);
     if (synthetic_control != remote_session::control_e::none) {
+      const auto identity = resolve_client_identity_from_request(request);
+      const auto active_session = proc::proc.active_session_guard();
+      const auto active_app = proc::proc.resolve_app(current_appid);
+      const remote_session::game_t game {
+        .running = current_appid > 0,
+        .owner_uuid = active_session.client_uuid,
+        .app = active_app ? remote_session::app_t {util::from_view(active_app->id), active_app->uuid, active_app->name, false} : remote_session::app_t {},
+      };
+      const remote_session::caller_t caller {
+        .uuid = identity.uuid,
+        .paired = !identity.uuid.empty(),
+        .may_view = !identity.uuid.empty(),
+        .may_launch = !identity.uuid.empty(),
+        .may_terminate = !identity.uuid.empty(),
+      };
+      const auto decision = remote_session::dispatch(caller, game, {}, synthetic_control);
+      if (!decision.allowed) {
+        tree.put("root.resume", 0);
+        tree.put("root.<xmlattr>.status_code", 403);
+        tree.put("root.<xmlattr>.status_message", "Remote session action is not permitted for this caller");
+        return;
+      }
+      if (decision.resume && current_appid > 0) {
+        g.disable();
+        resume(host_audio, std::move(response), std::move(request), current_appid);
+        return;
+      }
+      if (decision.terminate_game) {
+        g.disable();
+        cancel(std::move(response), std::move(request));
+        return;
+      }
       tree.put("root.resume", 0);
-      tree.put("root.<xmlattr>.status_code", 400);
-      tree.put("root.<xmlattr>.status_message", "Remote session controls require the remote session coordinator");
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "Remote session transport is not ready");
       return;
     }
     auto requested_app = proc::proc.resolve_app(appid_str, appuuid_str);
@@ -2840,12 +2877,8 @@ namespace nvhttp {
 
     std::string client_uuid = request_client_identity.uuid;
     const auto launch_client_uuid = resolve_known_client_uuid_from_launch_id(get_arg(args, "uniqueid", ""));
-    if (client_uuid.empty()) {
-      client_uuid = launch_client_uuid;
-    } else if (!launch_client_uuid.empty() && is_placeholder_client_name(request_client_identity.name)) {
-      BOOST_LOG(warning) << "Ignoring placeholder TLS client identity '" << request_client_identity.name
-                         << "' for runtime overrides; using launch uniqueid " << launch_client_uuid << ".";
-      client_uuid = launch_client_uuid;
+    if (!launch_client_uuid.empty() && launch_client_uuid != client_uuid) {
+      BOOST_LOG(warning) << "Ignoring launch uniqueid for runtime overrides; TLS caller identity is authoritative.";
     }
     const auto client_settings = get_named_cert_by_uuid(client_uuid);
     if (client_settings) {
@@ -3239,6 +3272,13 @@ namespace nvhttp {
       return;
     }
 
+    if (resolve_client_identity_from_request(request).uuid.empty()) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 403);
+      tree.put("root.<xmlattr>.status_message", "A paired TLS client identity is required");
+      return;
+    }
+
     // Newer Moonlight clients send localAudioPlayMode on /resume too,
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
@@ -3259,10 +3299,8 @@ namespace nvhttp {
 
     std::string client_uuid = request_client_identity.uuid;
     const auto resume_client_uuid = resolve_known_client_uuid_from_launch_id(get_arg(args, "uniqueid", ""));
-    if (client_uuid.empty()) {
-      client_uuid = resume_client_uuid;
-    } else if (!resume_client_uuid.empty() && is_placeholder_client_name(request_client_identity.name)) {
-      client_uuid = resume_client_uuid;
+    if (!resume_client_uuid.empty() && resume_client_uuid != client_uuid) {
+      BOOST_LOG(warning) << "Ignoring resume uniqueid for runtime overrides; TLS caller identity is authoritative.";
     }
     if (const auto client_settings = get_named_cert_by_uuid(client_uuid)) {
       config::merge_config_overrides(requested_runtime_overrides, client_settings->config_overrides);
@@ -3577,6 +3615,13 @@ namespace nvhttp {
       response->write(data.str());
       response->close_connection_after_response = true;
     });
+
+    if (resolve_client_identity_from_request(request).uuid.empty()) {
+      tree.put("root.cancel", 0);
+      tree.put("root.<xmlattr>.status_code", 403);
+      tree.put("root.<xmlattr>.status_message", "A paired TLS client identity is required");
+      return;
+    }
 
     tree.put("root.cancel", 1);
     tree.put("root.<xmlattr>.status_code", 200);
