@@ -20,6 +20,7 @@ import ClientSettingsEditor, {
   type DisplayDevice,
   type HdrProfileEntry,
 } from '@/components/devices/ClientSettingsEditor.vue';
+import DisplayTopologyEditor from '@/components/devices/DisplayTopologyEditor.vue';
 import { settingsDefaults } from '@/configs/settingsSchema';
 import { formatRelativeTime } from '@/utils/format';
 
@@ -603,6 +604,8 @@ onBeforeUnmount(() => {
         </RouterLink>
       </template>
     </PageHeader>
+
+    <DisplayTopologyEditor />
 
     <div class="devices-stack">
       <InlineAlert
