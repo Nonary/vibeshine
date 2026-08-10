@@ -13,7 +13,9 @@ extern "C" {
 #include <array>
 #include <cctype>
 #include <format>
+#include <iterator>
 #include <mutex>
+#include <unordered_map>
 #include <set>
 #include <sstream>
 #include <unordered_map>
@@ -182,12 +184,17 @@ namespace rtsp_stream {
     auto snapshot = std::make_shared<launch_session_t>();
 
     snapshot->id = source.id;
+    snapshot->role = source.role;
+    snapshot->role_generation = source.role_generation;
+    snapshot->remote_capture_output = source.remote_capture_output;
+    snapshot->rtsp_source_address = source.rtsp_source_address;
     snapshot->gcm_key = source.gcm_key;
     snapshot->iv = source.iv;
     snapshot->av_ping_payload = source.av_ping_payload;
     snapshot->control_connect_data = source.control_connect_data;
     snapshot->unique_id = source.unique_id;
     snapshot->client_uuid = source.client_uuid;
+    snapshot->client_name = source.client_name;
     snapshot->device_name = source.device_name;
     snapshot->client_display_mode_override = source.client_display_mode_override;
     snapshot->client_display_refresh_millihz = source.client_display_refresh_millihz;
@@ -225,6 +232,10 @@ namespace rtsp_stream {
      * @brief Queue an asynchronous read to begin the next message.
      */
     void read() {
+      if (!session) {
+        read_unbound_encrypted();
+        return;
+      }
       if (begin == std::end(msg_buf) || (session->rtsp_cipher && begin + sizeof(encrypted_rtsp_header_t) >= std::end(msg_buf))) {
         BOOST_LOG(error) << "RTSP: read(): Exceeded maximum rtsp packet size: "sv << msg_buf.size();
 
@@ -250,6 +261,88 @@ namespace rtsp_stream {
           )
         );
       }
+    }
+
+    // An encrypted RTSP transport proves its owner only after GCM
+    // authentication.  Do not guess from the TCP address: multiple launches
+    // from one NAT are legitimate.  Plaintext sessions are bound by address
+    // before read() and never reach this path.
+    void read_unbound_encrypted() {
+      if (encrypted_candidates.empty()) {
+        boost::system::error_code ec;
+        sock.close(ec);
+        return;
+      }
+      boost::asio::async_read(sock, boost::asio::buffer(begin, sizeof(encrypted_rtsp_header_t)), boost::bind(&socket_t::handle_read_unbound_encrypted_header, shared_from_this(), boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
+    }
+
+    static void handle_read_unbound_encrypted_header(std::shared_ptr<socket_t> &socket, const boost::system::error_code &ec, std::size_t bytes) {
+      if (ec || bytes < sizeof(encrypted_rtsp_header_t)) {
+        boost::system::error_code close_ec;
+        socket->sock.close(close_ec);
+        return;
+      }
+      auto header = reinterpret_cast<encrypted_rtsp_header_t *>(socket->begin);
+      const auto payload_length = header->payload_length();
+      if (!header->is_encrypted() || socket->begin + sizeof(*header) + payload_length >= std::end(socket->msg_buf)) {
+        BOOST_LOG(warning) << "Rejecting unbound RTSP connection without a valid encrypted header.";
+        boost::system::error_code close_ec;
+        socket->sock.close(close_ec);
+        return;
+      }
+      boost::asio::async_read(socket->sock, boost::asio::buffer(socket->begin + bytes, payload_length), boost::bind(&socket_t::handle_read_unbound_encrypted_message, socket->shared_from_this(), boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
+    }
+
+    static void handle_read_unbound_encrypted_message(std::shared_ptr<socket_t> &socket, const boost::system::error_code &ec, std::size_t bytes) {
+      if (ec) {
+        boost::system::error_code close_ec;
+        socket->sock.close(close_ec);
+        return;
+      }
+      auto header = reinterpret_cast<encrypted_rtsp_header_t *>(socket->begin);
+      const auto payload_length = header->payload_length();
+      if (bytes < payload_length) {
+        boost::system::error_code close_ec;
+        socket->sock.close(close_ec);
+        return;
+      }
+      const auto sequence = util::endian::big<std::uint32_t>(header->sequenceNumber);
+      crypto::aes_t iv(12);
+      std::copy_n(reinterpret_cast<std::uint8_t *>(&sequence), sizeof(sequence), std::begin(iv));
+      iv[10] = 'C';
+      iv[11] = 'R';
+      std::vector<std::uint8_t> plaintext;
+      std::shared_ptr<launch_session_t> matched;
+      for (const auto &candidate : socket->encrypted_candidates) {
+        if (!candidate || !candidate->rtsp_cipher) continue;
+        std::vector<std::uint8_t> candidate_plaintext;
+        if (candidate->rtsp_cipher->decrypt(std::string_view {reinterpret_cast<const char *>(header->tag), sizeof(header->tag) + bytes}, candidate_plaintext, &iv) == 0) {
+          if (matched) {
+            BOOST_LOG(error) << "Encrypted RTSP matched more than one pending launch; rejecting ambiguous transport.";
+            boost::system::error_code close_ec;
+            socket->sock.close(close_ec);
+            return;
+          }
+          matched = candidate;
+          plaintext = std::move(candidate_plaintext);
+        }
+      }
+      if (!matched) {
+        BOOST_LOG(warning) << "Encrypted RTSP authentication did not match a pending launch.";
+        boost::system::error_code close_ec;
+        socket->sock.close(close_ec);
+        return;
+      }
+      socket->session = std::move(matched);
+      msg_t req {new msg_t::element_type {}};
+      if (parseRtspMessage(req.get(), reinterpret_cast<char *>(plaintext.data()), static_cast<int>(plaintext.size()))) {
+        respond(socket->sock, *socket->session, nullptr, 400, "BAD REQUEST", 0, {});
+        boost::system::error_code close_ec;
+        socket->sock.close(close_ec);
+        return;
+      }
+      print_msg(req.get());
+      socket->handle_data(std::move(req));
     }
 
     /**
@@ -524,6 +617,7 @@ namespace rtsp_stream {
     char *begin = msg_buf.data();
 
     std::shared_ptr<launch_session_t> session;
+    std::vector<std::shared_ptr<launch_session_t>> encrypted_candidates;
   };
 
   class rtsp_server_t {
@@ -597,10 +691,14 @@ namespace rtsp_stream {
 
       auto socket = std::move(next_socket);
 
-      auto launch_session {launch_event.view(0s)};
-      if (launch_session) {
-        // Associate the current RTSP session with this socket and start reading
+      boost::system::error_code endpoint_ec;
+      const auto remote_endpoint = socket->sock.remote_endpoint(endpoint_ec);
+      const auto remote_address = endpoint_ec ? std::string {} : remote_endpoint.address().to_string();
+      if (const auto launch_session = plaintext_candidate(remote_address)) {
         socket->session = launch_session;
+        socket->read();
+      } else if (const auto candidates = encrypted_candidates(); !candidates.empty()) {
+        socket->encrypted_candidates = candidates;
         socket->read();
       } else {
         // This can happen due to normal things like port scanning, so let's not make these visible by default
@@ -657,7 +755,7 @@ namespace rtsp_stream {
       startup_tasks.fetch_sub(1, std::memory_order_acq_rel);
 
       std::optional<std::array<std::uint8_t, 16>> virtual_display_guid_bytes;
-      if (const auto pending = launch_event.view(0s)) {
+      if (const auto pending = any_pending_launch()) {
         virtual_display_guid_bytes = pending->virtual_display_guid_bytes;
       } else {
         virtual_display_guid_bytes = abandoned_startup_virtual_display_guid_bytes;
@@ -690,39 +788,30 @@ namespace rtsp_stream {
      * @param launch_session Streaming session information.
      */
     void session_raise(std::shared_ptr<launch_session_t> launch_session) {
-      // If a launch event is still pending, don't overwrite it.
-      if (launch_event.view(0s)) {
-        return;
-      }
-
-      // Raise the new launch session to prepare for the RTSP handshake
-      launch_event.raise(std::move(launch_session));
-
-      // Arm the timer to expire this launch session if the client times out
-      raised_timer.expires_after(config::stream.ping_timeout);
-      raised_timer.async_wait([this](const boost::system::error_code &ec) {
-        if (!ec) {
-          stream::session::cleanup_reservation_t cleanup_reservation;
-          std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
-          auto discarded = launch_event.pop(0s);
-          if (discarded) {
-            abandoned_startup_virtual_display_guid_bytes =
-              discarded->virtual_display_guid_bytes;
-            set_pending_vulkan_hdr_layer_stream(false);
-            BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
-            const stream::session::shared_runtime_finalize_context_t finalize_context {
-              .virtual_display_guid_bytes = discarded->virtual_display_guid_bytes,
-            };
-            (void) stream::session::finalize_shared_runtime_if_idle(
-              "rtsp_launch_timeout",
-              finalize_context
-            );
-            if (startup_count() == 0) {
-              abandoned_startup_virtual_display_guid_bytes.reset();
-            }
-          }
+      if (!launch_session || launch_session->id == 0) return;
+      const auto expires_at = std::chrono::steady_clock::now() + config::stream.ping_timeout;
+      bool accepted = false;
+      {
+        std::lock_guard lock {pending_launches_mutex};
+        expire_pending_locked(std::chrono::steady_clock::now());
+        if (pending_launches.size() >= remote_session::max_client_vdds * 2) {
+          BOOST_LOG(error) << "RTSP pending-launch registry is full; refusing launch " << launch_session->id;
+        } else if (pending_launches.contains(launch_session->id)) {
+          BOOST_LOG(error) << "RTSP pending-launch ID collision for " << launch_session->id;
+        } else if (!launch_session->rtsp_cipher && std::any_of(pending_launches.begin(), pending_launches.end(), [&launch_session](const auto &entry) {
+                     return !entry.second.session->rtsp_cipher && entry.second.source_address == launch_session->rtsp_source_address;
+                   })) {
+          plaintext_route_warning = "Plaintext RTSP has more than one pending launch for one source address; rejecting the new launch.";
+          BOOST_LOG(error) << plaintext_route_warning;
+        } else {
+          pending_launches.emplace(launch_session->id, pending_launch_t {std::move(launch_session), expires_at});
+          accepted = true;
         }
-      });
+      }
+      if (accepted) {
+        set_pending_vulkan_hdr_layer_stream(pending_hdr_active());
+        arm_pending_timer();
+      }
     }
 
     /**
@@ -732,25 +821,11 @@ namespace rtsp_stream {
     void session_clear(uint32_t launch_session_id) {
       stream::session::cleanup_reservation_t cleanup_reservation;
       std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
-      // We currently only support a single pending RTSP session,
-      // so the ID should always match the one for that session.
-      auto launch_session = launch_event.view(0s);
-      if (launch_session) {
-        if (launch_session->id != launch_session_id) {
-          BOOST_LOG(error) << "Attempted to clear unexpected session: "sv << launch_session_id << " vs "sv << launch_session->id;
-        } else {
-          raised_timer.cancel();
-          auto cleared = launch_event.pop();
-          if (cleared) {
-            abandoned_startup_virtual_display_guid_bytes =
-              cleared->virtual_display_guid_bytes;
-          }
-          set_pending_vulkan_hdr_layer_stream(false);
+      if (const auto cleared = take_pending_launch(launch_session_id)) {
+          abandoned_startup_virtual_display_guid_bytes = cleared->virtual_display_guid_bytes;
+          set_pending_vulkan_hdr_layer_stream(pending_hdr_active());
           const stream::session::shared_runtime_finalize_context_t finalize_context {
-            .virtual_display_guid_bytes =
-              cleared ?
-                std::optional<std::array<std::uint8_t, 16>> {cleared->virtual_display_guid_bytes} :
-                std::nullopt,
+            .virtual_display_guid_bytes = cleared->virtual_display_guid_bytes,
           };
           (void) stream::session::finalize_shared_runtime_if_idle(
             "rtsp_launch_attached",
@@ -759,29 +834,21 @@ namespace rtsp_stream {
           if (startup_count() == 0) {
             abandoned_startup_virtual_display_guid_bytes.reset();
           }
-        }
       }
     }
 
     void cancel_pending_launch(std::string_view reason) {
       stream::session::cleanup_reservation_t cleanup_reservation;
       std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
-      auto discarded = launch_event.pop(0s);
-      if (!discarded) {
-        return;
+      const auto discarded = take_all_pending_launches();
+      for (const auto &launch_session : discarded) {
+        abandoned_startup_virtual_display_guid_bytes = launch_session->virtual_display_guid_bytes;
+        const stream::session::shared_runtime_finalize_context_t finalize_context {
+          .virtual_display_guid_bytes = launch_session->virtual_display_guid_bytes,
+        };
+        (void) stream::session::finalize_shared_runtime_if_idle(reason, finalize_context);
       }
-
-      raised_timer.cancel();
-      abandoned_startup_virtual_display_guid_bytes =
-        discarded->virtual_display_guid_bytes;
       set_pending_vulkan_hdr_layer_stream(false);
-      const stream::session::shared_runtime_finalize_context_t finalize_context {
-        .virtual_display_guid_bytes = discarded->virtual_display_guid_bytes,
-      };
-      (void) stream::session::finalize_shared_runtime_if_idle(
-        reason,
-        finalize_context
-      );
       if (startup_count() == 0) {
         abandoned_startup_virtual_display_guid_bytes.reset();
       }
@@ -797,10 +864,129 @@ namespace rtsp_stream {
     }
 
     bool has_pending_launch_or_startup() {
-      return static_cast<bool>(launch_event.view(0s)) || startup_count() > 0;
+      return has_pending_launches() || startup_count() > 0;
     }
 
-    safe::event_t<std::shared_ptr<launch_session_t>> launch_event;
+    struct pending_launch_t {
+      std::shared_ptr<launch_session_t> session;
+      std::chrono::steady_clock::time_point expires_at;
+      std::string source_address;
+      pending_launch_t(std::shared_ptr<launch_session_t> launch_session, std::chrono::steady_clock::time_point expires):
+          session(std::move(launch_session)), expires_at(expires), source_address(session->rtsp_source_address) {}
+    };
+
+    void expire_pending_locked(std::chrono::steady_clock::time_point now) {
+      for (auto it = pending_launches.begin(); it != pending_launches.end();) {
+        it = it->second.expires_at <= now ? pending_launches.erase(it) : std::next(it);
+      }
+    }
+
+    void expire_pending() {
+      std::vector<std::shared_ptr<launch_session_t>> expired;
+      {
+        std::lock_guard lock {pending_launches_mutex};
+        const auto now = std::chrono::steady_clock::now();
+        for (auto it = pending_launches.begin(); it != pending_launches.end();) {
+          if (it->second.expires_at <= now) {
+            expired.push_back(std::move(it->second.session));
+            it = pending_launches.erase(it);
+          } else {
+            ++it;
+          }
+        }
+      }
+      for (const auto &launch_session : expired) {
+        BOOST_LOG(warning) << "RTSP pending launch expired: " << launch_session->id << " client=" << launch_session->client_uuid;
+      }
+      if (!expired.empty()) set_pending_vulkan_hdr_layer_stream(pending_hdr_active());
+    }
+
+    void arm_pending_timer() {
+      std::optional<std::chrono::steady_clock::time_point> deadline;
+      {
+        std::lock_guard lock {pending_launches_mutex};
+        for (const auto &[id, pending] : pending_launches) {
+          if (!deadline || pending.expires_at < *deadline) deadline = pending.expires_at;
+        }
+      }
+      raised_timer.cancel();
+      if (!deadline) return;
+      raised_timer.expires_at(*deadline);
+      raised_timer.async_wait([this](const boost::system::error_code &ec) {
+        if (!ec) {
+          expire_pending();
+          arm_pending_timer();
+        }
+      });
+    }
+
+    std::shared_ptr<launch_session_t> plaintext_candidate(std::string_view address) {
+      std::lock_guard lock {pending_launches_mutex};
+      expire_pending_locked(std::chrono::steady_clock::now());
+      std::shared_ptr<launch_session_t> match;
+      for (const auto &[id, pending] : pending_launches) {
+        if (!pending.session->rtsp_cipher && pending.source_address == address) {
+          if (match) {
+            plaintext_route_warning = "Plaintext RTSP source-address routing became ambiguous; rejecting transport.";
+            BOOST_LOG(error) << plaintext_route_warning;
+            return {};
+          }
+          match = pending.session;
+        }
+      }
+      return match;
+    }
+
+    std::vector<std::shared_ptr<launch_session_t>> encrypted_candidates() {
+      std::lock_guard lock {pending_launches_mutex};
+      expire_pending_locked(std::chrono::steady_clock::now());
+      std::vector<std::shared_ptr<launch_session_t>> candidates;
+      for (const auto &[id, pending] : pending_launches) if (pending.session->rtsp_cipher) candidates.push_back(pending.session);
+      return candidates;
+    }
+
+    std::shared_ptr<launch_session_t> any_pending_launch() {
+      std::lock_guard lock {pending_launches_mutex};
+      expire_pending_locked(std::chrono::steady_clock::now());
+      return pending_launches.empty() ? nullptr : pending_launches.begin()->second.session;
+    }
+
+    std::shared_ptr<launch_session_t> pending_launch(std::uint32_t id) {
+      std::lock_guard lock {pending_launches_mutex};
+      expire_pending_locked(std::chrono::steady_clock::now());
+      const auto it = pending_launches.find(id);
+      return it == pending_launches.end() ? nullptr : it->second.session;
+    }
+
+    std::shared_ptr<launch_session_t> take_pending_launch(std::uint32_t id) {
+      std::lock_guard lock {pending_launches_mutex};
+      const auto it = pending_launches.find(id);
+      if (it == pending_launches.end()) return {};
+      auto session = std::move(it->second.session);
+      pending_launches.erase(it);
+      return session;
+    }
+
+    std::vector<std::shared_ptr<launch_session_t>> take_all_pending_launches() {
+      std::lock_guard lock {pending_launches_mutex};
+      std::vector<std::shared_ptr<launch_session_t>> sessions;
+      for (auto &[id, pending] : pending_launches) sessions.push_back(std::move(pending.session));
+      pending_launches.clear();
+      return sessions;
+    }
+
+    bool has_pending_launches() {
+      std::lock_guard lock {pending_launches_mutex};
+      expire_pending_locked(std::chrono::steady_clock::now());
+      return !pending_launches.empty();
+    }
+
+    bool pending_hdr_active() {
+      std::lock_guard lock {pending_launches_mutex};
+      return std::any_of(pending_launches.begin(), pending_launches.end(), [](const auto &entry) {
+        return effective_hdr_requested(*entry.second.session);
+      });
+    }
 
     bool vulkan_hdr_layer_active_locked() {
       return config::video.dd.vulkan_hdr_layer &&
@@ -1048,6 +1234,9 @@ namespace rtsp_stream {
     boost::asio::io_context io_context;
     tcp::acceptor acceptor {io_context};
     boost::asio::steady_timer raised_timer {io_context};
+    std::mutex pending_launches_mutex;
+    std::unordered_map<std::uint32_t, pending_launch_t> pending_launches;
+    std::string plaintext_route_warning;
     thread_pool_util::ThreadPool startup_pool;
     std::atomic_int startup_tasks {0};
     std::atomic_bool stopping {false};
@@ -1656,7 +1845,7 @@ namespace rtsp_stream {
         // Apply deferred updates and take the hot-apply gate on the startup worker so
         // display/config churn cannot stall the RTSP io_context.
         std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
-        const auto pending_launch = server->launch_event.view(0s);
+        const auto pending_launch = server->pending_launch(launch_session->id);
         if (!pending_launch ||
             pending_launch->id != launch_session->id ||
             pending_launch->unique_id != launch_session->unique_id) {
