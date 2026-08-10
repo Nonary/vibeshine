@@ -50,6 +50,7 @@
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
+#include "remote_session.h"
 #include "platform/common.h"
 #include "state_storage.h"
 #ifdef _WIN32
@@ -2583,10 +2584,21 @@ namespace nvhttp {
 
     auto current_appid = proc::proc.running();
     auto current_app = proc::proc.resolve_app(current_appid);
+    const auto active_session = proc::proc.active_session_guard();
+    bool caller_owns_active_app = false;
+    if constexpr (std::is_same_v<SunshineHTTPS, T>) {
+      const auto identity = resolve_client_identity_from_request(request);
+      caller_owns_active_app = current_appid > 0 && !identity.uuid.empty() && identity.uuid == active_session.client_uuid;
+    }
     tree.put("root.PairStatus", pair_status);
-    tree.put("root.currentgame", current_appid);
-    tree.put("root.currentgameuuid", current_app ? current_app->uuid : "");
-    tree.put("root.state", current_appid > 0 ? "SUNSHINE_SERVER_BUSY" : "SUNSHINE_SERVER_FREE");
+    // GameStream polls this endpoint to refresh its controls. A paired caller
+    // that does not own the running game must see a free host so it can select
+    // the explicit Resume/Disconnect controls instead of being globally locked
+    // out by another client's process.
+    const bool expose_active_game = current_appid > 0 && caller_owns_active_app;
+    tree.put("root.currentgame", expose_active_game ? current_appid : 0);
+    tree.put("root.currentgameuuid", expose_active_game && current_app ? current_app->uuid : "");
+    tree.put("root.state", expose_active_game ? "SUNSHINE_SERVER_BUSY" : "SUNSHINE_SERVER_FREE");
 
     std::ostringstream data;
 
@@ -2696,14 +2708,44 @@ namespace nvhttp {
     const auto advertised_video = video::advertised_encoder_capabilities(true);
 #endif
 
-    for (auto &proc : proc::proc.get_apps()) {
+    const auto configured_apps = proc::proc.get_apps();
+    std::vector<remote_session::app_t> remote_configured_apps;
+    remote_configured_apps.reserve(configured_apps.size());
+    for (const auto &configured : configured_apps) {
+      remote_configured_apps.push_back({util::from_view(configured.id), configured.uuid, configured.name, false});
+    }
+
+    const auto current_appid = proc::proc.running();
+    const auto current_app = proc::proc.resolve_app(current_appid);
+    const auto active_session = proc::proc.active_session_guard();
+    const auto identity = resolve_client_identity_from_request(request);
+    const remote_session::caller_t caller {
+      .uuid = identity.uuid,
+      .paired = !identity.uuid.empty(),
+      .may_view = !identity.uuid.empty(),
+      .may_launch = !identity.uuid.empty(),
+      .may_terminate = !identity.uuid.empty(),
+    };
+    const remote_session::game_t game {
+      .running = current_appid > 0,
+      .owner_uuid = active_session.client_uuid,
+      .app = current_app ? remote_session::app_t {util::from_view(current_app->id), current_app->uuid, current_app->name, false} : remote_session::app_t {},
+    };
+    const auto projection = remote_session::project(caller, game, {}, remote_configured_apps);
+
+    for (const auto &entry : projection.catalogue) {
       pt::ptree app;
 
       app.put("IsHdrSupported"s, (advertised_video.hevc_mode == 3 || advertised_video.av1_mode == 3) ? 1 : 0);
-      app.put("AppTitle"s, proc.name);
-      app.put("UUID", proc.uuid);
-      app.put("ID", proc.id);
-      app.put("ArtVersion", proc.art_version);
+      app.put("AppTitle"s, entry.title);
+      app.put("UUID", entry.uuid);
+      app.put("ID", entry.id);
+      if (entry.synthetic) {
+        app.put("ArtVersion", "remote-session-v5");
+      } else {
+        const auto configured = std::find_if(configured_apps.begin(), configured_apps.end(), [&entry](const auto &candidate) { return candidate.uuid == entry.uuid; });
+        app.put("ArtVersion", configured == configured_apps.end() ? "" : configured->art_version);
+      }
 
       apps.push_back(std::make_pair("App", std::move(app)));
     }
@@ -2751,6 +2793,16 @@ namespace nvhttp {
 
     auto appid_str = get_arg(args, "appid", "0");
     auto appuuid_str = get_arg(args, "appuuid", "");
+    // Synthetic controls are host actions, never configured applications. Do
+    // this before resolve_app() so a stale/foreign control cannot collide with
+    // an apps.json id and launch a real process.
+    const auto synthetic_control = remote_session::identify(util::from_view(appid_str), appuuid_str);
+    if (synthetic_control != remote_session::control_e::none) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "Remote session controls require the remote session coordinator");
+      return;
+    }
     auto requested_app = proc::proc.resolve_app(appid_str, appuuid_str);
     auto appid = requested_app ? util::from_view(requested_app->id) : util::from_view(appid_str);
 
