@@ -38,6 +38,7 @@ extern "C" {
 #include "network.h"
 #include "nvhttp.h"
 #include "rtsp.h"
+#include "rtsp_pending_policy.h"
 #include "stream.h"
 #include "sync.h"
 #include "thread_pool.h"
@@ -233,7 +234,7 @@ namespace rtsp_stream {
      */
     void read() {
       if (!session) {
-        read_unbound_encrypted();
+        read_unbound();
         return;
       }
       if (begin == std::end(msg_buf) || (session->rtsp_cipher && begin + sizeof(encrypted_rtsp_header_t) >= std::end(msg_buf))) {
@@ -263,17 +264,59 @@ namespace rtsp_stream {
       }
     }
 
-    // An encrypted RTSP transport proves its owner only after GCM
-    // authentication.  Do not guess from the TCP address: multiple launches
-    // from one NAT are legitimate.  Plaintext sessions are bound by address
-    // before read() and never reach this path.
-    void read_unbound_encrypted() {
-      if (encrypted_candidates.empty()) {
+    // A mixed NAT cannot bind an address-owned plaintext launch before seeing
+    // the framing word: encrypted RTSP marks that word's MSB and must still be
+    // authenticated against every encrypted candidate.
+    void read_unbound() {
+      if (!plaintext_candidate && encrypted_candidates.empty()) {
         boost::system::error_code ec;
         sock.close(ec);
         return;
       }
-      boost::asio::async_read(sock, boost::asio::buffer(begin, sizeof(encrypted_rtsp_header_t)), boost::bind(&socket_t::handle_read_unbound_encrypted_header, shared_from_this(), boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
+      boost::asio::async_read(sock, boost::asio::buffer(begin, sizeof(std::uint32_t)), boost::bind(&socket_t::handle_read_unbound_prefix, shared_from_this(), boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
+    }
+
+    static void handle_read_unbound_prefix(std::shared_ptr<socket_t> &socket, const boost::system::error_code &ec, std::size_t bytes) {
+      if (ec || bytes != sizeof(std::uint32_t)) {
+        boost::system::error_code close_ec;
+        socket->sock.close(close_ec);
+        return;
+      }
+      const std::array<std::uint8_t, 4> first_word {
+        static_cast<std::uint8_t>(socket->begin[0]), static_cast<std::uint8_t>(socket->begin[1]),
+        static_cast<std::uint8_t>(socket->begin[2]), static_cast<std::uint8_t>(socket->begin[3]),
+      };
+      switch (pending_policy::choose_initial_route(static_cast<bool>(socket->plaintext_candidate), !socket->encrypted_candidates.empty(), first_word)) {
+        case pending_policy::initial_route_e::plaintext:
+          socket->session = std::move(socket->plaintext_candidate);
+          socket->begin += bytes;
+          socket->read();
+          return;
+        case pending_policy::initial_route_e::encrypted:
+          boost::asio::async_read(socket->sock, boost::asio::buffer(socket->begin + bytes, sizeof(encrypted_rtsp_header_t) - bytes), boost::bind(&socket_t::handle_read_unbound_encrypted_header_after_prefix, socket->shared_from_this(), boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
+          return;
+        case pending_policy::initial_route_e::reject:
+          break;
+      }
+      boost::system::error_code close_ec;
+      socket->sock.close(close_ec);
+    }
+
+    static void handle_read_unbound_encrypted_header_after_prefix(std::shared_ptr<socket_t> &socket, const boost::system::error_code &ec, std::size_t bytes) {
+      if (ec || bytes != sizeof(encrypted_rtsp_header_t) - sizeof(std::uint32_t)) {
+        boost::system::error_code close_ec;
+        socket->sock.close(close_ec);
+        return;
+      }
+      auto header = reinterpret_cast<encrypted_rtsp_header_t *>(socket->begin);
+      const auto payload_length = header->payload_length();
+      if (!header->is_encrypted() || socket->begin + sizeof(*header) + payload_length >= std::end(socket->msg_buf)) {
+        BOOST_LOG(warning) << "Rejecting unbound RTSP connection without a valid encrypted header.";
+        boost::system::error_code close_ec;
+        socket->sock.close(close_ec);
+        return;
+      }
+      boost::asio::async_read(socket->sock, boost::asio::buffer(socket->begin + sizeof(*header), payload_length), boost::bind(&socket_t::handle_read_unbound_encrypted_message, socket->shared_from_this(), boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
     }
 
     static void handle_read_unbound_encrypted_header(std::shared_ptr<socket_t> &socket, const boost::system::error_code &ec, std::size_t bytes) {
@@ -581,9 +624,9 @@ namespace rtsp_stream {
         socket->read();
       });
 
-      auto begin = std::max(socket->begin - 4, socket->begin);
-      auto buf_size = bytes + (begin - socket->begin);
-      auto end = begin + buf_size;
+      auto begin = std::max(socket->msg_buf.data(), socket->begin - 4);
+      auto end = socket->begin + bytes;
+      auto buf_size = end - begin;
 
       constexpr auto needle = "\r\n\r\n"sv;
 
@@ -617,6 +660,7 @@ namespace rtsp_stream {
     char *begin = msg_buf.data();
 
     std::shared_ptr<launch_session_t> session;
+    std::shared_ptr<launch_session_t> plaintext_candidate;
     std::vector<std::shared_ptr<launch_session_t>> encrypted_candidates;
   };
 
@@ -694,11 +738,10 @@ namespace rtsp_stream {
       boost::system::error_code endpoint_ec;
       const auto remote_endpoint = socket->sock.remote_endpoint(endpoint_ec);
       const auto remote_address = endpoint_ec ? std::string {} : remote_endpoint.address().to_string();
-      if (const auto launch_session = plaintext_candidate(remote_address)) {
-        socket->session = launch_session;
-        socket->read();
-      } else if (const auto candidates = encrypted_candidates(); !candidates.empty()) {
-        socket->encrypted_candidates = candidates;
+      const auto candidates = route_candidates(remote_address);
+      if (candidates.plaintext || !candidates.encrypted.empty()) {
+        socket->plaintext_candidate = candidates.plaintext;
+        socket->encrypted_candidates = candidates.encrypted;
         socket->read();
       } else {
         // This can happen due to normal things like port scanning, so let's not make these visible by default
@@ -793,9 +836,10 @@ namespace rtsp_stream {
       const auto launch_session_id = launch_session->id;
       const auto expires_at = std::chrono::steady_clock::now() + config::stream.ping_timeout;
       bool accepted = false;
+      std::vector<std::shared_ptr<launch_session_t>> expired;
       {
         std::lock_guard lock {pending_launches_mutex};
-        expire_pending_locked(std::chrono::steady_clock::now());
+        expire_pending_locked(std::chrono::steady_clock::now(), &expired);
         if (pending_launches.size() >= remote_session::max_client_vdds * 2) {
           BOOST_LOG(error) << "RTSP pending-launch registry is full; refusing launch " << launch_session_id;
         } else if (pending_launches.contains(launch_session_id)) {
@@ -810,6 +854,7 @@ namespace rtsp_stream {
           accepted = true;
         }
       }
+      notify_expired_pending(expired);
       if (accepted) {
         set_pending_vulkan_hdr_layer_stream(pending_hdr_active());
         arm_pending_timer();
@@ -883,30 +928,67 @@ namespace rtsp_stream {
           session(std::move(launch_session)), expires_at(expires), source_address(session->rtsp_source_address) {}
     };
 
-    void expire_pending_locked(std::chrono::steady_clock::time_point now) {
-      for (auto it = pending_launches.begin(); it != pending_launches.end();) {
-        it = it->second.expires_at <= now ? pending_launches.erase(it) : std::next(it);
+    struct route_candidates_t {
+      std::shared_ptr<launch_session_t> plaintext;
+      std::vector<std::shared_ptr<launch_session_t>> encrypted;
+    };
+
+    route_candidates_t route_candidates(std::string_view address) {
+      std::vector<std::shared_ptr<launch_session_t>> expired;
+      route_candidates_t result;
+      {
+        std::lock_guard lock {pending_launches_mutex};
+        expire_pending_locked(std::chrono::steady_clock::now(), &expired);
+        for (const auto &[id, pending] : pending_launches) {
+          if (pending.session->rtsp_cipher) {
+            result.encrypted.push_back(pending.session);
+          } else if (pending.source_address == address) {
+            if (result.plaintext) {
+              plaintext_route_warning = "Plaintext RTSP source-address routing became ambiguous; rejecting transport.";
+              BOOST_LOG(error) << plaintext_route_warning;
+              result = {};
+              break;
+            }
+            result.plaintext = pending.session;
+          }
+        }
       }
+      notify_expired_pending(expired);
+      return result;
+    }
+
+    void expire_pending_locked(std::chrono::steady_clock::time_point now, std::vector<std::shared_ptr<launch_session_t>> *expired = nullptr) {
+      for (auto it = pending_launches.begin(); it != pending_launches.end();) {
+        if (it->second.expires_at <= now) {
+          if (expired) expired->push_back(std::move(it->second.session));
+          it = pending_launches.erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
+
+    void notify_expired_pending(const std::vector<std::shared_ptr<launch_session_t>> &expired) {
+      std::vector<pending_policy::pending_owner_t> owners;
+      owners.reserve(expired.size());
+      for (const auto &launch_session : expired) {
+        if (!launch_session) continue;
+        BOOST_LOG(warning) << "RTSP pending launch expired: " << launch_session->id << " client=" << launch_session->client_uuid;
+        owners.push_back({.role = launch_session->role, .client_uuid = launch_session->client_uuid, .generation = launch_session->role_generation});
+      }
+      for (const auto &owner : pending_policy::expired_remote_input_owners(owners)) {
+        nvhttp::notify_remote_input_transport_lost(owner.client_uuid, owner.generation);
+      }
+      if (!expired.empty()) set_pending_vulkan_hdr_layer_stream(pending_hdr_active());
     }
 
     void expire_pending() {
       std::vector<std::shared_ptr<launch_session_t>> expired;
       {
         std::lock_guard lock {pending_launches_mutex};
-        const auto now = std::chrono::steady_clock::now();
-        for (auto it = pending_launches.begin(); it != pending_launches.end();) {
-          if (it->second.expires_at <= now) {
-            expired.push_back(std::move(it->second.session));
-            it = pending_launches.erase(it);
-          } else {
-            ++it;
-          }
-        }
+        expire_pending_locked(std::chrono::steady_clock::now(), &expired);
       }
-      for (const auto &launch_session : expired) {
-        BOOST_LOG(warning) << "RTSP pending launch expired: " << launch_session->id << " client=" << launch_session->client_uuid;
-      }
-      if (!expired.empty()) set_pending_vulkan_hdr_layer_stream(pending_hdr_active());
+      notify_expired_pending(expired);
     }
 
     void arm_pending_timer() {
@@ -929,8 +1011,8 @@ namespace rtsp_stream {
     }
 
     std::shared_ptr<launch_session_t> plaintext_candidate(std::string_view address) {
+      expire_pending();
       std::lock_guard lock {pending_launches_mutex};
-      expire_pending_locked(std::chrono::steady_clock::now());
       std::shared_ptr<launch_session_t> match;
       for (const auto &[id, pending] : pending_launches) {
         if (!pending.session->rtsp_cipher && pending.source_address == address) {
@@ -946,22 +1028,22 @@ namespace rtsp_stream {
     }
 
     std::vector<std::shared_ptr<launch_session_t>> encrypted_candidates() {
+      expire_pending();
       std::lock_guard lock {pending_launches_mutex};
-      expire_pending_locked(std::chrono::steady_clock::now());
       std::vector<std::shared_ptr<launch_session_t>> candidates;
       for (const auto &[id, pending] : pending_launches) if (pending.session->rtsp_cipher) candidates.push_back(pending.session);
       return candidates;
     }
 
     std::shared_ptr<launch_session_t> any_pending_launch() {
+      expire_pending();
       std::lock_guard lock {pending_launches_mutex};
-      expire_pending_locked(std::chrono::steady_clock::now());
       return pending_launches.empty() ? nullptr : pending_launches.begin()->second.session;
     }
 
     std::shared_ptr<launch_session_t> pending_launch(std::uint32_t id) {
+      expire_pending();
       std::lock_guard lock {pending_launches_mutex};
-      expire_pending_locked(std::chrono::steady_clock::now());
       const auto it = pending_launches.find(id);
       return it == pending_launches.end() ? nullptr : it->second.session;
     }
@@ -984,8 +1066,8 @@ namespace rtsp_stream {
     }
 
     bool has_pending_launches() {
+      expire_pending();
       std::lock_guard lock {pending_launches_mutex};
-      expire_pending_locked(std::chrono::steady_clock::now());
       return !pending_launches.empty();
     }
 
