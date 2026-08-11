@@ -116,7 +116,8 @@ namespace VDISPLAY_SUNSHINE {
     int framegen_refresh_multiplier = 1,
     bool hdr_requested = false,
     bool allow_pending_enumeration = false,
-    bool replace_existing = true
+    bool replace_existing = true,
+    bool preserve_peer_displays = false
   );
   bool removeVirtualDisplay(const GUID &guid);
   static bool remove_virtual_display_impl(
@@ -177,6 +178,7 @@ namespace VDISPLAY_SUNSHINE {
     bool hdr_requested,
     bool allow_pending_enumeration,
     bool replace_existing,
+    bool preserve_peer_displays,
     std::stop_token stop_token
   );
 
@@ -4608,6 +4610,7 @@ namespace VDISPLAY_SUNSHINE {
         state.params.hdr_requested,
         false,
         true,
+        false,
         stop_token
       );
       if (!recreation) {
@@ -6297,6 +6300,7 @@ namespace VDISPLAY_SUNSHINE {
       bool hdr_requested,
       bool allow_pending_enumeration,
       bool replace_existing,
+      bool preserve_peer_displays,
       bool &allow_driver_recovery,
       std::stop_token stop_token = {}
     ) {
@@ -6321,10 +6325,15 @@ namespace VDISPLAY_SUNSHINE {
                        << " hdr_requested=" << hdr_requested
                        << " guid=" << requested_uuid.string();
 
-      if (!teardown_conflicting_virtual_displays(requested_uuid, stop_token)) {
+      if (VDISPLAY::policy::should_teardown_conflicting_virtual_displays(preserve_peer_displays) &&
+          !teardown_conflicting_virtual_displays(requested_uuid, stop_token)) {
         return std::nullopt;
       }
-      BOOST_LOG(debug) << "teardown_conflicting_virtual_displays completed for guid=" << requested_uuid.string();
+      if (preserve_peer_displays) {
+        BOOST_LOG(debug) << "Preserving peer virtual displays while creating guid=" << requested_uuid.string();
+      } else {
+        BOOST_LOG(debug) << "teardown_conflicting_virtual_displays completed for guid=" << requested_uuid.string();
+      }
       if (!enforce_teardown_cooldown_if_needed(stop_token)) {
         return std::nullopt;
       }
@@ -7059,6 +7068,7 @@ namespace VDISPLAY_SUNSHINE {
     bool hdr_requested,
     bool allow_pending_enumeration,
     bool replace_existing,
+    bool preserve_peer_displays,
     std::stop_token stop_token
   ) {
     std::lock_guard<std::recursive_mutex> operation_lock(g_virtual_display_operation_mutex);
@@ -7092,7 +7102,11 @@ namespace VDISPLAY_SUNSHINE {
         return std::nullopt;
       }
 
-      bool allow_driver_recovery = true;
+      // A peer-preserving create must fail closed. Restarting the adapter to
+      // recover one requested display would tear down the already-active peer
+      // displays and violate their independent ownership.
+      bool allow_driver_recovery =
+        VDISPLAY::policy::may_restart_adapter_after_create_failure(preserve_peer_displays);
       auto result = create_virtual_display_once(
         s_hdr_profile,
         s_client_uid,
@@ -7107,6 +7121,7 @@ namespace VDISPLAY_SUNSHINE {
         hdr_requested,
         allow_pending_enumeration,
         replace_existing,
+        preserve_peer_displays,
         allow_driver_recovery,
         stop_token
       );
@@ -7318,7 +7333,8 @@ namespace VDISPLAY_SUNSHINE {
     int framegen_refresh_multiplier,
     bool hdr_requested,
     bool allow_pending_enumeration,
-    bool replace_existing
+    bool replace_existing,
+    bool preserve_peer_displays
   ) {
     if (!release_retained_ensure_display_for_stream(guid, s_client_uid)) {
       return std::nullopt;
@@ -7337,6 +7353,7 @@ namespace VDISPLAY_SUNSHINE {
       hdr_requested,
       allow_pending_enumeration,
       replace_existing,
+      preserve_peer_displays,
       {}
     );
   }
