@@ -153,6 +153,12 @@ namespace rtsp_stream {
 #endif
   };
 
+  struct client_disconnect_result_t {
+    bool disconnected {};
+    std::vector<remote_session::role_e> pending_roles;
+    std::vector<std::uint64_t> pending_generations;
+  };
+
   /**
    * @brief Whether the session should put the display (and the stream) into HDR.
    *
@@ -335,6 +341,7 @@ namespace rtsp_stream {
    * @return True if one or more sessions were stopped.
    */
   bool disconnect_client_sessions(const std::string &client_uuid);
+  client_disconnect_result_t disconnect_client_sessions_with_result(const std::string &client_uuid);
 
   /**
    * @brief Runs the RTSP server loop.
