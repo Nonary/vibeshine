@@ -15,6 +15,10 @@ that the experimental components are production-ready.
 - Landing policy: keep this work isolated on `duo_session`; do not squash, merge,
   or cherry-pick it into `unverified` until the user explicitly approves that step.
 - Product constraint: use concurrent Windows sessions, not VMs.
+- Remote-driver lane: branch `duo_session`, worktree
+  `D:/sources/worktrees/libvirtualdisplay-duo_session`, base
+  `3e85c1fb0e155eebdd640ee4abfd4fdca25bf3ce` from local
+  `libvirtualdisplay/master`.
 
 ## Target architecture
 
@@ -32,16 +36,29 @@ created through `SWD\\RemoteDisplayEnum` with
 
 ### Windows account semantics
 
-Duo does not clone a Windows profile. An instance selects an existing local
-Windows account and starts another session for it. We may use either:
+The production contract is now stricter than Duo's documented credential flow:
 
-- the same account in more than one session, sharing its SID, profile, HKCU,
-  AppData, and per-user databases; or
-- a dedicated seat account, with a separate profile and per-user state.
+- use the already logged-in user's Windows identity for a seat;
+- do not create or require a managed/fake local account;
+- do not ask for, store, or replay the user's Windows password; and
+- preserve the console logon while creating a distinct WTS session, desktop,
+  DWM, shell, and Sunshine process.
 
-The current proof uses the dedicated local account `VibeSeatTest`. A same-account
-test is still required because it is more convenient for users but has additional
-profile-locking, singleton, Steam, browser, and registry concurrency risks.
+The current `VibeSeatTest` session remains diagnostic evidence only. It is not
+the intended product account model.
+
+`DuplicateTokenEx` plus `SetTokenInformation(TokenSessionId)` is sufficient to
+launch a process in an **existing** WTS session, but it does not allocate the
+session or make Winlogon/DWM/shell own it. The provider's legacy
+`GetUserCredentials` contract supplies username/domain/password, not a token.
+The correct bootstrap must therefore join a token-transfer mechanism to session
+allocation instead of merely changing Sunshine's process token.
+
+Windows child sessions are the supported behavioral oracle. A child session is
+a loopback RDP session tied to the current user's existing session and is logged
+on without prompting for credentials. Windows documents a system-wide limit of
+one active connected child session, so this path can prove the same-user/no-
+password contract but cannot by itself provide arbitrary Duo-style seat count.
 
 ## Proven results
 
@@ -60,6 +77,11 @@ profile-locking, singleton, Steam, browser, and registry concurrency risks.
 - A diagnostic remote IDD created `\\.\\DISPLAY1` inside Windows session 2 at
   1920x1080 and 120 Hz on the RTX 4090. DXGI duplication returned a real nonzero
   frame, proving that the independent session's DWM rendered to the remote IDD.
+- A product-owned remote driver lane now has a distinct
+  `SUNSHINE_REMOTE_IDDCX` INF, remote-session adapter flags, a separate protected
+  control interface, session-specific device selection, console-HKCU isolation,
+  and a controller-tracked bootstrap monitor. These changes are source-only and
+  are not yet built, signed, installed, or runtime-proven.
 
 ### Independent Windows session
 
@@ -72,6 +94,17 @@ profile-locking, singleton, Steam, browser, and registry concurrency risks.
 - Windows 11 Pro client concurrency was enabled by TermWrap patching/wrapping
   TermService in memory. No Microsoft DLL was modified on disk, but production
   support and Windows Update resilience remain unresolved.
+- `WTSIsChildSessionsEnabled` succeeds on this Windows 11 26100 host. Child
+  sessions are currently disabled, so no child-session state was changed during
+  the source investigation.
+- The current `RegisterUsertokenForNoWinlogon` exports in both `wtsapi32.dll` and
+  `usermgrcli.dll` are compatibility stubs that set `ERROR_NOT_SUPPORTED` and
+  return failure. They are not a usable token-transfer API on this build.
+- The internal `UMgrChangeSessionUserToken(HANDLE)` API is real on this build and
+  routes to User Manager rather than returning the compatibility stub. It is a
+  candidate mechanism behind same-user bootstrap, but calling it in a temporary
+  RDS session has not yet been proven and must remain version-gated and fail
+  closed if used.
 
 ### Sunshine and video transport
 
@@ -166,6 +199,10 @@ profile-locking, singleton, Steam, browser, and registry concurrency risks.
    remain incomplete.
 9. **Lifecycle:** logoff, reconnect, host/provider/driver crashes, reboot,
    sleep/resume, GPU reset, TermService restart, and Windows Update are unproven.
+10. **Same-user bootstrap:** ordinary custom protocol-provider authentication
+    still requires credentials. Windows child sessions prove passwordless
+    same-user login but allow only one active child session system-wide. The
+    multi-seat token-transfer extension remains a runtime proof gate.
 
 ## Current live rig snapshot
 
@@ -201,45 +238,55 @@ Snapshot time: 2026-08-10 22:30 America/Chicago.
 
 Work these in order unless new evidence changes the dependency chain.
 
-1. **Finish the visual application test.** Bring the Moonlight seat window forward,
+1. **Prove passwordless same-user session creation.** Use the supported child-
+   session transport as the oracle: create one disposable child session from the
+   console user's context, confirm the account SID/logon identity and independent
+   Winlogon/DWM/shell, and confirm no password or managed account is used. Then
+   test the custom provider's temporary-session handoff with a duplicated primary
+   token and `UMgrChangeSessionUserToken`; require the session to remain valid
+   after the connection bootstrap and fail closed on any unsupported return.
+   Do not alter the retained `VibeSeatTest` proof session for this experiment.
+2. **Finish the visual application test.** Bring the Moonlight seat window forward,
    complete or inspect session-2 Steam startup, and launch a game. Use a known HDR
    test pattern/application as the HDR oracle if the selected game is ambiguous.
-2. **Resolve the HDR state transition.** Trace why the IDD accepts `hdr_enabled`
+3. **Resolve the HDR state transition.** Trace why the IDD accepts `hdr_enabled`
    while `advanced_color_active` remains false. Inspect the remote IDD's
    `IDDCX_MONITOR_DESCRIPTION`, mode/color capabilities, DisplayConfig Update2
    payload, DWM state, and DXGI color-space publication. Success requires PQ/2020
    signaling and an HDR-preserving visual/capture test, not merely Main10.
-3. **Test the corrected current Sunshine source.** After an explicit build request,
+4. **Test the corrected current Sunshine source.** After an explicit build request,
    build the canonical tree with tests enabled, refresh the installer as required,
    and replace the diagnostic 1.18.1 seat host. Reprove launch, reconnect, WGC,
    simultaneous streams, and teardown with the RTSP fix.
-4. **Test same-account sessions.** Create a second session using `Chase`, prove the
-   session and display stay independent, then inventory shared-profile conflicts.
-   Compare this with the dedicated-seat-account model before choosing a default.
-5. **Provide per-session audio.** Prototype the endpoint/transport, then prove the
+5. **Inventory same-profile concurrency.** Once passwordless same-user bootstrap
+   works, inventory profile locks and singleton behavior in Steam, browsers,
+   launchers, HKCU, AppData, and per-user services. Do not fall back to a fake seat
+   account to avoid those product issues.
+6. **Provide per-session audio.** Prototype the endpoint/transport, then prove the
    session-2 stream contains only session-2 audio and survives reconnect.
-6. **Prove remaining input classes.** Mouse, relative mouse, gamepad/ViGEm,
+7. **Prove remaining input classes.** Mouse, relative mouse, gamepad/ViGEm,
    Bluetooth controllers, touch/pen, focus changes, UAC, and secure desktop must
    not leak across sessions.
-7. **Implement the libvirtualdisplay remote-session backend.** Add a distinct remote
-   INF/hardware ID, remote adapter flag, session-scoped device/control namespace,
-   first-mode activation, HDR Update2 handling, and bounded teardown. Preserve the
-   existing root/console backend separately.
-8. **Implement a clean seat broker.** Own account/session creation, listener/RDP
+8. **Complete and runtime-prove the libvirtualdisplay remote-session backend.**
+   Build/sign/install the new remote package, make the clean provider return
+   `SUNSHINE_REMOTE_IDDCX`, and prove its bootstrap monitor, session-scoped control,
+   dynamic mode, swapchain, HDR Update2 behavior, and bounded teardown. Preserve
+   the existing root/console backend separately.
+9. **Implement a clean seat broker.** Own same-user session creation, listener/RDP
    lifetime, display activation, correct-token process launch, port/certificate
    allocation, resource admission, reconnect, and transactional cleanup.
-9. **Remove global Sunshine assumptions.** Scope or broker display-helper state,
+10. **Remove global Sunshine assumptions.** Scope or broker display-helper state,
    recovery files, update checks, mDNS, integrations, input devices, and other
    singleton resources.
-10. **Stress and compatibility test.** Run two and then more live seats at
+11. **Stress and compatibility test.** Run two and then more live seats at
     1080p120, 1440p120, and 4K HDR; measure GPU, VRAM, encoder, copy engine, CPU,
     frame pacing, audio, and network behavior. Include Steam, third-party launchers,
     DRM, and anti-cheat titles.
-11. **Lifecycle and servicing matrix.** Exercise disconnect/logoff, crashes,
+12. **Lifecycle and servicing matrix.** Exercise disconnect/logoff, crashes,
     provider/driver restart, TermService restart, sleep/resume, reboot, GPU driver
     update, and Windows cumulative update. Every unsupported state must fail closed
     without changing the console topology or another seat.
-12. **Compatibility and licensing decision.** Select a supportable client-SKU
+13. **Compatibility and licensing decision.** Select a supportable client-SKU
     strategy and document the clean-room boundary before productizing the session
     provider/display bridge.
 
