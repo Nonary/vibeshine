@@ -7,9 +7,11 @@
 
 // standard includes
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 // lib includes
@@ -62,6 +64,10 @@ namespace nvhttp {
    * @param cert
    */
   void setup(const std::string &pkey, const std::string &cert);
+
+  // Remote Input has no retained resource; its catalogue ownership ends with
+  // the exact transport generation that created it.
+  void notify_remote_input_transport_lost(std::string_view client_uuid, std::uint64_t generation);
 
   class SunshineHTTPS: public SimpleWeb::HTTPS {
   public:
