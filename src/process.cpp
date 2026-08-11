@@ -48,6 +48,7 @@
 #include "deferred_action.h"
 #ifdef _WIN32
   #include "display_helper_integration.h"
+  #include "remote_display_topology.h"
 #endif
 #include "logging.h"
 #include "nvhttp.h"
@@ -2167,6 +2168,11 @@ namespace proc {
       BOOST_LOG(info) << "Deferring display revert after app termination because another streaming session is still active.";
     }
 
+#ifdef _WIN32
+    if (!_active_client_uuid.empty()) {
+      remote_display_topology::instance().release_normal_game_identity(_active_client_uuid);
+    }
+#endif
     _active_client_uuid.clear();
     _app_launch_time = {};
     _app_id = -1;
