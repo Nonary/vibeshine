@@ -7,13 +7,21 @@ that the experimental components are production-ready.
 
 ## Project lane
 
-- Branch: `duo_session`
-- Worktree: `D:/sources/worktrees/duo_session`
+- Branch: `duo_session_large`
+- Worktree: `D:/sources/worktrees/duo_session_large`
+- Mode: large/build-enabled feature integration lane
+- Isolated build directory: `D:/sources/builds/duo_session_large`
 - Base snapshot: `302ca497bb7c955f575e99830820c1e542107393`
 - Base branch: local `unverified`
 - Created: 2026-08-10
-- Landing policy: keep this work isolated on `duo_session`; do not squash, merge,
-  or cherry-pick it into `unverified` until the user explicitly approves that step.
+- Converted from the lightweight `duo_session` lane at commit
+  `c7ff8322b703113315e8b3e0eed640844a0ce184` on 2026-08-11. The branch and
+  worktree were renamed in place so the existing history remains the lane's
+  history rather than being copied to a divergent branch.
+- Landing policy: keep this work isolated on `duo_session_large`; do not squash,
+  merge, or cherry-pick it into `unverified` until the user explicitly approves
+  that step. New implementation tasks for this feature should branch from the
+  current `duo_session_large` tip and land back into this lane first.
 - Product constraint: use concurrent Windows sessions, not VMs.
 - Remote-driver lane: branch `duo_session`, worktree
   `D:/sources/worktrees/libvirtualdisplay-duo_session`, base
@@ -355,7 +363,10 @@ Do not call this production-capable until all of the following are proven:
 
 At the start of a new session:
 
-1. Work only from `D:/sources/worktrees/duo_session` on branch `duo_session`.
+1. Treat `D:/sources/worktrees/duo_session_large` on branch
+   `duo_session_large` as the feature integration lane. New implementation tasks
+   branch from its current tip and land back into it before any explicit movement
+   to `unverified`.
 2. Read this file and the original ignored findings report.
 3. Check both the canonical `unverified` checkout and this worktree before editing.
 4. Inventory `qwinsta`, seat/console Sunshine processes, scheduled tasks, listeners,
@@ -364,3 +375,6 @@ At the start of a new session:
    snapshot; rediscover them rather than assuming they are still current.
 6. Update this ledger after every proof, disproof, architectural decision, or
    destructive cleanup.
+7. Build only in `D:/sources/builds/duo_session_large`, with `BUILD_TESTS=ON` and
+   the provisioned shared WebRTC SDK. Reconfigure from the committed lane tip
+   before compiling or packaging; never reuse the canonical Sunshine build tree.
