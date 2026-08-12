@@ -34,27 +34,32 @@ for a non-console Windows session; the proof rig required a remote-session IDD
 created through `SWD\\RemoteDisplayEnum` with
 `IDDCX_ADAPTER_FLAGS_REMOTE_SESSION_DRIVER`.
 
-### Windows account semantics
+### Windows account and application-token semantics
 
-The production contract is now stricter than Duo's documented credential flow:
+The seat's Windows logon identity and the application's Windows identity do not
+have to be the same. The revised product contract is:
 
-- use the already logged-in user's Windows identity for a seat;
-- do not create or require a managed/fake local account;
-- do not ask for, store, or replay the user's Windows password; and
-- preserve the console logon while creating a distinct WTS session, desktop,
-  DWM, shell, and Sunshine process.
+- a disposable managed seat account may own the independent WTS session,
+  Winlogon, DWM, shell, and remote display;
+- games, launchers, and Sunshine may be launched with a duplicate of the already
+  logged-in console user's token retargeted to the seat session;
+- do not ask for, store, or replay the console user's Windows password; and
+- preserve the console logon and its profile while creating a distinct WTS
+  desktop and display path.
 
-The current `VibeSeatTest` session remains diagnostic evidence only. It is not
-the intended product account model.
+This means `VibeSeatTest` is a valid diagnostic model for session ownership. Its
+credentials are still not a substitute for the console token used by
+applications that need the console user's HKCU, profile, Steam state, or other
+per-user resources.
 
 `DuplicateTokenEx` plus `SetTokenInformation(TokenSessionId)` is sufficient to
-launch a process in an **existing** WTS session, but it does not allocate the
-session or make Winlogon/DWM/shell own it. The provider's legacy
-`GetUserCredentials` contract supplies username/domain/password, not a token.
-The correct bootstrap must therefore join a token-transfer mechanism to session
-allocation instead of merely changing Sunshine's process token.
+launch a console-user process in an **existing** WTS session. It does not allocate
+that session or make Winlogon/DWM/shell own it, but the managed seat account can
+provide that bootstrap. The broker must prepare the seat's `WinSta0\Default` and
+`BaseNamedObjects` ACLs for the duplicated console user and logon SID before
+launching applications there.
 
-Windows child sessions are the supported behavioral oracle. A child session is
+Windows child sessions remain a useful supported behavioral oracle. A child session is
 a loopback RDP session tied to the current user's existing session and is logged
 on without prompting for credentials. Windows documents a system-wide limit of
 one active connected child session, so this path can prove the same-user/no-
@@ -80,8 +85,15 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
 - A product-owned remote driver lane now has a distinct
   `SUNSHINE_REMOTE_IDDCX` INF, remote-session adapter flags, a separate protected
   control interface, session-specific device selection, console-HKCU isolation,
-  and a controller-tracked bootstrap monitor. These changes are source-only and
-  are not yet built, signed, installed, or runtime-proven.
+  and a controller-tracked bootstrap monitor.
+- The product remote-driver lane was built with MSVC in Release configuration and
+  `BUILD_TESTS=ON`; all 201 CTest tests passed. Inf2Cat passed, the package was
+  locally signed, and `sunshineremotedisplaydriver.inf` version 1.3.0.1 was
+  staged as `oem31.inf`.
+- The custom provider selected `SUNSHINE_REMOTE_IDDCX` and loaded it for sessions
+  4 and 6. Inside active session 6, the display probe enumerated twelve remote
+  `Sunshine Remote Session Display Driver` paths with that product hardware ID.
+  This closes the earlier product-driver build/install/runtime proof gate.
 
 ### Independent Windows session
 
@@ -101,10 +113,34 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
   `usermgrcli.dll` are compatibility stubs that set `ERROR_NOT_SUPPORTED` and
   return failure. They are not a usable token-transfer API on this build.
 - The internal `UMgrChangeSessionUserToken(HANDLE)` API is real on this build and
-  routes to User Manager rather than returning the compatibility stub. It is a
-  candidate mechanism behind same-user bootstrap, but calling it in a temporary
-  RDS session has not yet been proven and must remain version-gated and fail
-  closed if used.
+  routes to User Manager rather than returning the compatibility stub. Runtime
+  calls against the console session, an established remote session, and the
+  provider allocation window all returned `E_UNEXPECTED`; queries returned
+  `ERROR_NOT_SUPPORTED`. It cannot replace TermService authentication on this
+  build. The revised split-identity architecture does not require it.
+- The official RDP ActiveX child-session connection proof timed out from both the
+  console user and a newly logged-on disposable parent session without reaching
+  connected state. This is a negative result for the tested host/build, not proof
+  that Windows child sessions are universally unavailable. Child sessions were
+  restored to disabled after the test.
+
+### Console-token launch into the managed seat
+
+- A primary token duplicated from the console `Chase` Explorer process was
+  retargeted from session 1 to active `VibeSeatTest` session 6 and launched with
+  `CreateProcessAsUser` on `WinSta0\Default`.
+- The resulting process ran in session 6 as `AMBIDEX\Chase`, with SID ending
+  `-1001`, `USERPROFILE=C:\Users\Chase`, and the console user's roaming profile.
+- Before ACL preparation, GUI initialization failed with `STATUS_DLL_INIT_FAILED`.
+  Granting the console user SID and console logon SID full access to session 6's
+  window station and desktop made GUI probes run successfully.
+- Both source and retargeted tokens report `TokenBnoIsolation=False`; the mutex
+  failure was not a hidden token sandbox.
+- The retargeted process initially received access denied for both `Local\` and
+  `Global\` mutex creation. Session 6's `BaseNamedObjects` DACL granted access to
+  the seat account/logon SID but not the console user. Adding the console user and
+  console logon SID made both mutex probes pass. These changes are session-local
+  and disappear when session 6 logs off.
 
 ### Sunshine and video transport
 
@@ -158,6 +194,23 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
   process can be established in the other Windows session in the current rig.
 - No Civilization VI process has appeared yet. The session-2 Steam UI/login/DRM
   state must be completed or inspected before treating game launch as proven.
+- In session 6, Steam launched under the retargeted console token after the
+  window-station, desktop, and named-object ACLs were prepared. Its complete CEF
+  `steamwebhelper.exe` process tree started, proving that a single seat can reuse
+  the console user's Steam identity and profile without signing the managed seat
+  account into Steam.
+- Starting a normal console Steam instance while the seat instance was running
+  shut the seat Steam down and took ownership. This proves Steam's cross-session
+  master IPC is still a singleton even though Windows `Local\` objects are
+  session-scoped.
+- Launching seat Steam with `-master_ipc_name_override vibeshine-seat-6` kept both
+  `steam.exe` processes alive. The seat's webhelper still retried and exited:
+  both clients used `C:\Users\Chase\AppData\Local\Steam\htmlcache`, and CEF
+  refused the shared profile with lock error 32 to avoid corruption.
+- Overriding `LOCALAPPDATA`, setting `VPROJECT=steammulti`, and passing a
+  `-cachedir` argument to `steam.exe` did not change the webhelper cache path on
+  the current Steam public-beta client. IPC naming alone is therefore
+  insufficient for simultaneous same-profile Steam clients on this build.
 
 ### Source defect found during the spike
 
@@ -191,64 +244,60 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
 6. **Client SKU compatibility:** the concurrent-session path depends on in-memory
    TermService compatibility patching. Servicing fragility, security posture, and
    fail-closed behavior remain potential deal breakers.
-7. **Application compatibility:** Steam login, Steam isolation, game DRM,
-   anti-cheat, launchers, and applications that detect remote sessions need broad
-   testing.
+7. **Application compatibility and file isolation:** console-token Steam works in
+   one seat, but simultaneous clients require both a unique master IPC name and a
+   per-seat CEF/profile path. A narrow Steam/webhelper child-launch rewrite or a
+   sandbox/file-namespace layer must be proven without leaking hooks into games
+   or tripping anti-cheat. Game DRM, launchers, and remote-session detection still
+   need broad testing.
 8. **Resource isolation:** controller visibility, GPU admission, NVENC session
    limits, audio, clipboard, device redirection, and per-seat network/QoS behavior
    remain incomplete.
 9. **Lifecycle:** logoff, reconnect, host/provider/driver crashes, reboot,
    sleep/resume, GPU reset, TermService restart, and Windows Update are unproven.
-10. **Same-user bootstrap:** ordinary custom protocol-provider authentication
-    still requires credentials. Windows child sessions prove passwordless
-    same-user login but allow only one active child session system-wide. The
-    multi-seat token-transfer extension remains a runtime proof gate.
+10. **Token-launch broker:** ordinary custom protocol-provider authentication
+    still requires managed seat credentials. `UMgrChangeSessionUserToken` is not
+    usable on this build, but it is no longer a gate. Production now needs a
+    privileged broker that securely obtains the console token, retargets child
+    processes, prepares only the necessary per-session ACLs, and never exposes
+    the token handle to the managed seat account.
 
 ## Current live rig snapshot
 
-Snapshot time: 2026-08-10 22:30 America/Chicago.
+Snapshot time: 2026-08-11 21:07 America/Chicago.
 
 - Evidence root:
   `C:/ProgramData/VibeshineDiagnostics/duo-session-spike-20260810`
-- Session-2 working directory:
-  `C:/Users/VibeSeatTest/AppData/Local/Temp/duo-spike-session2-remote-idd`
 - Provider log: `C:/ProgramData/Sunshine/RdpProtocolProvider/provider.log`
 - Driver log: `C:/ProgramData/Sunshine/IddDriver/IddDriver.log`
 - Original ignored findings:
   `D:/sources/sunshine/findings-duo-vdd-session-architecture.md`
-- Session 2 is active as `VibeSeatTest`; stale disconnected session 3 also exists.
-- Console Sunshine: PID 15504, session 1, normal ports 47984/47989/47990/48010.
-- Seat Sunshine: PID 60516, session 2, loopback ports
-  56995/57000/57001/57021.
-- Seat WGC helper: PID 61060, session 2.
-- Moonlight: PID 59588, session 1, connected to the seat in an HDR-requested
-  windowed HEVC/Main10 stream.
-- Seat Steam: PID 32292, session 2, launched for Civilization VI app ID 289070.
-- The seat API snapshot showed state `running`, 6,606 frames, 22,181 packets,
-  31,230,848 bytes, and zero client-reported losses.
-- `SunshineService`, `SunshineVirtualDisplayBroker`, and `TermService` are running.
-- Scheduled tasks retained for the experiment:
-  `DuoSeat2Sunshine`, `DuoSeat2HdrEnable`, and `DuoSeat2Civ6` under
-  `\\VibeshineDiagnostics\\`.
-- Do not tear down this rig until the user finishes the visual inspection or asks
-  for cleanup. The session-2 HDR preference can be restored with
-  `disable-hdr-live.cmd` through the session-2 interactive task path.
+- Session 1 remains the active `Chase` console. Session 6 is active as
+  `VibeSeatTest` on listener `sunshine-idd#1` and owns a product
+  `SUNSHINE_REMOTE_IDDCX` remote display.
+- Staged product driver: `oem31.inf`, version 1.3.0.1, local test signature.
+- The final simultaneous Steam proof used console PID 73704 and seat PID 64936.
+  Both proof-owned process trees were stopped after evidence capture; no Steam
+  process remains in either session.
+- Session 6's WinSta0, Default desktop, and BaseNamedObjects DACLs currently grant
+  the `Chase` SID and console logon SID. These grants disappear at session logoff.
+- Session 6 is intentionally retained for follow-up inspection. The proof-owned
+  scheduled tasks were removed without tearing down the seat.
 
 ## Next proof sequence
 
 Work these in order unless new evidence changes the dependency chain.
 
-1. **Prove passwordless same-user session creation.** Use the supported child-
-   session transport as the oracle: create one disposable child session from the
-   console user's context, confirm the account SID/logon identity and independent
-   Winlogon/DWM/shell, and confirm no password or managed account is used. Then
-   test the custom provider's temporary-session handoff with a duplicated primary
-   token and `UMgrChangeSessionUserToken`; require the session to remain valid
-   after the connection bootstrap and fail closed on any unsupported return.
-   Do not alter the retained `VibeSeatTest` proof session for this experiment.
-2. **Finish the visual application test.** Bring the Moonlight seat window forward,
-   complete or inspect session-2 Steam startup, and launch a game. Use a known HDR
-   test pattern/application as the HDR oracle if the selected game is ambiguous.
+1. **Choose and prove the Steam isolation boundary.** Keep the per-seat
+   `-master_ipc_name_override`, then prototype the narrowest per-seat CEF/profile
+   isolation. Prefer rewriting only Steam's `steamwebhelper.exe` child command to
+   a seat-specific cache over a general-purpose sandbox or hooks inherited by
+   games. Reprove two full Steam/webhelper trees, controller input, Steamworks IPC,
+   updates, shutdown, and anti-cheat non-interference.
+2. **Finish the visual application test.** With console Steam stopped, or after
+   Steam isolation is green, launch Civilization VI app ID 289070 from
+   `E:/SteamLibrary` inside session 6 under the retargeted console token. Use a
+   known HDR test pattern/application as the HDR oracle if the game is ambiguous.
 3. **Resolve the HDR state transition.** Trace why the IDD accepts `hdr_enabled`
    while `advanced_color_active` remains false. Inspect the remote IDD's
    `IDDCX_MONITOR_DESCRIPTION`, mode/color capabilities, DisplayConfig Update2
@@ -258,23 +307,23 @@ Work these in order unless new evidence changes the dependency chain.
    build the canonical tree with tests enabled, refresh the installer as required,
    and replace the diagnostic 1.18.1 seat host. Reprove launch, reconnect, WGC,
    simultaneous streams, and teardown with the RTSP fix.
-5. **Inventory same-profile concurrency.** Once passwordless same-user bootstrap
-   works, inventory profile locks and singleton behavior in Steam, browsers,
-   launchers, HKCU, AppData, and per-user services. Do not fall back to a fake seat
-   account to avoid those product issues.
+5. **Inventory same-profile concurrency.** Extend the now-proven Steam collision
+   audit to browsers, launchers, HKCU, AppData, and per-user services. Distinguish
+   objects that merely need seat ACLs from names and files that require isolation.
 6. **Provide per-session audio.** Prototype the endpoint/transport, then prove the
    session-2 stream contains only session-2 audio and survives reconnect.
 7. **Prove remaining input classes.** Mouse, relative mouse, gamepad/ViGEm,
    Bluetooth controllers, touch/pen, focus changes, UAC, and secure desktop must
    not leak across sessions.
-8. **Complete and runtime-prove the libvirtualdisplay remote-session backend.**
-   Build/sign/install the new remote package, make the clean provider return
-   `SUNSHINE_REMOTE_IDDCX`, and prove its bootstrap monitor, session-scoped control,
-   dynamic mode, swapchain, HDR Update2 behavior, and bounded teardown. Preserve
+8. **Finish the libvirtualdisplay remote-session backend.** Build/sign/install and
+   provider selection are now proven. Next prove dynamic mode, session-scoped
+   control, swapchain/HDR Update2 behavior, and bounded teardown while preserving
    the existing root/console backend separately.
-9. **Implement a clean seat broker.** Own same-user session creation, listener/RDP
-   lifetime, display activation, correct-token process launch, port/certificate
-   allocation, resource admission, reconnect, and transactional cleanup.
+9. **Implement a clean seat broker.** Own managed-seat session creation,
+   listener/RDP lifetime, display activation, console-token process launch,
+   WinSta/Desktop/BaseNamedObjects ACL preparation, Steam isolation identity,
+   port/certificate allocation, resource admission, reconnect, and transactional
+   cleanup.
 10. **Remove global Sunshine assumptions.** Scope or broker display-helper state,
    recovery files, update checks, mDNS, integrations, input devices, and other
    singleton resources.
