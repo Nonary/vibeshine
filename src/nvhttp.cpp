@@ -3569,7 +3569,10 @@ namespace nvhttp {
           auto cleanup_probe_display = util::fail_guard([&ensure_result]() {
             VDISPLAY::cleanup_ensure_display(ensure_result);
           });
-          if (!VDISPLAY::policy::should_ensure_probe_display(launch_session->virtual_display)) {
+          if (!VDISPLAY::policy::should_ensure_probe_display(
+                launch_session->virtual_display,
+                VDISPLAY::is_non_console_interactive_session()
+              )) {
             // Let APPLY settle when possible, but capability probing remains
             // adapter-scoped and does not turn a soft display gate into a 503.
             wait_for_probe_helper_settle(launch_session, display_startup_deadline);
@@ -3990,7 +3993,10 @@ namespace nvhttp {
           auto cleanup_probe_display = util::fail_guard([&ensure_result]() {
             VDISPLAY::cleanup_ensure_display(ensure_result);
           });
-          if (!VDISPLAY::policy::should_ensure_probe_display(launch_session->virtual_display)) {
+          if (!VDISPLAY::policy::should_ensure_probe_display(
+                launch_session->virtual_display,
+                VDISPLAY::is_non_console_interactive_session()
+              )) {
             wait_for_probe_helper_settle(launch_session, display_startup_deadline);
           } else {
             ensure_result = VDISPLAY::ensure_display();

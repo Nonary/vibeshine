@@ -1751,6 +1751,11 @@ namespace config {
     int_between_f(vars, "rtx_hdr_saturation", video.rtx_hdr.saturation, {-100, 100});
     int_between_f(vars, "rtx_hdr_middle_gray", video.rtx_hdr.middle_gray, {10, 100});
     int_between_f(vars, "rtx_hdr_peak_brightness", video.rtx_hdr.peak_brightness, {400, 2000});
+    // This proof switch is intentionally runtime-only. Consume its merged
+    // value so per-app activation does not look like an unknown persistent
+    // setting; stream config reads the authoritative runtime override map.
+    bool remote_session_hdr_bypass_runtime_only = false;
+    bool_f(vars, "remote_session_hdr_bypass", remote_session_hdr_bypass_runtime_only);
 
     string_f(vars, "capture", video.capture);
     bool_f(vars, "wgc_pacing_smoothing", video.wgc_pacing_smoothing);
@@ -2539,6 +2544,7 @@ namespace config {
         "rtx_hdr_saturation",
         "rtx_hdr_middle_gray",
         "rtx_hdr_peak_brightness",
+        "remote_session_hdr_bypass",
         "sw_preset",
         "sw_tune",
       };

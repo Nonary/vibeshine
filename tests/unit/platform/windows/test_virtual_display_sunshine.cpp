@@ -7,6 +7,7 @@
 #ifdef _WIN32
   #include <src/platform/windows/virtual_display.h>
   #include <src/platform/windows/wgc_capture_policy.h>
+  #include <src/platform/windows/wgc_hdr_bypass_policy.h>
 
   #include <array>
   #include <cstring>
@@ -115,8 +116,17 @@ TEST(SunshineVirtualDisplay, EnsureDisplayReservedIdentityNeverCollidesWithClien
 }
 
 TEST(SunshineVirtualDisplay, EncoderProbeEnsureDisplaySkippedForPerClientVirtualDisplay) {
-  EXPECT_TRUE(VDISPLAY::policy::should_ensure_probe_display(false));
-  EXPECT_FALSE(VDISPLAY::policy::should_ensure_probe_display(true));
+  EXPECT_TRUE(VDISPLAY::policy::should_ensure_probe_display(false, false));
+  EXPECT_FALSE(VDISPLAY::policy::should_ensure_probe_display(true, false));
+  EXPECT_FALSE(VDISPLAY::policy::should_ensure_probe_display(false, true));
+}
+
+TEST(SunshineVirtualDisplay, NonConsoleInteractiveSessionDoesNotOwnMachineVirtualDisplayLifecycle) {
+  EXPECT_TRUE(VDISPLAY::policy::is_non_console_interactive_session(true, 9, 1));
+  EXPECT_FALSE(VDISPLAY::policy::is_non_console_interactive_session(true, 1, 1));
+  EXPECT_FALSE(VDISPLAY::policy::is_non_console_interactive_session(true, 0, 1));
+  EXPECT_FALSE(VDISPLAY::policy::is_non_console_interactive_session(false, 9, 1));
+  EXPECT_FALSE(VDISPLAY::policy::is_non_console_interactive_session(true, 9, 0xFFFFFFFFu));
 }
 
 TEST(SunshineVirtualDisplay, EnsureDisplayAppliesConfiguredRenderAdapterBeforeTemporaryCreation) {
@@ -433,6 +443,27 @@ TEST(SunshineWgcCapture, UsesFp16ForAdvancedColorTargets) {
   EXPECT_EQ(select_capture_surface_format(true, false, false, true), capture_surface_format::rgba16_float);
   EXPECT_EQ(select_capture_surface_format(true, true, true, true), capture_surface_format::bgra8);
   EXPECT_EQ(select_capture_surface_format(false, false, true, true), capture_surface_format::bgra8);
+}
+
+TEST(SunshineWgcHdrBypass, RequiresEveryIndependentGate) {
+  using namespace platf::dxgi::wgc_hdr_bypass;
+  const inputs enabled {
+    .opt_in_enabled = true,
+    .client_requested_hdr = true,
+    .force_sdr = false,
+    .prefer_sdr_10bit = false,
+    .non_console_interactive_session = true,
+    .wgc_backend = true,
+    .fp16_capture = true,
+  };
+  EXPECT_TRUE(authorized(enabled));
+  EXPECT_FALSE(authorized(inputs {true, true, false, false, true, true, false}));
+  EXPECT_FALSE(authorized(inputs {true, true, false, false, true, false, true}));
+  EXPECT_FALSE(authorized(inputs {true, true, true, false, true, true, true}));
+  EXPECT_FALSE(authorized(inputs {true, true, false, true, true, true, true}));
+  EXPECT_FALSE(authorized(inputs {true, true, false, false, false, true, true}));
+  EXPECT_FALSE(authorized(inputs {false, true, false, false, true, true, true}));
+  EXPECT_FALSE(authorized(inputs {true, false, false, false, true, true, true}));
 }
 
 TEST(SunshineWgcCapture, HelperStartupAndStopAreBounded) {

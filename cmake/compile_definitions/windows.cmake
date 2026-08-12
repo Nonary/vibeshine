@@ -298,6 +298,7 @@ list(PREPEND PLATFORM_LIBRARIES
         synchronization.lib
         Windowscodecs
         userenv
+        wtsapi32
         ws2_32
         wsock32
 )

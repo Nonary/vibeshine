@@ -15,8 +15,22 @@ namespace VDISPLAY::policy {
   inline constexpr auto activation_grace = std::chrono::milliseconds {500};
   inline constexpr auto readiness_poll_interval = std::chrono::milliseconds {50};
 
-  constexpr bool should_ensure_probe_display(const bool session_uses_virtual_display) noexcept {
-    return !session_uses_virtual_display;
+  constexpr bool is_non_console_interactive_session(
+    const bool process_session_query_succeeded,
+    const std::uint32_t process_session_id,
+    const std::uint32_t active_console_session_id
+  ) noexcept {
+    return process_session_query_succeeded &&
+           process_session_id != 0 &&
+           active_console_session_id != 0xFFFFFFFFu &&
+           process_session_id != active_console_session_id;
+  }
+
+  constexpr bool should_ensure_probe_display(
+    const bool session_uses_virtual_display,
+    const bool non_console_interactive_session
+  ) noexcept {
+    return !session_uses_virtual_display && !non_console_interactive_session;
   }
 
   constexpr bool should_prepare_display_for_new_session(const bool no_active_sessions) noexcept {

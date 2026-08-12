@@ -56,7 +56,10 @@ extern "C" {
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/rtx_hdr_runtime.h"
   #include "src/platform/windows/virtual_display.h"
+  #include "src/platform/windows/wgc_hdr_bypass_policy.h"
   #include "uuid.h"
+
+  #include <wtsapi32.h>
 
   #include <AMF/core/Context.h>
   #include <AMF/core/Debug.h>
@@ -88,6 +91,14 @@ using namespace std::literals;
 namespace video {
 
   namespace {
+    bool is_non_console_interactive_terminal_session() {
+#ifdef _WIN32
+      return VDISPLAY::is_non_console_interactive_session();
+#else
+      return false;
+#endif
+    }
+
     /**
      * @brief Check if we can allow probing for the encoders.
      * @return True if there should be no issues with the probing, false if we should prevent it.
@@ -3308,6 +3319,22 @@ namespace video {
   }
 #endif
 
+  // WGC terminal-session bypass metadata describes the fixed Rec.2020/PQ target
+  // produced by Sunshine's existing FP16 conversion path. It is deliberately
+  // separate from panel metadata: the remote IDD is known to remain SDR.
+  SS_HDR_METADATA synthesize_remote_wgc_hdr_metadata() {
+    SS_HDR_METADATA m {};
+    m.displayPrimaries[0] = {35400, 14600};
+    m.displayPrimaries[1] = {8500, 39850};
+    m.displayPrimaries[2] = {6550, 2300};
+    m.whitePoint = {15635, 16450};
+    m.maxDisplayLuminance = 1000;
+    m.minDisplayLuminance = 1;
+    m.maxContentLightLevel = 1000;
+    m.maxFrameAverageLightLevel = 250;
+    return m;
+  }
+
   // Raise hdr_info unless it matches what this session last raised. Some clients
   // (moonlight-xbox) perform a full HDMI display mode-set for every HDR mode message,
   // so a redundant one on reinit costs seconds of black screen mid-stream.
@@ -5036,6 +5063,29 @@ namespace video {
 
     const bool display_is_hdr = disp.is_hdr();
     bool hdr_display = display_is_hdr;
+    bool wgc_hdr_bypass = false;
+#ifdef _WIN32
+    const auto wgc_bypass_gates = platf::dxgi::wgc_hdr_bypass::inputs {
+      .opt_in_enabled = config.remote_session_hdr_bypass,
+      .client_requested_hdr = config.dynamicRange > 0,
+      .force_sdr = config.force_sdr,
+      .prefer_sdr_10bit = config.prefer_sdr_10bit,
+      .non_console_interactive_session = is_non_console_interactive_terminal_session(),
+      .wgc_backend = disp.is_wgc_capture(),
+      .fp16_capture = disp.is_fp16_capture(),
+    };
+    wgc_hdr_bypass = platf::dxgi::wgc_hdr_bypass::authorized(wgc_bypass_gates);
+    BOOST_LOG(info) << "Terminal-session WGC HDR bypass gates"
+                    << " opt_in=" << wgc_bypass_gates.opt_in_enabled
+                    << " client_hdr=" << wgc_bypass_gates.client_requested_hdr
+                    << " force_sdr=" << wgc_bypass_gates.force_sdr
+                    << " prefer_sdr_10bit=" << wgc_bypass_gates.prefer_sdr_10bit
+                    << " non_console_session=" << wgc_bypass_gates.non_console_interactive_session
+                    << " wgc=" << wgc_bypass_gates.wgc_backend
+                    << " fp16=" << wgc_bypass_gates.fp16_capture
+                    << " authorized=" << wgc_hdr_bypass;
+    hdr_display = hdr_display || wgc_hdr_bypass;
+#endif
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
     // When NVIDIA TrueHDR (RTX HDR) is enabled for an HDR stream, synthesize HDR from an
     // SDR capture. The source display may intentionally remain SDR; the actual SDR->HDR
@@ -5125,7 +5175,12 @@ namespace video {
           BOOST_LOG(info) << "RTX HDR: synthesized HDR10 metadata (peak " << result->hdr_metadata.maxDisplayLuminance << " nits) for SDR source";
         } else
 #endif
-        if (display_is_hdr && disp.get_hdr_metadata(result->hdr_metadata)) {
+        if (wgc_hdr_bypass) {
+          result->hdr_metadata = synthesize_remote_wgc_hdr_metadata();
+          result->hdr_metadata_valid = true;
+          BOOST_LOG(info) << "Terminal-session WGC HDR bypass: synthesized Rec.2020/PQ metadata peak "
+                          << result->hdr_metadata.maxDisplayLuminance << " nits";
+        } else if (display_is_hdr && disp.get_hdr_metadata(result->hdr_metadata)) {
           result->hdr_metadata_valid = true;
           if (hdr_latch) {
             hdr_latch->metadata = result->hdr_metadata;
