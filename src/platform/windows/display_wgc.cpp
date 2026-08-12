@@ -227,7 +227,12 @@ namespace platf::dxgi {
       return -1;
     }
 
-    capture_format = DXGI_FORMAT_UNKNOWN;  // Start with unknown format (prevents race condition/crash on first frame)
+    // The WGC helper negotiates FP16 before the first frame whenever this stream
+    // is an effective HDR request. Seed the expected format so the shared
+    // encoder seam can make a fail-closed decision before the first snapshot;
+    // the first actual texture still verifies it and requests reinit on drift.
+    capture_format = (config.dynamicRange > 0 && !config.prefer_sdr_10bit && !config.force_sdr) ?
+                       DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_UNKNOWN;
 
     const bool advanced_color_capture = is_hdr();
 
@@ -485,8 +490,10 @@ namespace platf::dxgi {
       return -1;
     }
 
-    // Initialize capture format to unknown - will be determined from first frame
-    capture_format = DXGI_FORMAT_UNKNOWN;
+    // Keep the encoder's pre-first-frame gate aligned with the helper's
+    // effective-HDR format selection; the first actual frame remains authoritative.
+    capture_format = (config.dynamicRange > 0 && !config.prefer_sdr_10bit && !config.force_sdr) ?
+                       DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_UNKNOWN;
 
     // Note: WGC captures at monitor native resolution, not the requested config resolution.
     // The display helper handles resolution changes before capture starts if needed.

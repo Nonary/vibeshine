@@ -58,6 +58,10 @@ namespace video {
     // Force SDR colorspace/signaling independently of negotiated encoder bit depth.
     bool force_sdr = false;
 
+    // Diagnostic-only per-app opt-in for HDR WGC input in a terminal session.
+    // It is populated from the runtime override, never enabled by default.
+    bool remote_session_hdr_bypass = false;
+
     // Stream-scoped TrueHDR-capable pipeline enable. Runtime foreground-window
     // checks can still bypass per-frame conversion while this remains true, which
     // keeps capture and encoder format stable across desktop/app focus changes.

@@ -582,6 +582,17 @@ namespace platf {
       return false;
     }
 
+    // Capture provenance used by tightly scoped platform workarounds. Backends
+    // must report both the backend and the negotiated surface format; a format
+    // alone is never sufficient to classify a capture as WGC HDR input.
+    virtual bool is_wgc_capture() const {
+      return false;
+    }
+
+    virtual bool is_fp16_capture() const {
+      return false;
+    }
+
     virtual void prepare_for_reinit() {
     }
 

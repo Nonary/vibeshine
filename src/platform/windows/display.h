@@ -296,6 +296,9 @@ namespace platf::dxgi {
     typedef NTSTATUS(WINAPI *PD3DKMTCloseAdapter)(D3DKMT_CLOSEADAPTER *);
 
     virtual bool is_hdr() override;
+    bool is_fp16_capture() const override {
+      return capture_format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+    }
     virtual bool get_hdr_metadata(SS_HDR_METADATA &metadata) override;
 
     const char *dxgi_format_to_string(DXGI_FORMAT format);
@@ -458,6 +461,7 @@ namespace platf::dxgi {
    */
   class display_wgc_ipc_vram_t: public display_vram_t {
   public:
+    bool is_wgc_capture() const override { return true; }
     /**
      * @brief Constructs a new display_wgc_ipc_vram_t object.
      * Initializes the WGC IPC VRAM display backend for hardware encoding.
@@ -545,6 +549,7 @@ namespace platf::dxgi {
 
   class display_wgc_ipc_ram_t: public display_ram_t {
   public:
+    bool is_wgc_capture() const override { return true; }
     /**
      * @brief Constructs a new display_wgc_ipc_ram_t object.
      * Initializes internal state for the WGC IPC RAM display backend.

@@ -231,6 +231,7 @@ namespace VDISPLAY {
   std::vector<VirtualDisplayInfo> enumerateVirtualDisplays();
 
   uuid_util::uuid_t persistentVirtualDisplayUuid();
+  bool is_non_console_interactive_session();
   bool has_active_physical_display();
   bool should_auto_enable_virtual_display();
 

@@ -2660,6 +2660,7 @@ namespace webrtc_stream {
                               !config.prefer_sdr_10bit &&
                               !config.force_sdr;
       config.rtx_hdr_peak_nits = std::clamp(config::video.rtx_hdr.peak_brightness, 400, 2000);
+      config.remote_session_hdr_bypass = config::runtime_config_override_enabled("remote_session_hdr_bypass");
     }
 
     audio::config_t build_audio_config(const SessionOptions &options) {
@@ -3197,7 +3198,10 @@ namespace webrtc_stream {
             VDISPLAY::cleanup_ensure_display(ensure_result);
           });
 
-          if (VDISPLAY::policy::should_ensure_probe_display(launch_session->virtual_display)) {
+          if (VDISPLAY::policy::should_ensure_probe_display(
+                launch_session->virtual_display,
+                VDISPLAY::is_non_console_interactive_session()
+              )) {
             ensure_result = VDISPLAY::ensure_display();
             if (!ensure_result.ready_for_probe()) {
               return std::string {"No usable display is available on the selected capture adapter."};

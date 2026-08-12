@@ -857,11 +857,25 @@ namespace VDISPLAY {
     return use_sunshine_driver() ? VDISPLAY_SUNSHINE::enumerateVirtualDisplays() : VDISPLAY_SUDOVDA::enumerateSudaVDADisplays();
   }
 
+  bool is_non_console_interactive_session() {
+    DWORD process_session_id = 0;
+    const bool query_succeeded = ProcessIdToSessionId(GetCurrentProcessId(), &process_session_id) != FALSE;
+    return policy::is_non_console_interactive_session(
+      query_succeeded,
+      process_session_id,
+      WTSGetActiveConsoleSessionId()
+    );
+  }
+
   bool has_active_physical_display() {
     return use_sunshine_driver() ? VDISPLAY_SUNSHINE::has_active_physical_display() : VDISPLAY_SUDOVDA::has_active_physical_display();
   }
 
   bool should_auto_enable_virtual_display() {
+    if (is_non_console_interactive_session()) {
+      BOOST_LOG(debug) << "Non-console interactive session detected; leaving its session-scoped display lifecycle to Windows.";
+      return false;
+    }
     return use_sunshine_driver() ? VDISPLAY_SUNSHINE::should_auto_enable_virtual_display() : VDISPLAY_SUDOVDA::should_auto_enable_virtual_display();
   }
 

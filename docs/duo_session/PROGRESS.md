@@ -27,6 +27,10 @@ that the experimental components are production-ready.
   `D:/sources/worktrees/libvirtualdisplay-duo_session`, base
   `3e85c1fb0e155eebdd640ee4abfd4fdca25bf3ce` from local
   `libvirtualdisplay/master`.
+- HDR proof sublane: branch/worktree `duo_hdr_proof_large` at
+  `D:/sources/worktrees/duo_hdr_proof_large`, with isolated build directory
+  `D:/sources/builds/duo_hdr_proof_large`. Keep its commits out of `unverified`
+  until this long-running lane is explicitly promoted.
 
 ## Target architecture
 
@@ -225,6 +229,49 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
   accepted, and actual frames flow, but the RDS/kernel display-policy boundary
   keeps advanced color inactive and delivers SDR composition to the IDD. Main10
   transport by itself remains SDR-signaled and must not be labeled HDR.
+- The private-RDS capability hypothesis was narrowed rather than guessed. The
+  installed client/server pair accepts one private, zero-payload capability set
+  with version `0x000C0000`, but disassembly proves its selected pointer is stored
+  separately from the graphics-channel HDR boolean. The latter is initialized
+  false and has no writer on this build, so sending that capability as an HDR
+  fix would be protocol-valid but causally unsupported.
+- The alternative atomic-first-arrival experiment also produced a clean negative.
+  A proof-only remote-driver build published HDR intent before
+  `IddCxMonitorArrival`; `IddCxAdapterDisplayConfigUpdate2` rejected the
+  created-but-not-arrived monitor with `0xC000000D` (`STATUS_INVALID_PARAMETER`),
+  and no monitor arrived. This locates the failure at the public API ordering
+  boundary before any later RDS color-policy decision.
+- WGC provides a separate, working HDR source seam before the remote IDD's SDR
+  sink. A session-5 window capture and monitor capture both returned
+  `DXGI_FORMAT_R16G16B16A16_FLOAT` and real extended-range scRGB values, including
+  white `12.4844`, gray `1.25195`, and red `8.32812/-0.625/-0.0910645`. This is
+  content evidence, not merely an FP16 allocation.
+- A default-off, per-app `remote_session_hdr_bypass` prototype now authorizes HDR
+  only when all seven conditions hold: explicit opt-in, client HDR request,
+  neither SDR override, a non-console interactive session, WGC provenance, and
+  FP16 capture. It synthesizes a fixed Rec.2020/PQ mastering profile with a
+  1000-nit peak, 1000-nit MaxCLL, and 250-nit MaxFALL while preserving the normal
+  display-HDR and TrueHDR paths.
+- The first live attempt exposed an independent admission defect: the current
+  host treated the session-scoped remote IDD as an unowned machine virtual
+  display, invoked console VDD recovery, and returned HTTP 503 before capture.
+  The proof branch now treats a non-console interactive session as the owner of
+  its Windows-provided display lifecycle, skips machine-global VDD startup and
+  temporary-probe creation there, and probes the existing session display.
+- End-to-end session-9 proof is green. The final host logged all seven bypass
+  gates true, `Color coding: HDR (Rec. 2020 + SMPTE 2084 PQ)`, 10-bit depth, and
+  successful NVENC HDR metadata programming. Its session-9 WGC helper accepted
+  `hdr: 1`, published the first frame, and continued through frame 100 with no
+  format-mismatch reinitialization. Moonlight requested `hdrMode=1`, received a
+  200 launch response, negotiated video format `0x200` (HEVC Main10), received
+  its first packet after 200 ms, and decoded Main10 frames. The SDR control run
+  kept the app opt-in but requested no HDR; the gate denied authorization,
+  Sunshine encoded 8-bit SDR, and Moonlight negotiated `0x100` (HEVC Main).
+- This proves the authorized WGC/scRGB-to-PQ encode/decode path without modifying
+  a Windows DLL. It does not yet independently parse the emitted mastering SEI,
+  verify the Moonlight output swapchain color space, or measure decoded pixel
+  luminance/color against the source pattern; those remain the final quality and
+  client-output proof boundaries.
 - Evidence is under
   `C:/ProgramData/VibeshineDiagnostics/duo-session-spike-20260810`, principally
   `session5-current-session-hdr-legacy-20260812.txt`,
@@ -266,25 +313,27 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
   evaluation order was not safe.
 - Commit `cfcd2d3aced3a21e1830da47a7b510c4f2136289` preserves the pending launch ID
   before transferring ownership. It is an ancestor of this branch's base.
-- The live seat currently uses an extracted Vibeshine 1.18.1 host that predates
-  that crash. The corrected current source has not yet been built and substituted
-  into this diagnostic seat.
+- The HDR proof replaced that old diagnostic host with a current-source build in
+  session 9. Launch, WGC capture, NVENC, Moonlight transport, and clean teardown
+  all completed without the moved-session crash.
 
 ## Known failures and production gaps
 
-1. **HDR kernel/session policy:** a terminal-session HDR10 app, both public HDR
-   setters, and the driver's HDR Update2 request all succeed, but RDS/KMD returns
-   SDR timings and IddCx supplies a BGRA8/G22-P709 surface without HDR metadata.
-   The missing requirement is now below the application and public IDD control
-   layers. The `hdr=true` API field and Main10 encode remain request/codec state,
-   not proof of PQ/Rec.2020 transport.
+1. **Native HDR remains gated; the WGC bypass is now viable:** RDS/KMD still
+   converts the public remote-IDD HDR request to SDR, the private capability found
+   on this build does not write the HDR decision field, and pre-arrival Update2 is
+   invalid. Separately, the opt-in WGC/scRGB bypass now reaches Rec.2020/PQ NVENC
+   and Main10 Moonlight decode. Independent bitstream metadata parsing, decoded
+   pixel comparison, and client output-swapchain HDR verification remain before
+   this can be called production-quality HDR.
 2. **Audio:** session 2 has no default audio endpoint. Sunshine reports
    `0x80070490` and sends no seat audio. A real per-session endpoint/transport is
    required before the architecture is equivalent to Duo.
-3. **Display-helper globals:** the session-2 host encountered a cross-session
-   display-helper instance it could not open (`winerr=5`). The stream works because
-   the remote IDD was preactivated, but global helper ownership and recovery files
-   are not safe for multiple seats.
+3. **Display-helper globals:** the session host still encounters a cross-session
+   display-helper instance it cannot open (`winerr=5`). Non-console hosts now skip
+   machine-global VDD startup/recovery and can stream the preactivated remote IDD,
+   but helper ownership, display-apply retries, and recovery files are not yet
+   safely scoped for multiple seats.
 4. **Machine-global side effects:** NVIDIA preference recovery, RTSS recovery,
    mDNS identity, update checks, driver/display helper coordination, and other
    singleton state need explicit per-seat ownership or a broker.
@@ -314,7 +363,7 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
 
 ## Current live rig snapshot
 
-Snapshot time: 2026-08-12 11:08 America/Chicago.
+Snapshot time: 2026-08-12 13:12 America/Chicago.
 
 - Evidence root:
   `C:/ProgramData/VibeshineDiagnostics/duo-session-spike-20260810`
@@ -322,71 +371,77 @@ Snapshot time: 2026-08-12 11:08 America/Chicago.
 - Driver log: `C:/ProgramData/Sunshine/IddDriver/IddDriver.log`
 - Original ignored findings:
   `D:/sources/sunshine/findings-duo-vdd-session-architecture.md`
-- Session 1 remains the active `Chase` console. Session 5 is active as
-  `VibeSeatTest` on listener `sunshine-idd#0` and owns the live product
-  `SUNSHINE_REMOTE_IDDCX` remote display. Session 6 is disconnected.
-- Active staged product driver: `oem33.inf`, version 1.3.0.2, local test
-  signature. Older `oem31.inf` version 1.3.0.1 remains staged side by side.
+- Session 1 remains the active `Chase` console. Session 9 is active as
+  `VibeSeatTest` on listener `sunshine-idd#1` and owns the live product
+  `SUNSHINE_REMOTE_IDDCX` remote display.
+- Active loaded product driver after rollback: `oem34.inf`, version 1.3.0.3,
+  remote DLL SHA-256
+  `EDC8291D7C3A6369C2837DEEA618D62F73DFB1122587E031095F718DAB4F71A2`.
 - The final simultaneous Steam proof used console PID 73704 and seat PID 64936.
   Both proof-owned process trees were stopped after evidence capture; no Steam
   process remains in either session.
 - The deterministic HDR proof application and its process tree exited normally.
   Its source/composed frame captures and ETW traces remain in the evidence root.
-- Session 5 is intentionally retained for follow-up inspection. Session 6 remains
-  disconnected. The proof-owned transient tasks and trace sessions were removed
-  without tearing down the active seat.
+- WGC HDR bypass evidence is retained under
+  `wgc-hdr-bypass-live-20260812`, together with the final HDR and SDR-control
+  Moonlight logs. The proof host, WGC helper, Moonlight clients, port-58000
+  listeners, and proof-owned scheduled task were removed without tearing down
+  session 9. No trace session remains active.
 
 ## Next proof sequence
 
 Work these in order unless new evidence changes the dependency chain.
 
-1. **Resolve the RDS/kernel HDR policy gate.** Preserve the current renderer and
-   trace as the baseline. Identify the internal remote-graphics capability,
-   protocol-provider property, RdpIdd/KMD condition, or supported Windows path that
-   changes `SET_TIMINGS color space=0` to the working HDR value. Compare against a
-   known working terminal-session HDR implementation on the same Windows build if
-   one can be established. Do not keep changing public IDD capability fields that
-   the trace already proves IddCx accepts.
-2. **Reprove HDR end to end after the gate moves.** The deterministic test must
-   still submit R10/PQ/2020 with HDR10 metadata, while Windows reports advanced
-   color active, KMD commits an HDR color space, the IddCx surface remains
-   HDR-capable with metadata, and the encoded/decoded stream is PQ/Rec.2020. A
-   bright-looking BMP or Main10 bitstream is insufficient.
-3. **Choose and prove the Steam isolation boundary.** Keep the per-seat
+1. **Close the WGC HDR quality proof.** Capture or dump a bounded encoded sample,
+   independently parse its Rec.2020/PQ VUI and mastering/content-light SEI, then
+   compare decoded pixels from the deterministic scRGB pattern against the source.
+   Verify Moonlight's output swapchain enters an HDR color space on an HDR-capable
+   client. Main10 decode alone remains insufficient for the client-output claim.
+2. **Calibrate and harden the bypass.** Replace the proof's fixed 1000/250-nit
+   metadata with a documented policy or measured source contract, test SDR-white
+   mapping and out-of-gamut/negative scRGB handling, and exercise static desktop,
+   animated HDR, window/monitor capture, alt-tab, resize, reconnect, NVENC/AMF,
+   HEVC/AV1, and all seven negative gates at runtime.
+3. **Keep native RDS HDR as a secondary research lane.** Preserve the current
+   negative traces. Resume only with a supported/public contract or a permissible
+   capture from a known-working Microsoft client that identifies a real writer
+   for the graphics-channel HDR decision. Do not guess a private capability bit,
+   mutate `QueryProperty`, or patch a Windows DLL in memory.
+4. **Choose and prove the Steam isolation boundary.** Keep the per-seat
    `-master_ipc_name_override`, then prototype the narrowest per-seat CEF/profile
    isolation. Prefer rewriting only Steam's `steamwebhelper.exe` child command to
    a seat-specific cache over a general-purpose sandbox or hooks inherited by
    games. Reprove two full Steam/webhelper trees, controller input, Steamworks IPC,
    updates, shutdown, and anti-cheat non-interference.
-4. **Finish the visual game test.** With console Steam stopped, or after Steam
+5. **Finish the visual game test.** With console Steam stopped, or after Steam
    isolation is green, launch Civilization VI app ID 289070 from `E:/SteamLibrary`
    inside the active seat under the retargeted console token. The deterministic
    renderer, not the game's appearance, remains the HDR oracle.
-5. **Test the corrected current Sunshine source.** After an explicit build request,
-   build the canonical tree with tests enabled, refresh the installer as required,
-   and replace the diagnostic 1.18.1 seat host. Reprove launch, reconnect, WGC,
-   simultaneous streams, and teardown with the RTSP fix.
-6. **Inventory same-profile concurrency.** Extend the now-proven Steam collision
+6. **Integrate and regression-test the corrected session host.** The proof branch
+   now builds and streams successfully in session 9. Rebase or port it onto the
+   long-running `duo_session_large` lane, then reprove launch, reconnect, WGC,
+   simultaneous streams, helper isolation, and teardown before any promotion.
+7. **Inventory same-profile concurrency.** Extend the now-proven Steam collision
    audit to browsers, launchers, HKCU, AppData, and per-user services. Distinguish
    objects that merely need seat ACLs from names and files that require isolation.
-7. **Provide per-session audio.** Prototype the endpoint/transport, then prove the
+8. **Provide per-session audio.** Prototype the endpoint/transport, then prove the
    session-2 stream contains only session-2 audio and survives reconnect.
-8. **Prove remaining input classes.** Mouse, relative mouse, gamepad/ViGEm,
+9. **Prove remaining input classes.** Mouse, relative mouse, gamepad/ViGEm,
    Bluetooth controllers, touch/pen, focus changes, UAC, and secure desktop must
    not leak across sessions.
-9. **Finish the libvirtualdisplay remote-session backend.** Build/sign/install and
+10. **Finish the libvirtualdisplay remote-session backend.** Build/sign/install and
    provider selection are now proven. Next prove dynamic mode, session-scoped
    control, swapchain/HDR Update2 behavior, and bounded teardown while preserving
    the existing root/console backend separately.
-10. **Implement a clean seat broker.** Own managed-seat session creation,
+11. **Implement a clean seat broker.** Own managed-seat session creation,
    listener/RDP lifetime, display activation, console-token process launch,
    WinSta/Desktop/BaseNamedObjects ACL preparation, Steam isolation identity,
    port/certificate allocation, resource admission, reconnect, and transactional
    cleanup.
-11. **Remove global Sunshine assumptions.** Scope or broker display-helper state,
+12. **Remove global Sunshine assumptions.** Scope or broker display-helper state,
    recovery files, update checks, mDNS, integrations, input devices, and other
    singleton resources.
-12. **Stress and compatibility test.** Run two and then more live seats at
+13. **Stress and compatibility test.** Run two and then more live seats at
     1080p120, 1440p120, and 4K HDR; measure GPU, VRAM, encoder, copy engine, CPU,
     frame pacing, audio, and network behavior. Include Steam, third-party launchers,
     DRM, and anti-cheat titles.

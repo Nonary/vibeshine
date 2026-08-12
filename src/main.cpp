@@ -627,6 +627,15 @@ int main(int argc, char *argv[]) {
         BOOST_LOG(info) << "Interactive desktop is ready; resuming deferred startup display initialization.";
       }
 
+      if (VDISPLAY::is_non_console_interactive_session()) {
+        BOOST_LOG(info)
+          << "Non-console interactive session detected; skipping machine-global virtual-display startup management and probing its existing session display.";
+        if (video::probe_encoders()) {
+          BOOST_LOG(warning) << "Startup encoder probe failed against the existing non-console session display; launch-time probing will retry.";
+        }
+        return;
+      }
+
       // Keep driver recovery and the startup janitor out of the pre-listener
       // path. Both can block while Windows restarts a virtual-display device,
       // and the janitor must not mutate an intentional display before the
