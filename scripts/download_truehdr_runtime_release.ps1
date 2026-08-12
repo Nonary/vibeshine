@@ -142,17 +142,17 @@ try {
     $resolved[$dll] = $matches[0].FullName
   }
 
-  if (Test-Path -LiteralPath $OutDir) {
-    Remove-Item -LiteralPath $OutDir -Recurse -Force
-  }
-  New-Item -ItemType Directory -Path $OutDir | Out-Null
+  # SUNSHINE_TRUEHDR_RUNTIME_DIR intentionally defaults to CMAKE_BINARY_DIR.
+  # Refresh only the two pinned runtime files: recursively replacing OutDir
+  # would otherwise attempt to delete an active build tree during CPack.
+  New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 
   foreach ($dll in $requiredDlls) {
     Copy-Item -LiteralPath $resolved[$dll] -Destination (Join-Path $OutDir $dll) -Force
   }
 
   Write-Step "Installed pinned TrueHDR runtime to $OutDir"
-  Get-ChildItem -LiteralPath $OutDir -File | ForEach-Object {
+  Get-ChildItem -LiteralPath $OutDir -File | Where-Object { $_.Name -in $requiredDlls } | ForEach-Object {
     Write-Step ("{0}  {1} bytes  sha256={2}" -f $_.Name, $_.Length, (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())
   }
 } finally {
