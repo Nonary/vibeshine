@@ -4,6 +4,8 @@
  */
 #pragma once
 
+#include "amf_lifecycle.h"
+
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -18,6 +20,9 @@ namespace amf {
     std::vector<uint8_t> data;
     uint64_t frame_index = 0;
     bool idr = false;
+    lifecycle::encoded_picture_type_e picture_type = lifecycle::encoded_picture_type_e::unknown;
+    std::optional<int64_t> intra_pixels;
+    bool requested_full_refresh = false;
     bool after_ref_frame_invalidation = false;
     bool fatal = false;  // Set when encoder is in unrecoverable state (device lost, repeated failures)
   };

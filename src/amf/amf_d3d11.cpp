@@ -586,13 +586,6 @@ namespace amf {
         }
       }
 
-      // Intra refresh
-      if (config.intra_refresh_mbs &&
-          !set_verified_int64(
-            AMF_VIDEO_ENCODER_INTRA_REFRESH_NUM_MBS_PER_SLOT,
-            *config.intra_refresh_mbs,
-            "H.264 intra-refresh macroblocks")) return false;
-
       // Slices per frame
       if (client_config.slicesPerFrame > 1 &&
           !set_verified_int64(AMF_VIDEO_ENCODER_SLICES_PER_FRAME, client_config.slicesPerFrame, "H.264 slices per frame")) return false;
@@ -643,7 +636,7 @@ namespace amf {
       // native HEVC (freeze on the first keyframe need) while native AV1 and FFmpeg
       // hevc_amf, neither of which sets it, ran clean on the same cards. force_idr
       // keyframes are driven per-surface via HEVC_FORCE_PICTURE_TYPE, independent of this.
-      encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_GOP_SIZE, (amf_int64) 0);
+      if (!set_verified_int64(AMF_VIDEO_ENCODER_HEVC_GOP_SIZE, 0, "HEVC infinite GOP")) return false;
       if ((config.vbaq || !adaptive_quantization_supported) &&
           !set_verified_bool(
             AMF_VIDEO_ENCODER_HEVC_ENABLE_VBAQ,
@@ -687,13 +680,6 @@ namespace amf {
           return false;
         }
       }
-
-      // Intra refresh
-      if (config.intra_refresh_mbs &&
-          !set_verified_int64(
-            AMF_VIDEO_ENCODER_HEVC_INTRA_REFRESH_NUM_CTBS_PER_SLOT,
-            *config.intra_refresh_mbs,
-            "HEVC intra-refresh CTBs")) return false;
 
       // Slices per frame
       if (client_config.slicesPerFrame > 1 &&
@@ -791,19 +777,6 @@ namespace amf {
         AMF_VIDEO_ENCODER_AV1_LTR_MODE,
         AMF_VIDEO_ENCODER_AV1_LTR_MODE_RESET_UNUSED,
         AMF_VIDEO_ENCODER_AV1_CAP_MAX_NUM_LTR_FRAMES);
-
-      // Intra refresh
-      if (config.av1_intra_refresh_mode) {
-        if (!set_verified_int64(
-              AMF_VIDEO_ENCODER_AV1_INTRA_REFRESH_MODE,
-              *config.av1_intra_refresh_mode,
-              "AV1 intra-refresh mode")) return false;
-        if (config.av1_intra_refresh_stripes &&
-            !set_verified_int64(
-              AMF_VIDEO_ENCODER_AV1_INTRAREFRESH_STRIPES,
-              *config.av1_intra_refresh_stripes,
-              "AV1 intra-refresh stripes")) return false;
-      }
 
       // Tiles per frame
       if (client_config.slicesPerFrame > 1 &&
@@ -964,6 +937,7 @@ namespace amf {
     statistics_enabled = config.enable_statistics_feedback;
     psnr_enabled = config.enable_psnr_feedback;
     ssim_enabled = config.enable_ssim_feedback;
+    intra_refresh_diagnostic_enabled = config.intra_refresh_diagnostic;
 
     // Pre-Analysis sub-system properties (set on encoder when PA is enabled)
     if (preanalysis_plan.enabled) {
@@ -1011,6 +985,109 @@ namespace amf {
   }
 
   bool
+  amf_d3d11::configure_intra_refresh_after_init(const amf_config &config) {
+    const lifecycle::intra_refresh_plan_t plan {
+      config.intra_refresh_mbs.has_value() || config.av1_intra_refresh_mode.has_value(),
+      config.intra_refresh_mbs,
+      config.av1_intra_refresh_mode,
+      config.av1_intra_refresh_stripes,
+      config.intra_refresh_minimum_reference_frames,
+      false,
+    };
+    const auto writes = lifecycle::resolve_intra_refresh_properties(
+      lifecycle::encoder_property_phase_e::after_init,
+      video_format,
+      plan);
+    if (writes.count == 0) {
+      return true;
+    }
+
+    auto set_verified = [&](const wchar_t *property, int value, const char *label) {
+      const auto requested = static_cast<amf_int64>(value);
+      const auto set_result = encoder->SetProperty(property, requested);
+      amf_int64 applied = 0;
+      const auto get_result = encoder->GetProperty(property, &applied);
+      if (set_result != AMF_OK || get_result != AMF_OK || applied != requested) {
+        BOOST_LOG(error) << "AMF: failed to apply dynamic " << label << " after encoder Init"
+                         << " (requested=" << requested << ", applied=" << applied
+                         << ", set=" << set_result << ", get=" << get_result << ')';
+        return false;
+      }
+      BOOST_LOG(info) << "AMF: applied dynamic " << label << " after encoder Init"
+                      << " (value=" << applied << ')';
+      return true;
+    };
+
+    for (std::size_t index = 0; index < writes.count; ++index) {
+      const auto &write = writes.writes[index];
+      switch (write.property) {
+        case lifecycle::intra_refresh_property_e::h264_mbs_per_slot:
+          if (!set_verified(
+                AMF_VIDEO_ENCODER_INTRA_REFRESH_NUM_MBS_PER_SLOT,
+                write.value,
+                "H.264 intra-refresh macroblocks")) return false;
+          expected_intra_pixels_per_frame = static_cast<int64_t>(write.value) * 16 * 16;
+          break;
+        case lifecycle::intra_refresh_property_e::hevc_ctbs_per_slot:
+          if (!set_verified(
+                AMF_VIDEO_ENCODER_HEVC_INTRA_REFRESH_NUM_CTBS_PER_SLOT,
+                write.value,
+                "HEVC intra-refresh CTBs")) return false;
+          expected_intra_pixels_per_frame = static_cast<int64_t>(write.value) * 64 * 64;
+          break;
+        case lifecycle::intra_refresh_property_e::av1_mode:
+          if (!set_verified(
+                AMF_VIDEO_ENCODER_AV1_INTRA_REFRESH_MODE,
+                write.value,
+                "AV1 intra-refresh mode")) return false;
+          break;
+        case lifecycle::intra_refresh_property_e::av1_stripes:
+          if (!set_verified(
+                AMF_VIDEO_ENCODER_AV1_INTRAREFRESH_STRIPES,
+                write.value,
+                "AV1 intra-refresh stripes")) return false;
+          if (write.value > 0) {
+            const auto frame_pixels = static_cast<int64_t>(encode_width) * encode_height;
+            expected_intra_pixels_per_frame = (frame_pixels + write.value - 1) / write.value;
+          }
+          break;
+      }
+    }
+
+    if (video_format == 1) {
+      amf_int64 applied_gop = -1;
+      const auto get_result = encoder->GetProperty(AMF_VIDEO_ENCODER_HEVC_GOP_SIZE, &applied_gop);
+      if (get_result != AMF_OK || applied_gop != 0) {
+        BOOST_LOG(error) << "AMF: HEVC intra refresh did not retain the requested infinite GOP"
+                         << " (applied=" << applied_gop << ", get=" << get_result << ')';
+        return false;
+      }
+      BOOST_LOG(info) << "AMF: HEVC intra refresh retained GOP_SIZE=0; periodic full keyframes remain disabled";
+    }
+    return true;
+  }
+
+  void
+  amf_d3d11::log_intra_refresh_diagnostics(std::string_view reason) const {
+    if (!intra_refresh_diagnostic_enabled) {
+      return;
+    }
+    const auto average_intra_pixels = intra_refresh_diagnostics.statistics_samples == 0 ? 0 :
+      intra_refresh_diagnostics.intra_pixels / intra_refresh_diagnostics.statistics_samples;
+    BOOST_LOG(info) << "AMF intra-refresh experiment " << reason
+                    << ": outputs=" << intra_refresh_diagnostics.frames
+                    << ", host_full_refresh_outputs=" << intra_refresh_diagnostics.requested_full_refresh_outputs
+                    << ", matched_full_refresh=" << intra_refresh_diagnostics.requested_full_refresh_frames
+                    << ", unexpected_full_refresh=" << intra_refresh_diagnostics.unexpected_full_refresh_frames
+                    << ", statistics_samples=" << intra_refresh_diagnostics.statistics_samples
+                    << ", P_frames_with_intra_pixels=" << intra_refresh_diagnostics.p_frames_with_intra
+                    << ", avg_intra_pixels=" << average_intra_pixels
+                    << ", max_intra_pixels=" << intra_refresh_diagnostics.maximum_intra_pixels
+                    << ", expected_rolling_intra_pixels=" << expected_intra_pixels_per_frame
+                    << ", max_frame_bytes=" << intra_refresh_diagnostics.maximum_frame_bytes;
+  }
+
+  bool
   amf_d3d11::create_encoder(const amf_config &config,
     const video::config_t &client_config,
     const video::sunshine_colorspace_t &colorspace,
@@ -1018,6 +1095,13 @@ namespace amf {
     // Determine video format from client config
     video_format = client_config.videoFormat;
     current_config = client_config;
+    intra_refresh_diagnostics = {};
+    expected_intra_pixels_per_frame = 0;
+    statistics_feedback_failed = false;
+    statistics_window_started = false;
+    statistics_window_finished = false;
+    statistics_sampled_input_count = 0;
+    intra_refresh_diagnostic_started_at = {};
 
     // Initialize AMF library
     if (!init_amf_library()) return false;
@@ -1060,6 +1144,13 @@ namespace amf {
 
     if (res != AMF_OK) {
       BOOST_LOG(error) << "AMF: encoder Init failed with the requested encode settings, error: " << res;
+      return false;
+    }
+
+    // Intra-refresh controls are AMF dynamic properties. AMD's own pipeline
+    // applies dynamic settings only after Init; doing so here also ensures later
+    // static setup cannot silently reset the client request.
+    if (!configure_intra_refresh_after_init(config)) {
       return false;
     }
 
@@ -1317,6 +1408,8 @@ namespace amf {
     submit_backpressure_started = {};
     completed_outputs.clear();
     frame_rfi_flags.clear();
+    frame_full_refresh_flags.clear();
+    frame_statistics_flags.clear();
     last_completed_frame_index = 0;
     last_submitted_frame_index = 0;
     output_fatal = false;
@@ -1325,7 +1418,6 @@ namespace amf {
     output_poll_requested = false;
     active_output_poll_waiters = 0;
     catchup_batch_count = 0;
-
     output_thread = std::jthread([this](std::stop_token stop_token) {
       output_pump(stop_token);
     });
@@ -1341,6 +1433,16 @@ namespace amf {
                     << ", input_queue=" << encoder_input_queue_size
                     << ", input_surfaces=" << active_input_surface_count
                     << ", slices=" << client_config.slicesPerFrame << ")";
+    if (intra_refresh_diagnostic_enabled) {
+      BOOST_LOG(info) << "AMF intra-refresh experiment: visual baseline runs without statistics for the first "
+                      << std::chrono::duration_cast<std::chrono::seconds>(
+                           lifecycle::intra_refresh_statistics_warmup).count()
+                      << " seconds; host statistics then sample for at most "
+                      << std::chrono::duration_cast<std::chrono::seconds>(
+                           lifecycle::intra_refresh_statistics_window).count()
+                      << " seconds or " << lifecycle::intra_refresh_statistics_sample_frames
+                      << " accepted inputs, whichever comes first";
+    }
     return true;
   }
 
@@ -1358,6 +1460,7 @@ namespace amf {
       state_cv.notify_all();
       output_thread.join();
     }
+    log_intra_refresh_diagnostics("final summary");
     if (encoder) {
       encoder->Terminate();
       encoder = nullptr;
@@ -1378,6 +1481,8 @@ namespace amf {
       last_rendered_input_surface_slot.reset();
       completed_outputs.clear();
       frame_rfi_flags.clear();
+      frame_full_refresh_flags.clear();
+      frame_statistics_flags.clear();
       input_surfaces_in_flight = 0;
       accepted_input_count = 0;
       completed_output_count = 0;
@@ -1401,6 +1506,17 @@ namespace amf {
     skip_frame_control_verified = false;
     encoder_input_queue_size = lifecycle::default_amf_input_queue_size;
     input_surface_desc = {};
+    statistics_enabled = false;
+    psnr_enabled = false;
+    ssim_enabled = false;
+    intra_refresh_diagnostic_enabled = false;
+    statistics_feedback_failed = false;
+    statistics_window_started = false;
+    statistics_window_finished = false;
+    statistics_sampled_input_count = 0;
+    intra_refresh_diagnostic_started_at = {};
+    expected_intra_pixels_per_frame = 0;
+    intra_refresh_diagnostics = {};
 
     if (amf_dll) {
       FreeLibrary(amf_dll);
@@ -1410,7 +1526,7 @@ namespace amf {
   }
 
   amf_encoded_frame
-  amf_d3d11::extract_encoded_frame(const ::amf::AMFDataPtr &output_data) {
+  amf_d3d11::extract_encoded_frame(const ::amf::AMFDataPtr &output_data, bool read_statistics) {
     amf_encoded_frame result;
     if (!output_data) {
       return result;
@@ -1442,26 +1558,45 @@ namespace amf {
     if (video_format == 0) {
       if (output_data->GetProperty(AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE, &output_type) == AMF_OK) {
         result.idr = (output_type == AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_IDR);
+        result.picture_type = result.idr ? lifecycle::encoded_picture_type_e::idr :
+                              output_type == AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_I ? lifecycle::encoded_picture_type_e::i :
+                              output_type == AMF_VIDEO_ENCODER_OUTPUT_DATA_TYPE_P ? lifecycle::encoded_picture_type_e::p :
+                                                                                   lifecycle::encoded_picture_type_e::unknown;
       }
     }
     else if (video_format == 1) {
       if (output_data->GetProperty(AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE, &output_type) == AMF_OK) {
         result.idr = (output_type == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_IDR);
+        result.picture_type = result.idr ? lifecycle::encoded_picture_type_e::idr :
+                              output_type == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_I ? lifecycle::encoded_picture_type_e::i :
+                              output_type == AMF_VIDEO_ENCODER_HEVC_OUTPUT_DATA_TYPE_P ? lifecycle::encoded_picture_type_e::p :
+                                                                                        lifecycle::encoded_picture_type_e::unknown;
       }
     }
     else {
       if (output_data->GetProperty(AMF_VIDEO_ENCODER_AV1_OUTPUT_FRAME_TYPE, &output_type) == AMF_OK) {
         result.idr = (output_type == AMF_VIDEO_ENCODER_AV1_OUTPUT_FRAME_TYPE_KEY);
+        result.picture_type = result.idr ? lifecycle::encoded_picture_type_e::idr :
+                              output_type == AMF_VIDEO_ENCODER_AV1_OUTPUT_FRAME_TYPE_INTRA_ONLY ? lifecycle::encoded_picture_type_e::i :
+                              output_type == AMF_VIDEO_ENCODER_AV1_OUTPUT_FRAME_TYPE_INTER ? lifecycle::encoded_picture_type_e::p :
+                                                                                             lifecycle::encoded_picture_type_e::unknown;
       }
     }
 
-    if (statistics_enabled) {
+    if (read_statistics) {
       amf_int64 avg_qp = 0;
       const wchar_t *avg_qp_prop = (video_format == 0) ? AMF_VIDEO_ENCODER_STATISTIC_AVERAGE_QP :
                                    (video_format == 1) ? AMF_VIDEO_ENCODER_HEVC_STATISTIC_AVERAGE_QP :
                                                          AMF_VIDEO_ENCODER_AV1_STATISTIC_AVERAGE_Q_INDEX;
       if (output_data->GetProperty(avg_qp_prop, &avg_qp) == AMF_OK) {
         BOOST_LOG(debug) << "AMF: frame " << result.frame_index << " avg_qp=" << avg_qp << " size=" << data_size;
+      }
+      amf_int64 intra_pixels = 0;
+      const wchar_t *intra_pixels_prop = (video_format == 0) ? AMF_VIDEO_ENCODER_STATISTIC_PIX_NUM_INTRA :
+                                          (video_format == 1) ? AMF_VIDEO_ENCODER_HEVC_STATISTIC_PIX_NUM_INTRA :
+                                                                AMF_VIDEO_ENCODER_AV1_STATISTIC_PIX_NUM_INTRA;
+      if (output_data->GetProperty(intra_pixels_prop, &intra_pixels) == AMF_OK) {
+        result.intra_pixels = intra_pixels;
       }
     }
     if (psnr_enabled) {
@@ -1518,7 +1653,13 @@ namespace amf {
           // Extract outside state_mutex: the bitstream assign() is multi-MB on
           // high-bitrate IDR frames and encode_frame takes this same mutex as
           // its first action — copying under the lock adds submit-path jitter.
-          auto encoded_frame = extract_encoded_frame(output_data);
+          bool read_statistics = false;
+          const auto output_pts = output_data->GetPts();
+          if (output_pts >= 0) {
+            std::lock_guard lock(state_mutex);
+            read_statistics = frame_statistics_flags.contains(static_cast<uint64_t>(output_pts));
+          }
+          auto encoded_frame = extract_encoded_frame(output_data, read_statistics);
           {
             std::lock_guard lock(state_mutex);
             if (encoded_frame.data.empty()) {
@@ -1532,8 +1673,49 @@ namespace amf {
                 encoded_frame.after_ref_frame_invalidation = rfi_flag->second;
                 frame_rfi_flags.erase(rfi_flag);
               }
+              auto full_refresh_flag = frame_full_refresh_flags.find(encoded_frame.frame_index);
+              if (full_refresh_flag != frame_full_refresh_flags.end()) {
+                encoded_frame.requested_full_refresh = full_refresh_flag->second;
+                frame_full_refresh_flags.erase(full_refresh_flag);
+              }
+              const auto statistics_flag = frame_statistics_flags.find(encoded_frame.frame_index);
+              const bool statistics_were_requested = statistics_flag != frame_statistics_flags.end();
+              if (statistics_were_requested) {
+                frame_statistics_flags.erase(statistics_flag);
+              } else {
+                encoded_frame.intra_pixels.reset();
+              }
               while (frame_rfi_flags.size() > 256) {
                 frame_rfi_flags.erase(frame_rfi_flags.begin());
+              }
+              while (frame_full_refresh_flags.size() > 256) {
+                frame_full_refresh_flags.erase(frame_full_refresh_flags.begin());
+              }
+              while (frame_statistics_flags.size() > 256) {
+                frame_statistics_flags.erase(frame_statistics_flags.begin());
+              }
+
+              if (intra_refresh_diagnostic_enabled) {
+                const auto unexpected_before = intra_refresh_diagnostics.unexpected_full_refresh_frames;
+                intra_refresh_diagnostics.observe(
+                  encoded_frame.requested_full_refresh,
+                  encoded_frame.picture_type,
+                  encoded_frame.intra_pixels,
+                  encoded_frame.data.size());
+                if (intra_refresh_diagnostics.unexpected_full_refresh_frames != unexpected_before) {
+                  BOOST_LOG(warning) << "AMF intra-refresh experiment: unexpected full refresh at output frame "
+                                     << encoded_frame.frame_index << " without a matching host full-refresh request"
+                                     << " (encoded_bytes=" << encoded_frame.data.size() << ')';
+                }
+                if (encoded_frame.requested_full_refresh &&
+                    encoded_frame.picture_type == lifecycle::encoded_picture_type_e::p) {
+                  BOOST_LOG(warning) << "AMF intra-refresh experiment: host requested a full refresh but AMF emitted a P-frame"
+                                     << " (frame=" << encoded_frame.frame_index
+                                     << ", encoded_bytes=" << encoded_frame.data.size() << ')';
+                }
+                if (intra_refresh_diagnostics.frames % lifecycle::intra_refresh_diagnostic_report_frames == 0) {
+                  log_intra_refresh_diagnostics("periodic summary");
+                }
               }
               consecutive_output_failures = 0;
               ++completed_output_count;
@@ -1804,6 +1986,7 @@ namespace amf {
     // AMF call. SubmitInput may synchronously invoke OnSurfaceDataRelease(), which
     // must be able to acquire state_mutex without re-entering a non-recursive lock.
     bool frame_after_ref_frame_invalidation = false;
+    bool frame_forced_full_refresh = force_idr;
     int ltr_slot_to_commit = -1;
     int next_ltr_slot_to_commit = 0;
     bool consume_rfi_on_accept = false;
@@ -1912,6 +2095,7 @@ namespace amf {
           result.fatal = true;
           return result;
         }
+        frame_forced_full_refresh = true;
       }
     }
     else if (ltr_slot_to_commit >= 0) {
@@ -1927,10 +2111,52 @@ namespace amf {
       }
     }
 
-    if (statistics_enabled) {
-      surface->SetProperty(video_format == 0 ? AMF_VIDEO_ENCODER_STATISTICS_FEEDBACK :
-                           video_format == 1 ? AMF_VIDEO_ENCODER_HEVC_STATISTICS_FEEDBACK :
-                                               AMF_VIDEO_ENCODER_AV1_STATISTICS_FEEDBACK, true);
+    bool statistics_requested_for_surface = false;
+    if (statistics_enabled && !statistics_feedback_failed) {
+      if (intra_refresh_diagnostic_enabled &&
+          intra_refresh_diagnostic_started_at.time_since_epoch().count() == 0) {
+        intra_refresh_diagnostic_started_at = std::chrono::steady_clock::now();
+      }
+      const auto diagnostic_elapsed = intra_refresh_diagnostic_enabled ?
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - intra_refresh_diagnostic_started_at) :
+        std::chrono::milliseconds::zero();
+      if (intra_refresh_diagnostic_enabled &&
+          diagnostic_elapsed >= lifecycle::intra_refresh_statistics_warmup &&
+          !statistics_window_started) {
+        statistics_window_started = true;
+        BOOST_LOG(info) << "AMF intra-refresh experiment: bounded statistics window started"
+                        << " (accepted_samples=" << statistics_sampled_input_count << ')';
+      }
+      if (intra_refresh_diagnostic_enabled &&
+          (diagnostic_elapsed >= lifecycle::intra_refresh_statistics_warmup +
+                                   lifecycle::intra_refresh_statistics_window ||
+           statistics_sampled_input_count >= lifecycle::intra_refresh_statistics_sample_frames) &&
+          !statistics_window_finished) {
+        statistics_window_finished = true;
+        BOOST_LOG(info) << "AMF intra-refresh experiment: bounded statistics submission window finished"
+                        << " (accepted_samples=" << statistics_sampled_input_count << ')';
+      }
+
+      const bool request_statistics = !intra_refresh_diagnostic_enabled ||
+                                      lifecycle::intra_refresh_statistics_sample_requested(
+                                        diagnostic_elapsed,
+                                        statistics_sampled_input_count);
+      if (request_statistics) {
+        const auto property_result = surface->SetProperty(
+          video_format == 0 ? AMF_VIDEO_ENCODER_STATISTICS_FEEDBACK :
+          video_format == 1 ? AMF_VIDEO_ENCODER_HEVC_STATISTICS_FEEDBACK :
+                              AMF_VIDEO_ENCODER_AV1_STATISTICS_FEEDBACK,
+          true);
+        if (property_result == AMF_OK) {
+          statistics_requested_for_surface = true;
+        } else {
+          statistics_feedback_failed = true;
+          BOOST_LOG(warning) << "AMF intra-refresh experiment: runtime rejected statistics feedback"
+                             << " (error=" << property_result
+                             << "); visual testing and frame-type diagnostics remain active";
+        }
+      }
     }
     if (psnr_enabled) {
       surface->SetProperty(video_format == 0 ? AMF_VIDEO_ENCODER_PSNR_FEEDBACK :
@@ -1943,6 +2169,28 @@ namespace amf {
                                                AMF_VIDEO_ENCODER_AV1_SSIM_FEEDBACK, true);
     }
 
+    // Register diagnostic metadata before entering SubmitInput. The output pump
+    // can observe a very fast completion as soon as the vendor call accepts the
+    // surface, before this thread reacquires state_mutex to commit ownership.
+    // Roll the provisional entries back on every non-accepted path.
+    {
+      std::lock_guard lock(state_mutex);
+      if (frame_after_ref_frame_invalidation) {
+        frame_rfi_flags.insert_or_assign(frame_index, true);
+      }
+      if (frame_forced_full_refresh) {
+        frame_full_refresh_flags.insert_or_assign(frame_index, true);
+      }
+      if (statistics_requested_for_surface) {
+        frame_statistics_flags.insert_or_assign(frame_index, true);
+      }
+    }
+    auto discard_provisional_diagnostic_flags = util::fail_guard([&]() {
+      std::lock_guard lock(state_mutex);
+      frame_rfi_flags.erase(frame_index);
+      frame_full_refresh_flags.erase(frame_index);
+      frame_statistics_flags.erase(frame_index);
+    });
     // SubmitInput can block inside the AMD runtime once a PA pipeline has retained
     // more inputs than its configured queue. Check known ownership before entering
     // the driver so probe/runtime deadlines remain enforceable even on a stalled
@@ -2106,6 +2354,10 @@ namespace amf {
     consecutive_submit_failures = 0;
     submit_backpressure_started = {};
     result.input_accepted = true;
+    discard_provisional_diagnostic_flags.disable();
+    if (statistics_requested_for_surface) {
+      ++statistics_sampled_input_count;
+    }
 
     // Drop our wrapper reference immediately after acceptance. AMF retains its
     // own reference for as long as it owns the native texture; keeping ours until
@@ -2160,8 +2412,9 @@ namespace amf {
       ltr_slot_frame_index,
       current_ltr_slot,
       rfi_pending,
-      [&](uint64_t recovered_frame_index) {
-        frame_rfi_flags.emplace(recovered_frame_index, true);
+      [](uint64_t) {
+        // Output metadata was provisionally registered before SubmitInput so a
+        // synchronous completion cannot outrun this accepted-state commit.
       });
 
     // AMD's sample and FFmpeg both submit while a separate thread polls output.

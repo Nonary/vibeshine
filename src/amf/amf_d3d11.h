@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <wrl/client.h>
@@ -89,6 +90,12 @@ namespace amf {
       const video::config_t &client_config,
       const video::sunshine_colorspace_t &colorspace);
 
+    bool
+    configure_intra_refresh_after_init(const amf_config &config);
+
+    void
+    log_intra_refresh_diagnostics(std::string_view reason) const;
+
     AMF_SURFACE_FORMAT
     get_amf_format(platf::pix_fmt_e buffer_format, int bit_depth);
 
@@ -96,7 +103,7 @@ namespace amf {
     get_codec_id();
 
     amf_encoded_frame
-    extract_encoded_frame(const ::amf::AMFDataPtr &output_data);
+    extract_encoded_frame(const ::amf::AMFDataPtr &output_data, bool read_statistics);
 
     void
     output_pump(std::stop_token stop_token) noexcept;
@@ -180,6 +187,8 @@ namespace amf {
     std::jthread output_thread;
     std::deque<amf_encoded_frame> completed_outputs;
     std::unordered_map<uint64_t, bool> frame_rfi_flags;
+    std::unordered_map<uint64_t, bool> frame_full_refresh_flags;
+    std::unordered_map<uint64_t, bool> frame_statistics_flags;
     uint64_t last_completed_frame_index = 0;
     uint64_t last_submitted_frame_index = 0;
     bool output_fatal = false;
@@ -208,6 +217,14 @@ namespace amf {
     bool statistics_enabled = false;
     bool psnr_enabled = false;
     bool ssim_enabled = false;
+    bool intra_refresh_diagnostic_enabled = false;
+    bool statistics_feedback_failed = false;
+    bool statistics_window_started = false;
+    bool statistics_window_finished = false;
+    uint64_t statistics_sampled_input_count = 0;
+    std::chrono::steady_clock::time_point intra_refresh_diagnostic_started_at {};
+    int64_t expected_intra_pixels_per_frame = 0;
+    lifecycle::intra_refresh_diagnostics_t intra_refresh_diagnostics;
 
     // Runtime fault watchdog: count consecutive failures so we can signal
     // a fatal error to the upper layer (triggering a real reinit) instead

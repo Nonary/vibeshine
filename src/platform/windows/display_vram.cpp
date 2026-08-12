@@ -2299,11 +2299,16 @@ namespace platf::dxgi {
         amf_cfg.max_ltr_frames = 0;
       }
       if (intra_refresh_plan.enabled) {
-        BOOST_LOG(info) << "AMF: enabling client-requested intra refresh (period="
+        BOOST_LOG(info) << "AMF: received client intra-refresh request; dynamic properties will be applied after encoder Init (period="
                         << ::amf::lifecycle::intra_refresh_period_frames
                         << ", blocks_per_slot=" << intra_refresh_plan.blocks_per_slot.value_or(0)
                         << ", AV1_mode=" << intra_refresh_plan.av1_mode.value_or(0)
                         << ", AV1_cycle=" << intra_refresh_plan.av1_cycle_frames.value_or(0) << ')';
+#ifdef SUNSHINE_AMF_INTRA_REFRESH_EXPERIMENT
+        amf_cfg.enable_statistics_feedback = true;
+        amf_cfg.intra_refresh_diagnostic = true;
+        BOOST_LOG(info) << "AMF intra-refresh experiment: host diagnostics armed; play normally for at least 70 seconds";
+#endif
       }
 
       // Curated opt-in AMF feature knobs. Each defaults to "auto" (nullopt), which

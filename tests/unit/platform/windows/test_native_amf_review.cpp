@@ -215,6 +215,7 @@ namespace {
     const auto h264 = amf::lifecycle::resolve_intra_refresh(true, 0, 1920, 1080);
     const auto h264_odd = amf::lifecycle::resolve_intra_refresh(true, 0, 1919, 1079);
     const auto hevc = amf::lifecycle::resolve_intra_refresh(true, 1, 1920, 1080);
+    const auto hevc_4k = amf::lifecycle::resolve_intra_refresh(true, 1, 3840, 2160);
     const auto av1 = amf::lifecycle::resolve_intra_refresh(true, 2, 1920, 1080);
 
     return !disabled.enabled && !disabled.blocks_per_slot &&
@@ -223,11 +224,89 @@ namespace {
            h264.minimum_reference_frames == 2 && h264.disable_ltr &&
            h264_odd.blocks_per_slot && *h264_odd.blocks_per_slot == 28 &&
            hevc.enabled && hevc.blocks_per_slot && *hevc.blocks_per_slot == 2 &&
+           hevc_4k.enabled && hevc_4k.blocks_per_slot && *hevc_4k.blocks_per_slot == 7 &&
            hevc.minimum_reference_frames == 0 && hevc.disable_ltr &&
            av1.enabled && !av1.blocks_per_slot &&
            av1.av1_mode && *av1.av1_mode == amf::lifecycle::av1_continuous_intra_refresh_mode &&
            av1.av1_cycle_frames &&
            *av1.av1_cycle_frames == amf::lifecycle::intra_refresh_period_frames;
+  }
+
+  bool intra_refresh_properties_are_applied_only_after_init() {
+    using amf::lifecycle::encoder_property_phase_e;
+    using amf::lifecycle::intra_refresh_property_e;
+
+    const auto h264 = amf::lifecycle::resolve_intra_refresh(true, 0, 1920, 1080);
+    const auto hevc = amf::lifecycle::resolve_intra_refresh(true, 1, 3840, 2160);
+    const auto av1 = amf::lifecycle::resolve_intra_refresh(true, 2, 1920, 1080);
+    const auto h264_before_init = amf::lifecycle::resolve_intra_refresh_properties(
+      encoder_property_phase_e::before_init,
+      0,
+      h264);
+    const auto hevc_before_init = amf::lifecycle::resolve_intra_refresh_properties(
+      encoder_property_phase_e::before_init,
+      1,
+      hevc);
+    const auto av1_before_init = amf::lifecycle::resolve_intra_refresh_properties(
+      encoder_property_phase_e::before_init,
+      2,
+      av1);
+    const auto h264_after_init = amf::lifecycle::resolve_intra_refresh_properties(
+      encoder_property_phase_e::after_init,
+      0,
+      h264);
+    const auto hevc_after_init = amf::lifecycle::resolve_intra_refresh_properties(
+      encoder_property_phase_e::after_init,
+      1,
+      hevc);
+    const auto av1_after_init = amf::lifecycle::resolve_intra_refresh_properties(
+      encoder_property_phase_e::after_init,
+      2,
+      av1);
+
+    return h264_before_init.count == 0 &&
+           hevc_before_init.count == 0 &&
+           av1_before_init.count == 0 &&
+           h264_after_init.count == 1 &&
+           h264_after_init.writes[0].property == intra_refresh_property_e::h264_mbs_per_slot &&
+           h264_after_init.writes[0].value == 28 &&
+           hevc_after_init.count == 1 &&
+           hevc_after_init.writes[0].property == intra_refresh_property_e::hevc_ctbs_per_slot &&
+           hevc_after_init.writes[0].value == 7 &&
+           av1_after_init.count == 2 &&
+           av1_after_init.writes[0].property == intra_refresh_property_e::av1_mode &&
+           av1_after_init.writes[0].value == amf::lifecycle::av1_continuous_intra_refresh_mode &&
+           av1_after_init.writes[1].property == intra_refresh_property_e::av1_stripes &&
+           av1_after_init.writes[1].value == amf::lifecycle::intra_refresh_period_frames;
+  }
+
+  bool experimental_statistics_window_is_bounded_and_delayed() {
+    using amf::lifecycle::intra_refresh_statistics_sample_requested;
+
+    return !intra_refresh_statistics_sample_requested(0ms, 0) &&
+           !intra_refresh_statistics_sample_requested(59999ms, 0) &&
+           intra_refresh_statistics_sample_requested(60000ms, 0) &&
+           intra_refresh_statistics_sample_requested(69999ms, 299) &&
+           !intra_refresh_statistics_sample_requested(69999ms, 300) &&
+           !intra_refresh_statistics_sample_requested(70000ms, 0);
+  }
+
+  bool intra_refresh_diagnostics_distinguish_requested_and_unexpected_full_refreshes() {
+    using amf::lifecycle::encoded_picture_type_e;
+    amf::lifecycle::intra_refresh_diagnostics_t diagnostics;
+
+    diagnostics.observe(false, encoded_picture_type_e::p, 4096);
+    diagnostics.observe(true, encoded_picture_type_e::idr, std::nullopt);
+    diagnostics.observe(false, encoded_picture_type_e::i, std::nullopt);
+    diagnostics.observe(true, encoded_picture_type_e::p, std::nullopt);
+
+    return diagnostics.frames == 4 &&
+           diagnostics.requested_full_refresh_outputs == 2 &&
+           diagnostics.requested_full_refresh_frames == 1 &&
+           diagnostics.unexpected_full_refresh_frames == 1 &&
+           diagnostics.statistics_samples == 1 &&
+           diagnostics.p_frames_with_intra == 1 &&
+           diagnostics.maximum_intra_pixels == 4096;
   }
 
   bool effective_reference_frame_limit_matches_configure_and_verify() {
@@ -552,6 +631,9 @@ int main() {
              automatic_h264_coder_preserves_driver_default() &&
              native_selection_never_routes_to_legacy() &&
              xbox_intra_refresh_maps_to_native_amf() &&
+             intra_refresh_properties_are_applied_only_after_init() &&
+             experimental_statistics_window_is_bounded_and_delayed() &&
+             intra_refresh_diagnostics_distinguish_requested_and_unexpected_full_refreshes() &&
              effective_reference_frame_limit_matches_configure_and_verify() &&
              repeated_input_rotates_away_from_a_lookahead_owned_surface() &&
              surface_pool_can_prime_a_retaining_driver() &&
@@ -608,6 +690,18 @@ TEST(SunshineNativeAmfReview, NativeSelectionNeverRoutesToLegacy) {
 
 TEST(SunshineNativeAmfReview, XboxIntraRefreshMapsToNativeAmf) {
   EXPECT_TRUE(xbox_intra_refresh_maps_to_native_amf());
+}
+
+TEST(SunshineNativeAmfReview, IntraRefreshPropertiesAreAppliedOnlyAfterInit) {
+  EXPECT_TRUE(intra_refresh_properties_are_applied_only_after_init());
+}
+
+TEST(SunshineNativeAmfReview, ExperimentalStatisticsWindowIsBoundedAndDelayed) {
+  EXPECT_TRUE(experimental_statistics_window_is_bounded_and_delayed());
+}
+
+TEST(SunshineNativeAmfReview, IntraRefreshDiagnosticsDistinguishRequestedAndUnexpectedFullRefreshes) {
+  EXPECT_TRUE(intra_refresh_diagnostics_distinguish_requested_and_unexpected_full_refreshes());
 }
 
 TEST(SunshineNativeAmfReview, EffectiveReferenceFrameLimitMatchesConfigureAndVerify) {

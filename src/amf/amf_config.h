@@ -112,6 +112,10 @@ namespace amf {
     bool enable_statistics_feedback = false;
     bool enable_psnr_feedback = false;
     bool enable_ssim_feedback = false;
+    // Experimental host-side validation for a client-requested intra-refresh
+    // session. It delays and bounds AMF statistics sampling so the initial
+    // visual result is not measured under a different submission path.
+    bool intra_refresh_diagnostic = false;
 
     // --- High Motion Quality Boost (encoder-level, separate from PA) ---
     // Default nullopt = do not set the property, let the AMD driver decide

@@ -255,6 +255,120 @@ namespace amf::lifecycle {
     bool disable_ltr = false;
   };
 
+  // AMF classifies the intra-refresh controls as dynamic properties. AMD's
+  // own encoder pipeline applies dynamic properties only after Component::Init;
+  // keeping the phase in the driver-independent plan makes that ordering a
+  // testable contract instead of an incidental call-site detail.
+  enum class encoder_property_phase_e {
+    before_init,
+    after_init,
+  };
+
+  enum class intra_refresh_property_e {
+    h264_mbs_per_slot,
+    hevc_ctbs_per_slot,
+    av1_mode,
+    av1_stripes,
+  };
+
+  struct intra_refresh_property_write_t {
+    intra_refresh_property_e property = intra_refresh_property_e::h264_mbs_per_slot;
+    int value = 0;
+  };
+
+  struct intra_refresh_property_writes_t {
+    std::array<intra_refresh_property_write_t, 2> writes {};
+    std::size_t count = 0;
+  };
+
+  inline constexpr intra_refresh_property_writes_t resolve_intra_refresh_properties(
+    encoder_property_phase_e phase,
+    int video_format,
+    const intra_refresh_plan_t &plan) noexcept {
+    intra_refresh_property_writes_t result;
+    if (phase != encoder_property_phase_e::after_init || !plan.enabled) {
+      return result;
+    }
+
+    auto append = [&](intra_refresh_property_e property, const std::optional<int> &value) {
+      if (value && *value > 0 && result.count < result.writes.size()) {
+        result.writes[result.count++] = {property, *value};
+      }
+    };
+
+    if (video_format == 0) {
+      append(intra_refresh_property_e::h264_mbs_per_slot, plan.blocks_per_slot);
+    } else if (video_format == 1) {
+      append(intra_refresh_property_e::hevc_ctbs_per_slot, plan.blocks_per_slot);
+    } else if (video_format == 2) {
+      append(intra_refresh_property_e::av1_mode, plan.av1_mode);
+      append(intra_refresh_property_e::av1_stripes, plan.av1_cycle_frames);
+    }
+    return result;
+  }
+
+  inline constexpr auto intra_refresh_statistics_warmup = std::chrono::seconds(60);
+  inline constexpr auto intra_refresh_statistics_window = std::chrono::seconds(10);
+  inline constexpr uint64_t intra_refresh_statistics_sample_frames = 300;
+  inline constexpr uint64_t intra_refresh_diagnostic_report_frames = 300;
+
+  inline constexpr bool intra_refresh_statistics_sample_requested(
+    std::chrono::milliseconds elapsed,
+    uint64_t accepted_statistics_samples) noexcept {
+    return elapsed >= intra_refresh_statistics_warmup &&
+           elapsed < intra_refresh_statistics_warmup + intra_refresh_statistics_window &&
+           accepted_statistics_samples < intra_refresh_statistics_sample_frames;
+  }
+
+  enum class encoded_picture_type_e {
+    unknown,
+    idr,
+    i,
+    p,
+  };
+
+  struct intra_refresh_diagnostics_t {
+    uint64_t frames = 0;
+    uint64_t requested_full_refresh_outputs = 0;
+    uint64_t requested_full_refresh_frames = 0;
+    uint64_t unexpected_full_refresh_frames = 0;
+    uint64_t statistics_samples = 0;
+    uint64_t p_frames_with_intra = 0;
+    uint64_t intra_pixels = 0;
+    uint64_t maximum_intra_pixels = 0;
+    uint64_t maximum_frame_bytes = 0;
+
+    void observe(
+      bool requested_full_refresh,
+      encoded_picture_type_e picture_type,
+      const std::optional<int64_t> &sampled_intra_pixels,
+      uint64_t frame_bytes = 0) noexcept {
+      ++frames;
+      if (requested_full_refresh) {
+        ++requested_full_refresh_outputs;
+      }
+      const bool full_refresh = picture_type == encoded_picture_type_e::idr ||
+                                picture_type == encoded_picture_type_e::i;
+      if (full_refresh) {
+        if (requested_full_refresh) {
+          ++requested_full_refresh_frames;
+        } else {
+          ++unexpected_full_refresh_frames;
+        }
+      }
+      if (sampled_intra_pixels && *sampled_intra_pixels >= 0) {
+        const auto pixels = static_cast<uint64_t>(*sampled_intra_pixels);
+        ++statistics_samples;
+        intra_pixels += pixels;
+        maximum_intra_pixels = std::max(maximum_intra_pixels, pixels);
+        if (picture_type == encoded_picture_type_e::p && pixels != 0) {
+          ++p_frames_with_intra;
+        }
+      }
+      maximum_frame_bytes = std::max(maximum_frame_bytes, frame_bytes);
+    }
+  };
+
   inline constexpr intra_refresh_plan_t resolve_intra_refresh(
     bool requested,
     int video_format,

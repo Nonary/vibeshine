@@ -1876,6 +1876,7 @@ namespace stream {
           payload = {(char *) payload_with_replacements.data(), payload_with_replacements.size()};
         }
       }
+      const auto encoded_frame_bytes = payload.size();
 
       video_short_frame_header_t frame_header = {};
       frame_header.headerType = 0x01;  // Short header type
@@ -1931,7 +1932,12 @@ namespace stream {
       // If the number of FEC blocks needed exceeds the protocol limit, turn off FEC for this frame.
       // For normal FEC percentages, this should only happen for enormous frames (over 800 packets at 20%).
       if (fec_blocks_needed > MAX_FEC_BLOCKS) {
-        BOOST_LOG(warning) << "Skipping FEC for abnormally large encoded frame (needed "sv << fec_blocks_needed << " FEC blocks)"sv;
+        BOOST_LOG(warning) << "Skipping FEC for abnormally large encoded frame"
+                           << " (frame=" << packet->frame_index()
+                           << ", type=" << (packet->is_idr() ? "IDR" : "inter")
+                           << ", encoded_bytes=" << encoded_frame_bytes
+                           << ", packetized_bytes=" << payload.size()
+                           << ", needed_fec_blocks=" << fec_blocks_needed << ')';
         fecPercentage = 0;
         fec_blocks_needed = MAX_FEC_BLOCKS;
       }
@@ -1950,7 +1956,12 @@ namespace stream {
       // If we exceed the 10-bit FEC packet index (which means our frame exceeded 4096 packets),
       // the frame will be unrecoverable. Log an error for this case.
       if (aligned_size / blocksize >= 1024) {
-        BOOST_LOG(error) << "Encoder produced a frame too large to send! Is the encoder broken? (needed "sv << (aligned_size / blocksize) << " packets)"sv;
+        BOOST_LOG(error) << "Encoder produced a frame too large to send! Is the encoder broken?"
+                         << " (frame=" << packet->frame_index()
+                         << ", type=" << (packet->is_idr() ? "IDR" : "inter")
+                         << ", encoded_bytes=" << encoded_frame_bytes
+                         << ", packetized_bytes=" << payload.size()
+                         << ", needed_packets=" << (aligned_size / blocksize) << ')';
       }
 
       // Split the data into aligned FEC blocks
