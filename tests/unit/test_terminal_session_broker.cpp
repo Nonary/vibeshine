@@ -2,8 +2,8 @@
 
 #include <stdexcept>
 
-#include "rtsp.h"
-#include "terminal_session_broker.h"
+#include "src/rtsp.h"
+#include "src/terminal_session_broker.h"
 
 namespace {
   std::shared_ptr<rtsp_stream::launch_session_t> launch_material(
@@ -64,6 +64,9 @@ TEST(TerminalSessionBroker, RuntimeReceivesExactAuthenticatedLaunchMaterial) {
         .accepted = true,
         .ready = true,
         .rtsp_port = 58021,
+        .control_port = 58022,
+        .video_port = 58023,
+        .audio_port = 58024,
         .windows_session_id = 12,
         .seat_id = "seat-paired-client",
       };

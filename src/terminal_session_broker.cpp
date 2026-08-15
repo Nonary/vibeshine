@@ -80,8 +80,8 @@ namespace terminal_session {
         .error = "Terminal session broker failed.",
       };
     }
-    if (route.ready && (!route.accepted || route.rtsp_port == 0)) {
-      return invalid_request("Terminal session broker returned an invalid ready route.");
+    if (route.ready && (!route.accepted || route.rtsp_port == 0 || route.control_port == 0 || route.video_port == 0 || route.audio_port == 0)) {
+      return invalid_request("Terminal session broker returned an incomplete media route.");
     }
     if (!route.ready && route.error.empty()) {
       route.error = "Terminal session did not become ready.";

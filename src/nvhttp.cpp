@@ -54,6 +54,7 @@
 #include "remote_session.h"
 #include "remote_display_topology.h"
 #include "terminal_session_broker.h"
+#include "terminal_session_runtime.h"
 #include "platform/common.h"
 #include "state_storage.h"
 #ifdef _WIN32
@@ -4413,6 +4414,10 @@ namespace nvhttp {
     // Install the concrete coordinator callbacks before exposing that route.
     register_remote_monitor_runtime();
 #endif
+    // Install the seat runtime before exposing launch/resume. The default
+    // provider is deliberately fail-closed until a supported Windows provider
+    // can prove session, display, token, audio, and worker ownership.
+    terminal_session::register_production_runtime();
     auto shutdown_event = mail::man->event<bool>(mail::shutdown);
 
     auto port_http = net::map_port(PORT_HTTP);
@@ -4655,7 +4660,7 @@ namespace nvhttp {
     cleanup_virtual_display_if_idle();
 #endif
     remote_session::register_monitor_runtime_hooks({});
-    terminal_session::register_runtime_hooks({});
+    terminal_session::unregister_production_runtime();
   }
 
   void erase_all_clients() {

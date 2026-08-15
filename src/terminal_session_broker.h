@@ -41,6 +41,12 @@ namespace terminal_session {
     bool ready {};
     bool retryable {};
     std::uint16_t rtsp_port {};
+    // The worker owns one complete media/control allocation. A route is ready
+    // only when every required port is known; no arbitrary RTSP-only fallback
+    // is permitted for terminal sessions.
+    std::uint16_t control_port {};
+    std::uint16_t video_port {};
+    std::uint16_t audio_port {};
     std::uint32_t windows_session_id {};
     std::string seat_id;
     std::string error;
