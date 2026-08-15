@@ -37,10 +37,20 @@ target_link_libraries(audio-info
 )
 target_compile_options(audio-info PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
-add_executable(sunshinesvc sunshinesvc.cpp)
+add_executable(sunshinesvc sunshinesvc.cpp
+        ${CMAKE_SOURCE_DIR}/src/terminal_session_protocol.cpp
+        ${CMAKE_SOURCE_DIR}/src/terminal_session_service.cpp
+        ${CMAKE_SOURCE_DIR}/src/terminal_session_worker_process.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/misc_utils.cpp
+        ${CMAKE_SOURCE_DIR}/src/logging.cpp
+        ${CMAKE_SOURCE_DIR}/src/logging_policy.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.cpp)
 target_link_libraries(sunshinesvc
+        ${Boost_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
         wtsapi32
+        OpenSSL::Crypto
         ${PLATFORM_LIBRARIES})
 target_compile_options(sunshinesvc PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
@@ -48,6 +58,19 @@ add_custom_command(TARGET sunshinesvc POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/wix_payload/tools"
         COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:sunshinesvc>" "${CMAKE_BINARY_DIR}/wix_payload/tools/sunshinesvc.exe"
 )
+
+add_executable(sunshine_terminal_worker_probe
+        # Internal admission/IPC test host. This is intentionally not a
+        # user-facing Sunshine worker and is not installed by the MSI.
+        terminal_worker_probe.cpp
+        ${CMAKE_SOURCE_DIR}/src/terminal_session_protocol.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/misc_utils.cpp
+        ${CMAKE_SOURCE_DIR}/src/logging.cpp
+        ${CMAKE_SOURCE_DIR}/src/logging_policy.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.cpp)
+target_link_libraries(sunshine_terminal_worker_probe PRIVATE ${Boost_LIBRARIES} OpenSSL::Crypto wtsapi32 ${PLATFORM_LIBRARIES})
+target_compile_options(sunshine_terminal_worker_probe PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
 # Playnite launcher: per-launch helper that hosts a private IPC server
 add_executable(playnite-launcher

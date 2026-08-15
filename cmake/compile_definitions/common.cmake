@@ -108,6 +108,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/terminal_session_service.h"
         "${CMAKE_SOURCE_DIR}/src/terminal_session_worker.cpp"
         "${CMAKE_SOURCE_DIR}/src/terminal_session_worker.h"
+        "${CMAKE_SOURCE_DIR}/src/terminal_session_worker_process.cpp"
+        "${CMAKE_SOURCE_DIR}/src/terminal_session_worker_process.h"
         "${CMAKE_SOURCE_DIR}/src/remote_display_topology.cpp"
         "${CMAKE_SOURCE_DIR}/src/remote_display_topology.h"
         "${CMAKE_SOURCE_DIR}/src/nvhttp.cpp"

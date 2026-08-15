@@ -26,7 +26,10 @@ namespace terminal_session::protocol {
   constexpr std::size_t max_error_size = 256;
   constexpr auto ticket_lifetime = std::chrono::seconds {10};
 
-  enum class opcode : std::uint8_t { prepare = 1, resume = 2, release = 3, reply = 4, reject = 5 };
+  enum class opcode : std::uint8_t {
+    prepare = 1, resume = 2, release = 3, reply = 4, reject = 5,
+    control_prepare = 6, control_release = 7, control_challenge = 8
+  };
 
   enum class reject_reason : std::uint8_t {
     malformed,
@@ -44,10 +47,12 @@ namespace terminal_session::protocol {
   struct peer_identity_t {
     std::uint32_t pid {};
     std::string sid;
+    std::uint64_t creation_time {};
     bool authenticated {};
   };
 
   struct ticket_t {
+    opcode operation {opcode::prepare};
     std::string client_uuid;
     std::uint64_t generation {};
     std::uint32_t launch_id {};
@@ -77,6 +82,7 @@ namespace terminal_session::protocol {
     std::uint16_t control_port {};
     std::uint16_t video_port {};
     std::uint16_t audio_port {};
+    std::optional<ticket_t> ticket;
   };
 
   [[nodiscard]] std::vector<std::uint8_t> encode(const request_t &request);
@@ -91,16 +97,17 @@ namespace terminal_session::protocol {
     admission_authority();
     explicit admission_authority(std::uint64_t seed);
 
-    [[nodiscard]] ticket_t issue(std::string_view client_uuid, std::uint64_t generation, std::uint32_t launch_id,
-                                 clock_t::time_point now = clock_t::now());
+    [[nodiscard]] std::optional<ticket_t> issue(std::string_view client_uuid, std::uint64_t generation, std::uint32_t launch_id,
+                                 clock_t::time_point now = clock_t::now(), opcode operation = opcode::prepare);
+    [[nodiscard]] std::optional<ticket_t> issue(std::string_view client_uuid, std::uint64_t generation, std::uint32_t launch_id,
+                                 const peer_identity_t &peer, clock_t::time_point now = clock_t::now(), opcode operation = opcode::prepare);
     [[nodiscard]] std::optional<reject_reason> consume(const request_t &request,
                                                         clock_t::time_point now = clock_t::now());
     void expire(clock_t::time_point now = clock_t::now());
 
   private:
-    struct ticket_record { ticket_t ticket; bool used {}; };
-    std::array<std::uint8_t, 16> next_nonce();
-    std::uint64_t counter_ {};
+    struct ticket_record { ticket_t ticket; bool used {}; bool peer_bound {}; peer_identity_t expected_peer; };
+    [[nodiscard]] std::optional<std::array<std::uint8_t, 16>> next_nonce();
     std::vector<ticket_record> tickets_;
   };
 } // namespace terminal_session::protocol

@@ -35,6 +35,13 @@
 
 namespace platf::dxgi {
 
+  // Keep the security-sensitive CreateNamedPipeW argument construction in one
+  // named contract so tests can assert the reject-remote bit is in dwPipeMode,
+  // rather than accidentally passing it as nDefaultTimeOut.
+  constexpr DWORD terminal_named_pipe_access = PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE;
+  constexpr DWORD terminal_named_pipe_mode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS;
+  constexpr DWORD terminal_named_pipe_timeout = 0;
+
   constexpr uint8_t SECURE_DESKTOP_MSG = 0x01;  ///< Message type for WGC desktop-switch reinit notifications
   constexpr uint8_t ACK_MSG = 0x02;  ///< Message type for acknowledgment responses
 
@@ -164,6 +171,10 @@ namespace platf::dxgi {
      * @return `true` if connected, `false` otherwise.
      */
     virtual bool is_connected() = 0;
+    virtual bool get_client_process_id(DWORD &) { return false; }
+    virtual bool get_client_user_sid_string(std::wstring &) { return false; }
+    virtual bool get_client_process_creation_time(std::uint64_t &) { return false; }
+    virtual bool get_server_process_id(DWORD &) { return false; }
   };
 
   class FramedPipe: public INamedPipe {
@@ -178,6 +189,10 @@ namespace platf::dxgi {
     void wait_for_client_connection(int milliseconds) override;
     void disconnect() override;
     bool is_connected() override;
+    bool get_client_process_id(DWORD &pid) override;
+    bool get_client_user_sid_string(std::wstring &sid_str) override;
+    bool get_client_process_creation_time(std::uint64_t &time) override;
+    bool get_server_process_id(DWORD &pid) override;
 
   private:
     bool try_decode_one_frame(std::span<uint8_t> dst, size_t &bytesRead);
@@ -346,10 +361,12 @@ namespace platf::dxgi {
     bool write_blocking(std::span<const uint8_t> bytes);
 
     // Retrieve the client process ID for a connected server pipe.
-    bool get_client_process_id(DWORD &pid);
+    bool get_client_process_id(DWORD &pid) override;
 
     // Retrieve the client's user SID as a string (S-1-5-...)
-    bool get_client_user_sid_string(std::wstring &sid_str);
+    bool get_client_user_sid_string(std::wstring &sid_str) override;
+    bool get_client_process_creation_time(std::uint64_t &time) override;
+    bool get_server_process_id(DWORD &pid) override;
 
   private:
     /**

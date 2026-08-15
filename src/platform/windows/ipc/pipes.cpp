@@ -231,12 +231,12 @@ namespace platf::dxgi {
     winrt::file_handle hPipe {
       CreateNamedPipeW(
         fullPipeName.c_str(),
-        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+        terminal_named_pipe_access,
+        terminal_named_pipe_mode,
         1,
         65536,
         65536,
-        0,
+        terminal_named_pipe_timeout,
         pSecAttr
       )
     };
@@ -1265,6 +1265,28 @@ namespace platf::dxgi {
     return true;
   }
 
+  bool WinPipe::get_client_process_creation_time(std::uint64_t &time) {
+    time = 0;
+    DWORD pid = 0;
+    if (!get_client_process_id(pid)) return false;
+    winrt::handle process {OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)};
+    if (!process) return false;
+    FILETIME created {}, exited {}, kernel {}, user {};
+    if (!GetProcessTimes(process.get(), &created, &exited, &kernel, &user)) return false;
+    ULARGE_INTEGER value {.LowPart = created.dwLowDateTime, .HighPart = created.dwHighDateTime};
+    time = value.QuadPart;
+    return true;
+  }
+
+  bool WinPipe::get_server_process_id(DWORD &pid) {
+    pid = 0;
+    if (_is_server || !_pipe) return false;
+    ULONG value = 0;
+    if (!GetNamedPipeServerProcessId(_pipe.get(), &value)) return false;
+    pid = static_cast<DWORD>(value);
+    return pid != 0;
+  }
+
   AsyncNamedPipe::AsyncNamedPipe(std::unique_ptr<INamedPipe> pipe):
       _pipe(std::move(pipe)) {
   }
@@ -1554,6 +1576,22 @@ namespace platf::dxgi {
 
   bool FramedPipe::is_connected() {
     return _inner && _inner->is_connected();
+  }
+
+  bool FramedPipe::get_client_process_id(DWORD &pid) {
+    return _inner && _inner->get_client_process_id(pid);
+  }
+
+  bool FramedPipe::get_client_user_sid_string(std::wstring &sid_str) {
+    return _inner && _inner->get_client_user_sid_string(sid_str);
+  }
+
+  bool FramedPipe::get_client_process_creation_time(std::uint64_t &time) {
+    return _inner && _inner->get_client_process_creation_time(time);
+  }
+
+  bool FramedPipe::get_server_process_id(DWORD &pid) {
+    return _inner && _inner->get_server_process_id(pid);
   }
 
   SelfHealingPipe::SelfHealingPipe(Creator creator):

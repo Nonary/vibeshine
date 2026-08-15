@@ -1131,8 +1131,8 @@ Work these in order unless new evidence changes the dependency chain.
 
 ## Clean broker implementation checkpoint (2026-08-15)
 
-The source-owned control plane is implemented on `duo_seat_runtime_large` and
-landed back into `duo_session_large` after validation. This is deliberately not
+The source-owned control plane is implemented on the correction branch and is
+being landed back into `duo_session_large` after validation. This is deliberately not
 a claim that concurrent Windows seats are available on this host.
 
 - `terminal_session_protocol` defines version 1 of a bounded binary request /
@@ -1141,11 +1141,13 @@ a claim that concurrent Windows seats are available on this host.
   Requests are bound to the paired TLS client UUID, launch ID, and role
   generation. The authority rejects malformed or oversized frames, wrong UUID,
   stale generation, unauthenticated peer identity, expired tickets, and replay.
-- `terminal_session_service::endpoint_t` is the transport-neutral service
-  endpoint. The production Windows transport boundary is a protected
-  `NamedPipeFactory`/`FramedPipe` adapter (SYSTEM/user-SID ACL); the endpoint
-  applies protocol validation and admission before orchestration. Ticket and
-  peer secrets are never logged or persisted.
+- `terminal_session_service::endpoint_t` is hosted by `sunshinesvc` through a
+  protected first-instance `NamedPipeFactory`/`FramedPipe` endpoint. The main
+  process validates the server PID, SYSTEM token, and service image; the service
+  validates the client PID, token SID, process creation identity, and Sunshine
+  image. A service-issued one-use challenge is bound to the exact UUID,
+  generation, launch, peer, and opcode. Remote clients and pipe precreation are
+  rejected; ticket and peer secrets are never logged or persisted.
 - `terminal_session::runtime_t` is a transactional provider-to-worker state
   machine. Provider preflight must prove concurrent-session, remote-display,
   token-launch, and seat-audio capability before allocation. Provider failure,
@@ -1156,27 +1158,33 @@ a claim that concurrent Windows seats are available on this host.
   explicit worker command contract disabling public Web UI, pairing, mDNS,
   updater, and global display mutations. The worker consumes its one-use ticket
   from the protected local channel; it does not pair again.
+- The service-owned worker process path is real and testable: it uses a
+  CSPRNG rendezvous name, first-instance/reject-remote pipe, provider-owned
+  primary token, explicit session/desktop contract, kill-on-close job, exact
+  child PID handshake, one-use ticket validator, and reserved four-port route
+  equality. It is unreachable in the production build until a provider supplies a valid token/session/display/audio
+  resource, so no SYSTEM worker is ever launched as a fallback.
 - HTTP startup registers the runtime before exposing launch/resume. The default
   in-tree provider is an explicit fail-closed capability gate because no
   supportable Windows concurrent-session provider with owned Remote IDD and
   seat-scoped audio is currently available. Terminal opt-in therefore returns
   service-unavailable/admission failure and never falls back to console
   streaming. Non-terminal clients retain the existing path.
-- Focused tests cover codec bounds, complete route bundles, authentication,
-  replay, identity binding, provider rollback, idempotent cleanup, and worker
-  isolation flags. Tests use fake provider/worker objects; no driver, account,
+- Focused tests cover codec bounds, complete route bundles, challenge-bound
+  authentication, replay, identity binding, provider rollback, idempotent
+  cleanup, and worker isolation flags. Tests use fake provider/worker objects;
+  no driver, account,
   service, registry, TermService, or live session mutation is part of this
   implementation.
 
 Still unsupported: a legally and operationally supportable Windows session
 provider, Remote IDD ownership/activation in that provider, seat-scoped audio,
-full worker process launch over the protected pipe, firewall/WAN port mapping,
-Steam/CEF singleton isolation, and end-to-end multi-seat HDR/input proof.
-Those are provider admission requirements, not hidden fallbacks or proof-only
-patch mechanisms. A future provider plugin must implement capability preflight,
-transactional resource handles, complete port allocation, protected worker
-launch, and reverse-order release without modifying Microsoft DLLs or
-weakening Core Isolation/Code Integrity.
+firewall/WAN port mapping, Steam/CEF singleton isolation, and end-to-end
+multi-seat HDR/input proof. Those are provider admission requirements, not
+hidden fallbacks or proof-only patch mechanisms. A future provider plugin must
+implement capability preflight and owned session/display/audio/token handles,
+complete reserved port allocation, and reverse-order release without modifying
+Microsoft DLLs or weakening Core Isolation/Code Integrity.
 
 ## Release gates
 

@@ -8,6 +8,7 @@
 #include "terminal_session_protocol.h"
 
 #include <memory>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -40,6 +41,13 @@ namespace terminal_session {
     std::uint16_t control_port {};
     std::uint16_t video_port {};
     std::uint16_t audio_port {};
+    // Provider-owned primary token; zero is deliberately unsupported.
+    std::uintptr_t launch_token {};
+    // Provider-owned interactive desktop name/handle contract.
+    std::string desktop_name;
+    // SID read from the provider-owned launch token; an empty value is not
+    // sufficient to admit a worker process.
+    std::string user_sid;
   };
 
   class seat_provider_t {
@@ -48,6 +56,7 @@ namespace terminal_session {
     [[nodiscard]] virtual provider_capability_t preflight() = 0;
     [[nodiscard]] virtual std::optional<provider_resource_t> allocate(const provider_request_t &, std::string &error) = 0;
     virtual void release(const provider_resource_t &) noexcept = 0;
+    virtual bool release_checked(const provider_resource_t &resource) noexcept { release(resource); return true; }
   };
 
   struct worker_request_t {
@@ -57,6 +66,7 @@ namespace terminal_session {
     std::string config_root;
     std::string state_root;
     std::string log_root;
+    std::function<bool(const protocol::request_t &)> ticket_validator;
   };
 
   class seat_worker_t {
@@ -64,6 +74,7 @@ namespace terminal_session {
     virtual ~seat_worker_t() = default;
     [[nodiscard]] virtual std::optional<route_t> start(const worker_request_t &, std::string &error) = 0;
     virtual bool stop(const route_t &) noexcept = 0;
+    [[nodiscard]] virtual bool cleanup_needed() const noexcept { return false; }
   };
 
   class runtime_t {

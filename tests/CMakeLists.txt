@@ -338,7 +338,7 @@ sunshine_register_component(NAME test_component_remote_session TEST_SOURCE unit/
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/remote_session.cpp")
 sunshine_register_component(NAME test_component_terminal_session_broker TEST_SOURCE unit/test_terminal_session_broker.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/terminal_session_broker.cpp"
-    LINK_LIBRARIES OpenSSL::Crypto)
+    LINK_LIBRARIES OpenSSL::Crypto ${Boost_LIBRARIES} wtsapi32)
 sunshine_register_component(NAME test_component_terminal_session_runtime TEST_SOURCE unit/test_terminal_session_runtime.cpp
     PRODUCT_SOURCES
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/terminal_session_broker.cpp"
@@ -346,7 +346,12 @@ sunshine_register_component(NAME test_component_terminal_session_runtime TEST_SO
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/terminal_session_runtime.cpp"
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/terminal_session_worker.cpp"
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/terminal_session_service.cpp"
-    LINK_LIBRARIES OpenSSL::Crypto)
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/ipc/pipes.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/ipc/misc_utils.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/logging.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/logging_policy.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/utf_utils.cpp"
+    LINK_LIBRARIES OpenSSL::Crypto ${Boost_LIBRARIES} wtsapi32)
 sunshine_register_component(NAME test_component_remote_display_topology TEST_SOURCE unit/test_remote_display_topology.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/remote_display_topology.cpp")
 sunshine_register_component(NAME test_component_config_parse TEST_SOURCE unit/test_config_parse.cpp

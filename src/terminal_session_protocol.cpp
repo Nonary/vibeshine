@@ -4,6 +4,7 @@
 #include <cstring>
 #include <limits>
 #include <openssl/rand.h>
+#include <openssl/crypto.h>
 
 namespace terminal_session::protocol {
   namespace {
@@ -54,12 +55,18 @@ namespace terminal_session::protocol {
     }
 
     bool write_ticket(writer &out, const ticket_t &ticket) {
+      out.u8(static_cast<std::uint8_t>(ticket.operation));
       return out.string(ticket.client_uuid, max_uuid_size) && (out.u64(ticket.generation), out.u32(ticket.launch_id),
         out.bytes.insert(out.bytes.end(), ticket.nonce.begin(), ticket.nonce.end()), true);
     }
 
     bool read_ticket(reader &in, ticket_t &ticket) {
-      if (!in.string(ticket.client_uuid, max_uuid_size) || !in.u64(ticket.generation) || !in.u32(ticket.launch_id) || in.remaining() < ticket.nonce.size()) return false;
+      std::uint8_t operation = 0;
+      if (!in.u8(operation) || (operation != static_cast<std::uint8_t>(opcode::prepare) && operation != static_cast<std::uint8_t>(opcode::resume) &&
+          operation != static_cast<std::uint8_t>(opcode::release) && operation != static_cast<std::uint8_t>(opcode::control_prepare) &&
+          operation != static_cast<std::uint8_t>(opcode::control_release)) ||
+          !in.string(ticket.client_uuid, max_uuid_size) || !in.u64(ticket.generation) || !in.u32(ticket.launch_id) || in.remaining() < ticket.nonce.size()) return false;
+      ticket.operation = static_cast<opcode>(operation);
       std::copy_n(in.bytes.begin() + static_cast<std::ptrdiff_t>(in.offset), ticket.nonce.size(), ticket.nonce.begin());
       in.offset += ticket.nonce.size();
       return true;
@@ -70,16 +77,26 @@ namespace terminal_session::protocol {
     writer out; header(out, request.operation);
     if (!out.string(request.client_uuid, max_uuid_size)) return {};
     out.u64(request.generation); out.u32(request.launch_id);
-    if (!write_ticket(out, request.ticket) || out.bytes.size() > max_message_size) return {};
+    if (request.operation == opcode::control_challenge) {
+      out.u8(static_cast<std::uint8_t>(request.ticket.operation));
+    } else if (!write_ticket(out, request.ticket)) return {};
+    if (out.bytes.size() > max_message_size) return {};
     return std::move(out.bytes);
   }
 
   std::optional<request_t> decode_request(std::span<const std::uint8_t> bytes) {
     if (bytes.empty() || bytes.size() > max_message_size) return std::nullopt;
     reader in {bytes}; request_t result; opcode operation {};
-    if (!read_header(in, 0, operation) || (operation != opcode::prepare && operation != opcode::resume && operation != opcode::release)) return std::nullopt;
+    if (!read_header(in, 0, operation) || (operation != opcode::prepare && operation != opcode::resume && operation != opcode::release &&
+        operation != opcode::control_prepare && operation != opcode::control_release && operation != opcode::control_challenge)) return std::nullopt;
     result.operation = operation;
-    if (!in.string(result.client_uuid, max_uuid_size) || !in.u64(result.generation) || !in.u32(result.launch_id) || !read_ticket(in, result.ticket) || in.remaining() != 0) return std::nullopt;
+    if (!in.string(result.client_uuid, max_uuid_size) || !in.u64(result.generation) || !in.u32(result.launch_id)) return std::nullopt;
+    if (operation == opcode::control_challenge) {
+      std::uint8_t target = 0;
+      if (!in.u8(target) || (target != static_cast<std::uint8_t>(opcode::control_prepare) && target != static_cast<std::uint8_t>(opcode::control_release))) return std::nullopt;
+      result.ticket.operation = static_cast<opcode>(target);
+    } else if (!read_ticket(in, result.ticket)) return std::nullopt;
+    if (in.remaining() != 0) return std::nullopt;
     return result;
   }
 
@@ -90,6 +107,8 @@ namespace terminal_session::protocol {
     out.u64(response.generation); out.u32(response.launch_id); out.u32(response.windows_session_id);
     if (!out.string(response.seat_id, max_uuid_size)) return {};
     out.u16(response.rtsp_port); out.u16(response.control_port); out.u16(response.video_port); out.u16(response.audio_port);
+    out.u8(response.ticket ? 1 : 0);
+    if (response.ticket && !write_ticket(out, *response.ticket)) return {};
     if (out.bytes.size() > max_message_size) return {};
     return std::move(out.bytes);
   }
@@ -101,49 +120,73 @@ namespace terminal_session::protocol {
     std::uint8_t accepted = 0; std::uint8_t reason = 0;
     if (!in.u8(accepted) || !in.u8(reason) || !in.string(result.error, max_error_size) || !in.string(result.client_uuid, max_uuid_size) ||
         !in.u64(result.generation) || !in.u32(result.launch_id) || !in.u32(result.windows_session_id) || !in.string(result.seat_id, max_uuid_size) ||
-        !in.u16(result.rtsp_port) || !in.u16(result.control_port) || !in.u16(result.video_port) || !in.u16(result.audio_port) || in.remaining() != 0) return std::nullopt;
+        !in.u16(result.rtsp_port) || !in.u16(result.control_port) || !in.u16(result.video_port) || !in.u16(result.audio_port)) return std::nullopt;
+    std::uint8_t has_ticket = 0;
+    if (!in.u8(has_ticket) || has_ticket > 1) return std::nullopt;
+    if (has_ticket) { result.ticket.emplace(); if (!read_ticket(in, *result.ticket)) return std::nullopt; }
+    if (in.remaining() != 0) return std::nullopt;
     if (accepted > 1 || reason > static_cast<std::uint8_t>(reject_reason::worker_unavailable)) return std::nullopt;
     result.accepted = accepted != 0; result.reason = static_cast<reject_reason>(reason);
     return result;
   }
 
   admission_authority::admission_authority(): admission_authority(0x9e3779b97f4a7c15ULL) {}
-  admission_authority::admission_authority(std::uint64_t seed): counter_(seed) {}
+  admission_authority::admission_authority(std::uint64_t) {}
 
-  std::array<std::uint8_t, 16> admission_authority::next_nonce() {
+  std::optional<std::array<std::uint8_t, 16>> admission_authority::next_nonce() {
     std::array<std::uint8_t, 16> nonce {};
     if (RAND_bytes(nonce.data(), static_cast<int>(nonce.size())) == 1) return nonce;
-    // The counter fallback keeps tests and unusual OpenSSL initialization
-    // failures functional, while production remains protected by the local
-    // pipe ACL and rejects tickets after one use or ten seconds.
-    std::uint64_t value = ++counter_;
-    for (int i = 0; i < 8; ++i) nonce[i] = static_cast<std::uint8_t>(value >> (i * 8));
-    value ^= value << 17; value ^= value >> 13;
-    for (int i = 0; i < 8; ++i) nonce[8 + i] = static_cast<std::uint8_t>(value >> (i * 8));
-    return nonce;
+    return std::nullopt;
   }
 
-  ticket_t admission_authority::issue(std::string_view client_uuid, std::uint64_t generation, std::uint32_t launch_id, clock_t::time_point now) {
-    ticket_t ticket {std::string {client_uuid}, generation, launch_id, next_nonce(), now + ticket_lifetime};
+  std::optional<ticket_t> admission_authority::issue(std::string_view client_uuid, std::uint64_t generation, std::uint32_t launch_id, clock_t::time_point now, opcode operation) {
+    expire(now);
+    auto nonce = next_nonce();
+    if (!nonce || client_uuid.empty() || generation == 0 || launch_id == 0) return std::nullopt;
+    ticket_t ticket {operation, std::string {client_uuid}, generation, launch_id, *nonce, now + ticket_lifetime};
     tickets_.push_back({ticket, false});
+    return ticket;
+  }
+
+  std::optional<ticket_t> admission_authority::issue(std::string_view client_uuid, std::uint64_t generation, std::uint32_t launch_id,
+                                      const peer_identity_t &peer, clock_t::time_point now, opcode operation) {
+    auto ticket = issue(client_uuid, generation, launch_id, now, operation);
+    if (!ticket) return std::nullopt;
+    tickets_.back().expected_peer = peer;
+    tickets_.back().peer_bound = true;
     return ticket;
   }
 
   std::optional<reject_reason> admission_authority::consume(const request_t &request, clock_t::time_point now) {
     if (!request.peer.authenticated || request.peer.pid == 0 || request.peer.sid.empty()) return reject_reason::unauthenticated_peer;
     if (request.client_uuid.empty() || request.client_uuid != request.ticket.client_uuid) return reject_reason::wrong_client;
+    if (request.operation != request.ticket.operation) return reject_reason::invalid_state;
     if (request.generation == 0 || request.generation != request.ticket.generation || request.launch_id == 0 || request.launch_id != request.ticket.launch_id) return reject_reason::stale_generation;
-    const auto found = std::find_if(tickets_.begin(), tickets_.end(), [&](const ticket_record &record) { return record.ticket.nonce == request.ticket.nonce; });
+    auto found = std::find_if(tickets_.begin(), tickets_.end(), [&](const ticket_record &record) {
+      return CRYPTO_memcmp(record.ticket.nonce.data(), request.ticket.nonce.data(), request.ticket.nonce.size()) == 0;
+    });
     if (found == tickets_.end()) return reject_reason::replayed_ticket;
     if (found->used) return reject_reason::replayed_ticket;
     if (found->ticket.expires_at <= now) return reject_reason::expired_ticket;
-    if (found->ticket.client_uuid != request.client_uuid || found->ticket.generation != request.generation || found->ticket.launch_id != request.launch_id) return reject_reason::wrong_client;
+    expire(now);
+    found = std::find_if(tickets_.begin(), tickets_.end(), [&](const ticket_record &record) {
+      return CRYPTO_memcmp(record.ticket.nonce.data(), request.ticket.nonce.data(), request.ticket.nonce.size()) == 0;
+    });
+    if (found == tickets_.end()) return reject_reason::replayed_ticket;
+    if (found->ticket.client_uuid != request.client_uuid || found->ticket.generation != request.generation || found->ticket.launch_id != request.launch_id || found->ticket.operation != request.operation) return reject_reason::wrong_client;
+    if (found->peer_bound && (found->expected_peer.pid != request.peer.pid || found->expected_peer.sid != request.peer.sid ||
+        found->expected_peer.creation_time != request.peer.creation_time)) return reject_reason::unauthenticated_peer;
     found->used = true;
     expire(now);
     return std::nullopt;
   }
 
   void admission_authority::expire(clock_t::time_point now) {
+    for (auto &record : tickets_) {
+      if (record.ticket.expires_at <= now || record.used) {
+        OPENSSL_cleanse(record.ticket.nonce.data(), record.ticket.nonce.size());
+      }
+    }
     tickets_.erase(std::remove_if(tickets_.begin(), tickets_.end(), [&](const ticket_record &record) { return record.ticket.expires_at <= now || record.used; }), tickets_.end());
   }
 } // namespace terminal_session::protocol

@@ -4,11 +4,18 @@
  */
 #define WIN32_LEAN_AND_MEAN
 #include <format>
+#include <cstdint>
 #include <string>
 #include <Windows.h>
 #include <WtsApi32.h>
+#include <memory>
+#include <atomic>
+#include <mutex>
+#include <unordered_map>
 
 #include "src/platform/windows/service_constants.h"
+#include "src/terminal_session_service.h"
+#include "src/terminal_session_worker_process.h"
 
 // PROC_THREAD_ATTRIBUTE_JOB_LIST is currently missing from MinGW headers
 #ifndef PROC_THREAD_ATTRIBUTE_JOB_LIST
@@ -19,11 +26,62 @@ SERVICE_STATUS_HANDLE service_status_handle;
 SERVICE_STATUS service_status;
 HANDLE stop_event;
 HANDLE session_change_event;
+std::unique_ptr<terminal_session::service::pipe_server_t> terminal_broker;
+std::mutex terminal_state_mutex;
+struct terminal_state_t { std::uint64_t generation {}; std::uint32_t launch_id {}; };
+std::unordered_map<std::string, terminal_state_t> terminal_states;
+terminal_session::worker::process_t terminal_worker;
+std::atomic<DWORD> authorized_sunshine_pid {0};
+std::atomic<std::uint64_t> authorized_sunshine_creation {0};
+
+std::uint64_t ProcessCreationTime(HANDLE process) {
+  FILETIME created {}, exited {}, kernel {}, user {};
+  if (!GetProcessTimes(process, &created, &exited, &kernel, &user)) return 0;
+  ULARGE_INTEGER value {};
+  value.LowPart = created.dwLowDateTime;
+  value.HighPart = created.dwHighDateTime;
+  return value.QuadPart;
+}
 
 constexpr auto SERVICE_NAME = "SunshineService";
 constexpr DWORD FAST_EXIT_WINDOW_MS = 60 * 1000;
 constexpr DWORD CRASH_LOOP_RESTART_DELAY_MS = 30 * 1000;
 constexpr DWORD CRASH_LOOP_FAST_EXIT_THRESHOLD = 3;
+
+terminal_session::protocol::response_t HandleTerminalBroker(const terminal_session::protocol::request_t &request) {
+  terminal_session::protocol::response_t response;
+  response.client_uuid = request.client_uuid;
+  response.generation = request.generation;
+  response.launch_id = request.launch_id;
+  std::lock_guard lock {terminal_state_mutex};
+  if (request.operation == terminal_session::protocol::opcode::control_release) {
+    const auto found = terminal_states.find(request.client_uuid);
+    if (found == terminal_states.end() || found->second.generation != request.generation || found->second.launch_id != request.launch_id) {
+      response.reason = terminal_session::protocol::reject_reason::stale_generation;
+      response.error = "Terminal release does not match the owned launch.";
+      return response;
+    }
+    terminal_states.erase(found);
+    response.accepted = true;
+    return response;
+  }
+  if (request.operation != terminal_session::protocol::opcode::control_prepare) {
+    response.reason = terminal_session::protocol::reject_reason::invalid_state;
+    response.error = "The service accepts only authenticated control requests.";
+    return response;
+  }
+  const auto found = terminal_states.find(request.client_uuid);
+  if (found != terminal_states.end() && (found->second.generation != request.generation || found->second.launch_id != request.launch_id)) {
+    response.reason = terminal_session::protocol::reject_reason::stale_generation;
+    response.error = "Terminal launch generation is stale.";
+    return response;
+  }
+  // Provider admission is deliberately before worker creation. No provider
+  // means no token/session/display/audio mutation and no child process.
+  response.reason = terminal_session::protocol::reject_reason::provider_unavailable;
+  response.error = "No supported concurrent-session provider, remote display, or seat-scoped audio endpoint is available.";
+  return response;
+}
 
 DWORD WINAPI HandlerEx(DWORD dwControl, DWORD dwEventType, LPVOID lpEventData, LPVOID lpContext) {
   switch (dwControl) {
@@ -245,6 +303,16 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
   service_status.dwCurrentState = SERVICE_RUNNING;
   SetServiceStatus(service_status_handle, &service_status);
 
+  // The privileged service owns the sole production terminal broker endpoint.
+  // Its provider is fail-closed until a supported Windows seat contract exists.
+  terminal_broker = std::make_unique<terminal_session::service::pipe_server_t>(HandleTerminalBroker, [](const terminal_session::protocol::peer_identity_t &peer) {
+    return peer.pid == authorized_sunshine_pid.load(std::memory_order_acquire) &&
+           peer.creation_time == authorized_sunshine_creation.load(std::memory_order_acquire);
+  });
+  if (!terminal_broker->start()) {
+    terminal_broker.reset();
+  }
+
   SetEnvironmentVariableW(platf::service_launch::launched_by_service_env_var, L"1");
 
   DWORD fast_exit_count = 0;
@@ -279,6 +347,17 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
       CloseHandle(job_handle);
       continue;
     }
+    const auto creation = ProcessCreationTime(process_info.hProcess);
+    if (!creation) {
+      TerminateProcess(process_info.hProcess, ERROR_PROCESS_ABORTED);
+      CloseHandle(process_info.hThread);
+      CloseHandle(process_info.hProcess);
+      CloseHandle(console_token);
+      CloseHandle(job_handle);
+      continue;
+    }
+    authorized_sunshine_creation.store(creation, std::memory_order_release);
+    authorized_sunshine_pid.store(process_info.dwProcessId, std::memory_order_release);
 
     bool still_running = true;
     bool self_exit = false;
@@ -323,6 +402,8 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
 
     CloseHandle(process_info.hThread);
     CloseHandle(process_info.hProcess);
+    authorized_sunshine_pid.store(0, std::memory_order_release);
+    authorized_sunshine_creation.store(0, std::memory_order_release);
     CloseHandle(console_token);
     CloseHandle(job_handle);
 
@@ -351,6 +432,15 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
         break;
       }
     }
+  }
+
+  if (terminal_broker) {
+    terminal_broker->stop();
+    terminal_broker.reset();
+  }
+  {
+    std::lock_guard lock {terminal_state_mutex};
+    terminal_states.clear();
   }
 
   // Let SCM know we've stopped
