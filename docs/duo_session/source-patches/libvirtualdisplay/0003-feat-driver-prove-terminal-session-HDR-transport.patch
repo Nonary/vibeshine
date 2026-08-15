@@ -1,0 +1,1828 @@
+From 4f97a1bfe355207ba5f2103be7649a2aa65ef3cc Mon Sep 17 00:00:00 2001
+From: Chase Payne <chase_payne@outlook.com>
+Date: Wed, 12 Aug 2026 11:11:02 -0500
+Subject: [PATCH 3/5] feat(driver): prove terminal-session HDR transport
+
+Add session-scoped HDR control and Update2/CommitModes2 telemetry so the remote IDD can exercise real advanced-color transitions. Add public HDR state probes and a deterministic HDR10 renderer with source and composed-frame captures to distinguish application submission from IddCx transport. The proof tools expose when Windows accepts HDR configuration but the remote-session kernel path still commits SDR BGRA8 frames.
+
+Generated with [Codex](https://openai.com/codex/)
+Model: GPT 5.6-Sol X-High
+---
+ src/driver/CMakeLists.txt                     |   8 +
+ src/driver/control_client.cpp                 |   4 +
+ src/driver/control_protocol.cpp               |  28 +
+ src/driver/driver_controller.cpp              |  31 ++
+ .../virtual_display/driver/control_client.h   |   1 +
+ .../virtual_display/driver/control_protocol.h |  21 +-
+ .../driver/driver_controller.h                |   6 +
+ .../virtual_display/driver/probe_commands.h   |   1 +
+ .../driver/windows_control_protocol.h         |   3 +
+ src/driver/ioctl_dispatcher.cpp               |   9 +
+ src/driver/probe_commands.cpp                 |  33 +-
+ src/driver/windows_driver/driver_main.cpp     | 283 +++++++++-
+ tests/unit/driver/test_control_client.cpp     |  19 +
+ tests/unit/driver/test_control_protocol.cpp   |  19 +
+ tests/unit/driver/test_ioctl_dispatcher.cpp   |  41 ++
+ tests/unit/driver/test_probe_contract.cpp     |  11 +
+ tools/hdr_session_probe.cpp                   | 496 ++++++++++++++++++
+ tools/virtualdisplay_probe.cpp                | 305 ++++++++++-
+ 18 files changed, 1312 insertions(+), 7 deletions(-)
+ create mode 100644 tools/hdr_session_probe.cpp
+
+diff --git a/src/driver/CMakeLists.txt b/src/driver/CMakeLists.txt
+index a70a48b..f8862f7 100644
+--- a/src/driver/CMakeLists.txt
++++ b/src/driver/CMakeLists.txt
+@@ -138,6 +138,14 @@ if(WIN32 AND BUILD_VIRTUALDISPLAY_TOOLS)
+     target_compile_features(alttab_stress PRIVATE cxx_std_20)
+     install(TARGETS alttab_stress RUNTIME DESTINATION tools)
+     list(APPEND _libvirtualdisplay_tool_targets alttab_stress)
++
++    # Deterministic HDR10 producer used to prove what a terminal-session app submits
++    # versus what the IddCx consumer receives after desktop composition.
++    add_executable(hdr_session_probe "${PROJECT_SOURCE_DIR}/tools/hdr_session_probe.cpp")
++    target_link_libraries(hdr_session_probe PRIVATE d3d11 dxgi gdi32 user32)
++    target_compile_features(hdr_session_probe PRIVATE cxx_std_20)
++    install(TARGETS hdr_session_probe RUNTIME DESTINATION tools)
++    list(APPEND _libvirtualdisplay_tool_targets hdr_session_probe)
+ endif()
+ 
+ if(WIN32 AND BUILD_VIRTUALDISPLAY_VULKAN_LAYER)
+diff --git a/src/driver/control_client.cpp b/src/driver/control_client.cpp
+index ee7d76e..d9cfab5 100644
+--- a/src/driver/control_client.cpp
++++ b/src/driver/control_client.cpp
+@@ -91,6 +91,10 @@ namespace virtual_display::driver {
+     return ioctl_no_out(kIoctlSetRenderAdapter, &request, sizeof(request));
+   }
+ 
++  ControlOperationResult ControlClient::set_display_hdr_state(const SetDisplayHdrStateRequest &request) {
++    return ioctl_no_out(kIoctlSetDisplayHdrState, &request, sizeof(request));
++  }
++
+   ControlOperationResult ControlClient::ioctl_no_out(
+     const std::uint32_t ioctl_code,
+     const void *input,
+diff --git a/src/driver/control_protocol.cpp b/src/driver/control_protocol.cpp
+index 0cacce1..86c39e6 100644
+--- a/src/driver/control_protocol.cpp
++++ b/src/driver/control_protocol.cpp
+@@ -233,6 +233,30 @@ namespace virtual_display::driver {
+     return ValidationError::None;
+   }
+ 
++  ValidationError validate_set_display_hdr_state(const SetDisplayHdrStateRequest &request) {
++    if (!is_valid_api_namespace(request.api_namespace)) {
++      return ValidationError::WrongApiNamespace;
++    }
++    if (request.display_id == 0) {
++      return ValidationError::MissingDisplayId;
++    }
++    if (request.enabled > 1) {
++      return ValidationError::InvalidHdrState;
++    }
++    if (request.sdr_white_level_nits < kMinSdrWhiteLevelNits ||
++        request.sdr_white_level_nits > kMaxSdrWhiteLevelNits) {
++      return ValidationError::InvalidSdrWhiteLevel;
++    }
++    if (request.flags != 0) {
++      return ValidationError::InvalidFlags;
++    }
++    if (request.reserved != 0) {
++      return ValidationError::InvalidReservedField;
++    }
++
++    return ValidationError::None;
++  }
++
+   ValidationError validate_lease_display_request(const LeaseDisplayRequest &request) {
+     if (!is_valid_api_namespace(request.api_namespace)) {
+       return ValidationError::WrongApiNamespace;
+@@ -430,6 +454,10 @@ namespace virtual_display::driver {
+         return "invalid_physical_size";
+       case ValidationError::InvalidHdrLuminance:
+         return "invalid_hdr_luminance";
++      case ValidationError::InvalidHdrState:
++        return "invalid_hdr_state";
++      case ValidationError::InvalidSdrWhiteLevel:
++        return "invalid_sdr_white_level";
+       case ValidationError::InvalidRefreshRate:
+         return "invalid_refresh_rate";
+       case ValidationError::InvalidDisplayName:
+diff --git a/src/driver/driver_controller.cpp b/src/driver/driver_controller.cpp
+index 56f2551..c04216a 100644
+--- a/src/driver/driver_controller.cpp
++++ b/src/driver/driver_controller.cpp
+@@ -544,6 +544,33 @@ namespace virtual_display::driver {
+     return {};
+   }
+ 
++  ControllerStatus DriverController::set_display_hdr_state(const SetDisplayHdrStateRequest &request) {
++    return set_display_hdr_state(request, nullptr);
++  }
++
++  ControllerStatus DriverController::set_display_hdr_state(
++    const SetDisplayHdrStateRequest &request,
++    std::unique_lock<std::timed_mutex> *controller_lock
++  ) {
++    if (const auto validation = validate_set_display_hdr_state(request);
++        validation != ValidationError::None) {
++      return {StoreError::ValidationFailed, validation, BackendError::None};
++    }
++
++    if (const auto backend_error = call_backend_without_controller_lock(
++          backend_call_mutex_,
++          controller_lock,
++          BackendError::Busy,
++          [&]() {
++            return backend_.set_display_hdr_state(request);
++          });
++        backend_error != BackendError::None) {
++      return {StoreError::None, ValidationError::None, backend_error};
++    }
++
++    return {};
++  }
++
+   const DisplayManifest &DriverController::query_display_manifest() const {
+     return store_.display_manifest();
+   }
+@@ -674,6 +701,10 @@ namespace virtual_display::driver {
+     return BackendError::Failed;
+   }
+ 
++  BackendError DisplayDriverBackend::set_display_hdr_state(const SetDisplayHdrStateRequest &) {
++    return BackendError::Failed;
++  }
++
+   ControllerStatus DriverController::from_store_result(const StoreResult &result) {
+     return {result.error, result.validation_error, BackendError::None};
+   }
+diff --git a/src/driver/include/virtual_display/driver/control_client.h b/src/driver/include/virtual_display/driver/control_client.h
+index 519b5cf..df5e352 100644
+--- a/src/driver/include/virtual_display/driver/control_client.h
++++ b/src/driver/include/virtual_display/driver/control_client.h
+@@ -73,6 +73,7 @@ namespace virtual_display::driver {
+     ControlResult<DisplayManifest> set_display_manifest(const DisplayManifest &manifest);
+     ControlResult<DisplayManifest> query_display_manifest();
+     ControlOperationResult set_render_adapter(const SetRenderAdapterRequest &request);
++    ControlOperationResult set_display_hdr_state(const SetDisplayHdrStateRequest &request);
+ 
+   private:
+     template<class T>
+diff --git a/src/driver/include/virtual_display/driver/control_protocol.h b/src/driver/include/virtual_display/driver/control_protocol.h
+index d52d3b6..a407029 100644
+--- a/src/driver/include/virtual_display/driver/control_protocol.h
++++ b/src/driver/include/virtual_display/driver/control_protocol.h
+@@ -44,7 +44,7 @@ namespace virtual_display::driver {
+   };
+ 
+   inline constexpr std::uint16_t kProtocolVersionMajor = 3;
+-  inline constexpr std::uint16_t kProtocolVersionMinor = 7;
++  inline constexpr std::uint16_t kProtocolVersionMinor = 8;
+   inline constexpr std::uint16_t kProtocolVersionPatch = 0;
+   inline constexpr std::uint16_t kMinimumCompatibleProtocolVersionMinor = 6;
+ 
+@@ -68,6 +68,9 @@ namespace virtual_display::driver {
+   inline constexpr std::uint32_t kDefaultHdrMaxLuminanceNits = 1000;
+   inline constexpr std::uint32_t kMinHdrMaxLuminanceNits = 400;
+   inline constexpr std::uint32_t kMaxHdrMaxLuminanceNits = 2000;
++  inline constexpr std::uint32_t kDefaultSdrWhiteLevelNits = 80;
++  inline constexpr std::uint32_t kMinSdrWhiteLevelNits = 80;
++  inline constexpr std::uint32_t kMaxSdrWhiteLevelNits = 480;
+   inline constexpr std::uint32_t kCreateTemporaryDisplayFlagEphemeralIdentity = 0x00000001u;
+   inline constexpr std::uint32_t kCreateTemporaryDisplayKnownFlags =
+     kCreateTemporaryDisplayFlagEphemeralIdentity;
+@@ -107,6 +110,7 @@ namespace virtual_display::driver {
+     SetRenderAdapter = 0x90b,
+     CreateTemporaryDisplayOwned = 0x90c,
+     ReclaimTemporaryDisplay = 0x90d,
++    SetDisplayHdrState = 0x90e,
+   };
+ 
+   enum class IoctlAccess : std::uint32_t {
+@@ -153,6 +157,8 @@ namespace virtual_display::driver {
+     ioctl_code(IoctlFunction::CreateTemporaryDisplayOwned, IoctlAccess::ReadWrite);
+   inline constexpr std::uint32_t kIoctlReclaimTemporaryDisplay =
+     ioctl_code(IoctlFunction::ReclaimTemporaryDisplay, IoctlAccess::ReadWrite);
++  inline constexpr std::uint32_t kIoctlSetDisplayHdrState =
++    ioctl_code(IoctlFunction::SetDisplayHdrState, IoctlAccess::ReadWrite);
+ 
+   struct ProtocolVersion {
+     Guid api_namespace {kApiNamespaceGuid};
+@@ -203,6 +209,15 @@ namespace virtual_display::driver {
+     std::uint32_t reserved {};
+   };
+ 
++  struct SetDisplayHdrStateRequest {
++    Guid api_namespace {kApiNamespaceGuid};
++    std::uint64_t display_id {};
++    std::uint32_t enabled {};
++    std::uint32_t sdr_white_level_nits {kDefaultSdrWhiteLevelNits};
++    std::uint32_t flags {};
++    std::uint32_t reserved {};
++  };
++
+   struct OwnerCapability {
+     std::array<std::uint8_t, kOwnerCapabilityBytes> bytes {};
+ 
+@@ -353,6 +368,8 @@ namespace virtual_display::driver {
+     InvalidHeight,
+     InvalidPhysicalSize,
+     InvalidHdrLuminance,
++    InvalidHdrState,
++    InvalidSdrWhiteLevel,
+     InvalidRefreshRate,
+     InvalidDisplayName,
+     PermanentDisplayCountTooHigh,
+@@ -427,6 +444,7 @@ namespace virtual_display::driver {
+     ValidatedCreateTemporaryDisplay *validated = nullptr
+   );
+   ValidationError validate_reclaim_temporary_display(const ReclaimTemporaryDisplayRequest &request);
++  ValidationError validate_set_display_hdr_state(const SetDisplayHdrStateRequest &request);
+   ValidationError validate_lease_display_request(const LeaseDisplayRequest &request);
+   ValidationError validate_lease_request(const LeaseRequest &request);
+   ValidationError validate_permanent_display_count(
+@@ -452,6 +470,7 @@ namespace virtual_display::driver {
+   static_assert(sizeof(ReclaimTemporaryDisplayRequest) == 72);
+   static_assert(sizeof(ReclaimTemporaryDisplayResult) == 48);
+   static_assert(sizeof(SetRenderAdapterRequest) == 32);
++  static_assert(sizeof(SetDisplayHdrStateRequest) == 40);
+   static_assert(sizeof(LeaseDisplayRequest) == 32);
+   static_assert(sizeof(LeaseRequest) == 32);
+   static_assert(sizeof(QueryLeaseResult) == 48);
+diff --git a/src/driver/include/virtual_display/driver/driver_controller.h b/src/driver/include/virtual_display/driver/driver_controller.h
+index ae122be..5de92ed 100644
+--- a/src/driver/include/virtual_display/driver/driver_controller.h
++++ b/src/driver/include/virtual_display/driver/driver_controller.h
+@@ -58,6 +58,7 @@ namespace virtual_display::driver {
+     virtual BackendError set_permanent_display_count(const PermanentDisplayCountRequest &request) = 0;
+     virtual BackendError apply_display_manifest(const DisplayManifest &manifest);
+     virtual BackendError set_render_adapter(const SetRenderAdapterRequest &request) = 0;
++    virtual BackendError set_display_hdr_state(const SetDisplayHdrStateRequest &request);
+   };
+ 
+   struct ControllerStatus {
+@@ -124,6 +125,11 @@ namespace virtual_display::driver {
+       const SetRenderAdapterRequest &request,
+       std::unique_lock<std::timed_mutex> *controller_lock
+     );
++    ControllerStatus set_display_hdr_state(const SetDisplayHdrStateRequest &request);
++    ControllerStatus set_display_hdr_state(
++      const SetDisplayHdrStateRequest &request,
++      std::unique_lock<std::timed_mutex> *controller_lock
++    );
+     const DisplayManifest &query_display_manifest() const;
+     PermanentDisplayCountResult query_permanent_display_count() const;
+     QueryDisplayStateResult query_display_state() const;
+diff --git a/src/driver/include/virtual_display/driver/probe_commands.h b/src/driver/include/virtual_display/driver/probe_commands.h
+index 6f3598d..d74e889 100644
+--- a/src/driver/include/virtual_display/driver/probe_commands.h
++++ b/src/driver/include/virtual_display/driver/probe_commands.h
+@@ -26,6 +26,7 @@ namespace virtual_display::driver {
+   std::uint32_t saturating_u32(std::uint64_t value);
+   std::uint32_t refresh_millihz_from_hz(std::uint32_t refresh_hz);
+   std::optional<std::uint32_t> parse_probe_u32_token(std::string_view text);
++  std::optional<std::uint64_t> parse_probe_u64_token(std::string_view text);
+   std::optional<std::int32_t> parse_probe_i32_token(std::string_view text);
+   bool probe_arg_count_valid(int argc, int minimum, int maximum);
+   std::optional<ProbeCommandPlan> probe_command_plan(std::string_view command);
+diff --git a/src/driver/include/virtual_display/driver/windows_control_protocol.h b/src/driver/include/virtual_display/driver/windows_control_protocol.h
+index 7e97821..0bcc169 100644
+--- a/src/driver/include/virtual_display/driver/windows_control_protocol.h
++++ b/src/driver/include/virtual_display/driver/windows_control_protocol.h
+@@ -83,6 +83,8 @@ namespace virtual_display::driver {
+     CTL_CODE(FILE_DEVICE_UNKNOWN, static_cast<DWORD>(IoctlFunction::CreateTemporaryDisplayOwned), METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA);
+   inline constexpr DWORD kWinIoctlReclaimTemporaryDisplay =
+     CTL_CODE(FILE_DEVICE_UNKNOWN, static_cast<DWORD>(IoctlFunction::ReclaimTemporaryDisplay), METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA);
++  inline constexpr DWORD kWinIoctlSetDisplayHdrState =
++    CTL_CODE(FILE_DEVICE_UNKNOWN, static_cast<DWORD>(IoctlFunction::SetDisplayHdrState), METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA);
+ 
+   static_assert(sizeof(GUID) == sizeof(Guid));
+   static_assert(sizeof(LUID) == sizeof(AdapterLuid));
+@@ -100,6 +102,7 @@ namespace virtual_display::driver {
+   static_assert(kWinIoctlSetRenderAdapter == kIoctlSetRenderAdapter);
+   static_assert(kWinIoctlCreateTemporaryDisplayOwned == kIoctlCreateTemporaryDisplayOwned);
+   static_assert(kWinIoctlReclaimTemporaryDisplay == kIoctlReclaimTemporaryDisplay);
++  static_assert(kWinIoctlSetDisplayHdrState == kIoctlSetDisplayHdrState);
+ }  // namespace virtual_display::driver
+ 
+ #endif
+diff --git a/src/driver/ioctl_dispatcher.cpp b/src/driver/ioctl_dispatcher.cpp
+index 89d603f..9ace720 100644
+--- a/src/driver/ioctl_dispatcher.cpp
++++ b/src/driver/ioctl_dispatcher.cpp
+@@ -268,6 +268,15 @@ namespace virtual_display::driver {
+         return result_from_controller(controller_.set_render_adapter(request, controller_lock));
+       }
+ 
++      case kIoctlSetDisplayHdrState: {
++        SetDisplayHdrStateRequest request {};
++        if (!read_input(input, input_size, request)) {
++          return {IoctlStatus::InvalidInputBuffer, 0, {}};
++        }
++
++        return result_from_controller(controller_.set_display_hdr_state(request, controller_lock));
++      }
++
+       default:
+         return {IoctlStatus::InvalidIoctl, 0, {}};
+     }
+diff --git a/src/driver/probe_commands.cpp b/src/driver/probe_commands.cpp
+index c96b69e..cb40cb9 100644
+--- a/src/driver/probe_commands.cpp
++++ b/src/driver/probe_commands.cpp
+@@ -35,6 +35,17 @@ namespace virtual_display::driver {
+     return value;
+   }
+ 
++  std::optional<std::uint64_t> parse_probe_u64_token(const std::string_view text) {
++    std::uint64_t value {};
++    const auto *begin = text.data();
++    const auto *end = text.data() + text.size();
++    const auto result = std::from_chars(begin, end, value);
++    if (text.empty() || result.ec != std::errc {} || result.ptr != end) {
++      return std::nullopt;
++    }
++    return value;
++  }
++
+   std::optional<std::int32_t> parse_probe_i32_token(const std::string_view text) {
+     std::int32_t value {};
+     const auto *begin = text.data();
+@@ -60,6 +71,8 @@ namespace virtual_display::driver {
+     };
+ 
+     if (command == "--diagnose" ||
++        command == "--apply-extended-topology-current-session" ||
++        command == "--dump-display-config-current-session" ||
+         command == "--apply-extended-topology" ||
+         command == "--query-color-profiles" ||
+         command == "--check" ||
+@@ -67,9 +80,24 @@ namespace virtual_display::driver {
+         command == "--apply-manifest-topology") {
+       return plan(2, 2);
+     }
++    if (command == "--set-hdr-current-session") {
++      return plan(3, 4);
++    }
+     if (command == "--set-permanent") {
+       return plan(3, 3);
+     }
++    if (command == "--remote-query-permanent") {
++      return plan(3, 3);
++    }
++    if (command == "--remote-query-state") {
++      return plan(3, 3);
++    }
++    if (command == "--remote-set-permanent") {
++      return plan(4, 4);
++    }
++    if (command == "--remote-set-hdr") {
++      return plan(5, 6);
++    }
+     if (command == "--associate-color-profile") {
+       return plan(5, (std::numeric_limits<int>::max)());
+     }
+@@ -118,7 +146,10 @@ namespace virtual_display::driver {
+   }
+ 
+   ProbeCommandExecutionStage probe_command_execution_stage(const std::string_view command) {
+-    if (command == "--diagnose") {
++    if (command == "--diagnose" ||
++        command == "--apply-extended-topology-current-session" ||
++        command == "--dump-display-config-current-session" ||
++        command == "--set-hdr-current-session") {
+       return ProbeCommandExecutionStage::NoControlDevice;
+     }
+     if (command == "--apply-extended-topology" ||
+diff --git a/src/driver/windows_driver/driver_main.cpp b/src/driver/windows_driver/driver_main.cpp
+index e3c58ba..225c6bb 100644
+--- a/src/driver/windows_driver/driver_main.cpp
++++ b/src/driver/windows_driver/driver_main.cpp
+@@ -155,6 +155,9 @@ namespace {
+     bool arriving {};
+     bool departing {};
+     bool orphaned_late_arrival {};
++    bool display_config_initialized {};
++    bool hdr_requested {};
++    std::uint32_t sdr_white_level_nits {vdd::kDefaultSdrWhiteLevelNits};
+     std::uint32_t assign_callbacks_in_flight {};
+     std::uint32_t unassign_callbacks_in_flight {};
+     IDDCX_DEFAULT_HDR_METADATA_TYPE default_hdr_metadata_type {IDDCX_HDRMETADATA_TYPE_UNINITIALIZED};
+@@ -1273,6 +1276,7 @@ namespace {
+     IDDCX_TARGET_MODE2 mode {};
+     mode.Size = sizeof(mode);
+     mode.TargetVideoSignalInfo.targetVideoSignalInfo = make_signal_info(shape, false);
++    mode.RequiredBandwidth = 0;
+     populate_rgb_wire_bits(mode.BitsPerComponent, preferred_rgb_bits_per_component());
+     return mode;
+   }
+@@ -2158,6 +2162,8 @@ namespace {
+         for (;;) {
+           IDXGIResource *surface_ptr = nullptr;
+           HRESULT acquire_result = E_FAIL;
++          bool has_metadata2 = false;
++          IDDCX_METADATA2 metadata2 {};
+           if (IDD_IS_FUNCTION_AVAILABLE(IddCxSwapChainReleaseAndAcquireBuffer2)) {
+             IDARG_IN_RELEASEANDACQUIREBUFFER2 input {};
+             input.Size = sizeof(input);
+@@ -2165,6 +2171,8 @@ namespace {
+             acquired.MetaData.Size = sizeof(acquired.MetaData);
+             acquire_result = IddCxSwapChainReleaseAndAcquireBuffer2(swapchain_, &input, &acquired);
+             surface_ptr = acquired.MetaData.pSurface;
++            has_metadata2 = true;
++            metadata2 = acquired.MetaData;
+           } else {
+             IDARG_OUT_RELEASEANDACQUIREBUFFER acquired {};
+             acquire_result = IddCxSwapChainReleaseAndAcquireBuffer(swapchain_, &acquired);
+@@ -2212,6 +2220,25 @@ namespace {
+ 
+           Microsoft::WRL::ComPtr<IDXGIResource> surface;
+           surface.Attach(surface_ptr);
++          if (!first_frame_logged_.exchange(true, std::memory_order_acq_rel)) {
++            Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
++            D3D11_TEXTURE2D_DESC description {};
++            if (surface && SUCCEEDED(surface.As(&texture)) && texture) {
++              texture->GetDesc(&description);
++            }
++            TraceLoggingWrite(
++              g_trace_provider,
++              "SwapChainFirstFrame",
++              TraceLoggingUInt32(description.Width, "Width"),
++              TraceLoggingUInt32(description.Height, "Height"),
++              TraceLoggingUInt32(static_cast<std::uint32_t>(description.Format), "Format"),
++              TraceLoggingBool(has_metadata2, "HasMetadata2"),
++              TraceLoggingUInt32(static_cast<std::uint32_t>(metadata2.SurfaceColorSpace), "SurfaceColorSpace"),
++              TraceLoggingUInt32(metadata2.SdrWhiteLevel, "SdrWhiteLevelNits"),
++              TraceLoggingUInt32(static_cast<std::uint32_t>(metadata2.ValidFlags), "MetadataValidFlags"),
++              TraceLoggingUInt32(static_cast<std::uint32_t>(metadata2.Hdr10FrameMetaData.Type), "HdrMetadataType")
++            );
++          }
+           // Drop the acquired surface before reporting the frame complete so
+           // IddCx can reclaim the buffer during unassign/departure.
+           surface.Reset();
+@@ -2259,6 +2286,7 @@ namespace {
+     HANDLE next_surface_available_ {};
+     HANDLE stop_event_ {};
+     std::atomic<bool> stop_requested_ {false};
++    std::atomic<bool> first_frame_logged_ {false};
+     std::thread worker_ {};
+     std::mutex assignment_mutex_ {};
+     std::condition_variable assignment_changed_ {};
+@@ -2589,7 +2617,15 @@ namespace {
+     }
+ 
+     vdd::BackendDisplayResult arrive_temporary_display(const vdd::DisplayDescriptor &descriptor) override {
+-      return arrive_display(descriptor, false);
++      auto result = arrive_display(descriptor, false);
++      if constexpr (kRemoteSessionDriver) {
++        if (result.error == vdd::BackendError::None &&
++            update_remote_display_config("TemporaryMonitorArrival") != vdd::BackendError::None) {
++          (void) depart_display(descriptor.display_id, descriptor.generation);
++          result = {vdd::BackendError::Failed, {}, 0};
++        }
++      }
++      return result;
+     }
+ 
+     vdd::BackendError reserve_temporary_display_identity(const vdd::DisplayDescriptor &descriptor) override {
+@@ -2685,6 +2721,9 @@ namespace {
+           for (const auto &restore_descriptor: active_permanent_descriptors) {
+             (void) arrive_display(restore_descriptor, true);
+           }
++          if constexpr (kRemoteSessionDriver) {
++            (void) update_remote_display_config("PermanentManifestDepartureRollback");
++          }
+           return vdd::BackendError::Failed;
+         }
+       }
+@@ -2700,11 +2739,73 @@ namespace {
+           for (const auto &restore_descriptor: active_permanent_descriptors) {
+             (void) arrive_display(restore_descriptor, true);
+           }
++          if constexpr (kRemoteSessionDriver) {
++            (void) update_remote_display_config("PermanentManifestArrivalRollback");
++          }
+           return vdd::BackendError::Failed;
+         }
+         added.push_back(descriptor.display_id);
+       }
+ 
++      if constexpr (kRemoteSessionDriver) {
++        if (update_remote_display_config("PermanentManifestApplied") != vdd::BackendError::None) {
++          for (const auto display_id: added) {
++            (void) depart_display(display_id);
++          }
++          for (const auto &restore_descriptor: active_permanent_descriptors) {
++            (void) arrive_display(restore_descriptor, true);
++          }
++          (void) update_remote_display_config("PermanentManifestConfigRollback");
++          return vdd::BackendError::Failed;
++        }
++      }
++
++      return vdd::BackendError::None;
++    }
++
++    vdd::BackendError set_display_hdr_state(const vdd::SetDisplayHdrStateRequest &request) override {
++      if constexpr (!kRemoteSessionDriver) {
++        return vdd::BackendError::Failed;
++      }
++
++      bool old_hdr_requested = false;
++      std::uint32_t old_sdr_white_level_nits = vdd::kDefaultSdrWhiteLevelNits;
++      {
++        std::lock_guard lock {mutex_};
++        const auto monitor = monitors_.find(request.display_id);
++        if (monitor == monitors_.end() || monitor->second.arriving || monitor->second.departing) {
++          return vdd::BackendError::Failed;
++        }
++        if (request.enabled != 0 &&
++            (!runtime_hdr_supported() || !vdd::has_hdr_static_metadata(monitor->second.descriptor.edid))) {
++          return vdd::BackendError::Failed;
++        }
++        old_hdr_requested = monitor->second.hdr_requested;
++        old_sdr_white_level_nits = monitor->second.sdr_white_level_nits;
++        monitor->second.hdr_requested = request.enabled != 0;
++        monitor->second.sdr_white_level_nits = request.sdr_white_level_nits;
++      }
++
++      const auto result = update_remote_display_config("SetDisplayHdrState");
++      if (result != vdd::BackendError::None) {
++        {
++          std::lock_guard lock {mutex_};
++          if (const auto monitor = monitors_.find(request.display_id); monitor != monitors_.end()) {
++            monitor->second.hdr_requested = old_hdr_requested;
++            monitor->second.sdr_white_level_nits = old_sdr_white_level_nits;
++          }
++        }
++        (void) update_remote_display_config("SetDisplayHdrStateRollback");
++        return result;
++      }
++
++      TraceLoggingWrite(
++        g_trace_provider,
++        "RemoteDisplayHdrStateSet",
++        TraceLoggingUInt64(request.display_id, "DisplayId"),
++        TraceLoggingBool(request.enabled != 0, "Enabled"),
++        TraceLoggingUInt32(request.sdr_white_level_nits, "SdrWhiteLevelNits")
++      );
+       return vdd::BackendError::None;
+     }
+ 
+@@ -2918,6 +3019,16 @@ namespace {
+         } else {
+           (void) setup_hardware_cursor(path.MonitorObject);
+         }
++        TraceLoggingWrite(
++          g_trace_provider,
++          "CommitModes2Path",
++          TraceLoggingUInt32(index, "PathIndex"),
++          TraceLoggingUInt32(static_cast<std::uint32_t>(path.Flags), "Flags"),
++          TraceLoggingUInt32(path.TargetVideoSignalInfo.activeSize.cx, "Width"),
++          TraceLoggingUInt32(path.TargetVideoSignalInfo.activeSize.cy, "Height"),
++          TraceLoggingUInt32(static_cast<std::uint32_t>(path.WireFormatInfo.ColorSpace), "ColorSpace"),
++          TraceLoggingUInt32(static_cast<std::uint32_t>(path.WireFormatInfo.BitsPerComponent.Rgb), "RgbBitsPerComponent")
++        );
+       }
+ 
+       return STATUS_SUCCESS;
+@@ -3057,6 +3168,176 @@ namespace {
+     }
+ 
+   private:
++    vdd::BackendError update_remote_display_config(const char *source) {
++      if constexpr (!kRemoteSessionDriver) {
++        return vdd::BackendError::Failed;
++      }
++      if (!IDD_IS_FUNCTION_AVAILABLE(IddCxMonitorUpdateModes2) ||
++          !IDD_IS_FUNCTION_AVAILABLE(IddCxAdapterDisplayConfigUpdate2)) {
++        TraceLoggingWrite(g_trace_provider, "RemoteDisplayConfigDdiUnavailable");
++        return vdd::BackendError::Failed;
++      }
++
++      struct RemoteMonitorSnapshot {
++        std::uint64_t display_id {};
++        IDDCX_MONITOR monitor {};
++        vdd::DisplayDescriptor descriptor {};
++        bool display_config_initialized {};
++        bool hdr_requested {};
++        std::uint32_t sdr_white_level_nits {vdd::kDefaultSdrWhiteLevelNits};
++      };
++
++      IDDCX_ADAPTER adapter {};
++      std::vector<RemoteMonitorSnapshot> monitors;
++      std::vector<WdfObjectReferenceGuard> monitor_references;
++      WdfObjectReferenceGuard adapter_reference;
++      {
++        std::lock_guard lock {mutex_};
++        if (shutting_down_ || !adapter_ready_ || !adapter_) {
++          TraceLoggingWrite(
++            g_trace_provider,
++            "RemoteDisplayConfigBlockedAdapterNotReady",
++            TraceLoggingBool(shutting_down_, "ShuttingDown"),
++            TraceLoggingBool(adapter_ready_, "AdapterReady")
++          );
++          return vdd::BackendError::Failed;
++        }
++
++        adapter = adapter_;
++        adapter_reference = WdfObjectReferenceGuard {reinterpret_cast<WDFOBJECT>(adapter)};
++        monitors.reserve(monitors_.size());
++        monitor_references.reserve(monitors_.size());
++        for (const auto &[display_id, record]: monitors_) {
++          if (record.arriving || record.departing || !record.monitor) {
++            continue;
++          }
++          monitors.push_back({
++            display_id,
++            record.monitor,
++            record.descriptor,
++            record.display_config_initialized,
++            record.hdr_requested,
++            record.sdr_white_level_nits
++          });
++          monitor_references.emplace_back(reinterpret_cast<WDFOBJECT>(record.monitor));
++        }
++      }
++
++      if (monitors.empty()) {
++        TraceLoggingWrite(g_trace_provider, "RemoteDisplayConfigNoMonitors");
++        return vdd::BackendError::Failed;
++      }
++      std::sort(monitors.begin(), monitors.end(), [](const auto &left, const auto &right) {
++        return left.descriptor.connector_index < right.descriptor.connector_index;
++      });
++
++      for (const auto &monitor: monitors) {
++        const auto requested_shape = mode_shape_from_descriptor(monitor.descriptor);
++        const auto [shapes, preferred_index] = vdd::build_windows_driver_target_mode_shapes(
++          std::optional<ModeShape> {requested_shape},
++          &requested_shape
++        );
++        (void) preferred_index;
++        if (shapes.empty()) {
++          return vdd::BackendError::Failed;
++        }
++
++        std::vector<IDDCX_TARGET_MODE2> target_modes;
++        target_modes.reserve(shapes.size());
++        for (const auto &shape: shapes) {
++          target_modes.push_back(make_target_mode2(shape));
++        }
++
++        IDARG_IN_UPDATEMODES2 update_modes {};
++        update_modes.Reason = IDDCX_UPDATE_REASON_CONFIGURATION_CONSTRAINTS;
++        update_modes.TargetModeCount = static_cast<UINT>(target_modes.size());
++        update_modes.pTargetModes = target_modes.data();
++        const auto status = IddCxMonitorUpdateModes2(monitor.monitor, &update_modes);
++        TraceLoggingWrite(
++          g_trace_provider,
++          "RemoteMonitorModesUpdated",
++          TraceLoggingString(source, "Source"),
++          TraceLoggingUInt64(monitor.display_id, "DisplayId"),
++          TraceLoggingUInt32(update_modes.TargetModeCount, "ModeCount"),
++          TraceLoggingInt32(status, "Status")
++        );
++        if (!NT_SUCCESS(status)) {
++          return vdd::BackendError::Failed;
++        }
++      }
++
++      std::vector<IDDCX_DISPLAYCONFIGPATH2> paths(monitors.size());
++      LONG position_x = 0;
++      std::uint32_t hdr_path_count = 0;
++      for (std::size_t index = 0; index < monitors.size(); ++index) {
++        const auto &monitor = monitors[index];
++        auto &path = paths[index];
++        path.Size = sizeof(path);
++        path.Flags = IDDCX_DISPLAYCONFIGPATH2_FLAGS_MODE_VALID;
++        path.MonitorObject = monitor.monitor;
++        path.Mode.Position = {position_x, 0};
++        path.Mode.Resolution = {monitor.descriptor.width, monitor.descriptor.height};
++        path.Mode.Rotation = DISPLAYCONFIG_ROTATION_IDENTITY;
++        path.Mode.RefreshRate = {monitor.descriptor.refresh_rate_millihz, 1000};
++        path.Mode.VSyncFreqDivider = 1;
++        path.Mode.MonitorColorMode = monitor.hdr_requested ?
++          IDDCX_DISPLAYCONFIG_MONITOR_COLORMODE_HDR10 :
++          IDDCX_DISPLAYCONFIG_MONITOR_COLORMODE_SDR;
++        path.MonitorScaleFactor = 100;
++        if (!monitor.display_config_initialized) {
++          path.Flags |= IDDCX_DISPLAYCONFIGPATH2_FLAGS_MONITOR_SCALE_FACTOR_VALID;
++        }
++        if (monitor.hdr_requested) {
++          ++hdr_path_count;
++          path.Flags |= IDDCX_DISPLAYCONFIGPATH2_FLAGS_MONITOR_COLORIMETRY_VALID |
++                        IDDCX_DISPLAYCONFIGPATH2_FLAGS_MONITOR_SDRWHITELEVEL_VALID;
++          path.MonitorColorimetry.RedPoint = {725, 299};
++          path.MonitorColorimetry.GreenPoint = {174, 816};
++          path.MonitorColorimetry.BluePoint = {134, 47};
++          path.MonitorColorimetry.WhitePoint = {320, 337};
++          path.MonitorColorimetry.MinLuminance = 50;
++          path.MonitorColorimetry.MaxLuminance = 10'000'000;
++          path.MonitorColorimetry.MaxFullFrameLuminance = 4'000'000;
++          path.MonitorColorimetry.BitsPerComponent.Rgb = static_cast<IDDCX_BITS_PER_COMPONENT>(
++            IDDCX_BITS_PER_COMPONENT_8 | IDDCX_BITS_PER_COMPONENT_10
++          );
++          path.MonitorColorimetry.Flags = static_cast<IDDCX_DISPLAYCONFIG_MONITOR_COLORIMETRY_FLAGS>(
++            IDDCX_DISPLAYCONFIG_MONITOR_COLORIMETRY_FLAGS_BT2020RGB |
++            IDDCX_DISPLAYCONFIG_MONITOR_COLORIMETRY_FLAGS_ST2084
++          );
++          path.MonitorSdrWhiteLevel = monitor.sdr_white_level_nits;
++        }
++        position_x += static_cast<LONG>(monitor.descriptor.width);
++      }
++
++      IDARG_IN_ADAPTERDISPLAYCONFIGUPDATE2 update {};
++      update.PathCount = static_cast<UINT>(paths.size());
++      update.pPaths = paths.data();
++      const auto hr = IddCxAdapterDisplayConfigUpdate2(adapter, &update);
++      TraceLoggingWrite(
++        g_trace_provider,
++        "RemoteDisplayConfigUpdated",
++        TraceLoggingString(source, "Source"),
++        TraceLoggingUInt32(update.PathCount, "PathCount"),
++        TraceLoggingUInt32(hdr_path_count, "HdrPathCount"),
++        TraceLoggingUInt32(static_cast<std::uint32_t>(hr), "HResult")
++      );
++      if (FAILED(hr)) {
++        return vdd::BackendError::Failed;
++      }
++
++      {
++        std::lock_guard lock {mutex_};
++        for (const auto &snapshot: monitors) {
++          if (const auto current = monitors_.find(snapshot.display_id);
++              current != monitors_.end() && current->second.monitor == snapshot.monitor) {
++            current->second.display_config_initialized = true;
++          }
++        }
++      }
++      return vdd::BackendError::None;
++    }
++
+     NTSTATUS setup_hardware_cursor(IDDCX_MONITOR monitor) {
+       if (!monitor) {
+         return STATUS_INVALID_PARAMETER;
+diff --git a/tests/unit/driver/test_control_client.cpp b/tests/unit/driver/test_control_client.cpp
+index f8dae83..8ccadc4 100644
+--- a/tests/unit/driver/test_control_client.cpp
++++ b/tests/unit/driver/test_control_client.cpp
+@@ -348,6 +348,25 @@ TEST(VirtualDisplayDriverControlClient, SetRenderAdapterUsesRenderAdapterIoctl)
+   EXPECT_EQ(input_as<vdd::SetRenderAdapterRequest>(transport.calls[0]).adapter_luid, (vdd::AdapterLuid {99, 8}));
+ }
+ 
++TEST(VirtualDisplayDriverControlClient, SetDisplayHdrStateUsesHdrIoctl) {
++  FakeTransport transport;
++  vdd::ControlClient client {transport};
++  vdd::SetDisplayHdrStateRequest request {};
++  request.display_id = 0x7000000000000001ull;
++  request.enabled = 1;
++  request.sdr_white_level_nits = 203;
++
++  const auto result = client.set_display_hdr_state(request);
++
++  ASSERT_TRUE(result.ok());
++  ASSERT_EQ(transport.calls.size(), 1u);
++  EXPECT_EQ(transport.calls[0].ioctl_code, vdd::kIoctlSetDisplayHdrState);
++  const auto sent = input_as<vdd::SetDisplayHdrStateRequest>(transport.calls[0]);
++  EXPECT_EQ(sent.display_id, request.display_id);
++  EXPECT_EQ(sent.enabled, 1u);
++  EXPECT_EQ(sent.sdr_white_level_nits, 203u);
++}
++
+ TEST(VirtualDisplayDriverControlClient, DetectsShortOutput) {
+   FakeTransport transport;
+   transport.set_output(vdd::ProtocolVersion {});
+diff --git a/tests/unit/driver/test_control_protocol.cpp b/tests/unit/driver/test_control_protocol.cpp
+index fb7b416..3d10a59 100644
+--- a/tests/unit/driver/test_control_protocol.cpp
++++ b/tests/unit/driver/test_control_protocol.cpp
+@@ -90,6 +90,7 @@ TEST(VirtualDisplayDriverControlProtocol, ComputesBufferedUnknownDeviceIoctlCode
+   EXPECT_EQ(vdd::kIoctlSetRenderAdapter, 0x0022a42cu);
+   EXPECT_EQ(vdd::kIoctlCreateTemporaryDisplayOwned, 0x0022e430u);
+   EXPECT_EQ(vdd::kIoctlReclaimTemporaryDisplay, 0x0022e434u);
++  EXPECT_EQ(vdd::kIoctlSetDisplayHdrState, 0x0022e438u);
+ }
+ 
+ TEST(VirtualDisplayDriverControlProtocol, ProtocolVersionUsesDedicatedNamespace) {
+@@ -444,6 +445,24 @@ TEST(VirtualDisplayDriverControlProtocol, ValidatesPermanentDisplayCount) {
+   );
+ }
+ 
++TEST(VirtualDisplayDriverControlProtocol, ValidatesDisplayHdrState) {
++  vdd::SetDisplayHdrStateRequest request {};
++  request.display_id = 0x7000000000000001ull;
++
++  EXPECT_EQ(vdd::validate_set_display_hdr_state(request), vdd::ValidationError::None);
++
++  request.enabled = 2;
++  EXPECT_EQ(vdd::validate_set_display_hdr_state(request), vdd::ValidationError::InvalidHdrState);
++
++  request.enabled = 1;
++  request.sdr_white_level_nits = vdd::kMaxSdrWhiteLevelNits + 1;
++  EXPECT_EQ(vdd::validate_set_display_hdr_state(request), vdd::ValidationError::InvalidSdrWhiteLevel);
++
++  request.sdr_white_level_nits = vdd::kDefaultSdrWhiteLevelNits;
++  request.display_id = 0;
++  EXPECT_EQ(vdd::validate_set_display_hdr_state(request), vdd::ValidationError::MissingDisplayId);
++}
++
+ TEST(VirtualDisplayDriverControlProtocol, ValidatesPermanentDisplaySettings) {
+   vdd::PermanentDisplayCountRequest request {};
+   request.display_count = 1;
+diff --git a/tests/unit/driver/test_ioctl_dispatcher.cpp b/tests/unit/driver/test_ioctl_dispatcher.cpp
+index 1a38c97..b42ef66 100644
+--- a/tests/unit/driver/test_ioctl_dispatcher.cpp
++++ b/tests/unit/driver/test_ioctl_dispatcher.cpp
+@@ -51,8 +51,14 @@ namespace {
+       return vdd::BackendError::None;
+     }
+ 
++    vdd::BackendError set_display_hdr_state(const vdd::SetDisplayHdrStateRequest &request) override {
++      hdr_state_requests.push_back(request);
++      return fail_hdr_state ? vdd::BackendError::Failed : vdd::BackendError::None;
++    }
++
+     bool fail_arrive {};
+     bool fail_depart {};
++    bool fail_hdr_state {};
+     std::uint32_t next_target_id {12};
+     std::vector<vdd::DisplayDescriptor> arrived {};
+     std::vector<std::uint64_t> departed {};
+@@ -60,6 +66,7 @@ namespace {
+     std::vector<vdd::PermanentDisplayCountRequest> permanent_settings {};
+     std::vector<vdd::DisplayManifest> manifests {};
+     std::vector<vdd::SetRenderAdapterRequest> render_adapter_requests {};
++    std::vector<vdd::SetDisplayHdrStateRequest> hdr_state_requests {};
+   };
+ 
+   struct Harness {
+@@ -688,6 +695,40 @@ TEST(VirtualDisplayDriverIoctlDispatcher, SetPermanentDisplayCountRejectsShortOu
+   EXPECT_EQ(harness.controller.query_permanent_display_count().current_display_count, 0u);
+ }
+ 
++TEST(VirtualDisplayDriverIoctlDispatcher, SetDisplayHdrStateValidatesAndInvokesBackend) {
++  Harness harness;
++  vdd::SetDisplayHdrStateRequest request {};
++  request.display_id = 0x7000000000000001ull;
++  request.enabled = 1;
++  request.sdr_white_level_nits = 203;
++
++  const auto result = harness.dispatcher.dispatch(
++    vdd::kIoctlSetDisplayHdrState,
++    &request,
++    sizeof(request),
++    nullptr,
++    0,
++    std::chrono::steady_clock::now()
++  );
++
++  EXPECT_EQ(result.status, vdd::IoctlStatus::Success);
++  ASSERT_EQ(harness.backend.hdr_state_requests.size(), 1u);
++  EXPECT_EQ(harness.backend.hdr_state_requests[0].display_id, request.display_id);
++  EXPECT_EQ(harness.backend.hdr_state_requests[0].sdr_white_level_nits, 203u);
++
++  request.enabled = 2;
++  const auto invalid = harness.dispatcher.dispatch(
++    vdd::kIoctlSetDisplayHdrState,
++    &request,
++    sizeof(request),
++    nullptr,
++    0,
++    std::chrono::steady_clock::now()
++  );
++  EXPECT_EQ(invalid.status, vdd::IoctlStatus::InvalidRequest);
++  EXPECT_EQ(harness.backend.hdr_state_requests.size(), 1u);
++}
++
+ TEST(VirtualDisplayDriverIoctlDispatcher, RejectsUnknownIoctl) {
+   Harness harness;
+ 
+diff --git a/tests/unit/driver/test_probe_contract.cpp b/tests/unit/driver/test_probe_contract.cpp
+index 7de9a88..962c334 100644
+--- a/tests/unit/driver/test_probe_contract.cpp
++++ b/tests/unit/driver/test_probe_contract.cpp
+@@ -29,6 +29,10 @@ TEST(VirtualDisplayProbeContract, ParsesIntegerTokensExactly) {
+   EXPECT_FALSE(vdd::parse_probe_u32_token("-1").has_value());
+   EXPECT_FALSE(vdd::parse_probe_u32_token("4294967296").has_value());
+ 
++  EXPECT_EQ(vdd::parse_probe_u64_token("8070450532247928833"), 8070450532247928833ull);
++  EXPECT_EQ(vdd::parse_probe_u64_token("18446744073709551615"), (std::numeric_limits<std::uint64_t>::max)());
++  EXPECT_FALSE(vdd::parse_probe_u64_token("18446744073709551616").has_value());
++
+   EXPECT_EQ(vdd::parse_probe_i32_token("-2147483648"), (std::numeric_limits<std::int32_t>::min)());
+   EXPECT_EQ(vdd::parse_probe_i32_token("2147483647"), (std::numeric_limits<std::int32_t>::max)());
+   EXPECT_FALSE(vdd::parse_probe_i32_token("").has_value());
+@@ -58,6 +62,9 @@ TEST(VirtualDisplayProbeContract, PlansProbeCommandArgcBoundsAndExecutionStage)
+ 
+   constexpr std::array kPlans {
+     ExpectedPlan {"--diagnose", 2, 2, vdd::ProbeCommandExecutionStage::NoControlDevice},
++    ExpectedPlan {"--apply-extended-topology-current-session", 2, 2, vdd::ProbeCommandExecutionStage::NoControlDevice},
++    ExpectedPlan {"--dump-display-config-current-session", 2, 2, vdd::ProbeCommandExecutionStage::NoControlDevice},
++    ExpectedPlan {"--set-hdr-current-session", 3, 4, vdd::ProbeCommandExecutionStage::NoControlDevice},
+     ExpectedPlan {"--apply-extended-topology", 2, 2, vdd::ProbeCommandExecutionStage::ActiveSessionBeforeControlDevice},
+     ExpectedPlan {"--query-color-profiles", 2, 2, vdd::ProbeCommandExecutionStage::ActiveSessionBeforeControlDevice},
+     ExpectedPlan {"--associate-color-profile", 5, (std::numeric_limits<int>::max)(), vdd::ProbeCommandExecutionStage::ActiveSessionBeforeControlDevice},
+@@ -65,6 +72,10 @@ TEST(VirtualDisplayProbeContract, PlansProbeCommandArgcBoundsAndExecutionStage)
+     ExpectedPlan {"--query-permanent", 2, 2, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
+     ExpectedPlan {"--apply-manifest-topology", 2, 2, vdd::ProbeCommandExecutionStage::ControlDeviceBeforeActiveSession},
+     ExpectedPlan {"--set-permanent", 3, 3, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
++    ExpectedPlan {"--remote-query-permanent", 3, 3, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
++    ExpectedPlan {"--remote-query-state", 3, 3, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
++    ExpectedPlan {"--remote-set-permanent", 4, 4, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
++    ExpectedPlan {"--remote-set-hdr", 5, 6, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
+     ExpectedPlan {"--self-test-permanent", 2, 3, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
+     ExpectedPlan {"--self-test-temp", 2, 5, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
+     ExpectedPlan {"--self-test-4k240", 2, 3, vdd::ProbeCommandExecutionStage::ControlDeviceBeforeActiveSession},
+diff --git a/tools/hdr_session_probe.cpp b/tools/hdr_session_probe.cpp
+new file mode 100644
+index 0000000..2a80614
+--- /dev/null
++++ b/tools/hdr_session_probe.cpp
+@@ -0,0 +1,496 @@
++#ifndef UNICODE
++#define UNICODE
++#endif
++
++#include <windows.h>
++
++#include <d3d11_1.h>
++#include <dxgi1_6.h>
++#include <wrl/client.h>
++
++#include <algorithm>
++#include <array>
++#include <chrono>
++#include <cwchar>
++#include <cstdint>
++#include <filesystem>
++#include <fstream>
++#include <iomanip>
++#include <iostream>
++#include <limits>
++#include <sstream>
++#include <string>
++#include <string_view>
++#include <thread>
++#include <vector>
++
++using Microsoft::WRL::ComPtr;
++
++namespace {
++  struct Options {
++    std::filesystem::path output_prefix {L"hdr-session-proof"};
++    std::uint32_t duration_seconds {30};
++  };
++
++  struct OutputSelection {
++    ComPtr<IDXGIAdapter1> adapter;
++    ComPtr<IDXGIOutput> output;
++    DXGI_OUTPUT_DESC description {};
++  };
++
++  std::string narrow_ascii(const std::wstring_view value) {
++    std::string result;
++    result.reserve(value.size());
++    for (const wchar_t ch: value) {
++      result.push_back(ch >= 0 && ch <= 0x7f ? static_cast<char>(ch) : '?');
++    }
++    return result;
++  }
++
++  std::string hex_hresult(const HRESULT result) {
++    std::ostringstream stream;
++    stream << "0x" << std::hex << std::uppercase << static_cast<std::uint32_t>(result);
++    return stream.str();
++  }
++
++  bool parse_u32(const wchar_t *text, std::uint32_t &value) {
++    if (!text || *text == L'\0') {
++      return false;
++    }
++    wchar_t *end = nullptr;
++    const unsigned long parsed = std::wcstoul(text, &end, 10);
++    if (!end || *end != L'\0' || parsed > (std::numeric_limits<std::uint32_t>::max)()) {
++      return false;
++    }
++    value = static_cast<std::uint32_t>(parsed);
++    return true;
++  }
++
++  bool parse_options(const int argc, wchar_t **argv, Options &options) {
++    for (int index = 1; index < argc; ++index) {
++      const std::wstring_view argument {argv[index]};
++      if (argument == L"--output-prefix" && index + 1 < argc) {
++        options.output_prefix = argv[++index];
++      } else if (argument == L"--duration-seconds" && index + 1 < argc) {
++        if (!parse_u32(argv[++index], options.duration_seconds) || options.duration_seconds == 0) {
++          return false;
++        }
++      } else {
++        return false;
++      }
++    }
++    return true;
++  }
++
++  OutputSelection find_desktop_output(IDXGIFactory1 *factory) {
++    OutputSelection fallback;
++    for (UINT adapter_index = 0;; ++adapter_index) {
++      ComPtr<IDXGIAdapter1> adapter;
++      if (factory->EnumAdapters1(adapter_index, &adapter) == DXGI_ERROR_NOT_FOUND) {
++        break;
++      }
++      for (UINT output_index = 0;; ++output_index) {
++        ComPtr<IDXGIOutput> output;
++        if (adapter->EnumOutputs(output_index, &output) == DXGI_ERROR_NOT_FOUND) {
++          break;
++        }
++        DXGI_OUTPUT_DESC description {};
++        if (FAILED(output->GetDesc(&description))) {
++          continue;
++        }
++        if (!fallback.output) {
++          fallback = {adapter, output, description};
++        }
++        if (description.AttachedToDesktop) {
++          return {adapter, output, description};
++        }
++      }
++    }
++    return fallback;
++  }
++
++  LRESULT CALLBACK window_proc(HWND window, const UINT message, const WPARAM wparam, const LPARAM lparam) {
++    if (message == WM_CLOSE) {
++      DestroyWindow(window);
++      return 0;
++    }
++    if (message == WM_DESTROY) {
++      PostQuitMessage(0);
++      return 0;
++    }
++    return DefWindowProcW(window, message, wparam, lparam);
++  }
++
++  bool write_source_capture(
++    ID3D11Device *device,
++    ID3D11DeviceContext *context,
++    ID3D11Texture2D *source,
++    const std::filesystem::path &path,
++    std::ostream &log
++  ) {
++    D3D11_TEXTURE2D_DESC description {};
++    source->GetDesc(&description);
++    D3D11_TEXTURE2D_DESC staging_description = description;
++    staging_description.Usage = D3D11_USAGE_STAGING;
++    staging_description.BindFlags = 0;
++    staging_description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
++    staging_description.MiscFlags = 0;
++
++    ComPtr<ID3D11Texture2D> staging;
++    HRESULT result = device->CreateTexture2D(&staging_description, nullptr, &staging);
++    if (FAILED(result)) {
++      log << "source_capture_create_staging_result=" << hex_hresult(result) << '\n';
++      return false;
++    }
++
++    context->CopyResource(staging.Get(), source);
++    D3D11_MAPPED_SUBRESOURCE mapped {};
++    result = context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
++    if (FAILED(result)) {
++      log << "source_capture_map_result=" << hex_hresult(result) << '\n';
++      return false;
++    }
++
++    const std::uint32_t packed_row_bytes = description.Width * sizeof(std::uint32_t);
++    std::ofstream capture {path, std::ios::binary | std::ios::trunc};
++    std::uint64_t hash = 1469598103934665603ull;
++    for (UINT y = 0; y < description.Height; ++y) {
++      const auto *row = static_cast<const std::uint8_t *>(mapped.pData) + y * mapped.RowPitch;
++      capture.write(reinterpret_cast<const char *>(row), packed_row_bytes);
++      for (std::uint32_t index = 0; index < packed_row_bytes; ++index) {
++        hash ^= row[index];
++        hash *= 1099511628211ull;
++      }
++    }
++    const auto *top_row = static_cast<const std::uint32_t *>(mapped.pData);
++    const auto *middle_row = reinterpret_cast<const std::uint32_t *>(
++      static_cast<const std::uint8_t *>(mapped.pData) + (description.Height / 2) * mapped.RowPitch
++    );
++    const std::uint32_t first_pixel = top_row[0];
++    const std::uint32_t middle_pixel = middle_row[description.Width / 2];
++    const std::uint32_t last_pixel = middle_row[description.Width - 1];
++    context->Unmap(staging.Get(), 0);
++
++    log << "source_capture_path=" << narrow_ascii(path.wstring()) << '\n'
++        << "source_capture_width=" << description.Width << '\n'
++        << "source_capture_height=" << description.Height << '\n'
++        << "source_capture_format=" << static_cast<std::uint32_t>(description.Format) << '\n'
++        << "source_capture_packed_row_bytes=" << packed_row_bytes << '\n'
++        << "source_capture_fnv1a64=0x" << std::hex << std::uppercase << hash << std::dec << '\n'
++        << "source_capture_first_pixel=0x" << std::hex << std::uppercase << first_pixel << std::dec << '\n'
++        << "source_capture_middle_pixel=0x" << std::hex << std::uppercase << middle_pixel << std::dec << '\n'
++        << "source_capture_last_pixel=0x" << std::hex << std::uppercase << last_pixel << std::dec << '\n';
++    return capture.good();
++  }
++
++  bool write_composed_bmp(const RECT &rectangle, const std::filesystem::path &path, std::ostream &log) {
++    const LONG width = rectangle.right - rectangle.left;
++    const LONG height = rectangle.bottom - rectangle.top;
++    HDC screen = GetDC(nullptr);
++    HDC memory = screen ? CreateCompatibleDC(screen) : nullptr;
++    BITMAPINFO bitmap_info {};
++    bitmap_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
++    bitmap_info.bmiHeader.biWidth = width;
++    bitmap_info.bmiHeader.biHeight = -height;
++    bitmap_info.bmiHeader.biPlanes = 1;
++    bitmap_info.bmiHeader.biBitCount = 32;
++    bitmap_info.bmiHeader.biCompression = BI_RGB;
++    void *pixels = nullptr;
++    HBITMAP bitmap = memory ? CreateDIBSection(screen, &bitmap_info, DIB_RGB_COLORS, &pixels, nullptr, 0) : nullptr;
++    HGDIOBJ previous = bitmap && memory ? SelectObject(memory, bitmap) : nullptr;
++    const BOOL copied = previous ? BitBlt(
++      memory,
++      0,
++      0,
++      width,
++      height,
++      screen,
++      rectangle.left,
++      rectangle.top,
++      SRCCOPY | CAPTUREBLT
++    ) : FALSE;
++
++    bool written = false;
++    if (copied && pixels) {
++      const std::uint32_t pixel_bytes = static_cast<std::uint32_t>(width * height * 4);
++      BITMAPFILEHEADER file_header {};
++      file_header.bfType = 0x4d42;
++      file_header.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
++      file_header.bfSize = file_header.bfOffBits + pixel_bytes;
++      std::ofstream capture {path, std::ios::binary | std::ios::trunc};
++      capture.write(reinterpret_cast<const char *>(&file_header), sizeof(file_header));
++      capture.write(reinterpret_cast<const char *>(&bitmap_info.bmiHeader), sizeof(bitmap_info.bmiHeader));
++      capture.write(static_cast<const char *>(pixels), pixel_bytes);
++      written = capture.good();
++    }
++
++    if (previous) {
++      SelectObject(memory, previous);
++    }
++    if (bitmap) {
++      DeleteObject(bitmap);
++    }
++    if (memory) {
++      DeleteDC(memory);
++    }
++    if (screen) {
++      ReleaseDC(nullptr, screen);
++    }
++
++    log << "composed_capture_path=" << narrow_ascii(path.wstring()) << '\n'
++        << "composed_capture_bitblt=" << (copied ? 1 : 0) << '\n'
++        << "composed_capture_written=" << (written ? 1 : 0) << '\n'
++        << "composed_capture_format=BGRA8_BMP\n";
++    return written;
++  }
++}
++
++int wmain(const int argc, wchar_t **argv) {
++  Options options;
++  if (!parse_options(argc, argv, options)) {
++    std::cerr << "usage: hdr_session_probe [--output-prefix <path>] [--duration-seconds <seconds>]\n";
++    return 2;
++  }
++
++  std::error_code filesystem_error;
++  if (!options.output_prefix.parent_path().empty()) {
++    std::filesystem::create_directories(options.output_prefix.parent_path(), filesystem_error);
++  }
++  const auto log_path = options.output_prefix.wstring() + L".log";
++  const auto source_path = options.output_prefix.wstring() + L"-source-r10g10b10a2.raw";
++  const auto composed_path = options.output_prefix.wstring() + L"-composed-bgra8.bmp";
++  std::ofstream log {log_path, std::ios::trunc};
++  if (!log) {
++    std::cerr << "could not open proof log\n";
++    return 1;
++  }
++  log.setf(std::ios::unitbuf);
++
++  DWORD session_id = (std::numeric_limits<DWORD>::max)();
++  ProcessIdToSessionId(GetCurrentProcessId(), &session_id);
++  log << "process_id=" << GetCurrentProcessId() << '\n'
++      << "session_id=" << session_id << '\n'
++      << "duration_seconds=" << options.duration_seconds << '\n';
++
++  ComPtr<IDXGIFactory2> factory;
++  HRESULT result = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
++  log << "create_factory_result=" << hex_hresult(result) << '\n';
++  if (FAILED(result)) {
++    return 1;
++  }
++
++  const OutputSelection selected = find_desktop_output(factory.Get());
++  if (!selected.output || !selected.adapter) {
++    log << "desktop_output_found=0\n";
++    return 1;
++  }
++  const RECT rectangle = selected.description.DesktopCoordinates;
++  const UINT width = static_cast<UINT>(rectangle.right - rectangle.left);
++  const UINT height = static_cast<UINT>(rectangle.bottom - rectangle.top);
++  log << "desktop_output_found=1\n"
++      << "output_device=" << narrow_ascii(selected.description.DeviceName) << '\n'
++      << "output_attached=" << (selected.description.AttachedToDesktop ? 1 : 0) << '\n'
++      << "output_rect=" << rectangle.left << ',' << rectangle.top << ',' << rectangle.right << ',' << rectangle.bottom << '\n';
++
++  const wchar_t *window_class_name = L"LibvirtualdisplayHdrSessionProbe";
++  WNDCLASSW window_class {};
++  window_class.lpfnWndProc = window_proc;
++  window_class.hInstance = GetModuleHandleW(nullptr);
++  window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
++  window_class.lpszClassName = window_class_name;
++  RegisterClassW(&window_class);
++  HWND window = CreateWindowExW(
++    WS_EX_TOPMOST,
++    window_class_name,
++    L"HDR session transport proof",
++    WS_POPUP | WS_VISIBLE,
++    rectangle.left,
++    rectangle.top,
++    static_cast<int>(width),
++    static_cast<int>(height),
++    nullptr,
++    nullptr,
++    window_class.hInstance,
++    nullptr
++  );
++  log << "window_created=" << (window ? 1 : 0) << " native_error=" << GetLastError() << '\n';
++  if (!window) {
++    return 1;
++  }
++  ShowWindow(window, SW_SHOW);
++  SetWindowPos(window, HWND_TOPMOST, rectangle.left, rectangle.top, width, height, SWP_SHOWWINDOW);
++
++  constexpr std::array feature_levels {
++    D3D_FEATURE_LEVEL_11_1,
++    D3D_FEATURE_LEVEL_11_0,
++  };
++  ComPtr<ID3D11Device> device;
++  ComPtr<ID3D11DeviceContext> context;
++  D3D_FEATURE_LEVEL feature_level {};
++  result = D3D11CreateDevice(
++    selected.adapter.Get(),
++    D3D_DRIVER_TYPE_UNKNOWN,
++    nullptr,
++    D3D11_CREATE_DEVICE_BGRA_SUPPORT,
++    feature_levels.data(),
++    static_cast<UINT>(feature_levels.size()),
++    D3D11_SDK_VERSION,
++    &device,
++    &feature_level,
++    &context
++  );
++  log << "create_device_result=" << hex_hresult(result) << '\n'
++      << "feature_level=0x" << std::hex << static_cast<std::uint32_t>(feature_level) << std::dec << '\n';
++  if (FAILED(result)) {
++    DestroyWindow(window);
++    return 1;
++  }
++
++  DXGI_SWAP_CHAIN_DESC1 swapchain_description {};
++  swapchain_description.Width = width;
++  swapchain_description.Height = height;
++  swapchain_description.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
++  swapchain_description.SampleDesc.Count = 1;
++  swapchain_description.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
++  swapchain_description.BufferCount = 3;
++  swapchain_description.Scaling = DXGI_SCALING_STRETCH;
++  swapchain_description.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
++  swapchain_description.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
++
++  ComPtr<IDXGISwapChain1> swapchain1;
++  result = factory->CreateSwapChainForHwnd(
++    device.Get(),
++    window,
++    &swapchain_description,
++    nullptr,
++    selected.output.Get(),
++    &swapchain1
++  );
++  log << "create_swapchain_result=" << hex_hresult(result) << '\n'
++      << "swapchain_format=" << static_cast<std::uint32_t>(swapchain_description.Format) << '\n';
++  if (FAILED(result)) {
++    DestroyWindow(window);
++    return 1;
++  }
++  factory->MakeWindowAssociation(window, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
++
++  ComPtr<IDXGISwapChain3> swapchain3;
++  result = swapchain1.As(&swapchain3);
++  log << "query_swapchain3_result=" << hex_hresult(result) << '\n';
++  UINT color_space_support = 0;
++  const HRESULT color_check_result = swapchain3 ? swapchain3->CheckColorSpaceSupport(
++    DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
++    &color_space_support
++  ) : E_NOINTERFACE;
++  const HRESULT color_set_result = swapchain3 ? swapchain3->SetColorSpace1(
++    DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
++  ) : E_NOINTERFACE;
++  log << "hdr10_color_space=" << static_cast<std::uint32_t>(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) << '\n'
++      << "check_hdr10_color_space_result=" << hex_hresult(color_check_result) << '\n'
++      << "hdr10_color_space_support=0x" << std::hex << color_space_support << std::dec << '\n'
++      << "set_hdr10_color_space_result=" << hex_hresult(color_set_result) << '\n';
++
++  DXGI_HDR_METADATA_HDR10 metadata {};
++  metadata.RedPrimary[0] = 34000;
++  metadata.RedPrimary[1] = 16000;
++  metadata.GreenPrimary[0] = 13250;
++  metadata.GreenPrimary[1] = 34500;
++  metadata.BluePrimary[0] = 7500;
++  metadata.BluePrimary[1] = 3000;
++  metadata.WhitePoint[0] = 15635;
++  metadata.WhitePoint[1] = 16450;
++  metadata.MaxMasteringLuminance = 1000 * 10000;
++  metadata.MinMasteringLuminance = 500;
++  metadata.MaxContentLightLevel = 1000;
++  metadata.MaxFrameAverageLightLevel = 400;
++  ComPtr<IDXGISwapChain4> swapchain4;
++  result = swapchain1.As(&swapchain4);
++  const HRESULT metadata_result = swapchain4 ? swapchain4->SetHDRMetaData(
++    DXGI_HDR_METADATA_TYPE_HDR10,
++    sizeof(metadata),
++    &metadata
++  ) : E_NOINTERFACE;
++  log << "query_swapchain4_result=" << hex_hresult(result) << '\n'
++      << "set_hdr10_metadata_result=" << hex_hresult(metadata_result) << '\n'
++      << "metadata_max_mastering_nits=1000\n"
++      << "metadata_max_cll_nits=1000\n";
++
++  ComPtr<ID3D11DeviceContext1> context1;
++  result = context.As(&context1);
++  log << "query_context1_result=" << hex_hresult(result) << '\n';
++  if (FAILED(result)) {
++    DestroyWindow(window);
++    return 1;
++  }
++
++  const std::array<std::array<float, 4>, 5> colors {{
++    {0.0f, 0.0f, 0.0f, 1.0f},
++    {0.508078f, 0.508078f, 0.508078f, 1.0f},
++    {0.652579f, 0.0f, 0.0f, 1.0f},
++    {0.0f, 0.751827f, 0.0f, 1.0f},
++    {0.751827f, 0.751827f, 0.751827f, 1.0f},
++  }};
++
++  bool source_captured = false;
++  bool composed_captured = false;
++  std::uint64_t present_count = 0;
++  const auto start = std::chrono::steady_clock::now();
++  const auto deadline = start + std::chrono::seconds(options.duration_seconds);
++  while (std::chrono::steady_clock::now() < deadline && IsWindow(window)) {
++    MSG message {};
++    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
++      if (message.message == WM_QUIT) {
++        DestroyWindow(window);
++        break;
++      }
++      TranslateMessage(&message);
++      DispatchMessageW(&message);
++    }
++    if (!IsWindow(window)) {
++      break;
++    }
++
++    ComPtr<ID3D11Texture2D> backbuffer;
++    result = swapchain1->GetBuffer(0, IID_PPV_ARGS(&backbuffer));
++    if (FAILED(result)) {
++      log << "get_backbuffer_result=" << hex_hresult(result) << '\n';
++      break;
++    }
++    ComPtr<ID3D11RenderTargetView> render_target;
++    result = device->CreateRenderTargetView(backbuffer.Get(), nullptr, &render_target);
++    if (FAILED(result)) {
++      log << "create_render_target_result=" << hex_hresult(result) << '\n';
++      break;
++    }
++    for (std::size_t index = 0; index < colors.size(); ++index) {
++      const LONG left = static_cast<LONG>((static_cast<std::uint64_t>(width) * index) / colors.size());
++      const LONG right = static_cast<LONG>((static_cast<std::uint64_t>(width) * (index + 1)) / colors.size());
++      const D3D11_RECT band {left, 0, right, static_cast<LONG>(height)};
++      context1->ClearView(render_target.Get(), colors[index].data(), &band, 1);
++    }
++    if (!source_captured) {
++      source_captured = write_source_capture(device.Get(), context.Get(), backbuffer.Get(), source_path, log);
++      log << "source_capture_written=" << (source_captured ? 1 : 0) << '\n';
++    }
++
++    result = swapchain1->Present(1, 0);
++    if (FAILED(result)) {
++      log << "present_result=" << hex_hresult(result) << '\n';
++      break;
++    }
++    ++present_count;
++    // Present does not reliably block to the compositor cadence in a terminal
++    // session. Keep this diagnostic producer near 60 FPS instead of spinning.
++    std::this_thread::sleep_for(std::chrono::milliseconds(16));
++    if (!composed_captured && std::chrono::steady_clock::now() - start >= std::chrono::seconds(2)) {
++      composed_captured = write_composed_bmp(rectangle, composed_path, log);
++    }
++  }
++
++  log << "present_count=" << present_count << '\n'
++      << "proof_completed=1\n";
++  if (IsWindow(window)) {
++    DestroyWindow(window);
++  }
++  return source_captured && composed_captured && SUCCEEDED(color_set_result) ? 0 : 1;
++}
+diff --git a/tools/virtualdisplay_probe.cpp b/tools/virtualdisplay_probe.cpp
+index c2b88ac..354f74d 100644
+--- a/tools/virtualdisplay_probe.cpp
++++ b/tools/virtualdisplay_probe.cpp
+@@ -8,6 +8,7 @@
+ #include <atomic>
+ #include <charconv>
+ #include <chrono>
++#include <cstdio>
+ #include <cstdint>
+ #include <cstring>
+ #include <functional>
+@@ -91,12 +92,19 @@ namespace {
+       << "virtualdisplay_probe commands:\n"
+       << "  --diagnose\n"
+       << "  --apply-extended-topology\n"
++      << "  --apply-extended-topology-current-session\n"
++      << "  --dump-display-config-current-session\n"
++      << "  --set-hdr-current-session <0|1> [output-path]\n"
+       << "  --apply-manifest-topology\n"
+       << "  --query-color-profiles\n"
+       << "  --associate-color-profile <source_luid high:low> <source_id> <profile> [--advanced-color] [--default]\n"
+       << "  --check\n"
+       << "  --query-permanent\n"
+       << "  --set-permanent <count>\n"
++      << "  --remote-query-permanent <session_id>\n"
++      << "  --remote-query-state <session_id>\n"
++      << "  --remote-set-permanent <session_id> <count>\n"
++      << "  --remote-set-hdr <session_id> <display_id> <0|1> [sdr_white_level_nits]\n"
+       << "  --self-test-permanent [count]\n"
+       << "  --self-test-temp [width height refresh_hz]\n"
+       << "  --self-test-4k240 [timeout_ms]\n"
+@@ -199,6 +207,28 @@ namespace {
+     return true;
+   }
+ 
++  bool read_u64_arg(
++    const int argc,
++    char **argv,
++    const int index,
++    const std::uint64_t fallback,
++    const char *label,
++    std::uint64_t &value
++  ) {
++    if (argc <= index) {
++      value = fallback;
++      return true;
++    }
++
++    const auto parsed = vdd::parse_probe_u64_token(argv[index]);
++    if (!parsed) {
++      std::cerr << "invalid " << label << '\n';
++      return false;
++    }
++    value = *parsed;
++    return true;
++  }
++
+   bool require_command_arg_count(const std::string_view command, const int argc) {
+     if (!vdd::probe_command_arg_count_valid(command, argc)) {
+       print_usage();
+@@ -823,8 +853,20 @@ namespace {
+     const std::optional<vdd::AdapterLuid> &adapter_luid = std::nullopt,
+     const std::optional<std::uint32_t> &target_id = std::nullopt
+   ) {
+-    constexpr UINT32 kQueryFlags = QDC_ALL_PATHS | QDC_VIRTUAL_MODE_AWARE;
+-    auto query = query_display_config_result(kQueryFlags);
++    UINT32 query_flags = QDC_ALL_PATHS | QDC_VIRTUAL_MODE_AWARE;
++    auto query = query_display_config_result(query_flags);
++    if (!query.data) {
++      query_flags = QDC_ALL_PATHS;
++      query = query_display_config_result(query_flags);
++    }
++    if (!query.data) {
++      query_flags = QDC_ONLY_ACTIVE_PATHS | QDC_VIRTUAL_MODE_AWARE;
++      query = query_display_config_result(query_flags);
++    }
++    if (!query.data) {
++      query_flags = QDC_ONLY_ACTIVE_PATHS;
++      query = query_display_config_result(query_flags);
++    }
+     if (!query.data) {
+       std::cout << "display_config_query_error=1 native_error=" << query.native_error << '\n';
+       return;
+@@ -832,7 +874,8 @@ namespace {
+     auto &display_config = *query.data;
+ 
+     const auto filter_luid = adapter_luid ? vdd::to_windows_luid(*adapter_luid) : LUID {};
+-    std::cout << "display_config_paths=" << display_config.paths.size()
++    std::cout << "display_config_query_flags=" << query_flags
++              << " display_config_paths=" << display_config.paths.size()
+               << " modes=" << display_config.modes.size() << '\n';
+     for (std::size_t index = 0; index < display_config.paths.size(); ++index) {
+       const auto &path = display_config.paths[index];
+@@ -946,6 +989,118 @@ namespace {
+               << '\n';
+   }
+ 
++  bool advanced_color_matches(const AdvancedColorInfo &info, const bool enabled) {
++    if (!enabled) {
++      return !info.active ||
++             (info.v2 && !info.hdr_enabled &&
++              info.active_color_mode != DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR);
++    }
++
++    return info.v2 &&
++           info.supported &&
++           info.active &&
++           info.hdr_supported &&
++           info.hdr_enabled &&
++           info.active_color_mode == DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR &&
++           !info.limited_by_policy &&
++           info.bits_per_color_channel >= 10;
++  }
++
++  int set_current_session_hdr_state(const bool enabled) {
++    UINT32 query_flags = QDC_ONLY_ACTIVE_PATHS | QDC_VIRTUAL_MODE_AWARE;
++    auto query = query_display_config_result(query_flags);
++    if (!query.data) {
++      query_flags = QDC_ONLY_ACTIVE_PATHS;
++      query = query_display_config_result(query_flags);
++    }
++    if (!query.data) {
++      std::cerr << "current-session HDR path query failed native_error=" << query.native_error << '\n';
++      return 1;
++    }
++
++    std::uint32_t attempted = 0;
++    std::uint32_t matched = 0;
++    for (const auto &path: query.data->paths) {
++      if ((path.flags & DISPLAYCONFIG_PATH_ACTIVE) == 0 || !path.targetInfo.targetAvailable) {
++        continue;
++      }
++
++      const auto adapter_luid = vdd::from_windows_luid(path.targetInfo.adapterId);
++      LONG native_error = ERROR_SUCCESS;
++      const auto before = query_advanced_color(adapter_luid, path.targetInfo.id, &native_error);
++      std::cout << "current_session_hdr_target=" << attempted
++                << " adapter_luid=" << path.targetInfo.adapterId.HighPart << ':' << path.targetInfo.adapterId.LowPart
++                << " target_id=" << path.targetInfo.id << '\n';
++      if (!before) {
++        std::cerr << "current-session advanced-color query failed"
++                  << " target_id=" << path.targetInfo.id
++                  << " native_error=" << native_error << '\n';
++        ++attempted;
++        continue;
++      }
++
++      std::cout << "before_";
++      print_advanced_color(*before);
++      const bool set = before->v2 ?
++        set_hdr_state(adapter_luid, path.targetInfo.id, enabled) :
++        set_advanced_color(adapter_luid, path.targetInfo.id, enabled);
++      if (!set) {
++        std::cerr << "current-session HDR state change failed"
++                  << " target_id=" << path.targetInfo.id
++                  << " native_error=" << GetLastError() << '\n';
++        ++attempted;
++        continue;
++      }
++
++      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
++      std::optional<AdvancedColorInfo> after;
++      do {
++        after = query_advanced_color(adapter_luid, path.targetInfo.id, &native_error);
++        if (after && advanced_color_matches(*after, enabled)) {
++          break;
++        }
++        std::this_thread::sleep_for(std::chrono::milliseconds(100));
++      } while (std::chrono::steady_clock::now() < deadline);
++
++      if ((!after || !advanced_color_matches(*after, enabled)) && before->v2) {
++        std::cout << "current_session_hdr_legacy_fallback=1"
++                  << " target_id=" << path.targetInfo.id << '\n';
++        if (set_advanced_color(adapter_luid, path.targetInfo.id, enabled)) {
++          const auto fallback_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
++          do {
++            after = query_advanced_color(adapter_luid, path.targetInfo.id, &native_error);
++            if (after && advanced_color_matches(*after, enabled)) {
++              break;
++            }
++            std::this_thread::sleep_for(std::chrono::milliseconds(100));
++          } while (std::chrono::steady_clock::now() < fallback_deadline);
++        } else {
++          std::cerr << "current-session legacy advanced-color state change failed"
++                    << " target_id=" << path.targetInfo.id << '\n';
++        }
++      }
++
++      if (after) {
++        std::cout << "after_";
++        print_advanced_color(*after);
++      }
++      if (after && advanced_color_matches(*after, enabled)) {
++        ++matched;
++      } else {
++        std::cerr << "current-session HDR state did not converge"
++                  << " target_id=" << path.targetInfo.id
++                  << " requested=" << (enabled ? 1 : 0)
++                  << " native_error=" << native_error << '\n';
++      }
++      ++attempted;
++    }
++
++    std::cout << "current_session_hdr_requested=" << (enabled ? 1 : 0)
++              << " attempted=" << attempted
++              << " matched=" << matched << '\n';
++    return attempted != 0 && matched == attempted ? 0 : 1;
++  }
++
+   struct DisplayPathInfo {
+     bool active = false;
+     std::uint32_t width = 0;
+@@ -1891,6 +2046,46 @@ int main(const int argc, char **argv) {
+     return diagnose_control_devices();
+   }
+ 
++  if (command == "--apply-extended-topology-current-session") {
++    if (!require_command_arg_count(command, argc)) {
++      return 2;
++    }
++    const LONG result = apply_extended_topology_result();
++    if (result != ERROR_SUCCESS) {
++      std::cerr << "apply current-session extended topology failed native_error=" << result << '\n';
++      return 1;
++    }
++    std::cout << "current_session_extended_topology_applied=1\n";
++    return 0;
++  }
++
++  if (command == "--dump-display-config-current-session") {
++    if (!require_command_arg_count(command, argc)) {
++      return 2;
++    }
++    dump_display_config_paths();
++    return 0;
++  }
++
++  if (command == "--set-hdr-current-session") {
++    if (!require_command_arg_count(command, argc)) {
++      return 2;
++    }
++    if (argc == 4) {
++      FILE *redirected = nullptr;
++      if (freopen_s(&redirected, argv[3], "w", stdout) != 0 || redirected == nullptr) {
++        std::cerr << "open HDR proof output failed path=" << argv[3] << '\n';
++        return 2;
++      }
++      std::cerr.rdbuf(std::cout.rdbuf());
++    }
++    std::uint32_t enabled {};
++    if (!read_u32_arg(argc, argv, 2, 1, "HDR state", enabled)) {
++      return 2;
++    }
++    return set_current_session_hdr_state(enabled != 0);
++  }
++
+   if (command == "--apply-extended-topology") {
+     if (!require_command_arg_count(command, argc)) {
+       return 2;
+@@ -1962,7 +2157,17 @@ int main(const int argc, char **argv) {
+     return associate_color_profile(*source_luid, source_id, widen_ascii(argv[4]), advanced_color, set_default);
+   }
+ 
+-  auto opened = vdd::open_first_control_device();
++  const bool remote_query = command == "--remote-query-permanent" || command == "--remote-query-state";
++  const bool remote_set = command == "--remote-set-permanent" || command == "--remote-set-hdr";
++  std::uint32_t remote_session_id {};
++  if ((remote_query || remote_set) &&
++      !read_u32_arg(argc, argv, 2, 0, "remote session id", remote_session_id)) {
++    return 2;
++  }
++
++  auto opened = (remote_query || remote_set) ?
++    vdd::open_remote_control_device_for_session(remote_session_id) :
++    vdd::open_first_control_device();
+   if (!opened.ok()) {
+     return fail("open control device failed", {opened.status, opened.native_error});
+   }
+@@ -2002,6 +2207,51 @@ int main(const int argc, char **argv) {
+     return 0;
+   }
+ 
++  if (command == "--remote-query-permanent") {
++    if (!require_command_arg_count(command, argc)) {
++      return 2;
++    }
++    const auto result = client.query_permanent_display_count();
++    if (!result.ok()) {
++      return fail("query remote permanent count failed", result);
++    }
++    std::cout << "remote_session=" << remote_session_id
++              << " permanent=" << result.value.current_display_count
++              << " max=" << result.value.max_display_count
++              << " temporary=" << result.value.temporary_display_count
++              << " mode=" << result.value.width << 'x' << result.value.height << '@'
++              << (result.value.refresh_rate_millihz / 1000.0) << "Hz"
++              << " name=" << result.value.display_name << '\n';
++    return 0;
++  }
++
++  if (command == "--remote-query-state") {
++    if (!require_command_arg_count(command, argc)) {
++      return 2;
++    }
++    const auto result = client.query_display_state();
++    if (!result.ok()) {
++      return fail("query remote display state failed", result);
++    }
++    std::cout << "remote_session=" << remote_session_id
++              << " permanent=" << result.value.permanent_display_count
++              << " temporary=" << result.value.temporary_display_count
++              << " entries=" << result.value.entry_count << '\n';
++    const auto entry_count = (std::min)(result.value.entry_count, vdd::kMaxDisplayStateEntries);
++    for (std::uint32_t index = 0; index < entry_count; ++index) {
++      const auto &entry = result.value.entries[index];
++      std::cout << "entry=" << index
++                << " kind=" << entry.kind
++                << " flags=0x" << std::hex << entry.flags << std::dec
++                << " display_id=" << entry.display_id
++                << " connector=" << entry.connector_index
++                << " mode=" << entry.width << 'x' << entry.height << '@'
++                << (entry.refresh_rate_millihz / 1000.0) << "Hz"
++                << " name=" << entry.display_name << '\n';
++    }
++    return 0;
++  }
++
+   if (command == "--apply-manifest-topology") {
+     if (!require_command_arg_count(command, argc)) {
+       return 2;
+@@ -2027,6 +2277,53 @@ int main(const int argc, char **argv) {
+     return 0;
+   }
+ 
++  if (command == "--remote-set-permanent") {
++    if (!require_command_arg_count(command, argc)) {
++      return 2;
++    }
++    vdd::PermanentDisplayCountRequest request {};
++    if (!read_u32_arg(argc, argv, 3, 0, "permanent count", request.display_count)) {
++      return 2;
++    }
++    const auto result = client.set_permanent_display_count(request);
++    if (!result.ok()) {
++      return fail("set remote permanent count failed", result);
++    }
++    std::cout << "remote_session=" << remote_session_id
++              << " permanent=" << result.value.current_display_count
++              << " max=" << result.value.max_display_count
++              << " temporary=" << result.value.temporary_display_count << '\n';
++    return 0;
++  }
++
++  if (command == "--remote-set-hdr") {
++    if (!require_command_arg_count(command, argc)) {
++      return 2;
++    }
++    vdd::SetDisplayHdrStateRequest request {};
++    if (!read_u64_arg(argc, argv, 3, 0, "display id", request.display_id) ||
++        !read_u32_arg(argc, argv, 4, 0, "HDR enabled state", request.enabled) ||
++        !read_u32_arg(
++          argc,
++          argv,
++          5,
++          vdd::kDefaultSdrWhiteLevelNits,
++          "SDR white level",
++          request.sdr_white_level_nits
++        )) {
++      return 2;
++    }
++    const auto result = client.set_display_hdr_state(request);
++    if (!result.ok()) {
++      return fail("set remote HDR state failed", result);
++    }
++    std::cout << "remote_session=" << remote_session_id
++              << " display_id=" << request.display_id
++              << " hdr_enabled=" << request.enabled
++              << " sdr_white_level_nits=" << request.sdr_white_level_nits << '\n';
++    return 0;
++  }
++
+   if (command == "--self-test-permanent") {
+     if (!require_command_arg_count(command, argc)) {
+       return 2;
+-- 
+2.54.0.windows.1
+

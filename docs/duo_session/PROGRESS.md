@@ -828,6 +828,29 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
   to measure those acquired pixels and decide whether the driver/capture path
   must reinterpret or convert them before Main10/PQ encoding. This no longer
   blocks games from detecting and enabling Windows HDR.
+- The cleaned regression package 1.3.0.27 retained only the three mechanisms
+  needed by the success: initial HDR publication, the HDR10/10-bpc wire
+  contract, and pre-arrival WCG/source priming. The failed head-mounted,
+  local-adapter, desktop-topology, and BGRA8-swapchain-rejection experiments
+  were removed. All 26 focused checks and the complete 206-test driver suite
+  passed before the package was signed and installed as `oem31.inf`.
+- Session 54 then confirmed the cleaned path in a real Moonlight stream. The
+  exact 1.3.0.27 driver binding reported `advanced_color_active=1`, 10 bpc,
+  active color mode 2, and HDR remaining active after the temporary source owner
+  and cloned primary were released. The user independently confirmed the stream
+  was working. Evidence is retained under
+  `vibeseattest-probe-live-20260815-run7`.
+- Cleanup after that confirmation returned the machine to its fail-closed
+  baseline: only console session 1 remained; listeners 3397, 56000, and 56001
+  were absent; the proof provider, listener, volatile arms, disposable account,
+  credential, and helpers were absent; Secure Boot remained enabled; and VBS
+  status 2 with security services 2 and 7 remained active. No reboot was needed.
+- The exact source is now committed as provider commit
+  `00d5d5c43356c09b744f686a877a565e30af1977`, libvirtualdisplay commit
+  `c2a589ae40dc088d07477f5a5d605ba17cee6589`, and the Sunshine changes on this
+  `duo_session_large` branch. Replayable external-repository patch series are
+  retained under `docs/duo_session/source-patches` so the proof does not depend
+  on the continued existence of side worktrees.
 
 ### Steam and application launch
 
@@ -1031,10 +1054,12 @@ Work these in order unless new evidence changes the dependency chain.
    isolation is green, launch Civilization VI app ID 289070 from `E:/SteamLibrary`
    inside the active seat under the retargeted console token. The deterministic
    renderer, not the game's appearance, remains the HDR oracle.
-8. **Integrate and regression-test the corrected session host.** The proof branch
-   now builds and streams successfully in session 9. Rebase or port it onto the
-   long-running `duo_session_large` lane, then reprove launch, reconnect, WGC,
-   simultaneous streams, helper isolation, and teardown before any promotion.
+8. **Productize and regression-test the corrected session host.** The proven
+   Sunshine capture path and exact Remote IDD revision now live in the
+   `duo_session_large` lane, and the guarded provider source is preserved as a
+   replayable patch series. Move the proof-only provider/controller into a
+   product-owned seat broker, then reprove launch, reconnect, WGC, simultaneous
+   streams, helper isolation, and teardown before any promotion.
 9. **Inventory same-profile concurrency.** Extend the now-proven Steam collision
    audit to browsers, launchers, HKCU, AppData, and per-user services. Distinguish
    objects that merely need seat ACLs from names and files that require isolation.

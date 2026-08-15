@@ -1,0 +1,30 @@
+From 94031d410edcf40d1c6db03e744dda3878e96965 Mon Sep 17 00:00:00 2001
+From: Chase Payne <chase_payne@outlook.com>
+Date: Tue, 11 Aug 2026 21:11:45 -0500
+Subject: [PATCH 2/5] fix(display): define device property keys in control
+ client
+
+The remote control client references device property GUIDs, but devpkey.h only declares them unless one translation unit enables their definitions. Include initguid.h before devpkey.h so the MSVC remote-driver package links and can be runtime-tested.
+
+Generated with [Codex](https://openai.com/codex/)
+
+Model: GPT 5.6-Sol X-High
+---
+ src/driver/windows_control_client.cpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/driver/windows_control_client.cpp b/src/driver/windows_control_client.cpp
+index c48758b..1050f90 100644
+--- a/src/driver/windows_control_client.cpp
++++ b/src/driver/windows_control_client.cpp
+@@ -3,6 +3,7 @@
+ #ifdef _WIN32
+ 
+ #include <SetupAPI.h>
++#include <initguid.h>
+ #include <devpkey.h>
+ 
+ #include <algorithm>
+-- 
+2.54.0.windows.1
+

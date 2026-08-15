@@ -1,0 +1,1145 @@
+From 1413f9ff0aaa0625cc41eaa53cc8aeacaa52d0f6 Mon Sep 17 00:00:00 2001
+From: Chase Payne <chase_payne@outlook.com>
+Date: Mon, 10 Aug 2026 23:44:13 -0500
+Subject: [PATCH 1/5] feat(display): add terminal-session display driver
+
+Console IddCx adapters cannot serve RemoteDisplayEnum sessions, leaving product-owned virtual displays unavailable to independent seats. Add a separate remote-session package from the shared driver engine, bootstrap its first monitor, and isolate its control interface by WTS session while preserving the console driver.
+
+This is the source checkpoint; signed-package and live terminal-session validation remain pending.
+
+Generated with [Codex](https://openai.com/codex/)
+
+Model: GPT 5.6-Sol X-High
+---
+ README.md                                     |  23 ++
+ src/driver/CMakeLists.txt                     |  25 ++-
+ .../virtual_display/driver/control_protocol.h |  11 +
+ .../driver/windows_control_client.h           |  14 ++
+ src/driver/windows_control_client.cpp         | 211 ++++++++++++++----
+ src/driver/windows_driver/CMakeLists.txt      | 186 ++++++++-------
+ .../SunshineRemoteDisplayDriver.inf           |  84 +++++++
+ .../SunshineRemoteDisplayDriver.inf.in        |  84 +++++++
+ src/driver/windows_driver/driver_main.cpp     | 111 ++++++++-
+ tests/CMakeLists.txt                          |   5 +
+ tests/unit/driver/test_control_protocol.cpp   |   4 +
+ tools/gen_driver_inf.cpp                      |   1 +
+ 12 files changed, 632 insertions(+), 127 deletions(-)
+ create mode 100644 src/driver/windows_driver/SunshineRemoteDisplayDriver.inf
+ create mode 100644 src/driver/windows_driver/SunshineRemoteDisplayDriver.inf.in
+
+diff --git a/README.md b/README.md
+index 8737a0c..bae97ca 100644
+--- a/README.md
++++ b/README.md
+@@ -43,6 +43,21 @@ cmake -S . -B build-driver -G Ninja -DBUILD_TESTS=OFF -DBUILD_SUNSHINE_VIRTUAL_D
+ cmake --build build-driver --target SunshineVirtualDisplayDriver virtualdisplay_tools -j 10
+ ```
+ 
++The root-enumerated driver above owns console-session monitors. Windows terminal
++sessions require a separate `RemoteDisplayEnum` package; a console adapter cannot
++serve both roles. Build the remote-session package from the same display engine
++with:
++
++```powershell
++cmake -S . -B build-driver -G Ninja -DBUILD_TESTS=ON -DBUILD_SUNSHINE_REMOTE_DISPLAY_DRIVER=ON
++cmake --build build-driver --target SunshineRemoteDisplayDriver -j 10
++```
++
++The remote package matches `SUNSHINE_REMOTE_IDDCX`, advertises
++`IDDCX_ADAPTER_FLAGS_REMOTE_SESSION_DRIVER`, and creates one controller-tracked
++bootstrap monitor when its per-session adapter becomes ready. It requires Windows
++build 26100 or newer because its HDR and dynamic-mode contract uses IddCx 1.10.
++
+ The Windows driver build requires MSVC and the Windows Driver Kit. Packaging
+ also requires `Inf2Cat.exe` from the WDK. Local package builds generate the INF
+ and catalog files, but do not sign them; sign the driver package according to
+@@ -264,6 +279,14 @@ devices and opens the first usable one. It fails when the driver is not
+ installed, the device is not started, or Windows denies access. Keep the opened
+ transport alive for as long as `ControlClient` uses it.
+ 
++Remote-session devices use a separate interface class. A session-aware broker can
++select the exact `RemoteDisplayEnum` instance instead of accidentally opening the
++console driver or another seat:
++
++```cpp
++auto opened = vdd::open_remote_control_device_for_session(session_id);
++```
++
+ API calls return either `ControlOperationResult` or `ControlResult<T>`. Check
+ `ok()` before using output values. `status` reports library/protocol failures;
+ `native_error` carries the operating-system error code when transport or device
+diff --git a/src/driver/CMakeLists.txt b/src/driver/CMakeLists.txt
+index ee2930d..a70a48b 100644
+--- a/src/driver/CMakeLists.txt
++++ b/src/driver/CMakeLists.txt
+@@ -15,6 +15,7 @@ if(WIN32)
+ endif()
+ 
+ option(BUILD_SUNSHINE_VIRTUAL_DISPLAY_DRIVER "Build the Windows UMDF/IddCx Sunshine virtual display driver" OFF)
++option(BUILD_SUNSHINE_REMOTE_DISPLAY_DRIVER "Build the per-terminal-session UMDF/IddCx Sunshine remote display driver" OFF)
+ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+     set(_libvirtualdisplay_tool_default ON)
+ else()
+@@ -30,11 +31,15 @@ unset(_libvirtualdisplay_tool_default)
+ # source of truth. It is pure C++ (no Win32), so it builds and runs in the normal/test
+ # build. `regen_driver_inf` rewrites the committed INF; the test suite runs it in --check
+ # mode (see tests/CMakeLists.txt) so the shipped INF can never drift from the C++ constants.
+-if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME OR BUILD_SUNSHINE_VIRTUAL_DISPLAY_DRIVER)
++if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME OR BUILD_SUNSHINE_VIRTUAL_DISPLAY_DRIVER OR BUILD_SUNSHINE_REMOTE_DISPLAY_DRIVER)
+     set(SUNSHINE_DRIVER_INF_TEMPLATE
+             "${CMAKE_CURRENT_SOURCE_DIR}/windows_driver/SunshineVirtualDisplayDriver.inf.in")
+     set(SUNSHINE_DRIVER_INF_COMMITTED
+             "${CMAKE_CURRENT_SOURCE_DIR}/windows_driver/SunshineVirtualDisplayDriver.inf")
++    set(SUNSHINE_REMOTE_DRIVER_INF_TEMPLATE
++            "${CMAKE_CURRENT_SOURCE_DIR}/windows_driver/SunshineRemoteDisplayDriver.inf.in")
++    set(SUNSHINE_REMOTE_DRIVER_INF_COMMITTED
++            "${CMAKE_CURRENT_SOURCE_DIR}/windows_driver/SunshineRemoteDisplayDriver.inf")
+ 
+     add_executable(gen_driver_inf "${PROJECT_SOURCE_DIR}/tools/gen_driver_inf.cpp")
+     target_link_libraries(gen_driver_inf PRIVATE libvirtualdisplay::driver)
+@@ -44,6 +49,9 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME OR BUILD_SUNSHINE_VIRTUAL_DISPLAY_DR
+             COMMAND gen_driver_inf
+                 "${SUNSHINE_DRIVER_INF_TEMPLATE}"
+                 "${SUNSHINE_DRIVER_INF_COMMITTED}"
++            COMMAND gen_driver_inf
++                "${SUNSHINE_REMOTE_DRIVER_INF_TEMPLATE}"
++                "${SUNSHINE_REMOTE_DRIVER_INF_COMMITTED}"
+             COMMENT "Regenerating SunshineVirtualDisplayDriver.inf from device_identity")
+ 
+     set(_libvirtualdisplay_driver_version_source "${LIBVIRTUALDISPLAY_PACKAGE_VERSION}")
+@@ -80,9 +88,22 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME OR BUILD_SUNSHINE_VIRTUAL_DISPLAY_DR
+             COMMENT "Generating SunshineVirtualDisplayDriver.inf with DriverVer ${LIBVIRTUALDISPLAY_DRIVER_DATE},${LIBVIRTUALDISPLAY_DRIVER_VERSION}"
+             VERBATIM)
+     add_custom_target(gen_driver_package_inf DEPENDS "${SUNSHINE_DRIVER_INF_GENERATED}")
++
++    set(SUNSHINE_REMOTE_DRIVER_INF_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/windows_driver/SunshineRemoteDisplayDriver.inf")
++    add_custom_command(OUTPUT "${SUNSHINE_REMOTE_DRIVER_INF_GENERATED}"
++            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/windows_driver"
++            COMMAND gen_driver_inf
++                --driverver-date "${LIBVIRTUALDISPLAY_DRIVER_DATE}"
++                --driverver-version "${LIBVIRTUALDISPLAY_DRIVER_VERSION}"
++                "${SUNSHINE_REMOTE_DRIVER_INF_TEMPLATE}"
++                "${SUNSHINE_REMOTE_DRIVER_INF_GENERATED}"
++            DEPENDS gen_driver_inf "${SUNSHINE_REMOTE_DRIVER_INF_TEMPLATE}"
++            COMMENT "Generating SunshineRemoteDisplayDriver.inf with DriverVer ${LIBVIRTUALDISPLAY_DRIVER_DATE},${LIBVIRTUALDISPLAY_DRIVER_VERSION}"
++            VERBATIM)
++    add_custom_target(gen_remote_driver_package_inf DEPENDS "${SUNSHINE_REMOTE_DRIVER_INF_GENERATED}")
+ endif()
+ 
+-if(BUILD_SUNSHINE_VIRTUAL_DISPLAY_DRIVER)
++if(BUILD_SUNSHINE_VIRTUAL_DISPLAY_DRIVER OR BUILD_SUNSHINE_REMOTE_DISPLAY_DRIVER)
+     add_subdirectory(windows_driver)
+ endif()
+ 
+diff --git a/src/driver/include/virtual_display/driver/control_protocol.h b/src/driver/include/virtual_display/driver/control_protocol.h
+index 8bea3a8..d52d3b6 100644
+--- a/src/driver/include/virtual_display/driver/control_protocol.h
++++ b/src/driver/include/virtual_display/driver/control_protocol.h
+@@ -25,6 +25,17 @@ namespace virtual_display::driver {
+     {0x86, 0xef, 0xe4, 0xc6, 0x71, 0x93, 0x2d, 0x63}
+   };
+ 
++  // Remote-session IddCx devices are enumerated once per WTS session. Keep
++  // their control interface distinct from the root/console device so a
++  // machine-level broker cannot accidentally mutate the console display while
++  // opening a seat device (or vice versa).
++  inline constexpr Guid kRemoteDeviceInterfaceGuid {
++    0x2e82b34d,
++    0x53b8,
++    0x49c2,
++    {0x9d, 0x8d, 0x13, 0x46, 0x79, 0x91, 0xc4, 0x87}
++  };
++
+   inline constexpr Guid kApiNamespaceGuid {
+     0xa2864284,
+     0x77fe,
+diff --git a/src/driver/include/virtual_display/driver/windows_control_client.h b/src/driver/include/virtual_display/driver/windows_control_client.h
+index 2db4a3f..353903b 100644
+--- a/src/driver/include/virtual_display/driver/windows_control_client.h
++++ b/src/driver/include/virtual_display/driver/windows_control_client.h
+@@ -8,10 +8,16 @@
+ #include <Windows.h>
+ 
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <vector>
+ 
+ namespace virtual_display::driver {
++  enum class WindowsControlDeviceKind {
++    Console,
++    RemoteSession
++  };
++
+   class WindowsControlTransport final: public ControlTransport {
+   public:
+     explicit WindowsControlTransport(HANDLE handle);
+@@ -52,12 +58,20 @@ namespace virtual_display::driver {
+ 
+   struct WindowsControlDeviceInfo {
+     std::wstring device_path {};
++    std::wstring device_instance_id {};
++    std::optional<std::uint32_t> session_id {};
+     bool openable {};
+     std::uint32_t native_error {};
+   };
+ 
+   std::vector<WindowsControlDeviceInfo> enumerate_control_devices(std::uint32_t *native_error = nullptr);
++  std::vector<WindowsControlDeviceInfo> enumerate_control_devices(
++    WindowsControlDeviceKind kind,
++    std::uint32_t *native_error = nullptr
++  );
+   WindowsControlOpenResult open_first_control_device();
++  WindowsControlOpenResult open_first_control_device(WindowsControlDeviceKind kind);
++  WindowsControlOpenResult open_remote_control_device_for_session(std::uint32_t session_id);
+ }  // namespace virtual_display::driver
+ 
+ #endif
+diff --git a/src/driver/windows_control_client.cpp b/src/driver/windows_control_client.cpp
+index 258392a..c48758b 100644
+--- a/src/driver/windows_control_client.cpp
++++ b/src/driver/windows_control_client.cpp
+@@ -3,9 +3,13 @@
+ #ifdef _WIN32
+ 
+ #include <SetupAPI.h>
++#include <devpkey.h>
+ 
+ #include <algorithm>
++#include <cwchar>
++#include <cwctype>
+ #include <limits>
++#include <optional>
+ #include <utility>
+ #include <vector>
+ 
+@@ -60,8 +64,25 @@ namespace virtual_display::driver {
+       return nullptr;
+     }
+ 
+-    std::vector<std::wstring> enumerate_control_device_paths(std::uint32_t &native_error) {
+-      const GUID interface_guid = to_windows_guid(kDeviceInterfaceGuid);
++    struct ControlDevicePath {
++      std::wstring path {};
++      std::wstring instance_id {};
++      std::optional<std::uint32_t> session_id {};
++    };
++
++    GUID control_interface_guid(const WindowsControlDeviceKind kind) {
++      return to_windows_guid(
++        kind == WindowsControlDeviceKind::RemoteSession ?
++          kRemoteDeviceInterfaceGuid :
++          kDeviceInterfaceGuid
++      );
++    }
++
++    std::vector<ControlDevicePath> enumerate_control_device_paths(
++      const WindowsControlDeviceKind kind,
++      std::uint32_t &native_error
++    ) {
++      const GUID interface_guid = control_interface_guid(kind);
+       DevInfoSet device_info_set {
+         SetupDiGetClassDevsW(
+           &interface_guid,
+@@ -75,7 +96,7 @@ namespace virtual_display::driver {
+         return {};
+       }
+ 
+-      std::vector<std::wstring> paths;
++      std::vector<ControlDevicePath> paths;
+       native_error = ERROR_FILE_NOT_FOUND;
+ 
+       for (DWORD index = 0;; ++index) {
+@@ -101,17 +122,131 @@ namespace virtual_display::driver {
+         std::vector<std::byte> detail_buffer(detail_size);
+         auto *detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W *>(detail_buffer.data());
+         detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
+-        if (!SetupDiGetDeviceInterfaceDetailW(device_info_set.value, &interface_data, detail, detail_size, &detail_size, nullptr)) {
++        SP_DEVINFO_DATA device_info {};
++        device_info.cbSize = sizeof(device_info);
++        if (!SetupDiGetDeviceInterfaceDetailW(
++              device_info_set.value,
++              &interface_data,
++              detail,
++              detail_size,
++              &detail_size,
++              &device_info
++            )) {
+           native_error = GetLastError();
+           continue;
+         }
+ 
+-        paths.emplace_back(detail->DevicePath);
++        ControlDevicePath device_path {};
++        device_path.path = detail->DevicePath;
++
++        DWORD instance_id_size = 0;
++        (void) SetupDiGetDeviceInstanceIdW(
++          device_info_set.value,
++          &device_info,
++          nullptr,
++          0,
++          &instance_id_size
++        );
++        if (instance_id_size > 0) {
++          std::vector<wchar_t> instance_id(instance_id_size);
++          if (SetupDiGetDeviceInstanceIdW(
++                device_info_set.value,
++                &device_info,
++                instance_id.data(),
++                instance_id_size,
++                &instance_id_size
++              )) {
++            device_path.instance_id = instance_id.data();
++          }
++        }
++
++        DEVPROPTYPE property_type = DEVPROP_TYPE_EMPTY;
++        DWORD property_size = 0;
++        std::uint32_t session_id = 0;
++        if (SetupDiGetDevicePropertyW(
++              device_info_set.value,
++              &device_info,
++              &DEVPKEY_Device_SessionId,
++              &property_type,
++              reinterpret_cast<PBYTE>(&session_id),
++              sizeof(session_id),
++              &property_size,
++              0
++            ) &&
++            property_type == DEVPROP_TYPE_UINT32 &&
++            property_size == sizeof(session_id)) {
++          device_path.session_id = session_id;
++        }
++
++        paths.push_back(std::move(device_path));
+         native_error = ERROR_SUCCESS;
+       }
+ 
+       return paths;
+     }
++
++    bool contains_case_insensitive(const std::wstring &value, const std::wstring &needle) {
++      return std::search(
++               value.begin(),
++               value.end(),
++               needle.begin(),
++               needle.end(),
++               [](const wchar_t left, const wchar_t right) {
++                 return std::towupper(left) == std::towupper(right);
++               }
++             ) != value.end();
++    }
++
++    bool matches_remote_session(const ControlDevicePath &device, const std::uint32_t session_id) {
++      if (device.session_id) {
++        return *device.session_id == session_id;
++      }
++
++      // Older stacks may omit DEVPKEY_Device_SessionId. RemoteDisplayEnum also
++      // embeds the session in the instance ID, so retain that as a fail-closed
++      // compatibility fallback rather than opening an arbitrary seat.
++      wchar_t marker[32] {};
++      if (std::swprintf(marker, sizeof(marker) / sizeof(marker[0]), L"SESSIONID_%04X", session_id) < 0) {
++        return false;
++      }
++      return contains_case_insensitive(device.instance_id, marker) ||
++             contains_case_insensitive(device.path, marker);
++    }
++
++    WindowsControlOpenResult open_control_device_paths(
++      const std::vector<ControlDevicePath> &devices,
++      std::uint32_t last_error
++    ) {
++      for (const auto &device : devices) {
++        UniqueHandle handle {
++          CreateFileW(
++            device.path.c_str(),
++            GENERIC_READ | GENERIC_WRITE,
++            FILE_SHARE_READ | FILE_SHARE_WRITE,
++            nullptr,
++            OPEN_EXISTING,
++            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
++            nullptr
++          )
++        };
++        if (handle.value != INVALID_HANDLE_VALUE) {
++          auto transport = std::make_unique<WindowsControlTransport>(handle.release());
++          return {
++            ControlStatus::Success,
++            std::move(transport),
++            0,
++            device.path
++          };
++        }
++
++        last_error = GetLastError();
++      }
++
++      if (last_error == ERROR_SUCCESS || last_error == ERROR_NO_MORE_ITEMS) {
++        last_error = ERROR_FILE_NOT_FOUND;
++      }
++      return {ControlStatus::TransportFailed, {}, last_error, {}};
++    }
+   }  // namespace
+ 
+   WindowsControlTransport::WindowsControlTransport(HANDLE handle):
+@@ -220,8 +355,15 @@ namespace virtual_display::driver {
+   }
+ 
+   std::vector<WindowsControlDeviceInfo> enumerate_control_devices(std::uint32_t *native_error) {
++    return enumerate_control_devices(WindowsControlDeviceKind::Console, native_error);
++  }
++
++  std::vector<WindowsControlDeviceInfo> enumerate_control_devices(
++    const WindowsControlDeviceKind kind,
++    std::uint32_t *native_error
++  ) {
+     std::uint32_t enumerate_error = ERROR_SUCCESS;
+-    auto paths = enumerate_control_device_paths(enumerate_error);
++    auto paths = enumerate_control_device_paths(kind, enumerate_error);
+     if (native_error) {
+       *native_error = enumerate_error;
+     }
+@@ -230,10 +372,12 @@ namespace virtual_display::driver {
+     devices.reserve(paths.size());
+     for (const auto &path : paths) {
+       WindowsControlDeviceInfo info {};
+-      info.device_path = path;
++      info.device_path = path.path;
++      info.device_instance_id = path.instance_id;
++      info.session_id = path.session_id;
+ 
+       HANDLE handle = CreateFileW(
+-        path.c_str(),
++        path.path.c_str(),
+         GENERIC_READ | GENERIC_WRITE,
+         FILE_SHARE_READ | FILE_SHARE_WRITE,
+         nullptr,
+@@ -254,38 +398,29 @@ namespace virtual_display::driver {
+   }
+ 
+   WindowsControlOpenResult open_first_control_device() {
+-    std::uint32_t last_error = ERROR_SUCCESS;
+-    const auto paths = enumerate_control_device_paths(last_error);
+-
+-    for (const auto &path : paths) {
+-      UniqueHandle handle {
+-        CreateFileW(
+-          path.c_str(),
+-          GENERIC_READ | GENERIC_WRITE,
+-          FILE_SHARE_READ | FILE_SHARE_WRITE,
+-          nullptr,
+-          OPEN_EXISTING,
+-          FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
+-          nullptr
+-        )
+-      };
+-      if (handle.value != INVALID_HANDLE_VALUE) {
+-        auto transport = std::make_unique<WindowsControlTransport>(handle.release());
+-        return {
+-          ControlStatus::Success,
+-          std::move(transport),
+-          0,
+-          path
+-        };
+-      }
++    return open_first_control_device(WindowsControlDeviceKind::Console);
++  }
+ 
+-      last_error = GetLastError();
+-    }
++  WindowsControlOpenResult open_first_control_device(const WindowsControlDeviceKind kind) {
++    std::uint32_t last_error = ERROR_SUCCESS;
++    auto devices = enumerate_control_device_paths(kind, last_error);
++    return open_control_device_paths(devices, last_error);
++  }
+ 
+-    if (last_error == ERROR_SUCCESS || last_error == ERROR_NO_MORE_ITEMS) {
+-      last_error = ERROR_FILE_NOT_FOUND;
+-    }
+-    return {ControlStatus::TransportFailed, {}, last_error, {}};
++  WindowsControlOpenResult open_remote_control_device_for_session(const std::uint32_t session_id) {
++    std::uint32_t last_error = ERROR_SUCCESS;
++    auto devices = enumerate_control_device_paths(WindowsControlDeviceKind::RemoteSession, last_error);
++    devices.erase(
++      std::remove_if(
++        devices.begin(),
++        devices.end(),
++        [session_id](const auto &device) {
++          return !matches_remote_session(device, session_id);
++        }
++      ),
++      devices.end()
++    );
++    return open_control_device_paths(devices, last_error);
+   }
+ }  // namespace virtual_display::driver
+ 
+diff --git a/src/driver/windows_driver/CMakeLists.txt b/src/driver/windows_driver/CMakeLists.txt
+index bf14dde..fe99eec 100644
+--- a/src/driver/windows_driver/CMakeLists.txt
++++ b/src/driver/windows_driver/CMakeLists.txt
+@@ -3,6 +3,7 @@ if(NOT WIN32 OR NOT MSVC)
+ endif()
+ 
+ set(SUNSHINE_DRIVER_TARGET SunshineVirtualDisplayDriver)
++set(SUNSHINE_REMOTE_DRIVER_TARGET SunshineRemoteDisplayDriver)
+ set(SUNSHINE_DRIVER_WDF_VERSION "2.25" CACHE STRING "UMDF version for the Sunshine virtual display driver" FORCE)
+ set(SUNSHINE_DRIVER_IDDCX_VERSION "1.10" CACHE STRING "IddCx include/library version for the Sunshine virtual display driver" FORCE)
+ set(SUNSHINE_DRIVER_PLATFORM "${CMAKE_VS_PLATFORM_NAME}")
+@@ -11,6 +12,11 @@ if(SUNSHINE_DRIVER_INF_GENERATED)
+ else()
+     set(SUNSHINE_DRIVER_INF "${CMAKE_CURRENT_SOURCE_DIR}/SunshineVirtualDisplayDriver.inf")
+ endif()
++if(SUNSHINE_REMOTE_DRIVER_INF_GENERATED)
++    set(SUNSHINE_REMOTE_DRIVER_INF "${SUNSHINE_REMOTE_DRIVER_INF_GENERATED}")
++else()
++    set(SUNSHINE_REMOTE_DRIVER_INF "${CMAKE_CURRENT_SOURCE_DIR}/SunshineRemoteDisplayDriver.inf")
++endif()
+ 
+ if(NOT SUNSHINE_DRIVER_PLATFORM)
+     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+@@ -123,13 +129,6 @@ unset(_sunshine_driver_preferred_usable)
+ unset(_sunshine_driver_resolved_sdk_version)
+ unset(_sunshine_driver_candidate_root)
+ 
+-add_library(${SUNSHINE_DRIVER_TARGET} SHARED
+-        driver_main.cpp
+-        "${SUNSHINE_DRIVER_INF}")
+-if(TARGET gen_driver_package_inf)
+-    add_dependencies(${SUNSHINE_DRIVER_TARGET} gen_driver_package_inf)
+-endif()
+-
+ find_program(SUNSHINE_DRIVER_TRACEWPP
+         NAMES TraceWPP.exe tracewpp.exe
+         PATHS
+@@ -156,68 +155,9 @@ add_custom_command(OUTPUT "${SUNSHINE_DRIVER_WPP_TMH}"
+         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/driver_main.cpp"
+         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+         VERBATIM)
++# Preserve the established WPP target name for downstream build scripts while
++# sharing the generated trace header between the console and remote drivers.
+ add_custom_target(${SUNSHINE_DRIVER_TARGET}WppTrace DEPENDS "${SUNSHINE_DRIVER_WPP_TMH}")
+-add_dependencies(${SUNSHINE_DRIVER_TARGET} ${SUNSHINE_DRIVER_TARGET}WppTrace)
+-
+-target_link_libraries(${SUNSHINE_DRIVER_TARGET}
+-        PRIVATE
+-        libvirtualdisplay::driver
+-        advapi32
+-        avrt
+-        d3d11
+-        dxgi
+-        wtsapi32
+-        "${SUNSHINE_DRIVER_WDK_ROOT}/Lib/${SUNSHINE_DRIVER_SDK_VERSION}/um/${SUNSHINE_DRIVER_WDK_ARCH}/iddcx/${SUNSHINE_DRIVER_IDDCX_VERSION}/IddCxStub.lib"
+-        "${SUNSHINE_DRIVER_WDK_ROOT}/Lib/wdf/umdf/${SUNSHINE_DRIVER_WDK_ARCH}/${SUNSHINE_DRIVER_WDF_VERSION}/WdfDriverStubUm.lib"
+-        "${SUNSHINE_DRIVER_WDK_ROOT}/Lib/${SUNSHINE_DRIVER_SDK_VERSION}/um/${SUNSHINE_DRIVER_WDK_ARCH}/wpprecorderum.lib"
+-        "${SUNSHINE_DRIVER_WDK_ROOT}/Lib/${SUNSHINE_DRIVER_SDK_VERSION}/um/${SUNSHINE_DRIVER_WDK_ARCH}/ntdll.lib")
+-
+-target_include_directories(${SUNSHINE_DRIVER_TARGET}
+-        PRIVATE
+-        "${CMAKE_CURRENT_BINARY_DIR}"
+-        "${SUNSHINE_DRIVER_WDK_ROOT}/Include/wdf/umdf/${SUNSHINE_DRIVER_WDF_VERSION}"
+-        "${SUNSHINE_DRIVER_WDK_ROOT}/Include/${SUNSHINE_DRIVER_SDK_VERSION}/um"
+-        "${SUNSHINE_DRIVER_WDK_ROOT}/Include/${SUNSHINE_DRIVER_SDK_VERSION}/shared"
+-        "${SUNSHINE_DRIVER_WDK_ROOT}/Include/${SUNSHINE_DRIVER_SDK_VERSION}/ucrt"
+-        "${SUNSHINE_DRIVER_WDK_ROOT}/Include/${SUNSHINE_DRIVER_SDK_VERSION}/um/iddcx/${SUNSHINE_DRIVER_IDDCX_VERSION}")
+-
+-target_compile_definitions(${SUNSHINE_DRIVER_TARGET}
+-        PRIVATE
+-        UNICODE
+-        _UNICODE
+-        NOMINMAX
+-        UMDF_DRIVER
+-        UMDF_VERSION_MAJOR=2
+-        UMDF_VERSION_MINOR=25
+-        UMDF_MINIMUM_VERSION_REQUIRED=25
+-        _ATL_NO_WIN_SUPPORT
+-        IDDCX_VERSION_MAJOR=1
+-        IDDCX_VERSION_MINOR=10
+-        IDDCX_MINIMUM_VERSION_REQUIRED=4
+-        WPP_MACRO_USE_KM_VERSION_FOR_UM=1
+-        ENABLE_WPP_RECORDER=1)
+-
+-set_target_properties(${SUNSHINE_DRIVER_TARGET}
+-        PROPERTIES
+-        PREFIX ""
+-        OUTPUT_NAME "SunshineVirtualDisplayDriver"
+-        SUFFIX ".dll")
+-
+-# Keep the package inputs as real build outputs. A POST_BUILD-only copy does not
+-# run when only the INF changes, which can leave pnputil installing a stale driver package.
+-set(SUNSHINE_DRIVER_PACKAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/driver-package")
+-set(SUNSHINE_DRIVER_PACKAGED_INF "${SUNSHINE_DRIVER_PACKAGE_DIR}/SunshineVirtualDisplayDriver.inf")
+-set(SUNSHINE_DRIVER_PACKAGED_DLL "${SUNSHINE_DRIVER_PACKAGE_DIR}/SunshineVirtualDisplayDriver.dll")
+-add_custom_command(OUTPUT "${SUNSHINE_DRIVER_PACKAGED_INF}" "${SUNSHINE_DRIVER_PACKAGED_DLL}"
+-        COMMAND ${CMAKE_COMMAND} -E make_directory "${SUNSHINE_DRIVER_PACKAGE_DIR}"
+-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+-                "${SUNSHINE_DRIVER_INF}"
+-                "${SUNSHINE_DRIVER_PACKAGED_INF}"
+-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+-                "$<TARGET_FILE:${SUNSHINE_DRIVER_TARGET}>"
+-                "${SUNSHINE_DRIVER_PACKAGED_DLL}"
+-        DEPENDS ${SUNSHINE_DRIVER_TARGET} "${SUNSHINE_DRIVER_INF}"
+-        VERBATIM)
+ 
+ find_program(SUNSHINE_DRIVER_INF2CAT
+         NAMES Inf2Cat.exe
+@@ -230,14 +170,104 @@ if(NOT SUNSHINE_DRIVER_INF2CAT)
+     message(FATAL_ERROR "Inf2Cat.exe is required to package ${SUNSHINE_DRIVER_TARGET}")
+ endif()
+ 
+-set(SUNSHINE_DRIVER_PACKAGED_CAT "${SUNSHINE_DRIVER_PACKAGE_DIR}/sunshinevirtualdisplaydriver.cat")
+-add_custom_command(OUTPUT "${SUNSHINE_DRIVER_PACKAGED_CAT}"
+-        COMMAND "${SUNSHINE_DRIVER_INF2CAT}" "/driver:${SUNSHINE_DRIVER_PACKAGE_DIR}" /os:${SUNSHINE_DRIVER_INF2CAT_OS}
+-        DEPENDS "${SUNSHINE_DRIVER_PACKAGED_INF}" "${SUNSHINE_DRIVER_PACKAGED_DLL}"
+-        VERBATIM)
+-add_custom_target(${SUNSHINE_DRIVER_TARGET}PackageFiles ALL DEPENDS "${SUNSHINE_DRIVER_PACKAGED_CAT}")
++function(sunshine_add_display_driver target output_name inf dependency_target package_directory catalog_name)
++    add_library(${target} SHARED
++            driver_main.cpp
++            "${inf}")
++    if(TARGET ${dependency_target})
++        add_dependencies(${target} ${dependency_target})
++    endif()
++    add_dependencies(${target} ${SUNSHINE_DRIVER_TARGET}WppTrace)
++
++    target_link_libraries(${target}
++            PRIVATE
++            libvirtualdisplay::driver
++            advapi32
++            avrt
++            d3d11
++            dxgi
++            wtsapi32
++            "${SUNSHINE_DRIVER_WDK_ROOT}/Lib/${SUNSHINE_DRIVER_SDK_VERSION}/um/${SUNSHINE_DRIVER_WDK_ARCH}/iddcx/${SUNSHINE_DRIVER_IDDCX_VERSION}/IddCxStub.lib"
++            "${SUNSHINE_DRIVER_WDK_ROOT}/Lib/wdf/umdf/${SUNSHINE_DRIVER_WDK_ARCH}/${SUNSHINE_DRIVER_WDF_VERSION}/WdfDriverStubUm.lib"
++            "${SUNSHINE_DRIVER_WDK_ROOT}/Lib/${SUNSHINE_DRIVER_SDK_VERSION}/um/${SUNSHINE_DRIVER_WDK_ARCH}/wpprecorderum.lib"
++            "${SUNSHINE_DRIVER_WDK_ROOT}/Lib/${SUNSHINE_DRIVER_SDK_VERSION}/um/${SUNSHINE_DRIVER_WDK_ARCH}/ntdll.lib")
+ 
+-install(TARGETS ${SUNSHINE_DRIVER_TARGET} RUNTIME DESTINATION driver)
+-install(FILES "$<TARGET_PDB_FILE:${SUNSHINE_DRIVER_TARGET}>" DESTINATION driver OPTIONAL)
+-install(FILES "${SUNSHINE_DRIVER_PACKAGED_INF}" DESTINATION driver)
+-install(FILES "${SUNSHINE_DRIVER_PACKAGED_CAT}" DESTINATION driver RENAME SunshineVirtualDisplayDriver.cat)
++    target_include_directories(${target}
++            PRIVATE
++            "${CMAKE_CURRENT_BINARY_DIR}"
++            "${SUNSHINE_DRIVER_WDK_ROOT}/Include/wdf/umdf/${SUNSHINE_DRIVER_WDF_VERSION}"
++            "${SUNSHINE_DRIVER_WDK_ROOT}/Include/${SUNSHINE_DRIVER_SDK_VERSION}/um"
++            "${SUNSHINE_DRIVER_WDK_ROOT}/Include/${SUNSHINE_DRIVER_SDK_VERSION}/shared"
++            "${SUNSHINE_DRIVER_WDK_ROOT}/Include/${SUNSHINE_DRIVER_SDK_VERSION}/ucrt"
++            "${SUNSHINE_DRIVER_WDK_ROOT}/Include/${SUNSHINE_DRIVER_SDK_VERSION}/um/iddcx/${SUNSHINE_DRIVER_IDDCX_VERSION}")
++
++    target_compile_definitions(${target}
++            PRIVATE
++            UNICODE
++            _UNICODE
++            NOMINMAX
++            UMDF_DRIVER
++            UMDF_VERSION_MAJOR=2
++            UMDF_VERSION_MINOR=25
++            UMDF_MINIMUM_VERSION_REQUIRED=25
++            _ATL_NO_WIN_SUPPORT
++            IDDCX_VERSION_MAJOR=1
++            IDDCX_VERSION_MINOR=10
++            IDDCX_MINIMUM_VERSION_REQUIRED=4
++            WPP_MACRO_USE_KM_VERSION_FOR_UM=1
++            ENABLE_WPP_RECORDER=1
++            ${ARGN})
++
++    set_target_properties(${target}
++            PROPERTIES
++            PREFIX ""
++            OUTPUT_NAME "${output_name}"
++            SUFFIX ".dll")
++
++    # Keep package inputs as real outputs. INF-only edits must refresh the
++    # catalog even when the driver binary itself did not relink.
++    set(package_dir "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/${package_directory}")
++    set(packaged_inf "${package_dir}/${output_name}.inf")
++    set(packaged_dll "${package_dir}/${output_name}.dll")
++    # Inf2Cat normalizes the emitted catalog filename to lower case even when
++    # CatalogFile in the INF uses product casing.
++    string(TOLOWER "${catalog_name}" catalog_file_name)
++    set(packaged_cat "${package_dir}/${catalog_file_name}")
++    add_custom_command(OUTPUT "${packaged_inf}" "${packaged_dll}"
++            COMMAND ${CMAKE_COMMAND} -E make_directory "${package_dir}"
++            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${inf}" "${packaged_inf}"
++            COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${target}>" "${packaged_dll}"
++            DEPENDS ${target} "${inf}"
++            VERBATIM)
++    add_custom_command(OUTPUT "${packaged_cat}"
++            COMMAND "${SUNSHINE_DRIVER_INF2CAT}" "/driver:${package_dir}" /os:${SUNSHINE_DRIVER_INF2CAT_OS}
++            DEPENDS "${packaged_inf}" "${packaged_dll}"
++            VERBATIM)
++    add_custom_target(${target}PackageFiles ALL DEPENDS "${packaged_cat}")
++
++    install(TARGETS ${target} RUNTIME DESTINATION driver)
++    install(FILES "$<TARGET_PDB_FILE:${target}>" DESTINATION driver OPTIONAL)
++    install(FILES "${packaged_inf}" DESTINATION driver)
++    install(FILES "${packaged_cat}" DESTINATION driver RENAME "${catalog_name}")
++endfunction()
++
++if(BUILD_SUNSHINE_VIRTUAL_DISPLAY_DRIVER)
++    sunshine_add_display_driver(
++            ${SUNSHINE_DRIVER_TARGET}
++            SunshineVirtualDisplayDriver
++            "${SUNSHINE_DRIVER_INF}"
++            gen_driver_package_inf
++            driver-package
++            SunshineVirtualDisplayDriver.cat)
++endif()
++
++if(BUILD_SUNSHINE_REMOTE_DISPLAY_DRIVER)
++    sunshine_add_display_driver(
++            ${SUNSHINE_REMOTE_DRIVER_TARGET}
++            SunshineRemoteDisplayDriver
++            "${SUNSHINE_REMOTE_DRIVER_INF}"
++            gen_remote_driver_package_inf
++            remote-driver-package
++            SunshineRemoteDisplayDriver.cat
++            SUNSHINE_VDD_REMOTE_SESSION_DRIVER=1)
++endif()
+diff --git a/src/driver/windows_driver/SunshineRemoteDisplayDriver.inf b/src/driver/windows_driver/SunshineRemoteDisplayDriver.inf
+new file mode 100644
+index 0000000..08d83c1
+--- /dev/null
++++ b/src/driver/windows_driver/SunshineRemoteDisplayDriver.inf
+@@ -0,0 +1,84 @@
++; SunshineRemoteDisplayDriver.inf
++; Clean-room UMDF/IddCx display driver for a Remote Desktop Services session.
++
++[Version]
++Signature="$WINDOWS NT$"
++Class=Display
++ClassGuid={4d36e968-e325-11ce-bfc1-08002be10318}
++ClassVer=2.0
++Provider=%ManufacturerName%
++CatalogFile=SunshineRemoteDisplayDriver.cat
++DriverVer=06/06/2026,1.3.0.0
++PnpLockdown=1
++
++; RemoteDisplayEnum creates one software device per terminal session after the
++; protocol provider returns the hardware ID below. Preconfiguration makes the
++; UMDF/IddCx stack available during that session-creation transaction.
++[ControlFlags]
++PreConfigureDriver=*
++
++[Manufacturer]
++%ManufacturerName%=Standard,NTamd64.10.0...26100
++
++[Standard.NTamd64.10.0...26100]
++%DeviceName%=Device_Install, SUNSHINE_REMOTE_IDDCX
++
++[SourceDisksNames]
++1=%DiskName%,,,""
++
++[SourceDisksFiles]
++SunshineRemoteDisplayDriver.dll=1
++
++[DestinationDirs]
++UMDriverCopy=12,UMDF
++
++[Device_Install.NT]
++CopyFiles=UMDriverCopy
++
++[Device_Install.NT.hw]
++AddReg=Device_Install_Hw_AddReg
++
++[Device_Install_Hw_AddReg]
++HKR,,"UpperFilters",0x00010000,"IndirectKmd"
++HKR,"WUDF","DeviceGroupId",0x00000000,"SunshineRemoteDisplayGroup"
++HKR,,"ConfigVersion",0x00010001,1
++
++[Device_Install.NT.Interfaces]
++AddInterface={2e82b34d-53b8-49c2-9d8d-13467991c487},,ControlInterface
++
++[ControlInterface]
++AddReg=ControlInterface_AddReg
++
++[ControlInterface_AddReg]
++HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;S-1-5-80-2333729190-1599198784-3320592948-2337414441-3098439965)"
++
++[Device_Install.NT.Services]
++AddService=WUDFRd,0x000001fa,WUDFRD_ServiceInstall
++
++[WUDFRD_ServiceInstall]
++DisplayName=%WudfRdDisplayName%
++ServiceType=1
++StartType=3
++ErrorControl=1
++ServiceBinary=%12%\WUDFRd.sys
++
++[Device_Install.NT.Wdf]
++UmdfService=SunshineRemoteDisplayDriver,SunshineRemoteDisplayDriver_Install
++UmdfServiceOrder=SunshineRemoteDisplayDriver
++UmdfKernelModeClientPolicy=AllowKernelModeClients
++UmdfHostProcessSharing=ProcessSharingDisabled
++UmdfImpersonationLevel=Identification
++
++[SunshineRemoteDisplayDriver_Install]
++UmdfLibraryVersion=2.25.0
++ServiceBinary=%12%\UMDF\SunshineRemoteDisplayDriver.dll
++UmdfExtensions=IddCx0102
++
++[UMDriverCopy]
++SunshineRemoteDisplayDriver.dll
++
++[Strings]
++ManufacturerName="Sunshine"
++DeviceName="Sunshine Remote Session Display Driver"
++DiskName="Sunshine Remote Session Display Driver Installation Disk"
++WudfRdDisplayName="Windows Driver Foundation - User-mode Driver Framework Reflector"
+diff --git a/src/driver/windows_driver/SunshineRemoteDisplayDriver.inf.in b/src/driver/windows_driver/SunshineRemoteDisplayDriver.inf.in
+new file mode 100644
+index 0000000..1a74fdb
+--- /dev/null
++++ b/src/driver/windows_driver/SunshineRemoteDisplayDriver.inf.in
+@@ -0,0 +1,84 @@
++; SunshineRemoteDisplayDriver.inf
++; Clean-room UMDF/IddCx display driver for a Remote Desktop Services session.
++
++[Version]
++Signature="$WINDOWS NT$"
++Class=Display
++ClassGuid={4d36e968-e325-11ce-bfc1-08002be10318}
++ClassVer=2.0
++Provider=%ManufacturerName%
++CatalogFile=SunshineRemoteDisplayDriver.cat
++DriverVer=@VDD_DRIVER_VER_DATE@,@VDD_DRIVER_VER_VERSION@
++PnpLockdown=1
++
++; RemoteDisplayEnum creates one software device per terminal session after the
++; protocol provider returns the hardware ID below. Preconfiguration makes the
++; UMDF/IddCx stack available during that session-creation transaction.
++[ControlFlags]
++PreConfigureDriver=*
++
++[Manufacturer]
++%ManufacturerName%=Standard,NTamd64.10.0...26100
++
++[Standard.NTamd64.10.0...26100]
++%DeviceName%=Device_Install, SUNSHINE_REMOTE_IDDCX
++
++[SourceDisksNames]
++1=%DiskName%,,,""
++
++[SourceDisksFiles]
++SunshineRemoteDisplayDriver.dll=1
++
++[DestinationDirs]
++UMDriverCopy=12,UMDF
++
++[Device_Install.NT]
++CopyFiles=UMDriverCopy
++
++[Device_Install.NT.hw]
++AddReg=Device_Install_Hw_AddReg
++
++[Device_Install_Hw_AddReg]
++HKR,,"UpperFilters",0x00010000,"IndirectKmd"
++HKR,"WUDF","DeviceGroupId",0x00000000,"SunshineRemoteDisplayGroup"
++HKR,,"ConfigVersion",0x00010001,1
++
++[Device_Install.NT.Interfaces]
++AddInterface=@VDD_REMOTE_CONTROL_INTERFACE_GUID@,,ControlInterface
++
++[ControlInterface]
++AddReg=ControlInterface_AddReg
++
++[ControlInterface_AddReg]
++HKR,,Security,,"@VDD_CONTROL_SECURITY_DESCRIPTOR@"
++
++[Device_Install.NT.Services]
++AddService=WUDFRd,0x000001fa,WUDFRD_ServiceInstall
++
++[WUDFRD_ServiceInstall]
++DisplayName=%WudfRdDisplayName%
++ServiceType=1
++StartType=3
++ErrorControl=1
++ServiceBinary=%12%\WUDFRd.sys
++
++[Device_Install.NT.Wdf]
++UmdfService=SunshineRemoteDisplayDriver,SunshineRemoteDisplayDriver_Install
++UmdfServiceOrder=SunshineRemoteDisplayDriver
++UmdfKernelModeClientPolicy=AllowKernelModeClients
++UmdfHostProcessSharing=ProcessSharingDisabled
++UmdfImpersonationLevel=Identification
++
++[SunshineRemoteDisplayDriver_Install]
++UmdfLibraryVersion=2.25.0
++ServiceBinary=%12%\UMDF\SunshineRemoteDisplayDriver.dll
++UmdfExtensions=IddCx0102
++
++[UMDriverCopy]
++SunshineRemoteDisplayDriver.dll
++
++[Strings]
++ManufacturerName="Sunshine"
++DeviceName="Sunshine Remote Session Display Driver"
++DiskName="Sunshine Remote Session Display Driver Installation Disk"
++WudfRdDisplayName="Windows Driver Foundation - User-mode Driver Framework Reflector"
+diff --git a/src/driver/windows_driver/driver_main.cpp b/src/driver/windows_driver/driver_main.cpp
+index cd6b62b..e3c58ba 100644
+--- a/src/driver/windows_driver/driver_main.cpp
++++ b/src/driver/windows_driver/driver_main.cpp
+@@ -82,7 +82,17 @@ namespace {
+     static_cast<std::size_t>(kHardwareCursorMaxHeight) *
+     sizeof(std::uint32_t);
+   constexpr wchar_t kTemporaryDisplayProfilesValue[] = L"TemporaryDisplayProfiles";
++#if defined(SUNSHINE_VDD_REMOTE_SESSION_DRIVER)
++  constexpr bool kRemoteSessionDriver = true;
++  constexpr wchar_t kEndpointFriendlyName[] = L"Sunshine Remote Session Display Adapter";
++  constexpr wchar_t kEndpointModelName[] = L"SunshineRemoteSessionDisplay";
++  const GUID kControlInterfaceGuid = vdd::to_windows_guid(vdd::kRemoteDeviceInterfaceGuid);
++#else
++  constexpr bool kRemoteSessionDriver = false;
++  constexpr wchar_t kEndpointFriendlyName[] = L"Sunshine Virtual Display Adapter";
++  constexpr wchar_t kEndpointModelName[] = L"SunshineVirtualDisplay";
+   const GUID kControlInterfaceGuid = vdd::to_windows_guid(vdd::kDeviceInterfaceGuid);
++#endif
+ 
+   std::chrono::steady_clock::time_point lease_clock_now() noexcept {
+     ULONGLONG unbiased_time_100ns {};
+@@ -101,11 +111,13 @@ namespace {
+   }
+ 
+   class IddCxBackend;
++  class DeviceState;
+   class CursorProcessor;
+   class SwapChainProcessor;
+ 
+   struct AdapterContext {
+     IddCxBackend *backend {};
++    DeviceState *device_state {};
+   };
+ 
+   struct MonitorContext {
+@@ -988,6 +1000,21 @@ namespace {
+            vdd::supports_windows_hdr_toggle(vdd::hdr_output_capabilities());
+   }
+ 
++  std::optional<vdd::DisplayManifest> initial_display_manifest() {
++    if constexpr (!kRemoteSessionDriver) {
++      return std::nullopt;
++    }
++
++    // A remote session needs a target before Winlogon/DWM can establish the
++    // desktop path. The controller starts with the same manifest so its state
++    // remains authoritative and a later broker update replaces this bootstrap
++    // monitor instead of colliding with an untracked driver-created object.
++    vdd::PermanentDisplayCountRequest request {};
++    request.display_count = 1;
++    vdd::set_default_permanent_display_settings(request);
++    return vdd::display_manifest_from_permanent_settings(request, kMaxPermanentDisplays);
++  }
++
+   vdd::DisplayDescriptor make_permanent_descriptor(
+     const std::uint32_t index,
+     const vdd::PermanentDisplayCountRequest &settings
+@@ -2503,9 +2530,16 @@ namespace {
+       const auto hdr_capabilities = vdd::hdr_output_capabilities();
+       IDDCX_ADAPTER_CAPS caps {};
+       caps.Size = sizeof(caps);
+-      caps.Flags = has_hdr_iddcx_ddi() && hdr_capabilities.fp16_swapchain ?
+-        IDDCX_ADAPTER_FLAGS_CAN_PROCESS_FP16 :
+-        IDDCX_ADAPTER_FLAGS_NONE;
++      std::uint32_t adapter_flags = IDDCX_ADAPTER_FLAGS_NONE;
++      if (has_hdr_iddcx_ddi() && hdr_capabilities.fp16_swapchain) {
++        adapter_flags |= IDDCX_ADAPTER_FLAGS_CAN_PROCESS_FP16;
++      }
++      if constexpr (kRemoteSessionDriver) {
++        adapter_flags |= IDDCX_ADAPTER_FLAGS_REMOTE_SESSION_DRIVER;
++        adapter_flags |= IDDCX_ADAPTER_FLAGS_USE_SMALLEST_MODE;
++        adapter_flags |= IDDCX_ADAPTER_FLAGS_REMOTE_ALL_TARGET_MODES_MONITOR_COMPATIBLE;
++      }
++      caps.Flags = static_cast<IDDCX_ADAPTER_FLAGS>(adapter_flags);
+       caps.MaxMonitorsSupported = kMaxPermanentDisplays + kMaxTemporaryDisplays;
+       caps.EndPointDiagnostics.Size = sizeof(caps.EndPointDiagnostics);
+       // The virtual sink does not render an endpoint image or apply the OS
+@@ -2516,9 +2550,9 @@ namespace {
+         IDDCX_FEATURE_IMPLEMENTATION_SOFTWARE :
+         IDDCX_FEATURE_IMPLEMENTATION_NONE;
+       caps.EndPointDiagnostics.TransmissionType = IDDCX_TRANSMISSION_TYPE_WIRED_OTHER;
+-      caps.EndPointDiagnostics.pEndPointFriendlyName = const_cast<PWSTR>(L"Sunshine Virtual Display Adapter");
++      caps.EndPointDiagnostics.pEndPointFriendlyName = const_cast<PWSTR>(kEndpointFriendlyName);
+       caps.EndPointDiagnostics.pEndPointManufacturerName = const_cast<PWSTR>(L"Sunshine");
+-      caps.EndPointDiagnostics.pEndPointModelName = const_cast<PWSTR>(L"SunshineVirtualDisplay");
++      caps.EndPointDiagnostics.pEndPointModelName = const_cast<PWSTR>(kEndpointModelName);
+       caps.EndPointDiagnostics.pHardwareVersion = &endpoint_version;
+       caps.EndPointDiagnostics.pFirmwareVersion = &endpoint_version;
+ 
+@@ -2541,6 +2575,9 @@ namespace {
+ 
+       auto *context = GetAdapterContext(adapter_out.AdapterObject);
+       context->backend = this;
++      if (auto *device_context = GetDeviceContext(device)) {
++        context->device_state = device_context->state;
++      }
+       {
+         std::lock_guard lock {mutex_};
+         adapter_ = adapter_out.AdapterObject;
+@@ -2556,6 +2593,13 @@ namespace {
+     }
+ 
+     vdd::BackendError reserve_temporary_display_identity(const vdd::DisplayDescriptor &descriptor) override {
++      if constexpr (kRemoteSessionDriver) {
++        // RemoteDisplayEnum binds this device to one WTS session. Console-user
++        // HKCU is neither the owner nor a safe fallback for that seat, and the
++        // remote monitor does not need a machine-wide identity reservation.
++        return vdd::BackendError::None;
++      }
++
+       const auto dpi_value = read_retained_temporary_dpi_value(descriptor);
+       // A nullopt dpi_value is ambiguous: it can mean "the user is on
+       // recommended scaling / has no retained value" or "the interactive
+@@ -2580,6 +2624,10 @@ namespace {
+     }
+ 
+     vdd::BackendError unreserve_temporary_display_identity(const std::uint64_t display_id) override {
++      if constexpr (kRemoteSessionDriver) {
++        return vdd::BackendError::None;
++      }
++
+       const auto result = remove_temporary_display_profile(driver_, device_, display_id);
+       {
+         std::lock_guard lock {mutex_};
+@@ -3358,7 +3406,9 @@ namespace {
+       // Use a digital sink type so Windows avoids WCG-only classification for
+       // HDR, but avoid HDMI's legacy bandwidth ceiling that rejects 4K
+       // high-refresh virtual modes.
+-      monitor_info.MonitorType = DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL;
++      monitor_info.MonitorType = kRemoteSessionDriver ?
++        DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER :
++        DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL;
+       monitor_info.ConnectorIndex = descriptor.connector_index;
+       monitor_info.MonitorContainerId = vdd::to_windows_guid(descriptor.container_id);
+       monitor_info.MonitorDescription.Size = sizeof(monitor_info.MonitorDescription);
+@@ -3477,7 +3527,7 @@ namespace {
+         TraceLoggingUInt32(arrival_out.OsTargetId, "OsTargetId")
+       );
+       TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DEVICE, "MonitorArrived");
+-      if (!permanent) {
++      if (!permanent && !kRemoteSessionDriver) {
+         std::optional<DWORD> retained_dpi_value;
+         {
+           std::lock_guard lock {mutex_};
+@@ -4104,7 +4154,8 @@ namespace {
+           vdd::DisplayStore {
+             kMaxPermanentDisplays,
+             kMaxTemporaryDisplays,
+-            load_temporary_connector_reservations(driver, device)
++            load_temporary_connector_reservations(driver, device),
++            initial_display_manifest()
+           },
+           backend
+         },
+@@ -4132,6 +4183,40 @@ namespace {
+       return true;
+     }
+ 
++    NTSTATUS adapter_init_finished(const IDARG_IN_ADAPTER_INIT_FINISHED *args) {
++      const auto status = backend.adapter_init_finished(args);
++      if (!NT_SUCCESS(status) || !args || !NT_SUCCESS(args->AdapterInitStatus) || !kRemoteSessionDriver) {
++        return status;
++      }
++
++      const auto manifest = initial_display_manifest();
++      if (!manifest) {
++        return status;
++      }
++
++      std::unique_lock lock {controller_mutex, std::defer_lock};
++      if (!lock.try_lock_for(kControllerLockTimeout)) {
++        TraceLoggingWrite(g_trace_provider, "RemoteBootstrapMonitorControllerBusy");
++        TraceEvents(TRACE_LEVEL_WARNING, TRACE_DEVICE, "RemoteBootstrapMonitorControllerBusy");
++        return STATUS_SUCCESS;
++      }
++
++      const auto result = controller.apply_display_manifest(*manifest, &lock);
++      if (result.ok()) {
++        TraceLoggingWrite(g_trace_provider, "RemoteBootstrapMonitorArrived");
++      } else {
++        TraceLoggingWrite(
++          g_trace_provider,
++          "RemoteBootstrapMonitorFailed",
++          TraceLoggingUInt32(static_cast<std::uint32_t>(result.store_error), "StoreError"),
++          TraceLoggingUInt32(static_cast<std::uint32_t>(result.validation_error), "ValidationError"),
++          TraceLoggingUInt32(static_cast<std::uint32_t>(result.backend_error), "BackendError")
++        );
++        TraceEvents(TRACE_LEVEL_WARNING, TRACE_DEVICE, "RemoteBootstrapMonitorFailed");
++      }
++      return STATUS_SUCCESS;
++    }
++
+     vdd::IoctlDispatchResult dispatch(
+       const ULONG io_control_code,
+       void *input,
+@@ -4456,6 +4541,11 @@ NTSTATUS SunshineEvtDeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT device_init) {
+   }
+ 
+   TraceLoggingWrite(g_trace_provider, "DeviceAddSucceeded");
++  TraceLoggingWrite(
++    g_trace_provider,
++    "DisplayDriverRole",
++    TraceLoggingBool(kRemoteSessionDriver, "RemoteSessionDriver")
++  );
+   TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DEVICE, "DeviceAddSucceeded");
+   return STATUS_SUCCESS;
+ }
+@@ -4480,7 +4570,10 @@ NTSTATUS SunshineEvtAdapterInitFinished(
+     return STATUS_DEVICE_NOT_READY;
+   }
+ 
+-  return context->backend->adapter_init_finished(args);
++  if (!context->device_state) {
++    return context->backend->adapter_init_finished(args);
++  }
++  return context->device_state->adapter_init_finished(args);
+ }
+ 
+ NTSTATUS SunshineEvtParseMonitorDescription(
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 804f6e6..a66d2bb 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -38,3 +38,8 @@ add_test(NAME driver_inf_in_sync
+         COMMAND gen_driver_inf --check
+             "${PROJECT_SOURCE_DIR}/src/driver/windows_driver/SunshineVirtualDisplayDriver.inf.in"
+             "${PROJECT_SOURCE_DIR}/src/driver/windows_driver/SunshineVirtualDisplayDriver.inf")
++
++add_test(NAME remote_driver_inf_in_sync
++        COMMAND gen_driver_inf --check
++            "${PROJECT_SOURCE_DIR}/src/driver/windows_driver/SunshineRemoteDisplayDriver.inf.in"
++            "${PROJECT_SOURCE_DIR}/src/driver/windows_driver/SunshineRemoteDisplayDriver.inf")
+diff --git a/tests/unit/driver/test_control_protocol.cpp b/tests/unit/driver/test_control_protocol.cpp
+index 70f9d4b..fb7b416 100644
+--- a/tests/unit/driver/test_control_protocol.cpp
++++ b/tests/unit/driver/test_control_protocol.cpp
+@@ -121,6 +121,10 @@ TEST(VirtualDisplayDriverDeviceIdentity, FormatsControlInterfaceGuidAsInfBraceSt
+     vdd::format_inf_guid(vdd::kDeviceInterfaceGuid),
+     "{5f894d6c-3a69-48a2-86ef-e4c671932d63}"
+   );
++  EXPECT_EQ(
++    vdd::format_inf_guid(vdd::kRemoteDeviceInterfaceGuid),
++    "{2e82b34d-53b8-49c2-9d8d-13467991c487}"
++  );
+ 
+   // Field grouping: the clock-seq bytes (data4[0..1]) follow the third hyphen and the node
+   // bytes (data4[2..7]) the fourth, all lower-cased and zero-padded.
+diff --git a/tools/gen_driver_inf.cpp b/tools/gen_driver_inf.cpp
+index 28d30ca..7321e0f 100644
+--- a/tools/gen_driver_inf.cpp
++++ b/tools/gen_driver_inf.cpp
+@@ -43,6 +43,7 @@ namespace {
+   // this function applied to the committed template with the default DriverVer values.
+   std::string render_inf(std::string text, const std::string &driverver_date, const std::string &driverver_version) {
+     replace_all(text, "@VDD_CONTROL_INTERFACE_GUID@", vdd::format_inf_guid(vdd::kDeviceInterfaceGuid));
++    replace_all(text, "@VDD_REMOTE_CONTROL_INTERFACE_GUID@", vdd::format_inf_guid(vdd::kRemoteDeviceInterfaceGuid));
+     replace_all(text, "@VDD_CONTROL_SECURITY_DESCRIPTOR@", vdd::control_interface_security_descriptor());
+     replace_all(text, "@VDD_DRIVER_VER_DATE@", driverver_date);
+     replace_all(text, "@VDD_DRIVER_VER_VERSION@", driverver_version);
+-- 
+2.54.0.windows.1
+
