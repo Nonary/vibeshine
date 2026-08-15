@@ -241,6 +241,348 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
   created-but-not-arrived monitor with `0xC000000D` (`STATUS_INVALID_PARAMETER`),
   and no monitor arrived. This locates the failure at the public API ordering
   boundary before any later RDS color-policy decision.
+- A clean-room inspection of Duo v1.5.9 found no on-disk Windows binary patch in
+  its HDR setup. On every successful service start Duo instead removes any
+  existing priority 16..0 overrides for feature IDs `54238000` and `54538524`,
+  then creates priority-8 overrides with `EnabledState=1` and
+  `EnabledStateOptions=0`. The Windows SDK defines state 1 as disabled; Duo's
+  own log describes this registry feature configuration as reconfiguring
+  `dxgkrnl.sys`, but it does not write or replace that file.
+- The exact two priority-8 feature overrides were reproduced locally with a
+  targeted rollback script and followed by a full reboot. No competing priority
+  contained either feature ID. The keys survived reboot, but a fresh
+  `GetFeatureEnabledState` process still returned GatePerf enabled (`2`) and the
+  second feature default (`0`) for all change times on Windows 26200.8875.
+- The post-reboot session-2 display result is also negative and decisive. The
+  normal DisplayConfig HDR setter reports `supported=1`, `hdr_supported=1`,
+  `hdr_enabled=1`, `bits_per_color_channel=10`, and no policy limit, yet Windows
+  keeps `active=0` and `active_color_mode=0` after both the v2 setter and legacy
+  fallback. The two Duo feature overrides alone therefore do not release the
+  native HDR gate on this build/provider path.
+- Duo's public issue history supplies the name that was missing from the static
+  v1.5.9 analysis: feature `54538524` was Duo's workaround for
+  `HdrRequireSourcePixelFormat`. Duo's author reports that this feature changes
+  `BmlPickColorSpaceAndWireFormat` so a remote IDD needs a qualifying source
+  pixel format before Windows will select the HDR color space. The same issue
+  reports that GatePerf and then this second requirement caused successful mode
+  updates to remain SDR on newer Windows builds. Public issue 541 subsequently
+  reproduces our exact state on Duo 1.5.9 and RdpIdd 10.0.26100.8737: HDR is
+  supported, the driver logs an HDR change, but active color mode remains SDR.
+- Matching public symbols for the currently installed dxgkrnl 10.0.26100.9168
+  expose a newer feature named `Feature_Fp16ForRemoteSrcModes`, whose descriptor
+  embeds feature ID `62841958` (`0x03BEE466`). Static xref analysis finds exactly
+  one call to its state wrapper. At that call, enabled state selects source-mode
+  pixel format `0x71`; disabled state selects `0x15`. The matching Windows SDK
+  defines those values as `D3DDDIFMT_A16B16G16R16F` and
+  `D3DDDIFMT_A8R8G8B8`, respectively. This is a direct current-build mechanism
+  for satisfying the source-pixel-format requirement without patching a Windows
+  binary.
+- A controlled proof for feature `62841958` was staged at priority 8 with
+  `EnabledState=2` and `EnabledStateOptions=0` on 2026-08-13. Before reboot, a
+  fresh Feature Staging API process still reports default state at all four
+  change times, confirming the running kernel has not changed. Scheduled task
+  `\\VibeshineDiagnostics\\DuoFp16RemoteRollback` runs as SYSTEM five minutes
+  after the next startup and deletes only the `62841958` override; the current
+  boot keeps its cached state for the bounded HDR test, while the following boot
+  returns to the pre-test feature configuration. The listener remained at safe
+  baseline `0/1/1`, only the console user session was active, and all RDS
+  services remained running when staging completed. No reboot has yet been
+  issued for this proof.
+- Historical correction: that reboot was subsequently completed. On the clean
+  2026-08-14 boot, a fresh Feature Staging API process reports GatePerf
+  `54238000=DISABLED`, HdrRequireSourcePixelFormat `54538524=DISABLED`, and
+  Fp16ForRemoteSrcModes `62841958=ENABLED` at READ, MODULE_RELOAD, SESSION, and
+  REBOOT change times. Only the two Duo-equivalent priority-8 disable overrides
+  remain; the temporary `62841958` override and its one-shot rollback tasks are
+  absent. The Fp16 feature is enabled by the current Windows configuration
+  without a remaining override. The normal console login succeeded, so no
+  additional reboot is needed for the next HDR experiment.
+- The reboot did not disable or bypass platform security. Secure Boot remained
+  enabled, `VirtualizationBasedSecurityStatus=2`, HVCI remained enabled and
+  running, Code Integrity policy enforcement remained active, and the Code
+  Integrity operational log contained no warning/error/critical events from the
+  new boot. This is measured compatibility for the current boot, not a support
+  guarantee for private feature overrides on future Windows builds.
+- A historical private-inbox-driver proof found the real RdpIdd-handle seam but
+  initially interpreted its control contract incorrectly. The custom provider
+  received the RdpIdd handle in `ProtocolConnection::OnDriverLoad`; an early
+  helper then issued unnecessary `BindDriver`/`SetPropertyBag` transactions on
+  `0x80000040` before a malformed variable-length monitor request on
+  `0x80000044`. The last call did not return. That established only that the wait
+  was inside synchronous `DeviceIoControl`, not that the preliminary calls or
+  packet layout were correct. The corrected contract is recorded below.
+- That request was incorrectly issued on TermService's `OnDriverLoad` callback
+  thread. One minute later Winlogon event 6005 reported that subscriber
+  `<TermSrv>` was taking too long to handle the Logon notification. Repeated
+  forced boots entered Startup Repair, and Safe Mode was required to recover the
+  console. This was a service-thread liveness failure, not a Windows code-
+  integrity failure: no Microsoft binary was changed, and after recovery Secure
+  Boot is still enabled, VBS reports status 2 with security services 2 and 7
+  running, and Code Integrity policy enforcement reports 2.
+- Recovery left `Sunshine-Idd` fail-closed with `fEnableWinStation=0`,
+  `WinStationDisabled=1`, and `fLogonDisabled=1`. The provider COM registration
+  was restored to the known-safe
+  `C:/ProgramData/Sunshine/RdpProtocolProvider/SunshineRdpProvider.dll`, SHA-256
+  `C39B80B06E817E585E1ED29D0594402D5341CB87604967C7349BA7C97875511C`.
+  Normal `RDP-Tcp` remains listening and the console recovered as session 1.
+- The native route remains active, but the inline IOCTL implementation has been
+  removed entirely; the TermService-loaded provider contains no
+  `DeviceIoControl` call. It instead duplicates only the
+  supplied RdpIdd handle into a disposable helper process, places that helper in
+  a kill-on-close job, returns from `OnDriverLoad` immediately, and gives its
+  watchdog ten seconds to terminate only the helper. The listener is also
+  one-shot after the first credential-backed connection and cannot automatically
+  retry after failure or closure.
+- Historical offline validation was green only for the then-current 216-byte
+  packet's internal size/TLV consistency; later Microsoft-code analysis proved
+  that packet was not the correct existing-monitor update contract. A benign
+  helper then waited forever without opening RdpIdd; the production
+  watchdog terminated it at 10 seconds with exit code 1460, its watchdog thread
+  completed, and no helper process remained. Proof-only artifact hashes are:
+  provider `0826160356817F812D076DBED614881E1B048CBCC8FC4ECEFFBF31D063ABF3DF`,
+  helper `2A1713294D16A60D1377A77E1D48CCD2F9DF8FA9C6326C0A4304FEDC8A78FB0C`,
+  and checker `5B996AD0DC721EB122B5EFA7349726F5A5688A501B8513ECF100B275F3881A5A`.
+  At that checkpoint the binaries were built only; the later bounded live runs
+  described below staged and activated them.
+- The isolated live safety boundary is now proven on the real machine. The
+  TermService-loaded provider contains no `DeviceIoControl`; only a disposable
+  child receives the duplicated RdpIdd handle. A kill-on-close job and ten-second
+  watchdog repeatedly terminated a deliberately stuck child with exit code 1460
+  while TermService, Winlogon, and the console remained responsive. A separate
+  SYSTEM deadline also completed rollback successfully and removed only the
+  proof-owned listener, CLSID, credential, account, runtime arm, and helper.
+- Listener discovery requires a persistent WTS listener present while TermService
+  builds its table at boot. The listener itself therefore cannot be volatile,
+  but it stays disabled and inert until a separate `REG_OPTION_VOLATILE` runtime
+  key arms the proof for the current boot. The proof directory and runtime key
+  must grant NetworkService read/execute and read access respectively; missing
+  those ACLs explained the first inert boot without compromising the normal
+  login path.
+- The disposable `VibeHdrProof` account must be a member of the built-in Remote
+  Desktop Users group. Before that membership Winlogon rejected remote logon with
+  error 1385. After it, Security event 4624 recorded a successful type-10 logon,
+  Winlogon reported authentication result 0, and the terminal session reached
+  csrss, DWM, LogonUI, ctfmon, and GPU-process startup.
+- Three authenticated historical runs reached `OnDriverLoad`. Each malformed
+  216-byte monitor call exceeded the ten-second deadline and the disposable
+  helper was killed without blocking TermService. Those runs never proved a
+  monitor update or active HDR state.
+- Later read-only analysis with matching Microsoft public PDBs corrected the
+  control contract completely. `RdpIdd!CRdpIdAdapter::ProcessIoctl` opcode `10`
+  is `SET_MONITOR_CONFIGURATION` on IOCTL `0x80000044`. Microsoft's own
+  `rdpcorets!CDriverV4::SendMonitorLayoutChange` sends that IOCTL synchronously
+  with a null `OVERLAPPED`, so the synchronous API itself is not a guessed bug.
+  No proof-only bind or property-bag call is required. The current helper sends
+  one 184-byte action-`2` update for the existing all-zero one-monitor ID. Its
+  type-2 display mode is the observed Microsoft 1280x720, 32/1, divider-1 mode;
+  type 5 is HDR10 with BT.2020 primaries, ST.2084, 8/10-bpc masks and full-range
+  flags; type 6 carries 80-nit SDR white. The exact TLV parser and Update2 path
+  are retained in static artifacts 71 through 80 under
+  `.codex/delegation-artifacts/20260814-displaybroker-static`.
+- The first corrected live update reached `DeviceIoControl(0x80000044, opcode
+  10, input 184, output 20)` at 21:33:37 and did not return before the watchdog
+  killed only the helper at 21:33:44 with exit code 1460. The proof connection
+  was still in session arbitration, so no HDR result can be inferred. Rollback
+  then removed the proof listener, CLSID, credential, account, volatile arm,
+  helper, and deadline task while preserving the console and known-safe driver
+  and provider. A later activation did not exercise the update because the old
+  provider's process-global `g_rdpidd_helper_launched` flag never reset after
+  watchdog completion.
+- The helper gate is now an active-helper lock. All pre-watchdog launch failures
+  release it, and the watchdog releases it only after the child is confirmed
+  stopped. One loaded provider DLL passed two consecutive ten-second containment
+  tests; both helpers exited 1460 and the gate released between attempts.
+- The failed same-boot TermService restart was traced rather than forced. System
+  event 7046 and repeated event 7011 timeouts showed that `UmRdpService` was not
+  responding to service controls. Matching `umrdp.pdb` live stacks proved its
+  serialized control handler was blocked in
+  `RDCameraServiceExtension::OnRemoteDisconnect -> RDCameraDeviceManager::Terminate
+  -> CServerVCChannel::Terminate -> RtlEnterCriticalSection`, while its camera
+  APC thread was blocked in `CServerVCChannel::IssueARead -> ReadFileEx ->
+  NtReadFile`. Signed Sysinternals Handle v5.0 tied both waits to the fourth
+  proof-owned pipe, `SunshineRdsVirtualChannel-30152-4`: TermService handle
+  `0x920` and UmRdpService handle `0x27D4`.
+- The causal provider bug is exact. `CreateVirtualChannelPipe` opened the client
+  handle returned to RDS with creation flags `0`. UmRdp's camera implementation
+  calls `ReadFileEx`, which requires `FILE_FLAG_OVERLAPPED`; because the supplied
+  handle was synchronous, `NtReadFile` blocked while the camera channel lock was
+  held. Closing the proof-owned server handle and cancelling its TermService
+  worker produced provider error 995, but the malformed client handle cannot be
+  converted or safely cancelled after creation. The shared PID 2328 hosts 17
+  services, so it was deliberately not terminated.
+- The provider correction opens every RDS-facing client endpoint with
+  `FILE_FLAG_OVERLAPPED` and immediately queries native `FileModeInformation`;
+  it rejects the channel if either synchronous-I/O bit is present. Its reader is
+  now a joinable thread for the offline lifetime test. The exact final DLL passed
+  the virtual-channel mode/peer-close self-test, helper packet self-test,
+  isolated COM identity test, and two-cycle watchdog test. Final SHA-256 values
+  are provider
+  `66784352D8DB879A52195B1A4155D9263E30E3C6A678A83D9D24F2F306458297`,
+  checker `2EF691E30BF8873BCCE3B01A6888F8D9979EEB0F22EA173532D71722758751C0`,
+  helper `D137235875869DC5B5F96952DB4388218F23A47B6E209EF44F341D01DE2AB4E4`,
+  controller `0B41B8108BD130F79206626A6CA1C873EF45B2FE20DC63FA0A6ED3D2D7578CDD`,
+  and constrained recovery tool
+  `25274C274BA30B4EEE7C4B733F38E73F3646B6660DE45F5B9151E050A93849AF`.
+- Current recovery boundary: proof-owned registry/account/credential/listener/task
+  state is fully rolled back and the console remains active, but the already-
+  malformed UmRdp camera handle keeps service-control teardown wedged for this
+  boot. One normal reboot is required to clear that transient handle and load
+  the corrected provider. Do not force-kill PID 2328 and do not reboot
+  automatically; after the user reboots, reassert the complete safe baseline
+  before staging another bounded live capture.
+- `proof_guard.ps1 -Mode ActivateLive` no longer enables the proof before a
+  TermService restart. It now stops only responsive UmRdpService, restarts
+  TermService while the proof listener is disabled/unarmed, restores
+  UmRdpService in a `finally` block, and enables the proof only after both are
+  running. This removes the observed connect-during-restart race and leaves the
+  proof inert if service preparation fails.
+- The authenticated synthetic connection still closed after about 31 seconds
+  with reason 12 and no Explorer/user shell. Returning `1` instead of `0` for
+  `DISABLE_LOGON_DIALOG_TIMEOUT` was observed exactly but did not change that
+  timing, disproving it as the governing teardown control.
+- The provider's `GetLastInputTime` implementation was wrong. Microsoft defines
+  its output as elapsed milliseconds since the protocol last received input,
+  but the probe returned absolute `GetTickCount64()` uptime. Static Duo v1.5.9
+  disassembly at RVA `0x9100` returns a small value from 1 through 16 instead,
+  which continually reports recent activity. The probe now returns elapsed time
+  since connection creation until a real input transport can update the boundary.
+  This causally explains why Windows could apply idle policy on its approximately
+  30-second poll, but it still requires a future bounded live confirmation.
+- A final same-boot activation exposed a separate TermService-restart race:
+  Windows instantiated two proof-listener objects, stopped the first, consumed
+  the one-use credential through the second, assigned session 2, then closed the
+  connection about 57 ms later before `OnDriverLoad`. LocalSessionManager logged
+  failure `0x80004005` while transitioning from `CsrConnected` on
+  `EvCsrInitialized`, while the Application log recorded Winlogon event 4005,
+  `The Windows logon process has unexpectedly terminated.` The listener
+  duplication is restart noise; it is not proven to have killed Winlogon. This
+  is a session-lifecycle failure, not an HDR result, and it makes further blind
+  reboot-and-activate trials unjustified.
+- At 2026-08-12 22:02 America/Chicago the proof was rolled back again. Session 1
+  is the active `Chase` console; TermService, SessionEnv, and UmRdpService are
+  running; the proof listener, isolated CLSID, volatile runtime arm, one-use
+  credential, disposable account, rollback task, and helper process are absent.
+  No Microsoft file was patched or replaced, and the experiments did not disable
+  Core Isolation, HVCI, VBS, Secure Boot, or Code Integrity enforcement.
+- Current-build disassembly closes the hidden error-reporting boundary. In
+  `dxgkrnl.sys` 10.0.26100.9168,
+  `DxgkIddHandleSetDisplayConfig` calls
+  `MonitorIsMonitorAndLinkHDRCapable` for an HDR10 path. A rejection returns
+  `0xC00000BB` as the D3DKMT escape status and writes an eight-bit mask whose
+  exact IddCx labels are: bit 0 high-bpp scanout, bit 1 target high-color-space,
+  bit 2 target wide-color-space, bit 3 ST.2084 in the descriptor, bit 4 BT.2020
+  in the descriptor, bit 5 descriptor high-bpp, bit 6 OS WCG support, and bit 7
+  3x4-matrix support. The HDR-capability function's internal reasons map onto
+  the corresponding HDR subset of that public-facing text; their private enum
+  names remain unavailable.
+- Exact disassembly corrects the initial interpretation of the final envelope
+  field. IddCx 10.0.26100.4202
+  `IddAdapter::SendUserModeMessage` sends a public
+  `D3DKMT_ESCAPE_IDD_REQUEST` (`Type=30`) containing a private 0x30-byte
+  envelope: adapter handle, escape code, input pointer/size, output pointer/size,
+  and an output-byte-count field at offset `0x28`. Its optional final `UINT *`
+  receives that field after `D3DKMTEscape`; it is not a second command status.
+  `ProcessDisplayConfigUpdate` passes no output-byte-count pointer and examines
+  the eight-byte support result only when the D3DKMT escape status is negative.
+  The escape status itself is the kernel acceptance or rejection result.
+- The saved IddCx ETL cannot recover the result payload. Its two send-complete
+  events contain only the IddAdapter pointer and zero escape status; the
+  eight-byte support result is not logged. The direct probe below was therefore
+  required to distinguish an accepted capability check from a hidden rejection.
+- A non-patching diagnostic route is now fully specified. A seat-local tool can
+  open the active adapter with `D3DKMTOpenAdapterFromLuid`, reproduce IddCx's
+  one-path `4 + 0x84` display-config request, call the documented
+  `D3DKMT_ESCAPE_IDD_REQUEST` transport, and retain the escape status, returned
+  output byte count, and support mask that IddCx does not expose. It changes no Windows file or
+  executable memory and requires no reboot. Because command 2 reapplies a
+  display configuration, it must run only inside a bounded proof seat after the
+  monitor exists and under the existing automatic listener rollback.
+- The offline probe source is now prepared in the isolated
+  `libvirtualdisplay-duo_session` worktree. The proof-only
+  `--probe-idd-hdr-gate <target_luid> <target_id>` command opens the exact active
+  adapter, serializes the one-path request, supplies both the outer and private
+  adapter handles, preserves the escape status and eight-byte result,
+  and decodes every known support bit. Its command contract is registered as a
+  seat-local, no-control-device operation and `virtualdisplay_probe` now links
+  the documented D3DKMT entry points from `gdi32`. Static source review and
+  `git diff --check` pass.
+- The focused MSVC build and probe contract tests now pass. The executed probe
+  SHA-256 was
+  `D1C2C8C7CF5285FB6D7A2D1D986AE73110E125A99255804557659DB30A42CFCD`.
+  The bounded session-2 capture at
+  `idd-hdr-gate-20260814-142600` returned escape status `0x00000000`, eight
+  output bytes, missing-support mask `0x00000000`, path index 0, and
+  `idd_hdr_gate_missing=none`. Therefore the kernel HDR capability check passed:
+  no high-bpp scanout, target color-space, descriptor PQ/BT.2020/high-bpp,
+  OS-WCG, or matrix prerequisite is missing on this path.
+- Passing the capability check did not make HDR active. Before and two seconds
+  after the transaction, advanced-color state was identical:
+  `supported=1`, `active=0`, `limited_by_policy=0`, `hdr_supported=1`,
+  `hdr_enabled=1`, `bits_per_color_channel=8`, and `active_color_mode=0`.
+  The one active display path also remained present. This isolates the failure
+  after capability validation and before or during Windows' source-mode/color-
+  mode functionalization; further EDID or target-capability changes are not
+  justified by the evidence.
+- The seat-local script's obsolete supplemental PowerShell D3DKMT mode dumper
+  returned nonzero after all decisive files had been written, so the scheduled
+  task reported exit 1. The wrapper still immediately restored the fail-closed
+  listener, safe provider hash, and zero proof seats. That supplemental step has
+  been removed; it does not affect the gate result.
+- The live functionalization trace also proves the downstream ordering. The
+  display-policy sample already contains source pixel format `0x15`
+  (`A8R8G8B8`) before serialization; DisplayBroker and USER32 copy that value
+  unchanged, and both BML input and output retain `0x15`. Although the terminal
+  mode list includes `0x71` (`A16B16G16R16F`) and the current Fp16 feature is
+  enabled, its only current-build selector chooses `0x71` after the sampled
+  monitor color mode is non-SDR. Because the hidden capability mask is now
+  proven clear, the circular color-mode/source-format ordering is the next
+  boundary to trace.
+- Duo's current public issue 541 reports the same failure on Duo 1.5.9 and
+  RdpIdd 10.0.26100.8737: the driver requests HDR, dxdiag reports HDR-supported
+  BT.2020/ST.2084 monitor capabilities, but the display color space and active
+  color mode remain SDR. This independently confirms that Duo's two historical
+  overrides are no longer sufficient on every current Windows installation; it
+  does not identify the new private reason.
+- The corrected private RdpIdd monitor transaction now returns successfully
+  after the adapter's normal first layout. Complete one-monitor HDR replacement
+  packets, including a replacement with a fresh monitor identity, produce
+  `hdr_supported=1`, `hdr_enabled=1`, and 10 bits per color channel, but Windows
+  still reports `advanced_color_active=0`, `active_color_mode=0`, and a NONGDI
+  source mode. Static inspection of
+  `CRdpIdAdapter::ProcessSetMonitorLayout` proves every accepted complete-layout
+  request already performs `DeleteAllMonitors`, `AddMonitors`, and
+  `UpdateAllMonitors`; target removal/rearrival is therefore not the missing
+  transition.
+- Public source-mode activation did not close the gap. DisplayCore acquisition
+  was denied for the remote path, and a full `SetDisplayConfig` supplied-source
+  NONGDI transaction returned Win32 error 31 under both SYSTEM and an authentic
+  seat token. A successful FP16/scRGB flip-model full-screen presentation and a
+  successful legacy exclusive FP16 presentation each ran for 300 frames without
+  changing the same native active-SDR state. This rules out an ordinary game
+  swapchain as the operation that pins the qualifying remote source mode.
+- A guarded first-layout provider experiment reached the actual Windows callback
+  sequence without changing a Windows file or disabling HVCI. TermService only
+  consumes a newly written `LoadableProtocol_Object` mapping when it rebuilds
+  its listener table; after a guarded service restart it instantiated the exact
+  isolated `Sunshine-HdrProof` provider and created disposable sessions 13 and
+  14. Windows used the newer device-path `OnDriverLoad` overload, not the raw
+  handle overload originally targeted.
+- Routing the complete HDR layout through that device-path callback opened the
+  exact RdpIdd device and launched the job-contained helper before logon. The
+  first opcode-10 monitor transaction then blocked until its 10-second watchdog
+  killed only the helper. Giving the child a 100-ms head start kept the request
+  pending before `OnDriverLoad` returned and produced the same result. RdpIdd
+  therefore does not service monitor configuration before its own initial
+  monitor state exists; queue racing cannot make a second IOCTL become the first
+  layout.
+- The matching stock binaries expose the remaining pre-layout gate precisely.
+  `rdplite` initializes `CGraphicsChannel+0x178` to false and contains no writer;
+  `CGrfxPipeline::Start` publishes it as
+  `PKEY_Caps_Support_Hdr_Monitor_Config`, and `rdpcorets!StartPipeMgrLite` skips
+  its immediate legacy initial-layout path only when that Boolean is true. The
+  recognized zero-payload capability version `0x000C0000` writes the adjacent
+  selected-cap pointer at `+0x170`, not this Boolean. No protocol packet tested
+  or justified on the installed build can set the gate.
 - WGC provides a separate, working HDR source seam before the remote IDD's SDR
   sink. A session-5 window capture and monitor capture both returned
   `DXGI_FORMAT_R16G16B16A16_FLOAT` and real extended-range scRGB values, including
@@ -278,6 +620,214 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
   `session5-hdr-app-20260812.log`, the paired source RAW/composed BMP captures,
   `session5-hdr-app-driver-20260812.etl/.csv`, and
   `session5-hdr-app-iddcx-20260812.etl/.txt`.
+
+### Authentic-token and real-RDP source-pin proof (2026-08-15)
+
+- Retargeting an authentic `VibeSeatTest` token into a synthetic session was not
+  enough to make Windows accept the HDR transition. A SYSTEM child inherited the
+  exact token handle, applied it as thread impersonation, and still received
+  access denied from the public HDR setter and topology path while the active
+  source mode stayed `0x15` (`A8R8G8B8`).
+- A direct native user process initially exited with `0xC0000142`, before reaching
+  the probe. Microsoft documents that `CreateProcessAsUser` does not grant the
+  token access to the requested window station and desktop automatically. The
+  proof broker therefore granted only the token's logon SID temporary access to
+  that session's `winsta0/default`, launched the native child, and restored the
+  exact original window-station and desktop DACLs after it exited. Both grants
+  and both restorations returned success. The native process then reached the
+  probe normally but still received access denied and retained source format
+  `0x15`. This proves process identity and desktop ACLs are no longer the
+  governing HDR failure in a synthetic seat.
+- Event-log comparison identified the missing lifecycle distinction. Every
+  synthetic proof seat emitted the initial session event and then teardown, but
+  never `WTS_SESSION_DESKTOP_READY`. A locally connected FreeRDP client produced
+  the full RDP lifecycle: arbitration, logon success, shell start, and desktop
+  ready. A fresh guarded run reproduced that complete state in session 14, so
+  the native HDR test no longer depended on the incomplete synthetic session.
+- The real desktop-ready RDP session still reported
+  `supported=1`, `hdr_supported=1`, `limited_by_policy=0`, but
+  `active=0`, `active_color_mode=0`, 8 bits per color channel, and current source
+  format `0x15`. `DisplayConfigSetDeviceInfo` v2 fell back with Win32 error 31;
+  the legacy setter also returned 31. The full functionalization probe enumerated
+  28 source modes, including four FP16 `0x71` modes, and applied the public
+  topology successfully, but Windows retained `0x15` and inactive SDR. The
+  seat-local private IDD escape was denied with `0xC0000022` in this identity;
+  that denial does not supersede the earlier SYSTEM-context capability-check
+  success.
+- This disproves the hypothesis that a complete interactive RDP desktop or the
+  correct user token is sufficient to make Windows pin the advertised FP16
+  source mode. The live evidence is retained at
+  `real-rdp-native-hdr-20260815-0358`. The attempted detached direct-primary
+  launcher produced no new child trace and is not counted as evidence.
+- Cleanup was explicit rather than deadline-driven. Session 14 was logged off,
+  its exact FreeRDP PID was stopped, `VibeSeatTest` was disabled, and the
+  TermWrap and listener-ACL guards were rolled back in that order. Independent
+  verification found only inbox `termsrv.dll` loaded, listener permissions back
+  to 512 with remote-user logon disabled, no proof/rollback task, normal IPv4
+  and IPv6 RDP listeners, running TermService/UmRdpService/SunshineService, VBS
+  status 2, and HVCI running. No reboot or Windows-file replacement occurred.
+
+### Remote-source pinning and historical Duo boundary (2026-08-15)
+
+- Duo v1.6.0 does not supply a Core-Isolation-compatible native-HDR path on
+  this Windows generation. Static inspection proves that Duo first checks
+  whether Memory Integrity is enabled. When it is enabled, Duo skips its HDR
+  kernel patch. When it is disabled, Duo stages `RTCore64.sys`, bypasses driver
+  signature enforcement, and changes `dxgkrnl!IsHdrSourceModePinned` so it
+  returns true. This was not installed or executed here; it is outside the
+  project's Secure Boot/HVCI boundary.
+- A proof-only launcher that attempted to retarget a LocalSystem token into the
+  seat was quarantined by Microsoft Defender as token-injection behavior. No
+  exclusion or Defender bypass was attempted, the quarantined executable was
+  removed, and the live rig was restored. Kernel disassembly also proves this
+  experiment would not have changed the display decision: a LocalSystem user
+  process still lacks the DWM process flag at `DXGPROCESS+0x198 bit 4`; that
+  flag is assigned by the DWM/VMBus lifecycle, not by the token's account.
+- A controlled real-session comparison cloned both an FP16
+  `DXGI_FORMAT_R16G16B16A16_FLOAT` allocation and an SDR
+  `DXGI_FORMAT_B8G8R8A8_UNORM` allocation as a D3DKMT primary. Allocation
+  creation and exclusive source ownership succeeded in both cases, while
+  `D3DKMTSetDisplayMode(PreserveVidPn=TRUE)` returned the identical
+  `STATUS_GRAPHICS_PRESENT_MODE_CHANGED` (`0xC01E0005`) five times for each
+  format. Native state remained source format `0x15` and active SDR. The
+  rejection is therefore the cloned allocation's display-mode contract, not
+  the requested pixel format. Evidence is under
+  `primary-format-20260815-044307`.
+- `D3DKMTGetSharedPrimaryHandle` returned success with a zero global handle in
+  a fresh desktop-ready RDP session. Exact current-build disassembly explains
+  why: `DxgkGetSharedPrimaryHandle` reads the CDD primary handle, then skips the
+  normal fallback primary creation when `DXGPROCESS::IsRemoteConnection`
+  returns true. The RDP source deliberately has no shared scan-out primary for
+  a user-mode proof to clone. Evidence is under
+  `shared-primary-20260815-044544`.
+- An authentic user process inside the real RDP session can submit a public
+  `SetDisplayConfig` topology with source pixel format `NONGDI` while HDR
+  intent is off; Windows returns success and immediately normalizes the source
+  back to `DISPLAYCONFIG_PIXELFORMAT_32BPP`. After the HDR setter records
+  enabled intent, the same NONGDI topology returns error 31. A zero-delay
+  NONGDI-then-HDR sequence also fails: the NONGDI call succeeds, the immediately
+  following HDR setter returns 31, and all 20 quarter-second polls report HDR
+  enabled intent but inactive SDR/source format 4. There is no usable public
+  API ordering window. Evidence is under
+  `interactive-nongdi-20260815-044914` and
+  `nongdi-then-hdr-20260815-045151`.
+- Duo's own historical packages close the apparent alternative from its early
+  HDR announcement. Version 1.1.1's `RdpIddCapture.dll` did not contain HDR
+  configuration hooks. Version 1.2.0 added in-process hooks for the Windows
+  `IddCxImplAdapterDisplayConfigUpdate` and
+  `IddCxImplAdapterDisplayConfigUpdate2` implementations, rewrote the monitor
+  `ColorMode`, and logged that it had set HDR. Its disassembly builds the same
+  documented Update2 transaction used by the product-owned Remote IDD: path
+  flags `0x19` (mode, colorimetry, and SDR-white valid), HDR color mode, PQ /
+  BT.2020 colorimetry, 10-bpc support, and SDR-white data. Thus Duo v1.2 did not
+  reveal another driver contract; it patched the Windows IddCx library in
+  memory. Newer Windows source-format checks broke that coercion, leading to
+  Duo's two feature overrides and ultimately its v1.6.0 kernel predicate patch.
+  The packages were downloaded and extracted only, never executed; evidence is
+  under `duo-v111-static-20260815` and `duo-v120-static-20260815`.
+- Full-binary current `dxgkrnl.sys` analysis finds six direct callers of
+  `VIDPN_MGR::PinVidPnSourceMode`: path removal, modality pinning,
+  `BmlPreparePathOrderAndVidPn`, `BmlFunctionalizePath`, BML path-mode-list
+  construction, and the kernel
+  `DXGK_VIDPNSOURCEMODESET_INTERFACE_V1_IMPL::PinMode` entry offered to a real
+  display miniport. No user-mode DisplayConfig or IddCx DDI exposes this pin.
+  The Remote IDD can request HDR with the documented Update2 API, but only the
+  kernel BML pipeline or a full WDDM display miniport can pin the source mode
+  that `IsHdrSourceModePinned` later validates. The caller evidence is retained
+  in `dxgkrnl-pin-source-callers-current.txt`.
+- MultiSeat issue 15 independently measured the same topology boundary on
+  Windows 26200.9168: a SudoVDA IddCx monitor created by a seat appears only in
+  the console topology, while the seat enumerates only its RdpIdd surface. The
+  project owner confirmed this has never worked on the reference host, that its
+  24H2 per-session-display statement was aspirational, and that no Remote IDD
+  implementation has started. It provides corroboration, not a missing HDR
+  technique.
+- Every live experiment above was explicitly cleaned up. The machine remains on
+  inbox `termsrv.dll`, with only the Chase console session active, the proof
+  account disabled, proof credential and rollback tasks absent, and VBS/HVCI
+  running. No reboot was used or requested.
+
+### Native terminal-session HDR activation breakthrough (2026-08-15)
+
+- The earlier conclusion that only BML or a full display miniport could create
+  the required source-mode pin was incomplete. A documented user-mode
+  `D3DKMTSetDisplayMode` transaction can ask the kernel to rebuild the VidPN and
+  select a new primary, but only when the caller supplies a valid primary
+  allocation, owns the source exclusively, and does **not** preserve the
+  existing VidPN.
+- The working transaction is:
+  1. publish the Remote IDD target as HDR-capable and commit its link at 10 bpc;
+  2. create an FP16 `DXGI_FORMAT_R16G16B16A16_FLOAT` shared-displayable
+     allocation on the session render adapter;
+  3. reopen the resource through D3DKMT, copy its runtime and driver-private
+     allocation data into a new allocation marked `Primary=TRUE` for source 0;
+  4. acquire `D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE` for source 0;
+  5. call `D3DKMTSetDisplayMode` with the cloned primary and
+     `PreserveVidPn=FALSE`;
+  6. release source ownership and destroy both temporary allocations after the
+     transition.
+- The distinction between `PreserveVidPn=TRUE` and `FALSE` is causal, not
+  cosmetic. With the same valid cloned FP16 allocation, exclusive ownership,
+  resolution, and target state, the preserving call returned
+  `STATUS_GRAPHICS_PRESENT_MODE_CHANGED` (`0xC01E0005`) five times and left HDR
+  inactive. The non-preserving call returned `STATUS_SUCCESS` on its first
+  attempt and immediately changed Windows from `advancedColorActive=0`,
+  `activeColorMode=0` to `advancedColorActive=1`,
+  `activeColorMode=DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR` (2).
+- The driver independently observed the same transition in
+  `EVT_IDD_CX_ADAPTER_COMMIT_MODES2`: its wire contract changed from
+  `IDDCX_COLOR_SPACE_G22_P709` (1) to
+  `IDDCX_COLOR_SPACE_G2084_P2020` (2, HDR10) while retaining four encoded RGB
+  bits-per-component flags including 10 bpc. The public advanced-color query
+  reported HDR supported, user-enabled, active, not policy-limited, and 10 bpc.
+- Session 44 was the first native success. Evidence is under
+  `rdpcore-proxy-cloned-fp16-rebuild-10bpc-20260815-101236`. The source-pin
+  helper recorded a successful primary clone, exclusive ownership, and
+  non-preserving `SetDisplayMode`; Windows reported HDR active both during the
+  pin and after ownership and allocations were released.
+- Session 45 repeated the result and proved it persisted for a bounded ten
+  seconds after the temporary primary and ownership were gone. Evidence is
+  under `rdpcore-proxy-cloned-fp16-hdr-persist-20260815-101526`.
+- Session 46 then behaved like an HDR application after activation. It released
+  the temporary primary, created an ordinary FP16/scRGB application swapchain,
+  received scRGB color-space support, successfully called `SetColorSpace1`, and
+  presented all 300 frames while Windows remained HDR-active. The state was
+  still active ten seconds after the application and source-pin allocations had
+  exited. Evidence is under
+  `rdpcore-proxy-fp16-app-after-hdr-20260815-101809`.
+- Session 47 isolated the breakthrough from the prior BGRA8-rejection
+  diagnostic. A clean proof driver 1.3.0.26 was compiled with
+  `SUNSHINE_REMOTE_DISPLAY_PROOF_REJECT_SDR_SWAPCHAIN=OFF` and
+  `SUNSHINE_REMOTE_DISPLAY_PROOF_LOCAL_ADAPTER_FLAGS=OFF`. The same native HDR
+  activation, HDR10/10-bpc CommitModes2, FP16/scRGB application presentation,
+  and post-release persistence all succeeded. No `ProofSdrSwapChain*` event was
+  present. Evidence is under
+  `rdpcore-proxy-clean-driver-hdr-20260815-102110`.
+- The negative controls explain why the successful sequence works:
+  - DisplayCore saw the exact 10-bpc HDR-capable target but could not acquire it
+    because the remote compositor owned it (`STATUS_ACCESS_DENIED`), under
+    `rdpcore-proxy-displaycore-live-20260815-095117`.
+  - Closing three BGRA8 IDD swapchains made Windows deliberately recreate BGRA8
+    four times; an FP16 acquisition surface was never offered, under
+    `rdpcore-proxy-reject-bgra8-20260815-095828`.
+  - Removing `IDDCX_ADAPTER_FLAGS_REMOTE_SESSION_DRIVER` caused Windows to reject
+    the adapter before initialization, under
+    `rdpcore-proxy-local-adapter-20260815-100151`.
+  - Claiming D3DKMT ownership before an FP16 DXGI exclusive swapchain did not
+    work: creation returned `DXGI_STATUS_OCCLUDED` and fullscreen returned
+    `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE`, under
+    `rdpcore-proxy-owned-dxgi-10bpc-20260815-101010`.
+- This HDR activation path does not patch, replace, or hook a Windows DLL and
+  does not disable code integrity. It uses normal user-mode D3D11/DXGI and
+  D3DKMT calls. The concurrent client-SKU session wrapper used by the proof rig
+  is a separate compatibility boundary and is not part of the HDR transaction.
+- The remaining pixel-path caveat is now explicit. Windows reports active HDR
+  and commits an HDR10/10-bpc wire contract, and an application can submit
+  FP16/scRGB frames, but the Remote IDD still receives a BGRA8 format-87
+  acquisition surface with surface color space 0. The next engineering task is
+  to measure those acquired pixels and decide whether the driver/capture path
+  must reinterpret or convert them before Main10/PQ encoding. This no longer
+  blocks games from detecting and enabling Windows HDR.
 
 ### Steam and application launch
 
@@ -319,13 +869,15 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
 
 ## Known failures and production gaps
 
-1. **Native HDR remains gated; the WGC bypass is now viable:** RDS/KMD still
-   converts the public remote-IDD HDR request to SDR, the private capability found
-   on this build does not write the HDR decision field, and pre-arrival Update2 is
-   invalid. Separately, the opt-in WGC/scRGB bypass now reaches Rec.2020/PQ NVENC
-   and Main10 Moonlight decode. Independent bitstream metadata parsing, decoded
-   pixel comparison, and client output-swapchain HDR verification remain before
-   this can be called production-quality HDR.
+1. **Native HDR state is proven; acquired-pixel semantics remain:** the
+   non-preserving cloned-primary D3DKMT transaction now makes Windows keep the
+   terminal-session target in active HDR and commit HDR10/10-bpc to the Remote
+   IDD. An FP16/scRGB application also presents successfully after the temporary
+   primary is removed. The IDD acquisition surface nevertheless remains BGRA8
+   format 87 with surface color space 0. Capture exact acquired pixels from a
+   deterministic HDR pattern, compare them against the app backbuffer and WGC
+   oracle, then implement any required BGRA8-to-linear/PQ interpretation or
+   conversion before calling the path end-to-end HDR.
 2. **Audio:** session 2 has no default audio endpoint. Sunshine reports
    `0x80070490` and sends no seat audio. A real per-session endpoint/transport is
    required before the architecture is equivalent to Duo.
@@ -363,7 +915,8 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
 
 ## Current live rig snapshot
 
-Snapshot time: 2026-08-12 13:12 America/Chicago.
+Snapshot time: 2026-08-15 10:24 America/Chicago, after the native HDR activation,
+FP16 application, clean-driver isolation, and verified rollback runs.
 
 - Evidence root:
   `C:/ProgramData/VibeshineDiagnostics/duo-session-spike-20260810`
@@ -371,17 +924,59 @@ Snapshot time: 2026-08-12 13:12 America/Chicago.
 - Driver log: `C:/ProgramData/Sunshine/IddDriver/IddDriver.log`
 - Original ignored findings:
   `D:/sources/sunshine/findings-duo-vdd-session-architecture.md`
-- Session 1 remains the active `Chase` console. Session 9 is active as
-  `VibeSeatTest` on listener `sunshine-idd#1` and owns the live product
-  `SUNSHINE_REMOTE_IDDCX` remote display.
-- Active loaded product driver after rollback: `oem34.inf`, version 1.3.0.3,
-  remote DLL SHA-256
-  `EDC8291D7C3A6369C2837DEEA618D62F73DFB1122587E031095F718DAB4F71A2`.
+- Session 1 is the only active interactive session and remains the `Chase`
+  console. No experimental seat session or RdpIdd helper process is running.
+  `RDP-Tcp` is listening. The persistent `Sunshine-Idd` listener is fail-closed
+  at `fEnableWinStation=0`, `WinStationDisabled=1`, and `fLogonDisabled=1` and
+  must remain there except during a bounded, timed proof.
+- TermService, SessionEnv, and UmRdpService report running. UmRdpService's
+  service-control handler is responsive; multiple guarded TermService restarts
+  completed without a reboot. Secure Boot is enabled, VBS status is 2, security
+  services 2 and 7 are running, and Code Integrity policy enforcement status is
+  2.
+- The staged and currently copied Remote IDD proof package is `oem51.inf`,
+  version 1.3.0.26, signed and timestamped with the existing local test
+  certificate. Its package hashes are DLL
+  `619487D8543AF038924391504A2692B3BCC99D0022A4C8ED13212EAA55AE01B9`, INF
+  `958D3AE47643E2EF338817212B137025799DC8E0CA66141F7F955CD8CB55AD69`, and CAT
+  `9A8BC77D50DAA8F5E2CD8A2ACB844DFC5CE07DBDDBA66E7E73EAB2A09AD531E8`.
+  Its clean isolation configuration keeps initial HDR, Duo HDR wire, and WCG
+  prime enabled while both local-adapter flags and BGRA8 swapchain rejection are
+  disabled. `oem50.inf` 1.3.0.24 and `oem49.inf` 1.3.0.23 remain staged as exact
+  rollback packages.
+- The registered provider is the known-safe ProgramData DLL with SHA-256
+  `C39B80B06E817E585E1ED29D0594402D5341CB87604967C7349BA7C97875511C`.
+  Its CLSID registration remains in place because the disabled listener refers
+  to it. Proof artifacts remain staged in their Administrator/SYSTEM-owned
+  ProgramData directory for offline inspection, but the volatile runtime arm,
+  disposable account, credential, rollback task, and helper process are absent.
+  The staged proof DLL is the older loaded artifact; use the corrected worktree
+  build hash recorded above after reboot rather than trusting the staged file.
+- The active product virtual display is `ROOT\\DISPLAY\\0001`, started with
+  `oem11.inf`, version 1.6.3.0, and signer `Sunshine Virtual Display Release
+  Signing`. Its DriverStore payload hashes are DLL
+  `A01230696450B2E4CAAE0FD0EB4F6BBB641A07167111B2BF69CEDD6DCA17C32B`, INF
+  `AFB06CB8D5C152A96E4D939D664BC21AA8A289C6055DFA338DEC7A42623CF7C9`, and CAT
+  `C0C845A9C33102D3E02CDAE1A2A16FF1905474EA151B2EF5E7D6FEE72C19788C`.
+  The older 1.3.0.x remote proof packages remain staged but are not the active
+  device package.
+- Fresh feature-state results are `54238000=1`, `54538524=1`, and
+  `62841958=2` for all four change times. Priority 8 contains only the first two
+  disable overrides. No additional reboot is required to preserve this state.
+- Three historical seat tasks remain dormant and `Ready` under
+  `\\VibeshineDiagnostics\\`: `DuoSeat2Civ6`, `DuoSeat2HdrEnable`, and
+  `DuoSeat2Sunshine`. They point at retained August 10 proof scripts and must not
+  be started as part of the next HDR gate run. No Fp16 one-shot or rollback task
+  remains.
 - The final simultaneous Steam proof used console PID 73704 and seat PID 64936.
   Both proof-owned process trees were stopped after evidence capture; no Steam
   process remains in either session.
 - The deterministic HDR proof application and its process tree exited normally.
   Its source/composed frame captures and ETW traces remain in the evidence root.
+- Hidden-gate evidence is retained under `idd-hdr-gate-20260814-142600`. The
+  gate returned success with an empty missing-support mask, while advanced color
+  remained inactive SDR/8-bpc. Its rollback record proves listener `0/1/1`, the
+  safe provider hash, and zero proof seats. No reboot was used.
 - WGC HDR bypass evidence is retained under
   `wgc-hdr-bypass-live-20260812`, together with the final HDR and SDR-control
   Moonlight logs. The proof host, WGC helper, Moonlight clients, port-58000
@@ -392,64 +987,83 @@ Snapshot time: 2026-08-12 13:12 America/Chicago.
 
 Work these in order unless new evidence changes the dependency chain.
 
-1. **Close the WGC HDR quality proof.** Capture or dump a bounded encoded sample,
-   independently parse its Rec.2020/PQ VUI and mastering/content-light SEI, then
-   compare decoded pixels from the deterministic scRGB pattern against the source.
-   Verify Moonlight's output swapchain enters an HDR color space on an HDR-capable
-   client. Main10 decode alone remains insufficient for the client-output claim.
-2. **Calibrate and harden the bypass.** Replace the proof's fixed 1000/250-nit
-   metadata with a documented policy or measured source contract, test SDR-white
-   mapping and out-of-gamut/negative scRGB handling, and exercise static desktop,
-   animated HDR, window/monitor capture, alt-tab, resize, reconnect, NVENC/AMF,
-   HEVC/AV1, and all seven negative gates at runtime.
-3. **Keep native RDS HDR as a secondary research lane.** Preserve the current
-   negative traces. Resume only with a supported/public contract or a permissible
-   capture from a known-working Microsoft client that identifies a real writer
-   for the graphics-channel HDR decision. Do not guess a private capability bit,
-   mutate `QueryProperty`, or patch a Windows DLL in memory.
-4. **Choose and prove the Steam isolation boundary.** Keep the per-seat
+1. **Close the now-proven native HDR path.** The non-preserving cloned-primary
+   D3DKMT transaction is the working source-mode pin and should replace further
+   capability-bit or late-monitor experiments.
+   - Capture a deterministic FP16/scRGB pattern from the actual IddCx-acquired
+     BGRA8 surface and compare it to the application backbuffer, WGC oracle, and
+     encoded Main10 output. Record transfer function, primaries, range, clipping,
+     and SDR-white behavior.
+   - Productize only the minimum seat-scoped D3D11/DXGI/D3DKMT helper sequence,
+     launched after the Remote IDD commits 10 bpc and before the game. Retain
+     exact adapter/source matching, bounded timeouts, post-release verification,
+     and fail-closed cleanup. Do not carry forward BGRA8 swapchain rejection.
+   - Prove persistence across long sessions, multiple HDR applications,
+     reconnect, mode changes, and helper/host failure. Reapply only when advanced
+     color is no longer active; never retain source ownership or the temporary
+     primary allocation.
+2. **Keep the stock RDP graphics Boolean as a measured negative boundary.** The
+   installed `rdplite` has no writer for its HDR-monitor Boolean. Do not patch a
+   Windows DLL, proxy the PKEY, or claim that cap version `0x000C0000` sets it.
+   A future serviced Windows build may be rechecked by exact symbol/xref analysis.
+3. **Use the corrected proof harness for any live source-pin test.** Re-run the
+   helper packet, virtual-channel peer-close, and twice-in-one-process watchdog
+   tests; arm independent SYSTEM rollbacks for the isolated listener, exact RDP
+   ACL, and exact signed user-mode TermWrap. Rebuild the disabled listener table
+   before activation and explicitly roll back rather than waiting for deadlines.
+4. **Treat only native state as success.** Require
+   `advanced_color_active=1`, HDR active color mode, an HDR source/KMD color
+   space, 10-bit or FP16 source processing, and an HDR swapchain/frame. Supported,
+   user-enabled, 10-bpc, a successful IOCTL, or Main10 encoding alone are not
+   success.
+5. **Keep WGC HDR as a diagnostic and quality oracle.** Independently parse its
+   Rec.2020/PQ VUI and mastering/content-light SEI, compare decoded pixels from
+   the deterministic scRGB pattern, and verify Moonlight's HDR output swapchain.
+   Do not substitute this bypass for the requirement that Windows report active
+   HDR on the terminal-session display.
+6. **Choose and prove the Steam isolation boundary.** Keep the per-seat
    `-master_ipc_name_override`, then prototype the narrowest per-seat CEF/profile
    isolation. Prefer rewriting only Steam's `steamwebhelper.exe` child command to
    a seat-specific cache over a general-purpose sandbox or hooks inherited by
    games. Reprove two full Steam/webhelper trees, controller input, Steamworks IPC,
    updates, shutdown, and anti-cheat non-interference.
-5. **Finish the visual game test.** With console Steam stopped, or after Steam
+7. **Finish the visual game test.** With console Steam stopped, or after Steam
    isolation is green, launch Civilization VI app ID 289070 from `E:/SteamLibrary`
    inside the active seat under the retargeted console token. The deterministic
    renderer, not the game's appearance, remains the HDR oracle.
-6. **Integrate and regression-test the corrected session host.** The proof branch
+8. **Integrate and regression-test the corrected session host.** The proof branch
    now builds and streams successfully in session 9. Rebase or port it onto the
    long-running `duo_session_large` lane, then reprove launch, reconnect, WGC,
    simultaneous streams, helper isolation, and teardown before any promotion.
-7. **Inventory same-profile concurrency.** Extend the now-proven Steam collision
+9. **Inventory same-profile concurrency.** Extend the now-proven Steam collision
    audit to browsers, launchers, HKCU, AppData, and per-user services. Distinguish
    objects that merely need seat ACLs from names and files that require isolation.
-8. **Provide per-session audio.** Prototype the endpoint/transport, then prove the
+10. **Provide per-session audio.** Prototype the endpoint/transport, then prove the
    session-2 stream contains only session-2 audio and survives reconnect.
-9. **Prove remaining input classes.** Mouse, relative mouse, gamepad/ViGEm,
+11. **Prove remaining input classes.** Mouse, relative mouse, gamepad/ViGEm,
    Bluetooth controllers, touch/pen, focus changes, UAC, and secure desktop must
    not leak across sessions.
-10. **Finish the libvirtualdisplay remote-session backend.** Build/sign/install and
+12. **Finish the libvirtualdisplay remote-session backend.** Build/sign/install and
    provider selection are now proven. Next prove dynamic mode, session-scoped
    control, swapchain/HDR Update2 behavior, and bounded teardown while preserving
    the existing root/console backend separately.
-11. **Implement a clean seat broker.** Own managed-seat session creation,
+13. **Implement a clean seat broker.** Own managed-seat session creation,
    listener/RDP lifetime, display activation, console-token process launch,
    WinSta/Desktop/BaseNamedObjects ACL preparation, Steam isolation identity,
    port/certificate allocation, resource admission, reconnect, and transactional
    cleanup.
-12. **Remove global Sunshine assumptions.** Scope or broker display-helper state,
+14. **Remove global Sunshine assumptions.** Scope or broker display-helper state,
    recovery files, update checks, mDNS, integrations, input devices, and other
    singleton resources.
-13. **Stress and compatibility test.** Run two and then more live seats at
+15. **Stress and compatibility test.** Run two and then more live seats at
     1080p120, 1440p120, and 4K HDR; measure GPU, VRAM, encoder, copy engine, CPU,
     frame pacing, audio, and network behavior. Include Steam, third-party launchers,
     DRM, and anti-cheat titles.
-13. **Lifecycle and servicing matrix.** Exercise disconnect/logoff, crashes,
+16. **Lifecycle and servicing matrix.** Exercise disconnect/logoff, crashes,
     provider/driver restart, TermService restart, sleep/resume, reboot, GPU driver
     update, and Windows cumulative update. Every unsupported state must fail closed
     without changing the console topology or another seat.
-14. **Compatibility and licensing decision.** Select a supportable client-SKU
+17. **Compatibility and licensing decision.** Select a supportable client-SKU
     strategy and document the clean-room boundary before productizing the session
     provider/display bridge.
 
