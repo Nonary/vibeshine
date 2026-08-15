@@ -242,6 +242,7 @@ namespace nvhttp {
     const std::string &virtual_display_layout,
     std::optional<std::unordered_map<std::string, std::string>> config_overrides,
     bool prefer_10bit_sdr,
+    std::optional<bool> terminal_session_enabled,
     std::optional<std::string> hdr_profile
   );
 
@@ -255,6 +256,11 @@ namespace nvhttp {
    * @brief Whether a paired client is opted into 10-bit SDR instead of HDR.
    */
   bool get_client_prefer_10bit_sdr(const std::string &uuid);
+
+  /**
+   * @brief Whether a paired client launches configured apps in a private Windows seat.
+   */
+  bool get_client_terminal_session_enabled(const std::string &uuid);
 
   /**
    * @brief Get a copy of a client's runtime config overrides.

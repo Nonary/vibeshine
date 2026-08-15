@@ -879,6 +879,40 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
   the current Steam public-beta client. IPC naming alone is therefore
   insufficient for simultaneous same-profile Steam clients on this build.
 
+### Single-pair terminal-seat control plane (source implementation started 2026-08-15)
+
+- Task branch `duo-seat-broker`, based on the current `duo_session_large` tip,
+  introduces the product boundary between the public paired host and private
+  seat workers. The integration lane remains `duo_session_large`; this work must
+  land there and must not be moved to `unverified` yet.
+- Each paired client now has a Windows-only **Terminal emulation** setting in the
+  Web UI. The setting is stored beside that client's certificate and UUID in
+  `sunshine_state.json`; a Moonlight-supplied `uniqueid` still cannot select or
+  authorize a seat.
+- Pairing, `/serverinfo`, `/applist`, `/launch`, `/resume`, and `/cancel` remain
+  on the main Vibeshine HTTPS endpoint. A terminal-enabled configured-app launch
+  is diverted before the main process applies runtime overrides, changes the
+  console display, or starts the console app.
+- The main process hands a broker request the TLS-derived client UUID, paired
+  certificate, one-use launch ID, negotiated RTSP encryption material, app and
+  stream metadata, and normalized app/client overrides. The eventual IPC must
+  remain local, access-controlled, bounded, and non-persistent; stream secrets
+  must never be written to the Web UI, command line, or disk.
+- A successful broker response contains an already allocated private RTSP
+  listener port and the owned seat/session identity. Moonlight receives that
+  endpoint in the ordinary launch response from the already-paired host. The
+  worker must not expose pairing, configuration HTTPS, or mDNS, so there is no
+  second host identity and no second pairing step.
+- Launch, resume, disconnect, unpair, shutdown, state projection, and Web UI
+  connected-state hooks are explicit. The main host projects only the requesting
+  client's seat state and does not expose its console-only Remote Input/Monitor
+  controls to a terminal-enabled client.
+- The route is deliberately fail-closed. Until the privileged Windows runtime
+  registers a ready worker route, enabling Terminal emulation returns a retryable
+  503 and performs no local console launch. This source slice does not yet create
+  a managed account, RDP session, Remote IDD, seat worker, audio endpoint, or
+  protected IPC channel and must not be described as a working terminal seat.
+
 ### Source defect found during the spike
 
 - The then-installed current Sunshine build crashed during RTSP launch because an
@@ -1072,11 +1106,14 @@ Work these in order unless new evidence changes the dependency chain.
    provider selection are now proven. Next prove dynamic mode, session-scoped
    control, swapchain/HDR Update2 behavior, and bounded teardown while preserving
    the existing root/console backend separately.
-13. **Implement a clean seat broker.** Own managed-seat session creation,
-   listener/RDP lifetime, display activation, console-token process launch,
-   WinSta/Desktop/BaseNamedObjects ACL preparation, Steam isolation identity,
-   port/certificate allocation, resource admission, reconnect, and transactional
-   cleanup.
+13. **Finish the clean seat broker.** The single-pair control-plane contract and
+   per-client opt-in now exist on task branch `duo-seat-broker`. Implement the
+   privileged Windows runtime and protected local IPC behind those hooks. It must
+   own managed-seat session creation, listener/RDP lifetime, display activation,
+   console-token process launch, WinSta/Desktop/BaseNamedObjects ACL preparation,
+   Steam isolation identity, port allocation, resource admission, reconnect, and
+   transactional cleanup. The seat worker consumes a one-use launch reservation;
+   it does not run a second pairing or public Web UI endpoint.
 14. **Remove global Sunshine assumptions.** Scope or broker display-helper state,
    recovery files, update checks, mDNS, integrations, input devices, and other
    singleton resources.

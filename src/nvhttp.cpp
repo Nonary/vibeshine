@@ -53,6 +53,7 @@
 #include "nvhttp.h"
 #include "remote_session.h"
 #include "remote_display_topology.h"
+#include "terminal_session_broker.h"
 #include "platform/common.h"
 #include "state_storage.h"
 #ifdef _WIN32
@@ -1433,6 +1434,7 @@ namespace nvhttp {
     bool always_use_virtual_display = false;
     bool enabled = true;
     bool prefer_10bit_sdr = false;
+    bool terminal_session_enabled = false;
     std::optional<std::int64_t> last_seen;
     std::unordered_map<std::string, std::string> config_overrides;
   };
@@ -1534,6 +1536,9 @@ namespace nvhttp {
       }
       if (named_cert.prefer_10bit_sdr) {
         named_cert_node.put("prefer_10bit_sdr"s, true);
+      }
+      if (named_cert.terminal_session_enabled) {
+        named_cert_node.put("terminal_session_enabled"s, true);
       }
       if (named_cert.last_seen.has_value()) {
         named_cert_node.put("last_seen"s, *named_cert.last_seen);
@@ -1686,6 +1691,7 @@ namespace nvhttp {
           named_cert.always_use_virtual_display = el.get<bool>("always_use_virtual_display", false);
           named_cert.enabled = el.get<bool>("enabled", true);
           named_cert.prefer_10bit_sdr = el.get<bool>("prefer_10bit_sdr", false);
+          named_cert.terminal_session_enabled = el.get<bool>("terminal_session_enabled", false);
           if (auto last_seen = el.get_optional<std::int64_t>("last_seen")) {
             named_cert.last_seen = *last_seen;
           } else {
@@ -1754,6 +1760,7 @@ namespace nvhttp {
     named_cert.always_use_virtual_display = false;
     named_cert.enabled = true;
     named_cert.prefer_10bit_sdr = false;
+    named_cert.terminal_session_enabled = false;
     named_cert.last_seen.reset();
     named_cert.config_overrides.clear();
     {
@@ -2083,6 +2090,13 @@ namespace nvhttp {
 
     launch_session->host_audio = host_audio;
     auto client_settings = get_named_cert_by_uuid(launch_session->client_uuid);
+    launch_session->terminal_session_requested = client_settings && client_settings->terminal_session_enabled;
+    if (launch_session->terminal_session_requested) {
+      // A private RTSP worker cannot consult the main process's certificate
+      // chain, so the broker must receive the paired certificate with the
+      // one-use launch material. This value never leaves protected local IPC.
+      launch_session->client_cert = client_settings->cert;
+    }
     struct parsed_display_mode_t {
       int width = 0;
       int height = 0;
@@ -2351,6 +2365,61 @@ namespace nvhttp {
     }
 #endif
     return launch_session;
+  }
+
+  void publish_terminal_session_route(
+    pt::ptree &tree,
+    const req_https_t &request,
+    const terminal_session::operation_e operation,
+    std::shared_ptr<rtsp_stream::launch_session_t> launch_session,
+    std::unordered_map<std::string, std::string> runtime_config_overrides = {}
+  ) {
+    const auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
+    if (!launch_session->rtsp_cipher && encryption_mode == config::ENCRYPTION_MODE_MANDATORY) {
+      BOOST_LOG(error) << "Rejecting terminal-session client that cannot comply with mandatory encryption requirement"sv;
+      tree.put(operation == terminal_session::operation_e::resume ? "root.resume" : "root.gamesession", 0);
+      tree.put("root.<xmlattr>.status_code", 403);
+      tree.put("root.<xmlattr>.status_message", "Encryption is mandatory for this host but unsupported by the client");
+      return;
+    }
+
+    const auto client_uuid = launch_session->client_uuid;
+    const auto launch_id = launch_session->id;
+    const auto rtsp_url_scheme = launch_session->rtsp_url_scheme;
+    auto route = terminal_session::prepare({
+      .operation = operation,
+      .launch_session = std::move(launch_session),
+      .runtime_config_overrides = std::move(runtime_config_overrides),
+    });
+    if (!route.accepted || !route.ready) {
+      BOOST_LOG(warning) << "Terminal session route rejected for paired client " << client_uuid
+                         << " (launch=" << launch_id << "): " << route.error;
+      tree.put(operation == terminal_session::operation_e::resume ? "root.resume" : "root.gamesession", 0);
+      tree.put("root.<xmlattr>.status_code", route.retryable ? 503 : 500);
+      tree.put(
+        "root.<xmlattr>.status_message",
+        route.error.empty() ? "Terminal session did not become ready" : route.error
+      );
+      return;
+    }
+
+    tree.put("root.<xmlattr>.status_code", 200);
+    // Preserve the exact RTSP scheme negotiated with Moonlight. The broker
+    // returns a real listener port, not a Sunshine base-port offset.
+    tree.put(
+      "root.sessionUrl0",
+      std::format(
+        "{}{}:{}",
+        rtsp_url_scheme,
+        net::addr_to_url_escaped_string(request->local_endpoint().address()),
+        static_cast<unsigned int>(route.rtsp_port)
+      )
+    );
+    tree.put(operation == terminal_session::operation_e::resume ? "root.resume" : "root.gamesession", 1);
+    tree.put("root.VirtualDisplayDriverReady", true);
+    BOOST_LOG(info) << "Terminal session route ready for paired client " << client_uuid
+                    << " (seat=" << route.seat_id << ", session=" << route.windows_session_id
+                    << ", RTSP=" << route.rtsp_port << ").";
   }
 
   void remove_session(const pair_session_t &sess) {
@@ -2867,25 +2936,35 @@ namespace nvhttp {
     }
     tree.put("root.ServerCodecModeSupport", codec_mode_flags);
 
-    auto current_appid = proc::proc.running();
-    auto current_app = proc::proc.resolve_app(current_appid);
+    const auto current_appid = proc::proc.running();
+    const auto current_app = proc::proc.resolve_app(current_appid);
     const auto active_session = proc::proc.active_session_guard();
-    bool caller_owns_active_app = false;
+    bool expose_active_game = false;
+    int exposed_appid = 0;
+    std::string exposed_appuuid;
     if constexpr (std::is_same_v<SunshineHTTPS, T>) {
       const auto identity = resolve_client_identity_from_request(request);
-      const auto remote_owner = remote_owner_for_client(identity.uuid);
-      caller_owns_active_app = current_appid > 0 && !identity.uuid.empty() &&
-                               identity.uuid == active_session.client_uuid &&
-                               remote_owner.role == remote_session::role_e::none;
+      if (get_client_terminal_session_enabled(identity.uuid)) {
+        const auto seat = terminal_session::snapshot(identity.uuid);
+        expose_active_game = seat.exists && seat.ready && seat.app_id > 0;
+        exposed_appid = expose_active_game ? seat.app_id : 0;
+        exposed_appuuid = expose_active_game ? seat.app_uuid : std::string {};
+      } else {
+        const auto remote_owner = remote_owner_for_client(identity.uuid);
+        expose_active_game = current_appid > 0 && !identity.uuid.empty() &&
+                             identity.uuid == active_session.client_uuid &&
+                             remote_owner.role == remote_session::role_e::none;
+        exposed_appid = expose_active_game ? current_appid : 0;
+        exposed_appuuid = expose_active_game && current_app ? current_app->uuid : std::string {};
+      }
     }
     tree.put("root.PairStatus", pair_status);
     // GameStream polls this endpoint to refresh its controls. A paired caller
     // that does not own the running game must see a free host so it can select
     // the explicit Resume/Disconnect controls instead of being globally locked
     // out by another client's process.
-    const bool expose_active_game = current_appid > 0 && caller_owns_active_app;
-    tree.put("root.currentgame", expose_active_game ? current_appid : 0);
-    tree.put("root.currentgameuuid", expose_active_game && current_app ? current_app->uuid : "");
+    tree.put("root.currentgame", exposed_appid);
+    tree.put("root.currentgameuuid", exposed_appuuid);
     tree.put("root.state", expose_active_game ? "SUNSHINE_SERVER_BUSY" : "SUNSHINE_SERVER_FREE");
 
     std::ostringstream data;
@@ -2914,6 +2993,7 @@ namespace nvhttp {
       named_cert_node["virtual_display_layout"] = named_cert.virtual_display_layout_override;
       named_cert_node["always_use_virtual_display"] = named_cert.always_use_virtual_display;
       named_cert_node["prefer_10bit_sdr"] = named_cert.prefer_10bit_sdr;
+      named_cert_node["terminal_session_enabled"] = named_cert.terminal_session_enabled;
       if (named_cert.last_seen.has_value()) {
         named_cert_node["last_seen"] = *named_cert.last_seen;
       }
@@ -2941,6 +3021,9 @@ namespace nvhttp {
             break;
           }
         }
+      }
+      if (!connected && named_cert.terminal_session_enabled) {
+        connected = terminal_session::snapshot(named_cert.uuid).connected;
       }
       named_cert_node["connected"] = connected;
       named_cert_nodes.push_back(named_cert_node);
@@ -3034,10 +3117,12 @@ namespace nvhttp {
       remote_configured_apps.push_back({util::from_view(configured.id), configured.uuid, configured.name, false});
     }
 
-    const auto current_appid = proc::proc.running();
+    const auto identity = resolve_client_identity_from_request(request);
+    const bool terminal_mode = get_client_terminal_session_enabled(identity.uuid);
+    const auto seat = terminal_mode ? terminal_session::snapshot(identity.uuid) : terminal_session::state_t {};
+    const auto current_appid = terminal_mode ? (seat.ready ? seat.app_id : 0) : proc::proc.running();
     const auto current_app = proc::proc.resolve_app(current_appid);
     const auto active_session = proc::proc.active_session_guard();
-    const auto identity = resolve_client_identity_from_request(request);
     const remote_session::caller_t caller {
       .uuid = identity.uuid,
       .paired = !identity.uuid.empty(),
@@ -3045,12 +3130,24 @@ namespace nvhttp {
       .may_launch = !identity.uuid.empty(),
       .may_terminate = !identity.uuid.empty(),
     };
+    remote_session::app_t projected_app;
+    if (current_app) {
+      projected_app = remote_session::app_t {util::from_view(current_app->id), current_app->uuid, current_app->name, false};
+    } else if (terminal_mode && seat.app_id > 0) {
+      projected_app = remote_session::app_t {seat.app_id, seat.app_uuid, seat.app_name, false};
+    }
     const remote_session::game_t game {
       .running = current_appid > 0,
-      .owner_uuid = active_session.client_uuid,
-      .app = current_app ? remote_session::app_t {util::from_view(current_app->id), current_app->uuid, current_app->name, false} : remote_session::app_t {},
+      .owner_uuid = terminal_mode ? (seat.exists && seat.ready ? identity.uuid : std::string {}) : active_session.client_uuid,
+      .app = std::move(projected_app),
     };
-    const auto projection = remote_session::project(caller, game, remote_owner_for_client(identity.uuid), remote_configured_apps);
+    auto projection = remote_session::project(caller, game, terminal_mode ? remote_session::owner_t {} : remote_owner_for_client(identity.uuid), remote_configured_apps);
+    if (terminal_mode) {
+      // Remote Input/Monitor controls belong to the main process's display
+      // plane. A terminal-enabled client sees only its ordinary applications;
+      // reconnect is driven by the per-seat serverinfo state above.
+      std::erase_if(projection.catalogue, [](const remote_session::app_t &entry) { return entry.synthetic; });
+    }
 
     for (const auto &entry : projection.catalogue) {
       pt::ptree app;
@@ -3127,6 +3224,37 @@ namespace nvhttp {
     // this before resolve_app() so a stale/foreign control cannot collide with
     // an apps.json id and launch a real process.
     const auto synthetic_control = remote_session::identify(util::from_view(appid_str), appuuid_str);
+
+    // A terminal-enabled client owns a separate process/session plane. Route
+    // its authenticated configured-app request before consulting any console
+    // app state or mutating the main process's runtime/display configuration.
+    if (synthetic_control == remote_session::control_e::none) {
+      const auto terminal_client_settings = get_named_cert_by_uuid(request_identity.uuid);
+      if (terminal_client_settings && terminal_client_settings->terminal_session_enabled) {
+        const bool terminal_host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
+        const auto requested_app = proc::proc.resolve_app(appid_str, appuuid_str);
+        if (!requested_app) {
+          tree.put("root.gamesession", 0);
+          tree.put("root.<xmlattr>.status_code", 404);
+          tree.put("root.<xmlattr>.status_message", "The requested application is not configured on this host");
+          return;
+        }
+        std::unordered_map<std::string, std::string> requested_runtime_overrides;
+        config::merge_config_overrides(requested_runtime_overrides, requested_app->config_overrides);
+        config::merge_config_overrides(requested_runtime_overrides, terminal_client_settings->config_overrides);
+
+        auto launch_session = make_launch_session(terminal_host_audio, args, request, false, &request_identity);
+        publish_terminal_session_route(
+          tree,
+          request,
+          terminal_session::operation_e::launch,
+          std::move(launch_session),
+          std::move(requested_runtime_overrides)
+        );
+        return;
+      }
+    }
+
     // A secondary Moonlight client sees the running game in its projected
     // catalogue even though serverinfo is deliberately presented as free.
     // Launching that advertised entry is therefore a Resume request, not an
@@ -3711,17 +3839,6 @@ namespace nvhttp {
       }
     });
 
-    // proc_t::terminate() leaves the app id at -1 and nothing resets it to 0, so any
-    // non-positive id means nothing is running. Comparing against 0 alone would let a
-    // stale /resume run the whole resume path for an app that no longer exists.
-    if (current_appid <= 0) {
-      tree.put("root.resume", 0);
-      tree.put("root.<xmlattr>.status_code", 503);
-      tree.put("root.<xmlattr>.status_message", "No running app to resume");
-
-      return;
-    }
-
     auto args = request->parse_query_string();
     if (
       args.find("rikey"s) == std::end(args) ||
@@ -3734,10 +3851,45 @@ namespace nvhttp {
       return;
     }
 
-    if (resolve_client_identity_from_request(request).uuid.empty()) {
+    const auto resume_identity = resolve_client_identity_from_request(request);
+    if (resume_identity.uuid.empty()) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 403);
       tree.put("root.<xmlattr>.status_message", "A paired TLS client identity is required");
+      return;
+    }
+
+    if (const auto terminal_client_settings = get_named_cert_by_uuid(resume_identity.uuid);
+        terminal_client_settings && terminal_client_settings->terminal_session_enabled) {
+      const bool terminal_host_audio = args.find("localAudioPlayMode"s) != std::end(args) &&
+                                       util::from_view(get_arg(args, "localAudioPlayMode"));
+      std::unordered_map<std::string, std::string> requested_runtime_overrides;
+      const auto seat = terminal_session::snapshot(resume_identity.uuid);
+      if (seat.app_id > 0) {
+        if (const auto running_app = proc::proc.resolve_app(seat.app_id)) {
+          config::merge_config_overrides(requested_runtime_overrides, running_app->config_overrides);
+        }
+      }
+      config::merge_config_overrides(requested_runtime_overrides, terminal_client_settings->config_overrides);
+
+      auto launch_session = make_launch_session(terminal_host_audio, args, request, false, &resume_identity);
+      publish_terminal_session_route(
+        tree,
+        request,
+        terminal_session::operation_e::resume,
+        std::move(launch_session),
+        std::move(requested_runtime_overrides)
+      );
+      return;
+    }
+
+    // proc_t::terminate() leaves the app id at -1 and nothing resets it to 0, so any
+    // non-positive id means nothing is running. Comparing against 0 alone would let a
+    // stale /resume run the whole console path for an app that no longer exists.
+    if (current_appid <= 0) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "No running app to resume");
       return;
     }
 
@@ -4100,6 +4252,17 @@ namespace nvhttp {
       tree.put("root.cancel", 0);
       tree.put("root.<xmlattr>.status_code", 403);
       tree.put("root.<xmlattr>.status_message", "A paired TLS client identity is required");
+      return;
+    }
+
+    const auto terminal_state = terminal_session::snapshot(identity.uuid);
+    if (get_client_terminal_session_enabled(identity.uuid) || terminal_state.exists) {
+      const bool disconnected = terminal_session::disconnect(identity.uuid, "Moonlight cancel");
+      tree.put("root.cancel", disconnected ? 1 : 0);
+      tree.put("root.<xmlattr>.status_code", disconnected ? 200 : 409);
+      if (!disconnected) {
+        tree.put("root.<xmlattr>.status_message", "No terminal session owned by this client could be disconnected");
+      }
       return;
     }
 
@@ -4487,10 +4650,12 @@ namespace nvhttp {
     discovery_route_pool.join();
     rtsp_stream::terminate_sessions(false);
     remote_session::notify_monitor_shutdown();
+    terminal_session::notify_shutdown();
 #ifdef _WIN32
     cleanup_virtual_display_if_idle();
 #endif
     remote_session::register_monitor_runtime_hooks({});
+    terminal_session::register_runtime_hooks({});
   }
 
   void erase_all_clients() {
@@ -4498,6 +4663,7 @@ namespace nvhttp {
     for (const auto &client : clients) {
       (void) rtsp_stream::disconnect_client_sessions(client.uuid);
       remote_session::notify_monitor_unpair(client.uuid);
+      terminal_session::notify_unpair(client.uuid);
       forget_remote_client(client.uuid);
     }
 #ifdef _WIN32
@@ -4521,6 +4687,7 @@ namespace nvhttp {
     const std::string &virtual_display_layout,
     std::optional<std::unordered_map<std::string, std::string>> config_overrides,
     const bool prefer_10bit_sdr,
+    const std::optional<bool> terminal_session_enabled,
     const std::optional<std::string> hdr_profile
   ) {
     if (uuid.empty()) {
@@ -4542,6 +4709,15 @@ namespace nvhttp {
       config_overrides = std::move(normalized_overrides);
     }
 
+    if (terminal_session_enabled.has_value() && !*terminal_session_enabled) {
+      const auto seat = terminal_session::snapshot(uuid);
+      if (seat.exists && !terminal_session::disconnect(uuid, "Terminal emulation disabled")) {
+        BOOST_LOG(warning) << "Refusing to disable terminal emulation for paired client " << uuid
+                           << " because its active seat could not be disconnected.";
+        return false;
+      }
+    }
+
     bool updated = false;
     {
       std::lock_guard<std::mutex> lock(client_mutex);
@@ -4557,6 +4733,9 @@ namespace nvhttp {
         named_cert.virtual_display_mode_override = trimmed_vd_mode;
         named_cert.virtual_display_layout_override = trimmed_vd_layout;
         named_cert.prefer_10bit_sdr = prefer_10bit_sdr;
+        if (terminal_session_enabled.has_value()) {
+          named_cert.terminal_session_enabled = *terminal_session_enabled;
+        }
         if (config_overrides) {
           named_cert.config_overrides = std::move(*config_overrides);
         }
@@ -4645,13 +4824,14 @@ namespace nvhttp {
     // explicitly releases it (or is unpaired/shutdown). The RTSP join path
     // publishes the generation-scoped transport-loss transition.
     const bool disconnected = rtsp_stream::disconnect_client_sessions(uuid);
+    const bool terminal_disconnected = terminal_session::disconnect(uuid, "Web UI disconnect");
     if (const auto generation = remote_owner_generation(uuid, remote_session::role_e::input)) {
       // Input-only has no retained resource or Resume contract. Active
       // sessions clear this during join; this covers a pending launch that was
       // administratively disconnected before RTSP published a session.
       forget_remote_owner(uuid, remote_session::role_e::input, *generation);
     }
-    return disconnected;
+    return disconnected || terminal_disconnected;
   }
 
   bool get_client_prefer_10bit_sdr(const std::string &uuid) {
@@ -4659,6 +4839,16 @@ namespace nvhttp {
     for (const auto &named_cert : client_root.named_devices) {
       if (named_cert.uuid == uuid) {
         return named_cert.prefer_10bit_sdr;
+      }
+    }
+    return false;
+  }
+
+  bool get_client_terminal_session_enabled(const std::string &uuid) {
+    std::lock_guard<std::mutex> lock(client_mutex);
+    for (const auto &named_cert : client_root.named_devices) {
+      if (named_cert.uuid == uuid) {
+        return named_cert.terminal_session_enabled;
       }
     }
     return false;
@@ -4702,6 +4892,7 @@ namespace nvhttp {
     if (removed) {
       (void) rtsp_stream::disconnect_client_sessions(std::string {uuid});
       remote_session::notify_monitor_unpair(uuid);
+      terminal_session::notify_unpair(uuid);
       forget_remote_client(uuid);
 #ifdef _WIN32
       cleanup_virtual_display_if_idle();

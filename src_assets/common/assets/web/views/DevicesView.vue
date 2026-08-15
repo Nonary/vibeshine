@@ -39,6 +39,7 @@ interface PairedDevice {
   virtual_display_layout?: string;
   always_use_virtual_display?: boolean;
   prefer_10bit_sdr?: boolean;
+  terminal_session_enabled?: boolean;
   config_overrides?: Record<string, unknown>;
 }
 
@@ -182,6 +183,7 @@ function draftFromDevice(device: PairedDevice): ClientDeviceDraft {
     virtualDisplayLayout,
     hdrProfile: device.hdr_profile?.trim() ?? '',
     prefer10BitSdr: Boolean(device.prefer_10bit_sdr),
+    terminalSessionEnabled: Boolean(device.terminal_session_enabled),
     configOverrides:
       device.config_overrides && typeof device.config_overrides === 'object'
         ? structuredClone(toRaw(device.config_overrides))
@@ -393,6 +395,7 @@ function updatePayload(device: PairedDevice, draft: ClientDeviceDraft): Record<s
         : '',
     virtual_display_layout: useVirtualDisplay ? (draft.virtualDisplayLayout ?? '') : '',
     prefer_10bit_sdr: draft.prefer10BitSdr,
+    terminal_session_enabled: draft.terminalSessionEnabled,
     hdr_profile: draft.hdrProfile.trim(),
     config_overrides: cleanOverrides(draft.configOverrides),
   };
@@ -410,6 +413,7 @@ const draftScalarKeys = [
   'virtualDisplayLayout',
   'hdrProfile',
   'prefer10BitSdr',
+  'terminalSessionEnabled',
 ] as const satisfies ReadonlyArray<Exclude<keyof ClientDeviceDraft, 'configOverrides'>>;
 
 function serializedValue(value: unknown): string {

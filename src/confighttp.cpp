@@ -2345,7 +2345,8 @@ namespace confighttp {
         input_tree.contains("virtual_display_mode") ||
         input_tree.contains("virtual_display_layout") ||
         input_tree.contains("config_overrides") ||
-        input_tree.contains("prefer_10bit_sdr");
+        input_tree.contains("prefer_10bit_sdr") ||
+        input_tree.contains("terminal_session_enabled");
       const bool has_extended_fields = has_device_fields || input_tree.contains("enabled");
 
       if (!has_extended_fields) {
@@ -2401,6 +2402,10 @@ namespace confighttp {
       if (input_tree.contains("prefer_10bit_sdr") && !input_tree["prefer_10bit_sdr"].is_null()) {
         prefer_10bit_sdr = input_tree["prefer_10bit_sdr"].get<bool>();
       }
+      std::optional<bool> terminal_session_enabled;
+      if (input_tree.contains("terminal_session_enabled") && !input_tree["terminal_session_enabled"].is_null()) {
+        terminal_session_enabled = input_tree["terminal_session_enabled"].get<bool>();
+      }
 
       output_tree["status"] = nvhttp::update_device_info(
         uuid,
@@ -2412,6 +2417,7 @@ namespace confighttp {
         virtual_display_layout,
         std::move(config_overrides),
         prefer_10bit_sdr,
+        terminal_session_enabled,
         hdr_profile
       );
       send_response(response, output_tree);

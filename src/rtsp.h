@@ -58,6 +58,9 @@ namespace rtsp_stream {
     std::string client_uuid;
     std::string client_name;
     std::string device_name;
+    // Host-side opt-in. Pairing remains on the main Vibeshine instance; a
+    // private broker owns the WTS seat and its RTSP/media worker.
+    bool terminal_session_requested = false;
     std::optional<std::string> hdr_profile;
     int width;
     int height;

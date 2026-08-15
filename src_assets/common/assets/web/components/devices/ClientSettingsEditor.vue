@@ -27,6 +27,7 @@ export interface ClientDeviceDraft {
   virtualDisplayLayout: ClientVirtualDisplayLayout;
   hdrProfile: string;
   prefer10BitSdr: boolean;
+  terminalSessionEnabled: boolean;
   configOverrides: Record<string, unknown>;
 }
 
@@ -415,6 +416,24 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
             />
             <span class="vs-switch__track" aria-hidden="true" />
             <span class="vs-sr-only">{{ t('ui.devices.editor.allow_stream') }}</span>
+          </label>
+        </SettingRow>
+        <SettingRow
+          v-if="isWindows"
+          class="client-setting-row--switch"
+          :label="t('ui.devices.editor.terminal_session')"
+          :description="t('ui.devices.editor.terminal_session_description')"
+          :control-id="`${controlIdPrefix}-terminal-session`"
+        >
+          <label class="vs-switch">
+            <input
+              :id="`${controlIdPrefix}-terminal-session`"
+              v-model="draft.terminalSessionEnabled"
+              type="checkbox"
+              :disabled="busy"
+            />
+            <span class="vs-switch__track" aria-hidden="true" />
+            <span class="vs-sr-only">{{ t('ui.devices.editor.terminal_session') }}</span>
           </label>
         </SettingRow>
       </div>
