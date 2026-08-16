@@ -188,7 +188,7 @@ namespace steam_offline {
         for (DWORD index = 0; index < dacl->AceCount; ++index) {
           void *raw_ace = nullptr;
           if (!GetAce(dacl, index, &raw_ace) || !raw_ace) continue;
-          const auto *ace = static_cast<const ACCESS_ALLOWED_ACE *>(raw_ace);
+          auto *ace = static_cast<ACCESS_ALLOWED_ACE *>(raw_ace);
           if (ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && known_sids && EqualSid(&ace->SidStart, system_sid.data())) {
             system_ok = (ace->Mask & FILE_ALL_ACCESS) == FILE_ALL_ACCESS;
           }
@@ -427,7 +427,15 @@ namespace steam_offline {
     constexpr std::array<std::uint8_t, 16> provider_key_bytes {
       0x8c, 0x8d, 0x1d, 0x8e, 0x40, 0x57, 0x4e, 0x45, 0xa8, 0x2c, 0x17, 0xb7, 0x4f, 0x50, 0x44, 0x5a};
     constexpr std::array<std::uint8_t, 16> sublayer_key_bytes {
-      0x41, 0x0d, 0x69, 0x1f, 0xe4, 0x11, 0x45, 0x2c, 0x9d, 0xe7, 0x60, 0x1b, 0xae, 0xc4, 0x5f, 0x22, 0x09};
+      0x41, 0x0d, 0x69, 0x1f, 0xe4, 0x11, 0x45, 0x2c, 0x9d, 0xe7, 0x60, 0x1b, 0xae, 0xc4, 0x5f, 0x22};
+
+    constexpr GUID fwpm_layer_ale_auth_connect_v4 {
+      0xc38d57d1, 0x05a7, 0x4c33, {0x90, 0x4f, 0x7f, 0xbc, 0xee, 0xe6, 0x0e, 0x82}};
+    constexpr GUID fwpm_layer_ale_auth_connect_v6 {
+      0x4a72393b, 0x319f, 0x44bc, {0x84, 0xc3, 0xba, 0x54, 0xdc, 0xb3, 0xb6, 0xb4}};
+    constexpr GUID fwpm_condition_ale_app_id {
+      0xd78e1e87, 0x8644, 0x4ea5, {0x94, 0x37, 0xd8, 0x09, 0xec, 0xef, 0xcf, 0x71}};
+    constexpr UINT32 fwpm_persistent_flag = 1u;
 
     std::wstring service_epoch() {
       static const std::wstring epoch = [] {
@@ -452,9 +460,9 @@ namespace steam_offline {
       filter.layerKey = layer_key;
       filter.subLayerKey = sublayer_key;
       filter.weight.type = FWP_EMPTY;
-      filter.flags = FWPM_FILTER_FLAG_PERSISTENT;
+      filter.flags = fwpm_persistent_flag;
       FWPM_FILTER_CONDITION0 condition {};
-      condition.fieldKey = FWPM_CONDITION_ALE_APP_ID;
+      condition.fieldKey = fwpm_condition_ale_app_id;
       condition.matchType = FWP_MATCH_EQUAL;
       condition.conditionValue.type = FWP_BYTE_BLOB_TYPE;
       condition.conditionValue.byteBlob = new FWP_BYTE_BLOB {app_id_size, app_id};
@@ -557,7 +565,7 @@ namespace steam_offline {
         if (objects > max_objects) { ok = false; if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
         for (UINT32 i = 0; i < count && ok; ++i) {
           filter_owner parsed;
-          if (!filters[i] || !filters[i]->subLayerKey || std::memcmp(filters[i]->subLayerKey, &sublayer, sizeof(sublayer)) != 0) continue;
+          if (!filters[i] || !IsEqualGUID(filters[i]->subLayerKey, sublayer)) continue;
           if (!parse_filter_owner(filters[i]->displayData.description, parsed)) { ok = false; break; }
           if (parsed.seat == seat && parsed.generation != generation &&
               steam_offline::stale_filters_removal_allowed(generation_root_state(parsed))) {
@@ -580,13 +588,13 @@ namespace steam_offline {
     bool validate_owned_schema(HANDLE engine, const GUID &provider_key, const GUID &sublayer_key, std::string &error) {
       FWPM_PROVIDER0 *provider = nullptr; FWPM_SUBLAYER0 *sublayer = nullptr;
       auto status = FwpmProviderGetByKey0(engine, &provider_key, &provider);
-      const bool provider_ok = status == ERROR_SUCCESS && provider && provider->flags & FWPM_PROVIDER_FLAG_PERSISTENT &&
+      const bool provider_ok = status == ERROR_SUCCESS && provider && provider->flags & fwpm_persistent_flag &&
         provider->displayData.name && std::wstring_view {provider->displayData.name} == L"Vibeshine Steam user-mode isolation";
       if (provider) FwpmFreeMemory0(reinterpret_cast<void **>(&provider));
       status = FwpmSubLayerGetByKey0(engine, &sublayer_key, &sublayer);
       const bool sublayer_ok = status == ERROR_SUCCESS && sublayer && sublayer->providerKey &&
         std::memcmp(sublayer->providerKey, &provider_key, sizeof(provider_key)) == 0 &&
-        (sublayer->flags & FWPM_SUBLAYER_FLAG_PERSISTENT) && sublayer->weight == 0xffff;
+        (sublayer->flags & fwpm_persistent_flag) && sublayer->weight == 0xffff;
       if (sublayer) FwpmFreeMemory0(reinterpret_cast<void **>(&sublayer));
       if (!provider_ok || !sublayer_ok) { error = "Owned WFP provider/sublayer schema is not exact; isolation is refused."; return false; }
       return true;
@@ -705,7 +713,7 @@ namespace steam_offline {
     FWPM_PROVIDER0 provider {};
     const auto provider_key = guid(provider_key_bytes);
     provider.providerKey = provider_key;
-    provider.flags = FWPM_PROVIDER_FLAG_PERSISTENT;
+    provider.flags = fwpm_persistent_flag;
     provider.displayData.name = const_cast<wchar_t *>(L"Vibeshine Steam user-mode isolation");
     provider.displayData.description = const_cast<wchar_t *>(L"Persistent SYSTEM-owned Steam client seat filters");
     FWPM_SUBLAYER0 sublayer {};
@@ -716,7 +724,7 @@ namespace steam_offline {
     // Highest ordinary user-mode sublayer weight. This is not a callout veto:
     // administrator/higher-priority policy may still override the admission.
     sublayer.weight = 0xffff;
-    sublayer.flags = FWPM_SUBLAYER_FLAG_PERSISTENT;
+    sublayer.flags = fwpm_persistent_flag;
     const auto program_data_root = program_data();
     if (!program_data_root) { FwpmEngineClose0(engine); error = "The OS ProgramData root could not be resolved."; return false; }
     const auto owned_root = *program_data_root / L"VibeshineSteamSeats";
@@ -897,7 +905,7 @@ namespace steam_offline {
     staged_filter_keys.reserve(executables.size() * 2);
     for (const auto &staged : executables) {
       const auto published_path = mirror / staged.lexically_relative(stage);
-      PFWP_BYTE_BLOB app_id = nullptr;
+      FWP_BYTE_BLOB *app_id = nullptr;
       status = FwpmGetAppIdFromFileName0(published_path.c_str(), &app_id);
       if (status != ERROR_SUCCESS || !app_id || app_id->size == 0) {
         if (app_id) FwpmFreeMemory0(reinterpret_cast<void **>(&app_id));
@@ -906,8 +914,8 @@ namespace steam_offline {
       std::wstring owner = L"VibeshineSteamSeat|seat=" + seat_wide + L"|epoch=" + epoch + L"|generation=" + std::to_wstring(generation);
       const auto v4 = key_for(deterministic_filter_key(seat_id, generation, narrow(published_path), false));
       const auto v6 = key_for(deterministic_filter_key(seat_id, generation, narrow(published_path), true));
-      if (!add_filter(engine, guid(v4), provider_key, sublayer_key, FWPM_LAYER_ALE_AUTH_CONNECT_V4, app_id->data, app_id->size, owner, error) ||
-          !add_filter(engine, guid(v6), provider_key, sublayer_key, FWPM_LAYER_ALE_AUTH_CONNECT_V6, app_id->data, app_id->size, owner, error)) {
+      if (!add_filter(engine, guid(v4), provider_key, sublayer_key, fwpm_layer_ale_auth_connect_v4, app_id->data, app_id->size, owner, error) ||
+          !add_filter(engine, guid(v6), provider_key, sublayer_key, fwpm_layer_ale_auth_connect_v6, app_id->data, app_id->size, owner, error)) {
         FwpmFreeMemory0(reinterpret_cast<void **>(&app_id)); FwpmTransactionAbort0(engine); discard_published(); FwpmEngineClose0(engine); return false;
       }
       FwpmFreeMemory0(reinterpret_cast<void **>(&app_id));
@@ -957,7 +965,7 @@ namespace steam_offline {
       if (total_objects > max_objects) { ok = false; if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
       for (UINT32 i = 0; i < count; ++i) if (filters[i]) {
         filter_owner owner;
-        if (!filters[i]->subLayerKey || std::memcmp(filters[i]->subLayerKey, &sublayer, sizeof(sublayer)) != 0 ||
+        if (!IsEqualGUID(filters[i]->subLayerKey, sublayer) ||
             !parse_filter_owner(filters[i]->displayData.description, owner)) { ok = false; break; }
         if (owner.seat != std::wstring {seat_id_.begin(), seat_id_.end()} || owner.epoch != service_epoch() || owner.generation != generation_) continue;
         std::array<std::uint8_t, 16> key {}; std::memcpy(key.data(), &filters[i]->filterKey, sizeof(GUID)); observed.push_back(key);

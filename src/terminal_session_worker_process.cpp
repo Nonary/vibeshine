@@ -784,8 +784,8 @@ namespace terminal_session::worker {
     wchar_t image[MAX_PATH] {};
     DWORD length = _countof(image);
     if (!QueryFullProcessImageNameW(client.get(), 0, image, &length) || length == 0) return false;
-    const std::wstring canonical = canonical_image(std::wstring {image, length});
-    const auto expected = canonical_image((service_directory() / L"sunshine_display_helper.exe").wstring());
+    const std::wstring canonical = steam_offline::normalize_windows_image_path(std::wstring {image, length});
+    const auto expected = steam_offline::normalize_windows_image_path((service_directory() / L"sunshine_display_helper.exe").wstring());
     return canonical == expected;
   }
 

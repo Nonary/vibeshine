@@ -7,6 +7,7 @@
   #include "process.h"
   #include "rtsp.h"
   #include "stream.h"
+  #include "terminal_session_hdr_policy.h"
   #include "terminal_session_launch_codec.h"
   #include "terminal_session_protocol.h"
   #include "terminal_session_service.h"
