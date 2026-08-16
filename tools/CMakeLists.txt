@@ -38,8 +38,15 @@ target_link_libraries(audio-info
 target_compile_options(audio-info PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
 add_executable(sunshinesvc sunshinesvc.cpp
+        ${CMAKE_SOURCE_DIR}/src/crypto.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/terminal_session_seat_provider.cpp
+        ${CMAKE_SOURCE_DIR}/src/terminal_session_broker.cpp
+        ${CMAKE_SOURCE_DIR}/src/terminal_session_launch_codec.cpp
         ${CMAKE_SOURCE_DIR}/src/terminal_session_protocol.cpp
+        ${CMAKE_SOURCE_DIR}/src/terminal_session_runtime.cpp
         ${CMAKE_SOURCE_DIR}/src/terminal_session_service.cpp
+        ${CMAKE_SOURCE_DIR}/src/terminal_session_seat_pool.cpp
+        ${CMAKE_SOURCE_DIR}/src/terminal_session_worker.cpp
         ${CMAKE_SOURCE_DIR}/src/terminal_session_worker_process.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/misc_utils.cpp
@@ -50,6 +57,12 @@ target_link_libraries(sunshinesvc
         ${Boost_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
         wtsapi32
+        netapi32
+        userenv
+        advapi32
+        shell32
+        user32
+        nlohmann_json::nlohmann_json
         OpenSSL::Crypto
         ${PLATFORM_LIBRARIES})
 target_compile_options(sunshinesvc PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
@@ -58,6 +71,33 @@ add_custom_command(TARGET sunshinesvc POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/wix_payload/tools"
         COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:sunshinesvc>" "${CMAKE_BINARY_DIR}/wix_payload/tools/sunshinesvc.exe"
 )
+
+# Hidden inbox-RDP ActiveX host used by the privileged terminal seat broker.
+# Credentials cross only a protected inherited named-pipe channel; they never
+# appear in the process command line, environment, registry, or a .rdp file.
+find_program(VIBESHINE_CSC_EXECUTABLE csc.exe
+        PATHS "$ENV{WINDIR}/Microsoft.NET/Framework64/v4.0.30319"
+              "$ENV{WINDIR}/Microsoft.NET/Framework/v4.0.30319"
+        NO_DEFAULT_PATH)
+if(VIBESHINE_CSC_EXECUTABLE)
+    set(TERMINAL_SEAT_CONTROLLER_EXE "${CMAKE_CURRENT_BINARY_DIR}/vibeshine_seat_controller.exe")
+    add_custom_command(
+            OUTPUT "${TERMINAL_SEAT_CONTROLLER_EXE}"
+            COMMAND "${VIBESHINE_CSC_EXECUTABLE}" /nologo /target:winexe /platform:x64 /optimize+
+                    /reference:System.dll /reference:System.Core.dll
+                    /reference:System.Windows.Forms.dll /reference:System.Drawing.dll
+                    "/out:${TERMINAL_SEAT_CONTROLLER_EXE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/terminal_seat_controller.cs"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/terminal_seat_controller.cs"
+            VERBATIM)
+    add_custom_target(vibeshine_seat_controller ALL
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/wix_payload/tools"
+            COMMAND ${CMAKE_COMMAND} -E copy "${TERMINAL_SEAT_CONTROLLER_EXE}" "${CMAKE_BINARY_DIR}/wix_payload/tools/vibeshine_seat_controller.exe"
+            DEPENDS "${TERMINAL_SEAT_CONTROLLER_EXE}")
+    add_dependencies(sunshinesvc vibeshine_seat_controller)
+else()
+    message(FATAL_ERROR "The .NET Framework C# compiler is required for the Vibeshine terminal seat controller")
+endif()
 
 add_executable(sunshine_terminal_worker_probe
         # Internal admission/IPC test host. This is intentionally not a
@@ -71,6 +111,15 @@ add_executable(sunshine_terminal_worker_probe
         ${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.cpp)
 target_link_libraries(sunshine_terminal_worker_probe PRIVATE ${Boost_LIBRARIES} OpenSSL::Crypto wtsapi32 ${PLATFORM_LIBRARIES})
 target_compile_options(sunshine_terminal_worker_probe PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
+# Disposable seat-local helper for the proven FP16 cloned-primary,
+# PreserveVidPn=FALSE D3DKMT HDR activation transaction. The SYSTEM broker
+# owns launch and watchdog; keeping graphics calls in this child protects
+# Terminal Services callbacks.
+add_executable(vibeshine_terminal_hdr_activator terminal_hdr_activator.cpp)
+set_target_properties(vibeshine_terminal_hdr_activator PROPERTIES CXX_STANDARD 23)
+target_link_libraries(vibeshine_terminal_hdr_activator PRIVATE d3d11 dxgi gdi32 user32 wtsapi32 advapi32)
+target_compile_options(vibeshine_terminal_hdr_activator PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
 # Playnite launcher: per-launch helper that hosts a private IPC server
 add_executable(playnite-launcher

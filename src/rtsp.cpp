@@ -116,6 +116,7 @@ namespace {
 #endif
 
 namespace rtsp_stream {
+  namespace { std::atomic_bool rtsp_listener_ready {false}; }
   void free_msg(PRTSP_MESSAGE msg) {
     freeMessage(msg);
 
@@ -2034,6 +2035,7 @@ namespace rtsp_stream {
     server.map("ANNOUNCE"sv, &cmd_announce);
     server.map("PLAY"sv, &cmd_play);
 
+    rtsp_listener_ready.store(false, std::memory_order_release);
     boost::system::error_code ec;
     if (server.bind(net::af_from_enum_string(config::sunshine.address_family), net::map_port(rtsp_stream::RTSP_SETUP_PORT), ec)) {
       BOOST_LOG(fatal) << "Couldn't bind RTSP server to port ["sv << net::map_port(rtsp_stream::RTSP_SETUP_PORT) << "], " << ec.message();
@@ -2041,6 +2043,7 @@ namespace rtsp_stream {
 
       return;
     }
+    rtsp_listener_ready.store(true, std::memory_order_release);
 
     std::thread rtsp_thread {[&shutdown_event] {
       platf::set_thread_name("rtsp::handler");
@@ -2069,6 +2072,11 @@ namespace rtsp_stream {
     // Stop the server and join the server thread
     server.stop();
     rtsp_thread.join();
+    rtsp_listener_ready.store(false, std::memory_order_release);
+  }
+
+  bool listener_ready() {
+    return rtsp_listener_ready.load(std::memory_order_acquire);
   }
 
   void print_msg(PRTSP_MESSAGE msg) {

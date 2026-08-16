@@ -70,6 +70,7 @@ namespace rtsp_stream {
 
     struct app_metadata_t {
       std::string id;
+      std::string uuid;
       std::string name;
       bool virtual_screen;
       bool has_command;
@@ -272,6 +273,8 @@ namespace rtsp_stream {
   // Encrypted launches are independent; plaintext remains one pending launch
   // per source address because it has no cryptographic routing identity.
   bool launch_session_raise(std::shared_ptr<launch_session_t> launch_session);
+  /** True only after the RTSP socket has bound successfully. */
+  bool listener_ready();
 
   // Surface the actual plaintext admission warning in the topology UI without
   // giving that UI a second, divergent notion of RTSP routing state.

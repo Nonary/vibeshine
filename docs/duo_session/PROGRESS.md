@@ -907,11 +907,111 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
   connected-state hooks are explicit. The main host projects only the requesting
   client's seat state and does not expose its console-only Remote Input/Monitor
   controls to a terminal-enabled client.
-- The route is deliberately fail-closed. Until the privileged Windows runtime
-  registers a ready worker route, enabling Terminal emulation returns a retryable
-  503 and performs no local console launch. This source slice does not yet create
-  a managed account, RDP session, Remote IDD, seat worker, audio endpoint, or
-  protected IPC channel and must not be described as a working terminal seat.
+- The route remains deliberately fail-closed. The original boundary-only slice
+  returned a retryable 503 and performed no console launch until a privileged
+  Windows runtime could publish a complete route.
+
+### Managed-seat runtime implementation (source-only, 2026-08-15)
+
+- Task branch/worktree `duo_seat_pool_large`, based on
+  `ba4ef79d89a9594323558f314210f87fd01889da`, implements the next runtime layer.
+  It has not yet been compiled, packaged, installed, or exercised live.
+- The LocalSystem broker now discovers exact broker-owned `VibeshineSeatNN`
+  accounts, assigns reusable disconnected seats round-robin, creates another
+  account only when no reusable seat exists, hides it from the normal logon
+  picker, and keeps it disabled at rest. Every RDP bootstrap rotates a fresh
+  one-connect password, enables the account only for that transaction, then
+  disables it immediately; no reusable managed-seat password is persisted.
+  Ordinary stream lifecycle never logs off or deletes a healthy seat. Service
+  startup disables any exact managed account left enabled by a prior crash, and
+  uninstall invokes the same sweep before deleting those accounts.
+- The provider requires the already-live TermWrap plus inbox `termsrv.dll`
+  combination and the exact enabled `Sunshine-Idd` listener. It does not write a
+  Windows DLL, enable a listener, restart TermService, or modify either
+  prerequisite automatically. Missing prerequisites fail before account/session
+  mutation.
+- A hidden inbox RDP ActiveX controller runs with a privilege-disabled
+  LocalSystem token on a random SYSTEM-only private window station and desktop.
+  It receives the ephemeral managed credential only over a
+  random first-instance, local-only protected pipe. The broker verifies the exact
+  controller PID; the controller requires CredSSP, negotiated transport security,
+  and successful server authentication for the machine FQDN. The broker waits for
+  the exact managed account's Winlogon, DWM, and shell and keeps Remote Audio
+  playback enabled while disabling device, clipboard, printer, smart-card, and
+  microphone redirection.
+- Applications do not run as the managed account. The broker duplicates the
+  active console user's primary token, retargets it to the managed WTS session,
+  grants that exact user and logon SID access to the target session's
+  `WinSta0\\Default` and `BaseNamedObjects`, and launches a private Sunshine
+  worker under that token. The managed account owns Winlogon/DWM/Remote IDD;
+  Steam, launchers, and games retain the console user's profile and identity.
+- The private worker has isolated state/log/credential paths below a
+  process-boot-random `ProgramData\VibeshineTerminalSeats-&lt;128-bit random&gt;`
+  root and one deterministic
+  non-ephemeral port allocation per seat. Storage creation rejects reparse points,
+  mismatched canonical paths, unsafe owners/DACLs, and creates protected
+  SYSTEM/Administrators directories atomically before applying leaf-only user
+  access through validated handles. It starts no Web UI, pairing, mDNS,
+  updater, UPnP, or global display/VDD recovery path. The
+  already-paired main host passes a bounded, one-use encrypted-RTSP launch over
+  protected service IPC; the worker probes the session display/encoder, launches
+  the configured app, and publishes only the exact ready media route.
+  The broker creates both the worker process and primary thread atomically with
+  a validated explicit LocalSystem-only DACL; the seat user has no external real
+  worker handle to open or inject, and the worker uses its pseudo-handle for
+  self-management.
+- Ordinary Moonlight cancel and Web UI disconnect now park the worker and its app,
+  stop the hidden RDP controller, and call `WTSDisconnectSession`; they preserve
+  client/generation affinity. Resume reconnects the same account/session, proves
+  the same worker route, reapplies fresh stream keys/settings, and does not launch
+  the app twice. Disabling Terminal emulation, unpairing, or service shutdown is
+  explicit destructive teardown.
+- The main process can reconstruct a retained route after its own restart through
+  an authenticated, peer-bound, one-use per-client state query. There is no
+  unauthenticated seat enumeration or second Moonlight pairing path. An ordinary
+  main-process restart forgets only its local projection; the service retains the
+  worker and reconstructs the route on the next authenticated query. True global
+  teardown remains service-owned.
+- HDR-requested terminal launches now call a packaged, disposable seat-local
+  activator before encoder probing and before the game. The helper waits for one
+  exact HDR-supported, user-enabled, 10-bpc Remote IDD path, creates the proven
+  FP16 shared-displayable allocation, clones its private contract as the source-0
+  primary, acquires exclusive ownership, and invokes
+  `D3DKMTSetDisplayMode(PreserveVidPn=FALSE)`. It then releases ownership and both
+  temporary allocations and succeeds only if Windows still reports active HDR.
+  The SYSTEM broker launches the helper itself inside the existing worker job and
+  owns its 15-second watchdog, failing the launch closed on timeout or any
+  incomplete state. The worker waits only for the broker response and then
+  independently rechecks the exact target. The helper rejects the console
+  session, proves the exact `VibeshineSeatNN` WTS owner, and accepts only the
+  installed session-0 LocalSystem `sunshinesvc.exe` parent whose canonical
+  binaries and containing directories are protected from the caller's token.
+  The adapter LUID/source/target contract is
+  transferred by the SYSTEM broker over a random first-instance local named
+  pipe with remote clients rejected, rather than through mutable command-line
+  values; no inherited handle is used. The broker verifies the exact helper
+  PID before writing the one-shot capability. The worker's first exact sole-target
+  attestation binds both source and target adapter LUIDs plus source/target IDs to
+  the broker-owned worker lifetime; provider_resource_t intentionally does not
+  pretend to know this display identity. Every later HDR request/reconnect must
+  match that binding. The helper revalidates both adapter identities and exact
+  target immediately before source ownership and every display-mode attempt, caps all
+  driver-returned private-data allocations, validates the returned private-data
+  slice, and the worker independently rechecks the same target after helper exit.
+  Reconnect reapplies the transaction only when HDR is
+  requested and no longer active. No Windows DLL is patched or replaced.
+- Private-worker application launches remain inside the worker's kill-on-close
+  job instead of requesting job breakaway, so broker teardown retains containment.
+- Remaining production gates are explicit: package/provision the proven provider
+  and an authenticated machine-name listener without repeating the unsafe login
+  experiment; compile and live-validate the new D3DKMT activator against the
+  signed 1.3.0.27 Remote IDD contract; prove the acquired BGRA8 pixel semantics
+  and Remote Audio capture path; notify the broker on abrupt child-stream loss;
+  remove stale randomized storage roots safely; prove complete ACL revocation (or
+  adopt a unique restricted SID); measure first-seat launch latency; test
+  remote/NAT port routing; and isolate any Steam/global IPC that remains
+  cross-session. None of this source-only task has yet been compiled, packaged,
+  installed, or exercised live.
 
 ### Source defect found during the spike
 
@@ -1051,10 +1151,11 @@ Work these in order unless new evidence changes the dependency chain.
      BGRA8 surface and compare it to the application backbuffer, WGC oracle, and
      encoded Main10 output. Record transfer function, primaries, range, clipping,
      and SDR-white behavior.
-   - Productize only the minimum seat-scoped D3D11/DXGI/D3DKMT helper sequence,
-     launched after the Remote IDD commits 10 bpc and before the game. Retain
-     exact adapter/source matching, bounded timeouts, post-release verification,
-     and fail-closed cleanup. Do not carry forward BGRA8 swapchain rejection.
+   - The source-only runtime now contains the minimum disposable seat-scoped
+     D3D11/DXGI/D3DKMT helper sequence, launched after the Remote IDD reports 10
+     bpc and before the game. Compile/package it, then reprove exact adapter/source
+     matching, bounded timeout, post-release verification, and fail-closed cleanup
+     on the signed driver. Do not carry forward BGRA8 swapchain rejection.
    - Prove persistence across long sessions, multiple HDR applications,
      reconnect, mode changes, and helper/host failure. Reapply only when advanced
      color is no longer active; never retain source ownership or the temporary

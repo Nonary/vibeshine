@@ -48,7 +48,9 @@
       <Custom Action="StartSvcQuiet" Before="InstallFinalize">Installed AND NOT REMOVE AND UILevel &lt; 5</Custom>
 
       <!-- Manual uninstall: process/legacy service cleanup -->
-      <Custom Action="SetKillProcsQuiet" After="StopSvcQuiet">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="SetCleanupTerminalSeats" After="StopSvcQuiet">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="CleanupTerminalSeats" After="SetCleanupTerminalSeats">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="SetKillProcsQuiet" After="CleanupTerminalSeats">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <Custom Action="KillProcsQuiet" After="SetKillProcsQuiet">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <Custom Action="SetRemoveServiceQuiet" After="KillProcsQuiet">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <Custom Action="RemoveServiceQuiet" After="SetRemoveServiceQuiet">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
