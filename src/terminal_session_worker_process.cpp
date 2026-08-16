@@ -624,7 +624,7 @@ namespace terminal_session::worker {
     auto named_factory = std::make_unique<platf::dxgi::NamedPipeFactory>();
     const std::wstring user_sid = wide(resource_.user_sid);
     named_factory->set_security_descriptor_builder([user_sid](SECURITY_DESCRIPTOR &desc, PACL *out_pacl) {
-      const std::wstring sddl = L"D:P(A;;GA;;;SY)(A;;GA;;;" + user_sid + L")";
+      const std::wstring sddl = L"D:P(A;;GA;;;SY)(A;;GRGW;;;" + user_sid + L")";
       PSECURITY_DESCRIPTOR raw = nullptr;
       if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &raw, nullptr) || !raw) return false;
       BOOL dacl_present = FALSE;
