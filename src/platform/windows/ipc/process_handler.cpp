@@ -14,6 +14,7 @@
 #include <UserEnv.h>
 #include <windows.h>
 #include <WtsApi32.h>
+#include <Sddl.h>
 
 // standard includes
 #include "src/logging.h"
@@ -21,6 +22,9 @@
 #include "src/utility.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <cwchar>
+#include <optional>
 #include <system_error>
 #include <vector>
 
@@ -28,6 +32,36 @@ namespace {
 
   constexpr wchar_t kDefaultDesktopW[] = L"winsta0\\default";
   constexpr wchar_t kWinlogonDesktopW[] = L"winsta0\\winlogon";
+
+  std::optional<std::wstring> token_sid_string(HANDLE token) {
+    DWORD size = 0;
+    (void) GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+    if (!size) return std::nullopt;
+    std::vector<std::uint8_t> buffer(size);
+    if (!GetTokenInformation(token, TokenUser, buffer.data(), size, &size)) return std::nullopt;
+    LPWSTR sid = nullptr;
+    if (!ConvertSidToStringSidW(reinterpret_cast<PTOKEN_USER>(buffer.data())->User.Sid, &sid) || !sid) {
+      return std::nullopt;
+    }
+    std::wstring result {sid};
+    LocalFree(sid);
+    return result;
+  }
+
+  PSECURITY_DESCRIPTOR managed_process_security_descriptor(HANDLE token, const ACCESS_MASK user_mask) {
+    const auto sid = token_sid_string(token);
+    if (!sid) return nullptr;
+    wchar_t mask_text[9] {};
+    if (swprintf_s(mask_text, _countof(mask_text), L"%08X", user_mask) <= 0) return nullptr;
+    const auto sddl = L"O:SYG:SYD:P(A;;GA;;;SY)(A;;0x" +
+      std::wstring {mask_text} + L";;;" + *sid + L")";
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+          sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)) {
+      return nullptr;
+    }
+    return descriptor;
+  }
 
   bool start_as_system_in_active_console_session(
     const std::wstring &cmd_line,
@@ -221,13 +255,36 @@ bool ProcessHandler::start(
         }
       });
 
+      PSECURITY_DESCRIPTOR process_descriptor = nullptr;
+      PSECURITY_DESCRIPTOR thread_descriptor = nullptr;
+      auto free_descriptors = util::fail_guard([&]() {
+        if (process_descriptor) LocalFree(process_descriptor);
+        if (thread_descriptor) LocalFree(thread_descriptor);
+      });
+      SECURITY_ATTRIBUTES process_security {
+        .nLength = sizeof(SECURITY_ATTRIBUTES), .lpSecurityDescriptor = nullptr, .bInheritHandle = FALSE};
+      SECURITY_ATTRIBUTES thread_security {
+        .nLength = sizeof(SECURITY_ATTRIBUTES), .lpSecurityDescriptor = nullptr, .bInheritHandle = FALSE};
+      if (!use_job_) {
+        process_descriptor = managed_process_security_descriptor(
+          user_token, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE);
+        thread_descriptor = managed_process_security_descriptor(
+          user_token, THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE);
+        if (!process_descriptor || !thread_descriptor) {
+          BOOST_LOG(error) << "Failed to protect managed helper process objects.";
+          return false;
+        }
+        process_security.lpSecurityDescriptor = process_descriptor;
+        thread_security.lpSecurityDescriptor = thread_descriptor;
+      }
+
       // Launch in the user's context with their environment and an explicit working directory
       ret = CreateProcessAsUserW(
         user_token,
         nullptr,
         (LPWSTR) cmd_line.c_str(),
-        nullptr,
-        nullptr,
+        process_security.lpSecurityDescriptor ? &process_security : nullptr,
+        thread_security.lpSecurityDescriptor ? &thread_security : nullptr,
         FALSE,
         creation_flags,
         env_block,
@@ -262,11 +319,29 @@ bool ProcessHandler::start(
     }
   } else {
     // Non-SYSTEM: inherit our environment but still supply a sensible working directory
+    PSECURITY_DESCRIPTOR process_descriptor = nullptr;
+    PSECURITY_DESCRIPTOR thread_descriptor = nullptr;
+    auto free_descriptors = util::fail_guard([&]() {
+      if (process_descriptor) LocalFree(process_descriptor);
+      if (thread_descriptor) LocalFree(thread_descriptor);
+    });
+    HANDLE current_token = nullptr;
+    if (!use_job_ && OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &current_token)) {
+      process_descriptor = managed_process_security_descriptor(
+        current_token, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE);
+      thread_descriptor = managed_process_security_descriptor(
+        current_token, THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE);
+      CloseHandle(current_token);
+    }
+    SECURITY_ATTRIBUTES process_security {
+      .nLength = sizeof(SECURITY_ATTRIBUTES), .lpSecurityDescriptor = process_descriptor, .bInheritHandle = FALSE};
+    SECURITY_ATTRIBUTES thread_security {
+      .nLength = sizeof(SECURITY_ATTRIBUTES), .lpSecurityDescriptor = thread_descriptor, .bInheritHandle = FALSE};
     ret = CreateProcessW(
       nullptr,
       (LPWSTR) cmd_line.c_str(),
-      nullptr,
-      nullptr,
+      process_descriptor ? &process_security : nullptr,
+      thread_descriptor ? &thread_security : nullptr,
       FALSE,
       creation_flags,
       nullptr,

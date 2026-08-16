@@ -79,11 +79,6 @@ namespace display_helper::v2 {
         BOOST_LOG(error) << "Display helper v2: broker failed to query Remote IDD state for session " << *session_id << ".";
         return std::nullopt;
       }
-      if (std::all_of(queried->snapshot_mac_key.begin(), queried->snapshot_mac_key.end(), [](const auto byte) { return byte == 0; })) {
-        failure_status = ApplyStatus::HelperUnavailable;
-        return std::nullopt;
-      }
-      set_managed_snapshot_mac_key(queried->snapshot_mac_key);
       return RemoteDisplayTarget {
         .display_id = queried->display_id,
         .width = queried->width,

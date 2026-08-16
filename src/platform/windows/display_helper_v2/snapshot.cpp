@@ -51,7 +51,7 @@ namespace display_helper::v2 {
   }
 
   std::optional<codec::ParsedSnapshot> TextSnapshotStorage::load_with_metadata(SnapshotTier tier) {
-    const auto text = text_storage_.read(key_for(tier));
+    const auto text = text_storage_.read(key_for(tier), tier);
     if (!text) {
       return std::nullopt;
     }
@@ -69,7 +69,7 @@ namespace display_helper::v2 {
 
   bool TextSnapshotStorage::save(SnapshotTier tier, const Snapshot &snapshot, const codec::layout_rotation_map_t &layout_rotations) {
     const auto text = codec::serialize_snapshot(snapshot, layout_rotations);
-    return text_storage_.write_atomically(key_for(tier), text);
+    return text_storage_.write_atomically(key_for(tier), text, tier);
   }
 
   bool TextSnapshotStorage::remove(SnapshotTier tier) {

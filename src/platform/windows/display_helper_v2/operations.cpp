@@ -907,6 +907,13 @@ namespace display_helper::v2 {
       BOOST_LOG(info) << "Skipping golden: recent session restore success guard active.";
       return true;
     }
+    if (display_helper_session::has_managed_context()) {
+      // A managed golden is a broker-attested mode/HDR record with no physical
+      // topology. Its sole target was validated while loading the tier.
+      return !display_helper_session::managed_context_is_valid() ||
+             !display_helper_session::is_non_console_interactive() ||
+             golden.m_topology.size() != 0;
+    }
     // Ensure all devices in golden exist now
     std::set<std::string> golden_devices;
     for (const auto &grp : golden.m_topology) {
@@ -993,7 +1000,8 @@ namespace display_helper::v2 {
       if (should_skip_golden(golden->snapshot)) {
         return false;
       }
-      if (!display_.validate_topology(golden->snapshot.m_topology)) {
+      if (!display_helper_session::has_managed_context() &&
+          !display_.validate_topology(golden->snapshot.m_topology)) {
         golden_health_.note_issue("invalid_topology");
         return false;
       }

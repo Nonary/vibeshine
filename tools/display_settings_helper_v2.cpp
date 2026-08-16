@@ -580,7 +580,10 @@ namespace {
 
   /// Validate a snapshot file found in a search root. Managed snapshots are a
   /// broker-attested mode/HDR record, not a physical topology payload.
-  SnapshotValidation validate_snapshot_file(const std::filesystem::path &path, const char *label) {
+  SnapshotValidation validate_snapshot_file(
+    const std::filesystem::path &path,
+    const display_helper::v2::SnapshotTier tier,
+    const char *label) {
     display_helper::v2::AtomicFileTextStorage files {true};
     if (display_helper_session::has_managed_context()) {
       if (!display_helper_session::managed_context_is_valid() ||
@@ -591,12 +594,10 @@ namespace {
         terminal_session::display::operation::query,
         display_helper_session::managed_generation());
       if (!queried || queried->result != static_cast<std::uint8_t>(terminal_session::display::result::success) ||
-          queried->display_id == 0 ||
-          std::all_of(queried->snapshot_mac_key.begin(), queried->snapshot_mac_key.end(), [](const auto byte) { return byte == 0; })) {
+          queried->display_id == 0) {
         return SnapshotValidation::Unavailable;
       }
-      display_helper::v2::set_managed_snapshot_mac_key(queried->snapshot_mac_key);
-      const auto text = files.read(path.string());
+      const auto text = files.read(path.string(), tier);
       if (!text) {
         return SnapshotValidation::Unavailable;
       }
@@ -627,8 +628,8 @@ namespace {
     return SnapshotValidation::Invalid;
   }
 
-  /// Copy validated snapshots from any search root into the active snapshot dir
-  /// so SYSTEM/user contexts and old install layouts share one restore chain.
+  /// Re-seal authenticated snapshots from any search root into the active
+  /// snapshot dir so tier sequence state is never copied across paths.
   void adopt_snapshots_from_search_roots(
     const std::vector<std::filesystem::path> &search_roots,
     const std::filesystem::path &active_current,
@@ -637,13 +638,19 @@ namespace {
       const auto paths = display_helper_paths::make_snapshot_paths(root);
       std::error_code ec_cur;
       if (std::filesystem::exists(paths.session_current, ec_cur) && !ec_cur) {
-        if (validate_snapshot_file(paths.session_current, "session") == SnapshotValidation::Valid) {
+        if (validate_snapshot_file(paths.session_current, display_helper::v2::SnapshotTier::Current, "session") == SnapshotValidation::Valid) {
           BOOST_LOG(info) << "Existing current session snapshot detected; will preserve until confirmed restore: "
                           << paths.session_current.string();
           if (paths.session_current != active_current) {
             std::error_code ec_copy;
-            std::filesystem::create_directories(active_current.parent_path(), ec_copy);
-            std::filesystem::copy_file(paths.session_current, active_current, std::filesystem::copy_options::overwrite_existing, ec_copy);
+            if (!display_helper_session::has_managed_context()) {
+              std::filesystem::create_directories(active_current.parent_path(), ec_copy);
+            }
+            display_helper::v2::AtomicFileTextStorage files {true};
+            const auto authenticated = files.read(paths.session_current.string(), display_helper::v2::SnapshotTier::Current);
+            if (authenticated) {
+              (void) files.write_atomically(active_current.string(), *authenticated, display_helper::v2::SnapshotTier::Current);
+            }
           }
           break;
         }
@@ -653,11 +660,17 @@ namespace {
       const auto paths = display_helper_paths::make_snapshot_paths(root);
       std::error_code ec_prev;
       if (std::filesystem::exists(paths.session_previous, ec_prev) && !ec_prev) {
-        if (validate_snapshot_file(paths.session_previous, "session") == SnapshotValidation::Valid) {
+        if (validate_snapshot_file(paths.session_previous, display_helper::v2::SnapshotTier::Previous, "session") == SnapshotValidation::Valid) {
           if (paths.session_previous != active_previous) {
             std::error_code ec_copy;
-            std::filesystem::create_directories(active_previous.parent_path(), ec_copy);
-            std::filesystem::copy_file(paths.session_previous, active_previous, std::filesystem::copy_options::overwrite_existing, ec_copy);
+            if (!display_helper_session::has_managed_context()) {
+              std::filesystem::create_directories(active_previous.parent_path(), ec_copy);
+            }
+            display_helper::v2::AtomicFileTextStorage files {true};
+            const auto authenticated = files.read(paths.session_previous.string(), display_helper::v2::SnapshotTier::Previous);
+            if (authenticated) {
+              (void) files.write_atomically(active_previous.string(), *authenticated, display_helper::v2::SnapshotTier::Previous);
+            }
           }
           break;
         }
@@ -771,7 +784,7 @@ int run_v2_helper(int argc, char *argv[]) {
   {
     std::error_code ec_golden;
     if (std::filesystem::exists(paths.golden, ec_golden) && !ec_golden) {
-      (void) validate_snapshot_file(paths.golden, "golden");
+      (void) validate_snapshot_file(paths.golden, display_helper::v2::SnapshotTier::Golden, "golden");
     }
   }
 

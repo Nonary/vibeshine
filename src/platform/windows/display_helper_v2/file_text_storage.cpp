@@ -7,16 +7,15 @@
 #include <cstring>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <string_view>
+#include <vector>
 
-#include <openssl/evp.h>
-#include <openssl/hmac.h>
-#include <openssl/crypto.h>
+#include <openssl/rand.h>
+#include <openssl/sha.h>
 
 #include "src/platform/windows/display_helper_session.h"
+#include "src/terminal_session_display_protocol.h"
 
 #ifdef _WIN32
   #include <windows.h>
@@ -24,44 +23,36 @@
 
 namespace display_helper::v2 {
   namespace {
-    std::mutex snapshot_mac_mutex;
-    std::optional<std::array<std::uint8_t, 32>> snapshot_mac_key;
-
 #pragma pack(push, 1)
     struct snapshot_envelope_header {
       std::uint8_t magic[8];
       std::uint32_t version {};
       std::uint32_t session_id {};
       std::uint64_t generation {};
+      std::uint64_t display_id {};
+      std::uint32_t tier {};
+      std::uint64_t sequence {};
       std::uint32_t payload_size {};
-      std::uint8_t mac[32] {};
+      std::array<std::uint8_t, 32> digest {};
+      std::array<std::uint8_t, 32> tag {};
     };
 #pragma pack(pop)
 
-    static_assert(sizeof(snapshot_envelope_header) == 60);
+    static_assert(sizeof(snapshot_envelope_header) == 112);
+
+    // The helper stores only a broker tag. The signing key and replay state
+    // remain exclusively in the SYSTEM terminal worker broker.
 
     constexpr std::uint8_t kSnapshotEnvelopeMagic[8] {'V', 'S', 'N', 'A', 'P', 'M', 'A', 'C'};
     constexpr std::uint32_t kSnapshotEnvelopeVersion = 1;
 
-    std::optional<std::array<std::uint8_t, 32>> current_snapshot_mac_key() {
-      std::lock_guard lock(snapshot_mac_mutex);
-      return snapshot_mac_key;
+    std::array<std::uint8_t, 32> snapshot_digest(const std::string &payload) {
+      std::array<std::uint8_t, 32> digest {};
+      SHA256(reinterpret_cast<const unsigned char *>(payload.data()), payload.size(), digest.data());
+      return digest;
     }
 
-    bool snapshot_hmac(
-      const std::array<std::uint8_t, 32> &key,
-      const std::string_view data,
-      std::array<std::uint8_t, 32> &out) {
-      unsigned int output_size = 0;
-      return HMAC(
-               EVP_sha256(), key.data(), static_cast<int>(key.size()),
-               reinterpret_cast<const unsigned char *>(data.data()), data.size(),
-               out.data(), &output_size) != nullptr && output_size == out.size();
-    }
-
-    std::optional<std::string> unwrap_snapshot(
-      const std::string &data,
-      const std::array<std::uint8_t, 32> &key) {
+    std::optional<std::string> unwrap_snapshot(const std::string &data, const SnapshotTier tier) {
       if (data.size() < sizeof(snapshot_envelope_header)) return std::nullopt;
       snapshot_envelope_header header {};
       std::memcpy(&header, data.data(), sizeof(header));
@@ -69,52 +60,50 @@ namespace display_helper::v2 {
           header.version != kSnapshotEnvelopeVersion ||
           header.session_id != display_helper_session::managed_context().session_id ||
           header.generation != display_helper_session::managed_generation() ||
+          header.tier != static_cast<std::uint32_t>(tier) || header.display_id == 0 || header.sequence == 0 ||
           header.payload_size > 1024u * 1024u ||
           data.size() != sizeof(header) + header.payload_size) {
         return std::nullopt;
       }
       const auto payload = data.substr(sizeof(header), header.payload_size);
-      std::array<std::uint8_t, 32> expected {};
-      std::string authenticated_data = data.substr(0, offsetof(snapshot_envelope_header, mac));
-      authenticated_data += payload;
-      if (!snapshot_hmac(key, authenticated_data, expected) ||
-          CRYPTO_memcmp(expected.data(), header.mac, expected.size()) != 0) {
+      if (snapshot_digest(payload) != header.digest) {
         return std::nullopt;
       }
-      return payload;
+      const auto verified = terminal_session::display::transact_snapshot(
+        terminal_session::display::operation::verify_snapshot,
+        display_helper_session::managed_generation(),
+        header.tier, header.sequence, header.display_id, header.digest, header.tag);
+      return verified && verified->result == static_cast<std::uint8_t>(terminal_session::display::result::success) ?
+               std::optional<std::string> {payload} : std::nullopt;
     }
 
-    std::optional<std::string> wrap_snapshot(
-      const std::string &payload,
-      const std::array<std::uint8_t, 32> &key) {
+    std::optional<std::string> wrap_snapshot(const std::string &payload, const SnapshotTier tier) {
       if (payload.size() > 1024u * 1024u) return std::nullopt;
+      const auto digest = snapshot_digest(payload);
+      const auto sealed = terminal_session::display::transact_snapshot(
+        terminal_session::display::operation::seal_snapshot,
+        display_helper_session::managed_generation(), static_cast<std::uint32_t>(tier), 0, 0, digest);
+      if (!sealed || sealed->result != static_cast<std::uint8_t>(terminal_session::display::result::success) ||
+          sealed->display_id == 0 || sealed->snapshot_sequence == 0 ||
+          std::all_of(sealed->snapshot_tag.begin(), sealed->snapshot_tag.end(), [](const auto byte) { return byte == 0; })) {
+        return std::nullopt;
+      }
       snapshot_envelope_header header {};
       std::memcpy(header.magic, kSnapshotEnvelopeMagic, sizeof(header.magic));
       header.version = kSnapshotEnvelopeVersion;
       header.session_id = display_helper_session::managed_context().session_id;
       header.generation = display_helper_session::managed_generation();
+      header.display_id = sealed->display_id;
+      header.tier = static_cast<std::uint32_t>(tier);
+      header.sequence = sealed->snapshot_sequence;
       header.payload_size = static_cast<std::uint32_t>(payload.size());
-      std::string authenticated_data {
-        reinterpret_cast<const char *>(&header), offsetof(snapshot_envelope_header, mac)};
-      authenticated_data += payload;
-      std::array<std::uint8_t, 32> mac {};
-      if (!snapshot_hmac(key, authenticated_data, mac)) return std::nullopt;
-      std::memcpy(header.mac, mac.data(), mac.size());
+      header.digest = digest;
+      header.tag = sealed->snapshot_tag;
       std::string result {
         reinterpret_cast<const char *>(&header), sizeof(header)};
       result += payload;
       return result;
     }
-  }
-
-  void set_managed_snapshot_mac_key(const std::array<std::uint8_t, 32> &key) {
-    std::lock_guard lock(snapshot_mac_mutex);
-    snapshot_mac_key = key;
-  }
-
-  void clear_managed_snapshot_mac_key() {
-    std::lock_guard lock(snapshot_mac_mutex);
-    snapshot_mac_key.reset();
   }
 
 #ifdef _WIN32
@@ -143,10 +132,28 @@ namespace display_helper::v2 {
              normalized_path(std::wstring {actual, actual_length}) ==
                normalized_path(std::wstring {expected, expected_length});
     }
+
+    std::optional<std::wstring> unpredictable_temp_suffix() {
+      std::array<std::uint8_t, 16> bytes {};
+      if (RAND_bytes(bytes.data(), static_cast<int>(bytes.size())) != 1) return std::nullopt;
+      constexpr wchar_t hex[] = L"0123456789abcdef";
+      std::wstring suffix;
+      suffix.reserve(bytes.size() * 2);
+      for (const auto byte : bytes) {
+        suffix.push_back(hex[byte >> 4]);
+        suffix.push_back(hex[byte & 0x0f]);
+      }
+      OPENSSL_cleanse(bytes.data(), bytes.size());
+      return suffix;
+    }
   }
 #endif
 
   std::optional<std::string> AtomicFileTextStorage::read(const std::string &key) {
+    return read(key, SnapshotTier::Current);
+  }
+
+  std::optional<std::string> AtomicFileTextStorage::read(const std::string &key, const SnapshotTier tier) {
     const std::uintmax_t kMaxSnapshotBytes = snapshot_envelope_ && display_helper_session::has_managed_context() ?
       1024u * 1024u + sizeof(snapshot_envelope_header) : 1024u * 1024u;
     const std::filesystem::path path {key};
@@ -157,7 +164,7 @@ namespace display_helper::v2 {
     const auto parent = path.parent_path();
     const auto parent_handle = CreateFileW(
       parent.wstring().c_str(), FILE_READ_ATTRIBUTES,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
       OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (parent_handle == INVALID_HANDLE_VALUE) return std::nullopt;
     const auto close_parent = std::unique_ptr<void, void (*)(void *)> {
@@ -197,8 +204,7 @@ namespace display_helper::v2 {
       offset += read;
     }
     if (snapshot_envelope_ && display_helper_session::has_managed_context()) {
-      const auto mac_key = current_snapshot_mac_key();
-      return mac_key ? unwrap_snapshot(data, *mac_key) : std::nullopt;
+      return unwrap_snapshot(data, tier);
     }
     return data;
 #else
@@ -236,11 +242,16 @@ namespace display_helper::v2 {
   }
 
   bool AtomicFileTextStorage::write_atomically(const std::string &key, const std::string &text) {
+    return write_atomically(key, text, SnapshotTier::Current);
+  }
+
+  bool AtomicFileTextStorage::write_atomically(
+    const std::string &key,
+    const std::string &text,
+    const SnapshotTier tier) {
     std::string stored_text = text;
     if (snapshot_envelope_ && display_helper_session::has_managed_context()) {
-      const auto mac_key = current_snapshot_mac_key();
-      if (!mac_key) return false;
-      const auto wrapped = wrap_snapshot(text, *mac_key);
+      const auto wrapped = wrap_snapshot(text, tier);
       if (!wrapped) return false;
       stored_text = *wrapped;
     }
@@ -251,12 +262,14 @@ namespace display_helper::v2 {
       return false;
     }
     std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
+    if (!(snapshot_envelope_ && display_helper_session::has_managed_context())) {
+      std::filesystem::create_directories(path.parent_path(), ec);
+    }
 #ifdef _WIN32
     const auto parent = path.parent_path();
     const auto parent_handle = CreateFileW(
-      parent.wstring().c_str(), FILE_READ_ATTRIBUTES,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      parent.wstring().c_str(), DELETE | FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
       OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (parent_handle == INVALID_HANDLE_VALUE) return false;
     const auto close_parent = std::unique_ptr<void, void (*)(void *)> {
@@ -268,10 +281,12 @@ namespace display_helper::v2 {
         !handle_matches_path(parent_handle, parent)) {
       return false;
     }
+    const auto suffix = unpredictable_temp_suffix();
+    if (!suffix) return false;
     auto temporary = path;
-    temporary += L".tmp." + std::to_wstring(GetCurrentProcessId()) + L"." + std::to_wstring(GetTickCount64());
+    temporary += L".tmp." + *suffix;
     const auto temporary_handle = CreateFileW(
-      temporary.wstring().c_str(), GENERIC_WRITE,
+      temporary.wstring().c_str(), GENERIC_WRITE | DELETE,
       0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (temporary_handle == INVALID_HANDLE_VALUE) return false;
     auto close_temporary = std::unique_ptr<void, void (*)(void *)> {
@@ -294,12 +309,23 @@ namespace display_helper::v2 {
       std::filesystem::remove(temporary, ec);
       return false;
     }
-    close_temporary.release();
-    CloseHandle(temporary_handle);
-    if (!MoveFileExW(temporary.wstring().c_str(), path.wstring().c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    const auto target_name = path.filename().wstring();
+    const auto rename_size = offsetof(FILE_RENAME_INFO, FileName) + target_name.size() * sizeof(wchar_t);
+    std::vector<std::uint8_t> rename_buffer(rename_size);
+    auto *rename_info = reinterpret_cast<FILE_RENAME_INFO *>(rename_buffer.data());
+    rename_info->ReplaceIfExists = TRUE;
+    rename_info->RootDirectory = parent_handle;
+    rename_info->FileNameLength = static_cast<DWORD>(target_name.size() * sizeof(wchar_t));
+    std::memcpy(rename_info->FileName, target_name.data(), rename_info->FileNameLength);
+    if (!SetFileInformationByHandle(
+          temporary_handle, FileRenameInfo, rename_info, static_cast<DWORD>(rename_buffer.size()))) {
+      close_temporary.release();
+      CloseHandle(temporary_handle);
       std::filesystem::remove(temporary, ec);
       return false;
     }
+    close_temporary.release();
+    CloseHandle(temporary_handle);
     const auto final_handle = CreateFileW(
       path.wstring().c_str(), GENERIC_READ,
       FILE_SHARE_READ, nullptr, OPEN_EXISTING,
@@ -326,24 +352,51 @@ namespace display_helper::v2 {
         return false;
       }
     }
-    if (!std::filesystem::exists(path, ec) || ec) {
-      std::filesystem::rename(temporary, path, ec);
-      if (!ec) {
-        return true;
-      }
-    }
-    std::filesystem::copy_file(temporary, path, std::filesystem::copy_options::overwrite_existing, ec);
+    std::filesystem::rename(temporary, path, ec);
     if (ec) {
+      std::filesystem::remove(temporary, ec);
       return false;
     }
-    std::filesystem::remove(temporary, ec);
     return true;
 #endif
   }
 
   bool AtomicFileTextStorage::remove(const std::string &key) {
+#ifdef _WIN32
+    const std::filesystem::path path {key};
+    const auto parent = path.parent_path();
+    const auto parent_handle = CreateFileW(
+      parent.wstring().c_str(), FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (parent_handle == INVALID_HANDLE_VALUE) return false;
+    const auto close_parent = std::unique_ptr<void, void (*)(void *)> {
+      parent_handle, [](void *value) { CloseHandle(value); }};
+    BY_HANDLE_FILE_INFORMATION parent_info {};
+    if (!GetFileInformationByHandle(parent_handle, &parent_info) ||
+        (parent_info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != FILE_ATTRIBUTE_DIRECTORY ||
+        !handle_matches_path(parent_handle, parent)) {
+      return false;
+    }
+    const auto file_handle = CreateFileW(
+      path.wstring().c_str(), DELETE | FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (file_handle == INVALID_HANDLE_VALUE) return false;
+    const auto close_file = std::unique_ptr<void, void (*)(void *)> {
+      file_handle, [](void *value) { CloseHandle(value); }};
+    BY_HANDLE_FILE_INFORMATION info {};
+    if (!GetFileInformationByHandle(file_handle, &info) ||
+        (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0 ||
+        !handle_matches_path(file_handle, path)) {
+      return false;
+    }
+    FILE_DISPOSITION_INFO disposition {.DeleteFile = TRUE};
+    return SetFileInformationByHandle(file_handle, FileDispositionInfo, &disposition, sizeof(disposition)) != FALSE;
+#else
     std::error_code ec;
     return std::filesystem::remove(std::filesystem::path {key}, ec);
+#endif
   }
 
   bool AtomicFileTextStorage::exists(const std::string &key) {

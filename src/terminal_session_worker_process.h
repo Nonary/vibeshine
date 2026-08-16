@@ -49,7 +49,15 @@ namespace terminal_session::worker {
     // the first exact sole-target attestation and require it for this worker
     // until full stop.
     std::optional<terminal_session::hdr::target_binding_t> hdr_target_binding_;
-    std::array<std::uint8_t, 32> snapshot_mac_key_ {};
+    struct snapshot_tier_state {
+      std::uint64_t sequence {};
+      std::array<std::uint8_t, 32> digest {};
+      std::array<std::uint8_t, 32> tag {};
+    };
+    // Never sent over the helper pipe: only this SYSTEM broker can seal or
+    // verify generation-bound snapshot digests.
+    std::array<std::uint8_t, 32> snapshot_auth_key_ {};
+    std::array<snapshot_tier_state, 3> snapshot_tiers_ {};
     steam_offline::registration_t steam_offline_registration_;
     bool steam_offline_isolation_ {};
     bool cleanup_pending_ {};

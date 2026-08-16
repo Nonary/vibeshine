@@ -104,5 +104,49 @@ namespace terminal_session::display {
     }
     return response;
   }
+
+  std::optional<response_t> transact_snapshot(
+    const operation operation_code,
+    const std::uint64_t generation,
+    const std::uint32_t tier,
+    const std::uint64_t sequence,
+    const std::uint64_t display_id,
+    const std::array<std::uint8_t, 32> &digest,
+    const std::array<std::uint8_t, 32> &tag) {
+    const auto pipe_name = display_helper_session::display_pipe_name();
+    if (!pipe_name || !display_helper_session::managed_context_is_valid() ||
+        generation == 0 || generation != display_helper_session::managed_generation() || tier > 2) {
+      return std::nullopt;
+    }
+    request_t request {
+      .operation = static_cast<std::uint8_t>(operation_code),
+      .generation = generation,
+      .request_id = next_request_id.fetch_add(1, std::memory_order_relaxed),
+      .snapshot_tier = tier,
+      .snapshot_sequence = sequence,
+      .snapshot_display_id = display_id,
+      .snapshot_digest = digest,
+      .snapshot_tag = tag,
+    };
+    if (!valid_request(request)) return std::nullopt;
+
+    platf::dxgi::FramedPipeFactory factory {std::make_unique<platf::dxgi::NamedPipeFactory>()};
+    auto pipe = factory.create_client(*pipe_name);
+    if (!pipe || !authenticate_broker_peer(*pipe) ||
+        !pipe->send(std::span<const std::uint8_t> {
+          reinterpret_cast<const std::uint8_t *>(&request), sizeof(request)}, 5000)) {
+      return std::nullopt;
+    }
+    std::array<std::uint8_t, max_message_size> bytes {};
+    std::size_t size = 0;
+    if (pipe->receive(bytes, size, 5000) != platf::dxgi::PipeResult::Success) return std::nullopt;
+    response_t response {};
+    if (!decode(bytes.data(), size, response) || !valid_response(response) ||
+        response.operation != request.operation || response.request_id != request.request_id ||
+        response.generation != request.generation) {
+      return std::nullopt;
+    }
+    return response;
+  }
 }
 #endif

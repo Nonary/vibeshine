@@ -1230,9 +1230,8 @@ namespace {
       ULARGE_INTEGER creation_value {};
       creation_value.LowPart = created.dwLowDateTime;
       creation_value.HighPart = created.dwHighDateTime;
-      platf::display_helper_client::set_managed_helper_identity(
-        helper_pid, creation_value.QuadPart, helper_session, helper.wstring());
-      return true;
+      return platf::display_helper_client::set_managed_helper_identity(
+        helper_pid, creation_value.QuadPart, helper_session, helper.wstring(), process_handle);
     };
     // Already started? Verify liveness to avoid stale or wedged state
     if (HANDLE h = helper_proc().get_process_handle(); h != nullptr) {

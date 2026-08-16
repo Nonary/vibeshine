@@ -6,6 +6,8 @@
 
 #ifdef _WIN32
 
+  #include <windows.h>
+
   #include <cstdint>
   #include <chrono>
   #include <functional>
@@ -14,11 +16,12 @@
   #include <string_view>
 
 namespace platf::display_helper_client {
-  void set_managed_helper_identity(
+  bool set_managed_helper_identity(
     std::uint32_t pid,
     std::uint64_t creation_time,
     std::uint32_t session_id,
-    const std::wstring &canonical_image_path);
+    const std::wstring &canonical_image_path,
+    HANDLE owned_process_handle);
 
   void clear_managed_helper_identity();
 

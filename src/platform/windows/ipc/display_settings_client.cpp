@@ -41,6 +41,7 @@ namespace platf::display_helper_client {
       std::uint64_t creation_time {};
       std::uint32_t session_id {};
       std::wstring canonical_image_path;
+      winrt::handle owned_process;
     };
 
     std::mutex managed_helper_identity_mutex;
@@ -124,13 +125,15 @@ namespace platf::display_helper_client {
       DWORD server_pid = 0;
       if (!pipe.get_server_process_id(server_pid) || server_pid == 0 ||
           server_pid != managed_helper_identity->pid) return false;
-      winrt::handle process {OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server_pid)};
-      if (!process || process_creation_time(process.get()) != managed_helper_identity->creation_time) return false;
+      if (!managed_helper_identity->owned_process ||
+          GetProcessId(managed_helper_identity->owned_process.get()) != server_pid) return false;
+      HANDLE process = managed_helper_identity->owned_process.get();
+      if (process_creation_time(process) != managed_helper_identity->creation_time) return false;
       DWORD session_id = 0;
       if (!ProcessIdToSessionId(server_pid, &session_id) || session_id != managed_helper_identity->session_id) return false;
       wchar_t image[MAX_PATH] {};
       DWORD length = _countof(image);
-      if (!QueryFullProcessImageNameW(process.get(), 0, image, &length) || length == 0 ||
+      if (!QueryFullProcessImageNameW(process, 0, image, &length) || length == 0 ||
           canonical_image(std::wstring {image, length}) != managed_helper_identity->canonical_image_path) return false;
       const auto parent = parent_process_id(server_pid);
       return parent && *parent == GetCurrentProcessId();
@@ -138,10 +141,21 @@ namespace platf::display_helper_client {
 
   }  // namespace
 
-  void set_managed_helper_identity(const std::uint32_t pid, const std::uint64_t creation_time,
-                                   const std::uint32_t session_id, const std::wstring &image_path) {
+  bool set_managed_helper_identity(const std::uint32_t pid, const std::uint64_t creation_time,
+                                   const std::uint32_t session_id, const std::wstring &image_path,
+                                   const HANDLE owned_process_handle) {
+    HANDLE retained = nullptr;
+    if (!owned_process_handle || !DuplicateHandle(
+          GetCurrentProcess(), owned_process_handle, GetCurrentProcess(), &retained,
+          PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0)) {
+      std::lock_guard lock(managed_helper_identity_mutex);
+      managed_helper_identity.reset();
+      return false;
+    }
     std::lock_guard lock(managed_helper_identity_mutex);
-    managed_helper_identity = ManagedHelperIdentity {pid, creation_time, session_id, canonical_image(image_path)};
+    managed_helper_identity = ManagedHelperIdentity {
+      pid, creation_time, session_id, canonical_image(image_path), winrt::handle {retained}};
+    return true;
   }
 
   void clear_managed_helper_identity() {

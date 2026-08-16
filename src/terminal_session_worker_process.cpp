@@ -7,6 +7,8 @@
   #include "terminal_session_worker.h"
   #include "platform/windows/ipc/pipes.h"
   #include <openssl/crypto.h>
+  #include <openssl/evp.h>
+  #include <openssl/hmac.h>
   #include <openssl/rand.h>
   #include <Windows.h>
   #include <Aclapi.h>
@@ -20,6 +22,7 @@
   #include <cstring>
   #include <cwctype>
   #include <filesystem>
+  #include <limits>
   #include <span>
   #include <sstream>
   #include <string_view>
@@ -64,6 +67,30 @@ namespace terminal_session::worker {
       }
     };
     using unique_local_memory = std::unique_ptr<void, local_free>;
+
+#pragma pack(push, 1)
+    struct snapshot_auth_data {
+      std::uint32_t session_id {};
+      std::uint64_t generation {};
+      std::uint64_t display_id {};
+      std::uint32_t tier {};
+      std::uint64_t sequence {};
+      std::array<std::uint8_t, 32> digest {};
+    };
+#pragma pack(pop)
+
+    static_assert(sizeof(snapshot_auth_data) == 64);
+
+    bool snapshot_auth_tag(
+      const std::array<std::uint8_t, 32> &key,
+      const snapshot_auth_data &data,
+      std::array<std::uint8_t, 32> &tag) {
+      unsigned int output_size = 0;
+      return HMAC(
+               EVP_sha256(), key.data(), static_cast<int>(key.size()),
+               reinterpret_cast<const unsigned char *>(&data), sizeof(data),
+               tag.data(), &output_size) != nullptr && output_size == tag.size();
+    }
 
     bool local_system_sid(PSID sid) {
       std::array<std::byte, SECURITY_MAX_SID_SIZE> storage {};
@@ -733,7 +760,6 @@ namespace terminal_session::worker {
             response.refresh_rate_millihz = state.refresh_rate_millihz;
             response.hdr_enabled = (state.flags & virtual_display::driver::kDisplayStateFlagHdrEnabled) != 0 ? 1u : 0u;
             response.display_id = state.display_id;
-            response.snapshot_mac_key = snapshot_mac_key_;
             if (request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::set_mode)) {
               const auto changed = client.set_display_mode(virtual_display::driver::SetDisplayModeRequest {
                 .display_id = state.display_id,
@@ -750,6 +776,42 @@ namespace terminal_session::worker {
               });
               response.result = static_cast<std::uint8_t>(changed.ok() ? terminal_session::display::result::success : terminal_session::display::result::unavailable);
               response.native_error = changed.native_error;
+            } else if (request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::seal_snapshot) ||
+                       request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::verify_snapshot)) {
+              auto &tier = snapshot_tiers_[request.snapshot_tier];
+              snapshot_auth_data auth_data {
+                .session_id = resource_.windows_session_id,
+                .generation = generation_,
+                .display_id = state.display_id,
+                .tier = request.snapshot_tier,
+                .sequence = request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::seal_snapshot) ?
+                               tier.sequence + 1 : request.snapshot_sequence,
+                .digest = request.snapshot_digest,
+              };
+              std::array<std::uint8_t, 32> expected_tag {};
+              if (request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::seal_snapshot)) {
+                if (tier.sequence == (std::numeric_limits<std::uint64_t>::max)() ||
+                    !snapshot_auth_tag(snapshot_auth_key_, auth_data, expected_tag)) {
+                  response.result = static_cast<std::uint8_t>(terminal_session::display::result::unavailable);
+                } else {
+                  tier.sequence = auth_data.sequence;
+                  tier.digest = auth_data.digest;
+                  tier.tag = expected_tag;
+                  response.snapshot_sequence = tier.sequence;
+                  response.snapshot_tag = tier.tag;
+                  response.result = static_cast<std::uint8_t>(terminal_session::display::result::success);
+                }
+              } else if (request.snapshot_display_id != state.display_id ||
+                         request.snapshot_sequence == 0 || request.snapshot_sequence != tier.sequence ||
+                         request.snapshot_digest != tier.digest ||
+                         !snapshot_auth_tag(snapshot_auth_key_, auth_data, expected_tag) ||
+                         CRYPTO_memcmp(expected_tag.data(), request.snapshot_tag.data(), expected_tag.size()) != 0) {
+                response.result = static_cast<std::uint8_t>(terminal_session::display::result::stale);
+              } else {
+                response.snapshot_sequence = tier.sequence;
+                response.snapshot_tag = tier.tag;
+                response.result = static_cast<std::uint8_t>(terminal_session::display::result::success);
+              }
             } else {
               response.result = static_cast<std::uint8_t>(terminal_session::display::result::success);
             }
@@ -942,7 +1004,7 @@ namespace terminal_session::worker {
     }
     if (!route) return fail_start(error.empty() ? "Private worker did not become ready." : error);
     generation_ = request.admission.generation;
-    if (RAND_bytes(snapshot_mac_key_.data(), static_cast<int>(snapshot_mac_key_.size())) != 1) {
+    if (RAND_bytes(snapshot_auth_key_.data(), static_cast<int>(snapshot_auth_key_.size())) != 1) {
       return fail_start("Private worker snapshot authentication key generation failed.");
     }
     display_broker_running_.store(true, std::memory_order_release);
@@ -1045,7 +1107,10 @@ namespace terminal_session::worker {
     }
     if (!stopped) return false;
     pid_ = 0; pipe_name_.clear(); display_pipe_name_.clear(); generation_ = 0; resource_ = {};
-    hdr_target_binding_.reset(); snapshot_mac_key_.fill(0); steam_offline_isolation_ = false;
+    hdr_target_binding_.reset();
+    OPENSSL_cleanse(snapshot_auth_key_.data(), snapshot_auth_key_.size());
+    snapshot_tiers_ = {};
+    steam_offline_isolation_ = false;
     cleanup_pending_ = false;
     steam_offline_poisoned_.store(false, std::memory_order_release);
     worker_generation_ = 0; worker_creation_time_ = 0;

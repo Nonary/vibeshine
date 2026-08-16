@@ -1,5 +1,7 @@
 #pragma once
 
+#include "src/platform/windows/display_helper_v2/types.h"
+
 #include <map>
 #include <optional>
 #include <string>
@@ -13,6 +15,10 @@ namespace display_helper::v2 {
 
     virtual std::optional<std::string> read(const std::string &key) = 0;
     virtual bool write_atomically(const std::string &key, const std::string &text) = 0;
+    virtual std::optional<std::string> read(const std::string &key, SnapshotTier) { return read(key); }
+    virtual bool write_atomically(const std::string &key, const std::string &text, SnapshotTier) {
+      return write_atomically(key, text);
+    }
     virtual bool remove(const std::string &key) = 0;
     virtual bool exists(const std::string &key) = 0;
   };
