@@ -124,6 +124,9 @@ target_compile_options(sunshine_terminal_worker_probe PRIVATE ${SUNSHINE_COMPILE
 # no injection, IFEO, DLL patching, or AppContainer is involved.
 add_executable(steam_webhelper_proxy steam_webhelper_proxy.cpp)
 set_target_properties(steam_webhelper_proxy PROPERTIES WIN32_EXECUTABLE TRUE CXX_STANDARD 23)
+if(MINGW)
+    target_link_options(steam_webhelper_proxy PRIVATE -municode)
+endif()
 target_link_libraries(steam_webhelper_proxy PRIVATE shell32 advapi32)
 target_compile_options(steam_webhelper_proxy PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
