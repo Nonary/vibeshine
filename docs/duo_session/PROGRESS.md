@@ -1335,9 +1335,11 @@ are capability-scoped; invalid managed identity fails closed instead of
 becoming console/global behavior. Snapshot reads are bounded and reject
 reparse-point files, helper IPC binds both peer directions to PID/creation
 time/image/session, and stale helper cleanup revalidates the enumerated
-identity immediately before termination. These changes are source/static only;
-the service-mediated worker-to-broker display operations still require the
-isolated Duo-lane integration and adversarial runtime validation.
+identity immediately before termination. Managed helper query, resolution,
+refresh, and HDR requests now use a SYSTEM-owned per-worker capability pipe;
+the broker authenticates the helper/job identity and chooses the sole remote
+device server-side before opening the protected driver. These changes are
+source/static only; adversarial runtime validation remains required.
 
 ## Release gates
 

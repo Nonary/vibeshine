@@ -1,0 +1,141 @@
+From ac2a37aa2ae698f76c593540ef52a586b5886e38 Mon Sep 17 00:00:00 2001
+From: Chase Payne <chase_payne@outlook.com>
+Date: Sun, 16 Aug 2026 01:16:01 -0500
+Subject: [PATCH] fix(driver): keep remote control ACL broker-only
+
+The proof-only CMake path widened the remote device and interface to built-in users, bypassing the SYSTEM/service broker boundary. Remove descriptor overrides, generate the same protected ACL for both remote device objects, and reject ambiguous remote-session interfaces before opening one. Add contract assertions that user and world principals never enter the descriptor.
+
+Generated with [Codex](https://openai.com/codex/)
+
+Model: GPT 5.6-Luna High
+
+Orchestrator: GPT 5.6-Sol X-High
+
+diff --git a/src/driver/CMakeLists.txt b/src/driver/CMakeLists.txt
+index 1c2a729..4cef7ce 100644
+--- a/src/driver/CMakeLists.txt
++++ b/src/driver/CMakeLists.txt
+@@ -93,24 +93,11 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME OR BUILD_SUNSHINE_VIRTUAL_DISPLAY_DR
+     add_custom_target(gen_driver_package_inf DEPENDS "${SUNSHINE_DRIVER_INF_GENERATED}")
+ 
+     set(SUNSHINE_REMOTE_DRIVER_INF_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/windows_driver/SunshineRemoteDisplayDriver.inf")
+-    set(_sunshine_remote_inf_security_args)
+-    if(SUNSHINE_REMOTE_DISPLAY_PROOF_WCG_PRIME_HDR)
+-        # Proof-only: the transition helper runs under the authentic terminal-session
+-        # user, so grant that user class read/write access to the session-scoped
+-        # control interface. The normal generated and committed INF retain the
+-        # service-SID-only descriptor from device_identity.
+-        list(APPEND _sunshine_remote_inf_security_args
+-            --control-security-descriptor
+-            "D:P(A\;\;GA\;\;\;SY)(A\;\;GA\;\;\;BA)(A\;\;GRGW\;\;\;BU)"
+-            --device-security-descriptor
+-            "D:P(A\;\;GA\;\;\;SY)(A\;\;GA\;\;\;BA)(A\;\;GRGW\;\;\;BU)")
+-    endif()
+     add_custom_command(OUTPUT "${SUNSHINE_REMOTE_DRIVER_INF_GENERATED}"
+             COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/windows_driver"
+             COMMAND gen_driver_inf
+                 --driverver-date "${LIBVIRTUALDISPLAY_DRIVER_DATE}"
+                 --driverver-version "${LIBVIRTUALDISPLAY_DRIVER_VERSION}"
+-                ${_sunshine_remote_inf_security_args}
+                 "${SUNSHINE_REMOTE_DRIVER_INF_TEMPLATE}"
+                 "${SUNSHINE_REMOTE_DRIVER_INF_GENERATED}"
+             DEPENDS gen_driver_inf "${SUNSHINE_REMOTE_DRIVER_INF_TEMPLATE}"
+diff --git a/src/driver/windows_control_client.cpp b/src/driver/windows_control_client.cpp
+index 1050f90..acd0ee5 100644
+--- a/src/driver/windows_control_client.cpp
++++ b/src/driver/windows_control_client.cpp
+@@ -421,6 +421,18 @@ namespace virtual_display::driver {
+       ),
+       devices.end()
+     );
++    // A terminal session is allowed exactly one control interface. Opening the
++    // first matching path would let a stale/recreated device win a race and
++    // would make the caller's session identity advisory. The broker/service
++    // must re-enumerate and reject zero or multiple candidates instead.
++    if (devices.size() != 1) {
++      return {
++        ControlStatus::TransportFailed,
++        {},
++        devices.empty() ? ERROR_FILE_NOT_FOUND : ERROR_INVALID_DATA,
++        {}
++      };
++    }
+     return open_control_device_paths(devices, last_error);
+   }
+ }  // namespace virtual_display::driver
+diff --git a/src/driver/windows_driver/SunshineRemoteDisplayDriver.inf b/src/driver/windows_driver/SunshineRemoteDisplayDriver.inf
+index 08d83c1..8bcfab3 100644
+--- a/src/driver/windows_driver/SunshineRemoteDisplayDriver.inf
++++ b/src/driver/windows_driver/SunshineRemoteDisplayDriver.inf
+@@ -41,6 +41,7 @@ AddReg=Device_Install_Hw_AddReg
+ [Device_Install_Hw_AddReg]
+ HKR,,"UpperFilters",0x00010000,"IndirectKmd"
+ HKR,"WUDF","DeviceGroupId",0x00000000,"SunshineRemoteDisplayGroup"
++HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;S-1-5-80-2333729190-1599198784-3320592948-2337414441-3098439965)"
+ HKR,,"ConfigVersion",0x00010001,1
+ 
+ [Device_Install.NT.Interfaces]
+diff --git a/tests/unit/driver/test_control_protocol.cpp b/tests/unit/driver/test_control_protocol.cpp
+index 0ca0fcc..c22b398 100644
+--- a/tests/unit/driver/test_control_protocol.cpp
++++ b/tests/unit/driver/test_control_protocol.cpp
+@@ -177,6 +177,14 @@ TEST(VirtualDisplayDriverDeviceIdentity, BuildsProtectedSystemAndBrokerOnlySecur
+     sddl,
+     "D:P(A;;GA;;;SY)(A;;GA;;;" + vdd::derive_service_sid(vdd::kBrokerServiceName) + ")"
+   );
++
++  // The remote-session proof path must never widen the device ACL. User,
++  // interactive-user, and world principals would let a same-account process
++  // bypass the SYSTEM/service broker and issue display-control IOCTLs directly.
++  EXPECT_EQ(sddl.find("BU"), std::string::npos);
++  EXPECT_EQ(sddl.find("WD"), std::string::npos);
++  EXPECT_EQ(sddl.find("AU"), std::string::npos);
++  EXPECT_EQ(sddl.find("BA"), std::string::npos);
+ }
+ 
+ TEST(VirtualDisplayDriverControlProtocol, NormalizesLeaseTimeouts) {
+diff --git a/tools/gen_driver_inf.cpp b/tools/gen_driver_inf.cpp
+index 1cbac5d..9f2e1ea 100644
+--- a/tools/gen_driver_inf.cpp
++++ b/tools/gen_driver_inf.cpp
+@@ -68,7 +68,10 @@ int main(int argc, char **argv) {
+   std::string driverver_date = kDefaultDriverVerDate;
+   std::string driverver_version = kDefaultDriverVerVersion;
+   std::string control_security_descriptor = vdd::control_interface_security_descriptor();
+-  std::string device_security_descriptor;
++  // Both the device object and its control interface are privileged broker
++  // boundaries. Keep the remote proof build on this same immutable descriptor;
++  // there is intentionally no command-line override for either ACL.
++  std::string device_security_descriptor = vdd::control_interface_security_descriptor();
+   for (auto it = args.begin(); it != args.end();) {
+     if (*it == "--check") {
+       check = true;
+@@ -87,27 +90,13 @@ int main(int argc, char **argv) {
+       }
+       driverver_version = *std::next(it);
+       it = args.erase(it, std::next(it, 2));
+-    } else if (*it == "--control-security-descriptor") {
+-      if (std::next(it) == args.end()) {
+-        std::cerr << "gen_driver_inf: --control-security-descriptor requires a value\n";
+-        return 2;
+-      }
+-      control_security_descriptor = *std::next(it);
+-      it = args.erase(it, std::next(it, 2));
+-    } else if (*it == "--device-security-descriptor") {
+-      if (std::next(it) == args.end()) {
+-        std::cerr << "gen_driver_inf: --device-security-descriptor requires a value\n";
+-        return 2;
+-      }
+-      device_security_descriptor = *std::next(it);
+-      it = args.erase(it, std::next(it, 2));
+     } else {
+       ++it;
+     }
+   }
+ 
+   if (args.size() != 2) {
+-    std::cerr << "usage: gen_driver_inf [--check] [--driverver-date MM/DD/YYYY] [--driverver-version A.B.C.D] [--control-security-descriptor SDDL] [--device-security-descriptor SDDL] <template.inf.in> <output.inf>\n";
++    std::cerr << "usage: gen_driver_inf [--check] [--driverver-date MM/DD/YYYY] [--driverver-version A.B.C.D] <template.inf.in> <output.inf>\n";
+     return 2;
+   }
+ 
