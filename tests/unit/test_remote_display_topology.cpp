@@ -249,12 +249,14 @@ TEST(RemoteDisplayTopology, MissingAnchorAppendsAndReleasingOnePeerPreservesTheO
   std::vector<std::vector<std::string>> applied;
   coordinator.set_runtime_callbacks({.create_or_reclaim = [](const auto &, const auto &, const auto &) { return true; }, .apply_composed_topology = [&applied](const auto &nodes) { std::vector<std::string> ids; for (const auto &node : nodes) if (!node.physical) ids.push_back(node.id); applied.push_back(std::move(ids)); return true; }, .exact_target_has_current_mode_and_dxgi = [](const auto &uuid, const auto &) { return std::optional<std::string> {std::string {"target-"} + uuid}; }});
   EXPECT_TRUE(coordinator.activate_or_resume("one", "One", {}, 3).ready);
+  const auto one_state = coordinator.snapshot({{{"uuid", "one"}, {"name", "One"}}});
+  ASSERT_FALSE(one_state["warnings"].empty());
   EXPECT_TRUE(coordinator.activate_or_resume("two", "Two", {}, 3).ready);
   coordinator.explicit_release("one", 3, "Disconnect Monitor");
   const auto state = coordinator.snapshot({{{"uuid", "one"}, {"name", "One"}}, {{"uuid", "two"}, {"name", "Two"}}});
   EXPECT_EQ(state["capacity"]["used"], 1);
   EXPECT_NE(std::find_if(state["nodes"].begin(), state["nodes"].end(), [](const auto &node) { return node["id"] == "two"; }), state["nodes"].end());
-  ASSERT_FALSE(state["warnings"].empty());
+  EXPECT_TRUE(state["warnings"].empty());
   ASSERT_FALSE(applied.empty());
   EXPECT_EQ(applied.back(), std::vector<std::string>({"two"}));
 }

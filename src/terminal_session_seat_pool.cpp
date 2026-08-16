@@ -36,10 +36,11 @@ namespace terminal_session::seat_pool {
     std::unordered_set<std::string> seen;
     for (auto &seat : discovered) {
       if (seat.seat_id.empty() || seat.account_name.empty() || !seat.managed) continue;
-      seen.emplace(seat.seat_id);
-      const auto existing = seats_.find(seat.seat_id);
+      const auto seat_id = seat.seat_id;
+      seen.emplace(seat_id);
+      const auto existing = seats_.find(seat_id);
       if (existing == seats_.end()) {
-        seats_.emplace(seat.seat_id, record_t {.seat = std::move(seat)});
+        seats_.emplace(seat_id, record_t {.seat = std::move(seat)});
       } else {
         existing->second.seat.account_name = std::move(seat.account_name);
         existing->second.seat.account_sid = std::move(seat.account_sid);

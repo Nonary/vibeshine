@@ -453,12 +453,13 @@ TEST(TerminalSessionService, ReleaseDispositionIsBoundIntoTheOneUseChallenge) {
     .launch_id = 8,
     .ticket = *issued->ticket,
   };
+  release.ticket.release = terminal_session::protocol::release_mode::retain;
   const auto rejected = terminal_session::protocol::decode_response(
     endpoint.handle(terminal_session::protocol::encode(release), peer)
   );
   ASSERT_TRUE(rejected.has_value());
   EXPECT_FALSE(rejected->accepted);
-  EXPECT_EQ(rejected->reason, terminal_session::protocol::reject_reason::invalid_state);
+  EXPECT_EQ(rejected->reason, terminal_session::protocol::reject_reason::wrong_client);
 }
 
 #ifdef _WIN32
