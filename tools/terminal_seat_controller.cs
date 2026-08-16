@@ -231,8 +231,8 @@ internal sealed class ControllerForm : Form
                 SetProperty(client, "Server", server);
                 SetProperty(client, "Domain", domain);
                 SetProperty(client, "UserName", accountName);
-                SetProperty(client, "DesktopWidth", Math.Max(640, width));
-                SetProperty(client, "DesktopHeight", Math.Max(480, height));
+                SetProperty(client, "DesktopWidth", Math.Max(640, (int)width));
+                SetProperty(client, "DesktopHeight", Math.Max(480, (int)height));
                 SetProperty(client, "ColorDepth", 32);
                 object advanced = GetProperty(client, "AdvancedSettings7");
                 SetProperty(advanced, "RDPPort", (int)port);
