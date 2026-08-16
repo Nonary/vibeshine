@@ -2953,7 +2953,7 @@ namespace nvhttp {
     std::string exposed_appuuid;
     if constexpr (std::is_same_v<SunshineHTTPS, T>) {
       const auto identity = resolve_client_identity_from_request(request);
-      if (get_client_terminal_session_enabled(identity.uuid)) {
+      if (get_client_terminal_session_active(identity.uuid)) {
         const auto seat = terminal_session::snapshot(identity.uuid);
         expose_active_game = seat.exists && seat.ready && seat.app_id > 0;
         exposed_appid = expose_active_game ? seat.app_id : 0;
@@ -3032,7 +3032,7 @@ namespace nvhttp {
           }
         }
       }
-      if (!connected && named_cert.terminal_session_enabled) {
+      if (!connected && get_client_terminal_session_active(named_cert.uuid)) {
         connected = terminal_session::snapshot(named_cert.uuid).connected;
       }
       named_cert_node["connected"] = connected;
@@ -3128,7 +3128,7 @@ namespace nvhttp {
     }
 
     const auto identity = resolve_client_identity_from_request(request);
-    const bool terminal_mode = get_client_terminal_session_enabled(identity.uuid);
+    const bool terminal_mode = get_client_terminal_session_active(identity.uuid);
     const auto seat = terminal_mode ? terminal_session::snapshot(identity.uuid) : terminal_session::state_t {};
     const auto current_appid = terminal_mode ? (seat.ready ? seat.app_id : 0) : proc::proc.running();
     const auto current_app = proc::proc.resolve_app(current_appid);
@@ -3241,10 +3241,20 @@ namespace nvhttp {
     // app state or mutating the main process's runtime/display configuration.
     if (synthetic_control == remote_session::control_e::none) {
       const auto terminal_client_settings = get_named_cert_by_uuid(request_identity.uuid);
+      const bool terminal_mode = terminal_client_settings && get_client_terminal_session_active(request_identity.uuid);
       const auto requested_app = proc::proc.resolve_app(appid_str, appuuid_str);
-      const bool armed_isolated_session = terminal_session::supported() && terminal_client_settings && !terminal_client_settings->terminal_session_enabled && current_appid <= 0 && requested_app &&
-                                          remote_session::consume_isolated_session(request_identity.uuid);
-      if ((terminal_client_settings && terminal_client_settings->terminal_session_enabled) || armed_isolated_session) {
+      std::unique_lock one_shot_transition_lock {normal_http_app_transition_mutex, std::defer_lock};
+      bool armed_isolated_session = false;
+      if (!terminal_mode && terminal_session::supported() && terminal_client_settings && requested_app) {
+        one_shot_transition_lock.lock();
+        if (remote_owner_for_client(request_identity.uuid).role == remote_session::role_e::none) {
+          armed_isolated_session = remote_session::consume_isolated_session(request_identity.uuid);
+        }
+        if (!armed_isolated_session) {
+          one_shot_transition_lock.unlock();
+        }
+      }
+      if (terminal_mode || armed_isolated_session) {
         const bool terminal_host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
         if (!requested_app) {
           tree.put("root.gamesession", 0);
@@ -3257,9 +3267,9 @@ namespace nvhttp {
         config::merge_config_overrides(requested_runtime_overrides, terminal_client_settings->config_overrides);
 
         auto launch_session = make_launch_session(terminal_host_audio, args, request, false, &request_identity);
-        if (armed_isolated_session) {
+        if (!launch_session->terminal_session_requested) {
           launch_session->terminal_session_requested = true;
-          launch_session->steam_offline_isolation = false;
+          launch_session->steam_offline_isolation = steam_offline::enabled_for_terminal(true, true);
           launch_session->client_cert = terminal_client_settings->cert;
         }
         publish_terminal_session_route(
@@ -3895,7 +3905,7 @@ namespace nvhttp {
     }
 
     if (const auto terminal_client_settings = get_named_cert_by_uuid(resume_identity.uuid);
-        terminal_client_settings && terminal_client_settings->terminal_session_enabled) {
+        terminal_client_settings && get_client_terminal_session_active(resume_identity.uuid)) {
       const bool terminal_host_audio = args.find("localAudioPlayMode"s) != std::end(args) &&
                                        util::from_view(get_arg(args, "localAudioPlayMode"));
       std::unordered_map<std::string, std::string> requested_runtime_overrides;
@@ -3908,6 +3918,11 @@ namespace nvhttp {
       config::merge_config_overrides(requested_runtime_overrides, terminal_client_settings->config_overrides);
 
       auto launch_session = make_launch_session(terminal_host_audio, args, request, false, &resume_identity);
+      if (!launch_session->terminal_session_requested) {
+        launch_session->terminal_session_requested = true;
+        launch_session->steam_offline_isolation = steam_offline::enabled_for_terminal(true, true);
+        launch_session->client_cert = terminal_client_settings->cert;
+      }
       launch_session->appid = seat.app_id;
       if (const auto running_app = proc::proc.resolve_app(seat.app_id)) {
         rtsp_stream::launch_session_t::app_metadata_t metadata;
@@ -4812,6 +4827,11 @@ namespace nvhttp {
     }
 
     if (updated) {
+      if (terminal_session_enabled.has_value()) {
+        // A setting transition must not leave an old on-demand reservation
+        // available after the client's ownership mode changes.
+        remote_session::notify_isolated_session_unpair(uuid);
+      }
       save_state();
     }
     return updated;
@@ -4916,6 +4936,13 @@ namespace nvhttp {
       }
     }
     return false;
+  }
+
+  bool get_client_terminal_session_active(const std::string &uuid) {
+    return terminal_session::effective_terminal_mode(
+      get_client_terminal_session_enabled(uuid),
+      terminal_session::snapshot(uuid)
+    );
   }
 
   std::unordered_map<std::string, std::string> get_client_config_overrides(const std::string &uuid) {

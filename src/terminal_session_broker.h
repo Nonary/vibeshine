@@ -67,6 +67,11 @@ namespace terminal_session {
     std::string seat_id;
   };
 
+  /** A retained one-shot seat owns terminal routing until it is gone. */
+  [[nodiscard]] constexpr bool effective_terminal_mode(bool persistent, const state_t &state) noexcept {
+    return persistent || state.exists;
+  }
+
   struct runtime_hooks_t {
     std::function<route_t(request_t)> prepare;
     std::function<state_t(std::string_view client_uuid)> snapshot;

@@ -1502,3 +1502,22 @@ ordinary-app-only catalogue.
 This checkpoint is source/static only. Build, unit-test execution, installer,
 install, and live multi-seat validation remain required before treating the
 feature as runtime-proven.
+
+## One-use terminal ownership follow-up (2026-08-16)
+
+The follow-up keeps a consumed one-shot client's terminal ownership effective
+while its retained seat exists. `/serverinfo`, `/applist`, `/launch`, and
+`/resume` now use persistent-or-retained terminal mode, reconstruct terminal
+launch material from the authoritative paired certificate, and fail through
+the broker when retained-seat resume is unavailable rather than falling into
+console routing. One-shot consumption is serialized with normal app
+transitions and requires no Remote Input/Monitor ownership, so a secondary can
+arm an isolated launch while another client's console game is active.
+
+Changing a client's persistent terminal setting clears any outstanding one-shot
+reservation. Consumed on-demand launches request the existing Steam offline
+isolation policy through the same terminal worker plumbing; no separate network
+policy or fallback was added.
+
+This remains source/static-only; no build, test execution, install, or live
+service validation has been performed.

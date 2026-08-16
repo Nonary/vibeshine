@@ -51,6 +51,12 @@ TEST(TerminalSessionBroker, MissingRuntimeFailsClosedAndRemainsRetryable) {
   EXPECT_FALSE(route.error.empty());
 }
 
+TEST(TerminalSessionBroker, RetainedOneShotSeatKeepsTerminalModeAcrossLifecycleQueries) {
+  EXPECT_FALSE(terminal_session::effective_terminal_mode(false, {}));
+  EXPECT_TRUE(terminal_session::effective_terminal_mode(true, {}));
+  EXPECT_TRUE(terminal_session::effective_terminal_mode(false, {.exists = true}));
+}
+
 TEST(TerminalSessionBroker, RuntimeReceivesExactAuthenticatedLaunchMaterial) {
   terminal_session::operation_e operation {};
   std::string client_uuid;
