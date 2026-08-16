@@ -1,21 +1,221 @@
 #include "src/platform/windows/display_helper_v2/win_display_settings.h"
 
 #include "src/logging.h"
+#include "src/platform/windows/display_helper_session.h"
 #include "src/platform/windows/display_helper_v2/snapshot_codec.h"
 #include "src/platform/windows/display_helper_v2/topology_policy.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <sstream>
+#include <type_traits>
+#include <variant>
 #include <vector>
 #include <display_device/windows/persistent_state.h>
 #include <display_device/windows/win_api_recovery.h>
+#include <virtual_display/driver/control_client.h>
+#include <virtual_display/driver/windows_control_client.h>
 
 #include <windows.h>
 
 namespace display_helper::v2 {
   namespace {
+    namespace remote_driver = virtual_display::driver;
+
+    struct RemoteDisplayTarget {
+      std::unique_ptr<remote_driver::WindowsControlTransport> transport;
+      remote_driver::DisplayStateEntry state;
+      std::uint32_t session_id {};
+    };
+
+    ApplyStatus map_remote_driver_failure(const remote_driver::ControlStatus status) {
+      return status == remote_driver::ControlStatus::ProtocolIncompatible ?
+               ApplyStatus::HelperUnavailable :
+               ApplyStatus::Retryable;
+    }
+
+    std::optional<std::uint32_t> refresh_rate_millihz(const display_device::FloatingPoint &refresh_rate) {
+      const double refresh_hz = std::visit([](const auto &value) -> double {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, display_device::Rational>) {
+          return value.m_denominator == 0 ?
+                   0.0 :
+                   static_cast<double>(value.m_numerator) / value.m_denominator;
+        } else {
+          return value;
+        }
+      }, refresh_rate);
+      if (!std::isfinite(refresh_hz) || refresh_hz <= 0.0 ||
+          refresh_hz > static_cast<double>((std::numeric_limits<std::uint32_t>::max)()) / 1000.0) {
+        return std::nullopt;
+      }
+      return static_cast<std::uint32_t>(std::llround(refresh_hz * 1000.0));
+    }
+
+    std::optional<RemoteDisplayTarget> open_remote_display_target(ApplyStatus &failure_status) {
+      const auto session_id = display_helper_session::current_process_session_id();
+      if (!session_id || !display_helper_session::is_non_console_interactive()) {
+        failure_status = ApplyStatus::InvalidRequest;
+        return std::nullopt;
+      }
+
+      auto opened = remote_driver::open_remote_control_device_for_session(*session_id);
+      if (!opened.ok()) {
+        failure_status = map_remote_driver_failure(opened.status);
+        BOOST_LOG(error) << "Display helper v2: failed to open Remote IDD control device for session "
+                         << *session_id << " (status=" << remote_driver::to_string(opened.status)
+                         << ", winerr=" << opened.native_error << ").";
+        return std::nullopt;
+      }
+
+      remote_driver::ControlClient client {*opened.transport};
+      const auto queried = client.query_display_state();
+      if (!queried.ok()) {
+        failure_status = map_remote_driver_failure(queried.status);
+        BOOST_LOG(error) << "Display helper v2: failed to query Remote IDD state for session "
+                         << *session_id << " (status=" << remote_driver::to_string(queried.status)
+                         << ", winerr=" << queried.native_error << ").";
+        return std::nullopt;
+      }
+      if (!VDISPLAY::policy::remote_display_target_is_unambiguous(queried.value.entry_count) ||
+          queried.value.entries[0].display_id == 0) {
+        failure_status = queried.value.entry_count == 0 ? ApplyStatus::Retryable : ApplyStatus::InvalidRequest;
+        BOOST_LOG(error) << "Display helper v2: Remote IDD session " << *session_id
+                         << " exposed " << queried.value.entry_count
+                         << " display entries; refusing an ambiguous mode target.";
+        return std::nullopt;
+      }
+      return RemoteDisplayTarget {
+        .transport = std::move(opened.transport),
+        .state = queried.value.entries[0],
+        .session_id = *session_id,
+      };
+    }
+
+    ApplyStatus set_remote_display_mode(
+      RemoteDisplayTarget &target,
+      const std::uint32_t width,
+      const std::uint32_t height,
+      const std::uint32_t refresh_millihz) {
+      if (target.state.width == width &&
+          target.state.height == height &&
+          target.state.refresh_rate_millihz == refresh_millihz) {
+        BOOST_LOG(debug) << "Display helper v2: Remote IDD mode already matches for session "
+                         << target.session_id << " and display " << target.state.display_id << ".";
+        return ApplyStatus::Ok;
+      }
+      remote_driver::ControlClient client {*target.transport};
+      const auto result = client.set_display_mode(remote_driver::SetDisplayModeRequest {
+        .display_id = target.state.display_id,
+        .width = width,
+        .height = height,
+        .refresh_rate_millihz = refresh_millihz,
+      });
+      if (!result.ok()) {
+        BOOST_LOG(error) << "Display helper v2: Remote IDD mode apply failed for session "
+                         << target.session_id << " and display " << target.state.display_id
+                         << " (status=" << remote_driver::to_string(result.status)
+                         << ", winerr=" << result.native_error << ").";
+        return map_remote_driver_failure(result.status);
+      }
+      BOOST_LOG(info) << "Display helper v2: applied Remote IDD mode for session "
+                      << target.session_id << " and display " << target.state.display_id
+                      << ": " << width << 'x' << height << '@' << refresh_millihz << " mHz.";
+      target.state.width = width;
+      target.state.height = height;
+      target.state.refresh_rate_millihz = refresh_millihz;
+      return ApplyStatus::Ok;
+    }
+
+    ApplyStatus set_remote_display_hdr(RemoteDisplayTarget &target, const display_device::HdrState hdr_state) {
+      remote_driver::ControlClient client {*target.transport};
+      const auto result = client.set_display_hdr_state(remote_driver::SetDisplayHdrStateRequest {
+        .display_id = target.state.display_id,
+        .enabled = hdr_state == display_device::HdrState::Enabled ? 1u : 0u,
+      });
+      if (!result.ok()) {
+        BOOST_LOG(error) << "Display helper v2: Remote IDD HDR apply failed for session "
+                         << target.session_id << " and display " << target.state.display_id
+                         << " (status=" << remote_driver::to_string(result.status)
+                         << ", winerr=" << result.native_error << ").";
+        return result.status == remote_driver::ControlStatus::ProtocolIncompatible ?
+                 ApplyStatus::HelperUnavailable :
+                 ApplyStatus::HdrStateFailed;
+      }
+      BOOST_LOG(info) << "Display helper v2: applied Remote IDD HDR state for session "
+                      << target.session_id << " and display " << target.state.display_id
+                      << ": " << (hdr_state == display_device::HdrState::Enabled ? "enabled" : "disabled") << ".";
+      return ApplyStatus::Ok;
+    }
+
+    ApplyStatus apply_remote_display_configuration(const SingleDisplayConfiguration &config) {
+      ApplyStatus open_status = ApplyStatus::Retryable;
+      auto target = open_remote_display_target(open_status);
+      if (!target) {
+        return open_status;
+      }
+
+      if (config.m_resolution || config.m_refresh_rate) {
+        const auto width = config.m_resolution ? config.m_resolution->m_width : target->state.width;
+        const auto height = config.m_resolution ? config.m_resolution->m_height : target->state.height;
+        const auto refresh = config.m_refresh_rate ?
+                               refresh_rate_millihz(*config.m_refresh_rate) :
+                               std::optional<std::uint32_t> {target->state.refresh_rate_millihz};
+        if (width == 0 || height == 0 || !refresh || *refresh == 0) {
+          return ApplyStatus::InvalidRequest;
+        }
+        const auto mode_status = set_remote_display_mode(*target, width, height, *refresh);
+        if (mode_status != ApplyStatus::Ok) {
+          return mode_status;
+        }
+      }
+
+      if (config.m_hdr_state) {
+        return set_remote_display_hdr(*target, *config.m_hdr_state);
+      }
+      return ApplyStatus::Ok;
+    }
+
+    bool apply_remote_snapshot_settings(const Snapshot &snapshot) {
+      ApplyStatus open_status = ApplyStatus::Retryable;
+      auto target = open_remote_display_target(open_status);
+      if (!target) {
+        return false;
+      }
+
+      if (!snapshot.m_modes.empty()) {
+        if (!VDISPLAY::policy::remote_display_target_is_unambiguous(
+              static_cast<std::uint32_t>(snapshot.m_modes.size()))) {
+          BOOST_LOG(error) << "Display helper v2: refusing an ambiguous Remote IDD snapshot mode restore.";
+          return false;
+        }
+        const auto &mode = snapshot.m_modes.begin()->second;
+        const auto refresh = refresh_rate_millihz(mode.m_refresh_rate);
+        if (!refresh || set_remote_display_mode(
+                          *target,
+                          mode.m_resolution.m_width,
+                          mode.m_resolution.m_height,
+                          *refresh) != ApplyStatus::Ok) {
+          return false;
+        }
+      }
+
+      if (!snapshot.m_hdr_states.empty()) {
+        if (!VDISPLAY::policy::remote_display_target_is_unambiguous(
+              static_cast<std::uint32_t>(snapshot.m_hdr_states.size()))) {
+          BOOST_LOG(error) << "Display helper v2: refusing an ambiguous Remote IDD HDR snapshot restore.";
+          return false;
+        }
+        const auto &hdr = snapshot.m_hdr_states.begin()->second;
+        if (hdr && set_remote_display_hdr(*target, *hdr) != ApplyStatus::Ok) {
+          return false;
+        }
+      }
+      return true;
+    }
+
     template <typename MapType>
     std::string format_map_keys(const MapType &map) {
       std::ostringstream oss;
@@ -57,6 +257,9 @@ namespace display_helper::v2 {
     }
   }  // namespace
   ApplyStatus WinDisplaySettings::apply(const SingleDisplayConfiguration &config) {
+    if (display_helper_session::is_non_console_interactive()) {
+      return apply_remote_display_configuration(config);
+    }
     if (!ensure_initialized()) {
       return ApplyStatus::HelperUnavailable;
     }
@@ -194,6 +397,12 @@ namespace display_helper::v2 {
       // then modes and HDR are restored before primary/origin changes. Moving
       // primary first can make Windows reject a saved mode on a waking or
       // duplicate display, leaving recovery half-applied.
+      if (display_helper_session::is_non_console_interactive()) {
+        // A managed seat has one driver-owned target. Its primary/origin are
+        // inherent to that isolated desktop, so only mode and HDR belong to
+        // the restore transaction.
+        return apply_remote_snapshot_settings(snapshot);
+      }
       if (!snapshot.m_modes.empty() && !display_device_->setDisplayModes(snapshot.m_modes)) {
         BOOST_LOG(warning) << "apply_snapshot_settings: failed to restore display modes";
         return false;
@@ -475,6 +684,22 @@ namespace display_helper::v2 {
   bool WinDisplaySettings::set_device_refresh_rate(const std::string &device_id, unsigned int num, unsigned int den) {
     if (device_id.empty() || !ensure_initialized()) {
       return false;
+    }
+    if (display_helper_session::is_non_console_interactive()) {
+      if (num == 0 || den == 0) {
+        return false;
+      }
+      ApplyStatus open_status = ApplyStatus::Retryable;
+      auto target = open_remote_display_target(open_status);
+      if (!target) {
+        return false;
+      }
+      const auto refresh = refresh_rate_millihz(display_device::Rational {num, den});
+      return refresh && set_remote_display_mode(
+                          *target,
+                          target->state.width,
+                          target->state.height,
+                          *refresh) == ApplyStatus::Ok;
     }
     display_device::DisplayRecoveryBehaviorGuard recovery_guard(display_device::DisplayRecoveryBehavior::Skip);
     try {

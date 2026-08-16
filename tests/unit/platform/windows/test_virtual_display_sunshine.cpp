@@ -121,6 +121,24 @@ TEST(SunshineVirtualDisplay, EncoderProbeEnsureDisplaySkippedForPerClientVirtual
   EXPECT_FALSE(VDISPLAY::policy::should_ensure_probe_display(false, true));
 }
 
+TEST(SunshineVirtualDisplay, DisplayHelperOwnershipIsScopedToExactWindowsSession) {
+  EXPECT_TRUE(VDISPLAY::policy::helper_process_belongs_to_session(true, 72, true, 72));
+  EXPECT_FALSE(VDISPLAY::policy::helper_process_belongs_to_session(true, 72, true, 1));
+  EXPECT_FALSE(VDISPLAY::policy::helper_process_belongs_to_session(false, 0, true, 72));
+  EXPECT_FALSE(VDISPLAY::policy::helper_process_belongs_to_session(true, 72, false, 0));
+}
+
+TEST(SunshineVirtualDisplay, ManagedSeatHelperInheritsItsContainingJob) {
+  EXPECT_FALSE(VDISPLAY::policy::display_helper_should_breakaway_from_job(true));
+  EXPECT_TRUE(VDISPLAY::policy::display_helper_should_breakaway_from_job(false));
+}
+
+TEST(SunshineVirtualDisplay, RemoteModeApplyRequiresOneExactDriverTarget) {
+  EXPECT_FALSE(VDISPLAY::policy::remote_display_target_is_unambiguous(0));
+  EXPECT_TRUE(VDISPLAY::policy::remote_display_target_is_unambiguous(1));
+  EXPECT_FALSE(VDISPLAY::policy::remote_display_target_is_unambiguous(2));
+}
+
 TEST(SunshineVirtualDisplay, NonConsoleInteractiveSessionDoesNotOwnMachineVirtualDisplayLifecycle) {
   EXPECT_TRUE(VDISPLAY::policy::is_non_console_interactive_session(true, 9, 1));
   EXPECT_FALSE(VDISPLAY::policy::is_non_console_interactive_session(true, 1, 1));

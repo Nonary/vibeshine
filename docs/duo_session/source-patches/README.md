@@ -21,12 +21,13 @@ git am D:/sources/worktrees/duo_session_large/docs/duo_session/source-patches/re
 
 - Repository: `https://github.com/Nonary/libvirtualdisplay.git`
 - Base: `3e85c1fb0e155eebdd640ee4abfd4fdca25bf3ce` (`v1.6.3`)
-- Proven source commit: `c2a589ae40dc088d07477f5a5d605ba17cee6589`
+- Proven source commit: `c7c8c97b3793a4f75c0f3f263b53376f6af98397`
 - Patch series: `libvirtualdisplay/*.patch`
 
 The parent repository also pins `third-party/libvirtualdisplay` to the proven
-commit. The patch series preserves every intervening branch commit so the source
-can still be reconstructed if that commit has not yet been published:
+commit, including the live remote-mode control contract. The patch series
+preserves every intervening branch commit so the source can still be
+reconstructed if that commit has not yet been published:
 
 ```powershell
 git am D:/sources/worktrees/duo_session_large/docs/duo_session/source-patches/libvirtualdisplay/*.patch

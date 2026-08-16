@@ -540,6 +540,36 @@ namespace {
     }
   };
 
+  class SessionScheduledTaskManager final : public display_helper::v2::IScheduledTaskManager {
+  public:
+    bool create_restore_task(const std::wstring &username) override {
+      if (!display_helper_session::is_non_console_interactive()) {
+        return system_manager_.create_restore_task(username);
+      }
+      // A terminal-seat display disappears with its WTS session. Registering
+      // the console user's machine-wide boot task here would let one seat own
+      // another seat's recovery state, so the session-local snapshot/helper is
+      // the complete recovery boundary.
+      BOOST_LOG(debug) << "Display helper v2: keeping restore ownership inside the managed WTS session.";
+      return true;
+    }
+
+    bool delete_restore_task() override {
+      return display_helper_session::is_non_console_interactive() ?
+               true :
+               system_manager_.delete_restore_task();
+    }
+
+    bool is_task_present() override {
+      return display_helper_session::is_non_console_interactive() ?
+               false :
+               system_manager_.is_task_present();
+    }
+
+  private:
+    display_helper::v2::WinScheduledTaskManager system_manager_;
+  };
+
   /// Validate a snapshot file found in a search root; remove it when it has no
   /// usable restore payload (legacy validate_session_snapshot).
   bool validate_snapshot_file(const std::filesystem::path &path, const char *label) {
@@ -663,7 +693,7 @@ int run_v2_helper(int argc, char *argv[]) {
   display_helper::v2::ApplyPolicy apply_policy(clock);
   display_helper::v2::WinVirtualDisplayDriver virtual_display;
   display_helper::v2::WinPlatformWorkarounds workarounds;
-  display_helper::v2::WinScheduledTaskManager task_manager;
+  SessionScheduledTaskManager task_manager;
   display_helper::v2::HeartbeatMonitor heartbeat(clock);
   display_helper::v2::CancellationSource cancellation;
   display_helper::v2::SystemPorts system_ports(workarounds, task_manager, heartbeat, clock, cancellation);
@@ -899,12 +929,13 @@ int run_v2_helper(int argc, char *argv[]) {
 
   auto last_connect_wait_log = std::chrono::steady_clock::time_point::min();
   constexpr auto kReconnectLogInterval = std::chrono::hours(1);
+  const auto control_pipe_name = display_helper_session::pipe_name();
   while (running.load(std::memory_order_acquire)) {
     platf::dxgi::FramedPipeFactory pipe_factory(std::make_unique<platf::dxgi::AnonymousPipeFactory>());
-    auto server_pipe = pipe_factory.create_server("sunshine_display_helper");
+    auto server_pipe = pipe_factory.create_server(control_pipe_name);
     if (!server_pipe) {
       platf::dxgi::FramedPipeFactory fallback_factory(std::make_unique<platf::dxgi::NamedPipeFactory>());
-      server_pipe = fallback_factory.create_server("sunshine_display_helper");
+      server_pipe = fallback_factory.create_server(control_pipe_name);
       if (!server_pipe) {
         BOOST_LOG(error) << "Failed to create control pipe; retrying while keeping recovery timers alive.";
         // Listener creation is incidental to recovery. Continue driving the

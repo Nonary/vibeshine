@@ -41,12 +41,15 @@ public:
    * @brief Launch the target executable with arguments if no process is running.
    * @param application_path Full path to executable.
    * @param arguments Command line arguments (not including the executable path).
+   * @param allow_system_fallback Permit a SYSTEM-context launch when no user token is available.
+   * @param breakaway_from_current_job Request CREATE_BREAKAWAY_FROM_JOB for a keep-alive child.
    * @return `true` on successful launch, `false` otherwise.
    */
   bool start(
     const std::wstring &application_path,
     std::wstring_view arguments,
-    bool allow_system_fallback = false
+    bool allow_system_fallback = false,
+    bool breakaway_from_current_job = true
   );
 
   /**

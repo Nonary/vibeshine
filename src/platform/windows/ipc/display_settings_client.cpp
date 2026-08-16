@@ -26,6 +26,7 @@
   #include "display_settings_client.h"
   #include "src/globals.h"
   #include "src/logging.h"
+  #include "src/platform/windows/display_helper_session.h"
   #include "src/platform/windows/display_helper_v2/timing.h"
   #include "src/platform/windows/ipc/pipes.h"
 
@@ -846,7 +847,8 @@ namespace platf::display_helper_client {
       reset_log_level_cache();
     }
 
-    BOOST_LOG(debug) << "Display helper IPC: connecting to server pipe 'sunshine_display_helper'";
+    const auto pipe_name = display_helper_session::pipe_name();
+    BOOST_LOG(debug) << "Display helper IPC: connecting to server pipe '" << pipe_name << "'";
     const int connect_timeout_ms = connect_timeout_override_ms.value_or(effective_connect_timeout());
     const auto connect_deadline = std::min(
       std::chrono::steady_clock::now() + std::chrono::milliseconds(connect_timeout_ms),
@@ -879,17 +881,17 @@ namespace platf::display_helper_client {
     // Create fresh pipe - try anonymous first, then named fallback. The
     // normal connection path is allowed to negotiate the anonymous transport;
     // fast paths below intentionally never call this function.
-    if (remaining_ms() > 0 && create_session([]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
+    if (remaining_ms() > 0 && create_session([pipe_name]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
           platf::dxgi::FramedPipeFactory ff(std::make_unique<platf::dxgi::AnonymousPipeFactory>());
-          return ff.create_client("sunshine_display_helper");
+          return ff.create_client(pipe_name);
         })) {
       return true;
     }
     if (remaining_ms() > 0) {
       BOOST_LOG(debug) << "Display helper IPC: anonymous connect failed; trying named fallback";
-      if (create_session([]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
+      if (create_session([pipe_name]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
             platf::dxgi::FramedPipeFactory ff(std::make_unique<platf::dxgi::NamedPipeFactory>());
-            return ff.create_client("sunshine_display_helper");
+            return ff.create_client(pipe_name);
           })) {
         return true;
       }

@@ -26,6 +26,7 @@
   #include <shlobj.h>
 
   #include "src/platform/windows/ipc/misc_utils.h"
+  #include "src/platform/windows/display_helper_session.h"
 
 namespace display_helper_paths {
   inline HANDLE make_named_mutex(const wchar_t *name) {
@@ -36,10 +37,8 @@ namespace display_helper_paths {
   }
 
   inline bool ensure_single_instance(HANDLE &out_handle) {
-    out_handle = make_named_mutex(L"Global\\SunshineDisplayHelper");
-    if (!out_handle && GetLastError() == ERROR_ACCESS_DENIED) {
-      out_handle = make_named_mutex(L"Local\\SunshineDisplayHelper");
-    }
+    const auto mutex_name = display_helper_session::singleton_mutex_name();
+    out_handle = make_named_mutex(mutex_name.c_str());
     if (!out_handle) {
       return true;  // continue; best-effort singleton failed
     }
@@ -61,7 +60,7 @@ namespace display_helper_paths {
     appdataW.resize(MAX_PATH);
     if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, appdataW.data()))) {
       appdataW.resize(wcslen(appdataW.c_str()));
-      auto path = std::filesystem::path(appdataW) / L"Sunshine";
+      auto path = display_helper_session::scope_runtime_path(std::filesystem::path(appdataW) / L"Sunshine");
       std::error_code ec;
       std::filesystem::create_directories(path, ec);
       return path;
@@ -75,7 +74,7 @@ namespace display_helper_paths {
       DWORD written = GetEnvironmentVariableW(L"APPDATA", envAppData.data(), needed);
       if (written > 0) {
         envAppData.resize(written);
-        auto path = std::filesystem::path(envAppData) / L"Sunshine";
+        auto path = display_helper_session::scope_runtime_path(std::filesystem::path(envAppData) / L"Sunshine");
         std::error_code ec;
         std::filesystem::create_directories(path, ec);
         return path;
@@ -88,12 +87,12 @@ namespace display_helper_paths {
     DWORD tlen = GetTempPathW(MAX_PATH, tempW.data());
     if (tlen > 0 && tlen < MAX_PATH) {
       tempW.resize(tlen);
-      auto path = std::filesystem::path(tempW) / L"Sunshine";
+      auto path = display_helper_session::scope_runtime_path(std::filesystem::path(tempW) / L"Sunshine");
       std::error_code ec;
       std::filesystem::create_directories(path, ec);
       return path;
     }
-    auto path = std::filesystem::path(L".") / L"Sunshine";
+    auto path = display_helper_session::scope_runtime_path(std::filesystem::path(L".") / L"Sunshine");
     std::error_code ec;
     std::filesystem::create_directories(path, ec);
     return path;
@@ -101,7 +100,7 @@ namespace display_helper_paths {
 
   inline std::filesystem::path compute_snapshot_dir() {
     // When running as SYSTEM, prefer a shared ProgramData location for snapshots.
-    if (platf::dxgi::is_running_as_system()) {
+    if (platf::dxgi::is_running_as_system() && !display_helper_session::is_non_console_interactive()) {
       std::wstring programDataW;
       programDataW.resize(MAX_PATH);
       if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_COMMON_APPDATA, nullptr, SHGFP_TYPE_CURRENT, programDataW.data()))) {
@@ -159,6 +158,11 @@ namespace display_helper_paths {
     const auto user_root = compute_log_dir();
     if (!user_root.empty()) {
       roots.push_back(user_root);
+    }
+    // A managed seat must never adopt the console's physical-display restore
+    // ledger. Its baseline and recovery files belong only to that WTS session.
+    if (display_helper_session::is_non_console_interactive()) {
+      return roots;
     }
     {
       std::wstring programDataW;
