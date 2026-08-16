@@ -67,6 +67,28 @@ namespace terminal_session {
     std::string seat_id;
   };
 
+  enum class snapshot_status_e : std::uint8_t {
+    present,
+    absent,
+    unavailable,
+  };
+
+  struct snapshot_result_t {
+    snapshot_status_e status {snapshot_status_e::unavailable};
+    state_t state;
+  };
+
+  enum class route_mode_e : std::uint8_t {
+    terminal,
+    console,
+    unavailable,
+  };
+
+  [[nodiscard]] constexpr route_mode_e route_mode(const bool persistent, const snapshot_status_e status) noexcept {
+    if (persistent || status == snapshot_status_e::present) return route_mode_e::terminal;
+    return status == snapshot_status_e::absent ? route_mode_e::console : route_mode_e::unavailable;
+  }
+
   /** A retained one-shot seat owns terminal routing until it is gone. */
   [[nodiscard]] constexpr bool effective_terminal_mode(bool persistent, const state_t &state) noexcept {
     return persistent || state.exists;
@@ -74,7 +96,7 @@ namespace terminal_session {
 
   struct runtime_hooks_t {
     std::function<route_t(request_t)> prepare;
-    std::function<state_t(std::string_view client_uuid)> snapshot;
+    std::function<snapshot_result_t(std::string_view client_uuid)> snapshot;
     // True means the exact client's worker/session teardown is complete. A
     // timeout or partial cleanup must return false so the caller stays closed.
     std::function<bool(std::string_view client_uuid, std::string_view reason)> disconnect;
@@ -87,6 +109,8 @@ namespace terminal_session {
   /** True only on a host that exposes the terminal-session integration. */
   [[nodiscard]] bool supported();
   [[nodiscard]] route_t prepare(request_t request);
+  [[nodiscard]] snapshot_result_t snapshot_result(std::string_view client_uuid);
+  /** Compatibility projection for callers that only need an authoritative seat state. */
   [[nodiscard]] state_t snapshot(std::string_view client_uuid);
   [[nodiscard]] bool disconnect(std::string_view client_uuid, std::string_view reason);
   void notify_unpair(std::string_view client_uuid);

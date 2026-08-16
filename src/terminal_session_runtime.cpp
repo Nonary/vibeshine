@@ -298,7 +298,11 @@ namespace terminal_session {
       route_t prepare(request_t request) {
         if (!request.launch_session) return {.retryable = true, .error = "Terminal launch material is missing."};
         auto &launch = *request.launch_session;
-        if (request.operation == operation_e::resume && !routes_.contains(launch.client_uuid)) (void) recover(launch.client_uuid);
+        if (request.operation == operation_e::resume && !routes_.contains(launch.client_uuid)) {
+          if (recover(launch.client_uuid) == snapshot_status_e::unavailable) {
+            return {.retryable = true, .error = "Terminal broker seat status is unavailable."};
+          }
+        }
         if (launch.role_generation == 0) {
           if (request.operation == operation_e::resume) {
             const auto retained = routes_.find(launch.client_uuid);
@@ -342,18 +346,24 @@ namespace terminal_session {
         }
         return route;
       }
-      state_t snapshot(std::string_view uuid) {
+      snapshot_result_t snapshot(std::string_view uuid) {
         const std::string client {uuid};
-        if (!routes_.contains(client)) (void) recover(client);
+        if (!routes_.contains(client)) {
+          const auto recovered = recover(client);
+          if (recovered != snapshot_status_e::present) return {.status = recovered};
+        }
         const auto found = routes_.find(client);
-        if (found == routes_.end()) return {};
-        return {.exists = true, .ready = true, .connected = found->second.connected,
-                .app_id = found->second.app_id, .app_uuid = found->second.app_uuid, .app_name = found->second.app_name,
-                .windows_session_id = found->second.route.windows_session_id, .seat_id = found->second.route.seat_id};
+        if (found == routes_.end()) {
+          return {.status = snapshot_status_e::absent};
+        }
+        return {.status = snapshot_status_e::present,
+                .state = {.exists = true, .ready = true, .connected = found->second.connected,
+                          .app_id = found->second.app_id, .app_uuid = found->second.app_uuid, .app_name = found->second.app_name,
+                          .windows_session_id = found->second.route.windows_session_id, .seat_id = found->second.route.seat_id}};
       }
       bool release(std::string_view uuid, const protocol::release_mode mode) {
         const std::string client {uuid};
-        if (!routes_.contains(client)) (void) recover(client);
+        if (!routes_.contains(client) && recover(client) == snapshot_status_e::unavailable) return false;
         const auto found = routes_.find(client);
         if (found == routes_.end()) return true;
         protocol::request_t challenge {.operation = protocol::opcode::control_challenge, .release = mode,
@@ -387,8 +397,8 @@ namespace terminal_session {
         std::string app_name;
       };
 
-      bool recover(const std::string_view uuid) {
-        if (uuid.empty()) return false;
+      snapshot_status_e recover(const std::string_view uuid) {
+        if (uuid.empty()) return snapshot_status_e::unavailable;
         protocol::request_t challenge {
           .operation = protocol::opcode::control_challenge,
           .client_uuid = std::string {uuid},
@@ -397,7 +407,7 @@ namespace terminal_session {
         };
         challenge.ticket.operation = protocol::opcode::control_query;
         const auto issued = service::pipe_client_t::transact(challenge);
-        if (!issued || !issued->accepted || !issued->ticket) return false;
+        if (!issued || !issued->accepted || !issued->ticket) return snapshot_status_e::unavailable;
         protocol::request_t query {
           .operation = protocol::opcode::control_query,
           .client_uuid = std::string {uuid},
@@ -406,10 +416,11 @@ namespace terminal_session {
           .ticket = *issued->ticket,
         };
         const auto response = service::pipe_client_t::transact(query);
-        if (!response || !response->accepted || !response->state_exists) return false;
+        if (!response || !response->accepted) return snapshot_status_e::unavailable;
+        if (!response->state_exists) return snapshot_status_e::absent;
         if (response->owner_generation == 0 || response->owner_launch_id == 0 || response->app_id <= 0 ||
             response->rtsp_port == 0 || response->control_port == 0 || response->video_port == 0 || response->audio_port == 0 ||
-            response->windows_session_id == 0 || response->seat_id.empty()) return false;
+            response->windows_session_id == 0 || response->seat_id.empty()) return snapshot_status_e::unavailable;
         route_t route {
           .accepted = true,
           .ready = true,
@@ -424,7 +435,7 @@ namespace terminal_session {
           std::move(route), response->owner_generation, response->owner_launch_id, response->state_connected,
           response->app_id, response->app_uuid, response->app_name
         });
-        return true;
+        return snapshot_status_e::present;
       }
       std::unordered_map<std::string, route_record> routes_;
     };
@@ -438,7 +449,10 @@ namespace terminal_session {
     production_remote = std::make_unique<remote_runtime>();
     register_runtime_hooks({
       .prepare = [](request_t request) { std::lock_guard lock {production_mutex}; return production_remote ? production_remote->prepare(std::move(request)) : route_t {.retryable = true, .error = "Terminal broker service is unavailable."}; },
-      .snapshot = [](std::string_view uuid) { std::lock_guard lock {production_mutex}; return production_remote ? production_remote->snapshot(uuid) : state_t {}; },
+      .snapshot = [](std::string_view uuid) {
+        std::lock_guard lock {production_mutex};
+        return production_remote ? production_remote->snapshot(uuid) : snapshot_result_t {};
+      },
       .disconnect = [](std::string_view uuid, std::string_view reason) {
         const auto mode = reason == "Terminal emulation disabled" ? protocol::release_mode::abandon : protocol::release_mode::retain;
         std::lock_guard lock {production_mutex};
@@ -453,7 +467,12 @@ namespace terminal_session {
     production_runtime = std::make_unique<runtime_t>(std::make_unique<unsupported_provider>(), std::make_unique<unsupported_worker>());
     register_runtime_hooks({
       .prepare = [](request_t request) { std::lock_guard lock {production_mutex}; return production_runtime ? production_runtime->prepare(std::move(request)) : route_t {.retryable = true, .error = "Terminal session runtime is unavailable."}; },
-      .snapshot = [](std::string_view uuid) { std::lock_guard lock {production_mutex}; return production_runtime ? production_runtime->snapshot(uuid) : state_t {}; },
+      .snapshot = [](std::string_view uuid) {
+        std::lock_guard lock {production_mutex};
+        if (!production_runtime) return snapshot_result_t {};
+        auto state = production_runtime->snapshot(uuid);
+        return snapshot_result_t {.status = state.exists ? snapshot_status_e::present : snapshot_status_e::absent, .state = std::move(state)};
+      },
       .disconnect = [](std::string_view uuid, std::string_view reason) { std::lock_guard lock {production_mutex}; return production_runtime && production_runtime->disconnect(uuid, reason); },
       .unpair = [](std::string_view uuid) { std::lock_guard lock {production_mutex}; if (production_runtime) production_runtime->unpair(uuid); },
       .shutdown = [] { std::lock_guard lock {production_mutex}; if (production_runtime) production_runtime->shutdown(); },

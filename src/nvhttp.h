@@ -263,9 +263,6 @@ namespace nvhttp {
    */
   bool get_client_terminal_session_enabled(const std::string &uuid);
 
-  /** Whether persistent or retained one-shot terminal ownership is active. */
-  bool get_client_terminal_session_active(const std::string &uuid);
-
   /**
    * @brief Get a copy of a client's runtime config overrides.
    */

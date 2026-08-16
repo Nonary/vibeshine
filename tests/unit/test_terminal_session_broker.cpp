@@ -57,6 +57,43 @@ TEST(TerminalSessionBroker, RetainedOneShotSeatKeepsTerminalModeAcrossLifecycleQ
   EXPECT_TRUE(terminal_session::effective_terminal_mode(false, {.exists = true}));
 }
 
+TEST(TerminalSessionBroker, RoutingRequiresAuthoritativeSeatStatus) {
+  using terminal_session::route_mode_e;
+  using terminal_session::snapshot_status_e;
+
+  EXPECT_EQ(terminal_session::route_mode(false, snapshot_status_e::absent), route_mode_e::console);
+  EXPECT_EQ(terminal_session::route_mode(false, snapshot_status_e::present), route_mode_e::terminal);
+  EXPECT_EQ(terminal_session::route_mode(false, snapshot_status_e::unavailable), route_mode_e::unavailable);
+  EXPECT_EQ(terminal_session::route_mode(true, snapshot_status_e::unavailable), route_mode_e::terminal);
+}
+
+TEST(TerminalSessionBroker, SnapshotTransportFailureDoesNotBecomeConsoleAbsence) {
+  terminal_session::register_runtime_hooks({});
+  const auto unavailable = terminal_session::snapshot_result("after-restart");
+  EXPECT_EQ(unavailable.status, terminal_session::snapshot_status_e::unavailable);
+  EXPECT_EQ(terminal_session::route_mode(false, unavailable.status), terminal_session::route_mode_e::unavailable);
+
+  terminal_session::register_runtime_hooks({
+    .snapshot = [](std::string_view) {
+      return terminal_session::snapshot_result_t {.status = terminal_session::snapshot_status_e::absent};
+    },
+  });
+  const auto absent = terminal_session::snapshot_result("authoritatively-absent");
+  EXPECT_EQ(absent.status, terminal_session::snapshot_status_e::absent);
+  EXPECT_EQ(terminal_session::route_mode(false, absent.status), terminal_session::route_mode_e::console);
+
+  terminal_session::register_runtime_hooks({
+    .snapshot = [](std::string_view) {
+      return terminal_session::snapshot_result_t {
+        .status = terminal_session::snapshot_status_e::present,
+        .state = {},
+      };
+    },
+  });
+  EXPECT_EQ(terminal_session::snapshot_result("malformed-present").status, terminal_session::snapshot_status_e::unavailable);
+  terminal_session::register_runtime_hooks({});
+}
+
 TEST(TerminalSessionBroker, RuntimeReceivesExactAuthenticatedLaunchMaterial) {
   terminal_session::operation_e operation {};
   std::string client_uuid;
@@ -134,7 +171,10 @@ TEST(TerminalSessionBroker, LifecycleHooksAreScopedToTheAuthenticatedClient) {
     .prepare = [](terminal_session::request_t) { return terminal_session::route_t {}; },
     .snapshot = [&](std::string_view uuid) {
       snapshot_uuid = uuid;
-      return terminal_session::state_t {.exists = true, .connected = true, .app_id = 42};
+      return terminal_session::snapshot_result_t {
+        .status = terminal_session::snapshot_status_e::present,
+        .state = {.exists = true, .connected = true, .app_id = 42},
+      };
     },
     .disconnect = [&](std::string_view uuid, std::string_view reason) {
       disconnect_uuid = uuid;
@@ -146,6 +186,7 @@ TEST(TerminalSessionBroker, LifecycleHooksAreScopedToTheAuthenticatedClient) {
   });
 
   EXPECT_TRUE(terminal_session::runtime_available());
+  EXPECT_EQ(terminal_session::snapshot_result("paired-client").status, terminal_session::snapshot_status_e::present);
   EXPECT_EQ(terminal_session::snapshot("paired-client").app_id, 42);
   EXPECT_TRUE(terminal_session::disconnect("paired-client", "Web UI disconnect"));
   terminal_session::notify_unpair("paired-client");

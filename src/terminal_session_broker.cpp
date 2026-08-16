@@ -97,11 +97,11 @@ namespace terminal_session {
     return route;
   }
 
-  state_t snapshot(const std::string_view client_uuid) {
+  snapshot_result_t snapshot_result(const std::string_view client_uuid) {
     if (client_uuid.empty()) {
       return {};
     }
-    std::function<state_t(std::string_view)> snapshot_hook;
+    std::function<snapshot_result_t(std::string_view)> snapshot_hook;
     {
       std::lock_guard lock {runtime_hooks_mutex};
       snapshot_hook = runtime_hooks.snapshot;
@@ -110,10 +110,18 @@ namespace terminal_session {
       return {};
     }
     try {
-      return snapshot_hook(client_uuid);
+      auto result = snapshot_hook(client_uuid);
+      if (result.status == snapshot_status_e::present && !result.state.exists) return {};
+      if (result.status != snapshot_status_e::present) result.state = {};
+      return result;
     } catch (...) {
       return {};
     }
+  }
+
+  state_t snapshot(const std::string_view client_uuid) {
+    const auto result = snapshot_result(client_uuid);
+    return result.status == snapshot_status_e::present ? result.state : state_t {};
   }
 
   bool disconnect(const std::string_view client_uuid, const std::string_view reason) {

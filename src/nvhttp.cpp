@@ -82,6 +82,22 @@ using namespace std::literals;
 namespace nvhttp {
 
   namespace {
+    struct terminal_client_state_t {
+      bool persistent {};
+      terminal_session::snapshot_result_t lookup;
+
+      [[nodiscard]] terminal_session::route_mode_e mode() const noexcept {
+        return terminal_session::route_mode(persistent, lookup.status);
+      }
+    };
+
+    terminal_client_state_t terminal_client_state(std::string_view uuid) {
+      return {
+        .persistent = get_client_terminal_session_enabled(std::string {uuid}),
+        .lookup = terminal_session::snapshot_result(uuid),
+      };
+    }
+
     struct remote_role_owner_t {
       remote_session::role_e role {remote_session::role_e::none};
       std::uint64_t generation {};
@@ -2953,8 +2969,9 @@ namespace nvhttp {
     std::string exposed_appuuid;
     if constexpr (std::is_same_v<SunshineHTTPS, T>) {
       const auto identity = resolve_client_identity_from_request(request);
-      if (get_client_terminal_session_active(identity.uuid)) {
-        const auto seat = terminal_session::snapshot(identity.uuid);
+      const auto terminal_state = terminal_client_state(identity.uuid);
+      if (terminal_state.mode() != terminal_session::route_mode_e::console) {
+        const auto &seat = terminal_state.lookup.state;
         expose_active_game = seat.exists && seat.ready && seat.app_id > 0;
         exposed_appid = expose_active_game ? seat.app_id : 0;
         exposed_appuuid = expose_active_game ? seat.app_uuid : std::string {};
@@ -3032,8 +3049,9 @@ namespace nvhttp {
           }
         }
       }
-      if (!connected && get_client_terminal_session_active(named_cert.uuid)) {
-        connected = terminal_session::snapshot(named_cert.uuid).connected;
+      const auto terminal_state = terminal_client_state(named_cert.uuid);
+      if (!connected && terminal_state.mode() != terminal_session::route_mode_e::console) {
+        connected = terminal_state.lookup.state.connected;
       }
       named_cert_node["connected"] = connected;
       named_cert_nodes.push_back(named_cert_node);
@@ -3128,9 +3146,11 @@ namespace nvhttp {
     }
 
     const auto identity = resolve_client_identity_from_request(request);
-    const bool terminal_mode = get_client_terminal_session_active(identity.uuid);
-    const auto seat = terminal_mode ? terminal_session::snapshot(identity.uuid) : terminal_session::state_t {};
-    const auto current_appid = terminal_mode ? (seat.ready ? seat.app_id : 0) : proc::proc.running();
+    const auto terminal_state = terminal_client_state(identity.uuid);
+    const bool terminal_mode = terminal_state.mode() == terminal_session::route_mode_e::terminal;
+    const bool console_mode = terminal_state.mode() == terminal_session::route_mode_e::console;
+    const auto &seat = terminal_state.lookup.state;
+    const auto current_appid = terminal_mode ? (seat.ready ? seat.app_id : 0) : console_mode ? proc::proc.running() : 0;
     const auto current_app = proc::proc.resolve_app(current_appid);
     const auto active_session = proc::proc.active_session_guard();
     const remote_session::caller_t caller {
@@ -3148,11 +3168,11 @@ namespace nvhttp {
     }
     const remote_session::game_t game {
       .running = current_appid > 0,
-      .owner_uuid = terminal_mode ? (seat.exists && seat.ready ? identity.uuid : std::string {}) : active_session.client_uuid,
+      .owner_uuid = terminal_mode ? (seat.exists && seat.ready ? identity.uuid : std::string {}) : console_mode ? active_session.client_uuid : std::string {},
       .app = std::move(projected_app),
     };
-    auto projection = remote_session::project(caller, game, terminal_mode ? remote_session::owner_t {} : remote_owner_for_client(identity.uuid), remote_configured_apps,
-                                              !terminal_mode && terminal_session::supported());
+    auto projection = remote_session::project(caller, game, terminal_mode || !console_mode ? remote_session::owner_t {} : remote_owner_for_client(identity.uuid), remote_configured_apps,
+                                              console_mode && terminal_session::supported());
     if (terminal_mode) {
       // Remote Input/Monitor controls belong to the main process's display
       // plane. A terminal-enabled client sees only its ordinary applications;
@@ -3235,13 +3255,21 @@ namespace nvhttp {
     // this before resolve_app() so a stale/foreign control cannot collide with
     // an apps.json id and launch a real process.
     const auto synthetic_control = remote_session::identify(util::from_view(appid_str), appuuid_str);
+    const auto terminal_state = terminal_client_state(request_identity.uuid);
+    const auto terminal_route_mode = terminal_state.mode();
 
     // A terminal-enabled client owns a separate process/session plane. Route
     // its authenticated configured-app request before consulting any console
     // app state or mutating the main process's runtime/display configuration.
     if (synthetic_control == remote_session::control_e::none) {
       const auto terminal_client_settings = get_named_cert_by_uuid(request_identity.uuid);
-      const bool terminal_mode = terminal_client_settings && get_client_terminal_session_active(request_identity.uuid);
+      if (terminal_route_mode == terminal_session::route_mode_e::unavailable) {
+        tree.put("root.gamesession", 0);
+        tree.put("root.<xmlattr>.status_code", 503);
+        tree.put("root.<xmlattr>.status_message", "Terminal session status is unavailable; console routing is disabled");
+        return;
+      }
+      const bool terminal_mode = terminal_client_settings && terminal_route_mode == terminal_session::route_mode_e::terminal;
       const auto requested_app = proc::proc.resolve_app(appid_str, appuuid_str);
       std::unique_lock one_shot_transition_lock {normal_http_app_transition_mutex, std::defer_lock};
       bool armed_isolated_session = false;
@@ -3324,12 +3352,18 @@ namespace nvhttp {
         return;
       }
       if (synthetic_control == remote_session::control_e::isolated_session) {
-        if (!terminal_session::supported() || get_client_terminal_session_enabled(identity.uuid)) {
+        if (terminal_route_mode == terminal_session::route_mode_e::unavailable) {
+          tree.put("root.resume", 0);
+          tree.put("root.<xmlattr>.status_code", 503);
+          tree.put("root.<xmlattr>.status_message", "Terminal session status is unavailable; Isolated Session cannot be armed");
+          return;
+        }
+        if (terminal_route_mode != terminal_session::route_mode_e::console || !terminal_session::supported()) {
           tree.put("root.resume", 0);
           tree.put("root.<xmlattr>.status_code", 403);
           tree.put("root.<xmlattr>.status_message", !terminal_session::supported()
                                                         ? "Isolated Session is not supported on this host"
-                                                        : "Isolated Session is not available for persistently terminal-enabled clients");
+                                                        : "Isolated Session is not available while this client owns a terminal session");
           return;
         }
         remote_session::arm_isolated_session(identity.uuid);
@@ -3904,12 +3938,20 @@ namespace nvhttp {
       return;
     }
 
+    const auto terminal_state = terminal_client_state(resume_identity.uuid);
+    if (terminal_state.mode() == terminal_session::route_mode_e::unavailable) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "Terminal session status is unavailable; console resume is disabled");
+      return;
+    }
+
     if (const auto terminal_client_settings = get_named_cert_by_uuid(resume_identity.uuid);
-        terminal_client_settings && get_client_terminal_session_active(resume_identity.uuid)) {
+        terminal_client_settings && terminal_state.mode() == terminal_session::route_mode_e::terminal) {
       const bool terminal_host_audio = args.find("localAudioPlayMode"s) != std::end(args) &&
                                        util::from_view(get_arg(args, "localAudioPlayMode"));
       std::unordered_map<std::string, std::string> requested_runtime_overrides;
-      const auto seat = terminal_session::snapshot(resume_identity.uuid);
+      const auto &seat = terminal_state.lookup.state;
       if (seat.app_id > 0) {
         if (const auto running_app = proc::proc.resolve_app(seat.app_id)) {
           config::merge_config_overrides(requested_runtime_overrides, running_app->config_overrides);
@@ -4317,8 +4359,14 @@ namespace nvhttp {
       return;
     }
 
-    const auto terminal_state = terminal_session::snapshot(identity.uuid);
-    if (get_client_terminal_session_enabled(identity.uuid) || terminal_state.exists) {
+    const auto terminal_client = terminal_client_state(identity.uuid);
+    if (terminal_client.mode() == terminal_session::route_mode_e::unavailable) {
+      tree.put("root.cancel", 0);
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "Terminal session status is unavailable; console cancellation is disabled");
+      return;
+    }
+    if (terminal_client.mode() == terminal_session::route_mode_e::terminal) {
       const bool disconnected = terminal_session::disconnect(identity.uuid, "Moonlight cancel");
       tree.put("root.cancel", disconnected ? 1 : 0);
       tree.put("root.<xmlattr>.status_code", disconnected ? 200 : 409);
@@ -4779,8 +4827,14 @@ namespace nvhttp {
     }
 
     if (terminal_session_enabled.has_value() && !*terminal_session_enabled) {
-      const auto seat = terminal_session::snapshot(uuid);
-      if (seat.exists && !terminal_session::disconnect(uuid, "Terminal emulation disabled")) {
+      const auto seat_lookup = terminal_session::snapshot_result(uuid);
+      if (seat_lookup.status == terminal_session::snapshot_status_e::unavailable) {
+        BOOST_LOG(warning) << "Refusing to disable terminal emulation for paired client " << uuid
+                           << " because its seat status is unavailable.";
+        return false;
+      }
+      if (seat_lookup.status == terminal_session::snapshot_status_e::present &&
+          !terminal_session::disconnect(uuid, "Terminal emulation disabled")) {
         BOOST_LOG(warning) << "Refusing to disable terminal emulation for paired client " << uuid
                            << " because its active seat could not be disconnected.";
         return false;
@@ -4936,13 +4990,6 @@ namespace nvhttp {
       }
     }
     return false;
-  }
-
-  bool get_client_terminal_session_active(const std::string &uuid) {
-    return terminal_session::effective_terminal_mode(
-      get_client_terminal_session_enabled(uuid),
-      terminal_session::snapshot(uuid)
-    );
   }
 
   std::unordered_map<std::string, std::string> get_client_config_overrides(const std::string &uuid) {

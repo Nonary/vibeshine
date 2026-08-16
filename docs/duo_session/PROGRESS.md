@@ -1521,3 +1521,20 @@ policy or fallback was added.
 
 This remains source/static-only; no build, test execution, install, or live
 service validation has been performed.
+
+## Tri-state retained-seat lookup follow-up (2026-08-16)
+
+Terminal seat projection now distinguishes an authoritative present seat, an
+authoritative absent seat, and an unavailable broker/service query. The
+existing simple snapshot accessor remains available for non-routing callers,
+while serverinfo, applist, launch, resume, cancel, and terminal-setting
+transitions use the status-bearing path. Persistent terminal clients remain
+terminal-routed even when lookup is unavailable; non-persistent clients may
+use console projection or launch only after authoritative absence, and
+unavailable lookup fails closed without consuming an isolated-session arm.
+
+The Windows restart-recovery query now treats an accepted `state_exists=false`
+response as absent, but challenge/IPC/protocol failures and malformed present
+state as unavailable. Deterministic broker tests cover all three statuses and
+the unavailable-to-console decision boundary. This correction is source/static
+only; tests, builds, install, and live service validation remain outstanding.
