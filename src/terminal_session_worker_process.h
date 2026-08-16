@@ -9,6 +9,8 @@
 #include <thread>
 #include <string_view>
 
+#include "steam_offline_isolation.h"
+
 #ifdef _WIN32
 namespace platf::dxgi { class INamedPipe; }
 #endif
@@ -48,6 +50,14 @@ namespace terminal_session::worker {
     // until full stop.
     std::optional<terminal_session::hdr::target_binding_t> hdr_target_binding_;
     std::array<std::uint8_t, 32> snapshot_mac_key_ {};
+    steam_offline::registration_t steam_offline_registration_;
+    bool steam_offline_isolation_ {};
+    bool cleanup_pending_ {};
+    std::atomic<bool> steam_offline_monitor_stop_ {false};
+    std::atomic<bool> steam_offline_poisoned_ {false};
+    std::thread steam_offline_monitor_;
+    std::uint64_t worker_generation_ {};
+    std::uint64_t worker_creation_time_ {};
 #endif
     std::uint32_t pid_ {};
   };

@@ -3,6 +3,7 @@
 #include "terminal_session_launch_codec.h"
 #include "terminal_session_worker.h"
 #include "terminal_session_service.h"
+#include "steam_offline_policy.h"
 
 #include <algorithm>
 #include <limits>
@@ -52,7 +53,11 @@ namespace terminal_session {
                                          protocol::admission_authority::clock_t::now(), ticket_operation);
     if (!ticket) { error = "Terminal-session admission nonce generation failed."; return {}; }
     const auto contract = worker::make_contract(resource.seat_id, resource.rtsp_port, resource.control_port, resource.video_port, resource.audio_port);
-    worker_request_t worker_request {provider_request, resource, *ticket, contract.config_root, contract.state_root, contract.log_root};
+    worker_request_t worker_request {
+      provider_request, resource, *ticket, contract.config_root, contract.state_root, contract.log_root, {},
+      steam_offline::enabled_for_terminal(request.launch_session->terminal_session_requested,
+                                           request.launch_session->steam_offline_isolation)
+    };
     try {
       worker_request.launch_payload = launch_codec::encode(request, error);
     } catch (...) {

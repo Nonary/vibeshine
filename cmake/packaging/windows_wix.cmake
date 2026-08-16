@@ -41,11 +41,22 @@ set(CPACK_WIX_LIGHT_EXTRA_FLAGS
   "-b" "PayloadRoot=${CMAKE_BINARY_DIR}/wix_payload/"
 )
 
+if(SUNSHINE_BUILD_STEAM_OFFLINE_FILTER_DRIVER)
+  message(FATAL_ERROR
+    "SUNSHINE_BUILD_STEAM_OFFLINE_FILTER_DRIVER=ON is currently unsupported: MSI cannot safely replace or remove this intentionally non-unloadable driver without a two-phase reboot transaction.")
+  list(APPEND CPACK_WIX_LIGHT_EXTRA_FLAGS
+    "-b" "SteamOfflineFilterPayload=${SUNSHINE_STEAM_OFFLINE_FILTER_PACKAGE_DIR}")
+  set(_steam_offline_filter_wix_define 1)
+else()
+  set(_steam_offline_filter_wix_define 0)
+endif()
+
 # Define preprocessor variables for WiX sources
 # BinDir: directory containing built binaries (sunshine.exe) at packaging time
 set(CPACK_WIX_CANDLE_EXTRA_FLAGS
   "-dBinDir=${CMAKE_BINARY_DIR}"
   "-dVibeshineAppId=${WINDOWS_APP_USER_MODEL_ID}"
+  "-dVibeshineSteamOfflineFilter=${_steam_offline_filter_wix_define}"
   # Human-readable version for ARP DisplayVersion; ProductVersion itself is
   # ordinal-encoded (see below) and no longer matches the semver.
   "-dVibeshineSemVer=${PROJECT_VERSION_FULL}"
@@ -55,6 +66,10 @@ set(CPACK_WIX_CANDLE_EXTRA_FLAGS
 set(CPACK_WIX_EXTRA_SOURCES
   "${CMAKE_SOURCE_DIR}/packaging/windows/wix/custom_actions.wxs"
 )
+if(SUNSHINE_BUILD_STEAM_OFFLINE_FILTER_DRIVER)
+  list(APPEND CPACK_WIX_EXTRA_SOURCES
+    "${CMAKE_SOURCE_DIR}/src/steam_offline_filter_driver/VibeshineSteamOfflineFilter.wxs")
+endif()
 
 # Override CPack's default WiX template to keep RemoveExistingProducts inside
 # the MSI transaction. A failed upgrade must roll back to the previous install.

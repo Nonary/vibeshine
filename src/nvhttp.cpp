@@ -54,6 +54,7 @@
 #include "remote_session.h"
 #include "remote_display_topology.h"
 #include "terminal_session_broker.h"
+#include "steam_offline_policy.h"
 #include "terminal_session_runtime.h"
 #include "platform/common.h"
 #include "state_storage.h"
@@ -1436,6 +1437,7 @@ namespace nvhttp {
     bool enabled = true;
     bool prefer_10bit_sdr = false;
     bool terminal_session_enabled = false;
+    bool steam_offline_isolation = false;
     std::optional<std::int64_t> last_seen;
     std::unordered_map<std::string, std::string> config_overrides;
   };
@@ -1540,6 +1542,9 @@ namespace nvhttp {
       }
       if (named_cert.terminal_session_enabled) {
         named_cert_node.put("terminal_session_enabled"s, true);
+      }
+      if (named_cert.steam_offline_isolation) {
+        named_cert_node.put("steam_offline_isolation"s, true);
       }
       if (named_cert.last_seen.has_value()) {
         named_cert_node.put("last_seen"s, *named_cert.last_seen);
@@ -1693,6 +1698,7 @@ namespace nvhttp {
           named_cert.enabled = el.get<bool>("enabled", true);
           named_cert.prefer_10bit_sdr = el.get<bool>("prefer_10bit_sdr", false);
           named_cert.terminal_session_enabled = el.get<bool>("terminal_session_enabled", false);
+          named_cert.steam_offline_isolation = el.get<bool>("steam_offline_isolation", false);
           if (auto last_seen = el.get_optional<std::int64_t>("last_seen")) {
             named_cert.last_seen = *last_seen;
           } else {
@@ -1762,6 +1768,7 @@ namespace nvhttp {
     named_cert.enabled = true;
     named_cert.prefer_10bit_sdr = false;
     named_cert.terminal_session_enabled = false;
+    named_cert.steam_offline_isolation = false;
     named_cert.last_seen.reset();
     named_cert.config_overrides.clear();
     {
@@ -2092,6 +2099,8 @@ namespace nvhttp {
     launch_session->host_audio = host_audio;
     auto client_settings = get_named_cert_by_uuid(launch_session->client_uuid);
     launch_session->terminal_session_requested = client_settings && client_settings->terminal_session_enabled;
+    launch_session->steam_offline_isolation = steam_offline::enabled_for_terminal(
+      launch_session->terminal_session_requested, client_settings && client_settings->steam_offline_isolation);
     if (launch_session->terminal_session_requested) {
       // A private RTSP worker cannot consult the main process's certificate
       // chain, so the broker must receive the paired certificate with the
@@ -2994,6 +3003,7 @@ namespace nvhttp {
       named_cert_node["always_use_virtual_display"] = named_cert.always_use_virtual_display;
       named_cert_node["prefer_10bit_sdr"] = named_cert.prefer_10bit_sdr;
       named_cert_node["terminal_session_enabled"] = named_cert.terminal_session_enabled;
+      named_cert_node["steam_offline_isolation"] = named_cert.steam_offline_isolation;
       if (named_cert.last_seen.has_value()) {
         named_cert_node["last_seen"] = *named_cert.last_seen;
       }
@@ -4704,6 +4714,7 @@ namespace nvhttp {
     std::optional<std::unordered_map<std::string, std::string>> config_overrides,
     const bool prefer_10bit_sdr,
     const std::optional<bool> terminal_session_enabled,
+    const std::optional<bool> steam_offline_isolation,
     const std::optional<std::string> hdr_profile
   ) {
     if (uuid.empty()) {
@@ -4733,6 +4744,10 @@ namespace nvhttp {
         return false;
       }
     }
+    // The paired host is normally an interactive user and the isolation
+    // device is intentionally SYSTEM-only. Persist the opt-in here; the
+    // SYSTEM worker performs the authoritative open/register gate immediately
+    // before resume and fails the launch if the installed driver is absent.
 
     bool updated = false;
     {
@@ -4751,6 +4766,12 @@ namespace nvhttp {
         named_cert.prefer_10bit_sdr = prefer_10bit_sdr;
         if (terminal_session_enabled.has_value()) {
           named_cert.terminal_session_enabled = *terminal_session_enabled;
+        }
+        if (terminal_session_enabled.has_value() && !*terminal_session_enabled) {
+          named_cert.steam_offline_isolation = false;
+        } else if (steam_offline_isolation.has_value()) {
+          named_cert.steam_offline_isolation = steam_offline::enabled_for_terminal(
+            named_cert.terminal_session_enabled, *steam_offline_isolation);
         }
         if (config_overrides) {
           named_cert.config_overrides = std::move(*config_overrides);

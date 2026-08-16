@@ -28,6 +28,7 @@ export interface ClientDeviceDraft {
   hdrProfile: string;
   prefer10BitSdr: boolean;
   terminalSessionEnabled: boolean;
+  steamOfflineIsolation: boolean;
   configOverrides: Record<string, unknown>;
 }
 
@@ -434,6 +435,24 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
             />
             <span class="vs-switch__track" aria-hidden="true" />
             <span class="vs-sr-only">{{ t('ui.devices.editor.terminal_session') }}</span>
+          </label>
+        </SettingRow>
+        <SettingRow
+          v-if="isWindows && draft.terminalSessionEnabled"
+          class="client-setting-row--switch"
+          :label="t('ui.devices.editor.steam_offline_isolation')"
+          :description="t('ui.devices.editor.steam_offline_isolation_description')"
+          :control-id="`${controlIdPrefix}-steam-offline-isolation`"
+        >
+          <label class="vs-switch">
+            <input
+              :id="`${controlIdPrefix}-steam-offline-isolation`"
+              v-model="draft.steamOfflineIsolation"
+              type="checkbox"
+              :disabled="busy"
+            />
+            <span class="vs-switch__track" aria-hidden="true" />
+            <span class="vs-sr-only">{{ t('ui.devices.editor.steam_offline_isolation') }}</span>
           </label>
         </SettingRow>
       </div>

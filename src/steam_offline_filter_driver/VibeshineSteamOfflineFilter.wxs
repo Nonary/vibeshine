@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Driver-specific WiX fragment retained for a future enabled lane. The current
+  CMake configure gate rejects packaging because the driver is non-unloadable
+  and MSI lacks a coherent two-phase reboot transaction. Installation invokes
+  the elevated install.ps1/pnputil path; a raw File element is not a valid PnP
+  install.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="INSTALL_ROOT">
+      <Directory Id="DIR_SteamOfflineFilter" Name="drivers">
+        <Directory Id="DIR_SteamOfflineFilterPayload" Name="steam-offline-filter" />
+      </Directory>
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="DIR_SteamOfflineFilterPayload">
+      <!-- Stable identity preserves the demand-start driver across upgrades.
+           The build-time feature controls whether this component exists;
+           runtime client opt-in is enforced by registration, not MSI state. -->
+      <Component Id="SteamOfflineFilterPayload" Guid="{4C018C93-B0A7-4A5B-8A6D-7E3F7C8A4D11}" Win64="yes">
+        <File Id="SteamOfflineFilterInf" Source="!(bindpath.SteamOfflineFilterPayload)SteamOfflineFilter.inf" KeyPath="yes" />
+        <File Id="SteamOfflineFilterSys" Source="!(bindpath.SteamOfflineFilterPayload)VibeshineSteamOfflineFilter.sys" />
+        <File Id="SteamOfflineFilterCat" Source="!(bindpath.SteamOfflineFilterPayload)VibeshineSteamOfflineFilter.cat" />
+        <File Id="SteamOfflineFilterInstallScript" Source="!(bindpath.SteamOfflineFilterPayload)install.ps1" />
+        <File Id="SteamOfflineFilterUninstallScript" Source="!(bindpath.SteamOfflineFilterPayload)uninstall.ps1" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

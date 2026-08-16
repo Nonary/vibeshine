@@ -70,6 +70,9 @@ namespace terminal_session {
     std::string state_root;
     std::string log_root;
     std::vector<std::uint8_t> launch_payload;
+    // Only the SYSTEM worker may consume this opt-in; it is not a public-pipe
+    // command and is independently revalidated against the launch material.
+    bool steam_offline_isolation {};
     std::function<bool(const protocol::request_t &)> ticket_validator;
   };
 

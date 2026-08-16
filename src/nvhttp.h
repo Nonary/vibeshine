@@ -243,6 +243,7 @@ namespace nvhttp {
     std::optional<std::unordered_map<std::string, std::string>> config_overrides,
     bool prefer_10bit_sdr,
     std::optional<bool> terminal_session_enabled,
+    std::optional<bool> steam_offline_isolation,
     std::optional<std::string> hdr_profile
   );
 

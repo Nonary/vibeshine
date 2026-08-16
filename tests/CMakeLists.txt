@@ -357,6 +357,13 @@ sunshine_register_component(NAME test_component_terminal_session_runtime TEST_SO
     LINK_LIBRARIES OpenSSL::Crypto nlohmann_json::nlohmann_json ${Boost_LIBRARIES} wtsapi32)
 sunshine_register_component(NAME test_component_terminal_session_seat_pool TEST_SOURCE unit/test_terminal_session_seat_pool.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/terminal_session_seat_pool.cpp")
+sunshine_register_component(NAME test_component_steam_offline_policy TEST_SOURCE unit/test_steam_offline_policy.cpp
+    PRODUCT_SOURCES
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/crypto.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/steam_offline_policy.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/terminal_session_launch_codec.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/terminal_session_protocol.cpp"
+    LINK_LIBRARIES OpenSSL::Crypto nlohmann_json::nlohmann_json ${Boost_LIBRARIES} wtsapi32)
 sunshine_register_component(NAME test_component_remote_display_topology TEST_SOURCE unit/test_remote_display_topology.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/remote_display_topology.cpp")
 sunshine_register_component(NAME test_component_config_parse TEST_SOURCE unit/test_config_parse.cpp
