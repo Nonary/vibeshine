@@ -1018,6 +1018,7 @@ namespace rtsp_stream {
     /**
      * @brief Clear launch sessions.
      * @param all If true, clear all sessions. Otherwise, only clear timed out and stopped sessions.
+     * @param preserve_pending_launch If true, do not cancel pending launches when clearing all sessions.
      * @examples
      * clear(false);
      * @examples_end
@@ -1088,6 +1089,8 @@ namespace rtsp_stream {
     /**
      * @brief Inserts the provided session into the set of sessions.
      * @param session The session to insert.
+     * @param client_uuid Paired client UUID association; an empty value removes the association.
+     * @param hdr_enabled Whether this session counts toward Vulkan HDR-layer activity.
      */
     void insert(const std::shared_ptr<stream::session_t> &session, const std::string &client_uuid, bool hdr_enabled) {
       const bool has_uuid = !client_uuid.empty();
