@@ -20,7 +20,7 @@ namespace terminal_session::display {
       wchar_t full[MAX_PATH] {};
       const DWORD length = GetFullPathNameW(path.c_str(), _countof(full), full, nullptr);
       if (length != 0 && length < _countof(full)) path.assign(full, length);
-      for (auto &ch : path) ch = static_cast<wchar_t>(towlower(ch));
+      for (auto &ch : path) ch = static_cast<wchar_t>(std::towlower(ch));
       return path;
     }
 
