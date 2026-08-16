@@ -1667,4 +1667,10 @@ namespace platf::dxgi {
     }
     return inner && inner->is_connected();
   }
+
+  bool SelfHealingPipe::get_server_process_id(DWORD &pid) {
+    auto inner = acquire_inner();
+    return inner && inner->get_server_process_id(pid);
+  }
+
 }  // namespace platf::dxgi

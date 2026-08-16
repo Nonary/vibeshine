@@ -24,6 +24,11 @@ git am D:/sources/worktrees/duo_session_large/docs/duo_session/source-patches/re
 - Proven source commit: `c7c8c97b3793a4f75c0f3f263b53376f6af98397`
 - Patch series: `libvirtualdisplay/*.patch`
 
+The security correction is landed in isolated source commit
+`ac2a37aa2ae698f76c593540ef52a586b5886e38` and must remain the pinned source
+for the Duo integration; it removes proof ACL widening and rejects ambiguous
+remote control-device matches.
+
 The parent repository also pins `third-party/libvirtualdisplay` to the proven
 commit, including the live remote-mode control contract. The patch series
 preserves every intervening branch commit so the source can still be

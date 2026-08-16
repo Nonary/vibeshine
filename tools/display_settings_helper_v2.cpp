@@ -16,6 +16,7 @@
   #include <filesystem>
   #include <fstream>
   #include <memory>
+  #include <limits>
   #include <mutex>
   #include <optional>
   #include <set>
@@ -543,7 +544,7 @@ namespace {
   class SessionScheduledTaskManager final : public display_helper::v2::IScheduledTaskManager {
   public:
     bool create_restore_task(const std::wstring &username) override {
-      if (!display_helper_session::is_non_console_interactive()) {
+      if (!display_helper_session::has_managed_context()) {
         return system_manager_.create_restore_task(username);
       }
       // A terminal-seat display disappears with its WTS session. Registering
@@ -555,13 +556,13 @@ namespace {
     }
 
     bool delete_restore_task() override {
-      return display_helper_session::is_non_console_interactive() ?
+      return display_helper_session::has_managed_context() ?
                true :
                system_manager_.delete_restore_task();
     }
 
     bool is_task_present() override {
-      return display_helper_session::is_non_console_interactive() ?
+      return display_helper_session::has_managed_context() ?
                false :
                system_manager_.is_task_present();
     }
@@ -931,8 +932,17 @@ int run_v2_helper(int argc, char *argv[]) {
   constexpr auto kReconnectLogInterval = std::chrono::hours(1);
   const auto control_pipe_name = display_helper_session::pipe_name();
   while (running.load(std::memory_order_acquire)) {
-    platf::dxgi::FramedPipeFactory pipe_factory(std::make_unique<platf::dxgi::AnonymousPipeFactory>());
-    auto server_pipe = pipe_factory.create_server(control_pipe_name);
+    std::unique_ptr<platf::dxgi::INamedPipe> server_pipe;
+    if (display_helper_session::has_managed_context()) {
+      // AnonymousPipeFactory intentionally hides the first-instance peer
+      // identity behind its handshake. Managed seats require that identity
+      // before accepting any command, so use the protected named endpoint.
+      platf::dxgi::FramedPipeFactory managed_factory(std::make_unique<platf::dxgi::NamedPipeFactory>());
+      server_pipe = managed_factory.create_server(control_pipe_name);
+    } else {
+      platf::dxgi::FramedPipeFactory pipe_factory(std::make_unique<platf::dxgi::AnonymousPipeFactory>());
+      server_pipe = pipe_factory.create_server(control_pipe_name);
+    }
     if (!server_pipe) {
       platf::dxgi::FramedPipeFactory fallback_factory(std::make_unique<platf::dxgi::NamedPipeFactory>());
       server_pipe = fallback_factory.create_server(control_pipe_name);
@@ -948,13 +958,58 @@ int run_v2_helper(int argc, char *argv[]) {
       }
     }
 
+    bool managed_peer_connected = false;
+    if (display_helper_session::has_managed_context()) {
+      server_pipe->wait_for_client_connection(15000);
+      if (!server_pipe->is_connected() || !display_helper_session::managed_context_is_valid()) {
+        server_pipe->disconnect();
+        continue;
+      }
+      // The randomized capability prevents endpoint discovery; bind the
+      // accepted connection as well so a same-account process that somehow
+      // obtains the name cannot drive this helper.
+      const DWORD expected_pid_chars = GetEnvironmentVariableW(L"VIBESHINE_TERMINAL_WORKER_PID", nullptr, 0);
+      const DWORD creation_chars = GetEnvironmentVariableW(L"VIBESHINE_TERMINAL_WORKER_CREATION", nullptr, 0);
+      std::wstring expected_pid_text(expected_pid_chars, L'\0');
+      std::wstring creation_text(creation_chars, L'\0');
+      const DWORD expected_pid_written = expected_pid_chars ?
+        GetEnvironmentVariableW(L"VIBESHINE_TERMINAL_WORKER_PID", expected_pid_text.data(), expected_pid_chars) : 0;
+      const DWORD creation_written = creation_chars ?
+        GetEnvironmentVariableW(L"VIBESHINE_TERMINAL_WORKER_CREATION", creation_text.data(), creation_chars) : 0;
+      if (!expected_pid_written || expected_pid_written + 1 != expected_pid_chars ||
+          !creation_written || creation_written + 1 != creation_chars) {
+        server_pipe->disconnect();
+        continue;
+      }
+      expected_pid_text.resize(expected_pid_written);
+      creation_text.resize(creation_written);
+      std::uint64_t expected_pid_value = 0;
+      std::uint64_t expected_creation = 0;
+      if (!display_helper_session::decimal(expected_pid_text, expected_pid_value) ||
+          expected_pid_value == 0 || expected_pid_value > (std::numeric_limits<DWORD>::max)() ||
+          !display_helper_session::decimal(creation_text, expected_creation)) {
+        server_pipe->disconnect();
+        continue;
+      }
+      DWORD client_pid = 0;
+      std::uint64_t client_creation = 0;
+      if (!server_pipe->get_client_process_id(client_pid) ||
+          client_pid != static_cast<DWORD>(expected_pid_value) ||
+          !server_pipe->get_client_process_creation_time(client_creation) ||
+          client_creation != expected_creation) {
+        server_pipe->disconnect();
+        continue;
+      }
+      managed_peer_connected = true;
+    }
+
     platf::dxgi::AsyncNamedPipe async_pipe(std::move(server_pipe));
 
     // Wait for a client connection before starting the async worker. Without
     // this the cleanup path below would tear down the server pipe before
     // Sunshine ever had a chance to connect (28b048ac). Keep processing FSM
     // work (pending restores, ticks) while waiting.
-    {
+    if (!managed_peer_connected) {
       const auto wait_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
       while (running.load(std::memory_order_acquire) && !async_pipe.is_connected() &&
              std::chrono::steady_clock::now() < wait_deadline) {

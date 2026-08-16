@@ -1321,6 +1321,24 @@ This checkpoint has source/static validation only. A fresh Duo-lane build and a
 helper-driven 1080p-to-1440p runtime repetition remain required before calling
 the new integration proven end to end.
 
+## Remote-session security correction (2026-08-16)
+
+The remote driver control boundary is now retained during proof builds: the
+generator no longer accepts proof-only SDDL overrides, both remote device and
+interface descriptors remain SYSTEM plus the broker service SID, and remote
+interface enumeration rejects zero or multiple matching seats before opening
+one. The landed libvirtualdisplay source is `ac2a37aa2ae698f76c593540ef52a586b5886e38`.
+
+Managed workers now carry immutable session/generation facts and a per-launch
+capability into their helper. The helper endpoint, mutex, and recovery storage
+are capability-scoped; invalid managed identity fails closed instead of
+becoming console/global behavior. Snapshot reads are bounded and reject
+reparse-point files, helper IPC binds both peer directions to PID/creation
+time/image/session, and stale helper cleanup revalidates the enumerated
+identity immediately before termination. These changes are source/static only;
+the service-mediated worker-to-broker display operations still require the
+isolated Duo-lane integration and adversarial runtime validation.
+
 ## Release gates
 
 Do not call this production-capable until all of the following are proven:

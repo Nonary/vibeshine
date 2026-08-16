@@ -470,7 +470,9 @@ namespace terminal_session::worker {
       return leaf_directory && set_managed_directory_acl(leaf_directory.get(), user, FILE_ALL_ACCESS, true);
     }
 
-    std::vector<wchar_t> worker_environment(HANDLE token, const std::string &pipe_name) {
+    std::vector<wchar_t> worker_environment(HANDLE token, const std::string &pipe_name,
+                                            const provider_resource_t &resource, const std::uint64_t generation,
+                                            const std::string &helper_capability) {
       LPVOID raw = nullptr;
       if (!CreateEnvironmentBlock(&raw, token, FALSE) || !raw) return {};
       std::vector<std::wstring> entries;
@@ -486,6 +488,13 @@ namespace terminal_session::worker {
       };
       replace(L"VIBESHINE_TERMINAL_WORKER_PIPE", wide(pipe_name));
       replace(L"VIBESHINE_TERMINAL_BROKER_PID", std::to_wstring(GetCurrentProcessId()));
+      // These are immutable admission facts inherited by the worker and its
+      // helper. The helper must never reclassify itself from WTS/console state;
+      // a per-launch capability also prevents same-account sibling sessions
+      // from guessing the endpoint name.
+      replace(L"VIBESHINE_TERMINAL_SESSION_ID", std::to_wstring(resource.windows_session_id));
+      replace(L"VIBESHINE_TERMINAL_GENERATION", std::to_wstring(generation));
+      replace(L"VIBESHINE_TERMINAL_HELPER_CAPABILITY", wide(helper_capability));
       std::sort(entries.begin(), entries.end(), [](const auto &left, const auto &right) { return _wcsicmp(left.c_str(), right.c_str()) < 0; });
       std::size_t chars = 1;
       for (const auto &entry : entries) chars += entry.size() + 1;
@@ -638,7 +647,18 @@ namespace terminal_session::worker {
     std::wstring command = quote(executable.wstring()) + L" " + quote(config.wstring());
     for (const auto &argument : command_line(contract)) command += L" " + quote(wide(argument));
     command += L" " + quote(L"file_apps=" + apps.wstring());
-    auto environment = worker_environment(launch_token, pipe_name_);
+    const auto helper_capability = platf::dxgi::generate_guid();
+    if (helper_capability.empty()) {
+      CloseHandle(job);
+      error = "Private worker helper capability generation failed.";
+      return std::nullopt;
+    }
+    auto environment = worker_environment(
+      launch_token,
+      pipe_name_,
+      request.resource,
+      request.admission.generation,
+      helper_capability);
     if (environment.empty()) { CloseHandle(job); error = "Private worker environment creation failed."; return std::nullopt; }
     auto worker_descriptor = worker_security_descriptor();
     if (!worker_descriptor) {

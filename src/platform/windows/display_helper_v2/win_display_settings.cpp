@@ -56,7 +56,8 @@ namespace display_helper::v2 {
 
     std::optional<RemoteDisplayTarget> open_remote_display_target(ApplyStatus &failure_status) {
       const auto session_id = display_helper_session::current_process_session_id();
-      if (!session_id || !display_helper_session::is_non_console_interactive()) {
+      if (!session_id || !display_helper_session::managed_context_is_valid() ||
+          !display_helper_session::is_non_console_interactive()) {
         failure_status = ApplyStatus::InvalidRequest;
         return std::nullopt;
       }
@@ -257,6 +258,9 @@ namespace display_helper::v2 {
     }
   }  // namespace
   ApplyStatus WinDisplaySettings::apply(const SingleDisplayConfiguration &config) {
+    if (display_helper_session::has_managed_context() && !display_helper_session::managed_context_is_valid()) {
+      return ApplyStatus::InvalidRequest;
+    }
     if (display_helper_session::is_non_console_interactive()) {
       return apply_remote_display_configuration(config);
     }
@@ -278,6 +282,11 @@ namespace display_helper::v2 {
   }
 
   ApplyStatus WinDisplaySettings::apply_topology(const ActiveTopology &topology) {
+    if (display_helper_session::has_managed_context()) {
+      // The Remote IDD seat owns one target; accepting a caller-supplied
+      // physical topology here would cross the managed-session boundary.
+      return display_helper_session::managed_context_is_valid() ? ApplyStatus::Ok : ApplyStatus::InvalidRequest;
+    }
     if (!ensure_initialized()) {
       return ApplyStatus::HelperUnavailable;
     }
@@ -294,6 +303,9 @@ namespace display_helper::v2 {
   }
 
   EnumeratedDeviceList WinDisplaySettings::enumerate(display_device::DeviceEnumerationDetail detail) {
+    if (display_helper_session::has_managed_context()) {
+      return {};
+    }
     if (!ensure_initialized()) {
       return {};
     }
@@ -309,6 +321,9 @@ namespace display_helper::v2 {
   }
 
   ActiveTopology WinDisplaySettings::capture_topology() {
+    if (display_helper_session::has_managed_context()) {
+      return {};
+    }
     if (!ensure_initialized()) {
       return {};
     }
@@ -322,6 +337,9 @@ namespace display_helper::v2 {
   }
 
   bool WinDisplaySettings::validate_topology(const ActiveTopology &topology) {
+    if (display_helper_session::has_managed_context()) {
+      return false;
+    }
     if (!ensure_initialized()) {
       return false;
     }
@@ -346,6 +364,12 @@ namespace display_helper::v2 {
 
   Snapshot WinDisplaySettings::capture_snapshot() {
     Snapshot snapshot;
+    if (display_helper_session::has_managed_context()) {
+      // Physical DisplayConfig state is not authorization or recovery state
+      // for a managed seat. Returning it would let a later console fallback
+      // restore the wrong topology.
+      return snapshot;
+    }
     if (!ensure_initialized()) {
       return snapshot;
     }
@@ -382,10 +406,16 @@ namespace display_helper::v2 {
   }
 
   bool WinDisplaySettings::apply_snapshot(const Snapshot &snapshot) {
+    if (display_helper_session::has_managed_context()) {
+      return display_helper_session::managed_context_is_valid() && apply_snapshot_settings(snapshot);
+    }
     return apply_snapshot_with_layouts(snapshot, nullptr);
   }
 
   bool WinDisplaySettings::apply_snapshot_settings(const Snapshot &snapshot) {
+    if (display_helper_session::has_managed_context() && !display_helper_session::managed_context_is_valid()) {
+      return false;
+    }
     if (!ensure_initialized()) {
       BOOST_LOG(error) << "apply_snapshot_settings: display device not initialized";
       return false;
@@ -397,7 +427,10 @@ namespace display_helper::v2 {
       // then modes and HDR are restored before primary/origin changes. Moving
       // primary first can make Windows reject a saved mode on a waking or
       // duplicate display, leaving recovery half-applied.
-      if (display_helper_session::is_non_console_interactive()) {
+      if (display_helper_session::has_managed_context()) {
+        if (!display_helper_session::managed_context_is_valid()) {
+          return false;
+        }
         // A managed seat has one driver-owned target. Its primary/origin are
         // inherent to that isolated desktop, so only mode and HDR belong to
         // the restore transaction.
@@ -472,6 +505,9 @@ namespace display_helper::v2 {
   }
 
   bool WinDisplaySettings::snapshot_matches_current(const Snapshot &snapshot) {
+    if (display_helper_session::has_managed_context()) {
+      return false;
+    }
     if (!ensure_initialized()) {
       return false;
     }
@@ -685,7 +721,10 @@ namespace display_helper::v2 {
     if (device_id.empty() || !ensure_initialized()) {
       return false;
     }
-    if (display_helper_session::is_non_console_interactive()) {
+    if (display_helper_session::has_managed_context()) {
+      if (!display_helper_session::managed_context_is_valid()) {
+        return false;
+      }
       if (num == 0 || den == 0) {
         return false;
       }

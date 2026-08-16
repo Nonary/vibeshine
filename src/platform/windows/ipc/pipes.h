@@ -617,6 +617,7 @@ namespace platf::dxgi {
     void wait_for_client_connection(int milliseconds) override;
     void disconnect() override;
     bool is_connected() override;
+    bool get_server_process_id(DWORD &pid) override;
 
   private:
     /// Return a stable transport snapshot without reconnecting. Connection

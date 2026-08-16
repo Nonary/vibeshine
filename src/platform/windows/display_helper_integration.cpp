@@ -780,7 +780,12 @@ namespace {
 
     PROCESSENTRY32W entry {};
     entry.dwSize = sizeof(entry);
-    std::vector<DWORD> targets;
+    struct target_identity {
+      DWORD pid {};
+      DWORD session_id {};
+      std::uint64_t creation_time {};
+    };
+    std::vector<target_identity> targets;
     DWORD current_session_id = 0;
     const bool current_session_known = ProcessIdToSessionId(GetCurrentProcessId(), &current_session_id) != FALSE;
 
@@ -796,7 +801,20 @@ namespace {
                 current_session_id,
                 candidate_session_known,
                 candidate_session_id)) {
-            targets.push_back(entry.th32ProcessID);
+            HANDLE candidate = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
+            if (!candidate) {
+              continue;
+            }
+            FILETIME created {}, exited {}, kernel {}, user {};
+            const bool got_times = GetProcessTimes(candidate, &created, &exited, &kernel, &user) != FALSE;
+            CloseHandle(candidate);
+            if (!got_times) {
+              continue;
+            }
+            ULARGE_INTEGER created_value {};
+            created_value.LowPart = created.dwLowDateTime;
+            created_value.HighPart = created.dwHighDateTime;
+            targets.push_back(target_identity {entry.th32ProcessID, candidate_session_id, created_value.QuadPart});
           }
         }
       } while (Process32NextW(snapshot, &entry));
@@ -809,25 +827,55 @@ namespace {
 
     CloseHandle(snapshot);
 
-    for (DWORD pid : targets) {
+    for (const auto &target : targets) {
       if (cancellation_requested(cancellation_predicate) ||
           operation_deadline_expired(operation_deadline)) {
         return false;
       }
-      HANDLE h = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, pid);
+      HANDLE h = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, target.pid);
       if (!h) {
         DWORD err = GetLastError();
-        BOOST_LOG(warning) << "Display helper: unable to open external instance (pid=" << pid
+        BOOST_LOG(warning) << "Display helper: unable to open external instance (pid=" << target.pid
                            << ", winerr=" << err << ") for termination.";
+        continue;
+      }
+
+      // The process snapshot is only a candidate list. Revalidate the exact
+      // process object immediately before termination so PID reuse cannot turn
+      // cleanup into termination of an unrelated helper or session process.
+      FILETIME created {}, exited {}, kernel {}, user {};
+      DWORD live_session = 0;
+      if (!GetProcessTimes(h, &created, &exited, &kernel, &user) ||
+          !ProcessIdToSessionId(target.pid, &live_session)) {
+        CloseHandle(h);
+        continue;
+      }
+      ULARGE_INTEGER live_creation {};
+      live_creation.LowPart = created.dwLowDateTime;
+      live_creation.HighPart = created.dwHighDateTime;
+      wchar_t image[MAX_PATH] {};
+      DWORD image_length = _countof(image);
+      if (!QueryFullProcessImageNameW(h, 0, image, &image_length) ||
+          live_session != target.session_id || live_creation.QuadPart != target.creation_time) {
+        BOOST_LOG(warning) << "Display helper: external instance identity changed before termination (pid="
+                           << target.pid << ").";
+        CloseHandle(h);
+        continue;
+      }
+      const auto image_name = std::wstring_view {image, image_length};
+      const auto slash = image_name.find_last_of(L"\\/");
+      if (_wcsicmp(image_name.substr(slash == std::wstring_view::npos ? 0 : slash + 1).data(),
+                  L"sunshine_display_helper.exe") != 0) {
+        CloseHandle(h);
         continue;
       }
 
       DWORD wait = WaitForSingleObject(h, 0);
       if (wait == WAIT_TIMEOUT) {
-        BOOST_LOG(warning) << "Display helper: terminating external instance (pid=" << pid << ").";
+        BOOST_LOG(warning) << "Display helper: terminating external instance (pid=" << target.pid << ").";
         if (!TerminateProcess(h, 1)) {
           DWORD err = GetLastError();
-          BOOST_LOG(error) << "Display helper: TerminateProcess failed for pid=" << pid << " (winerr=" << err << ").";
+          BOOST_LOG(error) << "Display helper: TerminateProcess failed for pid=" << target.pid << " (winerr=" << err << ").";
         } else {
           DWORD wait_res = WAIT_TIMEOUT;
           if (!wait_for_process_with_cancellation(

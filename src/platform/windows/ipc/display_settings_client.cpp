@@ -17,6 +17,7 @@
   #include <optional>
   #include <span>
   #include <string>
+  #include <string_view>
   #include <utility>
   #include <vector>
 
@@ -75,6 +76,22 @@ namespace platf::display_helper_client {
 
     int effective_send_timeout() {
       return shutdown_requested() ? kShutdownIpcTimeoutMs : kSendTimeoutMs;
+    }
+
+    bool managed_helper_server_is_expected(platf::dxgi::INamedPipe &pipe) {
+      DWORD server_pid = 0;
+      if (!pipe.get_server_process_id(server_pid) || server_pid == 0) return false;
+      HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server_pid);
+      if (!process) return false;
+      wchar_t image[MAX_PATH] {};
+      DWORD length = _countof(image);
+      const bool queried = QueryFullProcessImageNameW(process, 0, image, &length) != FALSE;
+      CloseHandle(process);
+      if (!queried || length == 0) return false;
+      std::wstring_view image_view {image, length};
+      const auto slash = image_view.find_last_of(L"\\/");
+      const auto basename = image_view.substr(slash == std::wstring_view::npos ? 0 : slash + 1);
+      return _wcsicmp(std::wstring {basename}.c_str(), L"sunshine_display_helper.exe") == 0;
     }
 
   }  // namespace
@@ -872,16 +889,20 @@ namespace platf::display_helper_client {
           !pipe->is_connected()) {
         return false;
       }
+      if (display_helper_session::has_managed_context() &&
+          (!display_helper_session::managed_context_is_valid() || !managed_helper_server_is_expected(*pipe))) {
+        return false;
+      }
       const auto generation = allocate_connection_generation();
       session = std::make_shared<ConnectionSession>(std::move(pipe), generation);
       connection_generation().store(generation, std::memory_order_release);
       return true;
     };
 
-    // Create fresh pipe - try anonymous first, then named fallback. The
-    // normal connection path is allowed to negotiate the anonymous transport;
-    // fast paths below intentionally never call this function.
-    if (remaining_ms() > 0 && create_session([pipe_name]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
+    // Managed seats use the protected named endpoint so the server PID can be
+    // authenticated in both directions. Console helpers retain anonymous
+    // transport compatibility.
+    if (!display_helper_session::has_managed_context() && remaining_ms() > 0 && create_session([pipe_name]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
           platf::dxgi::FramedPipeFactory ff(std::make_unique<platf::dxgi::AnonymousPipeFactory>());
           return ff.create_client(pipe_name);
         })) {

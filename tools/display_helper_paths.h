@@ -100,7 +100,7 @@ namespace display_helper_paths {
 
   inline std::filesystem::path compute_snapshot_dir() {
     // When running as SYSTEM, prefer a shared ProgramData location for snapshots.
-    if (platf::dxgi::is_running_as_system() && !display_helper_session::is_non_console_interactive()) {
+    if (platf::dxgi::is_running_as_system() && !display_helper_session::has_managed_context()) {
       std::wstring programDataW;
       programDataW.resize(MAX_PATH);
       if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_COMMON_APPDATA, nullptr, SHGFP_TYPE_CURRENT, programDataW.data()))) {
@@ -161,7 +161,7 @@ namespace display_helper_paths {
     }
     // A managed seat must never adopt the console's physical-display restore
     // ledger. Its baseline and recovery files belong only to that WTS session.
-    if (display_helper_session::is_non_console_interactive()) {
+    if (display_helper_session::has_managed_context()) {
       return roots;
     }
     {

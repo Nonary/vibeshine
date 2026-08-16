@@ -317,6 +317,16 @@ namespace terminal_session::worker_mode {
     impl->pipe = std::move(pipe);
     impl->envelope = *request;
     if (!impl->decode_admission(*request, impl->launch, result.error)) return result;
+    FILETIME created {}, exited {}, kernel {}, user {};
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+      result.error = "Private worker process creation identity could not be recorded.";
+      return result;
+    }
+    ULARGE_INTEGER creation_value {};
+    creation_value.LowPart = created.dwLowDateTime;
+    creation_value.HighPart = created.dwHighDateTime;
+    SetEnvironmentVariableW(L"VIBESHINE_TERMINAL_WORKER_PID", std::to_wstring(GetCurrentProcessId()).c_str());
+    SetEnvironmentVariableW(L"VIBESHINE_TERMINAL_WORKER_CREATION", std::to_wstring(creation_value.QuadPart).c_str());
     private_worker_active.store(true, std::memory_order_release);
     SetEnvironmentVariableW(L"VIBESHINE_TERMINAL_WORKER_PIPE", nullptr);
     SetEnvironmentVariableW(L"VIBESHINE_TERMINAL_BROKER_PID", nullptr);
