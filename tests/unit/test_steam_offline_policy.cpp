@@ -18,7 +18,11 @@ TEST(SteamOfflinePolicy, KeepsGameLibrariesOutsideTheClientMirror) {
   EXPECT_FALSE(steam_offline::quarantine_complete_for_retry(false));
   EXPECT_TRUE(steam_offline::quarantine_complete_for_retry(true));
   const std::vector<std::wstring> original_images {L"c:\\steam\\steam.exe"};
-  EXPECT_TRUE(steam_offline::exact_original_image_match(L"c:\\steam\\steam.exe", L"c:\\steam", original_images));
+  EXPECT_TRUE(steam_offline::exact_original_image_match(
+    L"c:\\steam\\steam.exe", L"c:\\programdata\\vibeshine\\seat\\client", original_images));
+  EXPECT_FALSE(steam_offline::exact_original_image_match(
+    L"c:\\programdata\\vibeshine\\seat\\client\\steam.exe",
+    L"c:\\programdata\\vibeshine\\seat\\client", original_images));
   EXPECT_FALSE(steam_offline::exact_original_image_match(L"c:\\games\\steam.exe", L"c:\\steam", original_images));
   EXPECT_FALSE(steam_offline::exact_original_image_match(L"c:\\steam\\steam.exe", L"c:\\steam", std::vector<std::wstring> {}));
   EXPECT_TRUE(steam_offline::complete_job_process_list(4, 4));
