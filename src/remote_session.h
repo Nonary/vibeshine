@@ -18,10 +18,11 @@ namespace remote_session {
   inline constexpr std::int32_t disconnect_game_id = 2147483504;
   inline constexpr std::int32_t monitor_id = 2147483505;
   inline constexpr std::int32_t input_id = 2147483506;
+  inline constexpr std::int32_t isolated_session_id = 2147483507;
   inline constexpr std::size_t max_client_vdds = 4;
 
   enum class role_e : std::uint8_t { none, input, monitor, game };
-  enum class control_e : std::uint8_t { none, resume, disconnect_monitor, disconnect_input, disconnect_game, monitor, input, running_game };
+  enum class control_e : std::uint8_t { none, resume, disconnect_monitor, disconnect_input, disconnect_game, monitor, input, running_game, isolated_session };
   enum class permission_e : std::uint8_t { view, launch, terminate };
 
   struct app_t {
@@ -116,10 +117,35 @@ namespace remote_session {
   [[nodiscard]] std::string synthetic_uuid(control_e control);
   [[nodiscard]] app_t synthetic(control_e control);
   [[nodiscard]] std::optional<std::string_view> synthetic_artwork_filename(control_e control);
-  [[nodiscard]] projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured);
+  [[nodiscard]] projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured, bool include_isolated_session = false);
   [[nodiscard]] dispatch_t dispatch(const caller_t &caller, const game_t &game, const owner_t &owner, control_e control);
   [[nodiscard]] std::optional<control_completion_t> successful_control_completion(control_e control);
   [[nodiscard]] bool input_uses_display_or_audio(role_e role);
+
+  class isolated_session_arm_registry_t {
+  public:
+    using clock_t = std::chrono::steady_clock;
+    using now_fn_t = std::function<clock_t::time_point()>;
+
+    explicit isolated_session_arm_registry_t(now_fn_t now = clock_t::now): now_(std::move(now)) {}
+
+    void arm(std::string_view client_uuid);
+    [[nodiscard]] bool consume(std::string_view client_uuid);
+    void erase(std::string_view client_uuid);
+    void clear();
+
+  private:
+    static constexpr auto lifetime = std::chrono::seconds {30};
+
+    now_fn_t now_;
+    std::mutex mutex_;
+    std::unordered_map<std::string, clock_t::time_point> deadlines_;
+  };
+
+  void arm_isolated_session(std::string_view client_uuid);
+  [[nodiscard]] bool consume_isolated_session(std::string_view client_uuid);
+  void notify_isolated_session_unpair(std::string_view client_uuid);
+  void notify_isolated_session_shutdown();
 
   class normal_app_transition_gate_t {
   public:

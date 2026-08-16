@@ -31,6 +31,14 @@ namespace terminal_session {
     return static_cast<bool>(runtime_hooks.prepare);
   }
 
+  bool supported() {
+#ifdef _WIN32
+    return runtime_available();
+#else
+    return false;
+#endif
+  }
+
   route_t prepare(request_t request) {
     if (!request.launch_session) {
       return invalid_request("Terminal session launch material is missing.");

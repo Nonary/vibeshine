@@ -48,6 +48,7 @@ interface ClientsResponse {
   named_certs?: PairedDevice[];
   status?: boolean;
   platform?: string;
+  terminal_session_supported?: boolean;
 }
 
 interface MutationResponse {
@@ -246,7 +247,10 @@ async function loadCommonSettings(): Promise<void> {
       Object.entries(configResponse).filter(([key]) => key !== 'status'),
     );
     commonSettings.value = { ...settingsDefaults, ...configured };
-    metadata.value = { ...metadataResponse, platform: metadataResponse.platform || platform.value };
+    metadata.value = {
+      ...metadataResponse,
+      platform: metadataResponse.platform || platform.value,
+    };
   } catch {
     commonSettingsError.value = t('ui.devices.common_settings_unavailable');
   }
@@ -295,9 +299,13 @@ async function loadDevices(silent = false): Promise<void> {
     if (response.status === false) throw new Error(t('ui.devices.error.list_rejected'));
     const incoming = Array.isArray(response.named_certs) ? response.named_certs : [];
     platform.value = response.platform ?? platform.value;
-    if (!metadata.value.platform && platform.value) {
-      metadata.value = { ...metadata.value, platform: platform.value };
-    }
+    metadata.value = {
+      ...metadata.value,
+      ...(response.terminal_session_supported === undefined
+        ? {}
+        : { terminal_session_supported: response.terminal_session_supported }),
+      ...(!metadata.value.platform && platform.value ? { platform: platform.value } : {}),
+    };
     syncDrafts(incoming);
     devices.value = reconcileStable(devices.value, incoming);
     if (!silent) notice.value = '';

@@ -35,6 +35,7 @@ export interface ClientDeviceDraft {
 export interface ClientSettingsMetadata {
   gpus?: Array<{ description?: string; pnp_id?: string }>;
   platform?: string;
+  terminal_session_supported?: boolean;
 }
 
 export interface DisplayDevice {
@@ -122,6 +123,15 @@ const isWindows = computed(() =>
   String(props.metadata.platform ?? '')
     .toLocaleLowerCase()
     .includes('windows'),
+);
+
+// New servers publish the authoritative capability. Older servers only expose
+// platform metadata, so retain that compatibility fallback without allowing a
+// malformed or stale platform string to override an explicit server answer.
+const terminalSessionSupported = computed(() =>
+  typeof props.metadata.terminal_session_supported === 'boolean'
+    ? props.metadata.terminal_session_supported
+    : isWindows.value,
 );
 
 function normalizeVirtualMode(value: unknown): ClientVirtualDisplayMode {
@@ -420,7 +430,7 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
           </label>
         </SettingRow>
         <SettingRow
-          v-if="isWindows"
+          v-if="terminalSessionSupported"
           class="client-setting-row--switch"
           :label="t('ui.devices.editor.terminal_session')"
           :description="t('ui.devices.editor.terminal_session_description')"
@@ -438,7 +448,7 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
           </label>
         </SettingRow>
         <SettingRow
-          v-if="isWindows && draft.terminalSessionEnabled"
+          v-if="terminalSessionSupported && draft.terminalSessionEnabled"
           class="client-setting-row--switch"
           :label="t('ui.devices.editor.steam_offline_isolation')"
           :description="t('ui.devices.editor.steam_offline_isolation_description')"

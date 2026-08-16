@@ -1,5 +1,6 @@
 export interface MetaInfo {
   platform?: string;
+  terminal_session_supported?: boolean;
   status?: boolean;
   version?: string;
   commit?: string;

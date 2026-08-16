@@ -2,6 +2,7 @@
 
 #include "src/remote_session.h"
 
+#include <algorithm>
 #include <atomic>
 #include <thread>
 
@@ -16,9 +17,12 @@ TEST(RemoteSession, SyntheticIdsAndLegacyIdsNeverFallThrough) {
   EXPECT_EQ(remote_session::identify(remote_session::monitor_id), remote_session::control_e::monitor);
   EXPECT_EQ(remote_session::identify(2147483605), remote_session::control_e::monitor);
   EXPECT_EQ(remote_session::identify(11, "9a1c5a25-58fe-40e0-b9aa-7d3f00000006"), remote_session::control_e::input);
+  EXPECT_EQ(remote_session::identify(remote_session::isolated_session_id), remote_session::control_e::isolated_session);
+  EXPECT_EQ(remote_session::identify(11, "9a1c5a25-58fe-40e0-b9aa-7d3f00000008"), remote_session::control_e::isolated_session);
   EXPECT_EQ(remote_session::identify(11), remote_session::control_e::none);
   EXPECT_TRUE(remote_session::reserved_name("remote monitor"));
   EXPECT_TRUE(remote_session::reserved_name("Remote Input"));
+  EXPECT_TRUE(remote_session::reserved_name("isolated session"));
   ASSERT_TRUE(remote_session::synthetic_artwork_filename(remote_session::control_e::monitor));
   EXPECT_EQ(*remote_session::synthetic_artwork_filename(remote_session::control_e::monitor), "remote-monitor.png");
   ASSERT_TRUE(remote_session::synthetic_artwork_filename(remote_session::control_e::disconnect_monitor));
@@ -123,6 +127,52 @@ TEST(RemoteSession, DisconnectControlsCompleteAsDisplayedLaunchFailures) {
 
   EXPECT_FALSE(remote_session::successful_control_completion(remote_session::control_e::resume));
   EXPECT_FALSE(remote_session::successful_control_completion(remote_session::control_e::monitor));
+}
+
+TEST(RemoteSession, IsolatedSessionProjectsOnlyForSecondaryNonTerminalCallers) {
+  const std::vector<remote_session::app_t> configured {{1, "one", "One", false}};
+  const auto secondary = remote_session::project(caller("secondary"), game(), {}, configured, true);
+  ASSERT_EQ(secondary.catalogue.back().id, remote_session::isolated_session_id);
+  EXPECT_EQ(secondary.catalogue.back().title, "Isolated Session");
+  EXPECT_EQ(*remote_session::synthetic_artwork_filename(remote_session::control_e::isolated_session), "isolated-session.png");
+
+  const auto owner = remote_session::project(caller("owner"), game(), {}, configured, true);
+  EXPECT_TRUE(std::none_of(owner.catalogue.begin(), owner.catalogue.end(), [](const auto &entry) {
+    return entry.id == remote_session::isolated_session_id;
+  }));
+}
+
+TEST(RemoteSession, IsolatedSessionDispatchPreservesLaunchPermissions) {
+  EXPECT_TRUE(remote_session::dispatch(caller("secondary"), game(), {}, remote_session::control_e::isolated_session).allowed);
+  EXPECT_FALSE(remote_session::dispatch(caller("owner"), game(), {}, remote_session::control_e::isolated_session).allowed);
+  EXPECT_FALSE(remote_session::dispatch(caller("secondary", true, false), game(), {}, remote_session::control_e::isolated_session).allowed);
+}
+
+TEST(RemoteSession, IsolatedSessionArmRegistryIsClientBoundMonotonicAndOneUse) {
+  auto now = remote_session::isolated_session_arm_registry_t::clock_t::time_point {};
+  remote_session::isolated_session_arm_registry_t registry {[&now] { return now; }};
+
+  registry.arm("one");
+  EXPECT_FALSE(registry.consume("two"));
+  EXPECT_TRUE(registry.consume("one"));
+  EXPECT_FALSE(registry.consume("one"));
+
+  registry.arm("one");
+  now += std::chrono::seconds {29};
+  registry.arm("one");
+  now += std::chrono::seconds {2};
+  EXPECT_TRUE(registry.consume("one"));
+
+  registry.arm("one");
+  now += std::chrono::seconds {30};
+  EXPECT_FALSE(registry.consume("one"));
+
+  registry.arm("one");
+  registry.erase("one");
+  EXPECT_FALSE(registry.consume("one"));
+  registry.arm("one");
+  registry.clear();
+  EXPECT_FALSE(registry.consume("one"));
 }
 
 TEST(RemoteSession, PendingRegistryKeepsEncryptedLaunchesDistinctAndPlaintextSafe) {

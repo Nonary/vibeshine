@@ -21,9 +21,12 @@ namespace remote_session {
       return std::find(values.begin(), values.end(), value) != values.end();
     }
     bool owns_game(const caller_t &caller, const game_t &game) { return game.running && caller.paired && caller.uuid == game.owner_uuid; }
+    isolated_session_arm_registry_t isolated_session_arms;
   }
 
-  bool reserved_name(const std::string_view name) { return equal_folded(name, "Remote Input") || equal_folded(name, "Remote Monitor"); }
+  bool reserved_name(const std::string_view name) {
+    return equal_folded(name, "Remote Input") || equal_folded(name, "Remote Monitor") || equal_folded(name, "Isolated Session");
+  }
 
   control_e identify(const std::int32_t id, const std::string_view uuid) {
     if (id == resume_id || id == 2147483601 || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000001") return control_e::resume;
@@ -32,12 +35,13 @@ namespace remote_session {
     if (id == disconnect_game_id || id == 2147483604 || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000004") return control_e::disconnect_game;
     if (id == monitor_id || id == 2147483605 || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000005") return control_e::monitor;
     if (id == input_id || id == 2147483606 || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000006") return control_e::input;
+    if (id == isolated_session_id || id == 2147483607 || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000008") return control_e::isolated_session;
     return control_e::none;
   }
 
   std::string synthetic_uuid(const control_e control) {
     const auto suffix = static_cast<unsigned>(control);
-    return suffix >= 1 && suffix <= 6 ? "9a1c5a25-58fe-40e0-b9aa-7d3f0000000" + std::to_string(suffix) : std::string {};
+    return suffix >= 1 && suffix <= 8 ? "9a1c5a25-58fe-40e0-b9aa-7d3f0000000" + std::to_string(suffix) : std::string {};
   }
 
   app_t synthetic(const control_e control) {
@@ -48,6 +52,7 @@ namespace remote_session {
       case control_e::disconnect_game: return {disconnect_game_id, synthetic_uuid(control), "Disconnect", true};
       case control_e::monitor: return {monitor_id, synthetic_uuid(control), "Remote Monitor", true};
       case control_e::input: return {input_id, synthetic_uuid(control), "Remote Input", true};
+      case control_e::isolated_session: return {isolated_session_id, synthetic_uuid(control), "Isolated Session", true};
       default: return {};
     }
   }
@@ -60,16 +65,22 @@ namespace remote_session {
       case control_e::disconnect_game: return "disconnect-game.png";
       case control_e::monitor: return "remote-monitor.png";
       case control_e::input: return "remote-input.png";
+      case control_e::isolated_session: return "isolated-session.png";
       default: return std::nullopt;
     }
   }
 
-  projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured) {
+  projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured, const bool include_isolated_session) {
     projection_t result;
     std::vector<app_t> visible_configured;
     std::copy_if(configured.begin(), configured.end(), std::back_inserter(visible_configured), [](const app_t &app) {
       return !reserved_name(app.title);
     });
+    const auto append_isolated_session = [&] {
+      if (include_isolated_session && owner.role == role_e::none && !owns_game(caller, game)) {
+        result.catalogue.push_back(synthetic(control_e::isolated_session));
+      }
+    };
     if (owner.role == role_e::monitor) {
       result.catalogue = {synthetic(control_e::resume), synthetic(control_e::disconnect_monitor)};
       return result;
@@ -84,15 +95,18 @@ namespace remote_session {
       result.catalogue = visible_configured;
       result.catalogue.push_back(synthetic(control_e::input));
       result.catalogue.push_back(synthetic(control_e::monitor));
+      append_isolated_session();
       return result;
     }
     if (game.running) {
       result.catalogue = {synthetic(control_e::resume), synthetic(control_e::disconnect_game), game.app, synthetic(control_e::input), synthetic(control_e::monitor)};
+      append_isolated_session();
       return result;
     }
     result.catalogue = visible_configured;
     result.catalogue.push_back(synthetic(control_e::input));
     result.catalogue.push_back(synthetic(control_e::monitor));
+    append_isolated_session();
     return result;
   }
 
@@ -111,6 +125,10 @@ namespace remote_session {
       case control_e::input:
         result.permission = permission_e::launch;
         result.allowed = caller.may_launch && owner.role == role_e::none;
+        break;
+      case control_e::isolated_session:
+        result.permission = permission_e::launch;
+        result.allowed = caller.may_launch && owner.role == role_e::none && !owns_game(caller, game);
         break;
       case control_e::monitor:
         result.permission = permission_e::launch;
@@ -143,11 +161,48 @@ namespace remote_session {
       case control_e::disconnect_monitor: return control_completion_t {410, "Remote Monitor disconnected successfully."};
       case control_e::disconnect_input: return control_completion_t {410, "Remote Input disconnected successfully."};
       case control_e::disconnect_game: return control_completion_t {410, "Stream disconnected successfully."};
+      case control_e::isolated_session: return control_completion_t {410, "Isolated gaming session armed. Launch your next application within 30 seconds to attempt to connect in an isolated gaming session."};
       default: return std::nullopt;
     }
   }
 
   bool input_uses_display_or_audio(const role_e role) { return role != role_e::input; }
+
+  void isolated_session_arm_registry_t::arm(const std::string_view client_uuid) {
+    if (client_uuid.empty()) return;
+    std::lock_guard lock {mutex_};
+    deadlines_.insert_or_assign(std::string {client_uuid}, now_() + lifetime);
+  }
+
+  bool isolated_session_arm_registry_t::consume(const std::string_view client_uuid) {
+    if (client_uuid.empty()) return false;
+    std::lock_guard lock {mutex_};
+    const auto found = deadlines_.find(std::string {client_uuid});
+    if (found == deadlines_.end()) return false;
+    const auto now = now_();
+    if (found->second <= now) {
+      deadlines_.erase(found);
+      return false;
+    }
+    deadlines_.erase(found);
+    return true;
+  }
+
+  void isolated_session_arm_registry_t::erase(const std::string_view client_uuid) {
+    if (client_uuid.empty()) return;
+    std::lock_guard lock {mutex_};
+    deadlines_.erase(std::string {client_uuid});
+  }
+
+  void isolated_session_arm_registry_t::clear() {
+    std::lock_guard lock {mutex_};
+    deadlines_.clear();
+  }
+
+  void arm_isolated_session(const std::string_view client_uuid) { isolated_session_arms.arm(client_uuid); }
+  bool consume_isolated_session(const std::string_view client_uuid) { return isolated_session_arms.consume(client_uuid); }
+  void notify_isolated_session_unpair(const std::string_view client_uuid) { isolated_session_arms.erase(client_uuid); }
+  void notify_isolated_session_shutdown() { isolated_session_arms.clear(); }
 
   void register_monitor_runtime_hooks(monitor_runtime_hooks_t hooks) {
     std::lock_guard lock {monitor_runtime_hooks_mutex};

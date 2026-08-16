@@ -63,6 +63,7 @@
 #include "session_history.h"
 #include "stream.h"
 #include "host_stats.h"
+#include "terminal_session_broker.h"
 #include "video.h"
 #include "webrtc_stream.h"
 
@@ -2137,6 +2138,7 @@ namespace confighttp {
     output_tree["named_certs"] = named_certs;
     output_tree["status"] = true;
     output_tree["platform"] = SUNSHINE_PLATFORM;
+    output_tree["terminal_session_supported"] = terminal_session::supported();
     // The list changes immediately after pair/unpair. Avoid serving an old empty
     // list from an HTTP cache after the client state has changed.
     send_response(response, output_tree, "no-store");
@@ -2568,6 +2570,7 @@ namespace confighttp {
     nlohmann::json output_tree;
     output_tree["status"] = true;
     output_tree["platform"] = SUNSHINE_PLATFORM;
+    output_tree["terminal_session_supported"] = terminal_session::supported();
     output_tree["version"] = PROJECT_VERSION;
     output_tree["commit"] = PROJECT_VERSION_COMMIT;
 #ifdef PROJECT_VERSION_PRERELEASE

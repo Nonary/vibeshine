@@ -1479,3 +1479,26 @@ gates are copied Steam launch, two independent webhelper/cache trees, console
 versus clone AppId filtering, online game behavior, BFE restart and persistent
 filter reconciliation, Steam update/relaunch escape detection, reconnect reuse,
 and fail-closed teardown when filter deletion fails.
+
+## Paired terminal capability and one-use isolated-session control (2026-08-16)
+
+The source-only control-plane implementation now emits an explicit
+`terminal_session_supported` server capability from `/api/metadata` and
+`/api/clients/list`. The device editor consumes that typed capability and falls
+back to the legacy Windows platform string only when older servers omit it;
+existing `terminal_session_enabled` persistence is unchanged. Non-Windows
+builds report the capability as unsupported.
+
+Non-persistent secondary clients receive a synthetic `Isolated Session` catalog
+entry with dedicated artwork. Its authenticated synthetic launch arms a
+client-UUID-keyed, in-memory reservation for 30 seconds and returns a deliberate
+410 completion message. A same-client validated configured-app launch atomically
+consumes the reservation and enters the existing terminal-session route; wrong
+clients, synthetic controls, invalid or unknown apps, catalogue requests, and
+expired reservations cannot consume it. Re-arming replaces the deadline, and
+unpair/shutdown clear the state. Persistent terminal clients retain their
+ordinary-app-only catalogue.
+
+This checkpoint is source/static only. Build, unit-test execution, installer,
+install, and live multi-seat validation remain required before treating the
+feature as runtime-proven.

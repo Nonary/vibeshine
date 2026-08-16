@@ -3151,7 +3151,8 @@ namespace nvhttp {
       .owner_uuid = terminal_mode ? (seat.exists && seat.ready ? identity.uuid : std::string {}) : active_session.client_uuid,
       .app = std::move(projected_app),
     };
-    auto projection = remote_session::project(caller, game, terminal_mode ? remote_session::owner_t {} : remote_owner_for_client(identity.uuid), remote_configured_apps);
+    auto projection = remote_session::project(caller, game, terminal_mode ? remote_session::owner_t {} : remote_owner_for_client(identity.uuid), remote_configured_apps,
+                                              !terminal_mode && terminal_session::supported());
     if (terminal_mode) {
       // Remote Input/Monitor controls belong to the main process's display
       // plane. A terminal-enabled client sees only its ordinary applications;
@@ -3240,9 +3241,11 @@ namespace nvhttp {
     // app state or mutating the main process's runtime/display configuration.
     if (synthetic_control == remote_session::control_e::none) {
       const auto terminal_client_settings = get_named_cert_by_uuid(request_identity.uuid);
-      if (terminal_client_settings && terminal_client_settings->terminal_session_enabled) {
+      const auto requested_app = proc::proc.resolve_app(appid_str, appuuid_str);
+      const bool armed_isolated_session = terminal_session::supported() && terminal_client_settings && !terminal_client_settings->terminal_session_enabled && current_appid <= 0 && requested_app &&
+                                          remote_session::consume_isolated_session(request_identity.uuid);
+      if ((terminal_client_settings && terminal_client_settings->terminal_session_enabled) || armed_isolated_session) {
         const bool terminal_host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
-        const auto requested_app = proc::proc.resolve_app(appid_str, appuuid_str);
         if (!requested_app) {
           tree.put("root.gamesession", 0);
           tree.put("root.<xmlattr>.status_code", 404);
@@ -3254,6 +3257,11 @@ namespace nvhttp {
         config::merge_config_overrides(requested_runtime_overrides, terminal_client_settings->config_overrides);
 
         auto launch_session = make_launch_session(terminal_host_audio, args, request, false, &request_identity);
+        if (armed_isolated_session) {
+          launch_session->terminal_session_requested = true;
+          launch_session->steam_offline_isolation = false;
+          launch_session->client_cert = terminal_client_settings->cert;
+        }
         publish_terminal_session_route(
           tree,
           request,
@@ -3303,6 +3311,23 @@ namespace nvhttp {
         tree.put("root.resume", 0);
         tree.put("root.<xmlattr>.status_code", 403);
         tree.put("root.<xmlattr>.status_message", "Remote session action is not permitted for this caller");
+        return;
+      }
+      if (synthetic_control == remote_session::control_e::isolated_session) {
+        if (!terminal_session::supported() || get_client_terminal_session_enabled(identity.uuid)) {
+          tree.put("root.resume", 0);
+          tree.put("root.<xmlattr>.status_code", 403);
+          tree.put("root.<xmlattr>.status_message", !terminal_session::supported()
+                                                        ? "Isolated Session is not supported on this host"
+                                                        : "Isolated Session is not available for persistently terminal-enabled clients");
+          return;
+        }
+        remote_session::arm_isolated_session(identity.uuid);
+        const auto completion = *remote_session::successful_control_completion(synthetic_control);
+        tree.put("root.resume", 0);
+        tree.put("root.gamesession", 0);
+        tree.put("root.<xmlattr>.status_code", completion.status_code);
+        tree.put("root.<xmlattr>.status_message", std::string {completion.status_message});
         return;
       }
       if (decision.resume && decision.resume_role == remote_session::role_e::game && current_appid > 0) {
@@ -4676,6 +4701,7 @@ namespace nvhttp {
     discovery_route_pool.join();
     rtsp_stream::terminate_sessions(false);
     remote_session::notify_monitor_shutdown();
+    remote_session::notify_isolated_session_shutdown();
     terminal_session::notify_shutdown();
 #ifdef _WIN32
     cleanup_virtual_display_if_idle();
@@ -4689,6 +4715,7 @@ namespace nvhttp {
     for (const auto &client : clients) {
       (void) rtsp_stream::disconnect_client_sessions(client.uuid);
       remote_session::notify_monitor_unpair(client.uuid);
+      remote_session::notify_isolated_session_unpair(client.uuid);
       terminal_session::notify_unpair(client.uuid);
       forget_remote_client(client.uuid);
     }
@@ -4929,6 +4956,7 @@ namespace nvhttp {
     if (removed) {
       (void) rtsp_stream::disconnect_client_sessions(std::string {uuid});
       remote_session::notify_monitor_unpair(uuid);
+      remote_session::notify_isolated_session_unpair(uuid);
       terminal_session::notify_unpair(uuid);
       forget_remote_client(uuid);
 #ifdef _WIN32

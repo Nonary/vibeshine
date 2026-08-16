@@ -79,6 +79,8 @@ namespace terminal_session {
 
   void register_runtime_hooks(runtime_hooks_t hooks);
   [[nodiscard]] bool runtime_available();
+  /** True only on a host that exposes the terminal-session integration. */
+  [[nodiscard]] bool supported();
   [[nodiscard]] route_t prepare(request_t request);
   [[nodiscard]] state_t snapshot(std::string_view client_uuid);
   [[nodiscard]] bool disconnect(std::string_view client_uuid, std::string_view reason);
