@@ -688,7 +688,8 @@ namespace terminal_session::worker {
         } else {
           virtual_display::driver::ControlClient client {*opened.transport};
           const auto queried = client.query_display_state();
-          if (!queried.ok() || queried.value.entry_count != 1 || queried.value.entries[0].display_id == 0) {
+          if (!queried.ok() || queried.value.entry_count != 1 || queried.value.entries[0].display_id == 0 ||
+              queried.value.entries[0].kind != virtual_display::driver::kDisplayStateKindTemporary) {
             response.result = static_cast<std::uint8_t>(queried.ok() ? terminal_session::display::result::invalid : terminal_session::display::result::unavailable);
             response.native_error = queried.native_error;
           } else {
@@ -696,7 +697,9 @@ namespace terminal_session::worker {
             response.width = state.width;
             response.height = state.height;
             response.refresh_rate_millihz = state.refresh_rate_millihz;
+            response.hdr_enabled = (state.flags & virtual_display::driver::kDisplayStateFlagHdrEnabled) != 0 ? 1u : 0u;
             response.display_id = state.display_id;
+            response.snapshot_mac_key = snapshot_mac_key_;
             if (request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::set_mode)) {
               const auto changed = client.set_display_mode(virtual_display::driver::SetDisplayModeRequest {
                 .display_id = state.display_id,
@@ -839,6 +842,9 @@ namespace terminal_session::worker {
     auto route = transact_admission(*pipe_, request, static_cast<HANDLE>(process_), job, hdr_target_binding_, worker_poisoned, 60000, error);
     if (!route) return fail_start(error.empty() ? "Private worker did not become ready." : error);
     generation_ = request.admission.generation;
+    if (RAND_bytes(snapshot_mac_key_.data(), static_cast<int>(snapshot_mac_key_.size())) != 1) {
+      return fail_start("Private worker snapshot authentication key generation failed.");
+    }
     display_broker_running_.store(true, std::memory_order_release);
     display_broker_thread_ = std::jthread([this](std::stop_token) { run_display_broker(); });
     return route;
@@ -912,7 +918,7 @@ namespace terminal_session::worker {
     if (stopped) pipe_.reset();
     if (stopped && job_) { CloseHandle(static_cast<HANDLE>(job_)); job_ = nullptr; }
     if (!stopped) return false;
-    pid_ = 0; pipe_name_.clear(); display_pipe_name_.clear(); generation_ = 0; resource_ = {}; hdr_target_binding_.reset();
+    pid_ = 0; pipe_name_.clear(); display_pipe_name_.clear(); generation_ = 0; resource_ = {}; hdr_target_binding_.reset(); snapshot_mac_key_.fill(0);
 #endif
     return true;
   }

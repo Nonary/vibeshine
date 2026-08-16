@@ -4,6 +4,7 @@
 #include "terminal_session_runtime.h"
 
 #include <memory>
+#include <array>
 #include <atomic>
 #include <thread>
 #include <string_view>
@@ -46,6 +47,7 @@ namespace terminal_session::worker {
     // the first exact sole-target attestation and require it for this worker
     // until full stop.
     std::optional<terminal_session::hdr::target_binding_t> hdr_target_binding_;
+    std::array<std::uint8_t, 32> snapshot_mac_key_ {};
 #endif
     std::uint32_t pid_ {};
   };

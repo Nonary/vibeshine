@@ -38,3 +38,17 @@ TEST(TerminalSessionDisplayProtocol, UnknownAndOversizedFramesAreRejected) {
   std::array<std::uint8_t, max_message_size + 1> oversized {};
   EXPECT_FALSE(decode(oversized.data(), oversized.size(), request));
 }
+
+TEST(TerminalSessionDisplayProtocol, QueryResponseCarriesBoundedBrokerState) {
+  using namespace terminal_session::display;
+  static_assert(sizeof(response_t) == 88);
+  response_t response {};
+  response.operation = static_cast<std::uint8_t>(operation::query);
+  response.generation = 7;
+  response.request_id = 1;
+  response.display_id = 42;
+  response.hdr_enabled = 1;
+  response.snapshot_mac_key[0] = 0xA5;
+  EXPECT_TRUE(valid_response(response));
+  EXPECT_EQ(response.snapshot_mac_key.size(), 32u);
+}

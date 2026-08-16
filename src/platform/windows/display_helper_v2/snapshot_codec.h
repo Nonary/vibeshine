@@ -6,6 +6,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 /**
@@ -60,6 +61,7 @@ namespace display_helper::v2::codec {
   std::string serialize_snapshot(const Snapshot &snap, const layout_rotation_map_t &layout_rotations);
   ParsedSnapshot parse_snapshot_text(const std::string &data);
   bool snapshot_text_has_restore_payload(const std::string &data);
+  bool managed_snapshot_schema_is_valid(const Snapshot &snapshot, std::string_view expected_device_id);
 
   // --- filtering rules ---
 

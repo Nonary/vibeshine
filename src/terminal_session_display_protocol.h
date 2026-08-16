@@ -3,12 +3,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <array>
 #include <optional>
 
 namespace terminal_session::display {
   inline constexpr std::uint32_t magic = 0x31534454; // "TSD1"
   inline constexpr std::uint16_t version = 1;
-  inline constexpr std::size_t max_message_size = 64;
+  inline constexpr std::size_t max_message_size = 128;
 
   enum class operation : std::uint8_t {
     query = 1,
@@ -51,13 +52,14 @@ namespace terminal_session::display {
     std::uint32_t refresh_rate_millihz {};
     std::uint32_t hdr_enabled {};
     std::uint64_t display_id {};
+    std::array<std::uint8_t, 32> snapshot_mac_key {};
     std::uint32_t native_error {};
     std::uint32_t reserved {};
   };
 #pragma pack(pop)
 
   static_assert(sizeof(request_t) == 48);
-  static_assert(sizeof(response_t) == 56);
+  static_assert(sizeof(response_t) == 88);
 
   inline bool valid_operation(const std::uint8_t value) {
     return value >= static_cast<std::uint8_t>(operation::query) &&

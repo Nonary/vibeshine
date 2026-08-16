@@ -147,6 +147,26 @@ TEST(DisplayHelperV2Codec, LegacyV1SchemaParsesWithoutLayouts) {
   EXPECT_TRUE(codec::snapshot_text_has_restore_payload(fixture));
 }
 
+TEST(DisplayHelperV2Codec, ManagedSnapshotSchemaRequiresExactRemoteModeAndHdr) {
+  display_helper::v2::Snapshot snapshot;
+  const std::string device_id = "remote:7:9:42";
+  snapshot.m_modes.emplace(device_id, display_device::DisplayMode {
+    .m_resolution = {1920, 1080},
+    .m_refresh_rate = {60'000, 1000},
+  });
+  snapshot.m_hdr_states.emplace(device_id, display_device::HdrState::Disabled);
+  EXPECT_TRUE(codec::managed_snapshot_schema_is_valid(snapshot, device_id));
+
+  snapshot.m_topology = {{device_id}};
+  EXPECT_FALSE(codec::managed_snapshot_schema_is_valid(snapshot, device_id));
+  snapshot.m_topology.clear();
+  snapshot.m_hdr_states[device_id] = std::nullopt;
+  EXPECT_FALSE(codec::managed_snapshot_schema_is_valid(snapshot, device_id));
+  snapshot.m_hdr_states.erase(device_id);
+  snapshot.m_hdr_states.emplace("remote:7:9:43", display_device::HdrState::Disabled);
+  EXPECT_FALSE(codec::managed_snapshot_schema_is_valid(snapshot, device_id));
+}
+
 // --- virtual display classification (f3841ad8: baseline poisoning) ---
 
 TEST(DisplayHelperV2Codec, VirtualDisplayClassifier) {

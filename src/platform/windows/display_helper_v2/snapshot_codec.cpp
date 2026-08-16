@@ -593,6 +593,17 @@ namespace display_helper::v2::codec {
     }
   }
 
+  bool managed_snapshot_schema_is_valid(const Snapshot &snapshot, const std::string_view expected_device_id) {
+    const auto mode = snapshot.m_modes.find(std::string {expected_device_id});
+    const auto hdr = snapshot.m_hdr_states.find(std::string {expected_device_id});
+    return snapshot.m_topology.empty() && snapshot.m_primary_device.empty() && snapshot.m_origins.empty() &&
+           snapshot.m_modes.size() == 1 && mode != snapshot.m_modes.end() &&
+           snapshot.m_hdr_states.size() == 1 && hdr != snapshot.m_hdr_states.end() && hdr->second.has_value() &&
+           mode->second.m_resolution.m_width >= 1 && mode->second.m_resolution.m_width <= 16384 &&
+           mode->second.m_resolution.m_height >= 1 && mode->second.m_resolution.m_height <= 16384 &&
+           mode->second.m_refresh_rate.m_denominator != 0 && mode->second.m_refresh_rate.m_numerator >= 1;
+  }
+
   std::optional<Snapshot> filter_snapshot_for_save(
     Snapshot snap,
     const EnumeratedDeviceList &devices,

@@ -50,6 +50,7 @@
   #include "src/platform/windows/display_helper_v2/win_scheduled_task_manager.h"
   #include "src/platform/windows/display_helper_v2/win_virtual_display_driver.h"
   #include "src/platform/windows/ipc/pipes.h"
+  #include "src/terminal_session_display_protocol.h"
   #include "tools/display_helper_paths.h"
 
   #include <display_device/json.h>
@@ -571,22 +572,59 @@ namespace {
     display_helper::v2::WinScheduledTaskManager system_manager_;
   };
 
-  /// Validate a snapshot file found in a search root; remove it when it has no
-  /// usable restore payload (legacy validate_session_snapshot).
-  bool validate_snapshot_file(const std::filesystem::path &path, const char *label) {
-    display_helper::v2::AtomicFileTextStorage files;
+  enum class SnapshotValidation {
+    Valid,
+    Invalid,
+    Unavailable,
+  };
+
+  /// Validate a snapshot file found in a search root. Managed snapshots are a
+  /// broker-attested mode/HDR record, not a physical topology payload.
+  SnapshotValidation validate_snapshot_file(const std::filesystem::path &path, const char *label) {
+    display_helper::v2::AtomicFileTextStorage files {true};
+    if (display_helper_session::has_managed_context()) {
+      if (!display_helper_session::managed_context_is_valid() ||
+          !display_helper_session::is_non_console_interactive()) {
+        return SnapshotValidation::Unavailable;
+      }
+      const auto queried = terminal_session::display::transact(
+        terminal_session::display::operation::query,
+        display_helper_session::managed_generation());
+      if (!queried || queried->result != static_cast<std::uint8_t>(terminal_session::display::result::success) ||
+          queried->display_id == 0 ||
+          std::all_of(queried->snapshot_mac_key.begin(), queried->snapshot_mac_key.end(), [](const auto byte) { return byte == 0; })) {
+        return SnapshotValidation::Unavailable;
+      }
+      display_helper::v2::set_managed_snapshot_mac_key(queried->snapshot_mac_key);
+      const auto text = files.read(path.string());
+      if (!text) {
+        return SnapshotValidation::Unavailable;
+      }
+      const auto expected_device_id =
+        "remote:" + std::to_string(display_helper_session::managed_context().session_id) + ":" +
+        std::to_string(display_helper_session::managed_generation()) + ":" +
+        std::to_string(queried->display_id);
+      const auto loaded = display_helper::v2::codec::parse_snapshot_text(*text);
+      const bool valid = loaded.layout_rotations.empty() &&
+                         display_helper::v2::codec::managed_snapshot_schema_is_valid(
+                           loaded.snapshot, expected_device_id);
+      if (!valid) {
+        BOOST_LOG(warning) << "Rejecting invalid managed " << label << " snapshot without deleting its generation-bound state.";
+      }
+      return valid ? SnapshotValidation::Valid : SnapshotValidation::Invalid;
+    }
     const auto text = files.read(path.string());
     if (!text) {
-      return false;
+      return SnapshotValidation::Unavailable;
     }
     if (display_helper::v2::codec::snapshot_text_has_restore_payload(*text)) {
-      return true;
+      return SnapshotValidation::Valid;
     }
 
     BOOST_LOG(warning) << "Existing " << label << " snapshot is missing restore topology/mode data; removing path=" << path.string();
     std::error_code ec_rm;
     std::filesystem::remove(path, ec_rm);
-    return false;
+    return SnapshotValidation::Invalid;
   }
 
   /// Copy validated snapshots from any search root into the active snapshot dir
@@ -599,7 +637,7 @@ namespace {
       const auto paths = display_helper_paths::make_snapshot_paths(root);
       std::error_code ec_cur;
       if (std::filesystem::exists(paths.session_current, ec_cur) && !ec_cur) {
-        if (validate_snapshot_file(paths.session_current, "session")) {
+        if (validate_snapshot_file(paths.session_current, "session") == SnapshotValidation::Valid) {
           BOOST_LOG(info) << "Existing current session snapshot detected; will preserve until confirmed restore: "
                           << paths.session_current.string();
           if (paths.session_current != active_current) {
@@ -615,7 +653,7 @@ namespace {
       const auto paths = display_helper_paths::make_snapshot_paths(root);
       std::error_code ec_prev;
       if (std::filesystem::exists(paths.session_previous, ec_prev) && !ec_prev) {
-        if (validate_snapshot_file(paths.session_previous, "session")) {
+        if (validate_snapshot_file(paths.session_previous, "session") == SnapshotValidation::Valid) {
           if (paths.session_previous != active_previous) {
             std::error_code ec_copy;
             std::filesystem::create_directories(active_previous.parent_path(), ec_copy);

@@ -3,6 +3,7 @@
 #include "src/logging.h"
 #include "src/platform/windows/display_helper_session.h"
 #include "src/platform/windows/display_helper_v2/snapshot_codec.h"
+#include "src/platform/windows/display_helper_v2/file_text_storage.h"
 #include "src/platform/windows/display_helper_v2/topology_policy.h"
 #include "src/terminal_session_display_protocol.h"
 
@@ -26,6 +27,7 @@ namespace display_helper::v2 {
       std::uint32_t height {};
       std::uint32_t refresh_rate_millihz {};
       std::uint32_t session_id {};
+      bool hdr_enabled {};
     };
 
     std::string managed_snapshot_device_id(const RemoteDisplayTarget &target) {
@@ -77,12 +79,18 @@ namespace display_helper::v2 {
         BOOST_LOG(error) << "Display helper v2: broker failed to query Remote IDD state for session " << *session_id << ".";
         return std::nullopt;
       }
+      if (std::all_of(queried->snapshot_mac_key.begin(), queried->snapshot_mac_key.end(), [](const auto byte) { return byte == 0; })) {
+        failure_status = ApplyStatus::HelperUnavailable;
+        return std::nullopt;
+      }
+      set_managed_snapshot_mac_key(queried->snapshot_mac_key);
       return RemoteDisplayTarget {
         .display_id = queried->display_id,
         .width = queried->width,
         .height = queried->height,
         .refresh_rate_millihz = queried->refresh_rate_millihz,
         .session_id = *session_id,
+        .hdr_enabled = queried->hdr_enabled != 0,
       };
     }
 
@@ -152,9 +160,7 @@ namespace display_helper::v2 {
       }
 
       if (config.m_hdr_state) {
-        const auto status = set_remote_display_hdr(*target, *config.m_hdr_state);
-        if (status == ApplyStatus::Ok) managed_hdr_state_ = *config.m_hdr_state;
-        return status;
+        return set_remote_display_hdr(*target, *config.m_hdr_state);
       }
       return ApplyStatus::Ok;
     }
@@ -167,10 +173,8 @@ namespace display_helper::v2 {
       }
       const auto device_id = managed_snapshot_device_id(*target);
       if (!snapshot.m_topology.empty() || !snapshot.m_primary_device.empty() || !snapshot.m_origins.empty() ||
-          (snapshot.m_modes.size() != 1 && snapshot.m_modes.size() != 0) ||
-          (snapshot.m_hdr_states.size() > 1) ||
-          (!snapshot.m_modes.empty() && !snapshot.m_modes.contains(device_id)) ||
-          (!snapshot.m_hdr_states.empty() && !snapshot.m_hdr_states.contains(device_id))) {
+          snapshot.m_modes.size() != 1 || snapshot.m_hdr_states.size() != 1 ||
+          !codec::managed_snapshot_schema_is_valid(snapshot, device_id)) {
         return false;
       }
 
@@ -198,7 +202,7 @@ namespace display_helper::v2 {
           return false;
         }
         const auto &hdr = snapshot.m_hdr_states.begin()->second;
-        if (hdr && set_remote_display_hdr(*target, *hdr) != ApplyStatus::Ok) {
+        if (set_remote_display_hdr(*target, *hdr) != ApplyStatus::Ok) {
           return false;
         }
       }
@@ -305,7 +309,9 @@ namespace display_helper::v2 {
         .m_resolution = {target->width, target->height},
         .m_refresh_rate = display_device::Rational {target->refresh_rate_millihz, 1000},
         .m_primary = true,
-        .m_hdr_state = managed_hdr_state_,
+        .m_hdr_state = target->hdr_enabled ?
+                         std::optional<display_device::HdrState> {display_device::HdrState::Enabled} :
+                         std::optional<display_device::HdrState> {display_device::HdrState::Disabled},
       };
       return {std::move(device)};
     }
@@ -379,9 +385,9 @@ namespace display_helper::v2 {
         .m_resolution = {target->width, target->height},
         .m_refresh_rate = {target->refresh_rate_millihz, 1000},
       });
-      if (managed_hdr_state_) {
-        snapshot.m_hdr_states.emplace(device_id, managed_hdr_state_);
-      }
+      snapshot.m_hdr_states.emplace(
+        device_id,
+        target->hdr_enabled ? display_device::HdrState::Enabled : display_device::HdrState::Disabled);
       return snapshot;
     }
     if (!ensure_initialized()) {
@@ -449,9 +455,6 @@ namespace display_helper::v2 {
         // inherent to that isolated desktop, so only mode and HDR belong to
         // the restore transaction.
         const bool applied = apply_remote_snapshot_settings(snapshot);
-        if (applied && !snapshot.m_hdr_states.empty()) {
-          managed_hdr_state_ = snapshot.m_hdr_states.begin()->second;
-        }
         return applied;
       }
       if (!snapshot.m_modes.empty() && !display_device_->setDisplayModes(snapshot.m_modes)) {
@@ -570,7 +573,8 @@ namespace display_helper::v2 {
         if (!refresh || target->refresh_rate_millihz != *refresh) return false;
       }
       if (config.m_hdr_state &&
-          (!managed_hdr_state_ || *managed_hdr_state_ != *config.m_hdr_state)) {
+          ((target->hdr_enabled && *config.m_hdr_state != display_device::HdrState::Enabled) ||
+           (!target->hdr_enabled && *config.m_hdr_state != display_device::HdrState::Disabled))) {
         return false;
       }
       return true;

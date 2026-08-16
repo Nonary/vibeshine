@@ -1,17 +1,122 @@
 #include "src/platform/windows/display_helper_v2/file_text_storage.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdio>
 #include <cwctype>
+#include <cstring>
 #include <limits>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
+
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/crypto.h>
+
+#include "src/platform/windows/display_helper_session.h"
 
 #ifdef _WIN32
   #include <windows.h>
 #endif
 
 namespace display_helper::v2 {
+  namespace {
+    std::mutex snapshot_mac_mutex;
+    std::optional<std::array<std::uint8_t, 32>> snapshot_mac_key;
+
+#pragma pack(push, 1)
+    struct snapshot_envelope_header {
+      std::uint8_t magic[8];
+      std::uint32_t version {};
+      std::uint32_t session_id {};
+      std::uint64_t generation {};
+      std::uint32_t payload_size {};
+      std::uint8_t mac[32] {};
+    };
+#pragma pack(pop)
+
+    static_assert(sizeof(snapshot_envelope_header) == 60);
+
+    constexpr std::uint8_t kSnapshotEnvelopeMagic[8] {'V', 'S', 'N', 'A', 'P', 'M', 'A', 'C'};
+    constexpr std::uint32_t kSnapshotEnvelopeVersion = 1;
+
+    std::optional<std::array<std::uint8_t, 32>> current_snapshot_mac_key() {
+      std::lock_guard lock(snapshot_mac_mutex);
+      return snapshot_mac_key;
+    }
+
+    bool snapshot_hmac(
+      const std::array<std::uint8_t, 32> &key,
+      const std::string_view data,
+      std::array<std::uint8_t, 32> &out) {
+      unsigned int output_size = 0;
+      return HMAC(
+               EVP_sha256(), key.data(), static_cast<int>(key.size()),
+               reinterpret_cast<const unsigned char *>(data.data()), data.size(),
+               out.data(), &output_size) != nullptr && output_size == out.size();
+    }
+
+    std::optional<std::string> unwrap_snapshot(
+      const std::string &data,
+      const std::array<std::uint8_t, 32> &key) {
+      if (data.size() < sizeof(snapshot_envelope_header)) return std::nullopt;
+      snapshot_envelope_header header {};
+      std::memcpy(&header, data.data(), sizeof(header));
+      if (std::memcmp(header.magic, kSnapshotEnvelopeMagic, sizeof(header.magic)) != 0 ||
+          header.version != kSnapshotEnvelopeVersion ||
+          header.session_id != display_helper_session::managed_context().session_id ||
+          header.generation != display_helper_session::managed_generation() ||
+          header.payload_size > 1024u * 1024u ||
+          data.size() != sizeof(header) + header.payload_size) {
+        return std::nullopt;
+      }
+      const auto payload = data.substr(sizeof(header), header.payload_size);
+      std::array<std::uint8_t, 32> expected {};
+      std::string authenticated_data = data.substr(0, offsetof(snapshot_envelope_header, mac));
+      authenticated_data += payload;
+      if (!snapshot_hmac(key, authenticated_data, expected) ||
+          CRYPTO_memcmp(expected.data(), header.mac, expected.size()) != 0) {
+        return std::nullopt;
+      }
+      return payload;
+    }
+
+    std::optional<std::string> wrap_snapshot(
+      const std::string &payload,
+      const std::array<std::uint8_t, 32> &key) {
+      if (payload.size() > 1024u * 1024u) return std::nullopt;
+      snapshot_envelope_header header {};
+      std::memcpy(header.magic, kSnapshotEnvelopeMagic, sizeof(header.magic));
+      header.version = kSnapshotEnvelopeVersion;
+      header.session_id = display_helper_session::managed_context().session_id;
+      header.generation = display_helper_session::managed_generation();
+      header.payload_size = static_cast<std::uint32_t>(payload.size());
+      std::string authenticated_data {
+        reinterpret_cast<const char *>(&header), offsetof(snapshot_envelope_header, mac)};
+      authenticated_data += payload;
+      std::array<std::uint8_t, 32> mac {};
+      if (!snapshot_hmac(key, authenticated_data, mac)) return std::nullopt;
+      std::memcpy(header.mac, mac.data(), mac.size());
+      std::string result {
+        reinterpret_cast<const char *>(&header), sizeof(header)};
+      result += payload;
+      return result;
+    }
+  }
+
+  void set_managed_snapshot_mac_key(const std::array<std::uint8_t, 32> &key) {
+    std::lock_guard lock(snapshot_mac_mutex);
+    snapshot_mac_key = key;
+  }
+
+  void clear_managed_snapshot_mac_key() {
+    std::lock_guard lock(snapshot_mac_mutex);
+    snapshot_mac_key.reset();
+  }
+
 #ifdef _WIN32
   namespace {
     std::wstring normalized_path(std::wstring value) {
@@ -42,7 +147,8 @@ namespace display_helper::v2 {
 #endif
 
   std::optional<std::string> AtomicFileTextStorage::read(const std::string &key) {
-    constexpr std::uintmax_t kMaxSnapshotBytes = 1024u * 1024u;
+    const std::uintmax_t kMaxSnapshotBytes = snapshot_envelope_ && display_helper_session::has_managed_context() ?
+      1024u * 1024u + sizeof(snapshot_envelope_header) : 1024u * 1024u;
     const std::filesystem::path path {key};
 #ifdef _WIN32
     // Open and size the file through one handle.  A path-only status check
@@ -90,6 +196,10 @@ namespace display_helper::v2 {
       }
       offset += read;
     }
+    if (snapshot_envelope_ && display_helper_session::has_managed_context()) {
+      const auto mac_key = current_snapshot_mac_key();
+      return mac_key ? unwrap_snapshot(data, *mac_key) : std::nullopt;
+    }
     return data;
 #else
     std::error_code ec;
@@ -126,9 +236,18 @@ namespace display_helper::v2 {
   }
 
   bool AtomicFileTextStorage::write_atomically(const std::string &key, const std::string &text) {
-    constexpr std::size_t kMaxSnapshotBytes = 1024u * 1024u;
+    std::string stored_text = text;
+    if (snapshot_envelope_ && display_helper_session::has_managed_context()) {
+      const auto mac_key = current_snapshot_mac_key();
+      if (!mac_key) return false;
+      const auto wrapped = wrap_snapshot(text, *mac_key);
+      if (!wrapped) return false;
+      stored_text = *wrapped;
+    }
+    const std::size_t kMaxSnapshotBytes = snapshot_envelope_ && display_helper_session::has_managed_context() ?
+      1024u * 1024u + sizeof(snapshot_envelope_header) : 1024u * 1024u;
     const std::filesystem::path path {key};
-    if (path.empty() || text.size() > kMaxSnapshotBytes) {
+    if (path.empty() || stored_text.size() > kMaxSnapshotBytes) {
       return false;
     }
     std::error_code ec;
@@ -158,10 +277,10 @@ namespace display_helper::v2 {
     auto close_temporary = std::unique_ptr<void, void (*)(void *)> {
       temporary_handle, [](void *value) { CloseHandle(value); }};
     std::size_t offset = 0;
-    while (offset < text.size()) {
-      const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(text.size() - offset, 64 * 1024));
+    while (offset < stored_text.size()) {
+      const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(stored_text.size() - offset, 64 * 1024));
       DWORD written = 0;
-      if (!WriteFile(temporary_handle, text.data() + offset, chunk, &written, nullptr) || written != chunk) {
+      if (!WriteFile(temporary_handle, stored_text.data() + offset, chunk, &written, nullptr) || written != chunk) {
         close_temporary.release();
         CloseHandle(temporary_handle);
         std::filesystem::remove(temporary, ec);
@@ -181,7 +300,17 @@ namespace display_helper::v2 {
       std::filesystem::remove(temporary, ec);
       return false;
     }
-    return true;
+    const auto final_handle = CreateFileW(
+      path.wstring().c_str(), GENERIC_READ,
+      FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (final_handle == INVALID_HANDLE_VALUE) return false;
+    const auto close_final = std::unique_ptr<void, void (*)(void *)> {
+      final_handle, [](void *value) { CloseHandle(value); }};
+    BY_HANDLE_FILE_INFORMATION final_info {};
+    return GetFileInformationByHandle(final_handle, &final_info) &&
+           (final_info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) == 0 &&
+           handle_matches_path(final_handle, path);
 #else
     auto temporary = path;
     temporary += L".tmp";
@@ -191,7 +320,7 @@ namespace display_helper::v2 {
         return false;
       }
       auto guard = std::unique_ptr<FILE, int (*)(FILE *)> {file, fclose};
-      if (fwrite(text.data(), 1, text.size(), file) != text.size()) {
+      if (fwrite(stored_text.data(), 1, stored_text.size(), file) != stored_text.size()) {
         guard.reset();
         std::filesystem::remove(temporary, ec);
         return false;

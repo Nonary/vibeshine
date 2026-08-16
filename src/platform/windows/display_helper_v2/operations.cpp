@@ -637,17 +637,13 @@ namespace display_helper::v2 {
       }
       if (!display_helper_session::managed_context_is_valid() ||
           !display_helper_session::is_non_console_interactive() ||
-          devices.size() != 1 || !exclusions.empty()) {
+          devices.size() != 1) {
         return std::nullopt;
       }
       const auto &device = devices.front();
       const auto device_id = device.m_device_id.empty() ? device.m_display_name : device.m_device_id;
-      if (device_id.empty() || !loaded.snapshot.m_topology.empty() ||
-          !loaded.snapshot.m_primary_device.empty() || !loaded.snapshot.m_origins.empty() ||
-          loaded.snapshot.m_modes.size() != 1 || loaded.snapshot.m_hdr_states.size() > 1 ||
-          !loaded.snapshot.m_modes.contains(device_id) ||
-          (!loaded.snapshot.m_hdr_states.empty() && !loaded.snapshot.m_hdr_states.contains(device_id)) ||
-          !loaded.layout_rotations.empty()) {
+      if (device_id.empty() || !loaded.layout_rotations.empty() ||
+          !codec::managed_snapshot_schema_is_valid(loaded.snapshot, device_id)) {
         return std::nullopt;
       }
       return loaded;

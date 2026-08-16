@@ -104,8 +104,8 @@ namespace display_helper::v2 {
           !display_helper_session::is_non_console_interactive() ||
           !snap.m_topology.empty() || !snap.m_primary_device.empty() || !snap.m_origins.empty() ||
           snap.m_modes.size() != 1 ||
-          snap.m_hdr_states.size() > 1 ||
-          !exclusions.empty()) {
+          snap.m_hdr_states.size() != 1 ||
+          !codec::managed_snapshot_schema_is_valid(snap, snap.m_modes.begin()->first)) {
         BOOST_LOG(warning) << "Skipping managed display snapshot save ("
                            << (reason ? reason : "snapshot")
                            << "); invalid remote baseline.";

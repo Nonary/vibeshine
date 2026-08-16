@@ -228,5 +228,6 @@ target_link_libraries(sunshine_display_helper
         secur32
         ole32
         taskschd
+        ${OPENSSL_LIBRARIES}
         ${PLATFORM_LIBRARIES})
 target_compile_options(sunshine_display_helper PRIVATE ${SUNSHINE_COMPILE_OPTIONS})

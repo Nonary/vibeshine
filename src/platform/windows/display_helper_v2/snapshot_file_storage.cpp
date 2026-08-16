@@ -8,7 +8,8 @@ namespace display_helper::v2 {
   }
 
   FileSnapshotStorage::FileSnapshotStorage(SnapshotPaths paths)
-    : core_(keys_from(paths), files_) {}
+    : files_(true),
+      core_(keys_from(paths), files_) {}
 
   std::optional<Snapshot> FileSnapshotStorage::load(SnapshotTier tier) { return core_.load(tier); }
   std::optional<codec::ParsedSnapshot> FileSnapshotStorage::load_with_metadata(SnapshotTier tier) { return core_.load_with_metadata(tier); }
