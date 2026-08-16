@@ -2869,6 +2869,7 @@ namespace webrtc_stream {
             launch_session->frame_generation_provider = app_ctx->frame_generation_provider;
             rtsp_stream::launch_session_t::app_metadata_t metadata;
             metadata.id = app_ctx->id;
+            metadata.uuid = app_ctx->uuid;
             metadata.name = app_ctx->name;
             metadata.virtual_screen = app_ctx->virtual_screen;
             metadata.has_command = !app_ctx->cmd.empty();

@@ -41,6 +41,9 @@ namespace terminal_session::service {
   [[nodiscard]] std::wstring expected_installed_image(std::wstring_view module_path, bool service_image);
 
 #ifdef _WIN32
+  /** Authenticate an already-connected pipe server as the installed LocalSystem broker. */
+  [[nodiscard]] bool authenticate_service_peer(platf::dxgi::INamedPipe &pipe);
+
   /** The only production transport: a framed, ACL-protected local pipe. */
   class pipe_server_t {
   public:

@@ -38,12 +38,23 @@ namespace terminal_session::service {
       response.error = "Terminal-session peer identity was not authenticated.";
       return protocol::encode(response);
     }
+    // Opcode 10 is private worker-to-SYSTEM-broker traffic. The public
+    // service endpoint is reachable only by the installed interactive main
+    // host, and must never become an alternate HDR activation authority.
+    if (authenticated.operation == protocol::opcode::worker_hdr_activate) {
+      response.reason = protocol::reject_reason::invalid_state;
+      response.client_uuid = authenticated.client_uuid;
+      response.generation = authenticated.generation;
+      response.launch_id = authenticated.launch_id;
+      response.error = "Native HDR activation is accepted only on the authenticated private worker pipe.";
+      return protocol::encode(response);
+    }
     if (authenticated.operation == protocol::opcode::control_challenge) {
       response.client_uuid = authenticated.client_uuid;
       response.generation = authenticated.generation;
       response.launch_id = authenticated.launch_id;
       response.ticket = admissions_.issue(authenticated.client_uuid, authenticated.generation, authenticated.launch_id, authenticated.peer,
-                                          protocol::admission_authority::clock_t::now(), authenticated.ticket.operation);
+                                          protocol::admission_authority::clock_t::now(), authenticated.ticket.operation, authenticated.release);
       if (!response.ticket) {
         response.reason = protocol::reject_reason::worker_unavailable;
         response.error = "Terminal-session admission nonce generation failed.";
@@ -128,6 +139,10 @@ namespace terminal_session::service {
     }
   }
 
+  bool authenticate_service_peer(platf::dxgi::INamedPipe &pipe) {
+    return expected_service_peer(pipe);
+  }
+
   pipe_server_t::pipe_server_t(handler_t handler, peer_validator_t validator): endpoint_(std::move(handler)), validator_(std::move(validator)) {}
   pipe_server_t::~pipe_server_t() { stop(); }
 
@@ -152,20 +167,31 @@ namespace terminal_session::service {
       if (!pipe) { running_.store(false); return; }
       pipe->wait_for_client_connection(250);
       if (!pipe->is_connected()) continue;
+      DWORD pid = 0;
+      std::wstring sid;
+      std::uint64_t creation_time = 0;
+      const bool has_pid = pipe->get_client_process_id(pid);
+      const bool has_sid = pipe->get_client_user_sid_string(sid);
+      const bool has_creation = pipe->get_client_process_creation_time(creation_time);
+      std::string sid_utf8;
+      if (has_sid) sid_utf8.assign(sid.begin(), sid.end());
+      protocol::peer_identity_t identity {
+        .pid = has_pid ? static_cast<std::uint32_t>(pid) : 0,
+        .sid = std::move(sid_utf8),
+        .creation_time = creation_time,
+        .authenticated = has_pid && has_sid && has_creation && expected_main_peer(pid, creation_time),
+      };
+      if (validator_ && !validator_(identity)) identity.authenticated = false;
+      // Reject a pipe squatter before allowing it to consume the bounded
+      // receive timeout on the broker's single admission endpoint.
+      if (!identity.authenticated) {
+        pipe->disconnect();
+        continue;
+      }
       std::array<std::uint8_t, protocol::max_message_size> buffer {};
       std::size_t bytes = 0;
       const auto receive = pipe->receive(buffer, bytes, 1500);
       if (receive == platf::dxgi::PipeResult::Success && bytes <= buffer.size()) {
-        DWORD pid = 0;
-        std::wstring sid;
-        std::uint64_t creation_time = 0;
-        const bool has_pid = pipe->get_client_process_id(pid);
-        const bool has_sid = pipe->get_client_user_sid_string(sid);
-        const bool has_creation = pipe->get_client_process_creation_time(creation_time);
-        std::string sid_utf8;
-        if (has_sid) sid_utf8.assign(sid.begin(), sid.end());
-        protocol::peer_identity_t identity {.pid = has_pid ? static_cast<std::uint32_t>(pid) : 0, .sid = std::move(sid_utf8), .creation_time = creation_time, .authenticated = has_pid && has_sid && has_creation && expected_main_peer(pid, creation_time)};
-        if (validator_ && !validator_(identity)) identity.authenticated = false;
         const auto reply = endpoint_.handle(std::span<const std::uint8_t> {buffer.data(), bytes}, identity);
         if (!reply.empty()) (void) pipe->send(reply, 1500);
       }
@@ -177,13 +203,13 @@ namespace terminal_session::service {
     platf::dxgi::FramedPipeFactory factory {std::make_unique<platf::dxgi::NamedPipeFactory>()};
     auto pipe = factory.create_client(std::string {broker_pipe_name});
     if (!pipe) return std::nullopt;
-    if (!expected_service_peer(*pipe)) return std::nullopt;
+    if (!authenticate_service_peer(*pipe)) return std::nullopt;
     const auto encoded = protocol::encode(request);
     if (encoded.empty() || encoded.size() > protocol::max_message_size || !pipe->send(encoded, timeout_ms)) return std::nullopt;
     std::array<std::uint8_t, protocol::max_message_size> buffer {};
     std::size_t bytes = 0;
     if (pipe->receive(buffer, bytes, timeout_ms) != platf::dxgi::PipeResult::Success || bytes > buffer.size()) return std::nullopt;
-    if (!expected_service_peer(*pipe)) return std::nullopt;
+    if (!authenticate_service_peer(*pipe)) return std::nullopt;
     auto response = protocol::decode_response(std::span<const std::uint8_t> {buffer.data(), bytes});
     if (!response || response->client_uuid != request.client_uuid || response->generation != request.generation || response->launch_id != request.launch_id) return std::nullopt;
     return response;

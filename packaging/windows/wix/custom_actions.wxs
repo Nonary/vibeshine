@@ -89,6 +89,7 @@
       <Component Id="SunshineSvc" Guid="*">
         <!-- The service executable bound in at link-time via PayloadRoot binder path -->
         <File Id="SunshineSvcExe" Source="!(bindpath.PayloadRoot)tools\sunshinesvc.exe" KeyPath="yes" />
+        <File Id="VibeshineSeatControllerExe" Source="!(bindpath.PayloadRoot)tools\vibeshine_seat_controller.exe" />
         <ServiceInstall
             Id="SunshineServiceInstall"
             Name="SunshineService"
@@ -129,6 +130,7 @@
     <!-- Quiet process kill and service removal for manual uninstalls -->
     <CustomAction Id="KillProcsQuietImmediate" BinaryKey="WixCA" DllEntry="CAQuietExec" Return="ignore" />
     <CustomAction Id="KillProcsQuiet" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
+    <CustomAction Id="CleanupTerminalSeats" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="RemoveServiceQuiet" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="UninstallSudovda" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="UninstallVirtualDisplayDriver" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
@@ -202,10 +204,13 @@
     <!-- Immediate setters for quiet process kill and service removal on manual uninstall -->
     <CustomAction Id="SetKillProcsQuietImmediate"
                  Property="QtExecCmdLine"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite-launcher','playnite_launcher','sunshine_display_helper'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite-launcher','playnite_launcher','sunshine_display_helper','vibeshine_seat_controller','vibeshine_terminal_hdr_activator'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetKillProcsQuiet"
                  Property="KillProcsQuiet"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite-launcher','playnite_launcher','sunshine_display_helper'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite-launcher','playnite_launcher','sunshine_display_helper','vibeshine_seat_controller','vibeshine_terminal_hdr_activator'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+    <CustomAction Id="SetCleanupTerminalSeats"
+                 Property="CleanupTerminalSeats"
+                 Value="&quot;[INSTALL_ROOT]tools\sunshinesvc.exe&quot; --cleanup-terminal-seats"/>
     <CustomAction Id="SetRemoveServiceQuiet"
                  Property="RemoveServiceQuiet"
                  Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete VibeshineService | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>

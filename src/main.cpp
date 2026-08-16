@@ -27,6 +27,7 @@
 #include "process.h"
 #include "rtsp.h"
 #include "system_tray.h"
+#include "terminal_session_worker_mode.h"
 #include "update.h"
 #include "upnp.h"
 #include "version_compare.h"
@@ -258,6 +259,13 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(error) << "Logging failed to initialize"sv;
   }
 
+  auto terminal_worker_bootstrap = terminal_session::worker_mode::connect_from_environment();
+  if (terminal_worker_bootstrap.requested && !terminal_worker_bootstrap.context) {
+    BOOST_LOG(error) << "Private terminal worker bootstrap failed: " << terminal_worker_bootstrap.error;
+    return 8;
+  }
+  const bool private_terminal_worker = terminal_worker_bootstrap.context != nullptr;
+
 #ifdef _WIN32
   const auto app_user_model_id_status =
     SetCurrentProcessExplicitAppUserModelID(WIDEN_STRING_LITERAL(PROJECT_APP_USER_MODEL_ID));
@@ -307,8 +315,10 @@ int main(int argc, char *argv[]) {
 #endif
 
 #ifdef _WIN32
-  platf::frame_limiter_nvcp::restore_pending_overrides();
-  platf::rtss_restore_pending_overrides();
+  if (!private_terminal_worker) {
+    platf::frame_limiter_nvcp::restore_pending_overrides();
+    platf::rtss_restore_pending_overrides();
+  }
 #endif
 
   if (!config::sunshine.cmd.name.empty()) {
@@ -338,7 +348,7 @@ int main(int argc, char *argv[]) {
 
 #ifdef WIN32
   // Modify relevant NVIDIA control panel settings if the system has corresponding gpu
-  if (nvprefs_instance.load()) {
+  if (!private_terminal_worker && nvprefs_instance.load()) {
     // Restore global settings to the undo file left by improper termination of sunshine.exe
     nvprefs_instance.restore_from_and_delete_undo_file_if_exists();
     // Modify application settings for sunshine.exe
@@ -492,7 +502,7 @@ int main(int argc, char *argv[]) {
     system_tray::run_tray();
   }
   // Schedule periodic update checks if configured
-  if (config::sunshine.update_check_interval_seconds > 0) {
+  if (!private_terminal_worker && config::sunshine.update_check_interval_seconds > 0) {
     // Trigger an immediate update check on startup so users don't wait
     // a full interval before the first detection occurs.
     update::trigger_check(true);
@@ -776,7 +786,7 @@ int main(int argc, char *argv[]) {
     session_history::shutdown();
   });
 
-  if (http::init()) {
+  if (!private_terminal_worker && http::init()) {
     BOOST_LOG(fatal) << "HTTP interface failed to initialize"sv;
 
 #ifdef _WIN32
@@ -789,36 +799,50 @@ int main(int argc, char *argv[]) {
 
 #ifdef _WIN32
   // Start Playnite integration (IPC + handlers)
-  auto playnite_integration_guard = platf::playnite::start();
+  auto playnite_integration_guard = private_terminal_worker ? std::unique_ptr<platf::deinit_t> {} : platf::playnite::start();
 #endif
 
   std::unique_ptr<platf::deinit_t> mDNS;
-  auto sync_mDNS = std::async(std::launch::async, [&mDNS]() {
-    mDNS = platf::publish::start();
-  });
+  std::future<void> sync_mDNS;
+  if (!private_terminal_worker) {
+    sync_mDNS = std::async(std::launch::async, [&mDNS]() { mDNS = platf::publish::start(); });
+  }
 
   std::unique_ptr<platf::deinit_t> upnp_unmap;
-  auto sync_upnp = std::async(std::launch::async, [&upnp_unmap]() {
-    upnp_unmap = upnp::start();
-  });
+  std::future<void> sync_upnp;
+  if (!private_terminal_worker) {
+    sync_upnp = std::async(std::launch::async, [&upnp_unmap]() { upnp_unmap = upnp::start(); });
+  }
 
   // FIXME: Temporary workaround: Simple-Web_server needs to be updated or replaced
   if (shutdown_event->peek()) {
     return lifetime::desired_exit_code;
   }
 
-  std::thread httpThread {nvhttp::start};
-  std::thread configThread {confighttp::start};
+  std::thread httpThread;
+  std::thread configThread;
+  if (!private_terminal_worker) {
+    httpThread = std::thread {nvhttp::start};
+    configThread = std::thread {confighttp::start};
+  }
   std::thread rtspThread {rtsp_stream::start};
+
+  if (private_terminal_worker) {
+    std::string ready_error;
+    if (!terminal_worker_bootstrap.context->publish_ready(ready_error)) {
+      BOOST_LOG(error) << "Private terminal worker readiness failed: " << ready_error;
+      shutdown_event->raise(true);
+    }
+  }
 
   // Start listeners before any display-driver recovery or cold encoder probe.
   // A boot-time driver restart can take several bounded attempts; it must not
   // make the service unreachable while the interactive desktop converges.
-  startup_probe();
+  if (!private_terminal_worker) startup_probe();
 
 #ifdef _WIN32
   // If we're using the default port and GameStream is enabled, warn the user
-  if (config::sunshine.port == 47989 && is_gamestream_enabled()) {
+  if (!private_terminal_worker && config::sunshine.port == 47989 && is_gamestream_enabled()) {
     BOOST_LOG(fatal) << "GameStream is still enabled in GeForce Experience! This *will* cause streaming problems with Sunshine!"sv;
     BOOST_LOG(fatal) << "Disable GameStream on the SHIELD tab in GeForce Experience or change the Port setting through the Sunshine configuration API."sv;
   }
@@ -826,6 +850,7 @@ int main(int argc, char *argv[]) {
 
   // Wait for shutdown
   shutdown_event->view();
+  if (terminal_worker_bootstrap.context) terminal_worker_bootstrap.context->stop();
   // The signal handler only wakes main; start the owned watchdog here so it
   // never constructs threads or queues work from signal context.
   shutdown_deadline.arm();
@@ -841,26 +866,30 @@ int main(int argc, char *argv[]) {
   // Stop the owned lock-screen virtual-output worker before recovery workers
   // can publish more overrides. Both use configuration, the display helper,
   // and mail, all of which remain live until these joins complete.
-  config::request_deferred_virtual_output_reapply_shutdown();
-  VDISPLAY::request_virtual_display_recovery_shutdown();
-  config::join_deferred_virtual_output_reapply_worker();
-  VDISPLAY::join_virtual_display_recovery_monitors();
+  if (!private_terminal_worker) {
+    config::request_deferred_virtual_output_reapply_shutdown();
+    VDISPLAY::request_virtual_display_recovery_shutdown();
+    config::join_deferred_virtual_output_reapply_worker();
+    VDISPLAY::join_virtual_display_recovery_monitors();
+  }
 #endif
 
-  httpThread.join();
-  configThread.join();
+  if (httpThread.joinable()) httpThread.join();
+  if (configThread.joinable()) configThread.join();
   rtspThread.join();
 
 #ifdef _WIN32
   // Full process shutdown cannot leave the paused-session watchdog running.
   // If it survives past main(), CRT teardown can fast-fail while the helper
   // watchdog thread is still unwinding.
-  display_helper_integration::stop_watchdog(true);
+  if (!private_terminal_worker) display_helper_integration::stop_watchdog(true);
 
   // The virtual display watchdog thread also lives in static storage.
   // Ensure it is joined before CRT on-exit handlers destroy the thread object.
-  VDISPLAY::cleanup_retained_ensure_display();
-  VDISPLAY::closeVDisplayDevice();
+  if (!private_terminal_worker) {
+    VDISPLAY::cleanup_retained_ensure_display();
+    VDISPLAY::closeVDisplayDevice();
+  }
 #endif
 
   task_pool.stop();

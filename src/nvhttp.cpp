@@ -2277,6 +2277,7 @@ namespace nvhttp {
           launch_session->frame_generation_provider = app_ctx->frame_generation_provider;
           rtsp_stream::launch_session_t::app_metadata_t metadata;
           metadata.id = app_ctx->id;
+          metadata.uuid = app_ctx->uuid;
           metadata.name = app_ctx->name;
           metadata.virtual_screen = app_ctx->virtual_screen;
           metadata.has_command = !app_ctx->cmd.empty();
@@ -2375,15 +2376,13 @@ namespace nvhttp {
     std::shared_ptr<rtsp_stream::launch_session_t> launch_session,
     std::unordered_map<std::string, std::string> runtime_config_overrides = {}
   ) {
-    const auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
-    if (!launch_session->rtsp_cipher && encryption_mode == config::ENCRYPTION_MODE_MANDATORY) {
-      BOOST_LOG(error) << "Rejecting terminal-session client that cannot comply with mandatory encryption requirement"sv;
+    if (!launch_session->rtsp_cipher) {
+      BOOST_LOG(error) << "Rejecting terminal-session client without encrypted RTSP support"sv;
       tree.put(operation == terminal_session::operation_e::resume ? "root.resume" : "root.gamesession", 0);
       tree.put("root.<xmlattr>.status_code", 403);
-      tree.put("root.<xmlattr>.status_message", "Encryption is mandatory for this host but unsupported by the client");
+      tree.put("root.<xmlattr>.status_message", "Terminal emulation requires encrypted RTSP support");
       return;
     }
-
     const auto client_uuid = launch_session->client_uuid;
     const auto launch_id = launch_session->id;
     const auto rtsp_url_scheme = launch_session->rtsp_url_scheme;
@@ -3874,6 +3873,18 @@ namespace nvhttp {
       config::merge_config_overrides(requested_runtime_overrides, terminal_client_settings->config_overrides);
 
       auto launch_session = make_launch_session(terminal_host_audio, args, request, false, &resume_identity);
+      launch_session->appid = seat.app_id;
+      if (const auto running_app = proc::proc.resolve_app(seat.app_id)) {
+        rtsp_stream::launch_session_t::app_metadata_t metadata;
+        metadata.id = running_app->id;
+        metadata.uuid = running_app->uuid;
+        metadata.name = running_app->name;
+        metadata.virtual_screen = false;
+        metadata.has_command = !running_app->cmd.empty();
+        metadata.has_playnite = !running_app->playnite_id.empty();
+        metadata.playnite_fullscreen = running_app->playnite_fullscreen;
+        launch_session->app_metadata = std::move(metadata);
+      }
       publish_terminal_session_route(
         tree,
         request,

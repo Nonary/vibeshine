@@ -19,16 +19,27 @@
 
 namespace terminal_session::protocol {
   constexpr std::uint32_t magic = 0x31534254; // "TSB1"
-  constexpr std::uint16_t version = 1;
-  constexpr std::size_t max_message_size = 4096;
+  constexpr std::uint16_t version = 4;
+  constexpr std::size_t max_launch_payload_size = 48 * 1024;
+  constexpr std::size_t max_message_size = 64 * 1024;
   constexpr std::size_t max_uuid_size = 128;
   constexpr std::size_t max_sid_size = 184;
   constexpr std::size_t max_error_size = 256;
-  constexpr auto ticket_lifetime = std::chrono::seconds {10};
+  // Long enough for a cold private Sunshine process to parse its inherited
+  // configuration and authenticate to the already-created pipe. Tickets are
+  // still peer-bound, one-use, and never leave local protected IPC.
+  constexpr auto ticket_lifetime = std::chrono::seconds {30};
 
   enum class opcode : std::uint8_t {
     prepare = 1, resume = 2, release = 3, reply = 4, reject = 5,
-    control_prepare = 6, control_release = 7, control_challenge = 8
+    control_prepare = 6, control_release = 7, control_challenge = 8, control_query = 9,
+    worker_hdr_activate = 10
+  };
+
+  enum class release_mode : std::uint8_t {
+    retain = 0,
+    abandon = 1,
+    shutdown = 2,
   };
 
   enum class reject_reason : std::uint8_t {
@@ -53,6 +64,7 @@ namespace terminal_session::protocol {
 
   struct ticket_t {
     opcode operation {opcode::prepare};
+    release_mode release {release_mode::retain};
     std::string client_uuid;
     std::uint64_t generation {};
     std::uint32_t launch_id {};
@@ -62,9 +74,14 @@ namespace terminal_session::protocol {
 
   struct request_t {
     opcode operation {opcode::prepare};
+    release_mode release {release_mode::retain};
     std::string client_uuid;
     std::uint64_t generation {};
     std::uint32_t launch_id {};
+    // Serialized, already-authenticated launch material. It is present only on
+    // control_prepare/prepare, remains inside protected local IPC, and is
+    // bounded independently from the rest of the control message.
+    std::vector<std::uint8_t> launch_payload;
     ticket_t ticket;
     peer_identity_t peer;
   };
@@ -83,6 +100,13 @@ namespace terminal_session::protocol {
     std::uint16_t video_port {};
     std::uint16_t audio_port {};
     std::optional<ticket_t> ticket;
+    bool state_exists {};
+    bool state_connected {};
+    std::uint64_t owner_generation {};
+    std::uint32_t owner_launch_id {};
+    std::int32_t app_id {};
+    std::string app_uuid;
+    std::string app_name;
   };
 
   [[nodiscard]] std::vector<std::uint8_t> encode(const request_t &request);
@@ -98,9 +122,11 @@ namespace terminal_session::protocol {
     explicit admission_authority(std::uint64_t seed);
 
     [[nodiscard]] std::optional<ticket_t> issue(std::string_view client_uuid, std::uint64_t generation, std::uint32_t launch_id,
-                                 clock_t::time_point now = clock_t::now(), opcode operation = opcode::prepare);
+                                 clock_t::time_point now = clock_t::now(), opcode operation = opcode::prepare,
+                                 release_mode release = release_mode::retain);
     [[nodiscard]] std::optional<ticket_t> issue(std::string_view client_uuid, std::uint64_t generation, std::uint32_t launch_id,
-                                 const peer_identity_t &peer, clock_t::time_point now = clock_t::now(), opcode operation = opcode::prepare);
+                                 const peer_identity_t &peer, clock_t::time_point now = clock_t::now(), opcode operation = opcode::prepare,
+                                 release_mode release = release_mode::retain);
     [[nodiscard]] std::optional<reject_reason> consume(const request_t &request,
                                                         clock_t::time_point now = clock_t::now());
     void expire(clock_t::time_point now = clock_t::now());

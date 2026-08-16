@@ -15,6 +15,7 @@ namespace terminal_session::worker {
     std::uint16_t control_port {};
     std::uint16_t video_port {};
     std::uint16_t audio_port {};
+    std::uint16_t base_port {};
   };
 
   // Produces a private worker command contract. The ticket is passed as an

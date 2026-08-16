@@ -60,6 +60,7 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/process.h"
+#include "src/terminal_session_worker_mode.h"
 #include "src/utility.h"
 #include "utf_utils.h"
 
@@ -1231,7 +1232,8 @@ namespace platf {
       free_proc_thread_attr_list(list);
     });
 
-    DWORD creation_flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_BREAKAWAY_FROM_JOB;
+    DWORD creation_flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
+    if (!terminal_session::worker_mode::active()) creation_flags |= CREATE_BREAKAWAY_FROM_JOB;
 
     // Create a new console for interactive processes and use no console for non-interactive processes
     creation_flags |= interactive ? CREATE_NEW_CONSOLE : CREATE_NO_WINDOW;

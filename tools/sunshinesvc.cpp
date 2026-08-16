@@ -8,12 +8,17 @@
 #include <string>
 #include <Windows.h>
 #include <WtsApi32.h>
+#include <shellapi.h>
 #include <memory>
 #include <atomic>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 #include "src/platform/windows/service_constants.h"
+#include "src/platform/windows/terminal_session_seat_provider.h"
+#include "src/terminal_session_launch_codec.h"
+#include "src/terminal_session_runtime.h"
 #include "src/terminal_session_service.h"
 #include "src/terminal_session_worker_process.h"
 
@@ -28,9 +33,17 @@ HANDLE stop_event;
 HANDLE session_change_event;
 std::unique_ptr<terminal_session::service::pipe_server_t> terminal_broker;
 std::mutex terminal_state_mutex;
-struct terminal_state_t { std::uint64_t generation {}; std::uint32_t launch_id {}; };
+struct terminal_state_t {
+  std::uint64_t generation {};
+  std::uint32_t launch_id {};
+  bool connected {};
+  terminal_session::route_t route;
+  std::int32_t app_id {};
+  std::string app_uuid;
+  std::string app_name;
+};
 std::unordered_map<std::string, terminal_state_t> terminal_states;
-terminal_session::worker::process_t terminal_worker;
+std::unique_ptr<terminal_session::runtime_t> terminal_runtime;
 std::atomic<DWORD> authorized_sunshine_pid {0};
 std::atomic<std::uint64_t> authorized_sunshine_creation {0};
 
@@ -54,6 +67,25 @@ terminal_session::protocol::response_t HandleTerminalBroker(const terminal_sessi
   response.generation = request.generation;
   response.launch_id = request.launch_id;
   std::lock_guard lock {terminal_state_mutex};
+  if (request.operation == terminal_session::protocol::opcode::control_query) {
+    const auto found = terminal_states.find(request.client_uuid);
+    response.accepted = true;
+    if (found == terminal_states.end()) return response;
+    response.state_exists = true;
+    response.state_connected = found->second.connected;
+    response.owner_generation = found->second.generation;
+    response.owner_launch_id = found->second.launch_id;
+    response.windows_session_id = found->second.route.windows_session_id;
+    response.seat_id = found->second.route.seat_id;
+    response.rtsp_port = found->second.route.rtsp_port;
+    response.control_port = found->second.route.control_port;
+    response.video_port = found->second.route.video_port;
+    response.audio_port = found->second.route.audio_port;
+    response.app_id = found->second.app_id;
+    response.app_uuid = found->second.app_uuid;
+    response.app_name = found->second.app_name;
+    return response;
+  }
   if (request.operation == terminal_session::protocol::opcode::control_release) {
     const auto found = terminal_states.find(request.client_uuid);
     if (found == terminal_states.end() || found->second.generation != request.generation || found->second.launch_id != request.launch_id) {
@@ -61,7 +93,16 @@ terminal_session::protocol::response_t HandleTerminalBroker(const terminal_sessi
       response.error = "Terminal release does not match the owned launch.";
       return response;
     }
-    terminal_states.erase(found);
+    if (!terminal_runtime || !terminal_runtime->disconnect(request.client_uuid, "authenticated control release", request.release)) {
+      response.reason = terminal_session::protocol::reject_reason::provider_unavailable;
+      response.error = "The exact terminal worker/session teardown did not complete.";
+      return response;
+    }
+    if (request.release == terminal_session::protocol::release_mode::retain) {
+      found->second.connected = false;
+    } else {
+      terminal_states.erase(found);
+    }
     response.accepted = true;
     return response;
   }
@@ -71,15 +112,43 @@ terminal_session::protocol::response_t HandleTerminalBroker(const terminal_sessi
     return response;
   }
   const auto found = terminal_states.find(request.client_uuid);
-  if (found != terminal_states.end() && (found->second.generation != request.generation || found->second.launch_id != request.launch_id)) {
+  if (found != terminal_states.end() && found->second.generation != request.generation) {
     response.reason = terminal_session::protocol::reject_reason::stale_generation;
     response.error = "Terminal launch generation is stale.";
     return response;
   }
-  // Provider admission is deliberately before worker creation. No provider
-  // means no token/session/display/audio mutation and no child process.
-  response.reason = terminal_session::protocol::reject_reason::provider_unavailable;
-  response.error = "No supported concurrent-session provider, remote display, or seat-scoped audio endpoint is available.";
+  if (!terminal_runtime) {
+    response.reason = terminal_session::protocol::reject_reason::provider_unavailable;
+    response.error = "The managed terminal runtime is not initialized.";
+    return response;
+  }
+  std::string decode_error;
+  auto launch = terminal_session::launch_codec::decode(request.launch_payload, decode_error);
+  if (!launch || !launch->launch_session || launch->launch_session->client_uuid != request.client_uuid ||
+      launch->launch_session->role_generation != request.generation || launch->launch_session->id != request.launch_id) {
+    response.reason = terminal_session::protocol::reject_reason::malformed;
+    response.error = decode_error.empty() ? "The protected launch payload does not match its authenticated envelope." : decode_error;
+    return response;
+  }
+  const auto app_id = launch->launch_session->appid;
+  const auto app_uuid = launch->launch_session->app_metadata ? launch->launch_session->app_metadata->uuid : std::string {};
+  const auto app_name = launch->launch_session->app_metadata ? launch->launch_session->app_metadata->name : std::string {};
+  const auto route = terminal_runtime->prepare(std::move(*launch));
+  if (!route.accepted || !route.ready) {
+    response.reason = terminal_session::protocol::reject_reason::provider_unavailable;
+    response.error = route.error.empty() ? "The managed seat did not become ready." : route.error;
+    return response;
+  }
+  terminal_states.insert_or_assign(request.client_uuid, terminal_state_t {
+    request.generation, request.launch_id, true, route, app_id, app_uuid, app_name
+  });
+  response.accepted = true;
+  response.windows_session_id = route.windows_session_id;
+  response.seat_id = route.seat_id;
+  response.rtsp_port = route.rtsp_port;
+  response.control_port = route.control_port;
+  response.video_port = route.video_port;
+  response.audio_port = route.audio_port;
   return response;
 }
 
@@ -304,13 +373,23 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
   SetServiceStatus(service_status_handle, &service_status);
 
   // The privileged service owns the sole production terminal broker endpoint.
-  // Its provider is fail-closed until a supported Windows seat contract exists.
-  terminal_broker = std::make_unique<terminal_session::service::pipe_server_t>(HandleTerminalBroker, [](const terminal_session::protocol::peer_identity_t &peer) {
-    return peer.pid == authorized_sunshine_pid.load(std::memory_order_acquire) &&
-           peer.creation_time == authorized_sunshine_creation.load(std::memory_order_acquire);
-  });
-  if (!terminal_broker->start()) {
-    terminal_broker.reset();
+  // Provider preflight remains fail-closed and never restarts TermService or
+  // enables the isolated listener on its own.
+  // A previous service crash may have interrupted the narrow RDP bootstrap
+  // interval. Never expose the broker until every tagged account is disabled.
+  if (terminal_session::windows::secure_managed_accounts(false)) {
+    terminal_runtime = std::make_unique<terminal_session::runtime_t>(
+      terminal_session::windows::make_seat_provider(),
+      [] { return std::make_unique<terminal_session::worker::process_t>(); }
+    );
+    terminal_broker = std::make_unique<terminal_session::service::pipe_server_t>(HandleTerminalBroker, [](const terminal_session::protocol::peer_identity_t &peer) {
+      return peer.pid == authorized_sunshine_pid.load(std::memory_order_acquire) &&
+             peer.creation_time == authorized_sunshine_creation.load(std::memory_order_acquire);
+    });
+    if (!terminal_broker->start()) {
+      terminal_broker.reset();
+      terminal_runtime.reset();
+    }
   }
 
   SetEnvironmentVariableW(platf::service_launch::launched_by_service_env_var, L"1");
@@ -438,6 +517,10 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
     terminal_broker->stop();
     terminal_broker.reset();
   }
+  if (terminal_runtime) {
+    terminal_runtime->shutdown();
+    terminal_runtime.reset();
+  }
   {
     std::lock_guard lock {terminal_state_mutex};
     terminal_states.clear();
@@ -476,6 +559,19 @@ int main(int argc, char *argv[]) {
   if (argc == 3 && strcmp(argv[1], "--terminate") == 0) {
     return DoGracefulTermination(atol(argv[2]));
   }
+  int wide_argc = 0;
+  LPWSTR *wide_argv = CommandLineToArgvW(GetCommandLineW(), &wide_argc);
+  if (wide_argv && wide_argc == 2 && _wcsicmp(wide_argv[1], L"--cleanup-terminal-seats") == 0) {
+    const int result = terminal_session::windows::secure_managed_accounts(true) ? 0 : ERROR_ACCESS_DENIED;
+    LocalFree(wide_argv);
+    return result;
+  }
+  if (wide_argv && wide_argc >= 2 && _wcsicmp(wide_argv[1], L"--prepare-seat-acl") == 0) {
+    const int result = terminal_session::windows::run_seat_acl_helper(wide_argc, wide_argv);
+    LocalFree(wide_argv);
+    return result;
+  }
+  if (wide_argv) LocalFree(wide_argv);
 
   // By default, services have their current directory set to %SYSTEMROOT%\System32.
   // We want to use the directory where Sunshine.exe is located instead of system32.
