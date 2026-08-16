@@ -15,7 +15,7 @@ namespace steam_offline {
     std::filesystem::path cache_root;
     std::filesystem::path steam_executable;
     std::filesystem::path proxy_executable;
-    std::vector<std::filesystem::path> original_client_executables;
+    std::vector<std::wstring> original_client_image_keys;
     std::string manifest_digest;
     std::size_t filtered_executable_count {};
   };

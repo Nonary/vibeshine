@@ -108,7 +108,7 @@ namespace terminal_session::worker {
     }
 
     bool steam_image_outside_mirror(HANDLE job, const std::filesystem::path &mirror,
-                                    const std::vector<std::filesystem::path> &original_images);
+                                    const std::vector<std::wstring> &original_images);
 
     void quarantine_worker(const std::shared_ptr<poisoned_worker_t> &worker) {
       std::thread([worker] {
@@ -118,7 +118,7 @@ namespace terminal_session::worker {
           if (process_live || job_live) {
             std::string health_error;
             if (worker->job && (!worker->manager.healthy(health_error) || steam_image_outside_mirror(worker->job,
-                worker->manager.preparation().mirror_root, worker->manager.preparation().original_client_executables))) {
+                worker->manager.preparation().mirror_root, worker->manager.preparation().original_client_image_keys))) {
               (void)TerminateJobObject(worker->job, ERROR_NETWORK_NOT_AVAILABLE);
             } else if (worker->job) {
               (void)TerminateJobObject(worker->job, ERROR_PROCESS_ABORTED);
@@ -144,20 +144,12 @@ namespace terminal_session::worker {
       }).detach();
     }
 
-    std::wstring normalized_image_path(std::wstring value) {
-      if (value.starts_with(L"\\\\?\\")) value.erase(0, 4);
-      std::ranges::transform(value, value.begin(), [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
-      while (value.size() > 3 && value.ends_with(L"\\")) value.pop_back();
-      return value;
-    }
-
     bool steam_image_outside_mirror(HANDLE job, const std::filesystem::path &mirror,
-                                    const std::vector<std::filesystem::path> &original_images) {
+                                    const std::vector<std::wstring> &original_images) {
       if (!job) return false;
       std::vector<ULONG_PTR> ids;
       if (!query_job_process_ids(job, ids)) return true;
-      std::wstring expected = normalized_image_path(mirror.wstring());
-      if (!expected.ends_with(L"\\")) expected.push_back(L'\\');
+      const auto expected = steam_offline::normalize_windows_image_path(mirror.wstring());
       for (const auto pid : ids) {
         const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
         if (!process) { if (GetLastError() == ERROR_INVALID_PARAMETER) continue; return true; }
@@ -168,11 +160,8 @@ namespace terminal_session::worker {
         const bool exited = !queried && GetExitCodeProcess(process, &exit_code) && exit_code != STILL_ACTIVE;
         CloseHandle(process);
         if (!queried) { if (!exited) return true; continue; }
-        const std::wstring path = normalized_image_path(std::wstring {path_buffer.data(), length});
-        if (path.size() > expected.size() && path.compare(0, expected.size(), expected) == 0) continue;
-        if (std::ranges::any_of(original_images, [&](const auto &original) {
-              return normalized_image_path(original.wstring()) == path;
-            })) return true;
+        const std::wstring path = steam_offline::normalize_windows_image_path(std::wstring {path_buffer.data(), length});
+        if (steam_offline::exact_original_image_match(path, expected, original_images)) return true;
       }
       return false;
     }
@@ -1190,7 +1179,7 @@ namespace terminal_session::worker {
             const auto job = static_cast<HANDLE>(job_);
             if (!steam_offline_manager_.healthy(health_error) ||
                 steam_image_outside_mirror(job, steam_offline_preparation_.mirror_root,
-                  steam_offline_preparation_.original_client_executables)) {
+                  steam_offline_preparation_.original_client_image_keys)) {
               steam_offline_poisoned_.store(true, std::memory_order_release);
               const bool terminated = job && TerminateJobObject(job, ERROR_NETWORK_NOT_AVAILABLE) != FALSE;
               if (!terminated || !process || WaitForSingleObject(process, 10000) != WAIT_OBJECT_0) {

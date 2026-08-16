@@ -6,6 +6,8 @@
 
 #include <cstddef>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -15,8 +17,10 @@ TEST(SteamOfflinePolicy, KeepsGameLibrariesOutsideTheClientMirror) {
   EXPECT_FALSE(steam_offline::stale_filters_removal_allowed(steam_offline::protected_generation_state::unknown));
   EXPECT_FALSE(steam_offline::quarantine_complete_for_retry(false));
   EXPECT_TRUE(steam_offline::quarantine_complete_for_retry(true));
-  EXPECT_TRUE(steam_offline::exact_original_image_match("C:/Steam/steam.exe", "c:\\steam\\steam.exe"));
-  EXPECT_FALSE(steam_offline::exact_original_image_match("C:/Games/steam.exe", "c:\\steam\\steam.exe"));
+  const std::vector<std::wstring> original_images {L"c:\\steam\\steam.exe"};
+  EXPECT_TRUE(steam_offline::exact_original_image_match(L"c:\\steam\\steam.exe", L"c:\\steam", original_images));
+  EXPECT_FALSE(steam_offline::exact_original_image_match(L"c:\\games\\steam.exe", L"c:\\steam", original_images));
+  EXPECT_FALSE(steam_offline::exact_original_image_match(L"c:\\steam\\steam.exe", L"c:\\steam", std::vector<std::wstring> {}));
   EXPECT_TRUE(steam_offline::complete_job_process_list(4, 4));
   EXPECT_FALSE(steam_offline::complete_job_process_list(4, 3));
   EXPECT_TRUE(steam_offline::game_library_outside_mirror(

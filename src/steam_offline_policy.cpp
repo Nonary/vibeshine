@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cwctype>
 #include <vector>
 
 namespace steam_offline {
@@ -97,6 +98,22 @@ namespace steam_offline {
       return value;
     };
     return !process_path.empty() && normalize(std::string {process_path}) == normalize(std::string {recorded_path});
+  }
+
+  std::wstring normalize_windows_image_path(std::wstring value) noexcept {
+    if (value.starts_with(L"\\\\?\\")) value.erase(0, 4);
+    std::ranges::transform(value, value.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+    while (value.size() > 3 && value.ends_with(L"\\")) value.pop_back();
+    return value;
+  }
+
+  bool exact_original_image_match(const std::wstring_view process_path, const std::wstring_view mirror_root,
+                                  const std::span<const std::wstring> normalized_recorded_paths) noexcept {
+    const auto normalized = process_path;
+    auto mirror = std::wstring {mirror_root};
+    if (!mirror.ends_with(L"\\")) mirror.push_back(L'\\');
+    if (normalized.size() > mirror.size() && normalized.compare(0, mirror.size(), mirror) == 0) return false;
+    return !normalized.empty() && std::binary_search(normalized_recorded_paths.begin(), normalized_recorded_paths.end(), normalized);
   }
 
   bool is_configured_steam_client(const std::string_view command_line) noexcept {

@@ -86,7 +86,9 @@ principal and cannot close that race. The worker monitor detects Steam client
 images only when their canonical path exactly matches a recorded original
 Steam-client executable from the trusted source manifest; an unrelated game
 named `steam.exe` is not sufficient. It poisons/terminates the seat job, and its PID
-enumeration retries successful partial JobObjectBasicProcessIdList results,
+manifest is normalized, deduplicated, and bounded once during admission; each
+queried image is normalized once and checked through a sorted exact-path lookup.
+Its PID enumeration retries successful partial JobObjectBasicProcessIdList results,
 treating an incomplete list as live/unknown, but there is
 no pre-network zero-window guarantee and administrator/higher-priority policy can
 override a standard user-mode filter. Filters remain persistent and quarantined

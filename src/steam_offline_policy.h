@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <span>
+#include <vector>
 
 namespace steam_offline {
   enum class protected_generation_state { absent, present, unknown };
@@ -12,6 +14,10 @@ namespace steam_offline {
   }
   [[nodiscard]] bool exact_original_image_match(std::string_view process_path,
                                                  std::string_view recorded_path) noexcept;
+  [[nodiscard]] std::wstring normalize_windows_image_path(std::wstring value) noexcept;
+  [[nodiscard]] bool exact_original_image_match(std::wstring_view process_path,
+                                                 std::wstring_view mirror_root,
+                                                 std::span<const std::wstring> normalized_recorded_paths) noexcept;
   [[nodiscard]] constexpr bool quarantine_complete_for_retry(bool complete) noexcept { return complete; }
 
   constexpr std::size_t max_seat_id_size = 64;

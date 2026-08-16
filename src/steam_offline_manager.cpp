@@ -744,7 +744,7 @@ namespace steam_offline {
     if (generation_handle) stage_created = make_protected_directory(stage, stage_created);
     auto stage_handle = stage_created ? open_secure_directory(stage, true) : unique_handle {};
     std::vector<std::filesystem::path> executables;
-    std::vector<std::filesystem::path> original_client_executables;
+    std::vector<std::wstring> original_client_image_keys;
     std::size_t files = 0;
     std::size_t directories = 0, entries = 0;
     std::uintmax_t tree_bytes = 0;
@@ -809,7 +809,8 @@ namespace steam_offline {
           executables.push_back(destination);
           auto source_name = child.filename().wstring();
           std::ranges::transform(source_name, source_name.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
-          if (source_name != L"steamservice.exe") original_client_executables.push_back(child);
+          if (source_name != L"steamservice.exe") original_client_image_keys.push_back(
+            steam_offline::normalize_windows_image_path(child.wstring()));
           if (executables.size() > max_executables) copy_failed = true;
         }
       }
@@ -841,6 +842,11 @@ namespace steam_offline {
     }
     if (executables.empty() || executables.size() > max_executables || executables.size() > std::numeric_limits<std::size_t>::max() / 2) {
       (void)remove_owned_tree(stage); FwpmEngineClose0(engine); error = "The final Steam mirror executable count is outside the bounded admission policy."; return false;
+    }
+    std::ranges::sort(original_client_image_keys);
+    original_client_image_keys.erase(std::ranges::unique(original_client_image_keys).begin(), original_client_image_keys.end());
+    if (original_client_image_keys.empty() || original_client_image_keys.size() > max_executables) {
+      (void)remove_owned_tree(stage); FwpmEngineClose0(engine); error = "The original Steam image manifest exceeded its bounded policy."; return false;
     }
     PSID user = nullptr;
     std::wstring sid_wide; sid_wide.reserve(user_sid.size()); for (const auto ch : user_sid) sid_wide.push_back(static_cast<wchar_t>(static_cast<unsigned char>(ch)));
@@ -915,7 +921,7 @@ namespace steam_offline {
     engine_ = engine; filter_keys_ = std::move(staged_filter_keys); seat_id_ = seat_id; generation_ = generation;
     preparation_ = {.mirror_root = mirror, .cache_root = cache, .steam_executable = mirror / L"steam.exe",
                     .proxy_executable = mirror / L"steamwebhelper.exe",
-                    .original_client_executables = std::move(original_client_executables),
+                    .original_client_image_keys = std::move(original_client_image_keys),
                     .manifest_digest = digest_manifest(published),
                     .filtered_executable_count = published.size()};
     result = preparation_;
