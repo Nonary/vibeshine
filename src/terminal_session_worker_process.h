@@ -69,7 +69,7 @@ namespace terminal_session::worker {
     steam_offline::manager_t steam_offline_manager_;
     steam_offline::preparation_t steam_offline_preparation_;
     bool steam_offline_isolation_ {};
-    bool cleanup_pending_ {};
+    std::atomic_bool cleanup_pending_ {false};
     std::atomic<bool> steam_offline_monitor_stop_ {false};
     std::atomic<bool> steam_offline_poisoned_ {false};
     std::thread steam_offline_monitor_;

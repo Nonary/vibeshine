@@ -56,28 +56,90 @@ namespace terminal_session::worker {
       static auto *mutex = new std::mutex;
       return *mutex;
     }
-    std::vector<poisoned_worker_t> &poisoned_workers() {
-      static auto *workers = new std::vector<poisoned_worker_t>;
+    std::vector<std::shared_ptr<poisoned_worker_t>> &poisoned_workers() {
+      static auto *workers = new std::vector<std::shared_ptr<poisoned_worker_t>>;
       return *workers;
+    }
+
+    bool job_has_live_unverifiable_process(HANDLE job) {
+      if (!job) return false;
+      std::vector<std::byte> storage(sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + 16 * sizeof(ULONG_PTR));
+      for (unsigned retry = 0; retry != 4; ++retry) {
+        auto *list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST *>(storage.data());
+        DWORD bytes = 0;
+        if (QueryInformationJobObject(job, JobObjectBasicProcessIdList, list, static_cast<DWORD>(storage.size()), &bytes)) {
+          for (DWORD index = 0; index < list->NumberOfProcessIdsInList; ++index) {
+            const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, static_cast<DWORD>(list->ProcessIdList[index]));
+            if (!process) { if (GetLastError() == ERROR_INVALID_PARAMETER) continue; return true; }
+            const auto live = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+            CloseHandle(process);
+            if (live) return true;
+          }
+          return false;
+        }
+        if (GetLastError() != ERROR_MORE_DATA || storage.size() >= 8192 * sizeof(ULONG_PTR)) return true;
+        storage.resize(storage.size() * 2);
+      }
+      return true;
+    }
+
+    bool steam_image_outside_mirror(HANDLE job, const std::filesystem::path &mirror);
+
+    void quarantine_worker(const std::shared_ptr<poisoned_worker_t> &worker) {
+      std::thread([worker] {
+        for (;;) {
+          const bool process_live = worker->process && WaitForSingleObject(worker->process, 0) == WAIT_TIMEOUT;
+          const bool job_live = job_has_live_unverifiable_process(worker->job);
+          if (process_live || job_live) {
+            std::string health_error;
+            if (worker->job && (!worker->manager.healthy(health_error) || steam_image_outside_mirror(worker->job, worker->manager.preparation().mirror_root))) {
+              (void)TerminateJobObject(worker->job, ERROR_NETWORK_NOT_AVAILABLE);
+            } else if (worker->job) {
+              (void)TerminateJobObject(worker->job, ERROR_PROCESS_ABORTED);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            continue;
+          }
+          worker->manager.clear_quarantine();
+          std::string cleanup_error;
+          if (!worker->manager.release(cleanup_error)) {
+            // Keep the record and its persistent filters for later service
+            // reconciliation when deletion or BFE cleanup remains pending.
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            continue;
+          }
+          if (worker->process) { CloseHandle(worker->process); worker->process = nullptr; }
+          if (worker->job) { CloseHandle(worker->job); worker->job = nullptr; }
+          return;
+        }
+      }).detach();
     }
 
     bool steam_image_outside_mirror(HANDLE job, const std::filesystem::path &mirror) {
       if (!job) return false;
-      std::vector<std::byte> storage(sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + 64 * sizeof(ULONG_PTR));
-      auto *list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST *>(storage.data());
-      DWORD bytes = 0;
-      if (!QueryInformationJobObject(job, JobObjectBasicProcessIdList, list, static_cast<DWORD>(storage.size()), &bytes)) return true;
+      std::vector<std::byte> storage(sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + 16 * sizeof(ULONG_PTR));
+      JOBOBJECT_BASIC_PROCESS_ID_LIST *list = nullptr;
+      for (unsigned retry = 0; retry != 4; ++retry) {
+        list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST *>(storage.data()); DWORD bytes = 0;
+        if (QueryInformationJobObject(job, JobObjectBasicProcessIdList, list, static_cast<DWORD>(storage.size()), &bytes)) break;
+        if (GetLastError() != ERROR_MORE_DATA || storage.size() >= 8192 * sizeof(ULONG_PTR)) return true;
+        storage.resize(storage.size() * 2);
+        list = nullptr;
+      }
+      if (!list) return true;
       std::wstring expected = mirror.wstring();
       std::ranges::transform(expected, expected.begin(), [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
       if (!expected.ends_with(L"\\")) expected.push_back(L'\\');
       for (DWORD index = 0; index < list->NumberOfProcessIdsInList; ++index) {
         const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(list->ProcessIdList[index]));
-        if (!process) return true;
+        if (!process) { if (GetLastError() == ERROR_INVALID_PARAMETER) continue; return true; }
         std::array<wchar_t, 32768> path_buffer {};
         DWORD length = static_cast<DWORD>(path_buffer.size());
         const bool queried = QueryFullProcessImageNameW(process, 0, path_buffer.data(), &length) != FALSE;
+        DWORD exit_code = STILL_ACTIVE;
+        const bool exited = !queried && GetExitCodeProcess(process, &exit_code) && exit_code != STILL_ACTIVE;
         CloseHandle(process);
-        if (!queried) return true;
+        if (!queried) { if (!exited) return true; continue; }
         std::wstring path {path_buffer.data(), length};
         std::ranges::transform(path, path.begin(), [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
         const auto slash = path.find_last_of(L"\\/");
@@ -907,16 +969,21 @@ namespace terminal_session::worker {
   process_t::~process_t() {
 #ifdef _WIN32
     if (!stop({})) {
-      std::lock_guard lock {poisoned_workers_mutex()};
-      poisoned_workers().push_back({
-        reinterpret_cast<HANDLE>(process_),
-        reinterpret_cast<HANDLE>(job_),
-        std::move(pipe_),
-        std::move(steam_offline_manager_)});
+      auto quarantined = std::make_shared<poisoned_worker_t>();
+      quarantined->process = reinterpret_cast<HANDLE>(process_);
+      quarantined->job = reinterpret_cast<HANDLE>(job_);
+      quarantined->pipe = std::move(pipe_);
+      quarantined->manager = std::move(steam_offline_manager_);
+      quarantined->manager.quarantine();
+      {
+        std::lock_guard lock {poisoned_workers_mutex()};
+        poisoned_workers().push_back(quarantined);
+      }
+      quarantine_worker(quarantined);
       process_ = nullptr;
       job_ = nullptr;
       pid_ = 0;
-      cleanup_pending_ = true;
+      cleanup_pending_.store(true, std::memory_order_release);
     }
 #else
     (void) stop({});
@@ -926,7 +993,7 @@ namespace terminal_session::worker {
   bool process_t::cleanup_needed() const noexcept {
 #ifdef _WIN32
     return process_ != nullptr || job_ != nullptr || pipe_ != nullptr || display_broker_running_.load() ||
-           steam_offline_manager_.active() || cleanup_pending_;
+           steam_offline_manager_.active() || cleanup_pending_.load(std::memory_order_acquire);
 #else
     return false;
 #endif
@@ -981,9 +1048,15 @@ namespace terminal_session::worker {
       const auto trusted_steam = steam_offline::trusted_steam_executable(apps, request.launch_payload,
                                                                           error);
       const auto proxy = root / L"tools" / L"steam_webhelper_proxy.exe";
-      if (trusted_steam.empty() || !steam_offline_manager_.prepare(
-            trusted_steam, proxy, request.resource.seat_id, request.resource.user_sid, request.admission.generation,
-            steam_offline_preparation_, error)) {
+      HANDLE source_token_raw = nullptr;
+      unique_handle source_token;
+      if (!trusted_steam.empty() && DuplicateTokenEx(launch_token, TOKEN_QUERY | TOKEN_IMPERSONATE | TOKEN_DUPLICATE,
+            nullptr, SecurityImpersonation, TokenImpersonation, &source_token_raw)) {
+        source_token.reset(source_token_raw);
+      }
+      if (trusted_steam.empty() || !source_token || !steam_offline_manager_.prepare(
+            trusted_steam, proxy, source_token.get(), request.resource.seat_id, request.resource.user_sid,
+            request.admission.generation, steam_offline_preparation_, error)) {
         if (error.empty()) error = "Steam offline isolation admission failed.";
         CloseHandle(job);
         return std::nullopt;
@@ -1071,14 +1144,14 @@ namespace terminal_session::worker {
               if (!terminated || !process || WaitForSingleObject(process, 10000) != WAIT_OBJECT_0) {
                 // Do not release filters while any isolated process may live.
                 steam_offline_manager_.quarantine();
-                cleanup_pending_ = true;
+                cleanup_pending_.store(true, std::memory_order_release);
               }
               return;
             }
             // The monitor remains active for the complete worker/job lifetime;
             // BFE loss is fail-closed, but standard WFP cannot veto an already
             // established socket or outrank an administrator's higher policy.
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
           }
         });
       } catch (...) {
@@ -1113,7 +1186,7 @@ namespace terminal_session::worker {
     error = "Private worker process is Windows-only.";
     return std::nullopt;
 #else
-    if (cleanup_pending_ || steam_offline_poisoned_.load(std::memory_order_acquire) ||
+    if (cleanup_pending_.load(std::memory_order_acquire) || steam_offline_poisoned_.load(std::memory_order_acquire) ||
         steam_offline_isolation_ != steam_offline_manager_.active()) {
       error = "Steam offline filter cleanup or ownership state is not settled; reconnect is blocked.";
       return std::nullopt;
@@ -1200,8 +1273,8 @@ namespace terminal_session::worker {
     if (stopped && steam_offline_manager_.active()) {
       steam_offline_manager_.clear_quarantine();
       std::string registration_error;
-      if (!steam_offline_manager_.release(registration_error)) { stopped = false; cleanup_pending_ = true; }
-      else cleanup_pending_ = false;
+      if (!steam_offline_manager_.release(registration_error)) { stopped = false; cleanup_pending_.store(true, std::memory_order_release); }
+      else cleanup_pending_.store(false, std::memory_order_release);
     }
     if (!stopped) return false;
     pid_ = 0; pipe_name_.clear(); display_pipe_name_.clear(); generation_ = 0; resource_ = {};
@@ -1209,7 +1282,7 @@ namespace terminal_session::worker {
     OPENSSL_cleanse(snapshot_auth_key_.data(), snapshot_auth_key_.size());
     snapshot_tiers_ = {};
     steam_offline_isolation_ = false;
-    cleanup_pending_ = false;
+    cleanup_pending_.store(false, std::memory_order_release);
     steam_offline_poisoned_.store(false, std::memory_order_release);
     worker_generation_ = 0; worker_creation_time_ = 0;
 #endif

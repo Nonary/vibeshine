@@ -68,6 +68,11 @@ namespace steam_offline {
   bool game_library_outside_mirror(const std::string_view game_path,
                                    const std::string_view mirror_root) noexcept {
     if (game_path.empty() || mirror_root.empty()) return false;
+    return !path_is_same_or_descendant(game_path, mirror_root);
+  }
+
+  bool path_is_same_or_descendant(const std::string_view path, const std::string_view root) noexcept {
+    if (path.empty() || root.empty()) return false;
     auto normalize = [](std::string value) {
       std::ranges::transform(value, value.begin(), [](char ch) {
         if (ch == '/') return '\\';
@@ -76,10 +81,9 @@ namespace steam_offline {
       while (value.size() > 3 && value.ends_with("\\")) value.pop_back();
       return value;
     };
-    const auto game = normalize(std::string {game_path});
-    auto mirror = normalize(std::string {mirror_root});
-    if (!mirror.ends_with("\\")) mirror.push_back('\\');
-    return game.size() <= mirror.size() || game.compare(0, mirror.size(), mirror) != 0;
+    const auto game = normalize(std::string {path});
+    const auto normalized_root = normalize(std::string {root});
+    return game == normalized_root || (game.size() > normalized_root.size() && game.compare(0, normalized_root.size(), normalized_root) == 0 && game[normalized_root.size()] == '\\');
   }
 
   bool is_configured_steam_client(const std::string_view command_line) noexcept {

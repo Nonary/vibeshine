@@ -15,6 +15,8 @@ TEST(SteamOfflinePolicy, KeepsGameLibrariesOutsideTheClientMirror) {
   EXPECT_FALSE(steam_offline::game_library_outside_mirror(
     "C:/ProgramData/VibeshineSteamSeats/seat/1/client/steam.exe",
     "C:/ProgramData/VibeshineSteamSeats/seat/1/client"));
+  EXPECT_TRUE(steam_offline::path_is_same_or_descendant("C:/foo/bar", "C:/foo"));
+  EXPECT_FALSE(steam_offline::path_is_same_or_descendant("C:/foobar/bar", "C:/foo"));
   EXPECT_FALSE(steam_offline::is_configured_steam_client("steamservice.exe -silent"));
   EXPECT_TRUE(steam_offline::is_configured_steam_client("  \"C:\\Steam Library\\steam.exe\" -silent"));
   EXPECT_FALSE(steam_offline::is_configured_steam_client("cmd.exe /c steam.exe -silent"));

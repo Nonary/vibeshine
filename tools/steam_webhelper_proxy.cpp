@@ -20,6 +20,22 @@ namespace {
     return value;
   }
 
+  std::wstring canonical_extended(std::wstring value) {
+    value = lower(std::move(value));
+    if (value.starts_with(L"\\\\?\\unc\\")) return value;
+    if (value.starts_with(L"\\\\?\\")) return value;
+    if (value.starts_with(L"\\\\")) return L"\\\\?\\unc" + value.substr(1);
+    if (value.size() >= 2 && value[1] == L':') return L"\\\\?\\" + value;
+    return value;
+  }
+
+  bool same_or_descendant(std::wstring value, std::wstring root) {
+    value = canonical_extended(std::move(value)); root = canonical_extended(std::move(root));
+    while (value.size() > 7 && value.ends_with(L"\\")) value.pop_back();
+    while (root.size() > 7 && root.ends_with(L"\\")) root.pop_back();
+    return value == root || (value.size() > root.size() && value.compare(0, root.size(), root) == 0 && value[root.size()] == L'\\');
+  }
+
   std::wstring environment(const wchar_t *name) {
     std::wstring value(32768, L'\0');
     const auto length = GetEnvironmentVariableW(name, value.data(), static_cast<DWORD>(value.size()));
@@ -39,9 +55,7 @@ namespace {
     const auto size = GetFinalPathNameByHandleW(handle.get(), final_path.data(), static_cast<DWORD>(final_path.size()), FILE_NAME_NORMALIZED);
     if (!size || size >= final_path.size()) return false;
     final_path.resize(size);
-    auto canonical = [](std::wstring value) { value = lower(std::move(value)); while (value.size() > 3 && value.ends_with(L"\\")) value.pop_back(); return value; };
-    auto canonical_root = canonical(root.wstring()); if (!canonical_root.ends_with(L"\\")) canonical_root.push_back(L'\\');
-    if (canonical(final_path).compare(0, canonical_root.size(), canonical_root) != 0) return false;
+    if (!same_or_descendant(final_path, root.wstring())) return false;
     if (!check_acl) return true;
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     if (GetSecurityInfo(handle.get(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, nullptr, &descriptor) != ERROR_SUCCESS || !descriptor) return false;
@@ -58,7 +72,7 @@ namespace {
     const auto length = GetModuleFileNameW(nullptr, value, ARRAYSIZE(value));
     if (!length || length >= ARRAYSIZE(value)) return {};
     std::filesystem::path path {std::wstring {value, length}};
-    return (path.parent_path() / L"steamwebhelper.real.exe").wstring();
+    return (path.parent_path() / L"steamwebhelper.vibeshine-real.exe").wstring();
   }
 
   // CommandLineToArgvW performs the inverse parse. This serializer implements

@@ -70,10 +70,11 @@ while leaving `steamservice.exe` outside the mirror and unfiltered. `steamapps`,
 game libraries, profile collision directories, and volatile global state remain
 outside the client mirror. The packaged ordinary user-mode webhelper proxy
 rewrites both CEF cache and user-data arguments to a seat-private root, launches
-the copied real helper by exact sibling path, waits for it, and propagates its
-exit. No SYS/INF/CAT/callout, special certificate, TESTSIGNING, DLL patch,
-injection, IFEO, or AppContainer is part of this implementation. This is
-This is product offline-like behavior, not a cryptographic sandbox. Because the
+each copied real helper by its exact nested sibling path (including Steam's
+`bin/cef/cef.win7x64` layout), waits for it, and propagates its exit. No
+SYS/INF/CAT/callout, special certificate, TESTSIGNING, DLL patch, injection,
+IFEO, or AppContainer is part of this implementation. This is product
+offline-like behavior, not a cryptographic sandbox. Because the
 console and seat intentionally share one Windows SID/profile, an intentionally
 hostile same-console-user process can copy/rename Steam or launch the original
 console path outside the mirror; standard path-based AppId WFP has no distinct
@@ -1440,14 +1441,20 @@ enumeration rather than per-filter polling.
 
 Daybreak's first-pass rejection identified a critical path-only filesystem
 boundary, weak WFP lifetime/schema checks, unbounded recursion, cache ACL and
-proxy argument failures, and teardown/performance gaps. Those source corrections
-are represented above. The remaining deliberate limitation is same-console-SID
+proxy argument failures, and teardown/performance gaps. The follow-up correction
+also requires the broker to enumerate/open the source tree under a duplicated,
+SID-validated console-user impersonation token, copy from held source handles,
+apply and verify descendant ACLs before publication, discover nested helpers,
+and retain a service-lifetime quarantine monitor for unresolved teardown. These
+source corrections are represented above. The remaining deliberate limitation is same-console-SID
 hostile bypass: standard AppId filters cannot distinguish a malicious process
 that launches the original Steam path. The job monitor poisons/terminates
 out-of-mirror Steam images, but does not provide a pre-network zero-window
 security boundary; administrator/higher-priority WFP policy may also override
 standard user-mode filters. Filters remain persistent when worker termination is
-not proven.
+not proven; the quarantine monitor continues health/termination attempts and
+secure cleanup. Health polling is bounded and scoped with foreign-seat owners
+ignored, and no runtime proof is claimed.
 
 This checkpoint is source/static only: no build, unit-test execution, install,
 Steam launch, live WFP mutation, or runtime proof was performed. Required proof

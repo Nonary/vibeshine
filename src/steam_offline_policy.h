@@ -15,6 +15,7 @@ namespace steam_offline {
   // is used because it would silently miss future Steam helpers.
   [[nodiscard]] bool game_library_outside_mirror(std::string_view game_path,
                                                  std::string_view mirror_root) noexcept;
+  [[nodiscard]] bool path_is_same_or_descendant(std::string_view path, std::string_view root) noexcept;
   [[nodiscard]] bool is_configured_steam_client(std::string_view command_line) noexcept;
   [[nodiscard]] constexpr bool enabled_for_terminal(bool terminal_session, bool requested) noexcept { return terminal_session && requested; }
   [[nodiscard]] std::string ipc_name_for_seat(std::string_view opaque_seat_id);

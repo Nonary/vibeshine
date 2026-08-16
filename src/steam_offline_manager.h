@@ -33,6 +33,7 @@ namespace steam_offline {
     [[nodiscard]] static bool available(std::string &error) noexcept;
     [[nodiscard]] bool prepare(const std::filesystem::path &steam_executable,
                                const std::filesystem::path &proxy_executable,
+                               void *source_impersonation_token,
                                std::string_view seat_id, std::string_view user_sid, std::uint64_t generation,
                                preparation_t &result, std::string &error) noexcept;
     [[nodiscard]] bool healthy(std::string &error) const noexcept;
