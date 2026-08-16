@@ -37,6 +37,7 @@
 // third-party (libdisplaydevice)
   #include "src/logging.h"
   #include "src/platform/windows/ipc/pipes.h"
+  #include "tools/display_helper_paths.h"
 
   #include <display_device/json.h>
   #include <display_device/logging.h>
@@ -4409,87 +4410,16 @@ namespace {
 
 // Utilities to reduce main() complexity
 namespace {
-  HANDLE make_named_mutex(const wchar_t *name) {
-    SECURITY_ATTRIBUTES sa {};
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = FALSE;
-    return CreateMutexW(&sa, FALSE, name);
-  }
-
   bool ensure_single_instance(HANDLE &out_handle) {
-    out_handle = make_named_mutex(L"Global\\SunshineDisplayHelper");
-    if (!out_handle && GetLastError() == ERROR_ACCESS_DENIED) {
-      out_handle = make_named_mutex(L"Local\\SunshineDisplayHelper");
-    }
-    if (!out_handle) {
-      return true;  // continue; best-effort singleton failed
-    }
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-      return false;  // another instance running
-    }
-    return true;
+    return display_helper_paths::ensure_single_instance(out_handle);
   }
 
   std::filesystem::path compute_log_dir() {
-    // Try roaming AppData first
-    std::wstring appdataW;
-    appdataW.resize(MAX_PATH);
-    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, appdataW.data()))) {
-      appdataW.resize(wcslen(appdataW.c_str()));
-      auto path = std::filesystem::path(appdataW) / L"Sunshine";
-      std::error_code ec;
-      std::filesystem::create_directories(path, ec);
-      return path;
-    }
-
-    // Next, %APPDATA%
-    std::wstring envAppData;
-    DWORD needed = GetEnvironmentVariableW(L"APPDATA", nullptr, 0);
-    if (needed > 0) {
-      envAppData.resize(needed);
-      DWORD written = GetEnvironmentVariableW(L"APPDATA", envAppData.data(), needed);
-      if (written > 0) {
-        envAppData.resize(written);
-        auto path = std::filesystem::path(envAppData) / L"Sunshine";
-        std::error_code ec;
-        std::filesystem::create_directories(path, ec);
-        return path;
-      }
-    }
-
-    // Fallback: temp directory or current dir
-    std::wstring tempW;
-    tempW.resize(MAX_PATH);
-    DWORD tlen = GetTempPathW(MAX_PATH, tempW.data());
-    if (tlen > 0 && tlen < MAX_PATH) {
-      tempW.resize(tlen);
-      auto path = std::filesystem::path(tempW) / L"Sunshine";
-      std::error_code ec;
-      std::filesystem::create_directories(path, ec);
-      return path;
-    }
-    auto path = std::filesystem::path(L".") / L"Sunshine";
-    std::error_code ec;
-    std::filesystem::create_directories(path, ec);
-    return path;
+    return display_helper_paths::compute_log_dir();
   }
 
   std::filesystem::path compute_snapshot_dir() {
-    // When running as SYSTEM, prefer a shared ProgramData location for snapshots.
-    if (platf::dxgi::is_running_as_system()) {
-      std::wstring programDataW;
-      programDataW.resize(MAX_PATH);
-      if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_COMMON_APPDATA, nullptr, SHGFP_TYPE_CURRENT, programDataW.data()))) {
-        programDataW.resize(wcslen(programDataW.c_str()));
-        auto path = std::filesystem::path(programDataW) / L"Sunshine";
-        std::error_code ec;
-        std::filesystem::create_directories(path, ec);
-        return path;
-      }
-    }
-
-    // Default to per-user roaming AppData (or fallback locations inside compute_log_dir).
-    return compute_log_dir();
+    return display_helper_paths::compute_snapshot_dir();
   }
 
   struct SnapshotPaths {
@@ -4510,55 +4440,8 @@ namespace {
     };
   }
 
-  std::vector<std::filesystem::path> executable_config_search_roots() {
-    std::vector<std::filesystem::path> roots;
-    wchar_t exe_path[MAX_PATH] = {};
-    if (!GetModuleFileNameW(nullptr, exe_path, MAX_PATH)) {
-      return roots;
-    }
-
-    const auto module_path = std::filesystem::path(exe_path);
-    const auto module_dir = module_path.parent_path();
-    if (module_dir.empty()) {
-      return roots;
-    }
-
-    roots.push_back(module_dir / L"config");
-    roots.push_back(module_dir.parent_path() / L"config");
-    roots.push_back(module_dir.parent_path());
-    return roots;
-  }
-
   std::vector<std::filesystem::path> snapshot_search_roots() {
-    std::vector<std::filesystem::path> roots;
-    const auto user_root = compute_log_dir();
-    if (!user_root.empty()) {
-      roots.push_back(user_root);
-    }
-    {
-      std::wstring programDataW;
-      programDataW.resize(MAX_PATH);
-      if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_COMMON_APPDATA, nullptr, SHGFP_TYPE_CURRENT, programDataW.data()))) {
-        programDataW.resize(wcslen(programDataW.c_str()));
-        roots.push_back(std::filesystem::path(programDataW) / L"Sunshine");
-      }
-    }
-    for (const auto &root : executable_config_search_roots()) {
-      if (!root.empty()) {
-        roots.push_back(root);
-      }
-    }
-    // De-duplicate while preserving order.
-    std::vector<std::filesystem::path> uniq;
-    for (const auto &root : roots) {
-      if (root.empty()) {
-        continue;
-      }
-      if (std::find(uniq.begin(), uniq.end(), root) == uniq.end()) {
-        uniq.push_back(root);
-      }
-    }
-    return uniq;
+    return display_helper_paths::snapshot_search_roots();
   }
 
   bool create_restore_scheduled_task() {
@@ -5654,11 +5537,12 @@ int run_legacy_helper(int argc, char *argv[]) {
   constexpr auto kReconnectLogInterval = std::chrono::hours(1);
 
   // Outer service loop: keep accepting new client sessions while running
+  const auto control_pipe_name = display_helper_session::pipe_name();
   while (running.load(std::memory_order_acquire)) {
-    auto ctrl_pipe = pipe_factory.create_server("sunshine_display_helper");
+    auto ctrl_pipe = pipe_factory.create_server(control_pipe_name);
     if (!ctrl_pipe) {
       platf::dxgi::FramedPipeFactory fallback_factory(std::make_unique<platf::dxgi::NamedPipeFactory>());
-      ctrl_pipe = fallback_factory.create_server("sunshine_display_helper");
+      ctrl_pipe = fallback_factory.create_server(control_pipe_name);
       if (!ctrl_pipe) {
         BOOST_LOG(error) << "Failed to create control pipe; retrying in 500ms";
         std::this_thread::sleep_for(500ms);

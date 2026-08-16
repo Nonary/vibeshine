@@ -26,6 +26,29 @@ namespace VDISPLAY::policy {
            process_session_id != active_console_session_id;
   }
 
+  constexpr bool helper_process_belongs_to_session(
+    const bool current_session_query_succeeded,
+    const std::uint32_t current_session_id,
+    const bool candidate_session_query_succeeded,
+    const std::uint32_t candidate_session_id
+  ) noexcept {
+    return current_session_query_succeeded &&
+           candidate_session_query_succeeded &&
+           current_session_id == candidate_session_id;
+  }
+
+  constexpr bool display_helper_should_breakaway_from_job(
+    const bool private_terminal_worker
+  ) noexcept {
+    return !private_terminal_worker;
+  }
+
+  constexpr bool remote_display_target_is_unambiguous(
+    const std::uint32_t entry_count
+  ) noexcept {
+    return entry_count == 1;
+  }
+
   constexpr bool should_ensure_probe_display(
     const bool session_uses_virtual_display,
     const bool non_console_interactive_session

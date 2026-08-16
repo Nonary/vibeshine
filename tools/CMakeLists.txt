@@ -218,6 +218,7 @@ target_link_libraries(sunshine_display_helper
         ${Boost_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
         libdisplaydevice::display_device
+        libvirtualdisplay::driver
         user32
         wtsapi32
         advapi32

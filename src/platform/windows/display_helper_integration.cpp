@@ -38,6 +38,7 @@
   #include "src/logging.h"
   #include "src/platform/windows/display_helper_coordinator.h"
   #include "src/platform/windows/display_helper_request_helpers.h"
+  #include "src/platform/windows/display_helper_session.h"
   #include "src/platform/windows/frame_limiter_nvcp.h"
   #include "src/platform/windows/impersonating_display_device.h"
   #include "src/platform/windows/ipc/display_settings_client.h"
@@ -49,6 +50,7 @@
   #include "src/remote_display_topology.h"
   #include "src/state_storage.h"
   #include "src/stream.h"
+  #include "src/terminal_session_worker_mode.h"
   #include "src/webrtc_stream.h"
 
   #include <display_device/noop_audio_context.h>
@@ -779,12 +781,23 @@ namespace {
     PROCESSENTRY32W entry {};
     entry.dwSize = sizeof(entry);
     std::vector<DWORD> targets;
+    DWORD current_session_id = 0;
+    const bool current_session_known = ProcessIdToSessionId(GetCurrentProcessId(), &current_session_id) != FALSE;
 
     if (Process32FirstW(snapshot, &entry)) {
       do {
         if (_wcsicmp(entry.szExeFile, L"sunshine_display_helper.exe") == 0 &&
             entry.th32ProcessID != GetCurrentProcessId()) {
-          targets.push_back(entry.th32ProcessID);
+          DWORD candidate_session_id = 0;
+          const bool candidate_session_known =
+            ProcessIdToSessionId(entry.th32ProcessID, &candidate_session_id) != FALSE;
+          if (VDISPLAY::policy::helper_process_belongs_to_session(
+                current_session_known,
+                current_session_id,
+                candidate_session_known,
+                candidate_session_id)) {
+            targets.push_back(entry.th32ProcessID);
+          }
         }
       } while (Process32NextW(snapshot, &entry));
     } else {
@@ -1130,7 +1143,12 @@ namespace {
         operation_deadline_expired(operation_deadline)) {
       return false;
     }
-    const bool legacy_engine = use_legacy_helper_engine();
+    const bool managed_remote_session = terminal_session::worker_mode::active() ||
+                                        display_helper_session::is_non_console_interactive();
+    const bool legacy_engine = !managed_remote_session && use_legacy_helper_engine();
+    if (managed_remote_session && use_legacy_helper_engine()) {
+      BOOST_LOG(info) << "Display helper: using the session-aware v2 engine for the managed remote seat.";
+    }
     // Already started? Verify liveness to avoid stale or wedged state
     if (HANDLE h = helper_proc().get_process_handle(); h != nullptr) {
       BOOST_LOG(debug) << "Display helper: checking existing process handle...";
@@ -1321,7 +1339,13 @@ namespace {
         operation_deadline_expired(operation_deadline)) {
       return false;
     }
-    bool started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback);
+    const bool breakaway_from_current_job = VDISPLAY::policy::display_helper_should_breakaway_from_job(
+      terminal_session::worker_mode::active());
+    bool started = helper_proc().start(
+      helper.wstring(),
+      helper_args,
+      allow_system_fallback,
+      breakaway_from_current_job);
     if (!started && force_restart) {
       // If we were asked to hard-restart, tolerate a brief overlap window where the old
       // instance is still tearing down and retry quickly.
@@ -1332,7 +1356,11 @@ namespace {
               operation_deadline)) {
           return false;
         }
-        started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback);
+        started = helper_proc().start(
+          helper.wstring(),
+          helper_args,
+          allow_system_fallback,
+          breakaway_from_current_job);
       }
     }
     if (!started) {
@@ -1382,7 +1410,11 @@ namespace {
             return false;
           }
 
-          const bool retry_started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback);
+          const bool retry_started = helper_proc().start(
+            helper.wstring(),
+            helper_args,
+            allow_system_fallback,
+            breakaway_from_current_job);
           if (!retry_started) {
             BOOST_LOG(error) << "Display helper retry start failed";
             note_helper_start_failure("singleton retry launch failure");

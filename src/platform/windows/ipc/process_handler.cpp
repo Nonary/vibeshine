@@ -140,7 +140,8 @@ ProcessHandler::ProcessHandler(bool use_job):
 bool ProcessHandler::start(
   const std::wstring &application_path,
   std::wstring_view arguments,
-  bool allow_system_fallback
+  bool allow_system_fallback,
+  bool breakaway_from_current_job
 ) {
   if (running_) {
     // Check if the previously started process has already exited. If so, clear stale state.
@@ -187,7 +188,7 @@ bool ProcessHandler::start(
 
   DWORD creation_flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT;
   // When not using a job (keep-alive child), prefer to break away from any existing job to avoid kill-on-close
-  if (!use_job_) {
+  if (!use_job_ && breakaway_from_current_job) {
     creation_flags |= CREATE_BREAKAWAY_FROM_JOB;
   }
   // Compute a sane working directory for the child: the directory of the target executable

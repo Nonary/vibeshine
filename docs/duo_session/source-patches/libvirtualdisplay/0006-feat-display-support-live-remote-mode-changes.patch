@@ -1,0 +1,710 @@
+From c7c8c97b3793a4f75c0f3f263b53376f6af98397 Mon Sep 17 00:00:00 2001
+From: Chase Payne <chase_payne@outlook.com>
+Date: Sat, 15 Aug 2026 22:36:54 -0500
+Subject: [PATCH] feat(display): support live remote mode changes
+
+Remote Duo seats need to follow client resolution changes without tearing down their monitor or restarting the IddCx driver.
+
+Add a versioned mode-control request that updates monitor modes and display config in place, restores the prior configuration on failure, and exposes probe output for verification.
+
+Cover protocol, client, dispatcher, state, diagnostics, and backend-failure behavior.
+
+Generated with [Codex](https://openai.com/codex/)
+
+Model: GPT 5.6-Sol X-High
+---
+ src/driver/control_client.cpp                 |  4 +
+ src/driver/control_protocol.cpp               | 25 ++++++
+ src/driver/driver_controller.cpp              | 31 +++++++
+ .../virtual_display/driver/control_client.h   |  1 +
+ .../virtual_display/driver/control_protocol.h | 17 +++-
+ .../driver/driver_controller.h                |  6 ++
+ .../virtual_display/driver/lease_store.h      |  1 +
+ .../driver/windows_control_protocol.h         |  3 +
+ src/driver/ioctl_dispatcher.cpp               |  9 +++
+ src/driver/lease_store.cpp                    | 30 +++++++
+ src/driver/probe_commands.cpp                 |  3 +
+ src/driver/windows_driver/driver_main.cpp     | 50 ++++++++++++
+ tests/unit/driver/test_control_client.cpp     | 21 +++++
+ tests/unit/driver/test_control_protocol.cpp   | 28 ++++++-
+ tests/unit/driver/test_ioctl_dispatcher.cpp   | 81 +++++++++++++++++++
+ tests/unit/driver/test_probe_contract.cpp     |  1 +
+ tools/virtualdisplay_probe.cpp                | 60 +++++++++++++-
+ 17 files changed, 368 insertions(+), 3 deletions(-)
+
+diff --git a/src/driver/control_client.cpp b/src/driver/control_client.cpp
+index d9cfab5..ffad7c5 100644
+--- a/src/driver/control_client.cpp
++++ b/src/driver/control_client.cpp
+@@ -95,6 +95,10 @@ namespace virtual_display::driver {
+     return ioctl_no_out(kIoctlSetDisplayHdrState, &request, sizeof(request));
+   }
+ 
++  ControlOperationResult ControlClient::set_display_mode(const SetDisplayModeRequest &request) {
++    return ioctl_no_out(kIoctlSetDisplayMode, &request, sizeof(request));
++  }
++
+   ControlOperationResult ControlClient::ioctl_no_out(
+     const std::uint32_t ioctl_code,
+     const void *input,
+diff --git a/src/driver/control_protocol.cpp b/src/driver/control_protocol.cpp
+index 86c39e6..d666100 100644
+--- a/src/driver/control_protocol.cpp
++++ b/src/driver/control_protocol.cpp
+@@ -257,6 +257,31 @@ namespace virtual_display::driver {
+     return ValidationError::None;
+   }
+ 
++  ValidationError validate_set_display_mode(const SetDisplayModeRequest &request) {
++    if (!is_valid_api_namespace(request.api_namespace)) {
++      return ValidationError::WrongApiNamespace;
++    }
++    if (request.display_id == 0) {
++      return ValidationError::MissingDisplayId;
++    }
++    if (const auto mode_validation = validate_display_mode(
++          request.width,
++          request.height,
++          request.refresh_rate_millihz
++        );
++        mode_validation != ValidationError::None) {
++      return mode_validation;
++    }
++    if (request.flags != 0) {
++      return ValidationError::InvalidFlags;
++    }
++    if (request.reserved != 0) {
++      return ValidationError::InvalidReservedField;
++    }
++
++    return ValidationError::None;
++  }
++
+   ValidationError validate_lease_display_request(const LeaseDisplayRequest &request) {
+     if (!is_valid_api_namespace(request.api_namespace)) {
+       return ValidationError::WrongApiNamespace;
+diff --git a/src/driver/driver_controller.cpp b/src/driver/driver_controller.cpp
+index ac4c78b..2b4f0dd 100644
+--- a/src/driver/driver_controller.cpp
++++ b/src/driver/driver_controller.cpp
+@@ -571,6 +571,33 @@ namespace virtual_display::driver {
+     return {};
+   }
+ 
++  ControllerStatus DriverController::set_display_mode(const SetDisplayModeRequest &request) {
++    return set_display_mode(request, nullptr);
++  }
++
++  ControllerStatus DriverController::set_display_mode(
++    const SetDisplayModeRequest &request,
++    std::unique_lock<std::timed_mutex> *controller_lock
++  ) {
++    if (const auto validation = validate_set_display_mode(request);
++        validation != ValidationError::None) {
++      return {StoreError::ValidationFailed, validation, BackendError::None};
++    }
++
++    if (const auto backend_error = call_backend_without_controller_lock(
++          backend_call_mutex_,
++          controller_lock,
++          BackendError::Busy,
++          [&]() {
++            return backend_.set_display_mode(request);
++          });
++        backend_error != BackendError::None) {
++      return {StoreError::None, ValidationError::None, backend_error};
++    }
++
++    return from_store_result(store_.set_display_mode(request));
++  }
++
+   const DisplayManifest &DriverController::query_display_manifest() const {
+     return store_.display_manifest();
+   }
+@@ -705,6 +732,10 @@ namespace virtual_display::driver {
+     return BackendError::Failed;
+   }
+ 
++  BackendError DisplayDriverBackend::set_display_mode(const SetDisplayModeRequest &) {
++    return BackendError::Failed;
++  }
++
+   ControllerStatus DriverController::from_store_result(const StoreResult &result) {
+     return {result.error, result.validation_error, BackendError::None};
+   }
+diff --git a/src/driver/include/virtual_display/driver/control_client.h b/src/driver/include/virtual_display/driver/control_client.h
+index df5e352..6b9183e 100644
+--- a/src/driver/include/virtual_display/driver/control_client.h
++++ b/src/driver/include/virtual_display/driver/control_client.h
+@@ -74,6 +74,7 @@ namespace virtual_display::driver {
+     ControlResult<DisplayManifest> query_display_manifest();
+     ControlOperationResult set_render_adapter(const SetRenderAdapterRequest &request);
+     ControlOperationResult set_display_hdr_state(const SetDisplayHdrStateRequest &request);
++    ControlOperationResult set_display_mode(const SetDisplayModeRequest &request);
+ 
+   private:
+     template<class T>
+diff --git a/src/driver/include/virtual_display/driver/control_protocol.h b/src/driver/include/virtual_display/driver/control_protocol.h
+index 588cde7..5137c3a 100644
+--- a/src/driver/include/virtual_display/driver/control_protocol.h
++++ b/src/driver/include/virtual_display/driver/control_protocol.h
+@@ -44,7 +44,7 @@ namespace virtual_display::driver {
+   };
+ 
+   inline constexpr std::uint16_t kProtocolVersionMajor = 3;
+-  inline constexpr std::uint16_t kProtocolVersionMinor = 8;
++  inline constexpr std::uint16_t kProtocolVersionMinor = 9;
+   inline constexpr std::uint16_t kProtocolVersionPatch = 0;
+   inline constexpr std::uint16_t kMinimumCompatibleProtocolVersionMinor = 6;
+ 
+@@ -120,6 +120,7 @@ namespace virtual_display::driver {
+     CreateTemporaryDisplayOwned = 0x90c,
+     ReclaimTemporaryDisplay = 0x90d,
+     SetDisplayHdrState = 0x90e,
++    SetDisplayMode = 0x90f,
+   };
+ 
+   enum class IoctlAccess : std::uint32_t {
+@@ -168,6 +169,8 @@ namespace virtual_display::driver {
+     ioctl_code(IoctlFunction::ReclaimTemporaryDisplay, IoctlAccess::ReadWrite);
+   inline constexpr std::uint32_t kIoctlSetDisplayHdrState =
+     ioctl_code(IoctlFunction::SetDisplayHdrState, IoctlAccess::ReadWrite);
++  inline constexpr std::uint32_t kIoctlSetDisplayMode =
++    ioctl_code(IoctlFunction::SetDisplayMode, IoctlAccess::ReadWrite);
+ 
+   struct ProtocolVersion {
+     Guid api_namespace {kApiNamespaceGuid};
+@@ -227,6 +230,16 @@ namespace virtual_display::driver {
+     std::uint32_t reserved {};
+   };
+ 
++  struct SetDisplayModeRequest {
++    Guid api_namespace {kApiNamespaceGuid};
++    std::uint64_t display_id {};
++    std::uint32_t width {};
++    std::uint32_t height {};
++    std::uint32_t refresh_rate_millihz {};
++    std::uint32_t flags {};
++    std::uint32_t reserved {};
++  };
++
+   struct OwnerCapability {
+     std::array<std::uint8_t, kOwnerCapabilityBytes> bytes {};
+ 
+@@ -454,6 +467,7 @@ namespace virtual_display::driver {
+   );
+   ValidationError validate_reclaim_temporary_display(const ReclaimTemporaryDisplayRequest &request);
+   ValidationError validate_set_display_hdr_state(const SetDisplayHdrStateRequest &request);
++  ValidationError validate_set_display_mode(const SetDisplayModeRequest &request);
+   ValidationError validate_lease_display_request(const LeaseDisplayRequest &request);
+   ValidationError validate_lease_request(const LeaseRequest &request);
+   ValidationError validate_permanent_display_count(
+@@ -480,6 +494,7 @@ namespace virtual_display::driver {
+   static_assert(sizeof(ReclaimTemporaryDisplayResult) == 48);
+   static_assert(sizeof(SetRenderAdapterRequest) == 32);
+   static_assert(sizeof(SetDisplayHdrStateRequest) == 40);
++  static_assert(sizeof(SetDisplayModeRequest) == 48);
+   static_assert(sizeof(LeaseDisplayRequest) == 32);
+   static_assert(sizeof(LeaseRequest) == 32);
+   static_assert(sizeof(QueryLeaseResult) == 48);
+diff --git a/src/driver/include/virtual_display/driver/driver_controller.h b/src/driver/include/virtual_display/driver/driver_controller.h
+index 4f8be1b..6e1ec56 100644
+--- a/src/driver/include/virtual_display/driver/driver_controller.h
++++ b/src/driver/include/virtual_display/driver/driver_controller.h
+@@ -61,6 +61,7 @@ namespace virtual_display::driver {
+     virtual BackendError apply_display_manifest(const DisplayManifest &manifest);
+     virtual BackendError set_render_adapter(const SetRenderAdapterRequest &request) = 0;
+     virtual BackendError set_display_hdr_state(const SetDisplayHdrStateRequest &request);
++    virtual BackendError set_display_mode(const SetDisplayModeRequest &request);
+   };
+ 
+   struct ControllerStatus {
+@@ -132,6 +133,11 @@ namespace virtual_display::driver {
+       const SetDisplayHdrStateRequest &request,
+       std::unique_lock<std::timed_mutex> *controller_lock
+     );
++    ControllerStatus set_display_mode(const SetDisplayModeRequest &request);
++    ControllerStatus set_display_mode(
++      const SetDisplayModeRequest &request,
++      std::unique_lock<std::timed_mutex> *controller_lock
++    );
+     const DisplayManifest &query_display_manifest() const;
+     PermanentDisplayCountResult query_permanent_display_count() const;
+     QueryDisplayStateResult query_display_state() const;
+diff --git a/src/driver/include/virtual_display/driver/lease_store.h b/src/driver/include/virtual_display/driver/lease_store.h
+index 26ba9ea..ca76910 100644
+--- a/src/driver/include/virtual_display/driver/lease_store.h
++++ b/src/driver/include/virtual_display/driver/lease_store.h
+@@ -116,6 +116,7 @@ namespace virtual_display::driver {
+     QueryLeaseResult query_lease(std::uint64_t lease_id, std::chrono::steady_clock::time_point now) const;
+     StoreResult set_permanent_display_count(const PermanentDisplayCountRequest &request);
+     StoreResult apply_display_manifest(const DisplayManifest &manifest);
++    StoreResult set_display_mode(const SetDisplayModeRequest &request);
+     PermanentDisplayCountResult query_permanent_display_count() const;
+     std::uint32_t reap_expired(std::chrono::steady_clock::time_point now);
+ 
+diff --git a/src/driver/include/virtual_display/driver/windows_control_protocol.h b/src/driver/include/virtual_display/driver/windows_control_protocol.h
+index 0bcc169..48baef1 100644
+--- a/src/driver/include/virtual_display/driver/windows_control_protocol.h
++++ b/src/driver/include/virtual_display/driver/windows_control_protocol.h
+@@ -85,6 +85,8 @@ namespace virtual_display::driver {
+     CTL_CODE(FILE_DEVICE_UNKNOWN, static_cast<DWORD>(IoctlFunction::ReclaimTemporaryDisplay), METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA);
+   inline constexpr DWORD kWinIoctlSetDisplayHdrState =
+     CTL_CODE(FILE_DEVICE_UNKNOWN, static_cast<DWORD>(IoctlFunction::SetDisplayHdrState), METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA);
++  inline constexpr DWORD kWinIoctlSetDisplayMode =
++    CTL_CODE(FILE_DEVICE_UNKNOWN, static_cast<DWORD>(IoctlFunction::SetDisplayMode), METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA);
+ 
+   static_assert(sizeof(GUID) == sizeof(Guid));
+   static_assert(sizeof(LUID) == sizeof(AdapterLuid));
+@@ -103,6 +105,7 @@ namespace virtual_display::driver {
+   static_assert(kWinIoctlCreateTemporaryDisplayOwned == kIoctlCreateTemporaryDisplayOwned);
+   static_assert(kWinIoctlReclaimTemporaryDisplay == kIoctlReclaimTemporaryDisplay);
+   static_assert(kWinIoctlSetDisplayHdrState == kIoctlSetDisplayHdrState);
++  static_assert(kWinIoctlSetDisplayMode == kIoctlSetDisplayMode);
+ }  // namespace virtual_display::driver
+ 
+ #endif
+diff --git a/src/driver/ioctl_dispatcher.cpp b/src/driver/ioctl_dispatcher.cpp
+index 9ace720..f78c735 100644
+--- a/src/driver/ioctl_dispatcher.cpp
++++ b/src/driver/ioctl_dispatcher.cpp
+@@ -277,6 +277,15 @@ namespace virtual_display::driver {
+         return result_from_controller(controller_.set_display_hdr_state(request, controller_lock));
+       }
+ 
++      case kIoctlSetDisplayMode: {
++        SetDisplayModeRequest request {};
++        if (!read_input(input, input_size, request)) {
++          return {IoctlStatus::InvalidInputBuffer, 0, {}};
++        }
++
++        return result_from_controller(controller_.set_display_mode(request, controller_lock));
++      }
++
+       default:
+         return {IoctlStatus::InvalidIoctl, 0, {}};
+     }
+diff --git a/src/driver/lease_store.cpp b/src/driver/lease_store.cpp
+index 61eb859..8712022 100644
+--- a/src/driver/lease_store.cpp
++++ b/src/driver/lease_store.cpp
+@@ -532,6 +532,36 @@ namespace virtual_display::driver {
+     return {};
+   }
+ 
++  StoreResult DisplayStore::set_display_mode(const SetDisplayModeRequest &request) {
++    if (const auto validation = validate_set_display_mode(request);
++        validation != ValidationError::None) {
++      return validation_failure(validation);
++    }
++
++    for (std::uint32_t index = 0; index < display_manifest_.profile_count; ++index) {
++      auto &profile = display_manifest_.profiles[index];
++      if (profile.display_id != request.display_id) {
++        continue;
++      }
++
++      profile.native_mode_index = 0;
++      profile.allowed_mode_count = 1;
++      profile.allowed_modes[0] = {request.width, request.height, request.refresh_rate_millihz};
++      permanent_display_settings_ = permanent_settings_from_display_manifest(display_manifest_);
++      return {};
++    }
++
++    if (auto display = displays_by_id_.find(request.display_id);
++        display != displays_by_id_.end() && !display->second.pending_departure) {
++      display->second.width = request.width;
++      display->second.height = request.height;
++      display->second.refresh_rate_millihz = request.refresh_rate_millihz;
++      return {};
++    }
++
++    return {StoreError::DisplayNotFound, ValidationError::None};
++  }
++
+   PermanentDisplayCountResult DisplayStore::query_permanent_display_count() const {
+     PermanentDisplayCountResult result {};
+     result.current_display_count = permanent_display_count_;
+diff --git a/src/driver/probe_commands.cpp b/src/driver/probe_commands.cpp
+index 2050c0b..bd0626a 100644
+--- a/src/driver/probe_commands.cpp
++++ b/src/driver/probe_commands.cpp
+@@ -129,6 +129,9 @@ namespace virtual_display::driver {
+     if (command == "--remote-set-hdr") {
+       return plan(5, 6);
+     }
++    if (command == "--remote-set-mode") {
++      return plan(7, 7);
++    }
+     if (command == "--associate-color-profile") {
+       return plan(5, (std::numeric_limits<int>::max)());
+     }
+diff --git a/src/driver/windows_driver/driver_main.cpp b/src/driver/windows_driver/driver_main.cpp
+index 0e5301c..35d625c 100644
+--- a/src/driver/windows_driver/driver_main.cpp
++++ b/src/driver/windows_driver/driver_main.cpp
+@@ -2883,6 +2883,56 @@ namespace {
+       return vdd::BackendError::None;
+     }
+ 
++    vdd::BackendError set_display_mode(const vdd::SetDisplayModeRequest &request) override {
++      if constexpr (!kRemoteSessionDriver) {
++        return vdd::BackendError::Failed;
++      }
++
++      vdd::DisplayMode old_mode {};
++      {
++        std::lock_guard lock {mutex_};
++        const auto monitor = monitors_.find(request.display_id);
++        if (monitor == monitors_.end() || monitor->second.arriving || monitor->second.departing) {
++          return vdd::BackendError::Failed;
++        }
++        old_mode = {
++          monitor->second.descriptor.width,
++          monitor->second.descriptor.height,
++          monitor->second.descriptor.refresh_rate_millihz
++        };
++        monitor->second.descriptor.width = request.width;
++        monitor->second.descriptor.height = request.height;
++        monitor->second.descriptor.refresh_rate_millihz = request.refresh_rate_millihz;
++      }
++
++      const auto result = update_remote_display_config("SetDisplayMode");
++      if (result != vdd::BackendError::None) {
++        {
++          std::lock_guard lock {mutex_};
++          if (const auto monitor = monitors_.find(request.display_id); monitor != monitors_.end()) {
++            monitor->second.descriptor.width = old_mode.width;
++            monitor->second.descriptor.height = old_mode.height;
++            monitor->second.descriptor.refresh_rate_millihz = old_mode.refresh_rate_millihz;
++          }
++        }
++        (void) update_remote_display_config("SetDisplayModeRollback");
++        return result;
++      }
++
++      TraceLoggingWrite(
++        g_trace_provider,
++        "RemoteDisplayModeSet",
++        TraceLoggingUInt64(request.display_id, "DisplayId"),
++        TraceLoggingUInt32(old_mode.width, "OldWidth"),
++        TraceLoggingUInt32(old_mode.height, "OldHeight"),
++        TraceLoggingUInt32(old_mode.refresh_rate_millihz, "OldRefreshRateMilliHz"),
++        TraceLoggingUInt32(request.width, "Width"),
++        TraceLoggingUInt32(request.height, "Height"),
++        TraceLoggingUInt32(request.refresh_rate_millihz, "RefreshRateMilliHz")
++      );
++      return vdd::BackendError::None;
++    }
++
+     vdd::BackendError set_render_adapter(const vdd::SetRenderAdapterRequest &request) override {
+       const auto preferred_render_adapter = vdd::to_windows_luid(request.adapter_luid);
+       IDDCX_ADAPTER adapter {};
+diff --git a/tests/unit/driver/test_control_client.cpp b/tests/unit/driver/test_control_client.cpp
+index 8ccadc4..00d47ee 100644
+--- a/tests/unit/driver/test_control_client.cpp
++++ b/tests/unit/driver/test_control_client.cpp
+@@ -367,6 +367,27 @@ TEST(VirtualDisplayDriverControlClient, SetDisplayHdrStateUsesHdrIoctl) {
+   EXPECT_EQ(sent.sdr_white_level_nits, 203u);
+ }
+ 
++TEST(VirtualDisplayDriverControlClient, SetDisplayModeUsesModeIoctl) {
++  FakeTransport transport;
++  vdd::ControlClient client {transport};
++  vdd::SetDisplayModeRequest request {};
++  request.display_id = 0x7000000000000001ull;
++  request.width = 2560;
++  request.height = 1440;
++  request.refresh_rate_millihz = 120'000;
++
++  const auto result = client.set_display_mode(request);
++
++  ASSERT_TRUE(result.ok());
++  ASSERT_EQ(transport.calls.size(), 1u);
++  EXPECT_EQ(transport.calls[0].ioctl_code, vdd::kIoctlSetDisplayMode);
++  const auto sent = input_as<vdd::SetDisplayModeRequest>(transport.calls[0]);
++  EXPECT_EQ(sent.display_id, request.display_id);
++  EXPECT_EQ(sent.width, 2560u);
++  EXPECT_EQ(sent.height, 1440u);
++  EXPECT_EQ(sent.refresh_rate_millihz, 120'000u);
++}
++
+ TEST(VirtualDisplayDriverControlClient, DetectsShortOutput) {
+   FakeTransport transport;
+   transport.set_output(vdd::ProtocolVersion {});
+diff --git a/tests/unit/driver/test_control_protocol.cpp b/tests/unit/driver/test_control_protocol.cpp
+index 6d7d8ce..0ca0fcc 100644
+--- a/tests/unit/driver/test_control_protocol.cpp
++++ b/tests/unit/driver/test_control_protocol.cpp
+@@ -91,6 +91,7 @@ TEST(VirtualDisplayDriverControlProtocol, ComputesBufferedUnknownDeviceIoctlCode
+   EXPECT_EQ(vdd::kIoctlCreateTemporaryDisplayOwned, 0x0022e430u);
+   EXPECT_EQ(vdd::kIoctlReclaimTemporaryDisplay, 0x0022e434u);
+   EXPECT_EQ(vdd::kIoctlSetDisplayHdrState, 0x0022e438u);
++  EXPECT_EQ(vdd::kIoctlSetDisplayMode, 0x0022e43cu);
+ }
+ 
+ TEST(VirtualDisplayDriverControlProtocol, ProtocolVersionUsesDedicatedNamespace) {
+@@ -106,7 +107,7 @@ TEST(VirtualDisplayDriverControlProtocol, ProtocolVersionStringFormatsConstants)
+   // Behavioral replacement for the test that scraped README.md for the version prose: it
+   // asserts the formatter that is the single source of truth for the dotted version, rather
+   // than that a string happens to appear in a checked-in document.
+-  EXPECT_EQ(vdd::protocol_version_string(), "3.8.0");
++  EXPECT_EQ(vdd::protocol_version_string(), "3.9.0");
+ }
+ 
+ TEST(VirtualDisplayDriverControlProtocol, WindowsGuidAdapterPreservesProtocolGuid) {
+@@ -470,6 +471,31 @@ TEST(VirtualDisplayDriverControlProtocol, ValidatesDisplayHdrState) {
+   EXPECT_EQ(vdd::validate_set_display_hdr_state(request), vdd::ValidationError::MissingDisplayId);
+ }
+ 
++TEST(VirtualDisplayDriverControlProtocol, ValidatesDisplayModeChange) {
++  vdd::SetDisplayModeRequest request {};
++  request.display_id = 0x7000000000000001ull;
++  request.width = 2560;
++  request.height = 1440;
++  request.refresh_rate_millihz = 120'000;
++
++  EXPECT_EQ(vdd::validate_set_display_mode(request), vdd::ValidationError::None);
++
++  request.width = 0;
++  EXPECT_EQ(vdd::validate_set_display_mode(request), vdd::ValidationError::InvalidWidth);
++
++  request.width = 2560;
++  request.refresh_rate_millihz = 0;
++  EXPECT_EQ(vdd::validate_set_display_mode(request), vdd::ValidationError::InvalidRefreshRate);
++
++  request.refresh_rate_millihz = 120'000;
++  request.flags = 1;
++  EXPECT_EQ(vdd::validate_set_display_mode(request), vdd::ValidationError::InvalidFlags);
++
++  request.flags = 0;
++  request.display_id = 0;
++  EXPECT_EQ(vdd::validate_set_display_mode(request), vdd::ValidationError::MissingDisplayId);
++}
++
+ TEST(VirtualDisplayDriverControlProtocol, ValidatesPermanentDisplaySettings) {
+   vdd::PermanentDisplayCountRequest request {};
+   request.display_count = 1;
+diff --git a/tests/unit/driver/test_ioctl_dispatcher.cpp b/tests/unit/driver/test_ioctl_dispatcher.cpp
+index b42ef66..60783f1 100644
+--- a/tests/unit/driver/test_ioctl_dispatcher.cpp
++++ b/tests/unit/driver/test_ioctl_dispatcher.cpp
+@@ -56,9 +56,15 @@ namespace {
+       return fail_hdr_state ? vdd::BackendError::Failed : vdd::BackendError::None;
+     }
+ 
++    vdd::BackendError set_display_mode(const vdd::SetDisplayModeRequest &request) override {
++      mode_requests.push_back(request);
++      return fail_mode ? vdd::BackendError::Failed : vdd::BackendError::None;
++    }
++
+     bool fail_arrive {};
+     bool fail_depart {};
+     bool fail_hdr_state {};
++    bool fail_mode {};
+     std::uint32_t next_target_id {12};
+     std::vector<vdd::DisplayDescriptor> arrived {};
+     std::vector<std::uint64_t> departed {};
+@@ -67,6 +73,7 @@ namespace {
+     std::vector<vdd::DisplayManifest> manifests {};
+     std::vector<vdd::SetRenderAdapterRequest> render_adapter_requests {};
+     std::vector<vdd::SetDisplayHdrStateRequest> hdr_state_requests {};
++    std::vector<vdd::SetDisplayModeRequest> mode_requests {};
+   };
+ 
+   struct Harness {
+@@ -729,6 +736,80 @@ TEST(VirtualDisplayDriverIoctlDispatcher, SetDisplayHdrStateValidatesAndInvokesB
+   EXPECT_EQ(harness.backend.hdr_state_requests.size(), 1u);
+ }
+ 
++TEST(VirtualDisplayDriverIoctlDispatcher, SetDisplayModeValidatesAndInvokesBackend) {
++  Harness harness;
++  vdd::PermanentDisplayCountRequest permanent {};
++  permanent.display_count = 1;
++  vdd::PermanentDisplayCountResult permanent_result {};
++  ASSERT_EQ(
++    harness.dispatcher.dispatch(
++      vdd::kIoctlSetPermanentDisplayCount,
++      &permanent,
++      sizeof(permanent),
++      &permanent_result,
++      sizeof(permanent_result),
++      std::chrono::steady_clock::now()
++    ).status,
++    vdd::IoctlStatus::Success
++  );
++
++  vdd::SetDisplayModeRequest request {};
++  request.display_id = harness.controller.query_display_manifest().profiles[0].display_id;
++  request.width = 2560;
++  request.height = 1440;
++  request.refresh_rate_millihz = 120'000;
++
++  const auto result = harness.dispatcher.dispatch(
++    vdd::kIoctlSetDisplayMode,
++    &request,
++    sizeof(request),
++    nullptr,
++    0,
++    std::chrono::steady_clock::now()
++  );
++
++  EXPECT_EQ(result.status, vdd::IoctlStatus::Success);
++  ASSERT_EQ(harness.backend.mode_requests.size(), 1u);
++  EXPECT_EQ(harness.backend.mode_requests[0].display_id, request.display_id);
++  const auto state = harness.controller.query_display_state();
++  ASSERT_EQ(state.entry_count, 1u);
++  EXPECT_EQ(state.entries[0].width, 2560u);
++  EXPECT_EQ(state.entries[0].height, 1440u);
++  EXPECT_EQ(state.entries[0].refresh_rate_millihz, 120'000u);
++
++  request.height = 0;
++  const auto invalid = harness.dispatcher.dispatch(
++    vdd::kIoctlSetDisplayMode,
++    &request,
++    sizeof(request),
++    nullptr,
++    0,
++    std::chrono::steady_clock::now()
++  );
++  EXPECT_EQ(invalid.status, vdd::IoctlStatus::InvalidRequest);
++  EXPECT_EQ(harness.backend.mode_requests.size(), 1u);
++
++  request.width = 3840;
++  request.height = 2160;
++  request.refresh_rate_millihz = 60'000;
++  harness.backend.fail_mode = true;
++  const auto backend_failure = harness.dispatcher.dispatch(
++    vdd::kIoctlSetDisplayMode,
++    &request,
++    sizeof(request),
++    nullptr,
++    0,
++    std::chrono::steady_clock::now()
++  );
++  EXPECT_EQ(backend_failure.status, vdd::IoctlStatus::BackendFailed);
++  EXPECT_EQ(harness.backend.mode_requests.size(), 2u);
++  const auto unchanged_state = harness.controller.query_display_state();
++  ASSERT_EQ(unchanged_state.entry_count, 1u);
++  EXPECT_EQ(unchanged_state.entries[0].width, 2560u);
++  EXPECT_EQ(unchanged_state.entries[0].height, 1440u);
++  EXPECT_EQ(unchanged_state.entries[0].refresh_rate_millihz, 120'000u);
++}
++
+ TEST(VirtualDisplayDriverIoctlDispatcher, RejectsUnknownIoctl) {
+   Harness harness;
+ 
+diff --git a/tests/unit/driver/test_probe_contract.cpp b/tests/unit/driver/test_probe_contract.cpp
+index 1964265..b74da9f 100644
+--- a/tests/unit/driver/test_probe_contract.cpp
++++ b/tests/unit/driver/test_probe_contract.cpp
+@@ -95,6 +95,7 @@ TEST(VirtualDisplayProbeContract, PlansProbeCommandArgcBoundsAndExecutionStage)
+     ExpectedPlan {"--remote-query-state", 3, 3, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
+     ExpectedPlan {"--remote-set-permanent", 4, 4, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
+     ExpectedPlan {"--remote-set-hdr", 5, 6, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
++    ExpectedPlan {"--remote-set-mode", 7, 7, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
+     ExpectedPlan {"--self-test-permanent", 2, 3, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
+     ExpectedPlan {"--self-test-temp", 2, 5, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
+     ExpectedPlan {"--probe-displaymanager-acquire-new-temp-target", 2, 5, vdd::ProbeCommandExecutionStage::ControlDeviceWithoutActiveSession},
+diff --git a/tools/virtualdisplay_probe.cpp b/tools/virtualdisplay_probe.cpp
+index ecc0c3e..7024dc9 100644
+--- a/tools/virtualdisplay_probe.cpp
++++ b/tools/virtualdisplay_probe.cpp
+@@ -140,6 +140,7 @@ namespace {
+       << "  --remote-query-state <session_id>\n"
+       << "  --remote-set-permanent <session_id> <count>\n"
+       << "  --remote-set-hdr <session_id> <display_id> <0|1> [sdr_white_level_nits]\n"
++      << "  --remote-set-mode <session_id> <display_id> <width> <height> <refresh_millihz>\n"
+       << "  --self-test-permanent [count]\n"
+       << "  --self-test-temp [width height refresh_hz]\n"
+       << "  --self-test-4k240 [timeout_ms]\n"
+@@ -2644,6 +2645,7 @@ namespace {
+     std::cout << "display_config_query_flags=" << query_flags
+               << " display_config_paths=" << display_config.paths.size()
+               << " modes=" << display_config.modes.size() << '\n';
++    const bool virtual_mode_aware = (query_flags & QDC_VIRTUAL_MODE_AWARE) != 0;
+     for (std::size_t index = 0; index < display_config.paths.size(); ++index) {
+       const auto &path = display_config.paths[index];
+       const bool matches_filter =
+@@ -2669,6 +2671,38 @@ namespace {
+                 << " tech=" << static_cast<unsigned int>(path.targetInfo.outputTechnology)
+                 << " status=" << static_cast<unsigned int>(path.targetInfo.statusFlags)
+                 << '\n';
++
++      const auto source_index = virtual_mode_aware ?
++        path.sourceInfo.sourceModeInfoIdx :
++        path.sourceInfo.modeInfoIdx;
++      if (source_index != DISPLAYCONFIG_PATH_SOURCE_MODE_IDX_INVALID &&
++          source_index < display_config.modes.size()) {
++        const auto &mode = display_config.modes[source_index];
++        if (mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE) {
++          std::cout << "path_source_mode[" << index << "]"
++                    << " width=" << mode.sourceMode.width
++                    << " height=" << mode.sourceMode.height
++                    << " pixel_format=" << static_cast<unsigned int>(mode.sourceMode.pixelFormat)
++                    << " position=" << mode.sourceMode.position.x << ',' << mode.sourceMode.position.y
++                    << '\n';
++        }
++      }
++
++      const auto target_index = virtual_mode_aware ?
++        path.targetInfo.targetModeInfoIdx :
++        path.targetInfo.modeInfoIdx;
++      if (target_index != DISPLAYCONFIG_PATH_TARGET_MODE_IDX_INVALID &&
++          target_index < display_config.modes.size()) {
++        const auto &mode = display_config.modes[target_index];
++        if (mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_TARGET) {
++          const auto &signal = mode.targetMode.targetVideoSignalInfo;
++          std::cout << "path_target_mode[" << index << "]"
++                    << " active=" << signal.activeSize.cx << 'x' << signal.activeSize.cy
++                    << " total=" << signal.totalSize.cx << 'x' << signal.totalSize.cy
++                    << " vsync=" << signal.vSyncFreq.Numerator << '/' << signal.vSyncFreq.Denominator
++                    << '\n';
++        }
++      }
+     }
+   }
+ 
+@@ -5355,7 +5389,9 @@ int main(const int argc, char **argv) {
+   }
+ 
+   const bool remote_query = command == "--remote-query-permanent" || command == "--remote-query-state";
+-  const bool remote_set = command == "--remote-set-permanent" || command == "--remote-set-hdr";
++  const bool remote_set = command == "--remote-set-permanent" ||
++                          command == "--remote-set-hdr" ||
++                          command == "--remote-set-mode";
+   std::uint32_t remote_session_id {};
+   if ((remote_query || remote_set) &&
+       !read_u32_arg(argc, argv, 2, 0, "remote session id", remote_session_id)) {
+@@ -5521,6 +5557,28 @@ int main(const int argc, char **argv) {
+     return 0;
+   }
+ 
++  if (command == "--remote-set-mode") {
++    if (!require_command_arg_count(command, argc)) {
++      return 2;
++    }
++    vdd::SetDisplayModeRequest request {};
++    if (!read_u64_arg(argc, argv, 3, 0, "display id", request.display_id) ||
++        !read_u32_arg(argc, argv, 4, 0, "width", request.width) ||
++        !read_u32_arg(argc, argv, 5, 0, "height", request.height) ||
++        !read_u32_arg(argc, argv, 6, 0, "refresh rate (millihertz)", request.refresh_rate_millihz)) {
++      return 2;
++    }
++    const auto result = client.set_display_mode(request);
++    if (!result.ok()) {
++      return fail("set remote display mode failed", result);
++    }
++    std::cout << "remote_session=" << remote_session_id
++              << " display_id=" << request.display_id
++              << " mode=" << request.width << 'x' << request.height << '@'
++              << (request.refresh_rate_millihz / 1000.0) << "Hz\n";
++    return 0;
++  }
++
+   if (command == "--self-test-permanent") {
+     if (!require_command_arg_count(command, argc)) {
+       return 2;
+-- 
+2.54.0.windows.1
+

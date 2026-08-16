@@ -1287,6 +1287,40 @@ implement capability preflight and owned session/display/audio/token handles,
 complete reserved port allocation, and reverse-order release without modifying
 Microsoft DLLs or weakening Core Isolation/Code Integrity.
 
+## Remote display-helper mode integration (2026-08-16)
+
+The live mode-control proof closed the driver-side part of the dynamic-resolution
+gap without ending the terminal session or restarting either display driver.
+Session 72 began at 1920x1080, then accepted 2560x1440 at 60 Hz on the same
+Remote IDD display id (`8070450532247928833`). Windows DisplayConfig and the
+driver state both reported the new mode, WGC rejected its stale continuation
+because the output geometry changed and recaptured at 2560x1440, and HDR/HEVC
+remained active. The installed console `SunshineService` stayed on PID 52564
+throughout the proof.
+
+The Sunshine integration now routes that proven operation through
+`sunshine_display_helper.exe` when the helper is running in a non-console WTS
+session:
+
+- helper mutexes, IPC pipe names, stale-process cleanup, logs, snapshots, and
+  recovery files are scoped to the exact Windows session;
+- a private terminal worker launches its helper inside the containing job rather
+  than requesting `CREATE_BREAKAWAY_FROM_JOB`, which was the source of Win32
+  error 5 in the managed seat;
+- the v2 helper opens only the Remote IDD control interface whose device session
+  id matches its own session, requires exactly one driver display entry, and
+  applies resolution, refresh, HDR, refresh-only changes, and snapshot restores
+  through that display id;
+- a remote helper never creates or deletes the console user's machine-wide boot
+  restore task; its restore ledger remains inside the disposable WTS seat;
+- `third-party/libvirtualdisplay` now points to
+  `c7c8c97b3793a4f75c0f3f263b53376f6af98397`, and patch 0006 preserves the
+  live mode-control source after the earlier HDR proof series.
+
+This checkpoint has source/static validation only. A fresh Duo-lane build and a
+helper-driven 1080p-to-1440p runtime repetition remain required before calling
+the new integration proven end to end.
+
 ## Release gates
 
 Do not call this production-capable until all of the following are proven:
