@@ -10,6 +10,12 @@ param(
     [switch]$ValidateOnly,
     [string]$BuildDir,
     [string]$PrebuiltPackageDir,
+    [string]$ManifestPath,
+    [string]$SourceManifestPath,
+    [string]$TrustedBuildRoot,
+    [string]$SourceTrustedRoot,
+    [string]$Repository = 'Nonary/libvirtualdisplay',
+    [string]$Tag = 'v1.6.3',
     [string]$PackageVersion,
     [string]$DriverVerDate,
     [string]$VsDevCmdPath,
@@ -18,6 +24,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'vdd_package_security.ps1')
 
 function Resolve-RequiredPath {
     param(
@@ -493,15 +500,27 @@ if ($SourcePackageDir) {
 }
 
 if ($Build) {
-    New-Item -ItemType Directory -Path $PackageDir -Force | Out-Null
-    $packageRoot = (Resolve-Path -LiteralPath $PackageDir).Path
+    if ([string]::IsNullOrWhiteSpace($TrustedBuildRoot)) {
+        throw '[SunshineVirtualDisplay] TrustedBuildRoot is required for a build/package refresh.'
+    }
+    $packageDestination = Assert-VddSafePathComponents -Root $TrustedBuildRoot -Path $PackageDir
+    if (Test-Path -LiteralPath $packageDestination) {
+        Assert-VddNoReparseTree -Root $packageDestination -TrustedRoot $TrustedBuildRoot -RequireConsistentOwner | Out-Null
+    }
+    $packageRoot = New-VddSiblingPath -Path $packageDestination -TrustedRoot $TrustedBuildRoot -Suffix 'refresh'
+    New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
 } else {
     $packageRoot = Resolve-RequiredPath -Path $PackageDir
+    $packageDestination = $packageRoot
+    if ($TrustedBuildRoot) {
+        Assert-VddSafePathComponents -Root $TrustedBuildRoot -Path $packageRoot | Out-Null
+        Assert-VddNoReparseTree -Root $packageRoot -TrustedRoot $TrustedBuildRoot -RequireConsistentOwner | Out-Null
+    }
 }
 
 if ($sourcePackageRoot) {
     $sourceFullPath = [System.IO.Path]::GetFullPath($sourcePackageRoot).TrimEnd('\', '/')
-    $packageFullPath = [System.IO.Path]::GetFullPath($packageRoot).TrimEnd('\', '/')
+    $packageFullPath = [System.IO.Path]::GetFullPath($packageDestination).TrimEnd('\', '/')
     if ([System.StringComparer]::OrdinalIgnoreCase.Equals($sourceFullPath, $packageFullPath)) {
         throw '[SunshineVirtualDisplay] SourcePackageDir and PackageDir must be distinct directories.'
     }
@@ -510,6 +529,24 @@ if ($sourcePackageRoot) {
 $driverSourceInf = Join-Path $libRoot 'src\driver\windows_driver\SunshineVirtualDisplayDriver.inf'
 Resolve-RequiredPath -Path $driverSourceInf -Leaf | Out-Null
 $prebuiltPackageRoot = Resolve-PrebuiltPackageRoot -Path $PrebuiltPackageDir
+$pinnedManifest = $null
+if ($prebuiltPackageRoot) {
+    if ([string]::IsNullOrWhiteSpace($ManifestPath) -or [string]::IsNullOrWhiteSpace($TrustedBuildRoot)) {
+        throw '[SunshineVirtualDisplay] ManifestPath and TrustedBuildRoot are required when PrebuiltPackageDir is supplied.'
+    }
+    $pinnedManifest = Read-VddManifest -ManifestPath $ManifestPath -TrustedBuildRoot $TrustedBuildRoot
+    if ([string]::IsNullOrWhiteSpace($SourceManifestPath) -or [string]::IsNullOrWhiteSpace($SourceTrustedRoot)) { throw '[SunshineVirtualDisplay] Source manifest provenance is required.' }
+    $sourceManifest = Read-VddManifest -ManifestPath $SourceManifestPath -TrustedBuildRoot $SourceTrustedRoot
+    if ((Get-FileHash $pinnedManifest.Path -Algorithm SHA256).Hash -ne (Get-FileHash $sourceManifest.Path -Algorithm SHA256).Hash) { throw '[SunshineVirtualDisplay] Build manifest differs from checked-in source manifest.' }
+    Assert-VddManifestIdentity -Manifest $pinnedManifest -Repository $Repository -Tag $Tag
+    Assert-VddManifestPayload -Manifest $pinnedManifest -PackageRoot $prebuiltPackageRoot -TrustedRoot $TrustedBuildRoot -PrebuiltLayout -VerifyCatalog
+    $cachedManifest = Join-Path $prebuiltPackageRoot 'libvirtualdisplay-manifest.json'
+    if (-not (Test-Path -LiteralPath $cachedManifest -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $cachedManifest -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $pinnedManifest.Path -Algorithm SHA256).Hash) {
+        throw "[SunshineVirtualDisplay] Prebuilt package is missing the matching manifest: $prebuiltPackageRoot"
+    }
+}
 
 if ($Build -and $sourcePackageRoot) {
     foreach ($staticName in @('install.ps1', 'nefconc.exe')) {
@@ -671,6 +708,16 @@ if ($Build) {
     }
 }
 
+if ($pinnedManifest -and $Build) {
+    if ([string]::IsNullOrWhiteSpace($SourcePackageDir) -or [string]::IsNullOrWhiteSpace($SourceTrustedRoot)) {
+        throw '[SunshineVirtualDisplay] SourcePackageDir and SourceTrustedRoot are required for pinned package provenance.'
+    }
+    Assert-VddManifestPayload -Manifest $pinnedManifest -PackageRoot $packageRoot -TrustedRoot $TrustedBuildRoot -VerifyCatalog
+    $readyPath = Join-Path $packageRoot 'libvirtualdisplay-ready.json'
+    Write-VddReadyRecord -Manifest $pinnedManifest -PackageRoot $packageRoot -TrustedRoot $TrustedBuildRoot -SourcePackageRoot $SourcePackageDir -SourceTrustedRoot $SourceTrustedRoot -ReadyPath $readyPath
+    Assert-VddReadyRecord -Manifest $pinnedManifest -PackageRoot $packageRoot -TrustedRoot $TrustedBuildRoot -SourcePackageRoot $SourcePackageDir -SourceTrustedRoot $SourceTrustedRoot -ReadyPath $readyPath -RequirePinnedProvenance
+}
+
 foreach ($artifact in @(
     $packageInstaller,
     (Join-Path $packageRoot 'nefconc.exe'),
@@ -742,6 +789,16 @@ if ($SkipSigning) {
 & powershell.exe @validateArgs
 if ($LASTEXITCODE -ne 0) {
     throw "[SunshineVirtualDisplay] Driver installer validation failed with exit code $LASTEXITCODE"
+}
+
+if ($Build) {
+    Move-VddDirectoryAtomically -Stage $packageRoot -Destination $packageDestination -TrustedRoot $TrustedBuildRoot
+    $packageRoot = $packageDestination
+    if ($pinnedManifest) {
+        Assert-VddReadyRecord -Manifest $pinnedManifest -PackageRoot $packageRoot -TrustedRoot $TrustedBuildRoot -SourcePackageRoot $SourcePackageDir -SourceTrustedRoot $SourceTrustedRoot -ReadyPath (Join-Path $packageRoot 'libvirtualdisplay-ready.json') -RequirePinnedProvenance
+    } else {
+        Write-Warning '[SunshineVirtualDisplay] Published local self-signed driver package for development only; release CPack validation will reject it.'
+    }
 }
 
 if ($ValidateOnly) {

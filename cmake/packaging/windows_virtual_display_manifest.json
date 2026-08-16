@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "repository": "Nonary/libvirtualdisplay",
+  "tag": "v1.6.3",
+  "commit": "3e85c1fb0e155eebdd640ee4abfd4fdca25bf3ce",
+  "asset": {
+    "name": "libvirtualdisplay-1.6.3-windows-x64.zip",
+    "size": 7123026,
+    "sha256": "91377b2ebe2ecce132544f31f891ae8ffdae428537ce4c7a10c993fdb7e1473b"
+  },
+  "catalog_signer_thumbprint": "37E100B2B382866FA7CE04EE33FE53DF53AEDC6D",
+  "source_files": [
+    { "path": "install.ps1", "size": 46482, "sha256": "28e918650b4766cf33258dfa0e8b41bb55608a5952b056871b91925f16bcb060" },
+    { "path": "nefconc.exe", "size": 852448, "sha256": "99ed0d588a1eb7c4306ac59aa5bc47f7458fb70d2870957829962203c7fb989d" }
+  ],
+  "files": [
+    {
+      "path": "SunshineVirtualDisplayDriver.dll",
+      "archive_path": "driver/SunshineVirtualDisplayDriver.dll",
+      "size": 2852864,
+      "sha256": "a01230696450b2e4caae0fd0eb4f6bbb641a07167111b2bf69cedd6dca17c32b"
+    },
+    {
+      "path": "SunshineVirtualDisplayDriver.inf",
+      "archive_path": "driver/SunshineVirtualDisplayDriver.inf",
+      "size": 2305,
+      "sha256": "afb06cb8d5c152a96e4d939d664bc21aa8a289c6055dfa338dec7a42623cf7c9"
+    },
+    {
+      "path": "SunshineVirtualDisplayDriver.cat",
+      "archive_path": "driver/SunshineVirtualDisplayDriver.cat",
+      "size": 2632,
+      "sha256": "c0c845a9c33102d3e02cdae1a2a16ff1905474ea151b2ef5e7d6fee72c19788c"
+    },
+    {
+      "path": "SunshineVirtualDisplayDriver.cer",
+      "archive_path": "driver/SunshineVirtualDisplayDriver.cer",
+      "size": 826,
+      "sha256": "a42a04d241438ac8bd9107bc302e11b1232796c9536bf45d99717dee256746a1"
+    },
+    {
+      "path": "virtualdisplay_probe.exe",
+      "archive_path": "tools/virtualdisplay_probe.exe",
+      "size": 3066880,
+      "sha256": "1d31f177d2c804bc76b2734931325f71d7ba746eef7604858e05e327eeb2c608"
+    },
+    {
+      "path": "vulkan-layer/VkLayer_sunshine_hdr.dll",
+      "archive_path": "vulkan-layer/VkLayer_sunshine_hdr.dll",
+      "size": 1395712,
+      "sha256": "551d4c7a5ad24620ba9695c507d0a003879e05644072dc30e09738fb1e978f3a"
+    },
+    {
+      "path": "vulkan-layer/VkLayer_sunshine_hdr.json",
+      "archive_path": "vulkan-layer/VkLayer_sunshine_hdr.json",
+      "size": 505,
+      "sha256": "efd73a424e223910b9896e1d4e75e7a16b0673ba115953021a0aa022752fdb0c"
+    }
+  ]
+}

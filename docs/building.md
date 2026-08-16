@@ -285,14 +285,23 @@ ninja -C build
   }}
   @tab{Windows | @tabs{
     @tab{Installer | ```bash
+      cmake --build ./build --target refresh_sunshine_virtual_display_driver_assets
       cpack -G WIX --config ./build/CPackConfig.cmake
-      # note: MSI packaging requires WiX Toolset v3 to be installed (e.g. `choco install wixtoolset`)
+      # The CPack install phase revalidates the staged VDD payload and pinned
+      # provenance record; local-build/self-signed provenance is rejected.
+      # note: MSI packaging requires WiX Toolset v3 (e.g. `choco install wixtoolset`)
       ```}
     @tab{WiX Installer | ```bash
+      cmake --build ./build --target refresh_sunshine_virtual_display_driver_assets
       cpack -G WIX --config ./build/CPackConfig.cmake
+      # Direct CPack performs the same mandatory VDD install-phase validation.
+      # The guard assumes the same-user build workspace is not actively
+      # malicious; it protects against accidental or untrusted reparse swaps.
       ```}
     @tab{Portable | ```bash
+      cmake --build ./build --target refresh_sunshine_virtual_display_driver_assets
       cpack -G ZIP --config ./build/CPackConfig.cmake
+      # Direct CPack performs the same mandatory VDD install-phase validation.
       ```}
   }}
 }

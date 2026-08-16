@@ -132,6 +132,16 @@ set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_PACKAGE_DIR
     "${CMAKE_BINARY_DIR}/packaging/windows/drivers/sunshine")
 set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT "${CMAKE_SOURCE_DIR}/packaging/windows/virtual_display_driver/refresh_driver_package.ps1")
 set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_DOWNLOAD_SCRIPT "${CMAKE_SOURCE_DIR}/scripts/download_libvirtualdisplay_release.ps1")
+set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_CACHE_SCRIPT "${CMAKE_SOURCE_DIR}/packaging/windows/virtual_display_driver/stage_vdd_prebuilt_cache.ps1")
+set(SUNSHINE_VDD_BUILD_MANIFEST_PATH "${CMAKE_BINARY_DIR}/libvirtualdisplay-manifest.json")
+add_custom_command(
+    OUTPUT "${SUNSHINE_VDD_BUILD_MANIFEST_PATH}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${SUNSHINE_VDD_MANIFEST_PATH}" "${SUNSHINE_VDD_BUILD_MANIFEST_PATH}"
+    DEPENDS "${SUNSHINE_VDD_MANIFEST_PATH}"
+    COMMENT "Staging pinned virtual-display manifest")
+add_custom_target(stage_sunshine_virtual_display_manifest
+    DEPENDS "${SUNSHINE_VDD_BUILD_MANIFEST_PATH}")
 
 # The checked-in payload is the validation source.  Package installation must
 # consume only the build-local refresh output so a package build cannot mutate
@@ -156,12 +166,18 @@ unset(_sunshine_vdd_source_dir)
 unset(_sunshine_vdd_binary_root)
 
 set(SUNSHINE_LIBVIRTUALDISPLAY_PREBUILT_DIR "" CACHE PATH "Optional prebuilt libvirtualdisplay package root with driver/, tools/, and vulkan-layer/")
+set(SUNSHINE_VDD_PREBUILT_CACHE_DIR
+    "${CMAKE_BINARY_DIR}/libvirtualdisplay-release-${SUNSHINE_VDD_LIBVIRTUALDISPLAY_RELEASE_TAG}")
 if(SUNSHINE_LIBVIRTUALDISPLAY_PREBUILT_DIR)
-    set(SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR "${SUNSHINE_LIBVIRTUALDISPLAY_PREBUILT_DIR}")
+    file(TO_CMAKE_PATH "${SUNSHINE_LIBVIRTUALDISPLAY_PREBUILT_DIR}" _sunshine_vdd_external_prebuilt)
+    file(TO_CMAKE_PATH "${SUNSHINE_VDD_PREBUILT_CACHE_DIR}" _sunshine_vdd_cached_prebuilt)
+    if(_sunshine_vdd_external_prebuilt STREQUAL _sunshine_vdd_cached_prebuilt)
+        message(FATAL_ERROR "External virtual-display package must not be the build-local cache directory")
+    endif()
+    set(SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR "${SUNSHINE_VDD_PREBUILT_CACHE_DIR}")
     set(SUNSHINE_DOWNLOAD_LIBVIRTUALDISPLAY_RELEASE OFF)
 else()
-    set(SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR
-        "${CMAKE_BINARY_DIR}/libvirtualdisplay-release-${SUNSHINE_VDD_LIBVIRTUALDISPLAY_RELEASE_TAG}")
+    set(SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR "${SUNSHINE_VDD_PREBUILT_CACHE_DIR}")
     set(SUNSHINE_DOWNLOAD_LIBVIRTUALDISPLAY_RELEASE ON)
 endif()
 set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SIGNING_ARGS "")
@@ -232,9 +248,41 @@ if(EXISTS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}")
                     -Repository "${SUNSHINE_VDD_LIBVIRTUALDISPLAY_REPOSITORY}"
                     -Tag "${SUNSHINE_VDD_LIBVIRTUALDISPLAY_RELEASE_TAG}"
                     -OutDir "${SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR}"
+                    -ManifestPath "${SUNSHINE_VDD_BUILD_MANIFEST_PATH}"
+                    -TrustedBuildRoot "${CMAKE_BINARY_DIR}"
+                    -SourceManifestPath "${SUNSHINE_VDD_MANIFEST_PATH}"
+                    -SourceTrustedRoot "${CMAKE_SOURCE_DIR}"
             DEPENDS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_DOWNLOAD_SCRIPT}"
+                    stage_sunshine_virtual_display_manifest
             COMMENT "Downloading pinned Vibeshine Display Driver release"
             VERBATIM)
+    endif()
+
+    if(SUNSHINE_LIBVIRTUALDISPLAY_PREBUILT_DIR)
+        set(_sunshine_vdd_cache_marker "${SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR}/.cache-ready")
+        add_custom_command(OUTPUT "${_sunshine_vdd_cache_marker}"
+            COMMAND powershell -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass
+                    -File "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_CACHE_SCRIPT}"
+                    -SourcePackageDir "${SUNSHINE_LIBVIRTUALDISPLAY_PREBUILT_DIR}"
+                    -PackageDir "${SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR}"
+                    -ManifestPath "${SUNSHINE_VDD_BUILD_MANIFEST_PATH}"
+                    -TrustedBuildRoot "${CMAKE_BINARY_DIR}"
+                    -SourceManifestPath "${SUNSHINE_VDD_MANIFEST_PATH}"
+                    -SourceTrustedRoot "${CMAKE_SOURCE_DIR}"
+            DEPENDS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_CACHE_SCRIPT}"
+                    "${SUNSHINE_VDD_BUILD_MANIFEST_PATH}"
+            COMMENT "Staging caller-provided virtual-display package into the build-local cache"
+            VERBATIM)
+        add_custom_target(stage_sunshine_virtual_display_driver_cache
+            DEPENDS "${_sunshine_vdd_cache_marker}")
+        unset(_sunshine_vdd_cache_marker)
+    elseif(SUNSHINE_DOWNLOAD_LIBVIRTUALDISPLAY_RELEASE)
+        add_custom_target(stage_sunshine_virtual_display_driver_cache)
+        add_dependencies(stage_sunshine_virtual_display_driver_cache
+            download_sunshine_virtual_display_driver_release)
+    else()
+        add_custom_target(stage_sunshine_virtual_display_driver_cache
+            DEPENDS stage_sunshine_virtual_display_manifest)
     endif()
 
     add_custom_target(validate_sunshine_virtual_display_driver_assets
@@ -244,15 +292,20 @@ if(EXISTS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}")
                 -LibVirtualDisplayDir "${SUNSHINE_LIBVIRTUALDISPLAY_SOURCE_DIR}"
                 -PrebuiltPackageDir "${SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR}"
                 -PackageDir "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR}"
+                -ManifestPath "${SUNSHINE_VDD_BUILD_MANIFEST_PATH}"
+                -TrustedBuildRoot "${CMAKE_BINARY_DIR}"
+                -SourceManifestPath "${SUNSHINE_VDD_MANIFEST_PATH}"
+                -SourceTrustedRoot "${CMAKE_SOURCE_DIR}"
+                -Repository "${SUNSHINE_VDD_LIBVIRTUALDISPLAY_REPOSITORY}"
+                -Tag "${SUNSHINE_VDD_LIBVIRTUALDISPLAY_RELEASE_TAG}"
         DEPENDS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}"
+                stage_sunshine_virtual_display_manifest
                 ${SUNSHINE_VIRTUAL_DISPLAY_SOURCE_PACKAGE_FILES}
         COMMENT "Validating Vibeshine Display Driver package assets"
         VERBATIM)
 
-    if(SUNSHINE_DOWNLOAD_LIBVIRTUALDISPLAY_RELEASE)
-        add_dependencies(validate_sunshine_virtual_display_driver_assets
-            download_sunshine_virtual_display_driver_release)
-    endif()
+    add_dependencies(validate_sunshine_virtual_display_driver_assets
+        stage_sunshine_virtual_display_driver_cache)
 
     add_custom_target(refresh_sunshine_virtual_display_driver_assets
         COMMAND powershell -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass
@@ -260,23 +313,54 @@ if(EXISTS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}")
                 -Build
                 -LibVirtualDisplayDir "${SUNSHINE_LIBVIRTUALDISPLAY_SOURCE_DIR}"
                 -PrebuiltPackageDir "${SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR}"
-                -SourcePackageDir "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR}"
                 -PackageDir "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_PACKAGE_DIR}"
+                -ManifestPath "${SUNSHINE_VDD_BUILD_MANIFEST_PATH}"
+                -TrustedBuildRoot "${CMAKE_BINARY_DIR}"
+                -SourceManifestPath "${SUNSHINE_VDD_MANIFEST_PATH}"
+                -SourceTrustedRoot "${CMAKE_SOURCE_DIR}"
+                -SourcePackageDir "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR}"
+                -Repository "${SUNSHINE_VDD_LIBVIRTUALDISPLAY_REPOSITORY}"
+                -Tag "${SUNSHINE_VDD_LIBVIRTUALDISPLAY_RELEASE_TAG}"
                 ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SIGNING_ARGS}
         DEPENDS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}"
+                stage_sunshine_virtual_display_manifest
                 ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_STATIC_FILES}
         COMMENT "Refreshing Vibeshine Display Driver package assets from the pinned release"
         VERBATIM)
 
-    if(SUNSHINE_DOWNLOAD_LIBVIRTUALDISPLAY_RELEASE)
-        add_dependencies(refresh_sunshine_virtual_display_driver_assets
-            download_sunshine_virtual_display_driver_release)
-    endif()
+    add_dependencies(refresh_sunshine_virtual_display_driver_assets
+        stage_sunshine_virtual_display_driver_cache)
 
     if(TARGET package_msi AND SUNSHINE_VDD_REFRESH_BEFORE_MSI)
         add_dependencies(package_msi refresh_sunshine_virtual_display_driver_assets)
     endif()
 endif()
+
+# Guard the CPack destination before any VDD install(FILES) operation. This
+# validates the source-pinned ready record and rejects a reparse/interposed
+# destination before CPack can create or copy into it.
+set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_INSTALL_VALIDATION_SCRIPT
+    "${CMAKE_SOURCE_DIR}/packaging/windows/virtual_display_driver/validate_vdd_install.ps1")
+set(_sunshine_vdd_install_preflight_code [=[
+execute_process(
+    COMMAND powershell -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass
+            -File "@SUNSHINE_VIRTUAL_DISPLAY_DRIVER_INSTALL_VALIDATION_SCRIPT@"
+            -ManifestPath "@SUNSHINE_VDD_BUILD_MANIFEST_PATH@"
+            -SourceManifestPath "@SUNSHINE_VDD_MANIFEST_PATH@"
+            -SourceTrustedRoot "@CMAKE_SOURCE_DIR@"
+            -SourcePackageRoot "@SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR@"
+            -PackageRoot "@SUNSHINE_VIRTUAL_DISPLAY_DRIVER_PACKAGE_DIR@"
+            -InstalledPackageRoot "${CMAKE_INSTALL_PREFIX}/@SUNSHINE_VDD_DRIVER_DESTINATION@"
+            -TrustedBuildRoot "@CMAKE_BINARY_DIR@"
+            -Preflight -RequirePinnedProvenance
+    RESULT_VARIABLE _sunshine_vdd_preflight_result)
+if(NOT _sunshine_vdd_preflight_result EQUAL 0)
+    message(FATAL_ERROR "Pinned virtual-display pre-install validation failed.")
+endif()
+]=])
+string(CONFIGURE "${_sunshine_vdd_install_preflight_code}" _sunshine_vdd_install_preflight_code @ONLY)
+install(CODE "${_sunshine_vdd_install_preflight_code}" COMPONENT virtual_display_driver)
+unset(_sunshine_vdd_install_preflight_code)
 
 install(FILES ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_FILES}
         DESTINATION "${SUNSHINE_VDD_DRIVER_DESTINATION}"
@@ -288,6 +372,32 @@ install(FILES ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_OPTIONAL_FILES}
 install(FILES ${SUNSHINE_VIRTUAL_DISPLAY_VULKAN_LAYER_FILES}
         DESTINATION "${SUNSHINE_VDD_VULKAN_LAYER_DESTINATION}"
         COMPONENT virtual_display_driver)
+
+# CPack runs the install script independently of the package_msi target graph.
+# Validate both the build-local published payload and the exact files copied
+# into the CPack staging tree, and require the pinned-release provenance record.
+set(_sunshine_vdd_install_validation_code [=[
+execute_process(
+    COMMAND powershell -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass
+            -File "@SUNSHINE_VIRTUAL_DISPLAY_DRIVER_INSTALL_VALIDATION_SCRIPT@"
+            -ManifestPath "@SUNSHINE_VDD_BUILD_MANIFEST_PATH@"
+            -SourceManifestPath "@SUNSHINE_VDD_MANIFEST_PATH@"
+            -SourceTrustedRoot "@CMAKE_SOURCE_DIR@"
+            -SourcePackageRoot "@SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR@"
+            -PackageRoot "@SUNSHINE_VIRTUAL_DISPLAY_DRIVER_PACKAGE_DIR@"
+            -InstalledPackageRoot "${CMAKE_INSTALL_PREFIX}/@SUNSHINE_VDD_DRIVER_DESTINATION@"
+            -TrustedBuildRoot "@CMAKE_BINARY_DIR@"
+            -RequirePinnedProvenance
+    RESULT_VARIABLE _sunshine_vdd_install_validation_result)
+if(NOT _sunshine_vdd_install_validation_result EQUAL 0)
+    message(FATAL_ERROR "Pinned virtual-display install validation failed.")
+endif()
+]=])
+set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_INSTALL_VALIDATION_SCRIPT
+    "${CMAKE_SOURCE_DIR}/packaging/windows/virtual_display_driver/validate_vdd_install.ps1")
+string(CONFIGURE "${_sunshine_vdd_install_validation_code}" _sunshine_vdd_install_validation_code @ONLY)
+install(CODE "${_sunshine_vdd_install_validation_code}" COMPONENT virtual_display_driver)
+unset(_sunshine_vdd_install_validation_code)
 
 # Mandatory scripts
 install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/sunshine-setup.ps1"

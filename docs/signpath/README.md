@@ -131,6 +131,15 @@ that fails the build if any first-party PE is unsigned. It:
 This catches a portal misconfiguration (e.g. a container-only `msi-file` config,
 or a newly added binary missing from Strategy-1 enumeration) before release.
 
+The same post-sign step independently validates the administratively extracted
+`drivers/sunshine` payload against the exact release commit checked out by the
+workflow. It verifies all seven pinned upstream sizes/hashes, the catalog
+signer and bundled certificate, trust-independent DLL/INF catalog membership,
+and the source-owned `install.ps1`/`nefconc.exe` hashes. `vendorSkip` output is
+diagnostic logging only; it is not provenance and cannot waive this payload
+check. This catches SignPath portal deep-signing or payload drift before
+publication.
+
 ## Portal setup checklist
 
 1. Create/confirm the `msi-file` artifact configuration matches

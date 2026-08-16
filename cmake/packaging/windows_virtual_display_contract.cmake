@@ -4,17 +4,43 @@ include_guard(GLOBAL)
 # installer policy. Windows packaging consumes the file lists and destinations
 # below. The standalone component test configures the same values into a typed
 # C++ view, so it never opens package scripts or payload files at runtime.
-set(SUNSHINE_VDD_DRIVER_REQUIRED_FILES
-    install.ps1
-    SunshineVirtualDisplayDriver.inf
-    SunshineVirtualDisplayDriver.dll
-    SunshineVirtualDisplayDriver.cat
-    nefconc.exe
-    virtualdisplay_probe.exe)
-set(SUNSHINE_VDD_DRIVER_OPTIONAL_FILES SunshineVirtualDisplayDriver.cer)
-set(SUNSHINE_VDD_VULKAN_LAYER_FILES
-    vulkan-layer/VkLayer_sunshine_hdr.dll
-    vulkan-layer/VkLayer_sunshine_hdr.json)
+set(SUNSHINE_VDD_MANIFEST_PATH "${CMAKE_CURRENT_LIST_DIR}/windows_virtual_display_manifest.json")
+if(NOT EXISTS "${SUNSHINE_VDD_MANIFEST_PATH}")
+    message(FATAL_ERROR "Pinned virtual-display manifest is missing: ${SUNSHINE_VDD_MANIFEST_PATH}")
+endif()
+file(READ "${SUNSHINE_VDD_MANIFEST_PATH}" _sunshine_vdd_manifest_json)
+string(JSON _sunshine_vdd_manifest_schema GET "${_sunshine_vdd_manifest_json}" schema_version)
+if(NOT _sunshine_vdd_manifest_schema EQUAL 1)
+    message(FATAL_ERROR "Unsupported virtual-display manifest schema: ${_sunshine_vdd_manifest_schema}")
+endif()
+string(JSON SUNSHINE_VDD_LIBVIRTUALDISPLAY_REPOSITORY GET "${_sunshine_vdd_manifest_json}" repository)
+string(JSON SUNSHINE_VDD_LIBVIRTUALDISPLAY_RELEASE_TAG GET "${_sunshine_vdd_manifest_json}" tag)
+string(JSON SUNSHINE_VDD_LIBVIRTUALDISPLAY_COMMIT GET "${_sunshine_vdd_manifest_json}" commit)
+string(JSON SUNSHINE_VDD_LIBVIRTUALDISPLAY_ASSET_NAME GET "${_sunshine_vdd_manifest_json}" asset name)
+string(JSON SUNSHINE_VDD_LIBVIRTUALDISPLAY_ASSET_SIZE GET "${_sunshine_vdd_manifest_json}" asset size)
+string(JSON SUNSHINE_VDD_LIBVIRTUALDISPLAY_ASSET_SHA256 GET "${_sunshine_vdd_manifest_json}" asset sha256)
+string(JSON SUNSHINE_VDD_LIBVIRTUALDISPLAY_CATALOG_THUMBPRINT GET "${_sunshine_vdd_manifest_json}" catalog_signer_thumbprint)
+string(JSON _sunshine_vdd_manifest_file_count LENGTH "${_sunshine_vdd_manifest_json}" files)
+set(SUNSHINE_VDD_DRIVER_REQUIRED_FILES install.ps1 nefconc.exe)
+set(SUNSHINE_VDD_DRIVER_OPTIONAL_FILES "")
+set(SUNSHINE_VDD_VULKAN_LAYER_FILES "")
+math(EXPR _sunshine_vdd_manifest_last "${_sunshine_vdd_manifest_file_count} - 1")
+foreach(_sunshine_vdd_manifest_index RANGE ${_sunshine_vdd_manifest_last})
+    string(JSON _sunshine_vdd_manifest_path GET "${_sunshine_vdd_manifest_json}" files ${_sunshine_vdd_manifest_index} path)
+    if(_sunshine_vdd_manifest_path STREQUAL "SunshineVirtualDisplayDriver.cer")
+        list(APPEND SUNSHINE_VDD_DRIVER_OPTIONAL_FILES "${_sunshine_vdd_manifest_path}")
+    elseif(_sunshine_vdd_manifest_path MATCHES "^vulkan-layer/")
+        list(APPEND SUNSHINE_VDD_VULKAN_LAYER_FILES "${_sunshine_vdd_manifest_path}")
+    else()
+        list(APPEND SUNSHINE_VDD_DRIVER_REQUIRED_FILES "${_sunshine_vdd_manifest_path}")
+    endif()
+endforeach()
+unset(_sunshine_vdd_manifest_index)
+unset(_sunshine_vdd_manifest_last)
+unset(_sunshine_vdd_manifest_file_count)
+unset(_sunshine_vdd_manifest_path)
+unset(_sunshine_vdd_manifest_schema)
+unset(_sunshine_vdd_manifest_json)
 set(SUNSHINE_VDD_TRUEHDR_FILES vibeshine_truehdr.dll nvngx_truehdr.dll)
 
 set(SUNSHINE_VDD_DRIVER_DESTINATION "drivers/sunshine")
@@ -22,11 +48,9 @@ set(SUNSHINE_VDD_VULKAN_LAYER_DESTINATION "drivers/sunshine/vulkan-layer")
 set(SUNSHINE_VDD_SUDOVDA_DESTINATION "drivers/sudovda")
 set(SUNSHINE_VDD_TRUEHDR_REPOSITORY "Nonary/vibeshine_truehdr_runtime")
 set(SUNSHINE_VDD_TRUEHDR_RELEASE_TAG "v1.0.0")
-set(SUNSHINE_VDD_LIBVIRTUALDISPLAY_REPOSITORY "Nonary/libvirtualdisplay")
-# Windows packaging always stages this pinned release before it refreshes the
-# product payload. The local source checkout remains available for development,
-# but is not used to build the driver as part of product packaging.
-set(SUNSHINE_VDD_LIBVIRTUALDISPLAY_RELEASE_TAG "v1.6.3")
+# Windows packaging always stages this manifest-pinned release before it
+# refreshes the product payload. The local source checkout remains available
+# for development, but is not used to build the driver as part of packaging.
 set(SUNSHINE_VDD_VULKAN_LAYER_NAME "VK_LAYER_SUNSHINE_virtual_hdr")
 set(SUNSHINE_VDD_VULKAN_LAYER_LIBRARY ".\\VkLayer_sunshine_hdr.dll")
 set(SUNSHINE_VDD_VULKAN_LAYER_DISABLE_ENVIRONMENT "DISABLE_SUNSHINE_VIRTUAL_HDR")
