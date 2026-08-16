@@ -1499,10 +1499,17 @@ namespace proc {
     });
 
 #ifdef _WIN32
-    const bool steam_offline_isolation = _env["VIBESHINE_STEAM_OFFLINE_ISOLATION"] == "1";
-    const std::string steam_offline_seat_id = _env["VIBESHINE_STEAM_OFFLINE_SEAT_ID"];
-    const std::string steam_mirror_root = _env["VIBESHINE_STEAM_MIRROR_ROOT"];
-    const std::string steam_cache_root = _env["VIBESHINE_STEAM_CACHE_ROOT"];
+    const auto read_environment_value = [&](const std::string_view key) -> std::optional<std::string> {
+      const auto entry = std::find_if(_env.cbegin(), _env.cend(), [&](const auto &candidate) {
+        return boost::iequals(candidate.get_name(), key);
+      });
+      return entry == _env.cend() ? std::nullopt : std::optional<std::string> {entry->to_string()};
+    };
+    const auto steam_offline_isolation_value = read_environment_value("VIBESHINE_STEAM_OFFLINE_ISOLATION");
+    const bool steam_offline_isolation = steam_offline_isolation_value && *steam_offline_isolation_value == "1";
+    const std::string steam_offline_seat_id = read_environment_value("VIBESHINE_STEAM_OFFLINE_SEAT_ID").value_or("");
+    const std::string steam_mirror_root = read_environment_value("VIBESHINE_STEAM_MIRROR_ROOT").value_or("");
+    const std::string steam_cache_root = read_environment_value("VIBESHINE_STEAM_CACHE_ROOT").value_or("");
     const auto configured_launch_command = [&](const std::string &command) {
       if (!steam_offline_isolation) return command;
       return steam_offline::rewrite_client_command(command, steam_mirror_root, steam_cache_root, steam_offline_seat_id);
