@@ -403,6 +403,8 @@
         "route_target": "Route this client to",
         "terminal_session": "Terminal emulation",
         "terminal_session_description": "Launch this device's streams inside a separate Windows terminal desktop owned by a managed Vibeshine account. Moonlight stays paired to this host. This isolates the desktop and session, not the user's files or application identity.",
+        "steam_offline_isolation": "Steam offline isolation",
+        "steam_offline_isolation_description": "Offline the seat's Steam client processes after you prepare eligible games in Steam Offline Mode. Online-required games and third-party launchers may fail; game network traffic remains allowed.",
         "sections": {
           "display": "Display routing",
           "hdr": "HDR and presentation",

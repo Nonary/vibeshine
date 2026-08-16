@@ -43,6 +43,7 @@
 // local includes
 #include "app_framegen_config.h"
 #include "app_catalog_policy.h"
+#include "steam_offline_policy.h"
 #include "config.h"
 #include "crypto.h"
 #include "deferred_action.h"
@@ -1498,6 +1499,12 @@ namespace proc {
     });
 
 #ifdef _WIN32
+    const bool steam_offline_isolation = _env["VIBESHINE_STEAM_OFFLINE_ISOLATION"] == "1";
+    const std::string steam_offline_seat_id = _env["VIBESHINE_STEAM_OFFLINE_SEAT_ID"];
+    const auto configured_launch_command = [&](const std::string &command) {
+      if (!steam_offline_isolation) return command;
+      return steam_offline::append_ipc_override(command, steam_offline_seat_id);
+    };
     std::unordered_set<DWORD> lossless_baseline_pids;
     bool lossless_monitor_started = false;
     std::string lossless_install_dir_hint;
@@ -1555,6 +1562,9 @@ namespace proc {
         }
       }
 #endif
+      // Detached/prep commands are auxiliary game/launcher commands.  The
+      // Steam override is intentionally limited to the configured primary
+      // app command below so a game command can never be rewritten.
       BOOST_LOG(info) << "Spawning ["sv << cmd << "] in ["sv << working_dir << ']';
       auto child = platf::run_command(_app.elevated, true, cmd, working_dir, _env, _pipe.get(), ec, nullptr);
 #ifdef _WIN32
@@ -1768,8 +1778,10 @@ namespace proc {
         }
       }
 #endif
-      BOOST_LOG(info) << "Executing: ["sv << _app.cmd << "] in ["sv << working_dir << ']';
-      _process = platf::run_command(_app.elevated, true, _app.cmd, working_dir, _env, _pipe.get(), ec, &_process_group);
+      const auto launch_command = configured_launch_command(_app.cmd);
+      if (launch_command.empty()) return -1;
+      BOOST_LOG(info) << "Executing: ["sv << launch_command << "] in ["sv << working_dir << ']';
+      _process = platf::run_command(_app.elevated, true, launch_command, working_dir, _env, _pipe.get(), ec, &_process_group);
       if (ec) {
         BOOST_LOG(warning) << "Couldn't run ["sv << _app.cmd << "]: System: "sv << ec.message();
         return -1;

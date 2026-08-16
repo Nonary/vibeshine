@@ -40,8 +40,19 @@
       <Custom Action="StopSvcQuietImmediate" After="SetStopSvcQuietImmediate">((Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE AND UILevel &lt; 5) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
 
       <!-- Stop service proactively on repair or uninstall -->
-      <Custom Action="SetStopSvcQuiet" After="InstallInitialize">((Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE AND UILevel &lt; 5) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
-      <Custom Action="StopSvcQuiet" After="SetStopSvcQuiet">((Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE AND UILevel &lt; 5) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <Custom Action="SetStopSvcQuiet" After="InstallInitialize">((WIX_UPGRADE_DETECTED OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)) OR ((Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE AND UILevel &lt; 5))</Custom>
+      <Custom Action="StopSvcQuiet" After="SetStopSvcQuiet">((WIX_UPGRADE_DETECTED OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)) OR ((Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE AND UILevel &lt; 5))</Custom>
+
+      <?if $(var.VibeshineSteamOfflineFilter) = 1 ?>
+      <!-- Retained source actions for a future enabled lane. The current
+           CMake configure gate rejects this non-unloadable driver until a
+           coherent two-phase reboot transaction exists; runtime per-client
+           isolation remains a separate default-off setting. -->
+      <Custom Action="SetRollbackUninstallSteamOfflineFilter" After="StopSvcQuiet">(WIX_UPGRADE_DETECTED OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)) AND (?SteamOfflineFilterPayload = 3)</Custom>
+      <Custom Action="RollbackUninstallSteamOfflineFilter" After="SetRollbackUninstallSteamOfflineFilter">(WIX_UPGRADE_DETECTED OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)) AND (?SteamOfflineFilterPayload = 3)</Custom>
+      <Custom Action="SetUninstallSteamOfflineFilter" After="RollbackUninstallSteamOfflineFilter">(WIX_UPGRADE_DETECTED OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)) AND (?SteamOfflineFilterPayload = 3)</Custom>
+      <Custom Action="UninstallSteamOfflineFilter" After="SetUninstallSteamOfflineFilter">(WIX_UPGRADE_DETECTED OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)) AND (?SteamOfflineFilterPayload = 3)</Custom>
+      <?endif?>
 
       <!-- Start quietly on repair with basic/silent UI -->
       <Custom Action="SetStartSvcQuiet" Before="StartSvcQuiet">Installed AND NOT REMOVE AND UILevel &lt; 5</Custom>
@@ -58,6 +69,15 @@
       <!-- Post-install chores -->
       <Custom Action="SetResetAcls" After="InstallFiles">NOT REMOVE</Custom>
       <Custom Action="ResetAcls" After="SetResetAcls">NOT REMOVE</Custom>
+      <?if $(var.VibeshineSteamOfflineFilter) = 1 ?>
+      <!-- Retained source action for the future enabled lane. It is not
+           emitted while the configure-time non-unloadable-driver gate is in
+           force; runtime per-client isolation remains default-off. -->
+      <Custom Action="SetRollbackSteamOfflineFilter" After="ResetAcls">((NOT Installed AND NOT REMOVE) OR WIX_UPGRADE_DETECTED)</Custom>
+      <Custom Action="RollbackSteamOfflineFilter" After="SetRollbackSteamOfflineFilter">((NOT Installed AND NOT REMOVE) OR WIX_UPGRADE_DETECTED)</Custom>
+      <Custom Action="SetInstallSteamOfflineFilter" After="RollbackSteamOfflineFilter">((NOT Installed AND NOT REMOVE) OR WIX_UPGRADE_DETECTED)</Custom>
+      <Custom Action="InstallSteamOfflineFilter" After="SetInstallSteamOfflineFilter">((NOT Installed AND NOT REMOVE) OR WIX_UPGRADE_DETECTED)</Custom>
+      <?endif?>
       <Custom Action="SetInstallSudovda" After="ResetAcls">NOT REMOVE AND INSTALL_SUDOVDA = "1"</Custom>
       <Custom Action="InstallSudovda" After="SetInstallSudovda">NOT REMOVE AND INSTALL_SUDOVDA = "1"</Custom>
       <Custom Action="SetInstallVirtualDisplayDriver" After="InstallSudovda">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>

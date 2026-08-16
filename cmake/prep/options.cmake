@@ -17,6 +17,14 @@ option(SUNSHINE_CONFIGURE_ONLY "Configure special files only, then exit." OFF)
 option(SUNSHINE_ENABLE_TRAY "Enable system tray icon." ON)
 option(SUNSHINE_ENABLE_WEBRTC "Enable WebRTC streaming support (Windows only)." OFF)
 
+if(WIN32)
+    # The WDK lane is intentionally dormant unless a packaging job explicitly
+    # opts in.  Keeping the option Windows-scoped prevents non-Windows
+    # configure/build graphs from acquiring driver targets or scripts.
+    option(SUNSHINE_BUILD_STEAM_OFFLINE_FILTER_DRIVER
+            "Build and package the opt-in Steam Offline Filter WDM driver." OFF)
+endif()
+
 option(SUNSHINE_SYSTEM_VULKAN_HEADERS "Use system installation of vulkan-headers rather than the submodule." OFF)
 option(SUNSHINE_SYSTEM_WAYLAND_PROTOCOLS "Use system installation of wayland-protocols rather than the submodule." OFF)
 

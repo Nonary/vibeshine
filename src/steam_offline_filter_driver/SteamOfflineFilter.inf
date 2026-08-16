@@ -1,0 +1,49 @@
+; Vibeshine Steam Offline Filter WDM callout
+; The catalog is generated and signed by package.ps1; do not hand-edit it.
+
+[Version]
+Signature = "$WINDOWS NT$"
+Class = System
+ClassGuid = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider = %VibeshineProvider%
+CatalogFile = VibeshineSteamOfflineFilter.cat
+DriverVer = 08/16/2026,1.0.0.0
+PnpLockdown = 1
+
+[DefaultInstall.NTamd64]
+CopyFiles = DriverCopyFiles
+
+[DefaultInstall.NTamd64.Services]
+AddService = %ServiceName%,0x00000002,ServiceInstall
+
+[DefaultInstall.NTarm64]
+CopyFiles = DriverCopyFiles
+
+[DefaultInstall.NTarm64.Services]
+AddService = %ServiceName%,0x00000002,ServiceInstall
+
+[SourceDisksFiles]
+VibeshineSteamOfflineFilter.sys = 1
+
+[SourceDisksNames]
+1 = %DiskName%,,,
+
+[DestinationDirs]
+DriverCopyFiles = 13
+
+[DriverCopyFiles]
+VibeshineSteamOfflineFilter.sys
+
+[ServiceInstall]
+DisplayName = %ServiceDisplayName%
+ServiceType = 1
+StartType = 3
+ErrorControl = 1
+ServiceBinary = %13%\VibeshineSteamOfflineFilter.sys
+DependOnService = BFE
+
+[Strings]
+VibeshineProvider = "Vibeshine"
+ServiceName = "VibeshineSteamOfflineFilter"
+ServiceDisplayName = "Vibeshine Steam Offline Filter"
+DiskName = "Vibeshine Steam Offline Filter"

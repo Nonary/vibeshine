@@ -17,6 +17,11 @@
   <Fragment>
     <!-- Pull this fragment into the CPack-generated MSI -->
     <FeatureRef Id="ProductFeature"/>
+    <?if $(var.VibeshineSteamOfflineFilter) = 1 ?>
+    <FeatureRef Id="ProductFeature">
+      <ComponentRef Id="SteamOfflineFilterPayload" />
+    </FeatureRef>
+    <?endif?>
     
     <!-- Keep Restart Manager enabled (default) to stop services in basic/silent UI -->
     
@@ -119,6 +124,17 @@
     <CustomAction Id="InstallVirtualDisplayDriver" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="RegisterVulkanHdrLayer" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
 
+    <?if $(var.VibeshineSteamOfflineFilter) = 1 ?>
+    <!-- Retained source actions for a future enabled lane. The current CMake
+         configure gate rejects the intentionally non-unloadable driver until
+         MSI has a coherent two-phase reboot transaction; runtime isolation
+         remains dormant until a SYSTEM worker registers a seat. -->
+    <CustomAction Id="InstallSteamOfflineFilter" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
+    <CustomAction Id="RollbackSteamOfflineFilter" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="rollback" Return="ignore" Impersonate="no" />
+    <CustomAction Id="RollbackUninstallSteamOfflineFilter" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="rollback" Return="check" Impersonate="no" />
+    <CustomAction Id="UninstallSteamOfflineFilter" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
+    <?endif?>
+
     <!-- Uninstall-time actions (deferred, elevated) -->
     <CustomAction Id="RestoreNvPrefsUndo" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="RemoveConflictingProducts" BinaryKey="RemoveConflictingProductsVbs" VBScriptCall="RemoveConflictingProducts" Execute="immediate" Return="check" />
@@ -164,6 +180,21 @@
     <CustomAction Id="SetRegisterVulkanHdrLayer"
                  Property="RegisterVulkanHdrLayer"
                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]drivers\sunshine\install.ps1&quot; -RegisterVulkanLayerOnly"/>
+
+    <?if $(var.VibeshineSteamOfflineFilter) = 1 ?>
+    <CustomAction Id="SetInstallSteamOfflineFilter"
+                 Property="InstallSteamOfflineFilter"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]drivers\steam-offline-filter\install.ps1&quot; -InfPath &quot;[INSTALL_ROOT]drivers\steam-offline-filter\SteamOfflineFilter.inf&quot;"/>
+    <CustomAction Id="SetRollbackSteamOfflineFilter"
+                 Property="RollbackSteamOfflineFilter"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]drivers\steam-offline-filter\uninstall.ps1&quot;"/>
+    <CustomAction Id="SetRollbackUninstallSteamOfflineFilter"
+                 Property="RollbackUninstallSteamOfflineFilter"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]drivers\steam-offline-filter\install.ps1&quot; -InfPath &quot;[INSTALL_ROOT]drivers\steam-offline-filter\SteamOfflineFilter.inf&quot;"/>
+    <CustomAction Id="SetUninstallSteamOfflineFilter"
+                 Property="UninstallSteamOfflineFilter"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]drivers\steam-offline-filter\uninstall.ps1&quot;"/>
+    <?endif?>
 
 
     <!-- Guard NV prefs restore on uninstall: only run if sunshine.exe still exists -->

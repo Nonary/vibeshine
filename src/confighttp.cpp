@@ -2346,7 +2346,8 @@ namespace confighttp {
         input_tree.contains("virtual_display_layout") ||
         input_tree.contains("config_overrides") ||
         input_tree.contains("prefer_10bit_sdr") ||
-        input_tree.contains("terminal_session_enabled");
+        input_tree.contains("terminal_session_enabled") ||
+        input_tree.contains("steam_offline_isolation");
       const bool has_extended_fields = has_device_fields || input_tree.contains("enabled");
 
       if (!has_extended_fields) {
@@ -2406,6 +2407,10 @@ namespace confighttp {
       if (input_tree.contains("terminal_session_enabled") && !input_tree["terminal_session_enabled"].is_null()) {
         terminal_session_enabled = input_tree["terminal_session_enabled"].get<bool>();
       }
+      std::optional<bool> steam_offline_isolation;
+      if (input_tree.contains("steam_offline_isolation") && !input_tree["steam_offline_isolation"].is_null()) {
+        steam_offline_isolation = input_tree["steam_offline_isolation"].get<bool>();
+      }
 
       output_tree["status"] = nvhttp::update_device_info(
         uuid,
@@ -2418,6 +2423,7 @@ namespace confighttp {
         std::move(config_overrides),
         prefer_10bit_sdr,
         terminal_session_enabled,
+        steam_offline_isolation,
         hdr_profile
       );
       send_response(response, output_tree);

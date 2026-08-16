@@ -68,6 +68,7 @@ namespace terminal_session::launch_codec {
       {"client", s.client_uuid},
       {"client_name", s.client_name},
       {"device_name", s.device_name},
+      {"steam_offline_isolation", s.terminal_session_requested && s.steam_offline_isolation},
       {"width", s.width},
       {"height", s.height},
       {"fps", s.fps},
@@ -145,6 +146,7 @@ namespace terminal_session::launch_codec {
       session->client_name = in.at("client_name").get<std::string>();
       session->device_name = in.at("device_name").get<std::string>();
       session->terminal_session_requested = true;
+      session->steam_offline_isolation = in.value("steam_offline_isolation", false);
       session->hdr_profile = optional_value<std::string>(in, "hdr_profile");
       session->width = in.at("width").get<int>();
       session->height = in.at("height").get<int>();
