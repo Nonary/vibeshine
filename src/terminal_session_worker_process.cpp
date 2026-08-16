@@ -46,12 +46,12 @@ namespace terminal_session::worker {
       HANDLE process {};
       HANDLE job {};
       std::unique_ptr<platf::dxgi::INamedPipe> pipe;
-      steam_offline::registration_t registration;
+      steam_offline::manager_t manager;
     };
 
     /* A failed teardown remains contained and registered for the lifetime of
      * the service.  The heap allocation deliberately survives static
-     * destruction so registration_t cannot release a live worker's filter. */
+     * destruction so the broker manager cannot release a live worker's filters. */
     std::mutex &poisoned_workers_mutex() {
       static auto *mutex = new std::mutex;
       return *mutex;
@@ -534,6 +534,7 @@ namespace terminal_session::worker {
                                             const std::string &display_pipe_name,
                                             const provider_resource_t &resource, const std::uint64_t generation,
                                             const std::string &helper_capability,
+                                            const steam_offline::preparation_t *steam_offline_preparation,
                                             const bool steam_offline_isolation) {
       LPVOID raw = nullptr;
       if (!CreateEnvironmentBlock(&raw, token, FALSE) || !raw) return {};
@@ -560,6 +561,11 @@ namespace terminal_session::worker {
       replace(L"VIBESHINE_TERMINAL_HELPER_CAPABILITY", wide(helper_capability));
       replace(L"VIBESHINE_STEAM_OFFLINE_ISOLATION", steam_offline_isolation ? L"1" : L"0");
       replace(L"VIBESHINE_STEAM_OFFLINE_SEAT_ID", wide(resource.seat_id));
+      if (steam_offline_preparation) {
+        replace(L"VIBESHINE_STEAM_MIRROR_ROOT", steam_offline_preparation->mirror_root.wstring());
+        replace(L"VIBESHINE_STEAM_CACHE_ROOT", steam_offline_preparation->cache_root.wstring());
+        replace(L"VIBESHINE_STEAM_MANIFEST_DIGEST", wide(steam_offline_preparation->manifest_digest));
+      }
       std::sort(entries.begin(), entries.end(), [](const auto &left, const auto &right) { return _wcsicmp(left.c_str(), right.c_str()) < 0; });
       std::size_t chars = 1;
       for (const auto &entry : entries) chars += entry.size() + 1;
@@ -878,7 +884,7 @@ namespace terminal_session::worker {
         reinterpret_cast<HANDLE>(process_),
         reinterpret_cast<HANDLE>(job_),
         std::move(pipe_),
-        std::move(steam_offline_registration_)});
+        std::move(steam_offline_manager_)});
       process_ = nullptr;
       job_ = nullptr;
       pid_ = 0;
@@ -892,7 +898,7 @@ namespace terminal_session::worker {
   bool process_t::cleanup_needed() const noexcept {
 #ifdef _WIN32
     return process_ != nullptr || job_ != nullptr || pipe_ != nullptr || display_broker_running_.load() ||
-           steam_offline_registration_.active() || cleanup_pending_;
+           steam_offline_manager_.active() || cleanup_pending_;
 #else
     return false;
 #endif
@@ -903,7 +909,7 @@ namespace terminal_session::worker {
     error = "Private worker process is Windows-only.";
     return std::nullopt;
 #else
-    if (cleanup_needed()) { error = "A previous private worker or Steam offline registration still owns resources; teardown must complete first."; return std::nullopt; }
+    if (cleanup_needed()) { error = "A previous private worker or Steam offline filter set still owns resources; teardown must complete first."; return std::nullopt; }
     pipe_name_ = unique_pipe();
     const auto helper_capability = platf::dxgi::generate_guid();
     display_pipe_name_ = helper_capability.empty() ? std::string {} : "VibeshineTerminalDisplay-" + helper_capability;
@@ -943,6 +949,18 @@ namespace terminal_session::worker {
     if (!std::filesystem::is_regular_file(executable) || !std::filesystem::is_regular_file(config) || !std::filesystem::is_regular_file(apps)) {
       CloseHandle(job); error = "The installed Sunshine executable/config/apps contract is incomplete."; return std::nullopt;
     }
+    if (request.steam_offline_isolation) {
+      const auto trusted_steam = steam_offline::trusted_steam_executable(apps, request.launch_payload,
+                                                                          error);
+      const auto proxy = root / L"tools" / L"steam_webhelper_proxy.exe";
+      if (trusted_steam.empty() || !steam_offline_manager_.prepare(
+            trusted_steam, proxy, request.resource.seat_id, request.resource.user_sid, request.admission.generation,
+            steam_offline_preparation_, error)) {
+        if (error.empty()) error = "Steam offline isolation admission failed.";
+        CloseHandle(job);
+        return std::nullopt;
+      }
+    }
     const auto quote = [](const std::wstring &value) { return L"\"" + value + L"\""; };
     std::wstring command = quote(executable.wstring()) + L" " + quote(config.wstring());
     for (const auto &argument : command_line(contract)) command += L" " + quote(wide(argument));
@@ -954,10 +972,17 @@ namespace terminal_session::worker {
       request.resource,
       request.admission.generation,
       helper_capability,
+      request.steam_offline_isolation ? &steam_offline_preparation_ : nullptr,
       request.steam_offline_isolation);
-    if (environment.empty()) { CloseHandle(job); error = "Private worker environment creation failed."; return std::nullopt; }
+    if (environment.empty()) {
+      std::string ignored;
+      (void)steam_offline_manager_.release(ignored);
+      CloseHandle(job); error = "Private worker environment creation failed."; return std::nullopt;
+    }
     auto worker_descriptor = worker_security_descriptor();
     if (!worker_descriptor) {
+      std::string ignored;
+      (void)steam_offline_manager_.release(ignored);
       CloseHandle(job);
       error = "The broker could not validate the LocalSystem-only worker security descriptor.";
       return std::nullopt;
@@ -975,6 +1000,8 @@ namespace terminal_session::worker {
     if (!CreateProcessAsUserW(launch_token, executable.c_str(), command.data(), &worker_process_security, &worker_thread_security, FALSE,
                               CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | CREATE_SUSPENDED,
                               environment.data(), root.c_str(), &startup, &info)) {
+      std::string ignored;
+      (void)steam_offline_manager_.release(ignored);
       CloseHandle(job); error = "Private Sunshine worker process launch failed."; return std::nullopt;
     }
     process_ = info.hProcess;
@@ -993,44 +1020,33 @@ namespace terminal_session::worker {
     if (!creation_time) return fail_start("Worker process creation identity could not be queried.");
     worker_generation_ = request.admission.generation;
     worker_creation_time_ = creation_time;
-    if (request.steam_offline_isolation) {
-      if (!steam_offline_registration_.register_root(info.dwProcessId, creation_time, request.admission.generation,
-                                                     request.resource.seat_id, error)) {
-        if (error.empty()) error = "Steam offline isolation driver registration failed.";
-        return fail_start(error);
+    steam_offline_isolation_ = request.steam_offline_isolation;
+    if (steam_offline_isolation_) {
+      std::string readiness_error;
+      if (!steam_offline_manager_.healthy(readiness_error)) {
+        return fail_start(readiness_error.empty()
+          ? "Steam offline isolation filters changed before worker resume."
+          : readiness_error);
       }
-      steam_offline_isolation_ = true;
       steam_offline_monitor_stop_.store(false, std::memory_order_release);
       steam_offline_poisoned_.store(false, std::memory_order_release);
       try {
         steam_offline_monitor_ = std::thread([this] {
           while (!steam_offline_monitor_stop_.load(std::memory_order_acquire)) {
             std::string health_error;
-            if (!steam_offline_registration_.healthy(health_error)) {
+            if (!steam_offline_manager_.healthy(health_error)) {
               steam_offline_poisoned_.store(true, std::memory_order_release);
               const auto process = static_cast<HANDLE>(process_);
               const auto job = static_cast<HANDLE>(job_);
-              if (!process || !job || !TerminateJobObject(job, ERROR_NETWORK_NOT_AVAILABLE) ||
-                  WaitForSingleObject(process, 5000) != WAIT_OBJECT_0) {
-                /* stop() retains both exact handles and the registration in
-                 * the poisoned quarantine if containment is not proven. */
-                return;
-              }
+              if (job) (void)TerminateJobObject(job, ERROR_NETWORK_NOT_AVAILABLE);
+              if (process) (void)WaitForSingleObject(process, 5000);
               return;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
           }
         });
       } catch (...) {
-        return fail_start("Steam offline readiness monitor could not be created.");
-      }
-    }
-    if (steam_offline_isolation_) {
-      std::string readiness_error;
-      if (!steam_offline_registration_.healthy(readiness_error)) {
-        return fail_start(readiness_error.empty()
-          ? "Steam offline isolation readiness changed before worker resume."
-          : readiness_error);
+        return fail_start("Steam offline filter readiness monitor could not be created.");
       }
     }
     if (ResumeThread(info.hThread) == static_cast<DWORD>(-1)) return fail_start("Worker resume failed.");
@@ -1044,9 +1060,7 @@ namespace terminal_session::worker {
     pipe_ = std::move(pipe);
     bool worker_poisoned = false;
     auto route = transact_admission(*pipe_, request, static_cast<HANDLE>(process_), job, hdr_target_binding_, worker_poisoned, 60000, error);
-    if (steam_offline_poisoned_.load(std::memory_order_acquire)) {
-      return fail_start("Steam offline isolation driver lost BFE/WFP readiness.");
-    }
+    if (steam_offline_poisoned_.load(std::memory_order_acquire)) return fail_start("Steam offline isolation filters lost readiness.");
     if (!route) return fail_start(error.empty() ? "Private worker did not become ready." : error);
     generation_ = request.admission.generation;
     if (RAND_bytes(snapshot_auth_key_.data(), static_cast<int>(snapshot_auth_key_.size())) != 1) {
@@ -1064,8 +1078,8 @@ namespace terminal_session::worker {
     return std::nullopt;
 #else
     if (cleanup_pending_ || steam_offline_poisoned_.load(std::memory_order_acquire) ||
-        steam_offline_isolation_ != steam_offline_registration_.active()) {
-      error = "Steam offline registration cleanup or ownership state is not settled; reconnect is blocked.";
+        steam_offline_isolation_ != steam_offline_manager_.active()) {
+      error = "Steam offline filter cleanup or ownership state is not settled; reconnect is blocked.";
       return std::nullopt;
     }
     if (!process_ || !pipe_ || request.admission.generation != generation_ ||
@@ -1075,7 +1089,9 @@ namespace terminal_session::worker {
         request.resource.control_port != resource_.control_port || request.resource.video_port != resource_.video_port ||
         request.resource.audio_port != resource_.audio_port || request.resource.launch_token == 0 ||
         !token_matches_resource(reinterpret_cast<HANDLE>(request.resource.launch_token), request.resource) ||
-        request.steam_offline_isolation != steam_offline_isolation_ || process_creation_time(static_cast<HANDLE>(process_)) != worker_creation_time_ ||
+        request.steam_offline_isolation != steam_offline_isolation_ ||
+        (request.steam_offline_isolation && !steam_offline_manager_.healthy(error)) ||
+        process_creation_time(static_cast<HANDLE>(process_)) != worker_creation_time_ ||
         !process_matches_resource(static_cast<HANDLE>(process_), request.resource)) {
       error = "Reconnect does not match the running private worker resource.";
       return std::nullopt;
@@ -1099,7 +1115,7 @@ namespace terminal_session::worker {
     }
     if (steam_offline_poisoned_.load(std::memory_order_acquire)) {
       if (route) (void) stop({});
-      error = "Steam offline isolation driver lost BFE/WFP readiness.";
+      error = "Steam offline isolation filters lost readiness.";
       return std::nullopt;
     }
     if (route) resource_ = request.resource;
@@ -1145,9 +1161,9 @@ namespace terminal_session::worker {
     }
     if (stopped) pipe_.reset();
     if (stopped && job_) { CloseHandle(static_cast<HANDLE>(job_)); job_ = nullptr; }
-    if (stopped && steam_offline_registration_.active()) {
+    if (stopped && steam_offline_manager_.active()) {
       std::string registration_error;
-      if (!steam_offline_registration_.release(registration_error)) { stopped = false; cleanup_pending_ = true; }
+      if (!steam_offline_manager_.release(registration_error)) { stopped = false; cleanup_pending_ = true; }
       else cleanup_pending_ = false;
     }
     if (!stopped) return false;

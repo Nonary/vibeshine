@@ -46,16 +46,15 @@ for a non-console Windows session; the proof rig required a remote-session IDD
 created through `SWD\\RemoteDisplayEnum` with
 `IDDCX_ADAPTER_FLAGS_REMOTE_SESSION_DRIVER`.
 
-### Steam offline isolation (opt-in, source/runtime gate incomplete)
+### Steam offline isolation (opt-in, user-mode source/runtime gate incomplete)
 
 The paired-client setting is default-off and is effective only when terminal
 emulation is also enabled. Its value is carried through the authenticated launch
-material into the SYSTEM-owned private worker. The worker is created suspended;
-before resuming it, the SYSTEM service must register the exact worker PID,
-process-creation timestamp, seat token, and launch generation through the
-versioned private driver IOCTL contract. Registration failure aborts the launch.
-The registration handle remains RAII-owned until worker teardown, and reconnects
-must match the original worker identity and generation.
+material into the SYSTEM-owned private worker. Before resuming it, the SYSTEM
+service discovers the exact configured Steam command, publishes a reparse-safe
+real-file mirror, and installs persistent V4/V6 ALE AppId block filters through
+the documented BFE user-mode API. Filter and mirror admission failure aborts the
+launch; the console-user worker cannot add or remove WFP objects.
 
 When enabled, the app launcher adds one bounded, idempotent
 `-master_ipc_name_override vibeshine-seat-<safe-seat-token>` only when the
@@ -64,40 +63,17 @@ does not use undocumented `-offline`, and does not change live filtering rules.
 The user must prepare the Steam client and eligible games in Steam Offline Mode.
 Windows profile/cache isolation is not provided by this feature: same-account
 sessions can still share HKCU/AppData and file locks, and online-required games or
-third-party launchers may fail. The kernel filter implementation and an installed,
-compatible driver remain required before this option can work on Windows; the
-current source changes do not constitute runtime proof. The WFP callouts use
-UNKNOWN action semantics for permits and BLOCK+clear-write only for exact
-registered Steam client images. The kernel lineage table reserves 64 process
-entries per registration, rejects nonzero seat-token padding after the first
-NUL, and revalidates creator identity under teardown before rejecting an image
-lookup failure. WFP classify now compares only bounded nonpaged UTF-16 data with
-manual ASCII folding; it does not call PASSIVE-only Unicode or image-path
-helpers. Process-notify and root-registration image paths are canonicalized
-into fixed driver-owned records at PASSIVE_LEVEL before `gProcessLock`; the
-locked insertion path never dereferences caller or `SeLocateProcessImageName`
-storage. The checked-in WDK `km/ntddk.h` has no supported
-`PsGetProcessSessionId`/`PsGetProcessSessionIdEx` or process-to-session query
-(`ProcessSessionInformation` is only an `NtQueryInformationProcess` enum), and
-no supported process-to-job membership query. A non-standard clone path that
-bypasses process notifications therefore remains an explicit residual rather
-than an unclaimed guarantee. Runtime isolation remains default-off until an
-exact SYSTEM registration. Supported BFE state notifications synchronously
-advance readiness generation and clear readiness under the driver state lock;
-the worker proves the same generation immediately before resume, then tears
-down its own job within a bounded 250 ms poll window after notification
-scheduling. No arbitrary process is terminated.
-
-The Windows CMake/CPack lane is opt-in via
-`SUNSHINE_BUILD_STEAM_OFFLINE_FILTER_DRIVER=ON` (the build option defaults OFF),
-but currently fails at configure time with a precise unsupported
-two-phase-reboot-transaction gate: the callout driver is intentionally
-non-unloadable after startup, and MSI upgrade/uninstall cannot yet stage a
-coherent replacement. The source package artifacts and contract checks remain
-for a future enabled lane. Per-client Steam isolation remains runtime-default-
-off: it creates no registration or filter effect until the paired terminal
-setting is enabled. No HVCI or Microsoft-trust claim is made by the local
-signing path.
+third-party launchers may fail. The mirror filters every discovered client EXE
+while leaving `steamservice.exe` outside the mirror and unfiltered. `steamapps`,
+game libraries, profile collision directories, and volatile global state remain
+outside the client mirror. The packaged ordinary user-mode webhelper proxy
+rewrites both CEF cache and user-data arguments to a seat-private root, launches
+the copied real helper by exact sibling path, waits for it, and propagates its
+exit. No SYS/INF/CAT/callout, special certificate, TESTSIGNING, DLL patch,
+injection, IFEO, or AppContainer is part of this implementation. This is
+source-ready pending runtime proof, including copied Steam launch, proxy/cache
+separation, console-vs-clone path filtering, game online behavior, BFE restart,
+and update/relaunch escape detection.
 
 ### Windows account and application-token semantics
 
@@ -1425,3 +1401,26 @@ At the start of a new session:
 7. Build only in `D:/sources/builds/duo_session_large`, with `BUILD_TESTS=ON` and
    the provisioned shared WebRTC SDK. Reconfigure from the committed lane tip
    before compiling or packaging; never reuse the canonical Sunshine build tree.
+
+## User-mode Steam isolation source checkpoint (2026-08-16)
+
+The custom Steam kernel WFP driver, IOCTL ABI, WDK project, INF/CAT packaging,
+installer actions, and special-signing option have been removed. The replacement
+is a LocalSystem-only `fwpuclnt` manager using persistent provider/sublayer
+objects and exact V4/V6 ALE AppId block filters. Filters are installed in a
+transaction before a seat worker resumes and are removed only after its process
+tree is confirmed stopped; missing filters or BFE admission failure poison the
+seat and leave cleanup fail-closed.
+
+The manager stages a bounded real-file per-seat Steam client mirror, excludes
+game libraries and volatile profile state, retains `steamservice.exe` outside
+the mirror, and publishes an ordinary user-mode webhelper proxy plus renamed
+real helper. Steam's direct command is rewritten to the mirror and a private
+cache/user-data root while games retain their configured library paths.
+
+This checkpoint is source/static only: no build, unit-test execution, install,
+Steam launch, live WFP mutation, or runtime proof was performed. Required proof
+gates are copied Steam launch, two independent webhelper/cache trees, console
+versus clone AppId filtering, online game behavior, BFE restart and persistent
+filter reconciliation, Steam update/relaunch escape detection, reconnect reuse,
+and fail-closed teardown when filter deletion fails.

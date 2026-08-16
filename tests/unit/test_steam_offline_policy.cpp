@@ -1,5 +1,5 @@
 #include "src/steam_offline_policy.h"
-#include "src/steam_offline_filter_ioctl.h"
+#include "src/steam_offline_policy.h"
 #include "src/terminal_session_launch_codec.h"
 #include "src/terminal_session_protocol.h"
 #include "src/rtsp.h"
@@ -35,34 +35,23 @@ TEST(SteamOfflinePolicy, AugmentsOnlyConfiguredSteamAndIsIdempotent) {
                                                 std::string(steam_offline::max_command_line_size, 'x'), "seat-7").empty());
 }
 
-TEST(SteamOfflinePolicy, LineageRejectsPidReuseAndPreservesGeneration) {
-  steam_offline::lineage_registry_t registry {4};
-  ASSERT_TRUE(registry.register_root({10, 100}, 7, "seat-7"));
-  EXPECT_FALSE(registry.register_root({12, 120}, 8, "seat-8"));
-  ASSERT_TRUE(registry.observe_child({11, 110}, {10, 100}, "steam.exe"));
-  EXPECT_EQ(registry.state({11, 110}), steam_offline::lineage_state_e::blocked_client);
-  EXPECT_EQ(registry.state({11, 111}), steam_offline::lineage_state_e::empty);
-  EXPECT_TRUE(registry.generation_matches(7));
-  EXPECT_TRUE(registry.registration_matches({10, 100}, 7, "seat-7"));
-  EXPECT_FALSE(registry.registration_matches({10, 101}, 7, "seat-7"));
-  EXPECT_FALSE(registry.registration_matches({10, 100}, 8, "seat-7"));
-  EXPECT_FALSE(registry.registration_matches({10, 100}, 7, "seat-8"));
-  EXPECT_FALSE(registry.remove({11, 110}));
-  EXPECT_TRUE(registry.remove({10, 100}));
-  EXPECT_EQ(registry.state({11, 110}), steam_offline::lineage_state_e::empty);
-  EXPECT_FALSE(registry.generation_matches(7));
+TEST(SteamOfflinePolicy, RewritesOnlySteamClientAndUsesSeatPrivateProfile) {
+  const auto command = steam_offline::rewrite_client_command(
+    R"("C:\Program Files (x86)\Steam\steam.exe" -silent)",
+    R"(C:\ProgramData\VibeshineSteamSeats\seat-7\9\client)",
+    R"(C:\ProgramData\VibeshineSteamSeats\seat-7\9\cache)", "seat-7");
+  EXPECT_NE(command.find(R"(client\steam.exe)"), std::string::npos);
+  EXPECT_NE(command.find(R"(-cachedir "C:\ProgramData\VibeshineSteamSeats\seat-7\9\cache\htmlcache")"), std::string::npos);
+  EXPECT_NE(command.find(R"(-userdatadir "C:\ProgramData\VibeshineSteamSeats\seat-7\9\cache\userdata")"), std::string::npos);
+  EXPECT_EQ(steam_offline::rewrite_client_command("CivilizationVI.exe", "mirror", "cache", "seat-7"), "");
 }
 
-TEST(SteamOfflinePolicy, DriverRegistrationContractCarriesExactIdentity) {
-  static_assert(sizeof(steam_offline::driver::register_root_t) == 88);
-  static_assert(offsetof(steam_offline::driver::register_root_t, seat_id) == 24);
-  static_assert(sizeof(steam_offline::driver::unregister_root_t) == 88);
-  static_assert(offsetof(steam_offline::driver::unregister_root_t, seat_id) == 24);
-  static_assert(sizeof(steam_offline::driver::registration_t) == 24);
-  static_assert(sizeof(steam_offline::driver::status_t) == 24);
-  EXPECT_EQ(steam_offline::driver::protocol_version, 1u);
-  EXPECT_NE(steam_offline::driver::register_root_ioctl, steam_offline::driver::unregister_root_ioctl);
-  EXPECT_NE(steam_offline::driver::status_ioctl, steam_offline::driver::register_root_ioctl);
+TEST(SteamOfflinePolicy, FilterOwnershipKeyBindsSeatGenerationPathAndFamily) {
+  const auto v4 = steam_offline::deterministic_filter_key("seat-7", 9, "C:/mirror/steam.exe", false);
+  EXPECT_EQ(v4, steam_offline::deterministic_filter_key("seat-7", 9, "C:/mirror/steam.exe", false));
+  EXPECT_NE(v4, steam_offline::deterministic_filter_key("seat-8", 9, "C:/mirror/steam.exe", false));
+  EXPECT_NE(v4, steam_offline::deterministic_filter_key("seat-7", 10, "C:/mirror/steam.exe", false));
+  EXPECT_NE(v4, steam_offline::deterministic_filter_key("seat-7", 9, "C:/mirror/steam.exe", true));
 }
 
 TEST(SteamOfflinePolicy, LaunchCodecDefaultsIsolationOffAndRoundTripsOptIn) {

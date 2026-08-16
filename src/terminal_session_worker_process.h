@@ -11,7 +11,7 @@
 #include <thread>
 #include <string_view>
 
-#include "steam_offline_isolation.h"
+#include "steam_offline_manager.h"
 
 #ifdef _WIN32
 namespace platf::dxgi { class INamedPipe; }
@@ -66,7 +66,8 @@ namespace terminal_session::worker {
     // verify generation-bound snapshot digests.
     std::array<std::uint8_t, 32> snapshot_auth_key_ {};
     std::array<snapshot_tier_state, 3> snapshot_tiers_ {};
-    steam_offline::registration_t steam_offline_registration_;
+    steam_offline::manager_t steam_offline_manager_;
+    steam_offline::preparation_t steam_offline_preparation_;
     bool steam_offline_isolation_ {};
     bool cleanup_pending_ {};
     std::atomic<bool> steam_offline_monitor_stop_ {false};

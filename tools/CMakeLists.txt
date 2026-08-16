@@ -49,6 +49,8 @@ add_executable(sunshinesvc sunshinesvc.cpp
         ${CMAKE_SOURCE_DIR}/src/terminal_session_seat_pool.cpp
         ${CMAKE_SOURCE_DIR}/src/terminal_session_worker.cpp
         ${CMAKE_SOURCE_DIR}/src/terminal_session_worker_process.cpp
+        ${CMAKE_SOURCE_DIR}/src/steam_offline_manager.cpp
+        ${CMAKE_SOURCE_DIR}/src/steam_offline_policy.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/misc_utils.cpp
         ${CMAKE_SOURCE_DIR}/src/logging.cpp
@@ -60,6 +62,7 @@ target_link_libraries(sunshinesvc
         wtsapi32
         netapi32
         userenv
+        fwpuclnt
         advapi32
         shell32
         user32
@@ -113,6 +116,14 @@ add_executable(sunshine_terminal_worker_probe
         ${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.cpp)
 target_link_libraries(sunshine_terminal_worker_probe PRIVATE ${Boost_LIBRARIES} OpenSSL::Crypto wtsapi32 ${PLATFORM_LIBRARIES})
 target_compile_options(sunshine_terminal_worker_probe PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
+# Ordinary user-mode proxy for a mirrored Steam webhelper.  It rewrites CEF
+# cache/profile arguments and launches the renamed real helper by exact path;
+# no injection, IFEO, DLL patching, or AppContainer is involved.
+add_executable(steam_webhelper_proxy steam_webhelper_proxy.cpp)
+set_target_properties(steam_webhelper_proxy PROPERTIES WIN32_EXECUTABLE TRUE CXX_STANDARD 23)
+target_link_libraries(steam_webhelper_proxy PRIVATE shell32)
+target_compile_options(steam_webhelper_proxy PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
 # Disposable seat-local helper for the proven FP16 cloned-primary,
 # PreserveVidPn=FALSE D3DKMT HDR activation transaction. The SYSTEM broker

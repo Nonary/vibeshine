@@ -8,15 +8,8 @@ list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
         Wtsapi32.lib
         avrt.lib
         Mscms.lib
+        fwpuclnt.lib
         version.lib)
-
-if(SUNSHINE_BUILD_STEAM_OFFLINE_FILTER_DRIVER)
-    message(FATAL_ERROR
-            "SUNSHINE_BUILD_STEAM_OFFLINE_FILTER_DRIVER=ON is currently unsupported: the callout driver is intentionally non-unloadable after startup, so MSI upgrade/uninstall requires a two-phase reboot transaction that is not implemented. Keep the source lane available, but leave this packaging option OFF.")
-    add_subdirectory(
-        "${CMAKE_SOURCE_DIR}/src/steam_offline_filter_driver"
-        "${CMAKE_BINARY_DIR}/steam_offline_filter_driver")
-endif()
 
 # Copy Playnite plugin sources into build output (for packaging/installers)
 ## Copy Playnite plugin sources into build output (for packaging/installers)
@@ -78,14 +71,12 @@ foreach(_packaged_target IN ITEMS
         sunshinesvc
         playnite-launcher
         sunshine_wgc_capture
-        sunshine_display_helper)
+        sunshine_display_helper
+        steam_webhelper_proxy)
     if(TARGET "${_packaged_target}")
         list(APPEND SUNSHINE_WINDOWS_PACKAGED_TARGETS "${_packaged_target}")
     endif()
 endforeach()
-if(TARGET steam_offline_filter_driver_package)
-    list(APPEND SUNSHINE_WINDOWS_PACKAGED_TARGETS steam_offline_filter_driver_package)
-endif()
 
 # Convenience target to build MSI via CPack (WiX)
 add_custom_target(package_msi

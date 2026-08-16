@@ -1501,9 +1501,11 @@ namespace proc {
 #ifdef _WIN32
     const bool steam_offline_isolation = _env["VIBESHINE_STEAM_OFFLINE_ISOLATION"] == "1";
     const std::string steam_offline_seat_id = _env["VIBESHINE_STEAM_OFFLINE_SEAT_ID"];
+    const std::string steam_mirror_root = _env["VIBESHINE_STEAM_MIRROR_ROOT"];
+    const std::string steam_cache_root = _env["VIBESHINE_STEAM_CACHE_ROOT"];
     const auto configured_launch_command = [&](const std::string &command) {
       if (!steam_offline_isolation) return command;
-      return steam_offline::append_ipc_override(command, steam_offline_seat_id);
+      return steam_offline::rewrite_client_command(command, steam_mirror_root, steam_cache_root, steam_offline_seat_id);
     };
     std::unordered_set<DWORD> lossless_baseline_pids;
     bool lossless_monitor_started = false;

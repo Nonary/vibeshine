@@ -56,9 +56,8 @@ namespace steam_offline {
     }
 
     bool valid_seat_id(std::string_view value) {
-      // The driver ABI reserves one byte for the terminating NUL in its
-      // 64-byte field; keep the launch token bound identical so a command
-      // cannot advertise an ID that registration would reject.
+      // Keep the launch token bounded and filesystem-safe.  It is used only
+      // for deterministic seat-owned roots and filter keys.
       return !value.empty() && value.size() < max_seat_id_size &&
         std::ranges::all_of(value, [](const unsigned char ch) {
           return std::isalnum(ch) || ch == '-' || ch == '_' || ch == '.';
@@ -103,57 +102,33 @@ namespace steam_offline {
     return command_line;
   }
 
-  lineage_registry_t::lineage_registry_t(const std::size_t capacity): entries_(capacity) {}
-
-  bool lineage_registry_t::register_root(const process_identity_t root, const std::uint64_t generation, const std::string_view seat_id) {
-    if (!root.pid || !root.object_key || !generation || !valid_seat_id(seat_id) || generation_ != 0) return false;
-    const auto found = std::ranges::find_if(entries_, [](const entry_t &entry) { return entry.state == lineage_state_e::empty; });
-    if (found == entries_.end()) return false;
-    *found = {.identity = root, .state = lineage_state_e::root, .generation = generation};
-    root_ = root;
-    generation_ = generation;
-    seat_id_ = seat_id;
-    return true;
-  }
-
-  bool lineage_registry_t::observe_child(const process_identity_t child, const process_identity_t parent, const std::string_view image_name) {
-    if (!child.pid || !child.object_key || !parent.object_key) return false;
-    const auto parent_entry = std::ranges::find_if(entries_, [&](const entry_t &entry) { return entry.identity == parent && entry.state != lineage_state_e::empty; });
-    if (parent_entry == entries_.end()) return false;
-    const auto free_entry = std::ranges::find_if(entries_, [](const entry_t &entry) { return entry.state == lineage_state_e::empty; });
-    if (free_entry == entries_.end()) return false;
-    *free_entry = {.identity = child, .state = is_recognized_client_image(image_name) ? lineage_state_e::blocked_client : lineage_state_e::descendant,
-                   .generation = parent_entry->generation};
-    return true;
-  }
-
-  lineage_state_e lineage_registry_t::state(const process_identity_t identity) const noexcept {
-    const auto found = std::ranges::find_if(entries_, [&](const entry_t &entry) { return entry.identity == identity; });
-    return found == entries_.end() ? lineage_state_e::empty : found->state;
-  }
-
-  bool lineage_registry_t::remove(const process_identity_t identity) noexcept {
-    if (identity != root_) return false;
-    const auto found = std::ranges::find_if(entries_, [&](const entry_t &entry) { return entry.identity == identity; });
-    if (found == entries_.end()) return false;
-    const auto generation = found->generation;
-    for (auto &entry : entries_) {
-      if (entry.generation == generation) entry = {};
+  std::string rewrite_client_command(std::string command_line, const std::string_view mirror_root,
+                                     const std::string_view cache_root, const std::string_view opaque_seat_id) {
+    if (!is_configured_steam_client(command_line) || mirror_root.empty() || cache_root.empty()) return {};
+    const auto parsed = arguments(command_line);
+    if (parsed.empty()) return {};
+    std::string rewritten = "\"" + std::string {mirror_root} + "\\steam.exe\"";
+    std::size_t first_end = 0;
+    bool quoted = false;
+    for (; first_end < command_line.size(); ++first_end) {
+      const char ch = command_line[first_end];
+      if (ch == '"') quoted = !quoted;
+      else if (!quoted && std::isspace(static_cast<unsigned char>(ch))) break;
     }
-    if (generation_ == generation) {
-      generation_ = 0;
-      root_ = {};
-      seat_id_.clear();
-    }
-    return true;
+    if (first_end < command_line.size()) rewritten += command_line.substr(first_end);
+    rewritten = append_ipc_override(std::move(rewritten), opaque_seat_id);
+    if (rewritten.empty()) return {};
+    // The proxy consumes both Chromium spellings.  These are appended rather
+    // than inherited from the original command so a stale profile cannot be
+    // shared with the console Steam instance.
+    rewritten += " -cachedir \"" + std::string {cache_root} + "\\htmlcache\" -userdatadir \"" +
+      std::string {cache_root} + "\\userdata\"";
+    return rewritten.size() <= max_command_line_size ? rewritten : std::string {};
   }
 
-  bool lineage_registry_t::generation_matches(const std::uint64_t generation) const noexcept {
-    return generation != 0 && generation == generation_;
+  std::string deterministic_filter_key(const std::string_view seat_id, const std::uint64_t generation,
+                                       const std::string_view canonical_path, const bool ipv6) {
+    return std::string {seat_id} + ":" + std::to_string(generation) + ":" + std::string {canonical_path} + (ipv6 ? ":v6" : ":v4");
   }
 
-  bool lineage_registry_t::registration_matches(const process_identity_t root, const std::uint64_t generation,
-                                                 const std::string_view seat_id) const noexcept {
-    return root == root_ && generation_matches(generation) && seat_id == seat_id_;
-  }
 }

@@ -90,6 +90,9 @@ endif()
 if (TARGET sunshine_display_helper)
     install(TARGETS sunshine_display_helper RUNTIME DESTINATION "tools" COMPONENT application)
 endif()
+if (TARGET steam_webhelper_proxy)
+    install(TARGETS steam_webhelper_proxy RUNTIME DESTINATION "tools" COMPONENT application)
+endif()
 if (TARGET vibeshine_terminal_hdr_activator)
     install(TARGETS vibeshine_terminal_hdr_activator RUNTIME DESTINATION "tools" COMPONENT application)
 endif()
@@ -238,62 +241,6 @@ install(FILES ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_FILES}
 install(FILES ${SUNSHINE_VIRTUAL_DISPLAY_VULKAN_LAYER_FILES}
         DESTINATION "${SUNSHINE_VDD_VULKAN_LAYER_DESTINATION}"
         COMPONENT virtual_display_driver)
-
-# Optional Steam Offline Filter driver.  The feature is dormant by default:
-# no WDK target, payload, service action, or WFP device is present unless the
-# Windows packaging lane explicitly enables the option.  The option currently
-# fails at configure time in cmake/targets/windows.cmake because the driver is
-# non-unloadable and no coherent two-phase reboot transaction exists.  Keep
-# this artifact gate for the future enabled lane; direct CPack invocation must
-# fail if any staged artifact is absent or empty.
-if(SUNSHINE_BUILD_STEAM_OFFLINE_FILTER_DRIVER)
-    message(FATAL_ERROR
-            "SUNSHINE_BUILD_STEAM_OFFLINE_FILTER_DRIVER=ON is currently unsupported: the callout driver is intentionally non-unloadable after startup, so MSI upgrade/uninstall requires a two-phase reboot transaction that is not implemented.")
-    set(_steam_offline_filter_package_dir "${SUNSHINE_STEAM_OFFLINE_FILTER_PACKAGE_DIR}")
-    set(_steam_offline_filter_package_files
-        "${_steam_offline_filter_package_dir}/SteamOfflineFilter.inf"
-        "${_steam_offline_filter_package_dir}/VibeshineSteamOfflineFilter.sys"
-        "${_steam_offline_filter_package_dir}/VibeshineSteamOfflineFilter.cat"
-        "${_steam_offline_filter_package_dir}/install.ps1"
-        "${_steam_offline_filter_package_dir}/uninstall.ps1")
-    foreach(_steam_offline_filter_file IN LISTS _steam_offline_filter_package_files)
-        install(CODE "
-            if(NOT EXISTS \"${_steam_offline_filter_file}\")
-                message(FATAL_ERROR \"Required Steam Offline Filter package artifact missing: ${_steam_offline_filter_file}\")
-            endif()
-            file(SIZE \"${_steam_offline_filter_file}\" _steam_offline_filter_size)
-            if(_steam_offline_filter_size EQUAL 0)
-                message(FATAL_ERROR \"Required Steam Offline Filter package artifact is empty: ${_steam_offline_filter_file}\")
-            endif()
-        ")
-    endforeach()
-    install(CODE "
-        file(READ \"${_steam_offline_filter_package_dir}/SteamOfflineFilter.inf\" _steam_offline_filter_inf)
-        if(NOT \"\${_steam_offline_filter_inf}\" MATCHES \"CatalogFile[ \\t]*=[ \\t]*VibeshineSteamOfflineFilter\\\\.cat\")
-            message(FATAL_ERROR \"Steam Offline Filter INF contract missing: CatalogFile\")
-        endif()
-        if(NOT \"\${_steam_offline_filter_inf}\" MATCHES \"AddService[ \\t]*=[ \\t]*%ServiceName%\")
-            message(FATAL_ERROR \"Steam Offline Filter INF contract missing: AddService\")
-        endif()
-        if(NOT \"\${_steam_offline_filter_inf}\" MATCHES \"StartType[ \\t]*=[ \\t]*3\")
-            message(FATAL_ERROR \"Steam Offline Filter INF contract missing: StartType\")
-        endif()
-        if(NOT \"\${_steam_offline_filter_inf}\" MATCHES \"DependOnService[ \\t]*=[ \\t]*BFE\")
-            message(FATAL_ERROR \"Steam Offline Filter INF contract missing: BFE dependency\")
-        endif()
-        if(NOT \"\${_steam_offline_filter_inf}\" MATCHES \"PnpLockdown[ \\t]*=[ \\t]*1\")
-            message(FATAL_ERROR \"Steam Offline Filter INF contract missing: PnpLockdown\")
-        endif()
-        if(NOT \"\${_steam_offline_filter_inf}\" MATCHES \"ServiceBinary[ \\t]*=[ \\t]*%13%\\\\VibeshineSteamOfflineFilter\\\\.sys\")
-            message(FATAL_ERROR \"Steam Offline Filter INF contract missing: ServiceBinary\")
-        endif()
-    ")
-
-    set(CPACK_COMPONENT_STEAM_OFFLINE_FILTER_DISPLAY_NAME "Steam Offline Isolation Filter")
-    set(CPACK_COMPONENT_STEAM_OFFLINE_FILTER_DESCRIPTION "Opt-in per-terminal Steam network isolation driver payload.")
-    set(CPACK_COMPONENT_STEAM_OFFLINE_FILTER_GROUP "Drivers")
-    set(CPACK_COMPONENT_STEAM_OFFLINE_FILTER_REQUIRED false)
-endif()
 
 # Mandatory scripts
 install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/sunshine-setup.ps1"
