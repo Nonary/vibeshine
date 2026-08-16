@@ -1,5 +1,6 @@
 #include "terminal_session_worker_process.h"
 #include "terminal_session_display_protocol.h"
+#include "steam_offline_policy.h"
 
 #ifdef _WIN32
   #include "terminal_session_service.h"
@@ -61,26 +62,48 @@ namespace terminal_session::worker {
       return *workers;
     }
 
-    bool job_has_live_unverifiable_process(HANDLE job) {
-      if (!job) return false;
-      std::vector<std::byte> storage(sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + 16 * sizeof(ULONG_PTR));
-      for (unsigned retry = 0; retry != 4; ++retry) {
+    constexpr std::size_t max_job_processes = 8192;
+
+    // QueryInformationJobObject can succeed while returning only a prefix of
+    // the PID array.  NumberOfAssignedProcesses is the authoritative size;
+    // never treat a successful partial result as an empty/complete job.
+    bool query_job_process_ids(HANDLE job, std::vector<ULONG_PTR> &ids) {
+      ids.clear();
+      if (!job) return true;
+      std::size_t capacity = 16;
+      for (unsigned retry = 0; retry != 8; ++retry) {
+        if (capacity > max_job_processes || capacity > (static_cast<std::size_t>(std::numeric_limits<DWORD>::max()) - sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST)) / sizeof(ULONG_PTR)) return false;
+        const auto bytes_to_allocate = sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + capacity * sizeof(ULONG_PTR);
+        std::vector<std::byte> storage(bytes_to_allocate);
         auto *list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST *>(storage.data());
         DWORD bytes = 0;
-        if (QueryInformationJobObject(job, JobObjectBasicProcessIdList, list, static_cast<DWORD>(storage.size()), &bytes)) {
-          for (DWORD index = 0; index < list->NumberOfProcessIdsInList; ++index) {
-            const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, static_cast<DWORD>(list->ProcessIdList[index]));
-            if (!process) { if (GetLastError() == ERROR_INVALID_PARAMETER) continue; return true; }
-            const auto live = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
-            CloseHandle(process);
-            if (live) return true;
-          }
-          return false;
+        const BOOL queried = QueryInformationJobObject(job, JobObjectBasicProcessIdList, list, static_cast<DWORD>(storage.size()), &bytes);
+        if (!queried && GetLastError() != ERROR_MORE_DATA) return false;
+        const auto assigned = static_cast<std::size_t>(list->NumberOfAssignedProcesses);
+        const auto returned = static_cast<std::size_t>(list->NumberOfProcessIdsInList);
+        if (assigned > max_job_processes || returned > assigned || returned > capacity) return false;
+        if (!steam_offline::complete_job_process_list(assigned, returned) || !queried) {
+          if (capacity > max_job_processes / 2 && assigned <= capacity) return false;
+          capacity = std::max(std::min(capacity * 2, max_job_processes), assigned);
+          continue;
         }
-        if (GetLastError() != ERROR_MORE_DATA || storage.size() >= 8192 * sizeof(ULONG_PTR)) return true;
-        storage.resize(storage.size() * 2);
+        ids.assign(list->ProcessIdList, list->ProcessIdList + returned);
+        return true;
       }
-      return true;
+      return false;
+    }
+
+    bool job_has_live_unverifiable_process(HANDLE job) {
+      std::vector<ULONG_PTR> ids;
+      if (!query_job_process_ids(job, ids)) return true;
+      for (const auto pid : ids) {
+        const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
+        if (!process) { if (GetLastError() == ERROR_INVALID_PARAMETER) continue; return true; }
+        const auto live = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+        CloseHandle(process);
+        if (live) return true;
+      }
+      return false;
     }
 
     bool steam_image_outside_mirror(HANDLE job, const std::filesystem::path &mirror);
@@ -96,6 +119,8 @@ namespace terminal_session::worker {
               (void)TerminateJobObject(worker->job, ERROR_NETWORK_NOT_AVAILABLE);
             } else if (worker->job) {
               (void)TerminateJobObject(worker->job, ERROR_PROCESS_ABORTED);
+            } else if (worker->process) {
+              (void)TerminateProcess(worker->process, ERROR_PROCESS_ABORTED);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
             continue;
@@ -117,21 +142,13 @@ namespace terminal_session::worker {
 
     bool steam_image_outside_mirror(HANDLE job, const std::filesystem::path &mirror) {
       if (!job) return false;
-      std::vector<std::byte> storage(sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + 16 * sizeof(ULONG_PTR));
-      JOBOBJECT_BASIC_PROCESS_ID_LIST *list = nullptr;
-      for (unsigned retry = 0; retry != 4; ++retry) {
-        list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST *>(storage.data()); DWORD bytes = 0;
-        if (QueryInformationJobObject(job, JobObjectBasicProcessIdList, list, static_cast<DWORD>(storage.size()), &bytes)) break;
-        if (GetLastError() != ERROR_MORE_DATA || storage.size() >= 8192 * sizeof(ULONG_PTR)) return true;
-        storage.resize(storage.size() * 2);
-        list = nullptr;
-      }
-      if (!list) return true;
+      std::vector<ULONG_PTR> ids;
+      if (!query_job_process_ids(job, ids)) return true;
       std::wstring expected = mirror.wstring();
       std::ranges::transform(expected, expected.begin(), [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
       if (!expected.ends_with(L"\\")) expected.push_back(L'\\');
-      for (DWORD index = 0; index < list->NumberOfProcessIdsInList; ++index) {
-        const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(list->ProcessIdList[index]));
+      for (const auto pid : ids) {
+        const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
         if (!process) { if (GetLastError() == ERROR_INVALID_PARAMETER) continue; return true; }
         std::array<wchar_t, 32768> path_buffer {};
         DWORD length = static_cast<DWORD>(path_buffer.size());
@@ -968,26 +985,32 @@ namespace terminal_session::worker {
 
   process_t::~process_t() {
 #ifdef _WIN32
-    if (!stop({})) {
-      auto quarantined = std::make_shared<poisoned_worker_t>();
-      quarantined->process = reinterpret_cast<HANDLE>(process_);
-      quarantined->job = reinterpret_cast<HANDLE>(job_);
-      quarantined->pipe = std::move(pipe_);
-      quarantined->manager = std::move(steam_offline_manager_);
-      quarantined->manager.quarantine();
-      {
-        std::lock_guard lock {poisoned_workers_mutex()};
-        poisoned_workers().push_back(quarantined);
-      }
-      quarantine_worker(quarantined);
-      process_ = nullptr;
-      job_ = nullptr;
-      pid_ = 0;
-      cleanup_pending_.store(true, std::memory_order_release);
-    }
+    (void)stop({});
 #else
     (void) stop({});
 #endif
+  }
+
+  void process_t::handoff_quarantine() noexcept {
+    // The normal monitor remains active through graceful wait and forced
+    // termination.  On any unproven stop outcome, stop it only to transfer
+    // the exact handles/manager immediately to the service-lifetime monitor;
+    // no destructor path may release filters during this handoff.
+    steam_offline_monitor_stop_.store(true, std::memory_order_release);
+    if (steam_offline_monitor_.joinable()) steam_offline_monitor_.join();
+    auto quarantined = std::make_shared<poisoned_worker_t>();
+    quarantined->process = reinterpret_cast<HANDLE>(process_);
+    quarantined->job = reinterpret_cast<HANDLE>(job_);
+    quarantined->pipe = std::move(pipe_);
+    quarantined->manager = std::move(steam_offline_manager_);
+    quarantined->manager.quarantine();
+    {
+      std::lock_guard lock {poisoned_workers_mutex()};
+      poisoned_workers().push_back(quarantined);
+    }
+    quarantine_worker(quarantined);
+    process_ = nullptr; job_ = nullptr; pid_ = 0;
+    cleanup_pending_.store(true, std::memory_order_release);
   }
 
   bool process_t::cleanup_needed() const noexcept {
@@ -1248,8 +1271,6 @@ namespace terminal_session::worker {
     display_broker_running_.store(false, std::memory_order_release);
     if (display_broker_thread_.joinable()) display_broker_thread_.request_stop();
     if (display_broker_thread_.joinable()) display_broker_thread_.join();
-    steam_offline_monitor_stop_.store(true, std::memory_order_release);
-    if (steam_offline_monitor_.joinable()) steam_offline_monitor_.join();
     if (pipe_) {
       const std::array<std::uint8_t, 1> stop {1};
       (void) pipe_->send(stop, 1000);
@@ -1268,15 +1289,24 @@ namespace terminal_session::worker {
       }
       if (stopped) { CloseHandle(process); process_ = nullptr; }
     }
-    if (stopped) pipe_.reset();
-    if (stopped && job_) { CloseHandle(static_cast<HANDLE>(job_)); job_ = nullptr; }
+    if (stopped && job_ && job_has_live_unverifiable_process(static_cast<HANDLE>(job_))) {
+      stopped = TerminateJobObject(static_cast<HANDLE>(job_), ERROR_PROCESS_ABORTED) != FALSE &&
+        !job_has_live_unverifiable_process(static_cast<HANDLE>(job_));
+    }
+    if (!stopped) { handoff_quarantine(); return false; }
+    // Only now is it safe to stop/join the worker monitor: process and job
+    // emptiness have been proven, so there is no unmonitored live interval.
+    steam_offline_monitor_stop_.store(true, std::memory_order_release);
+    if (steam_offline_monitor_.joinable()) steam_offline_monitor_.join();
+    pipe_.reset();
+    if (job_) { CloseHandle(static_cast<HANDLE>(job_)); job_ = nullptr; }
     if (stopped && steam_offline_manager_.active()) {
       steam_offline_manager_.clear_quarantine();
       std::string registration_error;
       if (!steam_offline_manager_.release(registration_error)) { stopped = false; cleanup_pending_.store(true, std::memory_order_release); }
       else cleanup_pending_.store(false, std::memory_order_release);
     }
-    if (!stopped) return false;
+    if (!stopped) { handoff_quarantine(); return false; }
     pid_ = 0; pipe_name_.clear(); display_pipe_name_.clear(); generation_ = 0; resource_ = {};
     hdr_target_binding_.reset();
     OPENSSL_cleanse(snapshot_auth_key_.data(), snapshot_auth_key_.size());

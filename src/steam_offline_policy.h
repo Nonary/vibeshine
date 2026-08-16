@@ -16,6 +16,11 @@ namespace steam_offline {
   [[nodiscard]] bool game_library_outside_mirror(std::string_view game_path,
                                                  std::string_view mirror_root) noexcept;
   [[nodiscard]] bool path_is_same_or_descendant(std::string_view path, std::string_view root) noexcept;
+  // JobObjectBasicProcessIdList is complete only when the returned count
+  // equals the assigned count; a successful partial result must be retried.
+  [[nodiscard]] constexpr bool complete_job_process_list(std::size_t assigned, std::size_t returned) noexcept {
+    return assigned == returned;
+  }
   [[nodiscard]] bool is_configured_steam_client(std::string_view command_line) noexcept;
   [[nodiscard]] constexpr bool enabled_for_terminal(bool terminal_session, bool requested) noexcept { return terminal_session && requested; }
   [[nodiscard]] std::string ipc_name_for_seat(std::string_view opaque_seat_id);

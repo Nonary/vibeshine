@@ -37,6 +37,7 @@ namespace terminal_session::worker {
   private:
 #ifdef _WIN32
     void run_display_broker();
+    void handoff_quarantine() noexcept;
     bool validate_display_client(platf::dxgi::INamedPipe &pipe) const;
     void *process_ {};
     void *job_ {};

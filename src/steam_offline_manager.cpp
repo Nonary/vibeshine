@@ -231,7 +231,9 @@ namespace steam_offline {
       std::filesystem::path path {raw}; CoTaskMemFree(raw); return path;
     }
 
-    bool copy_regular_file(HANDLE token, const std::filesystem::path &source, const std::filesystem::path &destination) {
+    bool copy_regular_file(HANDLE token, const std::filesystem::path &source, const std::filesystem::path &destination,
+                           const std::uintmax_t remaining_budget, std::uintmax_t &copied_size) {
+      copied_size = 0;
       HANDLE raw = INVALID_HANDLE_VALUE;
       LARGE_INTEGER source_size {};
       FILE_ID_INFO source_identity {};
@@ -239,7 +241,7 @@ namespace steam_offline {
         impersonation_scope impersonating {token};
         if (!impersonating.active) return false;
         raw = CreateFileW(source.c_str(), FILE_READ_ATTRIBUTES | FILE_READ_DATA,
-          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+          FILE_SHARE_READ, nullptr, OPEN_EXISTING,
           FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
         if (raw == INVALID_HANDLE_VALUE) return false;
         unique_handle source_handle {raw}; FILE_ATTRIBUTE_TAG_INFO tag {};
@@ -247,7 +249,8 @@ namespace steam_offline {
             (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
         if (!GetFileInformationByHandleEx(source_handle.get(), FileIdInfo, &source_identity, sizeof(source_identity)) ||
             !GetFileSizeEx(source_handle.get(), &source_size) || source_size.QuadPart < 0 ||
-            static_cast<std::uintmax_t>(source_size.QuadPart) > max_file_bytes) return false;
+            static_cast<std::uintmax_t>(source_size.QuadPart) > max_file_bytes ||
+            static_cast<std::uintmax_t>(source_size.QuadPart) > remaining_budget) return false;
         raw = source_handle.release();
       }
       unique_handle source_handle {raw};
@@ -267,9 +270,13 @@ namespace steam_offline {
         copied += written;
       }
       FILE_ID_INFO after_identity {};
-      return copied == static_cast<std::uintmax_t>(source_size.QuadPart) &&
-        GetFileInformationByHandleEx(source_handle.get(), FileIdInfo, &after_identity, sizeof(after_identity)) &&
+      LARGE_INTEGER final_size {};
+      const bool stable = GetFileInformationByHandleEx(source_handle.get(), FileIdInfo, &after_identity, sizeof(after_identity)) &&
+        GetFileSizeEx(source_handle.get(), &final_size) && final_size.QuadPart == source_size.QuadPart &&
         std::memcmp(&source_identity, &after_identity, sizeof(source_identity)) == 0;
+      if (!stable || copied != static_cast<std::uintmax_t>(source_size.QuadPart)) return false;
+      copied_size = copied;
+      return true;
     }
 
     bool create_owned_path(const std::filesystem::path &root, const std::filesystem::path &target) {
@@ -307,10 +314,15 @@ namespace steam_offline {
     }
 
     bool reconcile_generation_root(const std::filesystem::path &root, std::string &error) {
-      std::error_code ec;
-      if (!std::filesystem::exists(root, ec)) return !ec;
       auto opened = open_secure_directory(root, true);
-      if (!opened) { error = "An existing Steam generation root failed SYSTEM/reparse ownership validation."; return false; }
+      if (!opened) {
+        // The caller pins the protected ProgramData/owned/seat parents and
+        // creates this component immediately before reconciliation.  A
+        // missing generation is therefore an empty, safe admission state;
+        // any existing component must pass handle validation above.
+        return true;
+      }
+      std::error_code ec;
       // A generation with any client/cache/staging content may still have a
       // live clone from an earlier service lifetime. Keep it blocked and force
       // a fresh generation rather than deleting an unproven live tree.
@@ -333,13 +345,15 @@ namespace steam_offline {
     }
 
     bool under_root(const std::filesystem::path &path, const std::filesystem::path &root) {
-      std::error_code path_error, root_error;
-      auto p = std::filesystem::weakly_canonical(path, path_error);
-      auto r = std::filesystem::weakly_canonical(root, root_error);
-      if (path_error || root_error) return false;
+      const auto p = path.lexically_normal();
+      const auto r = root.lexically_normal();
       auto pit = p.begin();
       for (auto rit = r.begin(); rit != r.end(); ++rit, ++pit) {
-        if (pit == p.end() || *pit != *rit) return false;
+        if (pit == p.end()) return false;
+        auto lhs = pit->wstring(); auto rhs = rit->wstring();
+        std::ranges::transform(lhs, lhs.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+        std::ranges::transform(rhs, rhs.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+        if (lhs != rhs) return false;
       }
       return true;
     }
@@ -415,6 +429,17 @@ namespace steam_offline {
     constexpr std::array<std::uint8_t, 16> sublayer_key_bytes {
       0x41, 0x0d, 0x69, 0x1f, 0xe4, 0x11, 0x45, 0x2c, 0x9d, 0xe7, 0x60, 0x1b, 0xae, 0xc4, 0x5f, 0x22, 0x09};
 
+    std::wstring service_epoch() {
+      static const std::wstring epoch = [] {
+        GUID value {};
+        if (CoCreateGuid(&value) != S_OK) return std::wstring {L"epoch-unavailable"};
+        wchar_t text[64] {};
+        StringFromGUID2(value, text, ARRAYSIZE(text));
+        return std::wstring {text};
+      }();
+      return epoch;
+    }
+
     bool add_filter(HANDLE engine, const GUID &filter_key, const GUID &provider_key,
                     const GUID &sublayer_key, const GUID &layer_key, PBYTE app_id, UINT32 app_id_size,
                     std::wstring_view owner, std::string &error) {
@@ -445,16 +470,20 @@ namespace steam_offline {
       return true;
     }
 
-    struct filter_owner { std::wstring seat; std::uint64_t generation {}; };
+    struct filter_owner { std::wstring seat; std::wstring epoch; std::uint64_t generation {}; };
 
     bool parse_filter_owner(const wchar_t *description, filter_owner &owner) {
       if (!description) return false;
       constexpr std::wstring_view prefix = L"VibeshineSteamSeat|seat=";
       const std::wstring_view value {description};
       if (!value.starts_with(prefix)) return false;
+      const auto epoch_tag = value.find(L"|epoch=");
       const auto generation_tag = value.find(L"|generation=");
-      if (generation_tag == std::wstring_view::npos || generation_tag == prefix.size()) return false;
-      owner.seat.assign(value.substr(prefix.size(), generation_tag - prefix.size()));
+      if (epoch_tag == std::wstring_view::npos || generation_tag == std::wstring_view::npos ||
+          epoch_tag <= prefix.size() || generation_tag <= epoch_tag + 7) return false;
+      owner.seat.assign(value.substr(prefix.size(), epoch_tag - prefix.size()));
+      owner.epoch.assign(value.substr(epoch_tag + 7, generation_tag - epoch_tag - 7));
+      if (owner.epoch.empty()) return false;
       const auto number = value.substr(generation_tag + 12);
       if (number.empty() || !std::ranges::all_of(number, [](wchar_t ch) { return ch >= L'0' && ch <= L'9'; })) return false;
       try { owner.generation = std::stoull(std::wstring {number}); } catch (...) { return false; }
@@ -464,6 +493,32 @@ namespace steam_offline {
         seat.push_back(static_cast<char>(ch));
       }
       return valid_seat(seat);
+    }
+
+    bool generation_root_absent(const filter_owner &owner) {
+      if (owner.epoch.size() != 38 || owner.epoch.front() != L'{' || owner.epoch.back() != L'}' ||
+          owner.epoch.find_first_of(L"\\/") != std::wstring::npos) return false;
+      const auto root = program_data();
+      if (!root) return false;
+      const auto owned = *root / L"VibeshineSteamSeats";
+      const auto seat = owned / owner.seat;
+      const auto epoch = seat / (L"epoch-" + owner.epoch);
+      const auto generation = epoch / (L"generation-" + std::to_wstring(owner.generation));
+      // Pin every protected ancestor before inspecting the generation.  A
+      // missing component is safe to reconcile; an unsafe/ambiguous one is
+      // retained so an old clone can never become unfiltered.
+      if (!open_no_reparse_directory(*root) || !open_secure_directory(owned, true) ||
+          !open_secure_directory(seat, true) || !open_secure_directory(epoch, true)) return false;
+      SetLastError(ERROR_SUCCESS);
+      HANDLE raw = CreateFileW(generation.c_str(), FILE_READ_ATTRIBUTES | READ_CONTROL,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      if (raw == INVALID_HANDLE_VALUE) {
+        const auto last = GetLastError();
+        return last == ERROR_FILE_NOT_FOUND || last == ERROR_PATH_NOT_FOUND;
+      }
+      unique_handle opened {raw};
+      return secure_directory(opened.get(), true);
     }
 
     bool remove_stale_filters(HANDLE engine, std::wstring_view seat, std::uint64_t generation, std::string &error) {
@@ -476,27 +531,29 @@ namespace steam_offline {
       if (status != ERROR_SUCCESS || !enumeration) { error = "WFP stale-filter enumeration could not start (" + std::to_string(status) + ")."; return false; }
       constexpr UINT32 page_size = 128, max_pages = 128, max_objects = page_size * max_pages;
       status = FwpmTransactionBegin0(engine, 0);
-      UINT32 pages = 0, objects = 0;
+      UINT32 pages = 0, objects = 0; bool complete = false;
       bool ok = status == ERROR_SUCCESS;
-      while (ok && pages++ < max_pages) {
+      while (ok && pages <= max_pages) {
         UINT32 count = 0; FWPM_FILTER0 **filters = nullptr;
         status = FwpmFilterEnum0(engine, enumeration, page_size, &filters, &count);
         if (status != ERROR_SUCCESS) { ok = false; break; }
-        if (count == 0) { if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
+        if (count == 0) { complete = true; if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
+        ++pages;
+        if (pages > max_pages) { ok = false; if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
         objects += count;
         if (objects > max_objects) { ok = false; if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
         for (UINT32 i = 0; i < count && ok; ++i) {
           filter_owner parsed;
           if (!filters[i] || !filters[i]->subLayerKey || std::memcmp(filters[i]->subLayerKey, &sublayer, sizeof(sublayer)) != 0) continue;
           if (!parse_filter_owner(filters[i]->displayData.description, parsed)) { ok = false; break; }
-          if (parsed.seat == seat && parsed.generation != generation) {
+          if (parsed.seat == seat && parsed.generation != generation && generation_root_absent(parsed)) {
             status = FwpmFilterDeleteByKey0(engine, &filters[i]->filterKey);
             ok = status == ERROR_SUCCESS || status == FWP_E_FILTER_NOT_FOUND;
           }
         }
         if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters));
       }
-      if (pages > max_pages && ok) ok = false;
+      if (!complete && ok) ok = false;
       if (ok) status = FwpmTransactionCommit0(engine);
       if (!ok || status != ERROR_SUCCESS) {
         (void)FwpmTransactionAbort0(engine);
@@ -580,6 +637,9 @@ namespace steam_offline {
       error = "Steam isolation admission identity is invalid or already active.";
       return false;
     }
+    // Filter identities are transaction-local until BFE commit succeeds.
+    filter_keys_.clear();
+    preparation_ = {};
 #ifdef _WIN32
     if (!local_system()) { error = "Steam isolation preparation must run in the SYSTEM broker."; return false; }
     const auto source_token = static_cast<HANDLE>(source_impersonation_token);
@@ -608,14 +668,18 @@ namespace steam_offline {
         return false;
       }
     }
-    const auto proxy = std::filesystem::weakly_canonical(proxy_executable, ec);
-    if (ec || !std::filesystem::is_regular_file(proxy, ec)) {
-      error = "The packaged steam webhelper proxy is missing.";
-      return false;
-    }
-    if (under_root(proxy, source_root)) {
-      error = "The webhelper proxy must not be supplied from the Steam source tree.";
-      return false;
+    std::filesystem::path proxy;
+    {
+      // Resolve and compare the proxy while the same validated console token
+      // is impersonated as the source.  SYSTEM must not canonicalize a
+      // user-raceable ancestor and then use that result for disclosure policy.
+      impersonation_scope impersonating {source_token};
+      if (!impersonating.active) { error = "Steam proxy impersonation could not be established."; return false; }
+      proxy = std::filesystem::weakly_canonical(proxy_executable, ec);
+      if (ec || !std::filesystem::is_regular_file(proxy, ec) || under_root(proxy, source_root)) {
+        error = "The packaged steam webhelper proxy is missing or is inside the Steam source tree.";
+        return false;
+      }
     }
 
     HANDLE engine = nullptr;
@@ -643,7 +707,10 @@ namespace steam_offline {
     if (!program_data_root) { FwpmEngineClose0(engine); error = "The OS ProgramData root could not be resolved."; return false; }
     const auto owned_root = *program_data_root / L"VibeshineSteamSeats";
     const auto seat_root = owned_root / seat_wide;
-    const auto generation_root = seat_root / std::to_wstring(generation);
+    const auto epoch = service_epoch();
+    if (epoch == L"epoch-unavailable") { FwpmEngineClose0(engine); error = "A unique service epoch could not be established."; return false; }
+    const auto epoch_root = seat_root / (L"epoch-" + epoch);
+    const auto generation_root = epoch_root / (L"generation-" + std::to_wstring(generation));
     GUID stage_id {};
     if (CoCreateGuid(&stage_id) != S_OK) { FwpmEngineClose0(engine); error = "Secure staging identity could not be generated."; return false; }
     wchar_t stage_name[64] {};
@@ -655,10 +722,10 @@ namespace steam_offline {
       (void)remove_owned_tree(mirror);
       (void)remove_owned_tree(cache);
     };
-    if (!reconcile_generation_root(generation_root, error)) { FwpmEngineClose0(engine); return false; }
     auto owned = ensure_protected_directory(owned_root);
     auto seat = owned ? ensure_protected_directory(seat_root) : unique_handle {};
-    auto generation_handle = seat ? ensure_protected_directory(generation_root) : unique_handle {};
+    auto epoch_handle = seat ? ensure_protected_directory(epoch_root) : unique_handle {};
+    auto generation_handle = epoch_handle ? ensure_protected_directory(generation_root) : unique_handle {};
     bool stage_created = false;
     if (generation_handle) stage_created = make_protected_directory(stage, stage_created);
     auto stage_handle = stage_created ? open_secure_directory(stage, true) : unique_handle {};
@@ -668,7 +735,8 @@ namespace steam_offline {
     std::uintmax_t tree_bytes = 0;
     bool copy_failed = false;
     constexpr std::size_t max_directories = 4096, max_entries = 16384, max_executables = 8192;
-    if (!owned || !seat || !generation_handle || !stage_handle) { FwpmEngineClose0(engine); error = "The SYSTEM-owned Steam mirror root could not be opened safely."; return false; }
+    if (!owned || !seat || !epoch_handle || !generation_handle || !stage_handle) { FwpmEngineClose0(engine); error = "The SYSTEM-owned Steam mirror root could not be opened safely."; return false; }
+    if (!reconcile_generation_root(generation_root, error)) { FwpmEngineClose0(engine); return false; }
     std::vector<std::pair<std::filesystem::path, std::filesystem::path>> pending;
     pending.emplace_back(source_root, std::filesystem::path {});
     while (!pending.empty() && !copy_failed) {
@@ -711,19 +779,13 @@ namespace steam_offline {
           continue;
         }
         if (!std::filesystem::is_regular_file(status)) { copy_failed = true; break; }
-        std::uintmax_t file_bytes = 0;
-        {
-          impersonation_scope impersonating {source_token};
-          if (!impersonating.active) { copy_failed = true; break; }
-          file_bytes = std::filesystem::file_size(child, ec);
-          if (ec) { copy_failed = true; break; }
-        }
-        if (++files > max_files || file_bytes > max_file_bytes || tree_bytes > max_tree_bytes - std::min(file_bytes, max_tree_bytes) ||
-            executables.size() > max_executables) { copy_failed = true; break; }
-        tree_bytes += file_bytes;
+        if (++files > max_files || tree_bytes > max_tree_bytes || executables.size() > max_executables) { copy_failed = true; break; }
         const auto destination = stage / rel;
+        std::uintmax_t copied_size = 0;
         if (!under_root(destination, stage) || !create_owned_path(stage, destination.parent_path()) ||
-            !copy_regular_file(source_token, child, destination)) { copy_failed = true; break; }
+            !copy_regular_file(source_token, child, destination, max_tree_bytes - tree_bytes, copied_size)) { copy_failed = true; break; }
+        if (copied_size > max_file_bytes || copied_size > max_tree_bytes - tree_bytes) { copy_failed = true; break; }
+        tree_bytes += copied_size;
         auto lower_name = destination.filename().wstring(); std::ranges::transform(lower_name, lower_name.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
         if (lower_name == L"steamservice.exe") { if (!DeleteFileW(destination.c_str())) { copy_failed = true; break; } continue; }
         auto extension = destination.extension().wstring();
@@ -744,14 +806,20 @@ namespace steam_offline {
     const auto real_suffix = L".vibeshine-real.exe";
     for (const auto &helper : helper_paths) {
       const auto real_helper = helper.parent_path() / (helper.stem().wstring() + real_suffix);
+      std::uintmax_t proxy_size = 0;
       if (std::filesystem::exists(real_helper, ec) ||
           !MoveFileExW(helper.c_str(), real_helper.c_str(), MOVEFILE_WRITE_THROUGH) ||
-          !copy_regular_file(source_token, proxy, helper)) {
+          !copy_regular_file(source_token, proxy, helper, max_tree_bytes - tree_bytes, proxy_size)) {
         (void)remove_owned_tree(stage); FwpmEngineClose0(engine); error = "Steam webhelper proxy publication collided or failed."; return false;
       }
+      if (proxy_size > max_tree_bytes - tree_bytes) { (void)remove_owned_tree(stage); FwpmEngineClose0(engine); error = "Steam webhelper proxy exceeds mirror bounds."; return false; }
+      tree_bytes += proxy_size;
       const auto old = std::find(executables.begin(), executables.end(), helper);
       if (old != executables.end()) *old = real_helper;
       executables.push_back(helper);
+    }
+    if (executables.empty() || executables.size() > max_executables || executables.size() > std::numeric_limits<std::size_t>::max() / 2) {
+      (void)remove_owned_tree(stage); FwpmEngineClose0(engine); error = "The final Steam mirror executable count is outside the bounded admission policy."; return false;
     }
     PSID user = nullptr;
     std::wstring sid_wide; sid_wide.reserve(user_sid.size()); for (const auto ch : user_sid) sid_wide.push_back(static_cast<wchar_t>(static_cast<unsigned char>(ch)));
@@ -775,8 +843,10 @@ namespace steam_offline {
     if (!make_protected_directory(cache, cache_created)) { discard_published(); FwpmEngineClose0(engine); error = "Steam cache root creation failed."; return false; }
     const auto html = cache / L"htmlcache"; const auto profile = cache / L"userdata";
     auto cache_handle = open_secure_directory(cache, true);
-    auto html_handle = cache_handle ? (make_protected_directory(html, html_created), open_secure_directory(html, true, user)) : unique_handle {};
-    auto profile_handle = cache_handle ? (make_protected_directory(profile, profile_created), open_secure_directory(profile, true, user)) : unique_handle {};
+    const bool html_ready = cache_handle && make_protected_directory(html, html_created);
+    const bool profile_ready = cache_handle && make_protected_directory(profile, profile_created);
+    auto html_handle = html_ready ? open_secure_directory(html, true, user) : unique_handle {};
+    auto profile_handle = profile_ready ? open_secure_directory(profile, true, user) : unique_handle {};
     if (!cache_handle || !html_handle || !profile_handle || !set_leaf_acl(cache_handle.get(), user, FILE_TRAVERSE | SYNCHRONIZE, false) ||
         !verify_protected_user_acl(cache_handle.get(), user, FILE_TRAVERSE | SYNCHRONIZE) || !set_leaf_acl(html_handle.get(), user, user_modify) ||
         !verify_protected_user_acl(html_handle.get(), user, user_modify) || !set_leaf_acl(profile_handle.get(), user, user_modify) ||
@@ -796,6 +866,8 @@ namespace steam_offline {
 
     std::vector<std::filesystem::path> published;
     published.reserve(executables.size());
+    std::vector<std::array<std::uint8_t, 16>> staged_filter_keys;
+    staged_filter_keys.reserve(executables.size() * 2);
     for (const auto &staged : executables) {
       const auto published_path = mirror / staged.lexically_relative(stage);
       PFWP_BYTE_BLOB app_id = nullptr;
@@ -804,7 +876,7 @@ namespace steam_offline {
         if (app_id) FwpmFreeMemory0(reinterpret_cast<void **>(&app_id));
         FwpmTransactionAbort0(engine); discard_published(); FwpmEngineClose0(engine); error = "Steam mirror app identity could not be canonicalized."; return false;
       }
-      std::wstring owner = L"VibeshineSteamSeat|seat=" + seat_wide + L"|generation=" + std::to_wstring(generation);
+      std::wstring owner = L"VibeshineSteamSeat|seat=" + seat_wide + L"|epoch=" + epoch + L"|generation=" + std::to_wstring(generation);
       const auto v4 = key_for(deterministic_filter_key(seat_id, generation, narrow(published_path), false));
       const auto v6 = key_for(deterministic_filter_key(seat_id, generation, narrow(published_path), true));
       if (!add_filter(engine, guid(v4), provider_key, sublayer_key, FWPM_LAYER_ALE_AUTH_CONNECT_V4, app_id->data, app_id->size, owner, error) ||
@@ -812,11 +884,14 @@ namespace steam_offline {
         FwpmFreeMemory0(reinterpret_cast<void **>(&app_id)); FwpmTransactionAbort0(engine); discard_published(); FwpmEngineClose0(engine); return false;
       }
       FwpmFreeMemory0(reinterpret_cast<void **>(&app_id));
-      filter_keys_.push_back(v4); filter_keys_.push_back(v6); published.push_back(published_path);
+      staged_filter_keys.push_back(v4); staged_filter_keys.push_back(v6); published.push_back(published_path);
+    }
+    if (published.size() != executables.size() || staged_filter_keys.size() != executables.size() * 2) {
+      FwpmTransactionAbort0(engine); discard_published(); FwpmEngineClose0(engine); error = "The final Steam mirror/filter count is inconsistent."; return false;
     }
     status = FwpmTransactionCommit0(engine);
     if (status != ERROR_SUCCESS) { FwpmTransactionAbort0(engine); filter_keys_.clear(); discard_published(); FwpmEngineClose0(engine); error = "WFP filter transaction commit failed (" + std::to_string(status) + ")."; return false; }
-    engine_ = engine; seat_id_ = seat_id; generation_ = generation;
+    engine_ = engine; filter_keys_ = std::move(staged_filter_keys); seat_id_ = seat_id; generation_ = generation;
     preparation_ = {.mirror_root = mirror, .cache_root = cache, .steam_executable = mirror / L"steam.exe",
                     .proxy_executable = mirror / L"steamwebhelper.exe", .manifest_digest = digest_manifest(published),
                     .filtered_executable_count = published.size()};
@@ -840,26 +915,28 @@ namespace steam_offline {
     if (status != ERROR_SUCCESS || !enumeration) { error = "Owned WFP filter health enumeration failed; reconnect is blocked."; return false; }
     std::vector<std::array<std::uint8_t, 16>> observed; observed.reserve(filter_keys_.size());
     constexpr UINT32 page_size = 128, max_pages = 256, max_objects = page_size * max_pages;
-    bool ok = true; UINT32 pages = 0;
+    bool ok = true, complete = false; UINT32 pages = 0;
     UINT32 total_objects = 0;
-    while (ok && pages++ < max_pages) {
+    while (ok && pages <= max_pages) {
       UINT32 count = 0; FWPM_FILTER0 **filters = nullptr;
       status = FwpmFilterEnum0(static_cast<HANDLE>(engine_), enumeration, page_size, &filters, &count);
       if (status != ERROR_SUCCESS) { ok = false; break; }
-      if (count == 0) { if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
+      if (count == 0) { complete = true; if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
+      ++pages;
+      if (pages > max_pages) { ok = false; if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
       total_objects += count;
       if (total_objects > max_objects) { ok = false; if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
       for (UINT32 i = 0; i < count; ++i) if (filters[i]) {
         filter_owner owner;
         if (!filters[i]->subLayerKey || std::memcmp(filters[i]->subLayerKey, &sublayer, sizeof(sublayer)) != 0 ||
             !parse_filter_owner(filters[i]->displayData.description, owner)) { ok = false; break; }
-        if (owner.seat != std::wstring {seat_id_.begin(), seat_id_.end()} || owner.generation != generation_) continue;
+        if (owner.seat != std::wstring {seat_id_.begin(), seat_id_.end()} || owner.epoch != service_epoch() || owner.generation != generation_) continue;
         std::array<std::uint8_t, 16> key {}; std::memcpy(key.data(), &filters[i]->filterKey, sizeof(GUID)); observed.push_back(key);
         if (std::ranges::count(observed, key) != 1) { ok = false; break; }
       }
       if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters));
     }
-    if (pages > max_pages || observed.size() != filter_keys_.size()) ok = false;
+    if (!complete || observed.size() != filter_keys_.size()) ok = false;
     if (ok) for (const auto &key : filter_keys_) if (std::ranges::find(observed, key) == observed.end()) { ok = false; break; }
     (void)FwpmFilterDestroyEnumHandle0(static_cast<HANDLE>(engine_), enumeration);
     if (!ok) { error = "A persistent owned Steam seat filter is missing or mismatched; reconnect is blocked."; return false; }

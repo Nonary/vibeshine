@@ -53,7 +53,11 @@ emulation is also enabled. Its value is carried through authenticated launch
 material into the SYSTEM-owned private worker. Before resuming it, the SYSTEM
 service resolves ProgramData through the OS, creates SYSTEM/Admin-only protected
 roots, stages a bounded real-file mirror with no-follow/reparse rejection, and
-publishes it atomically. It then validates a persistent provider+sublayer schema
+publishes it atomically. Each service lifetime uses a fresh non-reusable epoch
+in the protected path and filter ownership; stale generations are never reused
+as an unfiltered clone. Source files are opened while impersonating the exact
+console-user token, copied from held handles, and charged against the aggregate
+byte budget from the handle's observed size. It then validates a persistent provider+sublayer schema
 and installs exact V4/V6 ALE AppId block filters through the documented BFE
 user-mode API. Filter and mirror admission failure aborts the launch; the
 console-user worker cannot add or remove WFP objects.
@@ -79,12 +83,20 @@ console and seat intentionally share one Windows SID/profile, an intentionally
 hostile same-console-user process can copy/rename Steam or launch the original
 console path outside the mirror; standard path-based AppId WFP has no distinct
 principal and cannot close that race. The worker monitor detects Steam client
-images outside the exact mirror and poisons/terminates the seat job, but there is
+images outside the exact mirror and poisons/terminates the seat job, and its PID
+enumeration retries successful partial JobObjectBasicProcessIdList results,
+treating an incomplete list as live/unknown, but there is
 no pre-network zero-window guarantee and administrator/higher-priority policy can
 override a standard user-mode filter. Filters remain persistent and quarantined
-when termination cannot be proven. Source correction was rejected by Daybreak's
-first pass for filesystem, WFP lifetime, recursion, cache ACL, proxy argv,
-monitoring, and ownership gaps; those corrections are now represented here.
+when termination cannot be proven. Stale filter cleanup is allowed only after
+all protected epoch, seat, and generation ancestors are pinned and the
+generation root is proven absent; otherwise the old clone and filters remain
+quarantined. Source correction was rejected by Daybreak's first pass for
+filesystem, WFP lifetime, recursion, cache ACL, proxy argv, monitoring, and
+ownership gaps; this final correction also closes successful partial PID-list
+handling, source-root impersonation, held-handle accounting, teardown
+monitoring, exact count/page bounds, transaction-local keys, and epoch
+ownership. These corrections are now represented here.
 No build, test execution, install, Steam launch, or live WFP mutation has been
 performed. Remaining runtime gates are copied Steam launch, proxy/cache
 separation, console-vs-clone path filtering, game-online behavior, BFE restart,

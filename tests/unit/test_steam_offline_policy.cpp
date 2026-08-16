@@ -10,6 +10,8 @@
 #include <gtest/gtest.h>
 
 TEST(SteamOfflinePolicy, KeepsGameLibrariesOutsideTheClientMirror) {
+  EXPECT_TRUE(steam_offline::complete_job_process_list(4, 4));
+  EXPECT_FALSE(steam_offline::complete_job_process_list(4, 3));
   EXPECT_TRUE(steam_offline::game_library_outside_mirror(
     "C:/SteamLibrary/steamapps/common/Game/game.exe", "C:/ProgramData/VibeshineSteamSeats/seat/1/client"));
   EXPECT_FALSE(steam_offline::game_library_outside_mirror(
