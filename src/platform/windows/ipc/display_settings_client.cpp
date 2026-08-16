@@ -9,6 +9,7 @@
   #include <atomic>
   #include <chrono>
   #include <cstdint>
+  #include <cwctype>
   #include <deque>
   #include <functional>
   #include <limits>
@@ -20,6 +21,7 @@
   #include <string_view>
   #include <utility>
   #include <vector>
+  #include <tlhelp32.h>
 
   #include <nlohmann/json.hpp>
 
@@ -34,6 +36,16 @@
 namespace platf::display_helper_client {
 
   namespace {
+    struct ManagedHelperIdentity {
+      std::uint32_t pid {};
+      std::uint64_t creation_time {};
+      std::uint32_t session_id {};
+      std::wstring canonical_image_path;
+    };
+
+    std::mutex managed_helper_identity_mutex;
+    std::optional<ManagedHelperIdentity> managed_helper_identity;
+
     constexpr int kConnectTimeoutMs = 2000;
     constexpr int kSendTimeoutMs = 5000;
     constexpr int kShutdownIpcTimeoutMs = 500;
@@ -78,23 +90,64 @@ namespace platf::display_helper_client {
       return shutdown_requested() ? kShutdownIpcTimeoutMs : kSendTimeoutMs;
     }
 
+    std::wstring canonical_image(std::wstring path) {
+      wchar_t full[MAX_PATH] {};
+      const DWORD length = GetFullPathNameW(path.c_str(), _countof(full), full, nullptr);
+      if (length != 0 && length < _countof(full)) path.assign(full, length);
+      for (auto &ch : path) ch = static_cast<wchar_t>(std::towlower(ch));
+      return path;
+    }
+
+    std::optional<DWORD> parent_process_id(DWORD pid) {
+      winrt::handle snapshot {CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)};
+      if (!snapshot || snapshot.get() == INVALID_HANDLE_VALUE) return std::nullopt;
+      PROCESSENTRY32W entry {.dwSize = sizeof(PROCESSENTRY32W)};
+      if (!Process32FirstW(snapshot.get(), &entry)) return std::nullopt;
+      do {
+        if (entry.th32ProcessID == pid) return entry.th32ParentProcessID;
+      } while (Process32NextW(snapshot.get(), &entry));
+      return std::nullopt;
+    }
+
+    std::uint64_t process_creation_time(HANDLE process) {
+      FILETIME created {}, exited {}, kernel {}, user {};
+      if (!GetProcessTimes(process, &created, &exited, &kernel, &user)) return 0;
+      ULARGE_INTEGER value {};
+      value.LowPart = created.dwLowDateTime;
+      value.HighPart = created.dwHighDateTime;
+      return value.QuadPart;
+    }
+
     bool managed_helper_server_is_expected(platf::dxgi::INamedPipe &pipe) {
+      std::lock_guard lock(managed_helper_identity_mutex);
+      if (!managed_helper_identity) return false;
       DWORD server_pid = 0;
-      if (!pipe.get_server_process_id(server_pid) || server_pid == 0) return false;
-      HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server_pid);
-      if (!process) return false;
+      if (!pipe.get_server_process_id(server_pid) || server_pid == 0 ||
+          server_pid != managed_helper_identity->pid) return false;
+      winrt::handle process {OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server_pid)};
+      if (!process || process_creation_time(process.get()) != managed_helper_identity->creation_time) return false;
+      DWORD session_id = 0;
+      if (!ProcessIdToSessionId(server_pid, &session_id) || session_id != managed_helper_identity->session_id) return false;
       wchar_t image[MAX_PATH] {};
       DWORD length = _countof(image);
-      const bool queried = QueryFullProcessImageNameW(process, 0, image, &length) != FALSE;
-      CloseHandle(process);
-      if (!queried || length == 0) return false;
-      std::wstring_view image_view {image, length};
-      const auto slash = image_view.find_last_of(L"\\/");
-      const auto basename = image_view.substr(slash == std::wstring_view::npos ? 0 : slash + 1);
-      return _wcsicmp(std::wstring {basename}.c_str(), L"sunshine_display_helper.exe") == 0;
+      if (!QueryFullProcessImageNameW(process.get(), 0, image, &length) || length == 0 ||
+          canonical_image(std::wstring {image, length}) != managed_helper_identity->canonical_image_path) return false;
+      const auto parent = parent_process_id(server_pid);
+      return parent && *parent == GetCurrentProcessId();
     }
 
   }  // namespace
+
+  void set_managed_helper_identity(const std::uint32_t pid, const std::uint64_t creation_time,
+                                   const std::uint32_t session_id, const std::wstring &image_path) {
+    std::lock_guard lock(managed_helper_identity_mutex);
+    managed_helper_identity = ManagedHelperIdentity {pid, creation_time, session_id, canonical_image(image_path)};
+  }
+
+  void clear_managed_helper_identity() {
+    std::lock_guard lock(managed_helper_identity_mutex);
+    managed_helper_identity.reset();
+  }
 
   /**
    * @brief IPC message types used by the display settings helper protocol.
@@ -857,6 +910,12 @@ namespace platf::display_helper_client {
     }
     auto &session = session_singleton();
     if (session && session->pipe && session->pipe->is_connected()) {
+      if (display_helper_session::has_managed_context() &&
+          (!display_helper_session::managed_context_is_valid() ||
+           !managed_helper_server_is_expected(*session->pipe))) {
+        (void) retire_session_locked();
+        return false;
+      }
       return true;
     }
     if (session) {

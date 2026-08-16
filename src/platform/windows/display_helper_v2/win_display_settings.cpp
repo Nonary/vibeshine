@@ -28,6 +28,12 @@ namespace display_helper::v2 {
       std::uint32_t session_id {};
     };
 
+    std::string managed_snapshot_device_id(const RemoteDisplayTarget &target) {
+      return "remote:" + std::to_string(target.session_id) + ":" +
+             std::to_string(display_helper_session::managed_generation()) + ":" +
+             std::to_string(target.display_id);
+    }
+
     ApplyStatus map_remote_display_failure(const terminal_session::display::result result) {
       switch (result) {
         case terminal_session::display::result::invalid: return ApplyStatus::InvalidRequest;
@@ -72,7 +78,7 @@ namespace display_helper::v2 {
         return std::nullopt;
       }
       return RemoteDisplayTarget {
-        .display_id = 0,
+        .display_id = queried->display_id,
         .width = queried->width,
         .height = queried->height,
         .refresh_rate_millihz = queried->refresh_rate_millihz,
@@ -146,7 +152,9 @@ namespace display_helper::v2 {
       }
 
       if (config.m_hdr_state) {
-        return set_remote_display_hdr(*target, *config.m_hdr_state);
+        const auto status = set_remote_display_hdr(*target, *config.m_hdr_state);
+        if (status == ApplyStatus::Ok) managed_hdr_state_ = *config.m_hdr_state;
+        return status;
       }
       return ApplyStatus::Ok;
     }
@@ -155,6 +163,14 @@ namespace display_helper::v2 {
       ApplyStatus open_status = ApplyStatus::Retryable;
       auto target = open_remote_display_target(open_status);
       if (!target) {
+        return false;
+      }
+      const auto device_id = managed_snapshot_device_id(*target);
+      if (!snapshot.m_topology.empty() || !snapshot.m_primary_device.empty() || !snapshot.m_origins.empty() ||
+          (snapshot.m_modes.size() != 1 && snapshot.m_modes.size() != 0) ||
+          (snapshot.m_hdr_states.size() > 1) ||
+          (!snapshot.m_modes.empty() && !snapshot.m_modes.contains(device_id)) ||
+          (!snapshot.m_hdr_states.empty() && !snapshot.m_hdr_states.contains(device_id))) {
         return false;
       }
 
@@ -230,10 +246,10 @@ namespace display_helper::v2 {
     }
   }  // namespace
   ApplyStatus WinDisplaySettings::apply(const SingleDisplayConfiguration &config) {
-    if (display_helper_session::has_managed_context() && !display_helper_session::managed_context_is_valid()) {
-      return ApplyStatus::InvalidRequest;
-    }
-    if (display_helper_session::is_non_console_interactive()) {
+    if (display_helper_session::has_managed_context()) {
+      if (!display_helper_session::managed_context_is_valid() || !display_helper_session::is_non_console_interactive()) {
+        return ApplyStatus::InvalidRequest;
+      }
       return apply_remote_display_configuration(config);
     }
     if (!ensure_initialized()) {
@@ -276,7 +292,22 @@ namespace display_helper::v2 {
 
   EnumeratedDeviceList WinDisplaySettings::enumerate(display_device::DeviceEnumerationDetail detail) {
     if (display_helper_session::has_managed_context()) {
-      return {};
+      if (!display_helper_session::managed_context_is_valid() || !display_helper_session::is_non_console_interactive()) return {};
+      ApplyStatus status = ApplyStatus::Retryable;
+      auto target = open_remote_display_target(status);
+      if (!target) return {};
+      const auto device_id = managed_snapshot_device_id(*target);
+      display_device::EnumeratedDevice device;
+      device.m_device_id = device_id;
+      device.m_display_name = "Remote IDD";
+      device.m_friendly_name = "Remote IDD";
+      device.m_info = display_device::EnumeratedDevice::Info {
+        .m_resolution = {target->width, target->height},
+        .m_refresh_rate = display_device::Rational {target->refresh_rate_millihz, 1000},
+        .m_primary = true,
+        .m_hdr_state = managed_hdr_state_,
+      };
+      return {std::move(device)};
     }
     if (!ensure_initialized()) {
       return {};
@@ -337,9 +368,20 @@ namespace display_helper::v2 {
   Snapshot WinDisplaySettings::capture_snapshot() {
     Snapshot snapshot;
     if (display_helper_session::has_managed_context()) {
-      // Physical DisplayConfig state is not authorization or recovery state
-      // for a managed seat. Returning it would let a later console fallback
-      // restore the wrong topology.
+      if (!display_helper_session::managed_context_is_valid() || !display_helper_session::is_non_console_interactive()) {
+        return snapshot;
+      }
+      ApplyStatus status = ApplyStatus::Retryable;
+      auto target = open_remote_display_target(status);
+      if (!target) return snapshot;
+      const auto device_id = managed_snapshot_device_id(*target);
+      snapshot.m_modes.emplace(device_id, display_device::DisplayMode {
+        .m_resolution = {target->width, target->height},
+        .m_refresh_rate = {target->refresh_rate_millihz, 1000},
+      });
+      if (managed_hdr_state_) {
+        snapshot.m_hdr_states.emplace(device_id, managed_hdr_state_);
+      }
       return snapshot;
     }
     if (!ensure_initialized()) {
@@ -388,7 +430,7 @@ namespace display_helper::v2 {
     if (display_helper_session::has_managed_context() && !display_helper_session::managed_context_is_valid()) {
       return false;
     }
-    if (!ensure_initialized()) {
+    if (!display_helper_session::has_managed_context() && !ensure_initialized()) {
       BOOST_LOG(error) << "apply_snapshot_settings: display device not initialized";
       return false;
     }
@@ -406,7 +448,11 @@ namespace display_helper::v2 {
         // A managed seat has one driver-owned target. Its primary/origin are
         // inherent to that isolated desktop, so only mode and HDR belong to
         // the restore transaction.
-        return apply_remote_snapshot_settings(snapshot);
+        const bool applied = apply_remote_snapshot_settings(snapshot);
+        if (applied && !snapshot.m_hdr_states.empty()) {
+          managed_hdr_state_ = snapshot.m_hdr_states.begin()->second;
+        }
+        return applied;
       }
       if (!snapshot.m_modes.empty() && !display_device_->setDisplayModes(snapshot.m_modes)) {
         BOOST_LOG(warning) << "apply_snapshot_settings: failed to restore display modes";
@@ -478,7 +524,8 @@ namespace display_helper::v2 {
 
   bool WinDisplaySettings::snapshot_matches_current(const Snapshot &snapshot) {
     if (display_helper_session::has_managed_context()) {
-      return false;
+      if (!display_helper_session::managed_context_is_valid() || !display_helper_session::is_non_console_interactive()) return false;
+      return codec::equal_snapshots_strict(capture_snapshot(), snapshot);
     }
     if (!ensure_initialized()) {
       return false;
@@ -511,6 +558,23 @@ namespace display_helper::v2 {
   bool WinDisplaySettings::configuration_matches(
     const SingleDisplayConfiguration &config,
     const ResolvedConfigurationTarget &target) {
+    if (display_helper_session::has_managed_context()) {
+      if (!display_helper_session::managed_context_is_valid() || !display_helper_session::is_non_console_interactive()) return false;
+      ApplyStatus status = ApplyStatus::Retryable;
+      auto target = open_remote_display_target(status);
+      if (!target) return false;
+      if (config.m_resolution &&
+          (target->width != config.m_resolution->m_width || target->height != config.m_resolution->m_height)) return false;
+      if (config.m_refresh_rate) {
+        const auto refresh = refresh_rate_millihz(*config.m_refresh_rate);
+        if (!refresh || target->refresh_rate_millihz != *refresh) return false;
+      }
+      if (config.m_hdr_state &&
+          (!managed_hdr_state_ || *managed_hdr_state_ != *config.m_hdr_state)) {
+        return false;
+      }
+      return true;
+    }
     if (!ensure_initialized()) {
       return false;
     }
@@ -581,6 +645,9 @@ namespace display_helper::v2 {
   }
 
   bool WinDisplaySettings::set_display_origin(const std::string &device_id, const display_device::Point &origin) {
+    if (display_helper_session::has_managed_context()) {
+      return false;
+    }
     if (!ensure_initialized()) {
       return false;
     }
@@ -595,6 +662,9 @@ namespace display_helper::v2 {
   }
 
   bool WinDisplaySettings::topology_is_valid(const ActiveTopology &topology) {
+    if (display_helper_session::has_managed_context()) {
+      return display_helper_session::managed_context_is_valid() && topology.empty();
+    }
     if (!ensure_initialized()) {
       return false;
     }
@@ -606,6 +676,9 @@ namespace display_helper::v2 {
   }
 
   bool WinDisplaySettings::recover_display_stack() {
+    if (display_helper_session::has_managed_context()) {
+      return false;
+    }
     if (!ensure_initialized()) {
       return false;
     }
@@ -620,6 +693,12 @@ namespace display_helper::v2 {
   ApplyPreflightOutcome WinDisplaySettings::preflight_apply(
     const SingleDisplayConfiguration &config,
     const std::optional<ActiveTopology> &base_topology) {
+    if (display_helper_session::has_managed_context()) {
+      if (!display_helper_session::managed_context_is_valid() || !display_helper_session::is_non_console_interactive()) {
+        return {.status = ApplyStatus::InvalidRequest};
+      }
+      return {.status = ApplyStatus::Ok, .plan = ApplyTopologyPlan {}};
+    }
     if (!ensure_initialized()) {
       return {.status = ApplyStatus::Retryable};
     }
@@ -678,6 +757,9 @@ namespace display_helper::v2 {
   }
 
   bool WinDisplaySettings::reset_staged_apply_state() {
+    if (display_helper_session::has_managed_context()) {
+      return display_helper_session::managed_context_is_valid();
+    }
     if (!ensure_initialized()) {
       return false;
     }
@@ -690,7 +772,7 @@ namespace display_helper::v2 {
   }
 
   bool WinDisplaySettings::set_device_refresh_rate(const std::string &device_id, unsigned int num, unsigned int den) {
-    if (device_id.empty() || !ensure_initialized()) {
+    if (device_id.empty()) {
       return false;
     }
     if (display_helper_session::has_managed_context()) {
@@ -711,6 +793,9 @@ namespace display_helper::v2 {
                           target->width,
                           target->height,
                           *refresh) == ApplyStatus::Ok;
+    }
+    if (!ensure_initialized()) {
+      return false;
     }
     display_device::DisplayRecoveryBehaviorGuard recovery_guard(display_device::DisplayRecoveryBehavior::Skip);
     try {
@@ -734,6 +819,9 @@ namespace display_helper::v2 {
   std::set<std::string> WinDisplaySettings::set_device_refresh_rates(
     const std::vector<std::pair<std::string, std::pair<unsigned int, unsigned int>>> &overrides) {
     std::set<std::string> applied;
+    if (display_helper_session::has_managed_context()) {
+      return applied;
+    }
     if (overrides.empty() || !ensure_initialized()) {
       return applied;
     }
@@ -806,6 +894,9 @@ namespace display_helper::v2 {
   std::unordered_map<std::string, std::optional<display_device::Resolution>>
   WinDisplaySettings::get_repositionable_display_resolutions(const std::set<std::string> &device_ids) {
     std::unordered_map<std::string, std::optional<display_device::Resolution>> result;
+    if (display_helper_session::has_managed_context()) {
+      return result;
+    }
     if (device_ids.empty() || !ensure_initialized()) {
       return result;
     }
@@ -854,6 +945,9 @@ namespace display_helper::v2 {
   }
 
   bool WinDisplaySettings::is_topology_same(const ActiveTopology &lhs, const ActiveTopology &rhs) {
+    if (display_helper_session::has_managed_context()) {
+      return display_helper_session::managed_context_is_valid() && lhs.empty() && rhs.empty();
+    }
     if (!ensure_initialized()) {
       return false;
     }
@@ -1137,6 +1231,9 @@ namespace display_helper::v2 {
 
   codec::layout_rotation_map_t WinDisplaySettings::capture_layout_rotations(const std::set<std::string> &device_ids) {
     codec::layout_rotation_map_t out;
+    if (display_helper_session::has_managed_context()) {
+      return out;
+    }
     if (!ensure_initialized()) {
       return out;
     }
@@ -1177,6 +1274,9 @@ namespace display_helper::v2 {
   }
 
   bool WinDisplaySettings::apply_layout_rotations(const codec::layout_rotation_map_t &layout_rotations) {
+    if (display_helper_session::has_managed_context()) {
+      return layout_rotations.empty();
+    }
     if (layout_rotations.empty()) {
       return true;
     }
@@ -1260,6 +1360,9 @@ namespace display_helper::v2 {
   }
 
   bool WinDisplaySettings::reassert_layout_rotations(const codec::layout_rotation_map_t &layout_rotations) {
+    if (display_helper_session::has_managed_context()) {
+      return layout_rotations.empty();
+    }
     if (layout_rotations.empty()) {
       return true;
     }
@@ -1312,6 +1415,9 @@ namespace display_helper::v2 {
   }
 
   bool WinDisplaySettings::current_layout_matches(const codec::layout_rotation_map_t &expected) {
+    if (display_helper_session::has_managed_context()) {
+      return expected.empty();
+    }
     if (expected.empty()) {
       return true;
     }

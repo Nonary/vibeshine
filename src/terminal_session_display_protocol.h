@@ -50,13 +50,14 @@ namespace terminal_session::display {
     std::uint32_t height {};
     std::uint32_t refresh_rate_millihz {};
     std::uint32_t hdr_enabled {};
+    std::uint64_t display_id {};
     std::uint32_t native_error {};
     std::uint32_t reserved {};
   };
 #pragma pack(pop)
 
   static_assert(sizeof(request_t) == 48);
-  static_assert(sizeof(response_t) == 48);
+  static_assert(sizeof(response_t) == 56);
 
   inline bool valid_operation(const std::uint8_t value) {
     return value >= static_cast<std::uint8_t>(operation::query) &&
@@ -66,8 +67,8 @@ namespace terminal_session::display {
   inline bool valid_request(const request_t &request) {
     return request.magic == magic && request.version == version && valid_operation(request.operation) &&
            request.flags == 0 && request.generation != 0 && request.request_id != 0 && request.reserved == 0 &&
-           (request.operation == static_cast<std::uint8_t>(operation::query) &&
-            request.width == 0 && request.height == 0 && request.refresh_rate_millihz == 0 && request.hdr_enabled == 0) ||
+           ((request.operation == static_cast<std::uint8_t>(operation::query) &&
+             request.width == 0 && request.height == 0 && request.refresh_rate_millihz == 0 && request.hdr_enabled == 0) ||
             (request.operation == static_cast<std::uint8_t>(operation::set_mode) &&
              request.width >= 1 && request.width <= 16384 && request.height >= 1 && request.height <= 16384 &&
              request.refresh_rate_millihz >= 1000 && request.refresh_rate_millihz <= 1'000'000 && request.hdr_enabled == 0) ||

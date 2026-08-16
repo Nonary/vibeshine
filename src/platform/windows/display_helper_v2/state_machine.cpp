@@ -6,6 +6,7 @@
 #include <iterator>
 #include <utility>
 
+#include "src/platform/windows/display_helper_session.h"
 #include "src/platform/windows/display_helper_v2/diagnostics.h"
 
 namespace display_helper::v2 {
@@ -98,6 +99,20 @@ namespace display_helper::v2 {
   }  // namespace
   std::optional<std::pair<Snapshot, codec::layout_rotation_map_t>> SnapshotLedger::capture_filtered(const std::vector<std::string> &exclusions, const char *reason) {
     auto snap = service_.capture();
+    if (display_helper_session::has_managed_context()) {
+      if (!display_helper_session::managed_context_is_valid() ||
+          !display_helper_session::is_non_console_interactive() ||
+          !snap.m_topology.empty() || !snap.m_primary_device.empty() || !snap.m_origins.empty() ||
+          snap.m_modes.size() != 1 ||
+          snap.m_hdr_states.size() > 1 ||
+          !exclusions.empty()) {
+        BOOST_LOG(warning) << "Skipping managed display snapshot save ("
+                           << (reason ? reason : "snapshot")
+                           << "); invalid remote baseline.";
+        return std::nullopt;
+      }
+      return std::make_pair(std::move(snap), codec::layout_rotation_map_t {});
+    }
     if (!service_.topology_is_valid(snap.m_topology)) {
       BOOST_LOG(warning) << "Skipping display snapshot save (" << (reason ? reason : "snapshot")
                          << "); topology is invalid or empty.";

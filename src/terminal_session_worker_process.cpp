@@ -696,6 +696,7 @@ namespace terminal_session::worker {
             response.width = state.width;
             response.height = state.height;
             response.refresh_rate_millihz = state.refresh_rate_millihz;
+            response.display_id = state.display_id;
             if (request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::set_mode)) {
               const auto changed = client.set_display_mode(virtual_display::driver::SetDisplayModeRequest {
                 .display_id = state.display_id,

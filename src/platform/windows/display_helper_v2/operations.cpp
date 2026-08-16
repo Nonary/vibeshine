@@ -1,5 +1,6 @@
 #include "src/platform/windows/display_helper_v2/operations.h"
 #include "src/platform/windows/display_helper_v2/topology_policy.h"
+#include "src/platform/windows/display_helper_session.h"
 
 #include <algorithm>
 #include <sstream>
@@ -151,6 +152,11 @@ namespace display_helper::v2 {
     TopologyTransitionOutcome outcome;
     if (token.is_cancelled()) {
       outcome.status = ApplyStatus::Fatal;
+      return outcome;
+    }
+    if (display_helper_session::has_managed_context()) {
+      outcome.status = display_helper_session::managed_context_is_valid() && topology.empty() ?
+                         ApplyStatus::Ok : ApplyStatus::InvalidRequest;
       return outcome;
     }
     if (!display_.topology_is_valid(topology)) {
@@ -395,6 +401,9 @@ namespace display_helper::v2 {
   }
 
   void ApplyOperation::apply_monitor_positions(const ApplyRequest &request, const CancellationToken &token) {
+    if (display_helper_session::has_managed_context()) {
+      return;
+    }
     if (request.monitor_positions.empty()) {
       return;
     }
@@ -487,6 +496,9 @@ namespace display_helper::v2 {
   }
 
   void ApplyOperation::apply_refresh_rate_overrides(const ApplyRequest &request, const CancellationToken &token) {
+    if (display_helper_session::has_managed_context()) {
+      return;
+    }
     if (request.refresh_rate_overrides.empty()) {
       return;
     }
@@ -614,6 +626,34 @@ namespace display_helper::v2 {
       clock_(clock),
       topology_transition_(display, clock) {}
 
+  namespace {
+    std::optional<codec::ParsedSnapshot> filter_loaded_snapshot_for_context(
+      codec::ParsedSnapshot loaded,
+      const display_device::EnumeratedDeviceList &devices,
+      const std::vector<std::string> &exclusions,
+      const char *source_label) {
+      if (!display_helper_session::has_managed_context()) {
+        return codec::filter_loaded_snapshot(std::move(loaded), devices, exclusions, source_label);
+      }
+      if (!display_helper_session::managed_context_is_valid() ||
+          !display_helper_session::is_non_console_interactive() ||
+          devices.size() != 1 || !exclusions.empty()) {
+        return std::nullopt;
+      }
+      const auto &device = devices.front();
+      const auto device_id = device.m_device_id.empty() ? device.m_display_name : device.m_device_id;
+      if (device_id.empty() || !loaded.snapshot.m_topology.empty() ||
+          !loaded.snapshot.m_primary_device.empty() || !loaded.snapshot.m_origins.empty() ||
+          loaded.snapshot.m_modes.size() != 1 || loaded.snapshot.m_hdr_states.size() > 1 ||
+          !loaded.snapshot.m_modes.contains(device_id) ||
+          (!loaded.snapshot.m_hdr_states.empty() && !loaded.snapshot.m_hdr_states.contains(device_id)) ||
+          !loaded.layout_rotations.empty()) {
+        return std::nullopt;
+      }
+      return loaded;
+    }
+  }
+
   long long RecoveryOperation::steady_now_ms() const {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
              clock_.now().time_since_epoch()
@@ -627,7 +667,8 @@ namespace display_helper::v2 {
       return std::nullopt;
     }
     const auto devices = display_.enumerate(display_device::DeviceEnumerationDetail::Minimal);
-    return codec::filter_loaded_snapshot(std::move(*loaded), devices, state_.exclusions(), label ? label : tier_to_string(tier));
+    return filter_loaded_snapshot_for_context(
+      std::move(*loaded), devices, state_.exclusions(), label ? label : tier_to_string(tier));
   }
 
   bool RecoveryOperation::read_stable_snapshot(
@@ -898,11 +939,8 @@ namespace display_helper::v2 {
     }
 
     const auto devices = display_.enumerate(display_device::DeviceEnumerationDetail::Minimal);
-    if (codec::filter_loaded_snapshot(
-          *loaded,
-          devices,
-          state_.exclusions(),
-          "golden-pending-check")) {
+    if (filter_loaded_snapshot_for_context(
+          *loaded, devices, state_.exclusions(), "golden-pending-check")) {
       return true;
     }
 

@@ -765,6 +765,12 @@ namespace {
         operation_deadline_expired(operation_deadline)) {
       return false;
     }
+    wchar_t module_path[MAX_PATH] = {};
+    if (!GetModuleFileNameW(nullptr, module_path, _countof(module_path))) {
+      return false;
+    }
+    const auto expected_helper_path =
+      (std::filesystem::path(module_path).parent_path() / L"tools" / L"sunshine_display_helper.exe").wstring();
     helper_proc().terminate();
 
     if (cancellation_requested(cancellation_predicate)) {
@@ -862,10 +868,7 @@ namespace {
         CloseHandle(h);
         continue;
       }
-      const auto image_name = std::wstring_view {image, image_length};
-      const auto slash = image_name.find_last_of(L"\\/");
-      if (_wcsicmp(image_name.substr(slash == std::wstring_view::npos ? 0 : slash + 1).data(),
-                  L"sunshine_display_helper.exe") != 0) {
+      if (_wcsicmp(image, expected_helper_path.c_str()) != 0) {
         CloseHandle(h);
         continue;
       }
@@ -888,7 +891,7 @@ namespace {
             return false;
           }
           if (wait_res != WAIT_OBJECT_0) {
-            BOOST_LOG(warning) << "Display helper: external instance pid=" << pid
+            BOOST_LOG(warning) << "Display helper: external instance pid=" << target.pid
                                << " did not exit within " << kHelperForceKillWaitMs << " ms.";
           }
         }
@@ -1197,6 +1200,40 @@ namespace {
     if (managed_remote_session && use_legacy_helper_engine()) {
       BOOST_LOG(info) << "Display helper: using the session-aware v2 engine for the managed remote seat.";
     }
+    wchar_t module_path[MAX_PATH] = {};
+    if (!GetModuleFileNameW(nullptr, module_path, _countof(module_path))) {
+      BOOST_LOG(error) << "Failed to resolve Sunshine module path; cannot launch display helper.";
+      return false;
+    }
+    const std::filesystem::path helper =
+      std::filesystem::path(module_path).parent_path() / L"tools" / L"sunshine_display_helper.exe";
+    if (!std::filesystem::exists(helper)) {
+      BOOST_LOG(warning) << "Display helper not found at: " << platf::to_utf8(helper.wstring())
+                         << ". Ensure the tools subdirectory is present and contains sunshine_display_helper.exe.";
+      return false;
+    }
+    const auto record_helper_identity = [&](HANDLE process_handle) {
+      if (!managed_remote_session) {
+        platf::display_helper_client::clear_managed_helper_identity();
+        return true;
+      }
+      DWORD helper_pid = GetProcessId(process_handle);
+      DWORD helper_session = 0;
+      const auto expected_session = display_helper_session::current_process_session_id();
+      FILETIME created {}, exited {}, kernel {}, user {};
+      if (!helper_pid || !ProcessIdToSessionId(helper_pid, &helper_session) ||
+          !expected_session || helper_session != *expected_session ||
+          helper_session != display_helper_session::managed_context().session_id ||
+          !GetProcessTimes(process_handle, &created, &exited, &kernel, &user)) {
+        return false;
+      }
+      ULARGE_INTEGER creation_value {};
+      creation_value.LowPart = created.dwLowDateTime;
+      creation_value.HighPart = created.dwHighDateTime;
+      platf::display_helper_client::set_managed_helper_identity(
+        helper_pid, creation_value.QuadPart, helper_session, helper.wstring());
+      return true;
+    };
     // Already started? Verify liveness to avoid stale or wedged state
     if (HANDLE h = helper_proc().get_process_handle(); h != nullptr) {
       BOOST_LOG(debug) << "Display helper: checking existing process handle...";
@@ -1250,6 +1287,10 @@ namespace {
             return false;
           }
         } else if (!force_restart) {
+          if (!record_helper_identity(h)) {
+            BOOST_LOG(warning) << "Display helper: existing process identity is unavailable; refusing reuse.";
+            return false;
+          }
           // Check IPC liveness with a lightweight ping; if responsive, reuse existing helper
           bool ping_ok = false;
           for (int i = 0; i < 2 && !ping_ok; ++i) {
@@ -1359,22 +1400,6 @@ namespace {
       return false;
     }
 
-    // Compute path to sunshine_display_helper.exe inside the tools subdirectory next to Sunshine.exe
-    wchar_t module_path[MAX_PATH] = {};
-    if (!GetModuleFileNameW(nullptr, module_path, _countof(module_path))) {
-      BOOST_LOG(error) << "Failed to resolve Sunshine module path; cannot launch display helper.";
-      return false;
-    }
-    std::filesystem::path exe_path(module_path);
-    std::filesystem::path dir = exe_path.parent_path();
-    std::filesystem::path helper = dir / L"tools" / L"sunshine_display_helper.exe";
-
-    if (!std::filesystem::exists(helper)) {
-      BOOST_LOG(warning) << "Display helper not found at: " << platf::to_utf8(helper.wstring())
-                         << ". Ensure the tools subdirectory is present and contains sunshine_display_helper.exe.";
-      return false;
-    }
-
     const bool allow_system_fallback = platf::is_running_as_system() && !user_session_ready();
     // Select the helper engine (legacy fallback vs v2) and propagate the log level.
     std::wstring helper_args = legacy_engine ? L"--engine=legacy" : L"--engine=v2";
@@ -1420,6 +1445,10 @@ namespace {
     if (!h) {
       BOOST_LOG(error) << "Display helper started but no process handle available";
       note_helper_start_failure("missing process handle");
+      return false;
+    }
+    if (!record_helper_identity(h)) {
+      helper_proc().terminate();
       return false;
     }
     g_running_helper_legacy = legacy_engine;
@@ -1471,6 +1500,10 @@ namespace {
           h = helper_proc().get_process_handle();
           if (h) {
             pid = GetProcessId(h);
+            if (!record_helper_identity(h)) {
+              helper_proc().terminate();
+              return false;
+            }
             BOOST_LOG(info) << "Display helper retry succeeded (pid=" << pid << ")";
             if (!sleep_with_cancellation(
                   std::chrono::milliseconds(300),

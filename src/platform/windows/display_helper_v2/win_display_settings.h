@@ -84,5 +84,6 @@ namespace display_helper::v2 {
     mutable std::shared_ptr<display_device::WinDisplayDevice> display_device_;
     mutable std::unique_ptr<display_device::SettingsManager> settings_manager_;
     mutable std::mutex settings_mutex_;
+    std::optional<display_device::HdrState> managed_hdr_state_;
   };
 }  // namespace display_helper::v2

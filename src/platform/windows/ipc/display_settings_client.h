@@ -11,8 +11,17 @@
   #include <functional>
   #include <optional>
   #include <string>
+  #include <string_view>
 
 namespace platf::display_helper_client {
+  void set_managed_helper_identity(
+    std::uint32_t pid,
+    std::uint64_t creation_time,
+    std::uint32_t session_id,
+    const std::wstring &canonical_image_path);
+
+  void clear_managed_helper_identity();
+
   // Send APPLY with JSON payload (SingleDisplayConfiguration). Every request
   // carries a backward-compatible token: v2 echoes it for a later verification
   // acknowledgement, while legacy helpers reply in their original untagged
