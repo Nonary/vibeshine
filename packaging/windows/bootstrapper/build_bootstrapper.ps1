@@ -153,6 +153,75 @@ function Get-GeneratedWindowsFileVersion([string]$BuildDir) {
     return "{0}.{1}.{2}.{3}" -f $fields["MAJOR"], $fields["MINOR"], $fields["BUILD"], $fields["REVISION"]
 }
 
+function Get-BuildVersionMetadata([string]$BuildDir) {
+    $metadataPath = Join-Path $BuildDir "generated_versioninfo\windows_versioninfo_metadata.txt"
+    if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) {
+        return $null
+    }
+
+    $fields = @{}
+    $allowedNames = @('informational_version', 'version', 'commit', 'branch', 'dirty')
+    foreach ($line in Get-Content -LiteralPath $metadataPath) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+        if ($line -notmatch '^([a-z_]+)=(.*)$') {
+            throw "Malformed Windows version metadata line in $metadataPath`: $line"
+        }
+        if ($allowedNames -notcontains $matches[1]) {
+            throw "Unknown Windows version metadata key '$($matches[1])`: $metadataPath"
+        }
+        if ($fields.ContainsKey($matches[1])) {
+            throw "Duplicate Windows version metadata key '$($matches[1])`: $metadataPath"
+        }
+        $fields[$matches[1]] = $matches[2]
+    }
+
+    foreach ($name in @('informational_version', 'version', 'commit', 'branch', 'dirty')) {
+        if (-not $fields.ContainsKey($name) -or [string]::IsNullOrWhiteSpace($fields[$name])) {
+            throw "Windows version metadata is missing '$name`: $metadataPath"
+        }
+    }
+    if ($fields['commit'] -notmatch '^(?:[0-9a-fA-F]{7,40}|unknown)$') {
+        throw "Windows version metadata has an invalid commit: $metadataPath"
+    }
+    if ($fields['dirty'] -notmatch '^(?:true|false)$') {
+        throw "Windows version metadata has an invalid dirty flag: $metadataPath"
+    }
+    $hasDirtySuffix = $fields['informational_version'] -match '-dirty$'
+    if (($fields['dirty'] -eq 'true') -ne $hasDirtySuffix) {
+        throw "Windows version metadata dirty flag does not match informational version: $metadataPath"
+    }
+
+    return [PSCustomObject]@{
+        InformationalVersion = $fields['informational_version']
+        Version = $fields['version']
+        Commit = $fields['commit']
+        Branch = $fields['branch']
+        Dirty = $fields['dirty']
+    }
+}
+
+function ConvertTo-NumericAssemblyVersion([string]$Version) {
+    $numericVersion = ($Version.TrimStart('v') -replace '[-+].*$', '')
+    if ($numericVersion -notmatch '^([0-9]+)\.([0-9]+)\.([0-9]+)(?:\.([0-9]+))?$') {
+        return $null
+    }
+    $parts = $numericVersion.Split('.')
+    $values = @()
+    foreach ($part in $parts) {
+        [int]$value = 0
+        if (-not [int]::TryParse($part, [ref]$value) -or $value -lt 0 -or $value -gt 65535) {
+            return $null
+        }
+        $values += $value
+    }
+    while ($values.Count -lt 4) {
+        $values += 0
+    }
+    return "{0}.{1}.{2}.{3}" -f $values[0], $values[1], $values[2], $values[3]
+}
+
 function Resolve-CscPath {
     $candidates = @(
         (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
@@ -236,9 +305,18 @@ if ([string]::IsNullOrWhiteSpace($OutputName)) {
 
 $outputPath = Join-Path $artifactDir $OutputName
 
-$tagVersion = Get-GitTagVersion -RepoRoot $repoRoot
-$fallbackTag = if ($null -eq $tagVersion) { "" } else { $tagVersion.Tag }
-$informationalVersion = Get-GitInformationalVersion -RepoRoot $repoRoot -fallbackTag $fallbackTag
+$buildVersionMetadata = Get-BuildVersionMetadata -BuildDir $BuildDir
+if ($null -ne $buildVersionMetadata) {
+    $tagVersion = $null
+    $informationalVersion = $buildVersionMetadata.InformationalVersion
+    $metadataAssemblyVersion = ConvertTo-NumericAssemblyVersion -Version $buildVersionMetadata.Version
+} else {
+    # Standalone bootstrapper invocations retain the historical Git fallback;
+    # package builds use the source-relative metadata emitted by CMake above.
+    $tagVersion = Get-GitTagVersion -RepoRoot $repoRoot
+    $fallbackTag = if ($null -eq $tagVersion) { "" } else { $tagVersion.Tag }
+    $informationalVersion = Get-GitInformationalVersion -RepoRoot $repoRoot -fallbackTag $fallbackTag
+}
 $generatedFileVersion = Get-GeneratedWindowsFileVersion -BuildDir $BuildDir
 $assemblyVersion = $generatedFileVersion
 
@@ -251,6 +329,17 @@ if (-not $UninstallOnly) {
             $informationalVersion = $msiProductVersion
         }
     }
+}
+
+if ([string]::IsNullOrWhiteSpace($assemblyVersion) -and $null -ne $buildVersionMetadata -and
+    -not [string]::IsNullOrWhiteSpace($metadataAssemblyVersion)) {
+    $assemblyVersion = $metadataAssemblyVersion
+}
+
+if ([string]::IsNullOrWhiteSpace($assemblyVersion) -and $null -ne $buildVersionMetadata) {
+    # Only fall back to standalone Git discovery after metadata, the generated
+    # header, and the MSI payload supplied no usable numeric version.
+    $tagVersion = Get-GitTagVersion -RepoRoot $repoRoot
 }
 
 if ([string]::IsNullOrWhiteSpace($assemblyVersion) -and $null -ne $tagVersion) {

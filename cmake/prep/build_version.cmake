@@ -40,6 +40,24 @@ if(DEFINED GITHUB_CLONE_URL AND (SUNSHINE_REPO_OWNER STREQUAL "Nonary" OR SUNSHI
     endif()
 endif()
 
+# Resolve Git relative to the selected source worktree, never the shell's
+# current directory.  This also lets explicit CI versions retain source
+# provenance in the generated metadata below.
+find_package(Git)
+set(PROJECT_VERSION_GIT_DIRTY "false")
+if(GIT_EXECUTABLE)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} status --porcelain --untracked-files=all
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        OUTPUT_VARIABLE _sunshine_git_status
+        RESULT_VARIABLE _sunshine_git_status_error_code
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(NOT _sunshine_git_status_error_code AND NOT "${_sunshine_git_status}" STREQUAL "")
+        set(PROJECT_VERSION_GIT_DIRTY "true")
+    endif()
+endif()
+
 # BUILD_VERSION is the authoritative version input.  BRANCH is optional build
 # context and must not decide whether an explicit release version is honored.
 # In particular, later build targets may re-run CMake without inheriting a
@@ -54,9 +72,6 @@ if(DEFINED ENV{BUILD_VERSION} AND NOT "$ENV{BUILD_VERSION}" STREQUAL "")  # cmak
     string(REGEX REPLACE "^v" "" PROJECT_VERSION "${PROJECT_VERSION}")  # remove the v prefix if it exists
     set(CMAKE_PROJECT_VERSION "${PROJECT_VERSION}")  # cpack will use this to set the binary versions
 else()
-    # Resolve version from environment tag or git tags
-    find_package(Git)
-
     function(_sunshine_select_latest_git_tag out_var)
         if(NOT GIT_EXECUTABLE)
             set(${out_var} "" PARENT_SCOPE)
@@ -67,6 +82,7 @@ else()
         foreach(_tag_pattern IN LISTS _tag_patterns)
             execute_process(
                 COMMAND ${GIT_EXECUTABLE} tag --merged HEAD --sort=-version:refname --list "${_tag_pattern}"
+                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
                 OUTPUT_VARIABLE _git_tag_candidates_raw
                 RESULT_VARIABLE _git_tag_candidates_error
                 OUTPUT_STRIP_TRAILING_WHITESPACE)
@@ -101,6 +117,7 @@ else()
         # Current branch name
         execute_process(
             COMMAND ${GIT_EXECUTABLE} rev-parse --abbrev-ref HEAD
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
             OUTPUT_VARIABLE GIT_DESCRIBE_BRANCH
             RESULT_VARIABLE GIT_BRANCH_ERROR
             OUTPUT_STRIP_TRAILING_WHITESPACE)
@@ -109,12 +126,14 @@ else()
         # Short commit for logging
         execute_process(
             COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
             OUTPUT_VARIABLE GIT_SHORT
             RESULT_VARIABLE GIT_SHORT_ERROR
             OUTPUT_STRIP_TRAILING_WHITESPACE)
         # Dirty state
         execute_process(
             COMMAND ${GIT_EXECUTABLE} diff --quiet --exit-code
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
             RESULT_VARIABLE GIT_IS_DIRTY
             OUTPUT_STRIP_TRAILING_WHITESPACE)
 
@@ -126,6 +145,7 @@ else()
         else()
             execute_process(
                 COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0
+                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
                 OUTPUT_VARIABLE GIT_NEAREST_TAG_RAW
                 RESULT_VARIABLE GIT_TAG_ERROR
                 OUTPUT_STRIP_TRAILING_WHITESPACE)
@@ -182,21 +202,59 @@ else()
     set(PROJECT_VERSION_BRANCH "unknown")
 endif()
 
-# Ensure we always have a commit hash for comparison logic in the UI.
-# Prefer the CI provided env COMMIT. If not present, fall back to querying git directly.
-if((NOT DEFINED GITHUB_COMMIT) OR (GITHUB_COMMIT STREQUAL ""))
-    if(GIT_EXECUTABLE)
-        execute_process(
-            COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
-            OUTPUT_VARIABLE GIT_FULL_COMMIT
-            RESULT_VARIABLE GIT_FULL_COMMIT_ERROR_CODE
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-        )
-        if(NOT GIT_FULL_COMMIT_ERROR_CODE)
-            set(GITHUB_COMMIT "${GIT_FULL_COMMIT}")
-        endif()
+# Ensure we always have a full commit hash for comparison logic in the UI.
+# When Git is available, the selected source worktree is authoritative even if
+# CI supplied a shortened or stale COMMIT value.
+if(GIT_EXECUTABLE)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        OUTPUT_VARIABLE GIT_FULL_COMMIT
+        RESULT_VARIABLE GIT_FULL_COMMIT_ERROR_CODE
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(NOT GIT_FULL_COMMIT_ERROR_CODE)
+        set(GITHUB_COMMIT "${GIT_FULL_COMMIT}")
     endif()
 endif()
+if(NOT DEFINED GITHUB_COMMIT OR GITHUB_COMMIT STREQUAL "")
+    set(GITHUB_COMMIT "unknown")
+endif()
+
+# Keep a source-relative, human-readable provenance value alongside the exact
+# commit and branch values used by the binaries.  The bootstrapper consumes
+# this file from BuildDir, so it does not need to guess which checkout was used
+# when CMake was invoked from another working directory.
+set(PROJECT_VERSION_GIT_DESCRIBE "")
+if(DEFINED ENV{BUILD_VERSION} AND NOT "$ENV{BUILD_VERSION}" STREQUAL "")
+    set(PROJECT_VERSION_GIT_DESCRIBE "${PROJECT_VERSION_FULL}")
+    if(PROJECT_VERSION_GIT_DIRTY STREQUAL "true" AND NOT PROJECT_VERSION_GIT_DESCRIBE MATCHES "-dirty$")
+        string(APPEND PROJECT_VERSION_GIT_DESCRIBE "-dirty")
+    endif()
+elseif(GIT_EXECUTABLE)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} describe --tags --dirty --always
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        OUTPUT_VARIABLE PROJECT_VERSION_GIT_DESCRIBE
+        RESULT_VARIABLE PROJECT_VERSION_GIT_DESCRIBE_ERROR_CODE
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+endif()
+if(PROJECT_VERSION_GIT_DESCRIBE STREQUAL "")
+    set(PROJECT_VERSION_GIT_DESCRIBE "${GITHUB_COMMIT}")
+endif()
+if(PROJECT_VERSION_GIT_DIRTY STREQUAL "true" AND NOT PROJECT_VERSION_GIT_DESCRIBE MATCHES "-dirty$")
+    string(APPEND PROJECT_VERSION_GIT_DESCRIBE "-dirty")
+endif()
+
+set(SUNSHINE_WINDOWS_VERSIONINFO_DIR "${CMAKE_BINARY_DIR}/generated_versioninfo")
+file(MAKE_DIRECTORY "${SUNSHINE_WINDOWS_VERSIONINFO_DIR}")
+file(WRITE "${SUNSHINE_WINDOWS_VERSIONINFO_DIR}/windows_versioninfo_metadata.txt"
+    "informational_version=${PROJECT_VERSION_GIT_DESCRIBE}\n"
+    "version=${PROJECT_VERSION_FULL}\n"
+    "commit=${GITHUB_COMMIT}\n"
+    "branch=${PROJECT_VERSION_BRANCH}\n"
+    "dirty=${PROJECT_VERSION_GIT_DIRTY}\n")
 
 # set date variables (defaults; will be auto-resolved below)
 set(PROJECT_YEAR "1990")
@@ -296,6 +354,7 @@ if(PROJECT_RELEASE_DATE_ISO STREQUAL "")
     if(GIT_EXECUTABLE)
         execute_process(
             COMMAND ${GIT_EXECUTABLE} log -1 --format=%cI
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
             OUTPUT_VARIABLE GIT_COMMIT_DATE_ISO
             RESULT_VARIABLE GIT_COMMIT_DATE_ISO_ERROR_CODE
             OUTPUT_STRIP_TRAILING_WHITESPACE

@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$PackageDir,
 
+    [string]$SourcePackageDir,
     [switch]$Build,
     [switch]$ValidateOnly,
     [string]$BuildDir,
@@ -486,11 +487,53 @@ function Find-SigningCertificate {
 }
 
 $libRoot = Resolve-RequiredPath -Path $LibVirtualDisplayDir
-$packageRoot = Resolve-RequiredPath -Path $PackageDir
+$sourcePackageRoot = ''
+if ($SourcePackageDir) {
+    $sourcePackageRoot = Resolve-RequiredPath -Path $SourcePackageDir
+}
+
+if ($Build) {
+    New-Item -ItemType Directory -Path $PackageDir -Force | Out-Null
+    $packageRoot = (Resolve-Path -LiteralPath $PackageDir).Path
+} else {
+    $packageRoot = Resolve-RequiredPath -Path $PackageDir
+}
+
+if ($sourcePackageRoot) {
+    $sourceFullPath = [System.IO.Path]::GetFullPath($sourcePackageRoot).TrimEnd('\', '/')
+    $packageFullPath = [System.IO.Path]::GetFullPath($packageRoot).TrimEnd('\', '/')
+    if ([System.StringComparer]::OrdinalIgnoreCase.Equals($sourceFullPath, $packageFullPath)) {
+        throw '[SunshineVirtualDisplay] SourcePackageDir and PackageDir must be distinct directories.'
+    }
+}
+
 $driverSourceInf = Join-Path $libRoot 'src\driver\windows_driver\SunshineVirtualDisplayDriver.inf'
 Resolve-RequiredPath -Path $driverSourceInf -Leaf | Out-Null
 $prebuiltPackageRoot = Resolve-PrebuiltPackageRoot -Path $PrebuiltPackageDir
-$resolvedPackageVersion = Resolve-PackageVersion -LibRoot $libRoot -PrebuiltRoot $prebuiltPackageRoot -ExistingInfPath (Join-Path $packageRoot 'SunshineVirtualDisplayDriver.inf') -AdvanceLocalDirtyVersion:$Build
+
+if ($Build -and $sourcePackageRoot) {
+    foreach ($staticName in @('install.ps1', 'nefconc.exe')) {
+        $sourceStatic = Join-Path $sourcePackageRoot $staticName
+        Assert-File -Path $sourceStatic
+        Copy-Item -Force -LiteralPath $sourceStatic -Destination (Join-Path $packageRoot $staticName)
+    }
+
+    $sourceCertificate = Join-Path $sourcePackageRoot 'SunshineVirtualDisplayDriver.cer'
+    $packageCertificate = Join-Path $packageRoot 'SunshineVirtualDisplayDriver.cer'
+    if (Test-Path -LiteralPath $sourceCertificate -PathType Leaf) {
+        Assert-File -Path $sourceCertificate
+        Copy-Item -Force -LiteralPath $sourceCertificate -Destination $packageCertificate
+    } elseif (Test-Path -LiteralPath $packageCertificate -PathType Leaf) {
+        Remove-Item -Force -LiteralPath $packageCertificate
+    }
+}
+
+$existingInfPath = if ($sourcePackageRoot) {
+    Join-Path $sourcePackageRoot 'SunshineVirtualDisplayDriver.inf'
+} else {
+    Join-Path $packageRoot 'SunshineVirtualDisplayDriver.inf'
+}
+$resolvedPackageVersion = Resolve-PackageVersion -LibRoot $libRoot -PrebuiltRoot $prebuiltPackageRoot -ExistingInfPath $existingInfPath -AdvanceLocalDirtyVersion:$Build
 $resolvedDriverVersion = ConvertTo-DriverVerVersion -Version $resolvedPackageVersion
 $resolvedDriverDate = Resolve-DriverVerDateFromGit -Path $libRoot
 
@@ -571,6 +614,8 @@ if ($Build) {
             Copy-Item -Force -LiteralPath $expectedPackageCer -Destination $packageCer
         } elseif (Test-Path -LiteralPath $packageCer -PathType Leaf) {
             Remove-Item -Force -LiteralPath $packageCer
+            $expectedPackageCer = ''
+        } else {
             $expectedPackageCer = ''
         }
         Copy-Item -Force -LiteralPath $expectedPackageProbe -Destination $packageProbe

@@ -128,8 +128,33 @@ install(FILES ${SUDOVDA_DRIVER_FILES}
 
 # Drivers (Vibeshine Display Driver)
 set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/sunshine")
+set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_PACKAGE_DIR
+    "${CMAKE_BINARY_DIR}/packaging/windows/drivers/sunshine")
 set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT "${CMAKE_SOURCE_DIR}/packaging/windows/virtual_display_driver/refresh_driver_package.ps1")
 set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_DOWNLOAD_SCRIPT "${CMAKE_SOURCE_DIR}/scripts/download_libvirtualdisplay_release.ps1")
+
+# The checked-in payload is the validation source.  Package installation must
+# consume only the build-local refresh output so a package build cannot mutate
+# or accidentally archive files from the source checkout.
+file(TO_CMAKE_PATH "${CMAKE_BINARY_DIR}" _sunshine_vdd_binary_root)
+file(TO_CMAKE_PATH "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR}" _sunshine_vdd_source_dir)
+file(TO_CMAKE_PATH "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_PACKAGE_DIR}" _sunshine_vdd_package_dir)
+string(REGEX REPLACE "/+$" "" _sunshine_vdd_binary_root "${_sunshine_vdd_binary_root}")
+string(REGEX REPLACE "/+$" "" _sunshine_vdd_source_dir "${_sunshine_vdd_source_dir}")
+string(REGEX REPLACE "/+$" "" _sunshine_vdd_package_dir "${_sunshine_vdd_package_dir}")
+if("${_sunshine_vdd_package_dir}" STREQUAL "${_sunshine_vdd_binary_root}" OR
+   "${_sunshine_vdd_package_dir}" STREQUAL "${_sunshine_vdd_source_dir}")
+    message(FATAL_ERROR "Vibeshine Display Driver package directory must be distinct from the source checkout")
+endif()
+string(FIND "${_sunshine_vdd_package_dir}/" "${_sunshine_vdd_binary_root}/" _sunshine_vdd_package_root_index)
+if(NOT _sunshine_vdd_package_root_index EQUAL 0)
+    message(FATAL_ERROR "Vibeshine Display Driver package directory must be rooted under CMAKE_BINARY_DIR: ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_PACKAGE_DIR}")
+endif()
+unset(_sunshine_vdd_package_root_index)
+unset(_sunshine_vdd_package_dir)
+unset(_sunshine_vdd_source_dir)
+unset(_sunshine_vdd_binary_root)
+
 set(SUNSHINE_LIBVIRTUALDISPLAY_PREBUILT_DIR "" CACHE PATH "Optional prebuilt libvirtualdisplay package root with driver/, tools/, and vulkan-layer/")
 if(SUNSHINE_LIBVIRTUALDISPLAY_PREBUILT_DIR)
     set(SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR "${SUNSHINE_LIBVIRTUALDISPLAY_PREBUILT_DIR}")
@@ -140,35 +165,51 @@ else()
     set(SUNSHINE_DOWNLOAD_LIBVIRTUALDISPLAY_RELEASE ON)
 endif()
 set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SIGNING_ARGS "")
+set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_FILES "")
+set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_STATIC_FILES "")
 set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_FILES "")
+set(SUNSHINE_VIRTUAL_DISPLAY_DRIVER_OPTIONAL_FILES "")
 foreach(_sunshine_driver_relative_file IN LISTS SUNSHINE_VDD_DRIVER_REQUIRED_FILES)
-    list(APPEND SUNSHINE_VIRTUAL_DISPLAY_DRIVER_FILES
+    list(APPEND SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_FILES
         "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR}/${_sunshine_driver_relative_file}")
+    list(APPEND SUNSHINE_VIRTUAL_DISPLAY_DRIVER_FILES
+        "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_PACKAGE_DIR}/${_sunshine_driver_relative_file}")
 endforeach()
 unset(_sunshine_driver_relative_file)
+foreach(_sunshine_driver_static_name IN ITEMS install.ps1 nefconc.exe)
+    list(APPEND SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_STATIC_FILES
+        "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR}/${_sunshine_driver_static_name}")
+endforeach()
+unset(_sunshine_driver_static_name)
 
+set(SUNSHINE_VIRTUAL_DISPLAY_VULKAN_LAYER_SOURCE_FILES "")
 set(SUNSHINE_VIRTUAL_DISPLAY_VULKAN_LAYER_FILES "")
 foreach(_sunshine_vulkan_relative_file IN LISTS SUNSHINE_VDD_VULKAN_LAYER_FILES)
-    list(APPEND SUNSHINE_VIRTUAL_DISPLAY_VULKAN_LAYER_FILES
+    list(APPEND SUNSHINE_VIRTUAL_DISPLAY_VULKAN_LAYER_SOURCE_FILES
         "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR}/${_sunshine_vulkan_relative_file}")
+    list(APPEND SUNSHINE_VIRTUAL_DISPLAY_VULKAN_LAYER_FILES
+        "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_PACKAGE_DIR}/${_sunshine_vulkan_relative_file}")
 endforeach()
 unset(_sunshine_vulkan_relative_file)
-set(SUNSHINE_VIRTUAL_DISPLAY_PACKAGE_FILES
-    ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_FILES}
-    ${SUNSHINE_VIRTUAL_DISPLAY_VULKAN_LAYER_FILES}
+set(SUNSHINE_VIRTUAL_DISPLAY_SOURCE_PACKAGE_FILES
+    ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_FILES}
+    ${SUNSHINE_VIRTUAL_DISPLAY_VULKAN_LAYER_SOURCE_FILES}
 )
 foreach(_sunshine_driver_optional_name IN LISTS SUNSHINE_VDD_DRIVER_OPTIONAL_FILES)
     set(_sunshine_driver_optional_file
         "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR}/${_sunshine_driver_optional_name}")
     if(EXISTS "${_sunshine_driver_optional_file}")
-        list(APPEND SUNSHINE_VIRTUAL_DISPLAY_DRIVER_FILES "${_sunshine_driver_optional_file}")
-        list(APPEND SUNSHINE_VIRTUAL_DISPLAY_PACKAGE_FILES "${_sunshine_driver_optional_file}")
+        list(APPEND SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_FILES "${_sunshine_driver_optional_file}")
+        list(APPEND SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_STATIC_FILES "${_sunshine_driver_optional_file}")
+        list(APPEND SUNSHINE_VIRTUAL_DISPLAY_SOURCE_PACKAGE_FILES "${_sunshine_driver_optional_file}")
     endif()
+    list(APPEND SUNSHINE_VIRTUAL_DISPLAY_DRIVER_OPTIONAL_FILES
+        "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_PACKAGE_DIR}/${_sunshine_driver_optional_name}")
 endforeach()
 unset(_sunshine_driver_optional_file)
 unset(_sunshine_driver_optional_name)
 
-foreach(_sunshine_driver_file IN LISTS SUNSHINE_VIRTUAL_DISPLAY_PACKAGE_FILES)
+foreach(_sunshine_driver_file IN LISTS SUNSHINE_VIRTUAL_DISPLAY_SOURCE_PACKAGE_FILES)
     if (NOT EXISTS "${_sunshine_driver_file}")
         message(FATAL_ERROR "Required Vibeshine Display Driver artifact missing: ${_sunshine_driver_file}")
     endif()
@@ -204,7 +245,7 @@ if(EXISTS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}")
                 -PrebuiltPackageDir "${SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR}"
                 -PackageDir "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR}"
         DEPENDS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}"
-                ${SUNSHINE_VIRTUAL_DISPLAY_PACKAGE_FILES}
+                ${SUNSHINE_VIRTUAL_DISPLAY_SOURCE_PACKAGE_FILES}
         COMMENT "Validating Vibeshine Display Driver package assets"
         VERBATIM)
 
@@ -219,9 +260,11 @@ if(EXISTS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}")
                 -Build
                 -LibVirtualDisplayDir "${SUNSHINE_LIBVIRTUALDISPLAY_SOURCE_DIR}"
                 -PrebuiltPackageDir "${SUNSHINE_EFFECTIVE_LIBVIRTUALDISPLAY_PREBUILT_DIR}"
-                -PackageDir "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR}"
+                -SourcePackageDir "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_DIR}"
+                -PackageDir "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_PACKAGE_DIR}"
                 ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SIGNING_ARGS}
         DEPENDS "${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_REFRESH_SCRIPT}"
+                ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_SOURCE_STATIC_FILES}
         COMMENT "Refreshing Vibeshine Display Driver package assets from the pinned release"
         VERBATIM)
 
@@ -238,6 +281,10 @@ endif()
 install(FILES ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_FILES}
         DESTINATION "${SUNSHINE_VDD_DRIVER_DESTINATION}"
         COMPONENT virtual_display_driver)
+install(FILES ${SUNSHINE_VIRTUAL_DISPLAY_DRIVER_OPTIONAL_FILES}
+        DESTINATION "${SUNSHINE_VDD_DRIVER_DESTINATION}"
+        COMPONENT virtual_display_driver
+        OPTIONAL)
 install(FILES ${SUNSHINE_VIRTUAL_DISPLAY_VULKAN_LAYER_FILES}
         DESTINATION "${SUNSHINE_VDD_VULKAN_LAYER_DESTINATION}"
         COMPONENT virtual_display_driver)
