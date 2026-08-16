@@ -16,8 +16,9 @@ namespace terminal_session::display {
     query = 1,
     set_mode = 2,
     set_hdr = 3,
-    seal_snapshot = 4,
-    verify_snapshot = 5,
+    seal_snapshot = 4, // Prepare a broker-owned pending envelope seal.
+    commit_snapshot = 5, // Publish the exact pending seal after atomic write.
+    verify_snapshot = 6, // Verify committed or exact broker-pending recovery state.
   };
 
   enum class result : std::uint8_t {
@@ -100,6 +101,11 @@ namespace terminal_session::display {
              request.snapshot_tier <= 2 && request.snapshot_sequence == 0 && request.snapshot_display_id == 0 &&
              !std::all_of(request.snapshot_digest.begin(), request.snapshot_digest.end(), [](const auto byte) { return byte == 0; }) &&
              std::all_of(request.snapshot_tag.begin(), request.snapshot_tag.end(), [](const auto byte) { return byte == 0; })) ||
+            (request.operation == static_cast<std::uint8_t>(operation::commit_snapshot) &&
+             request.width == 0 && request.height == 0 && request.refresh_rate_millihz == 0 && request.hdr_enabled == 0 &&
+             request.snapshot_tier <= 2 && request.snapshot_sequence != 0 && request.snapshot_display_id != 0 &&
+             !std::all_of(request.snapshot_digest.begin(), request.snapshot_digest.end(), [](const auto byte) { return byte == 0; }) &&
+             !std::all_of(request.snapshot_tag.begin(), request.snapshot_tag.end(), [](const auto byte) { return byte == 0; })) ||
             (request.operation == static_cast<std::uint8_t>(operation::verify_snapshot) &&
              request.width == 0 && request.height == 0 && request.refresh_rate_millihz == 0 && request.hdr_enabled == 0 &&
              request.snapshot_tier <= 2 && request.snapshot_sequence != 0 && request.snapshot_display_id != 0 &&

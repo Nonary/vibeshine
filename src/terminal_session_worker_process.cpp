@@ -777,40 +777,84 @@ namespace terminal_session::worker {
               response.result = static_cast<std::uint8_t>(changed.ok() ? terminal_session::display::result::success : terminal_session::display::result::unavailable);
               response.native_error = changed.native_error;
             } else if (request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::seal_snapshot) ||
+                       request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::commit_snapshot) ||
                        request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::verify_snapshot)) {
               auto &tier = snapshot_tiers_[request.snapshot_tier];
-              snapshot_auth_data auth_data {
-                .session_id = resource_.windows_session_id,
-                .generation = generation_,
-                .display_id = state.display_id,
-                .tier = request.snapshot_tier,
-                .sequence = request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::seal_snapshot) ?
-                               tier.sequence + 1 : request.snapshot_sequence,
-                .digest = request.snapshot_digest,
+              const auto operation = static_cast<terminal_session::display::operation>(request.operation);
+              const auto make_auth_data = [&](const std::uint64_t sequence, const std::array<std::uint8_t, 32> &digest) {
+                return snapshot_auth_data {
+                  .session_id = resource_.windows_session_id,
+                  .generation = generation_,
+                  .display_id = state.display_id,
+                  .tier = request.snapshot_tier,
+                  .sequence = sequence,
+                  .digest = digest,
+                };
               };
-              std::array<std::uint8_t, 32> expected_tag {};
-              if (request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::seal_snapshot)) {
-                if (tier.sequence == (std::numeric_limits<std::uint64_t>::max)() ||
-                    !snapshot_auth_tag(snapshot_auth_key_, auth_data, expected_tag)) {
+              const auto tag_for = [&](const std::uint64_t sequence,
+                                       const std::array<std::uint8_t, 32> &digest,
+                                       std::array<std::uint8_t, 32> &tag) {
+                const auto auth_data = make_auth_data(sequence, digest);
+                return snapshot_auth_tag(snapshot_auth_key_, auth_data, tag);
+              };
+              const auto matches = [&](const process_t::snapshot_record &record) {
+                std::array<std::uint8_t, 32> expected_tag {};
+                return record.display_id == state.display_id && record.sequence != 0 &&
+                       record.sequence == request.snapshot_sequence && record.digest == request.snapshot_digest &&
+                       CRYPTO_memcmp(record.tag.data(), request.snapshot_tag.data(), record.tag.size()) == 0 &&
+                       tag_for(record.sequence, record.digest, expected_tag) &&
+                       CRYPTO_memcmp(expected_tag.data(), record.tag.data(), expected_tag.size()) == 0;
+              };
+              if (operation == terminal_session::display::operation::seal_snapshot) {
+                if (tier.next_sequence == 0 || tier.next_sequence == (std::numeric_limits<std::uint64_t>::max)()) {
                   response.result = static_cast<std::uint8_t>(terminal_session::display::result::unavailable);
                 } else {
-                  tier.sequence = auth_data.sequence;
-                  tier.digest = auth_data.digest;
-                  tier.tag = expected_tag;
-                  response.snapshot_sequence = tier.sequence;
-                  response.snapshot_tag = tier.tag;
+                  const auto sequence = tier.next_sequence++;
+                  std::array<std::uint8_t, 32> tag {};
+                  if (!tag_for(sequence, request.snapshot_digest, tag)) {
+                    response.result = static_cast<std::uint8_t>(terminal_session::display::result::unavailable);
+                  } else {
+                    tier.pending = process_t::snapshot_record {
+                      .sequence = sequence,
+                      .display_id = state.display_id,
+                      .digest = request.snapshot_digest,
+                      .tag = tag,
+                    };
+                    response.snapshot_sequence = sequence;
+                    response.snapshot_tag = tag;
+                    response.result = static_cast<std::uint8_t>(terminal_session::display::result::success);
+                  }
+                }
+              } else if (operation == terminal_session::display::operation::commit_snapshot) {
+                if (!tier.pending || !matches(*tier.pending)) {
+                  response.result = static_cast<std::uint8_t>(terminal_session::display::result::stale);
+                } else {
+                  tier.committed = tier.pending;
+                  tier.pending.reset();
+                  response.snapshot_sequence = tier.committed->sequence;
+                  response.snapshot_tag = tier.committed->tag;
                   response.result = static_cast<std::uint8_t>(terminal_session::display::result::success);
                 }
-              } else if (request.snapshot_display_id != state.display_id ||
-                         request.snapshot_sequence == 0 || request.snapshot_sequence != tier.sequence ||
-                         request.snapshot_digest != tier.digest ||
-                         !snapshot_auth_tag(snapshot_auth_key_, auth_data, expected_tag) ||
-                         CRYPTO_memcmp(expected_tag.data(), request.snapshot_tag.data(), expected_tag.size()) != 0) {
-                response.result = static_cast<std::uint8_t>(terminal_session::display::result::stale);
               } else {
-                response.snapshot_sequence = tier.sequence;
-                response.snapshot_tag = tier.tag;
-                response.result = static_cast<std::uint8_t>(terminal_session::display::result::success);
+                const snapshot_record *verified = nullptr;
+                if (tier.committed && matches(*tier.committed)) {
+                  verified = &*tier.committed;
+                } else if (tier.pending && matches(*tier.pending)) {
+                  // A published pending envelope may be recovered after a
+                  // helper restart only when it is byte-for-byte the broker's
+                  // pending record. Promote that exact record; never bless
+                  // caller data.
+                  tier.committed = tier.pending;
+                  tier.pending.reset();
+                  verified = &*tier.committed;
+                }
+                if (!verified) {
+                  response.result = static_cast<std::uint8_t>(terminal_session::display::result::stale);
+                } else {
+                  response.snapshot_sequence = verified->sequence;
+                  response.snapshot_tag = verified->tag;
+                  response.result = static_cast<std::uint8_t>(terminal_session::display::result::success);
+                }
               }
             } else {
               response.result = static_cast<std::uint8_t>(terminal_session::display::result::success);

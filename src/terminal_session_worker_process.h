@@ -6,6 +6,8 @@
 #include <memory>
 #include <array>
 #include <atomic>
+#include <cstdint>
+#include <optional>
 #include <thread>
 #include <string_view>
 
@@ -49,10 +51,16 @@ namespace terminal_session::worker {
     // the first exact sole-target attestation and require it for this worker
     // until full stop.
     std::optional<terminal_session::hdr::target_binding_t> hdr_target_binding_;
-    struct snapshot_tier_state {
+    struct snapshot_record {
       std::uint64_t sequence {};
+      std::uint64_t display_id {};
       std::array<std::uint8_t, 32> digest {};
       std::array<std::uint8_t, 32> tag {};
+    };
+    struct snapshot_tier_state {
+      std::uint64_t next_sequence {1};
+      std::optional<snapshot_record> pending;
+      std::optional<snapshot_record> committed;
     };
     // Never sent over the helper pipe: only this SYSTEM broker can seal or
     // verify generation-bound snapshot digests.

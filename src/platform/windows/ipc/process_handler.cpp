@@ -53,8 +53,12 @@ namespace {
     if (!sid) return nullptr;
     wchar_t mask_text[9] {};
     if (swprintf_s(mask_text, _countof(mask_text), L"%08X", user_mask) <= 0) return nullptr;
-    const auto sddl = L"O:SYG:SYD:P(A;;GA;;;SY)(A;;0x" +
-      std::wstring {mask_text} + L";;;" + *sid + L")";
+    // The admitted user must be able to assign this descriptor when the
+    // helper is launched from an unprivileged worker. OWNER RIGHTS replaces
+    // the owner's implicit WRITE_DAC/WRITE_OWNER grants, so the same-SID
+    // owner cannot reopen the object with VM or injection rights later.
+    const auto sddl = L"O:" + *sid + L"G:" + *sid + L"D:P(A;;GA;;;SY)(A;;0x" +
+      std::wstring {mask_text} + L";;;OW)(A;;0x" + std::wstring {mask_text} + L";;;" + *sid + L")";
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
           sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)) {
@@ -283,8 +287,8 @@ bool ProcessHandler::start(
         user_token,
         nullptr,
         (LPWSTR) cmd_line.c_str(),
-        process_security.lpSecurityDescriptor ? &process_security : nullptr,
-        thread_security.lpSecurityDescriptor ? &thread_security : nullptr,
+        &process_security,
+        &thread_security,
         FALSE,
         creation_flags,
         env_block,
@@ -292,7 +296,7 @@ bool ProcessHandler::start(
         (LPSTARTUPINFOW) &si,
         &pi_
       );
-    } else if (allow_system_fallback) {
+    } else if (allow_system_fallback && use_job_) {
       BOOST_LOG(warning) << "No user session available; launching as SYSTEM: " << platf::to_utf8(application_path);
 
       // Prefer launching into the active console session so display APIs (e.g., SetDisplayConfig)
@@ -300,11 +304,33 @@ bool ProcessHandler::start(
       if (start_as_system_in_active_console_session(cmd_line, working_dir, creation_flags, si, pi_)) {
         ret = TRUE;
       } else {
+        HANDLE fallback_token = nullptr;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &fallback_token)) {
+          BOOST_LOG(error) << "Failed to query the SYSTEM token for fallback process security.";
+          return false;
+        }
+        auto close_fallback_token = util::fail_guard([&]() { CloseHandle(fallback_token); });
+        PSECURITY_DESCRIPTOR fallback_process_descriptor = managed_process_security_descriptor(
+          fallback_token, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE);
+        PSECURITY_DESCRIPTOR fallback_thread_descriptor = managed_process_security_descriptor(
+          fallback_token, THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE);
+        auto free_fallback_descriptors = util::fail_guard([&]() {
+          if (fallback_process_descriptor) LocalFree(fallback_process_descriptor);
+          if (fallback_thread_descriptor) LocalFree(fallback_thread_descriptor);
+        });
+        if (!fallback_process_descriptor || !fallback_thread_descriptor) {
+          BOOST_LOG(error) << "Failed to secure SYSTEM fallback process objects.";
+          return false;
+        }
+        SECURITY_ATTRIBUTES fallback_process_security {
+          .nLength = sizeof(SECURITY_ATTRIBUTES), .lpSecurityDescriptor = fallback_process_descriptor, .bInheritHandle = FALSE};
+        SECURITY_ATTRIBUTES fallback_thread_security {
+          .nLength = sizeof(SECURITY_ATTRIBUTES), .lpSecurityDescriptor = fallback_thread_descriptor, .bInheritHandle = FALSE};
         ret = CreateProcessW(
           nullptr,
           (LPWSTR) cmd_line.c_str(),
-          nullptr,
-          nullptr,
+          &fallback_process_security,
+          &fallback_thread_security,
           FALSE,
           creation_flags,
           nullptr,
@@ -326,12 +352,20 @@ bool ProcessHandler::start(
       if (thread_descriptor) LocalFree(thread_descriptor);
     });
     HANDLE current_token = nullptr;
-    if (!use_job_ && OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &current_token)) {
+    if (!use_job_ && !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &current_token)) {
+      BOOST_LOG(error) << "Failed to query the admitted user token while securing managed helper objects.";
+      return false;
+    }
+    if (!use_job_) {
       process_descriptor = managed_process_security_descriptor(
         current_token, PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE);
       thread_descriptor = managed_process_security_descriptor(
         current_token, THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE);
       CloseHandle(current_token);
+      if (!process_descriptor || !thread_descriptor) {
+        BOOST_LOG(error) << "Failed to build both protected managed helper object descriptors.";
+        return false;
+      }
     }
     SECURITY_ATTRIBUTES process_security {
       .nLength = sizeof(SECURITY_ATTRIBUTES), .lpSecurityDescriptor = process_descriptor, .bInheritHandle = FALSE};
@@ -340,8 +374,8 @@ bool ProcessHandler::start(
     ret = CreateProcessW(
       nullptr,
       (LPWSTR) cmd_line.c_str(),
-      process_descriptor ? &process_security : nullptr,
-      thread_descriptor ? &thread_security : nullptr,
+      &process_security,
+      &thread_security,
       FALSE,
       creation_flags,
       nullptr,

@@ -9,8 +9,10 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include <openssl/crypto.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 
@@ -77,7 +79,16 @@ namespace display_helper::v2 {
                std::optional<std::string> {payload} : std::nullopt;
     }
 
-    std::optional<std::string> wrap_snapshot(const std::string &payload, const SnapshotTier tier) {
+    struct sealed_snapshot {
+      std::string envelope;
+      SnapshotTier tier {};
+      std::uint64_t sequence {};
+      std::uint64_t display_id {};
+      std::array<std::uint8_t, 32> digest {};
+      std::array<std::uint8_t, 32> tag {};
+    };
+
+    std::optional<sealed_snapshot> wrap_snapshot(const std::string &payload, const SnapshotTier tier) {
       if (payload.size() > 1024u * 1024u) return std::nullopt;
       const auto digest = snapshot_digest(payload);
       const auto sealed = terminal_session::display::transact_snapshot(
@@ -102,7 +113,14 @@ namespace display_helper::v2 {
       std::string result {
         reinterpret_cast<const char *>(&header), sizeof(header)};
       result += payload;
-      return result;
+      return sealed_snapshot {
+        .envelope = std::move(result),
+        .tier = tier,
+        .sequence = header.sequence,
+        .display_id = header.display_id,
+        .digest = header.digest,
+        .tag = header.tag,
+      };
     }
   }
 
@@ -250,10 +268,11 @@ namespace display_helper::v2 {
     const std::string &text,
     const SnapshotTier tier) {
     std::string stored_text = text;
+    std::optional<sealed_snapshot> sealed;
     if (snapshot_envelope_ && display_helper_session::has_managed_context()) {
-      const auto wrapped = wrap_snapshot(text, tier);
-      if (!wrapped) return false;
-      stored_text = *wrapped;
+      sealed = wrap_snapshot(text, tier);
+      if (!sealed) return false;
+      stored_text = sealed->envelope;
     }
     const std::size_t kMaxSnapshotBytes = snapshot_envelope_ && display_helper_session::has_managed_context() ?
       1024u * 1024u + sizeof(snapshot_envelope_header) : 1024u * 1024u;
@@ -324,19 +343,26 @@ namespace display_helper::v2 {
       std::filesystem::remove(temporary, ec);
       return false;
     }
-    close_temporary.release();
-    CloseHandle(temporary_handle);
-    const auto final_handle = CreateFileW(
-      path.wstring().c_str(), GENERIC_READ,
-      FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-    if (final_handle == INVALID_HANDLE_VALUE) return false;
-    const auto close_final = std::unique_ptr<void, void (*)(void *)> {
-      final_handle, [](void *value) { CloseHandle(value); }};
+    // Keep the same handle through rename and validation. Reopening the
+    // destination would permit a sibling to replace the published file
+    // between validation and broker commit.
     BY_HANDLE_FILE_INFORMATION final_info {};
-    return GetFileInformationByHandle(final_handle, &final_info) &&
-           (final_info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) == 0 &&
-           handle_matches_path(final_handle, path);
+    if (!GetFileInformationByHandle(temporary_handle, &final_info) ||
+        (final_info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0 ||
+        !handle_matches_path(temporary_handle, path)) {
+      return false;
+    }
+    if (sealed) {
+      const auto committed = terminal_session::display::transact_snapshot(
+        terminal_session::display::operation::commit_snapshot,
+        display_helper_session::managed_generation(),
+        static_cast<std::uint32_t>(sealed->tier), sealed->sequence, sealed->display_id,
+        sealed->digest, sealed->tag);
+      if (!committed || committed->result != static_cast<std::uint8_t>(terminal_session::display::result::success)) {
+        return false;
+      }
+    }
+    return true;
 #else
     auto temporary = path;
     temporary += L".tmp";
@@ -356,6 +382,16 @@ namespace display_helper::v2 {
     if (ec) {
       std::filesystem::remove(temporary, ec);
       return false;
+    }
+    if (sealed) {
+      const auto committed = terminal_session::display::transact_snapshot(
+        terminal_session::display::operation::commit_snapshot,
+        display_helper_session::managed_generation(),
+        static_cast<std::uint32_t>(sealed->tier), sealed->sequence, sealed->display_id,
+        sealed->digest, sealed->tag);
+      if (!committed || committed->result != static_cast<std::uint8_t>(terminal_session::display::result::success)) {
+        return false;
+      }
     }
     return true;
 #endif

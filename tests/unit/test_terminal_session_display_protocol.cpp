@@ -6,7 +6,7 @@
 TEST(TerminalSessionDisplayProtocol, CommonEnvelopeChecksApplyToEveryOperation) {
   using namespace terminal_session::display;
   for (const auto op : {operation::query, operation::set_mode, operation::set_hdr,
-                        operation::seal_snapshot, operation::verify_snapshot}) {
+                        operation::seal_snapshot, operation::commit_snapshot, operation::verify_snapshot}) {
     request_t request {
       .operation = static_cast<std::uint8_t>(op),
       .generation = 7,
@@ -21,7 +21,7 @@ TEST(TerminalSessionDisplayProtocol, CommonEnvelopeChecksApplyToEveryOperation) 
     } else if (op == operation::seal_snapshot) {
       request.snapshot_tier = 1;
       request.snapshot_digest[0] = 1;
-    } else if (op == operation::verify_snapshot) {
+    } else if (op == operation::commit_snapshot || op == operation::verify_snapshot) {
       request.snapshot_tier = 1;
       request.snapshot_sequence = 1;
       request.snapshot_display_id = 42;
@@ -44,7 +44,7 @@ TEST(TerminalSessionDisplayProtocol, UnknownAndOversizedFramesAreRejected) {
   using namespace terminal_session::display;
   request_t request {.operation = 0, .generation = 1, .request_id = 1};
   EXPECT_FALSE(valid_request(request));
-  request.operation = 6;
+  request.operation = 7;
   EXPECT_FALSE(valid_request(request));
   EXPECT_FALSE(decode(nullptr, sizeof(request), request));
   std::array<std::uint8_t, max_message_size + 1> oversized {};
@@ -93,4 +93,12 @@ TEST(TerminalSessionDisplayProtocol, SnapshotSealAndVerifyFieldsAreStrictlyBound
   EXPECT_TRUE(valid_request(verify));
   verify.snapshot_tier = 3;
   EXPECT_FALSE(valid_request(verify));
+
+  request_t commit = verify;
+  commit.operation = static_cast<std::uint8_t>(operation::commit_snapshot);
+  commit.snapshot_tier = 1;
+  commit.snapshot_sequence = 3;
+  EXPECT_TRUE(valid_request(commit));
+  commit.snapshot_tag.fill(0);
+  EXPECT_FALSE(valid_request(commit));
 }
