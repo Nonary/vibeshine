@@ -94,7 +94,7 @@ TEST(SteamOfflinePolicy, LaunchCodecDefaultsIsolationOffAndRoundTripsOptIn) {
   session->height = 1080;
   session->fps = 60;
   session->steam_offline_isolation = true;
-  terminal_session::protocol::request_t request;
+  terminal_session::request_t request;
   request.operation = terminal_session::operation_e::launch;
   request.launch_session = session;
   std::string error;

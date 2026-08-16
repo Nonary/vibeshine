@@ -5,8 +5,6 @@
 #include "src/remote_display_topology.h"
 
 namespace {
-  using remote_display_topology::mode_t;
-
   nlohmann::json layout(nlohmann::json placements) { return {{"version", 1}, {"placements", std::move(placements)}}; }
   const std::vector<std::string> clients {"one", "two", "three", "four", "five"};
 }
@@ -127,7 +125,7 @@ TEST(RemoteDisplayTopology, FailedCreationRollbackDoesNotRemoveRetainedMonitor) 
 TEST(RemoteDisplayTopology, FailedApplyAndLeaseLossRetainOwnershipWithoutFallback) {
   remote_display_topology::coordinator_t coordinator;
   coordinator.set_runtime_callbacks({.create_or_reclaim = [](const auto &, const auto &, const auto &) { return true; }, .apply_composed_topology = [](const auto &) { return false; }, .exact_target_has_current_mode_and_dxgi = [](const auto &, const auto &) { return std::optional<std::string> {}; }});
-  const auto failed = coordinator.activate_or_resume("one", "One", mode_t {2560, 1440, 60}, 9);
+  const auto failed = coordinator.activate_or_resume("one", "One", remote_display_topology::mode_t {2560, 1440, 60}, 9);
   EXPECT_TRUE(failed.accepted);
   EXPECT_TRUE(failed.retryable);
   coordinator.transport_lost("one", 9);
@@ -163,7 +161,7 @@ TEST(RemoteDisplayTopology, NewGenerationRetriesRetainedMonitorActivation) {
 
 TEST(RemoteDisplayTopology, ExactOutputIsBoundToTheRequestedModeAndOldGenerationCannotReleaseNewOwner) {
   remote_display_topology::coordinator_t coordinator;
-  mode_t observed {};
+  remote_display_topology::mode_t observed {};
   int removals = 0;
   coordinator.set_runtime_callbacks({
     .create_or_reclaim = [](const auto &, const auto &, const auto &) { return true; },
