@@ -3,6 +3,13 @@
  */
 #ifdef _WIN32
 
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <winsock2.h>
+  #include <windows.h>
+  #include <tlhelp32.h>
+
   // standard
   #include <algorithm>
   #include <array>
@@ -21,8 +28,6 @@
   #include <string_view>
   #include <utility>
   #include <vector>
-  #include <tlhelp32.h>
-
   #include <nlohmann/json.hpp>
 
   // local
