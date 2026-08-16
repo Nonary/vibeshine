@@ -83,15 +83,18 @@ console and seat intentionally share one Windows SID/profile, an intentionally
 hostile same-console-user process can copy/rename Steam or launch the original
 console path outside the mirror; standard path-based AppId WFP has no distinct
 principal and cannot close that race. The worker monitor detects Steam client
-images outside the exact mirror and poisons/terminates the seat job, and its PID
+images only when their canonical path exactly matches a recorded original
+Steam-client executable from the trusted source manifest; an unrelated game
+named `steam.exe` is not sufficient. It poisons/terminates the seat job, and its PID
 enumeration retries successful partial JobObjectBasicProcessIdList results,
 treating an incomplete list as live/unknown, but there is
 no pre-network zero-window guarantee and administrator/higher-priority policy can
 override a standard user-mode filter. Filters remain persistent and quarantined
 when termination cannot be proven. Stale filter cleanup is allowed only after
 all protected epoch, seat, and generation ancestors are pinned and the
-generation root is proven absent; otherwise the old clone and filters remain
-quarantined. Source correction was rejected by Daybreak's first pass for
+generation root is proven absent; present and unknown roots retain filters.
+Repeated stop attempts remain cleanup-pending while the service-lifetime
+quarantine completion token is unresolved. Source correction was rejected by Daybreak's first pass for
 filesystem, WFP lifetime, recursion, cache ACL, proxy argv, monitoring, and
 ownership gaps; this final correction also closes successful partial PID-list
 handling, source-root impersonation, held-handle accounting, teardown

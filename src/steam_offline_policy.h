@@ -6,6 +6,14 @@
 #include <string_view>
 
 namespace steam_offline {
+  enum class protected_generation_state { absent, present, unknown };
+  [[nodiscard]] constexpr bool stale_filters_removal_allowed(protected_generation_state state) noexcept {
+    return state == protected_generation_state::absent;
+  }
+  [[nodiscard]] bool exact_original_image_match(std::string_view process_path,
+                                                 std::string_view recorded_path) noexcept;
+  [[nodiscard]] constexpr bool quarantine_complete_for_retry(bool complete) noexcept { return complete; }
+
   constexpr std::size_t max_seat_id_size = 64;
   constexpr std::size_t max_ipc_name_size = 96;
   constexpr std::size_t max_command_line_size = 32768;

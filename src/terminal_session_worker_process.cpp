@@ -48,6 +48,7 @@ namespace terminal_session::worker {
       HANDLE job {};
       std::unique_ptr<platf::dxgi::INamedPipe> pipe;
       steam_offline::manager_t manager;
+      std::shared_ptr<quarantine_completion_t> completion;
     };
 
     /* A failed teardown remains contained and registered for the lifetime of
@@ -106,7 +107,8 @@ namespace terminal_session::worker {
       return false;
     }
 
-    bool steam_image_outside_mirror(HANDLE job, const std::filesystem::path &mirror);
+    bool steam_image_outside_mirror(HANDLE job, const std::filesystem::path &mirror,
+                                    const std::vector<std::filesystem::path> &original_images);
 
     void quarantine_worker(const std::shared_ptr<poisoned_worker_t> &worker) {
       std::thread([worker] {
@@ -115,7 +117,8 @@ namespace terminal_session::worker {
           const bool job_live = job_has_live_unverifiable_process(worker->job);
           if (process_live || job_live) {
             std::string health_error;
-            if (worker->job && (!worker->manager.healthy(health_error) || steam_image_outside_mirror(worker->job, worker->manager.preparation().mirror_root))) {
+            if (worker->job && (!worker->manager.healthy(health_error) || steam_image_outside_mirror(worker->job,
+                worker->manager.preparation().mirror_root, worker->manager.preparation().original_client_executables))) {
               (void)TerminateJobObject(worker->job, ERROR_NETWORK_NOT_AVAILABLE);
             } else if (worker->job) {
               (void)TerminateJobObject(worker->job, ERROR_PROCESS_ABORTED);
@@ -135,17 +138,25 @@ namespace terminal_session::worker {
           }
           if (worker->process) { CloseHandle(worker->process); worker->process = nullptr; }
           if (worker->job) { CloseHandle(worker->job); worker->job = nullptr; }
+          if (worker->completion) worker->completion->complete.store(true, std::memory_order_release);
           return;
         }
       }).detach();
     }
 
-    bool steam_image_outside_mirror(HANDLE job, const std::filesystem::path &mirror) {
+    std::wstring normalized_image_path(std::wstring value) {
+      if (value.starts_with(L"\\\\?\\")) value.erase(0, 4);
+      std::ranges::transform(value, value.begin(), [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
+      while (value.size() > 3 && value.ends_with(L"\\")) value.pop_back();
+      return value;
+    }
+
+    bool steam_image_outside_mirror(HANDLE job, const std::filesystem::path &mirror,
+                                    const std::vector<std::filesystem::path> &original_images) {
       if (!job) return false;
       std::vector<ULONG_PTR> ids;
       if (!query_job_process_ids(job, ids)) return true;
-      std::wstring expected = mirror.wstring();
-      std::ranges::transform(expected, expected.begin(), [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
+      std::wstring expected = normalized_image_path(mirror.wstring());
       if (!expected.ends_with(L"\\")) expected.push_back(L'\\');
       for (const auto pid : ids) {
         const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
@@ -157,13 +168,11 @@ namespace terminal_session::worker {
         const bool exited = !queried && GetExitCodeProcess(process, &exit_code) && exit_code != STILL_ACTIVE;
         CloseHandle(process);
         if (!queried) { if (!exited) return true; continue; }
-        std::wstring path {path_buffer.data(), length};
-        std::ranges::transform(path, path.begin(), [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
-        const auto slash = path.find_last_of(L"\\/");
-        const auto name = slash == std::wstring::npos ? path : path.substr(slash + 1);
-        const bool steam_image = name == L"steam.exe" || name == L"steamwebhelper.exe" || name == L"steamerrorreporter.exe" ||
-          name == L"steamerrorreporter64.exe" || name == L"gameoverlayui.exe";
-        if (steam_image && (path.size() <= expected.size() || path.compare(0, expected.size(), expected) != 0)) return true;
+        const std::wstring path = normalized_image_path(std::wstring {path_buffer.data(), length});
+        if (path.size() > expected.size() && path.compare(0, expected.size(), expected) == 0) continue;
+        if (std::ranges::any_of(original_images, [&](const auto &original) {
+              return normalized_image_path(original.wstring()) == path;
+            })) return true;
       }
       return false;
     }
@@ -998,11 +1007,17 @@ namespace terminal_session::worker {
     // no destructor path may release filters during this handoff.
     steam_offline_monitor_stop_.store(true, std::memory_order_release);
     if (steam_offline_monitor_.joinable()) steam_offline_monitor_.join();
+    if (steam_offline_monitor_process_) {
+      CloseHandle(static_cast<HANDLE>(steam_offline_monitor_process_));
+      steam_offline_monitor_process_ = nullptr;
+    }
+    quarantine_completion_ = std::make_shared<quarantine_completion_t>();
     auto quarantined = std::make_shared<poisoned_worker_t>();
     quarantined->process = reinterpret_cast<HANDLE>(process_);
     quarantined->job = reinterpret_cast<HANDLE>(job_);
     quarantined->pipe = std::move(pipe_);
     quarantined->manager = std::move(steam_offline_manager_);
+    quarantined->completion = quarantine_completion_;
     quarantined->manager.quarantine();
     {
       std::lock_guard lock {poisoned_workers_mutex()};
@@ -1016,7 +1031,9 @@ namespace terminal_session::worker {
   bool process_t::cleanup_needed() const noexcept {
 #ifdef _WIN32
     return process_ != nullptr || job_ != nullptr || pipe_ != nullptr || display_broker_running_.load() ||
-           steam_offline_manager_.active() || cleanup_pending_.load(std::memory_order_acquire);
+           steam_offline_manager_.active() || cleanup_pending_.load(std::memory_order_acquire) ||
+           (quarantine_completion_ && !steam_offline::quarantine_complete_for_retry(
+             quarantine_completion_->complete.load(std::memory_order_acquire)));
 #else
     return false;
 #endif
@@ -1027,6 +1044,11 @@ namespace terminal_session::worker {
     error = "Private worker process is Windows-only.";
     return std::nullopt;
 #else
+    if (quarantine_completion_ && steam_offline::quarantine_complete_for_retry(
+        quarantine_completion_->complete.load(std::memory_order_acquire))) {
+      quarantine_completion_.reset();
+      cleanup_pending_.store(false, std::memory_order_release);
+    }
     if (cleanup_needed()) { error = "A previous private worker or Steam offline filter set still owns resources; teardown must complete first."; return std::nullopt; }
     pipe_name_ = unique_pipe();
     const auto helper_capability = platf::dxgi::generate_guid();
@@ -1152,16 +1174,23 @@ namespace terminal_session::worker {
           ? "Steam offline isolation filters changed before worker resume."
           : readiness_error);
       }
+      HANDLE monitor_process = nullptr;
+      if (!DuplicateHandle(GetCurrentProcess(), info.hProcess, GetCurrentProcess(), &monitor_process,
+                           PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0)) {
+        return fail_start("Steam isolation monitor process handle could not be duplicated.");
+      }
+      steam_offline_monitor_process_ = monitor_process;
       steam_offline_monitor_stop_.store(false, std::memory_order_release);
       steam_offline_poisoned_.store(false, std::memory_order_release);
       try {
         steam_offline_monitor_ = std::thread([this] {
           while (!steam_offline_monitor_stop_.load(std::memory_order_acquire)) {
             std::string health_error;
-            const auto process = static_cast<HANDLE>(process_);
+            const auto process = static_cast<HANDLE>(steam_offline_monitor_process_);
             const auto job = static_cast<HANDLE>(job_);
             if (!steam_offline_manager_.healthy(health_error) ||
-                steam_image_outside_mirror(job, steam_offline_preparation_.mirror_root)) {
+                steam_image_outside_mirror(job, steam_offline_preparation_.mirror_root,
+                  steam_offline_preparation_.original_client_executables)) {
               steam_offline_poisoned_.store(true, std::memory_order_release);
               const bool terminated = job && TerminateJobObject(job, ERROR_NETWORK_NOT_AVAILABLE) != FALSE;
               if (!terminated || !process || WaitForSingleObject(process, 10000) != WAIT_OBJECT_0) {
@@ -1267,6 +1296,12 @@ namespace terminal_session::worker {
 
   bool process_t::stop(const route_t &) noexcept {
 #ifdef _WIN32
+    if (quarantine_completion_ && !steam_offline::quarantine_complete_for_retry(
+        quarantine_completion_->complete.load(std::memory_order_acquire))) {
+      cleanup_pending_.store(true, std::memory_order_release);
+      return false;
+    }
+    if (quarantine_completion_) quarantine_completion_.reset();
     bool stopped = true;
     display_broker_running_.store(false, std::memory_order_release);
     if (display_broker_thread_.joinable()) display_broker_thread_.request_stop();
@@ -1298,6 +1333,10 @@ namespace terminal_session::worker {
     // emptiness have been proven, so there is no unmonitored live interval.
     steam_offline_monitor_stop_.store(true, std::memory_order_release);
     if (steam_offline_monitor_.joinable()) steam_offline_monitor_.join();
+    if (steam_offline_monitor_process_) {
+      CloseHandle(static_cast<HANDLE>(steam_offline_monitor_process_));
+      steam_offline_monitor_process_ = nullptr;
+    }
     pipe_.reset();
     if (job_) { CloseHandle(static_cast<HANDLE>(job_)); job_ = nullptr; }
     if (stopped && steam_offline_manager_.active()) {

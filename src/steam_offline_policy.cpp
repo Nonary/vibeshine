@@ -86,6 +86,19 @@ namespace steam_offline {
     return game == normalized_root || (game.size() > normalized_root.size() && game.compare(0, normalized_root.size(), normalized_root) == 0 && game[normalized_root.size()] == '\\');
   }
 
+  bool exact_original_image_match(const std::string_view process_path,
+                                  const std::string_view recorded_path) noexcept {
+    auto normalize = [](std::string value) {
+      std::ranges::transform(value, value.begin(), [](char ch) {
+        if (ch == '/') return '\\';
+        return static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+      });
+      while (value.size() > 3 && value.ends_with('\\')) value.pop_back();
+      return value;
+    };
+    return !process_path.empty() && normalize(std::string {process_path}) == normalize(std::string {recorded_path});
+  }
+
   bool is_configured_steam_client(const std::string_view command_line) noexcept {
     return lowercase(basename(first_argument(command_line))) == "steam.exe";
   }

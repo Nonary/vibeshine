@@ -18,6 +18,10 @@ namespace platf::dxgi { class INamedPipe; }
 #endif
 
 namespace terminal_session::worker {
+  struct quarantine_completion_t {
+    std::atomic_bool complete {false};
+  };
+
   // The worker process and its primary thread are created with this
   // descriptor. The broker retains its own returned handles; the seat user
   // needs no external real handle to the worker because the worker uses its
@@ -40,6 +44,7 @@ namespace terminal_session::worker {
     void handoff_quarantine() noexcept;
     bool validate_display_client(platf::dxgi::INamedPipe &pipe) const;
     void *process_ {};
+    void *steam_offline_monitor_process_ {};
     void *job_ {};
     std::string pipe_name_;
     std::string display_pipe_name_;
@@ -74,6 +79,7 @@ namespace terminal_session::worker {
     std::atomic<bool> steam_offline_monitor_stop_ {false};
     std::atomic<bool> steam_offline_poisoned_ {false};
     std::thread steam_offline_monitor_;
+    std::shared_ptr<quarantine_completion_t> quarantine_completion_;
     std::uint64_t worker_generation_ {};
     std::uint64_t worker_creation_time_ {};
 #endif
