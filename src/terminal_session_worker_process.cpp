@@ -799,7 +799,8 @@ namespace terminal_session::worker {
               };
               const auto matches = [&](const process_t::snapshot_record &record) {
                 std::array<std::uint8_t, 32> expected_tag {};
-                return record.display_id == state.display_id && record.sequence != 0 &&
+                return terminal_session::display::snapshot_request_display_matches(request, record.display_id) &&
+                       record.display_id == state.display_id && record.sequence != 0 &&
                        record.sequence == request.snapshot_sequence && record.digest == request.snapshot_digest &&
                        CRYPTO_memcmp(record.tag.data(), request.snapshot_tag.data(), record.tag.size()) == 0 &&
                        tag_for(record.sequence, record.digest, expected_tag) &&

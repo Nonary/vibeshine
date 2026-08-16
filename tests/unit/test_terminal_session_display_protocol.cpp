@@ -102,3 +102,18 @@ TEST(TerminalSessionDisplayProtocol, SnapshotSealAndVerifyFieldsAreStrictlyBound
   commit.snapshot_tag.fill(0);
   EXPECT_FALSE(valid_request(commit));
 }
+
+TEST(TerminalSessionDisplayProtocol, SnapshotDisplayIdentityIsBoundToTheSealedRecord) {
+  using namespace terminal_session::display;
+  request_t request {
+    .operation = static_cast<std::uint8_t>(operation::verify_snapshot),
+    .generation = 7,
+    .request_id = 1,
+    .snapshot_sequence = 4,
+    .snapshot_display_id = 42,
+  };
+  EXPECT_TRUE(snapshot_request_display_matches(request, 42));
+  EXPECT_FALSE(snapshot_request_display_matches(request, 43));
+  request.snapshot_display_id = 43;
+  EXPECT_FALSE(snapshot_request_display_matches(request, 42));
+}

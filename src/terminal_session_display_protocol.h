@@ -119,6 +119,12 @@ namespace terminal_session::display {
            response.request_id != 0 && response.reserved == 0;
   }
 
+  // Broker verification must bind the caller's envelope identity to the
+  // exact display identity that was sealed, not merely to the current seat.
+  inline bool snapshot_request_display_matches(const request_t &request, const std::uint64_t display_id) {
+    return display_id != 0 && request.snapshot_display_id == display_id;
+  }
+
   [[nodiscard]] std::optional<response_t> transact(operation operation_code,
                                                     std::uint64_t generation,
                                                     std::uint32_t width = 0,
