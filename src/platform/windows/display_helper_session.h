@@ -103,6 +103,16 @@ namespace display_helper_session {
     return "sunshine_display_helper";
   }
 
+  inline std::optional<std::string> display_pipe_name() {
+    if (!has_managed_context()) return std::nullopt;
+    const auto capability = managed_context().capability;
+    if (capability.empty()) return std::nullopt;
+    const auto advertised = environment(L"VIBESHINE_TERMINAL_DISPLAY_PIPE");
+    const auto expected = "VibeshineTerminalDisplay-" + capability;
+    if (!advertised || *advertised != std::wstring {expected.begin(), expected.end()}) return std::nullopt;
+    return expected;
+  }
+
   inline std::wstring singleton_mutex_name() {
     if (has_managed_context()) {
       return L"Local\\SunshineDisplayHelper-" +

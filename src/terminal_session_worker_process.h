@@ -4,6 +4,8 @@
 #include "terminal_session_runtime.h"
 
 #include <memory>
+#include <atomic>
+#include <thread>
 #include <string_view>
 
 #ifdef _WIN32
@@ -29,11 +31,17 @@ namespace terminal_session::worker {
     bool cleanup_needed() const noexcept override;
   private:
 #ifdef _WIN32
+    void run_display_broker();
+    bool validate_display_client(platf::dxgi::INamedPipe &pipe) const;
     void *process_ {};
     void *job_ {};
     std::string pipe_name_;
+    std::string display_pipe_name_;
     std::unique_ptr<platf::dxgi::INamedPipe> pipe_;
     provider_resource_t resource_;
+    std::uint64_t generation_ {};
+    std::atomic_bool display_broker_running_ {false};
+    std::jthread display_broker_thread_;
     // The service cannot query the worker's WTS display topology itself. Bind
     // the first exact sole-target attestation and require it for this worker
     // until full stop.

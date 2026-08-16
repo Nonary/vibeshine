@@ -1,4 +1,5 @@
 #include "terminal_session_worker_process.h"
+#include "terminal_session_display_protocol.h"
 
 #ifdef _WIN32
   #include "terminal_session_service.h"
@@ -22,6 +23,7 @@
   #include <sstream>
   #include <string_view>
   #include <vector>
+  #include <virtual_display/driver/windows_control_client.h>
 #endif
 
 namespace terminal_session::worker {
@@ -471,6 +473,7 @@ namespace terminal_session::worker {
     }
 
     std::vector<wchar_t> worker_environment(HANDLE token, const std::string &pipe_name,
+                                            const std::string &display_pipe_name,
                                             const provider_resource_t &resource, const std::uint64_t generation,
                                             const std::string &helper_capability) {
       LPVOID raw = nullptr;
@@ -488,6 +491,7 @@ namespace terminal_session::worker {
       };
       replace(L"VIBESHINE_TERMINAL_WORKER_PIPE", wide(pipe_name));
       replace(L"VIBESHINE_TERMINAL_BROKER_PID", std::to_wstring(GetCurrentProcessId()));
+      replace(L"VIBESHINE_TERMINAL_DISPLAY_PIPE", wide(display_pipe_name));
       // These are immutable admission facts inherited by the worker and its
       // helper. The helper must never reclassify itself from WTS/console state;
       // a per-launch capability also prevents same-account sibling sessions
@@ -590,11 +594,142 @@ namespace terminal_session::worker {
   }
 #endif
 
+#ifdef _WIN32
+  bool process_t::validate_display_client(platf::dxgi::INamedPipe &pipe) const {
+    if (!process_ || !job_ || !process_matches_resource(static_cast<HANDLE>(process_), resource_)) return false;
+    DWORD pid = 0;
+    std::uint64_t creation = 0;
+    std::wstring sid;
+    if (!pipe.get_client_process_id(pid) || !pipe.get_client_process_creation_time(creation) ||
+        !pipe.get_client_user_sid_string(sid) || pid == 0 || creation == 0 || sid.empty()) return false;
+    if (std::string {sid.begin(), sid.end()} != resource_.user_sid) return false;
+    DWORD session = 0;
+    if (!ProcessIdToSessionId(pid, &session) || session != resource_.windows_session_id) return false;
+    winrt::handle client {OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)};
+    if (!client || process_creation_time(client.get()) != creation) return false;
+    BOOL in_job = FALSE;
+    if (!IsProcessInJob(client.get(), static_cast<HANDLE>(job_), &in_job) || !in_job) return false;
+    wchar_t image[MAX_PATH] {};
+    DWORD length = _countof(image);
+    if (!QueryFullProcessImageNameW(client.get(), 0, image, &length) || length == 0) return false;
+    const std::wstring canonical = canonical_image(std::wstring {image, length});
+    const auto expected = canonical_image((service_directory() / L"sunshine_display_helper.exe").wstring());
+    return canonical == expected;
+  }
+
+  void process_t::run_display_broker() {
+    std::uint64_t last_request_id = 0;
+    DWORD bound_client_pid = 0;
+    std::uint64_t bound_client_creation = 0;
+    auto named_factory = std::make_unique<platf::dxgi::NamedPipeFactory>();
+    const std::wstring user_sid = wide(resource_.user_sid);
+    named_factory->set_security_descriptor_builder([user_sid](SECURITY_DESCRIPTOR &desc, PACL *out_pacl) {
+      const std::wstring sddl = L"D:P(A;;GA;;;SY)(A;;GA;;;" + user_sid + L")";
+      PSECURITY_DESCRIPTOR raw = nullptr;
+      if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &raw, nullptr) || !raw) return false;
+      BOOL dacl_present = FALSE;
+      BOOL dacl_defaulted = FALSE;
+      PACL dacl = nullptr;
+      if (!GetSecurityDescriptorDacl(raw, &dacl_present, &dacl, &dacl_defaulted) || !dacl_present || !dacl ||
+          !InitializeSecurityDescriptor(&desc, SECURITY_DESCRIPTOR_REVISION) ||
+          !SetSecurityDescriptorDacl(&desc, TRUE, dacl, FALSE)) {
+        LocalFree(raw);
+        return false;
+      }
+      *out_pacl = reinterpret_cast<PACL>(raw);
+      return true;
+    });
+    platf::dxgi::FramedPipeFactory factory {std::move(named_factory)};
+    while (display_broker_running_.load(std::memory_order_acquire)) {
+      auto pipe = factory.create_server(display_pipe_name_);
+      if (!pipe) break;
+      pipe->wait_for_client_connection(250);
+      if (!pipe->is_connected()) continue;
+      DWORD client_pid = 0;
+      std::uint64_t client_creation = 0;
+      if (!validate_display_client(*pipe) || !pipe->get_client_process_id(client_pid) ||
+          !pipe->get_client_process_creation_time(client_creation)) {
+        pipe->disconnect();
+        continue;
+      }
+      if (client_pid != bound_client_pid || client_creation != bound_client_creation) {
+        bound_client_pid = client_pid;
+        bound_client_creation = client_creation;
+        last_request_id = 0;
+      }
+      std::array<std::uint8_t, terminal_session::display::max_message_size> bytes {};
+      std::size_t size = 0;
+      if (pipe->receive(bytes, size, 5000) != platf::dxgi::PipeResult::Success) {
+        pipe->disconnect();
+        continue;
+      }
+      terminal_session::display::request_t request {};
+      terminal_session::display::response_t response {};
+      if (!terminal_session::display::decode(bytes.data(), size, request) ||
+          !terminal_session::display::valid_request(request)) {
+        response.result = static_cast<std::uint8_t>(terminal_session::display::result::malformed);
+        (void) pipe->send(std::span<const std::uint8_t> {
+          reinterpret_cast<const std::uint8_t *>(&response), sizeof(response)}, 1000);
+        pipe->disconnect();
+        continue;
+      }
+      response.operation = request.operation;
+      response.generation = request.generation;
+      response.request_id = request.request_id;
+      if (request.generation != generation_ || request.request_id <= last_request_id) {
+        response.result = static_cast<std::uint8_t>(request.generation != generation_ ?
+          terminal_session::display::result::stale : terminal_session::display::result::stale);
+      } else {
+        last_request_id = request.request_id;
+        auto opened = virtual_display::driver::open_remote_control_device_for_session(resource_.windows_session_id);
+        if (!opened.ok()) {
+          response.result = static_cast<std::uint8_t>(terminal_session::display::result::unavailable);
+          response.native_error = opened.native_error;
+        } else {
+          virtual_display::driver::ControlClient client {*opened.transport};
+          const auto queried = client.query_display_state();
+          if (!queried.ok() || queried.value.entry_count != 1 || queried.value.entries[0].display_id == 0) {
+            response.result = static_cast<std::uint8_t>(queried.ok() ? terminal_session::display::result::invalid : terminal_session::display::result::unavailable);
+            response.native_error = queried.native_error;
+          } else {
+            const auto &state = queried.value.entries[0];
+            response.width = state.width;
+            response.height = state.height;
+            response.refresh_rate_millihz = state.refresh_rate_millihz;
+            if (request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::set_mode)) {
+              const auto changed = client.set_display_mode(virtual_display::driver::SetDisplayModeRequest {
+                .display_id = state.display_id,
+                .width = request.width,
+                .height = request.height,
+                .refresh_rate_millihz = request.refresh_rate_millihz,
+              });
+              response.result = static_cast<std::uint8_t>(changed.ok() ? terminal_session::display::result::success : terminal_session::display::result::unavailable);
+              response.native_error = changed.native_error;
+            } else if (request.operation == static_cast<std::uint8_t>(terminal_session::display::operation::set_hdr)) {
+              const auto changed = client.set_display_hdr_state(virtual_display::driver::SetDisplayHdrStateRequest {
+                .display_id = state.display_id,
+                .enabled = request.hdr_enabled,
+              });
+              response.result = static_cast<std::uint8_t>(changed.ok() ? terminal_session::display::result::success : terminal_session::display::result::unavailable);
+              response.native_error = changed.native_error;
+            } else {
+              response.result = static_cast<std::uint8_t>(terminal_session::display::result::success);
+            }
+          }
+        }
+      }
+      (void) pipe->send(std::span<const std::uint8_t> {
+        reinterpret_cast<const std::uint8_t *>(&response), sizeof(response)}, 1000);
+      pipe->disconnect();
+    }
+  }
+#endif
+
   process_t::~process_t() { (void) stop({}); }
 
   bool process_t::cleanup_needed() const noexcept {
 #ifdef _WIN32
-    return process_ != nullptr || job_ != nullptr || pipe_ != nullptr;
+    return process_ != nullptr || job_ != nullptr || pipe_ != nullptr || display_broker_running_.load();
 #else
     return false;
 #endif
@@ -607,7 +742,9 @@ namespace terminal_session::worker {
 #else
     if (process_ || job_ || pipe_) { error = "A previous private worker still owns resources; teardown must complete first."; return std::nullopt; }
     pipe_name_ = unique_pipe();
-    if (pipe_name_.empty() || request.resource.launch_token == 0 || request.resource.windows_session_id == 0 ||
+    const auto helper_capability = platf::dxgi::generate_guid();
+    display_pipe_name_ = helper_capability.empty() ? std::string {} : "VibeshineTerminalDisplay-" + helper_capability;
+    if (pipe_name_.empty() || display_pipe_name_.empty() || request.resource.launch_token == 0 || request.resource.windows_session_id == 0 ||
         request.resource.desktop_name.empty() || request.resource.user_sid.empty()) {
       error = "Provider did not supply a complete token/session/user/desktop launch contract.";
       return std::nullopt;
@@ -647,15 +784,10 @@ namespace terminal_session::worker {
     std::wstring command = quote(executable.wstring()) + L" " + quote(config.wstring());
     for (const auto &argument : command_line(contract)) command += L" " + quote(wide(argument));
     command += L" " + quote(L"file_apps=" + apps.wstring());
-    const auto helper_capability = platf::dxgi::generate_guid();
-    if (helper_capability.empty()) {
-      CloseHandle(job);
-      error = "Private worker helper capability generation failed.";
-      return std::nullopt;
-    }
     auto environment = worker_environment(
       launch_token,
       pipe_name_,
+      display_pipe_name_,
       request.resource,
       request.admission.generation,
       helper_capability);
@@ -705,6 +837,9 @@ namespace terminal_session::worker {
     bool worker_poisoned = false;
     auto route = transact_admission(*pipe_, request, static_cast<HANDLE>(process_), job, hdr_target_binding_, worker_poisoned, 60000, error);
     if (!route) return fail_start(error.empty() ? "Private worker did not become ready." : error);
+    generation_ = request.admission.generation;
+    display_broker_running_.store(true, std::memory_order_release);
+    display_broker_thread_ = std::jthread([this](std::stop_token) { run_display_broker(); });
     return route;
 #endif
   }
@@ -714,7 +849,7 @@ namespace terminal_session::worker {
     error = "Private worker process is Windows-only.";
     return std::nullopt;
 #else
-    if (!process_ || !pipe_ || request.resource.windows_session_id != resource_.windows_session_id ||
+    if (!process_ || !pipe_ || request.admission.generation != generation_ || request.resource.windows_session_id != resource_.windows_session_id ||
         request.resource.seat_id != resource_.seat_id || request.resource.rtsp_port != resource_.rtsp_port ||
         request.resource.control_port != resource_.control_port || request.resource.video_port != resource_.video_port ||
         request.resource.audio_port != resource_.audio_port || request.resource.launch_token == 0 ||
@@ -758,6 +893,9 @@ namespace terminal_session::worker {
   bool process_t::stop(const route_t &) noexcept {
 #ifdef _WIN32
     bool stopped = true;
+    display_broker_running_.store(false, std::memory_order_release);
+    if (display_broker_thread_.joinable()) display_broker_thread_.request_stop();
+    if (display_broker_thread_.joinable()) display_broker_thread_.join();
     if (pipe_) {
       const std::array<std::uint8_t, 1> stop {1};
       (void) pipe_->send(stop, 1000);
@@ -773,7 +911,7 @@ namespace terminal_session::worker {
     if (stopped) pipe_.reset();
     if (stopped && job_) { CloseHandle(static_cast<HANDLE>(job_)); job_ = nullptr; }
     if (!stopped) return false;
-    pid_ = 0; pipe_name_.clear(); resource_ = {}; hdr_target_binding_.reset();
+    pid_ = 0; pipe_name_.clear(); display_pipe_name_.clear(); generation_ = 0; resource_ = {}; hdr_target_binding_.reset();
 #endif
     return true;
   }
