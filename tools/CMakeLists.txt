@@ -86,13 +86,15 @@ find_program(VIBESHINE_CSC_EXECUTABLE csc.exe
         NO_DEFAULT_PATH)
 if(VIBESHINE_CSC_EXECUTABLE)
     set(TERMINAL_SEAT_CONTROLLER_EXE "${CMAKE_CURRENT_BINARY_DIR}/vibeshine_seat_controller.exe")
+    cmake_path(CONVERT "${CMAKE_CURRENT_SOURCE_DIR}/terminal_seat_controller.cs"
+            TO_NATIVE_PATH_LIST TERMINAL_SEAT_CONTROLLER_SOURCE_NATIVE)
     add_custom_command(
             OUTPUT "${TERMINAL_SEAT_CONTROLLER_EXE}"
             COMMAND "${VIBESHINE_CSC_EXECUTABLE}" /nologo /target:winexe /platform:x64 /optimize+
                     /reference:System.dll /reference:System.Core.dll
                     /reference:System.Windows.Forms.dll /reference:System.Drawing.dll
                     "/out:${TERMINAL_SEAT_CONTROLLER_EXE}"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/terminal_seat_controller.cs"
+                    "${TERMINAL_SEAT_CONTROLLER_SOURCE_NATIVE}"
             DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/terminal_seat_controller.cs"
             VERBATIM)
     add_custom_target(vibeshine_seat_controller ALL
