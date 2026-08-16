@@ -20,6 +20,7 @@
     <Feature Id="VibeshineExtras" Title="Vibeshine Components" Level="1" Absent="disallow">
       <ComponentRef Id="CtlStopSunshine"/>
       <ComponentRef Id="SunshineSvc"/>
+      <ComponentRef Id="VibeshineSeatController"/>
       <ComponentRef Id="Env_Path"/>
       <ComponentRef Id="Fw_Exceptions"/>
       <ComponentRef Id="StartMenuShortcut"/>

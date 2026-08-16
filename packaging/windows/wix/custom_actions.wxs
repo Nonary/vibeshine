@@ -89,7 +89,6 @@
       <Component Id="SunshineSvc" Guid="*">
         <!-- The service executable bound in at link-time via PayloadRoot binder path -->
         <File Id="SunshineSvcExe" Source="!(bindpath.PayloadRoot)tools\sunshinesvc.exe" KeyPath="yes" />
-        <File Id="VibeshineSeatControllerExe" Source="!(bindpath.PayloadRoot)tools\vibeshine_seat_controller.exe" />
         <ServiceInstall
             Id="SunshineServiceInstall"
             Name="SunshineService"
@@ -104,6 +103,9 @@
             Stop="both"
             Remove="uninstall"
             Wait="yes" />
+      </Component>
+      <Component Id="VibeshineSeatController" Guid="*">
+        <File Id="VibeshineSeatControllerExe" Source="!(bindpath.PayloadRoot)tools\vibeshine_seat_controller.exe" KeyPath="yes" />
       </Component>
     </DirectoryRef>
   </Fragment>
