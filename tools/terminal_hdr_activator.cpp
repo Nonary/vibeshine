@@ -97,6 +97,23 @@ namespace {
     terminal_session::hdr::display_state_t color;
   };
 
+  // MinGW exposes the Win11 device-info opcode but hides the matching record
+  // behind NTDDI_VERSION. Keep the documented ABI local so this helper can
+  // query the running OS without raising the product's Windows 10 baseline.
+  struct advanced_color_info_v2_t {
+    DISPLAYCONFIG_DEVICE_INFO_HEADER header {};
+    UINT32 value {};
+    DISPLAYCONFIG_COLOR_ENCODING color_encoding {};
+    UINT32 bits_per_color_channel {};
+    UINT32 active_color_mode {};
+  };
+  static_assert(sizeof(advanced_color_info_v2_t) == 36);
+
+  constexpr UINT32 advanced_color_active = 1u << 1;
+  constexpr UINT32 hdr_supported = 1u << 4;
+  constexpr UINT32 hdr_user_enabled = 1u << 5;
+  constexpr UINT32 advanced_color_mode_hdr = 2;
+
   struct expected_target_t {
     DWORD session_id {};
     LUID source_adapter {};
@@ -348,7 +365,7 @@ namespace {
         return std::nullopt;
       }
 
-      DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 color {};
+      advanced_color_info_v2_t color {};
       color.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2;
       color.header.size = sizeof(color);
       color.header.adapterId = path.targetInfo.adapterId;
@@ -362,11 +379,11 @@ namespace {
         .source_mode = modes[source_index].sourceMode,
         .color = {
           .found = true,
-          .supported = color.highDynamicRangeSupported != 0,
-          .user_enabled = color.highDynamicRangeUserEnabled != 0,
-          .active = color.advancedColorActive != 0,
-          .hdr_color_mode = color.activeColorMode == DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR,
-          .bits_per_color_channel = color.bitsPerColorChannel,
+          .supported = (color.value & hdr_supported) != 0,
+          .user_enabled = (color.value & hdr_user_enabled) != 0,
+          .active = (color.value & advanced_color_active) != 0,
+          .hdr_color_mode = color.active_color_mode == advanced_color_mode_hdr,
+          .bits_per_color_channel = color.bits_per_color_channel,
         },
       };
     }

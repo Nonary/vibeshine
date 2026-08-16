@@ -10,6 +10,7 @@
 #include <TlHelp32.h>
 #include <UserEnv.h>
 #include <WtsApi32.h>
+#include <winternl.h>
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
 
@@ -41,6 +42,45 @@ namespace terminal_session::windows {
     // Stay below Windows' default dynamic client-port range (49152-65535).
     constexpr std::uint16_t first_worker_base_port = 40000;
     constexpr std::uint16_t worker_port_stride = 32;
+
+    // MinGW's WtsApi32.h omits the listener-query declarations present in the
+    // Windows SDK. Resolve the documented API dynamically against this exact,
+    // size-checked ABI instead of changing the project's Windows target level.
+    struct wts_listener_config_w_t {
+      ULONG version;
+      ULONG fEnableListener;
+      ULONG MaxConnectionCount;
+      ULONG fPromptForPassword;
+      ULONG fInheritColorDepth;
+      ULONG ColorDepth;
+      ULONG fInheritBrokenTimeoutSettings;
+      ULONG BrokenTimeoutSettings;
+      ULONG fDisablePrinterRedirection;
+      ULONG fDisableDriveRedirection;
+      ULONG fDisableComPortRedirection;
+      ULONG fDisableLPTPortRedirection;
+      ULONG fDisableClipboardRedirection;
+      ULONG fDisableAudioRedirection;
+      ULONG fDisablePNPRedirection;
+      ULONG fDisableDefaultMainClientPrinter;
+      ULONG LanAdapter;
+      ULONG PortNumber;
+      ULONG fInheritShadowSettings;
+      ULONG ShadowSettings;
+      ULONG TimeoutSettingsConnection;
+      ULONG TimeoutSettingsDisconnection;
+      ULONG TimeoutSettingsIdle;
+      ULONG SecurityLayer;
+      ULONG MinEncryptionLevel;
+      ULONG UserAuthentication;
+      WCHAR Comment[WTS_COMMENT_LENGTH + 1];
+      WCHAR LogonUserName[USERNAME_LENGTH + 1];
+      WCHAR LogonDomain[DOMAIN_LENGTH + 1];
+      WCHAR WorkDirectory[MAX_PATH + 1];
+      WCHAR InitialProgram[MAX_PATH + 1];
+    };
+    static_assert(sizeof(wts_listener_config_w_t) == 1348);
+    using query_listener_config_w_t = BOOL (WINAPI *)(HANDLE, PVOID, DWORD, LPWSTR, wts_listener_config_w_t *);
 
     std::optional<unsigned int> managed_account_index(const std::wstring_view account) {
       if (account.size() != account_prefix.size() + 2 || !account.starts_with(account_prefix)) return std::nullopt;
@@ -159,7 +199,11 @@ namespace terminal_session::windows {
       constexpr ACCESS_MASK desktop_access = DESKTOP_READOBJECTS | DESKTOP_CREATEWINDOW | DESKTOP_CREATEMENU |
         DESKTOP_ENUMERATE | DESKTOP_WRITEOBJECTS | READ_CONTROL;
       bool ok = true;
-      for (const auto *sid : {reinterpret_cast<PSID>(const_cast<std::uint8_t *>(user_sid->data())), reinterpret_cast<PSID>(const_cast<std::uint8_t *>(logon_sid->data()))}) {
+      const std::array<PSID, 2> sids {
+        reinterpret_cast<PSID>(const_cast<std::uint8_t *>(user_sid->data())),
+        reinterpret_cast<PSID>(const_cast<std::uint8_t *>(logon_sid->data())),
+      };
+      for (const auto sid : sids) {
         ok = grant_object(station, SE_WINDOW_OBJECT, sid, station_access) == ERROR_SUCCESS && ok;
         ok = grant_object(desktop, SE_WINDOW_OBJECT, sid, desktop_access) == ERROR_SUCCESS && ok;
       }
@@ -179,7 +223,7 @@ namespace terminal_session::windows {
       HANDLE raw_directory = nullptr;
       if (open_directory(&raw_directory, READ_CONTROL | WRITE_DAC, &attributes) < 0 || !raw_directory) return false;
       unique_handle directory {raw_directory};
-      for (const auto *sid : {reinterpret_cast<PSID>(const_cast<std::uint8_t *>(user_sid->data())), reinterpret_cast<PSID>(const_cast<std::uint8_t *>(logon_sid->data()))}) {
+      for (const auto sid : sids) {
         constexpr ACCESS_MASK directory_access = 0x0001 /* DIRECTORY_QUERY */ | 0x0002 /* DIRECTORY_TRAVERSE */ |
           0x0004 /* DIRECTORY_CREATE_OBJECT */ | 0x0008 /* DIRECTORY_CREATE_SUBDIRECTORY */ | READ_CONTROL;
         ok = grant_object(directory.get(), SE_KERNEL_OBJECT, sid, directory_access) == ERROR_SUCCESS && ok;
@@ -240,7 +284,7 @@ namespace terminal_session::windows {
     bool add_remote_desktop_membership(const std::wstring &account) {
       DWORD sid_size = SECURITY_MAX_SID_SIZE;
       std::array<std::uint8_t, SECURITY_MAX_SID_SIZE> sid {};
-      if (!CreateWellKnownSid(WinRemoteDesktopUsersSid, nullptr, sid.data(), &sid_size)) return false;
+      if (!CreateWellKnownSid(WinBuiltinRemoteDesktopUsersSid, nullptr, sid.data(), &sid_size)) return false;
       wchar_t group[256] {}, domain[256] {};
       DWORD group_size = _countof(group), domain_size = _countof(domain);
       SID_NAME_USE use {};
@@ -373,8 +417,10 @@ namespace terminal_session::windows {
         (size = sizeof(DWORD), RegQueryValueExW(key, L"WinStationDisabled", nullptr, nullptr, reinterpret_cast<LPBYTE>(&disabled), &size) == ERROR_SUCCESS) &&
         (size = sizeof(DWORD), RegQueryValueExW(key, L"fLogonDisabled", nullptr, nullptr, reinterpret_cast<LPBYTE>(&logon_disabled), &size) == ERROR_SUCCESS);
       RegCloseKey(key);
-      WTSLISTENERCONFIGW live {};
-      const bool live_ok = WTSQueryListenerConfigW(WTS_CURRENT_SERVER_HANDLE, nullptr, 0, const_cast<LPWSTR>(listener_name.data()), &live) != FALSE;
+      const auto wtsapi = GetModuleHandleW(L"Wtsapi32.dll");
+      const auto query_listener = wtsapi ? reinterpret_cast<query_listener_config_w_t>(GetProcAddress(wtsapi, "WTSQueryListenerConfigW")) : nullptr;
+      wts_listener_config_w_t live {};
+      const bool live_ok = query_listener && query_listener(WTS_CURRENT_SERVER_HANDLE, nullptr, 0, const_cast<LPWSTR>(listener_name.data()), &live) != FALSE;
       return {static_cast<std::uint16_t>(port), ok && live_ok && port >= 1024 && port <= 65535 && enabled == 1 && disabled == 0 && logon_disabled == 0 && live.fEnableListener != 0};
     }
 

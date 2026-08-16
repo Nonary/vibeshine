@@ -17,6 +17,7 @@
 
 #include "src/platform/windows/service_constants.h"
 #include "src/platform/windows/terminal_session_seat_provider.h"
+#include "src/rtsp.h"
 #include "src/terminal_session_launch_codec.h"
 #include "src/terminal_session_runtime.h"
 #include "src/terminal_session_service.h"
