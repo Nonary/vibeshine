@@ -4248,6 +4248,10 @@ Enables collection of the host and session statistics shown by the real-time sta
 
 Sets the real-time statistics polling interval in milliseconds. Lower values refresh the dashboard more frequently.
 
+### remote_session_hdr_bypass
+
+Enables the guarded WGC FP16 HDR path for terminal sessions. Disabled by default and intended for proof or troubleshooting.
+
 ### rtx_hdr
 
 Enables RTX HDR processing when the active NVIDIA environment supports it.

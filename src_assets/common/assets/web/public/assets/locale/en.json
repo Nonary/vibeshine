@@ -734,6 +734,8 @@
     "rtx_hdr_contrast_desc": "HDR contrast (-100–100, 0 = neutral).",
     "rtx_hdr_saturation": "Saturation",
     "rtx_hdr_saturation_desc": "HDR color saturation (-100–100, 0 = neutral).",
+    "remote_session_hdr_bypass": "Terminal-session HDR bypass",
+    "remote_session_hdr_bypass_desc": "Enables the guarded WGC FP16 HDR path for terminal sessions. Disabled by default and intended for proof or troubleshooting.",
     "session_token_ttl_seconds": "Web UI Session Timeout (seconds)",
     "session_token_ttl_seconds_desc": "How long a Web UI login session remains valid before requiring re-authentication. Reduce for higher security; increase for convenience.",
     "remember_me_refresh_token_ttl_seconds": "Trusted device lifetime (seconds)",
