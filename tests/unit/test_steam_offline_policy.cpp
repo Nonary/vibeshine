@@ -9,11 +9,12 @@
 
 #include <gtest/gtest.h>
 
-TEST(SteamOfflinePolicy, RecognizesOnlySteamClientImages) {
-  EXPECT_TRUE(steam_offline::is_recognized_client_image("C:\\Steam\\steamwebhelper.exe"));
-  EXPECT_TRUE(steam_offline::is_recognized_client_image("GAMEOVERLAYUI.EXE"));
-  EXPECT_FALSE(steam_offline::is_recognized_client_image("CivilizationVI.exe"));
-  EXPECT_FALSE(steam_offline::is_recognized_client_image("steamservice.exe"));
+TEST(SteamOfflinePolicy, KeepsGameLibrariesOutsideTheClientMirror) {
+  EXPECT_TRUE(steam_offline::game_library_outside_mirror(
+    "C:/SteamLibrary/steamapps/common/Game/game.exe", "C:/ProgramData/VibeshineSteamSeats/seat/1/client"));
+  EXPECT_FALSE(steam_offline::game_library_outside_mirror(
+    "C:/ProgramData/VibeshineSteamSeats/seat/1/client/steam.exe",
+    "C:/ProgramData/VibeshineSteamSeats/seat/1/client"));
   EXPECT_FALSE(steam_offline::is_configured_steam_client("steamservice.exe -silent"));
   EXPECT_TRUE(steam_offline::is_configured_steam_client("  \"C:\\Steam Library\\steam.exe\" -silent"));
   EXPECT_FALSE(steam_offline::is_configured_steam_client("cmd.exe /c steam.exe -silent"));

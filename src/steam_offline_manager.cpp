@@ -4,12 +4,16 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cwctype>
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <ranges>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -18,14 +22,17 @@
   #include <fwpmu.h>
   #include <sddl.h>
   #include <Aclapi.h>
+  #include <ShlObj.h>
   #pragma comment(lib, "fwpuclnt.lib")
 #endif
 
 namespace steam_offline {
   namespace {
-    constexpr std::size_t max_files = 4096;
+    constexpr std::size_t max_files = 8192;
     constexpr std::uintmax_t max_file_bytes = 1ULL << 31;
     constexpr std::uintmax_t max_tree_bytes = 8ULL << 30;
+    constexpr std::size_t max_depth = 16;
+    constexpr std::size_t max_path_chars = 32768;
     constexpr std::wstring_view volatile_directory_names[] = {
       L"steamapps", L"userdata", L"htmlcache", L"logs", L"dumps", L"confightml", L"package"};
 
@@ -36,23 +43,179 @@ namespace steam_offline {
     }
 
 #ifdef _WIN32
-    bool set_mirror_acl(const std::filesystem::path &path, std::string_view user_sid) {
-      if (user_sid.empty()) return false;
-      std::wstring sid;
-      sid.reserve(user_sid.size());
-      for (const auto ch : user_sid) sid.push_back(static_cast<wchar_t>(static_cast<unsigned char>(ch)));
-      const std::wstring sddl = L"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x120089;;;" + sid + L")";
+    struct handle_closer { void operator()(HANDLE handle) const noexcept { if (handle && handle != INVALID_HANDLE_VALUE) CloseHandle(handle); } };
+    using unique_handle = std::unique_ptr<void, handle_closer>;
+
+    bool secure_directory(HANDLE handle, const bool require_system_owner, PSID allowed_user = nullptr) {
+      if (!handle || handle == INVALID_HANDLE_VALUE) return false;
+      FILE_ATTRIBUTE_TAG_INFO tag {};
+      if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag, sizeof(tag)) ||
+          !(tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+      FILE_ID_INFO identity {};
+      if (!GetFileInformationByHandleEx(handle, FileIdInfo, &identity, sizeof(identity))) return false;
       PSECURITY_DESCRIPTOR descriptor = nullptr;
-      if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)) return false;
-      PACL dacl = nullptr;
-      BOOL present = FALSE, defaulted = FALSE;
-      const bool read = GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted) != FALSE;
-      auto mutable_path = path.wstring();
-      const bool applied = read && present && dacl &&
-        SetNamedSecurityInfoW(mutable_path.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                              nullptr, nullptr, dacl, nullptr) == ERROR_SUCCESS;
+      if (GetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                          nullptr, nullptr, nullptr, nullptr, &descriptor) != ERROR_SUCCESS || !descriptor) return false;
+      PSID owner = nullptr; BOOL present = FALSE, defaulted = FALSE; PACL dacl = nullptr;
+      const bool got = GetSecurityDescriptorOwner(descriptor, &owner, &defaulted) &&
+        GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted);
+      std::array<std::uint8_t, SECURITY_MAX_SID_SIZE> system_buffer {};
+      DWORD system_size = static_cast<DWORD>(system_buffer.size());
+      const bool system = CreateWellKnownSid(WinLocalSystemSid, nullptr, system_buffer.data(), &system_size);
+      SECURITY_DESCRIPTOR_CONTROL control {}; DWORD revision = 0;
+      const bool protected_dacl = GetSecurityDescriptorControl(descriptor, &control, &revision) &&
+        (control & SE_DACL_PROTECTED) != 0;
+      const bool owner_ok = !require_system_owner || (system && owner && EqualSid(owner, system_buffer.data()));
+      const bool user_ok = !allowed_user || (present && dacl && IsValidSid(allowed_user));
+      // Protected roots/leaves are authored by make_protected_directory and
+      // contain only the SYSTEM/Admin full-control entries until an explicit
+      // seat leaf ACL is applied. Reject a pre-created root with extra ACEs.
+      const bool root_acl_ok = !require_system_owner || allowed_user || (dacl && dacl->AceCount == 2);
       LocalFree(descriptor);
-      return applied;
+      return got && present && dacl && protected_dacl && owner_ok && user_ok && root_acl_ok;
+    }
+
+    unique_handle open_secure_directory(const std::filesystem::path &path, const bool require_system_owner,
+                                        PSID allowed_user = nullptr) {
+      HANDLE raw = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC | WRITE_OWNER,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                               FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      if (raw == INVALID_HANDLE_VALUE) return {};
+      unique_handle result {raw};
+      if (!secure_directory(result.get(), require_system_owner, allowed_user)) return {};
+      return result;
+    }
+
+    unique_handle open_no_reparse_directory(const std::filesystem::path &path) {
+      HANDLE raw = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      if (raw == INVALID_HANDLE_VALUE) return {};
+      unique_handle result {raw}; FILE_ATTRIBUTE_TAG_INFO tag {};
+      return GetFileInformationByHandleEx(result.get(), FileAttributeTagInfo, &tag, sizeof(tag)) &&
+        (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ? std::move(result) : unique_handle {};
+    }
+
+    bool make_protected_directory(const std::filesystem::path &path, bool &created) {
+      std::array<std::uint8_t, SECURITY_MAX_SID_SIZE> system_buffer {}, admin_buffer {};
+      DWORD system_size = static_cast<DWORD>(system_buffer.size()), admin_size = static_cast<DWORD>(admin_buffer.size());
+      if (!CreateWellKnownSid(WinLocalSystemSid, nullptr, system_buffer.data(), &system_size) ||
+          !CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, admin_buffer.data(), &admin_size)) return false;
+      std::array<EXPLICIT_ACCESSW, 2> entries {};
+      for (std::size_t i = 0; i != entries.size(); ++i) {
+        entries[i].grfAccessPermissions = FILE_ALL_ACCESS;
+        entries[i].grfAccessMode = SET_ACCESS;
+        entries[i].grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+        entries[i].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+        entries[i].Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+        entries[i].Trustee.ptstrName = static_cast<LPWSTR>(i ? static_cast<void *>(admin_buffer.data()) : static_cast<void *>(system_buffer.data()));
+      }
+      PACL acl = nullptr;
+      if (SetEntriesInAclW(static_cast<ULONG>(entries.size()), entries.data(), nullptr, &acl) != ERROR_SUCCESS || !acl) return false;
+      SECURITY_DESCRIPTOR descriptor {};
+      const bool ready = InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) &&
+        SetSecurityDescriptorOwner(&descriptor, system_buffer.data(), FALSE) &&
+        SetSecurityDescriptorDacl(&descriptor, TRUE, acl, FALSE) &&
+        SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+      SECURITY_ATTRIBUTES security {sizeof(security), ready ? &descriptor : nullptr, FALSE};
+      SetLastError(ERROR_SUCCESS);
+      created = ready && CreateDirectoryW(path.c_str(), &security) != FALSE;
+      const DWORD last = GetLastError();
+      LocalFree(acl);
+      return ready && (created || last == ERROR_ALREADY_EXISTS);
+    }
+
+    unique_handle ensure_protected_directory(const std::filesystem::path &path) {
+      bool created = false;
+      if (!make_protected_directory(path, created)) return {};
+      return open_secure_directory(path, true);
+    }
+
+    bool set_leaf_acl(HANDLE directory, PSID user, const ACCESS_MASK user_access, const bool inherit_user = true) {
+      if (!directory || !user) return false;
+      std::array<std::uint8_t, SECURITY_MAX_SID_SIZE> system_buffer {}, admin_buffer {};
+      DWORD system_size = static_cast<DWORD>(system_buffer.size()), admin_size = static_cast<DWORD>(admin_buffer.size());
+      if (!CreateWellKnownSid(WinLocalSystemSid, nullptr, system_buffer.data(), &system_size) ||
+          !CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, admin_buffer.data(), &admin_size)) return false;
+      std::array<EXPLICIT_ACCESSW, 3> entries {};
+      const auto init = [](EXPLICIT_ACCESSW &entry, PSID sid, ACCESS_MASK access, DWORD inherit) {
+        entry.grfAccessPermissions = access; entry.grfAccessMode = SET_ACCESS; entry.grfInheritance = inherit;
+        entry.Trustee.TrusteeForm = TRUSTEE_IS_SID; entry.Trustee.TrusteeType = TRUSTEE_IS_USER; entry.Trustee.ptstrName = static_cast<LPWSTR>(sid);
+      };
+      init(entries[0], system_buffer.data(), FILE_ALL_ACCESS, SUB_CONTAINERS_AND_OBJECTS_INHERIT);
+      init(entries[1], admin_buffer.data(), FILE_ALL_ACCESS, SUB_CONTAINERS_AND_OBJECTS_INHERIT);
+      init(entries[2], user, user_access, inherit_user ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE);
+      PACL acl = nullptr;
+      if (SetEntriesInAclW(static_cast<ULONG>(entries.size()), entries.data(), nullptr, &acl) != ERROR_SUCCESS || !acl) return false;
+      const DWORD result = SetSecurityInfo(directory, SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, acl, nullptr);
+      LocalFree(acl);
+      return result == ERROR_SUCCESS;
+    }
+
+    std::optional<std::filesystem::path> program_data() {
+      PWSTR raw = nullptr;
+      if (FAILED(SHGetKnownFolderPath(FOLDERID_ProgramData, KF_FLAG_DEFAULT, nullptr, &raw)) || !raw) return std::nullopt;
+      std::filesystem::path path {raw}; CoTaskMemFree(raw); return path;
+    }
+
+    bool copy_regular_file(const std::filesystem::path &source, const std::filesystem::path &destination) {
+      HANDLE raw = CreateFileW(source.c_str(), FILE_READ_ATTRIBUTES | FILE_READ_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+      if (raw == INVALID_HANDLE_VALUE) return false;
+      unique_handle source_handle {raw}; FILE_ATTRIBUTE_TAG_INFO tag {};
+      if (!GetFileInformationByHandleEx(source_handle.get(), FileAttributeTagInfo, &tag, sizeof(tag)) ||
+          (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+      FILE_ID_INFO source_identity {};
+      if (!GetFileInformationByHandleEx(source_handle.get(), FileIdInfo, &source_identity, sizeof(source_identity))) return false;
+      if (!CopyFileExW(source.c_str(), destination.c_str(), nullptr, nullptr, nullptr, COPY_FILE_FAIL_IF_EXISTS)) return false;
+      HANDLE source_again = CreateFileW(source.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      if (source_again == INVALID_HANDLE_VALUE) return false;
+      unique_handle source_again_handle {source_again}; FILE_ID_INFO source_again_identity {};
+      if (!GetFileInformationByHandleEx(source_again_handle.get(), FileIdInfo, &source_again_identity, sizeof(source_again_identity)) ||
+          std::memcmp(&source_identity, &source_again_identity, sizeof(source_identity)) != 0) return false;
+      HANDLE copied = CreateFileW(destination.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      if (copied == INVALID_HANDLE_VALUE) return false;
+      unique_handle copied_handle {copied}; FILE_ATTRIBUTE_TAG_INFO copied_tag {};
+      return GetFileInformationByHandleEx(copied_handle.get(), FileAttributeTagInfo, &copied_tag, sizeof(copied_tag)) &&
+        !(copied_tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT);
+    }
+
+    bool create_owned_path(const std::filesystem::path &root, const std::filesystem::path &target) {
+      const auto relative = target.lexically_relative(root);
+      if (relative.empty() || relative.native().starts_with(L"..")) return false;
+      auto current = root;
+      for (const auto &part : relative) {
+        current /= part;
+        bool created = false;
+        if (!make_protected_directory(current, created) || !open_secure_directory(current, true)) return false;
+      }
+      return true;
+    }
+
+    bool remove_owned_tree(const std::filesystem::path &path) {
+      // Deletion is only called for a SYSTEM-owned path below the protected
+      // ProgramData root. Every entry is opened with OPEN_REPARSE_POINT; a
+      // reparse entry is rejected instead of followed or recursively removed.
+      std::error_code ec;
+      if (!std::filesystem::exists(path, ec)) return true;
+      HANDLE raw = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES | DELETE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      if (raw == INVALID_HANDLE_VALUE) return false;
+      unique_handle opened {raw}; FILE_ATTRIBUTE_TAG_INFO tag {};
+      if (!GetFileInformationByHandleEx(opened.get(), FileAttributeTagInfo, &tag, sizeof(tag)) ||
+          (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+      if (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        for (std::filesystem::directory_iterator it(path, std::filesystem::directory_options::none, ec), end; it != end && !ec; it.increment(ec)) {
+          if (!remove_owned_tree(it->path())) return false;
+        }
+        return !ec && RemoveDirectoryW(path.c_str()) != FALSE;
+      }
+      return !ec && DeleteFileW(path.c_str()) != FALSE;
     }
 #endif
 
@@ -66,8 +229,10 @@ namespace steam_offline {
     }
 
     bool under_root(const std::filesystem::path &path, const std::filesystem::path &root) {
-      auto p = std::filesystem::weakly_canonical(path);
-      auto r = std::filesystem::weakly_canonical(root);
+      std::error_code path_error, root_error;
+      auto p = std::filesystem::weakly_canonical(path, path_error);
+      auto r = std::filesystem::weakly_canonical(root, root_error);
+      if (path_error || root_error) return false;
       auto pit = p.begin();
       for (auto rit = r.begin(); rit != r.end(); ++rit, ++pit) {
         if (pit == p.end() || *pit != *rit) return false;
@@ -77,9 +242,12 @@ namespace steam_offline {
 
     bool excluded_directory(const std::filesystem::path &relative) {
       return std::ranges::any_of(relative, [](const auto &part) {
-        const auto value = part.wstring();
+        auto value = part.wstring();
+        std::ranges::transform(value, value.begin(), [](wchar_t ch) {
+          return static_cast<wchar_t>(std::towlower(ch));
+        });
         return std::ranges::any_of(volatile_directory_names, [&](std::wstring_view name) {
-          return _wcsicmp(value.c_str(), name.data()) == 0;
+          return value == name;
         });
       });
     }
@@ -173,22 +341,80 @@ namespace steam_offline {
       return true;
     }
 
-    void remove_stale_filters(HANDLE engine, std::wstring_view seat, std::uint64_t generation) {
-      UINT32 count = 0;
-      FWPM_FILTER0 **filters = nullptr;
-      if (FwpmFilterEnum0(engine, nullptr, 4096, &filters, &count) != ERROR_SUCCESS) return;
-      const auto provider = guid(provider_key_bytes);
-      const std::wstring marker = L"Vibeshine Steam seat=" + std::wstring {seat} + L" generation=";
-      const auto current = std::to_wstring(generation);
-      for (UINT32 i = 0; i < count; ++i) {
-        const auto description = filters[i] && filters[i]->displayData.description ?
-          std::wstring_view {filters[i]->displayData.description} : std::wstring_view {};
-        if (filters[i] && filters[i]->providerKey && std::memcmp(filters[i]->providerKey, &provider, sizeof(provider)) == 0 &&
-            description.starts_with(marker) && description.substr(marker.size()).find(current) != 0) {
-          (void)FwpmFilterDeleteByKey0(engine, &filters[i]->filterKey);
-        }
+    struct filter_owner { std::wstring seat; std::uint64_t generation {}; };
+
+    bool parse_filter_owner(const wchar_t *description, filter_owner &owner) {
+      if (!description) return false;
+      constexpr std::wstring_view prefix = L"VibeshineSteamSeat|seat=";
+      const std::wstring_view value {description};
+      if (!value.starts_with(prefix)) return false;
+      const auto generation_tag = value.find(L"|generation=");
+      if (generation_tag == std::wstring_view::npos || generation_tag == prefix.size()) return false;
+      owner.seat.assign(value.substr(prefix.size(), generation_tag - prefix.size()));
+      const auto number = value.substr(generation_tag + 12);
+      if (number.empty() || !std::ranges::all_of(number, [](wchar_t ch) { return ch >= L'0' && ch <= L'9'; })) return false;
+      try { owner.generation = std::stoull(std::wstring {number}); } catch (...) { return false; }
+      std::string seat; seat.reserve(owner.seat.size());
+      for (const wchar_t ch : owner.seat) {
+        if (ch > 0x7f) return false;
+        seat.push_back(static_cast<char>(ch));
       }
-      FwpmFreeMemory0(reinterpret_cast<void **>(&filters));
+      return valid_seat(seat);
+    }
+
+    bool remove_stale_filters(HANDLE engine, std::wstring_view seat, std::uint64_t generation, std::string &error) {
+      const auto provider = guid(provider_key_bytes);
+      const auto sublayer = guid(sublayer_key_bytes);
+      FWPM_FILTER_ENUM_TEMPLATE0 templ {};
+      templ.providerKey = const_cast<GUID *>(&provider);
+      HANDLE enumeration = nullptr;
+      auto status = FwpmFilterCreateEnumHandle0(engine, &templ, &enumeration);
+      if (status != ERROR_SUCCESS || !enumeration) { error = "WFP stale-filter enumeration could not start (" + std::to_string(status) + ")."; return false; }
+      constexpr UINT32 page_size = 128, max_pages = 128, max_objects = page_size * max_pages;
+      status = FwpmTransactionBegin0(engine, 0);
+      UINT32 pages = 0, objects = 0;
+      bool ok = status == ERROR_SUCCESS;
+      while (ok && pages++ < max_pages) {
+        UINT32 count = 0; FWPM_FILTER0 **filters = nullptr;
+        status = FwpmFilterEnum0(engine, enumeration, page_size, &filters, &count);
+        if (status != ERROR_SUCCESS) { ok = false; break; }
+        if (count == 0) { if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
+        objects += count;
+        if (objects > max_objects) { ok = false; if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
+        for (UINT32 i = 0; i < count && ok; ++i) {
+          filter_owner parsed;
+          if (!filters[i] || !filters[i]->subLayerKey || std::memcmp(filters[i]->subLayerKey, &sublayer, sizeof(sublayer)) != 0 ||
+              !parse_filter_owner(filters[i]->displayData.description, parsed)) continue;
+          if (parsed.seat == seat && parsed.generation != generation) {
+            status = FwpmFilterDeleteByKey0(engine, &filters[i]->filterKey);
+            ok = status == ERROR_SUCCESS || status == FWP_E_FILTER_NOT_FOUND;
+          }
+        }
+        if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters));
+      }
+      if (pages > max_pages && ok) ok = false;
+      if (ok) status = FwpmTransactionCommit0(engine);
+      if (!ok || status != ERROR_SUCCESS) {
+        (void)FwpmTransactionAbort0(engine);
+        error = "WFP stale-filter reconciliation failed; cleanup remains pending (" + std::to_string(status) + ").";
+      }
+      (void)FwpmFilterDestroyEnumHandle0(engine, enumeration);
+      return ok && status == ERROR_SUCCESS;
+    }
+
+    bool validate_owned_schema(HANDLE engine, const GUID &provider_key, const GUID &sublayer_key, std::string &error) {
+      FWPM_PROVIDER0 *provider = nullptr; FWPM_SUBLAYER0 *sublayer = nullptr;
+      auto status = FwpmProviderGetByKey0(engine, &provider_key, &provider);
+      const bool provider_ok = status == ERROR_SUCCESS && provider && provider->flags & FWPM_PROVIDER_FLAG_PERSISTENT &&
+        provider->displayData.name && std::wstring_view {provider->displayData.name} == L"Vibeshine Steam user-mode isolation";
+      if (provider) FwpmFreeMemory0(reinterpret_cast<void **>(&provider));
+      status = FwpmSubLayerGetByKey0(engine, &sublayer_key, &sublayer);
+      const bool sublayer_ok = status == ERROR_SUCCESS && sublayer && sublayer->providerKey &&
+        std::memcmp(sublayer->providerKey, &provider_key, sizeof(provider_key)) == 0 &&
+        (sublayer->flags & FWPM_SUBLAYER_FLAG_PERSISTENT) && sublayer->weight == 0xffff;
+      if (sublayer) FwpmFreeMemory0(reinterpret_cast<void **>(&sublayer));
+      if (!provider_ok || !sublayer_ok) { error = "Owned WFP provider/sublayer schema is not exact; isolation is refused."; return false; }
+      return true;
     }
 #endif
   }
@@ -200,9 +426,10 @@ namespace steam_offline {
 
   manager_t::manager_t(manager_t &&other) noexcept
       : engine_(other.engine_), filter_keys_(std::move(other.filter_keys_)), preparation_(std::move(other.preparation_)),
-        seat_id_(std::move(other.seat_id_)), generation_(other.generation_) {
+        seat_id_(std::move(other.seat_id_)), generation_(other.generation_), quarantined_(other.quarantined_) {
     other.engine_ = nullptr;
     other.generation_ = 0;
+    other.quarantined_ = false;
   }
 
   manager_t &manager_t::operator=(manager_t &&other) noexcept {
@@ -214,8 +441,10 @@ namespace steam_offline {
     preparation_ = std::move(other.preparation_);
     seat_id_ = std::move(other.seat_id_);
     generation_ = other.generation_;
+    quarantined_ = other.quarantined_;
     other.engine_ = nullptr;
     other.generation_ = 0;
+    other.quarantined_ = false;
     return *this;
   }
 
@@ -250,11 +479,17 @@ namespace steam_offline {
     if (!local_system()) { error = "Steam isolation preparation must run in the SYSTEM broker."; return false; }
     std::error_code ec;
     const auto source = std::filesystem::weakly_canonical(steam_executable, ec);
-    if (ec || !std::filesystem::is_regular_file(source, ec) || _wcsicmp(source.filename().c_str(), L"steam.exe") != 0) {
+    auto source_name = source.filename().wstring();
+    std::ranges::transform(source_name, source_name.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+    if (ec || !std::filesystem::is_regular_file(source, ec) || source_name != L"steam.exe") {
       error = "The trusted Steam command is not a canonical steam.exe file.";
       return false;
     }
     const auto source_root = source.parent_path();
+    if (!open_no_reparse_directory(source_root)) {
+      error = "The trusted Steam source root is a reparse point or could not be opened safely.";
+      return false;
+    }
     const auto proxy = std::filesystem::weakly_canonical(proxy_executable, ec);
     if (ec || !std::filesystem::is_regular_file(proxy, ec)) {
       error = "The packaged steam webhelper proxy is missing.";
@@ -271,101 +506,142 @@ namespace steam_offline {
     std::wstring seat_wide;
     seat_wide.reserve(seat_id.size());
     for (const auto ch : seat_id) seat_wide.push_back(static_cast<wchar_t>(static_cast<unsigned char>(ch)));
-    remove_stale_filters(engine, seat_wide, generation);
-
     FWPM_PROVIDER0 provider {};
     const auto provider_key = guid(provider_key_bytes);
     provider.providerKey = provider_key;
+    provider.flags = FWPM_PROVIDER_FLAG_PERSISTENT;
     provider.displayData.name = const_cast<wchar_t *>(L"Vibeshine Steam user-mode isolation");
     provider.displayData.description = const_cast<wchar_t *>(L"Persistent SYSTEM-owned Steam client seat filters");
-    status = FwpmTransactionBegin0(engine, 0);
-    if (status == ERROR_SUCCESS) status = FwpmProviderAdd0(engine, &provider, nullptr);
     FWPM_SUBLAYER0 sublayer {};
     const auto sublayer_key = guid(sublayer_key_bytes);
     sublayer.subLayerKey = sublayer_key;
     sublayer.displayData.name = const_cast<wchar_t *>(L"Vibeshine Steam seat isolation");
     sublayer.providerKey = const_cast<GUID *>(&provider_key);
-    sublayer.weight = 0x7fff;
-    if (status == ERROR_SUCCESS) status = FwpmSubLayerAdd0(engine, &sublayer, nullptr);
-    if (status != ERROR_SUCCESS) {
-      if (status == FWP_E_ALREADY_EXISTS) status = ERROR_SUCCESS;
-      else { FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); error = "WFP provider transaction failed (" + std::to_string(status) + ")."; return false; }
-    }
-
-    const auto seat_root = std::filesystem::path {L"C:\\ProgramData\\VibeshineSteamSeats"} / seat_wide;
+    // Highest ordinary user-mode sublayer weight. This is not a callout veto:
+    // administrator/higher-priority policy may still override the admission.
+    sublayer.weight = 0xffff;
+    sublayer.flags = FWPM_SUBLAYER_FLAG_PERSISTENT;
+    const auto program_data_root = program_data();
+    if (!program_data_root) { FwpmEngineClose0(engine); error = "The OS ProgramData root could not be resolved."; return false; }
+    const auto owned_root = *program_data_root / L"VibeshineSteamSeats";
+    const auto seat_root = owned_root / seat_wide;
     const auto generation_root = seat_root / std::to_wstring(generation);
-    const auto stage = generation_root.parent_path() / (std::to_wstring(generation) + L".staging");
+    GUID stage_id {};
+    if (CoCreateGuid(&stage_id) != S_OK) { FwpmEngineClose0(engine); error = "Secure staging identity could not be generated."; return false; }
+    wchar_t stage_name[64] {};
+    StringFromGUID2(stage_id, stage_name, ARRAYSIZE(stage_name));
+    const auto stage = seat_root / (L".staging-" + std::wstring {stage_name});
     const auto mirror = generation_root / L"client";
     const auto cache = generation_root / L"cache";
-    if (std::filesystem::is_symlink(seat_root, ec) || std::filesystem::is_symlink(generation_root, ec) ||
-        std::filesystem::is_symlink(stage, ec) || std::filesystem::is_symlink(mirror, ec) ||
-        std::filesystem::is_symlink(cache, ec)) {
-      FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); error = "Steam mirror root contains an unsafe reparse point."; return false;
-    }
-    std::filesystem::remove_all(stage, ec);
-    std::filesystem::create_directories(stage, ec);
+    const auto discard_published = [&] {
+      (void)remove_owned_tree(mirror);
+      (void)remove_owned_tree(cache);
+    };
+    auto owned = ensure_protected_directory(owned_root);
+    auto seat = owned ? ensure_protected_directory(seat_root) : unique_handle {};
+    auto generation_handle = seat ? ensure_protected_directory(generation_root) : unique_handle {};
+    bool stage_created = false;
+    if (generation_handle) stage_created = make_protected_directory(stage, stage_created);
+    auto stage_handle = stage_created ? open_secure_directory(stage, true) : unique_handle {};
     std::vector<std::filesystem::path> executables;
     std::size_t files = 0;
     std::uintmax_t tree_bytes = 0;
     bool copy_failed = false;
-    if (ec) { FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); error = "Steam mirror staging root could not be created."; return false; }
-    std::filesystem::recursive_directory_iterator it(source_root, std::filesystem::directory_options::skip_permission_denied, ec), end;
+    if (!owned || !seat || !generation_handle || !stage_handle) { FwpmEngineClose0(engine); error = "The SYSTEM-owned Steam mirror root could not be opened safely."; return false; }
+    std::filesystem::recursive_directory_iterator it(source_root, std::filesystem::directory_options::none, ec), end;
     for (; it != end && !ec; it.increment(ec)) {
       const auto rel = std::filesystem::relative(it->path(), source_root, ec);
       if (ec || excluded_directory(rel)) { if (it->is_directory(ec)) it.disable_recursion_pending(); continue; }
+      if (rel.native().size() > max_path_chars) { copy_failed = true; break; }
+      if (rel.begin() != rel.end() && static_cast<std::size_t>(std::distance(rel.begin(), rel.end())) > max_depth) { copy_failed = true; break; }
       if (it->is_symlink(ec) || it->is_other(ec)) { copy_failed = true; break; }
+      if (it->is_directory(ec)) {
+        if (!open_no_reparse_directory(it->path())) { copy_failed = true; break; }
+        if (!create_owned_path(stage, stage / rel)) { copy_failed = true; break; }
+        continue;
+      }
       const auto file_bytes = it->is_regular_file(ec) ? std::filesystem::file_size(it->path(), ec) : 0;
       if (ec || !it->is_regular_file(ec) || ++files > max_files || file_bytes > max_file_bytes ||
           tree_bytes > max_tree_bytes - std::min(file_bytes, max_tree_bytes)) { copy_failed = true; break; }
       tree_bytes += file_bytes;
       const auto destination = stage / rel;
-      std::filesystem::create_directories(destination.parent_path(), ec);
-      if (ec || !std::filesystem::copy_file(it->path(), destination, std::filesystem::copy_options::overwrite_existing, ec)) { copy_failed = true; break; }
-      if (_wcsicmp(destination.filename().c_str(), L"steamservice.exe") == 0) { std::filesystem::remove(destination, ec); continue; }
-      if (_wcsicmp(destination.extension().c_str(), L".exe") == 0) executables.push_back(destination);
+      if (!under_root(destination, stage)) { copy_failed = true; break; }
+      if (!create_owned_path(stage, destination.parent_path()) || !copy_regular_file(it->path(), destination)) { copy_failed = true; break; }
+      auto lower_name = destination.filename().wstring(); std::ranges::transform(lower_name, lower_name.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+      if (lower_name == L"steamservice.exe") { if (!DeleteFileW(destination.c_str())) { copy_failed = true; break; } continue; }
+      auto extension = destination.extension().wstring();
+      std::ranges::transform(extension, extension.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+      if (extension == L".exe") executables.push_back(destination);
     }
     if (ec || copy_failed || executables.empty()) {
-      FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); error = "Steam mirror could not be completely enumerated."; return false;
+      (void)remove_owned_tree(stage); FwpmEngineClose0(engine); error = "Steam mirror could not be completely enumerated."; return false;
     }
     const auto helper = stage / L"steamwebhelper.exe";
     const auto real_helper = stage / L"steamwebhelper.real.exe";
     executables.erase(std::remove(executables.begin(), executables.end(), helper), executables.end());
-    if (std::filesystem::exists(helper, ec)) std::filesystem::rename(helper, real_helper, ec);
-    if (ec || !std::filesystem::copy_file(proxy, helper, std::filesystem::copy_options::overwrite_existing, ec)) {
-      FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); error = "Steam webhelper proxy publication failed."; return false;
+    if (std::filesystem::exists(helper, ec)) {
+      if (!MoveFileExW(helper.c_str(), real_helper.c_str(), MOVEFILE_WRITE_THROUGH)) { (void)remove_owned_tree(stage); FwpmEngineClose0(engine); error = "Steam webhelper could not be published safely."; return false; }
     }
+    if (ec || !copy_regular_file(proxy, helper)) { (void)remove_owned_tree(stage); FwpmEngineClose0(engine); error = "Steam webhelper proxy publication failed."; return false; }
     executables.push_back(real_helper);
     executables.push_back(helper);
-    std::filesystem::create_directories(cache, ec);
-    std::filesystem::create_directories(generation_root, ec);
-    std::filesystem::remove_all(mirror, ec);
-    std::filesystem::rename(stage, mirror, ec);
-    if (ec || !set_mirror_acl(mirror, user_sid) || !set_mirror_acl(cache, user_sid)) {
-      FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); error = "Steam mirror publication or ACL setup failed."; return false;
+    // The generation parent is SYSTEM/Admin-only. Publish exactly once, then
+    // reopen and revalidate the published leaf before deriving AppIds.
+    if (std::filesystem::exists(mirror, ec) || !MoveFileExW(stage.c_str(), mirror.c_str(), MOVEFILE_WRITE_THROUGH)) {
+      (void)remove_owned_tree(stage); FwpmEngineClose0(engine); error = "Steam mirror publication failed closed."; return false;
+    }
+    auto mirror_handle = open_secure_directory(mirror, true);
+    if (!mirror_handle) { discard_published(); FwpmEngineClose0(engine); error = "Published Steam mirror failed SYSTEM/reparse validation."; return false; }
+    PSID user = nullptr;
+    std::wstring sid_wide; sid_wide.reserve(user_sid.size()); for (const auto ch : user_sid) sid_wide.push_back(static_cast<wchar_t>(static_cast<unsigned char>(ch)));
+    if (!ConvertStringSidToSidW(sid_wide.c_str(), &user) || !user) { discard_published(); FwpmEngineClose0(engine); error = "Steam seat user SID is invalid."; return false; }
+    const auto user_guard = std::unique_ptr<void, decltype(&LocalFree)> {user, LocalFree};
+    bool cache_created = false, html_created = false, profile_created = false;
+    if (!make_protected_directory(cache, cache_created)) { discard_published(); FwpmEngineClose0(engine); error = "Steam cache root creation failed."; return false; }
+    const auto html = cache / L"htmlcache"; const auto profile = cache / L"userdata";
+    auto cache_handle = open_secure_directory(cache, true);
+    auto html_handle = cache_handle ? (make_protected_directory(html, html_created), open_secure_directory(html, true, user)) : unique_handle {};
+    auto profile_handle = cache_handle ? (make_protected_directory(profile, profile_created), open_secure_directory(profile, true, user)) : unique_handle {};
+    constexpr ACCESS_MASK user_read_execute = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE | FILE_TRAVERSE | SYNCHRONIZE;
+    constexpr ACCESS_MASK user_modify = user_read_execute | FILE_GENERIC_WRITE;
+    if (!cache_handle || !html_handle || !profile_handle || !set_leaf_acl(cache_handle.get(), user, FILE_TRAVERSE | SYNCHRONIZE, false) ||
+        !set_leaf_acl(mirror_handle.get(), user, user_read_execute) || !set_leaf_acl(html_handle.get(), user, user_modify) ||
+        !set_leaf_acl(profile_handle.get(), user, user_modify)) {
+      discard_published(); FwpmEngineClose0(engine); error = "Seat-private Steam cache/profile ACL setup failed."; return false;
+    }
+
+    if (!remove_stale_filters(engine, seat_wide, generation, error)) { discard_published(); FwpmEngineClose0(engine); return false; }
+    status = FwpmTransactionBegin0(engine, 0);
+    if (status == ERROR_SUCCESS) status = FwpmProviderAdd0(engine, &provider, nullptr);
+    if (status == FWP_E_ALREADY_EXISTS) status = ERROR_SUCCESS;
+    if (status == ERROR_SUCCESS) status = FwpmSubLayerAdd0(engine, &sublayer, nullptr);
+    if (status == FWP_E_ALREADY_EXISTS) status = ERROR_SUCCESS;
+    if (status != ERROR_SUCCESS || !validate_owned_schema(engine, provider_key, sublayer_key, error)) {
+      (void)FwpmTransactionAbort0(engine); discard_published(); FwpmEngineClose0(engine); if (error.empty()) error = "WFP provider/sublayer schema transaction failed."; return false;
     }
 
     std::vector<std::filesystem::path> published;
     published.reserve(executables.size());
     for (const auto &staged : executables) {
-      const auto published_path = mirror / std::filesystem::relative(staged, stage, ec);
+      const auto published_path = mirror / staged.lexically_relative(stage);
       PFWP_BYTE_BLOB app_id = nullptr;
       status = FwpmGetAppIdFromFileName0(published_path.c_str(), &app_id);
       if (status != ERROR_SUCCESS || !app_id || app_id->size == 0) {
         if (app_id) FwpmFreeMemory0(reinterpret_cast<void **>(&app_id));
-        FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); error = "Steam mirror app identity could not be canonicalized."; return false;
+        FwpmTransactionAbort0(engine); discard_published(); FwpmEngineClose0(engine); error = "Steam mirror app identity could not be canonicalized."; return false;
       }
-      std::wstring owner = L"Vibeshine Steam seat=" + seat_wide + L" generation=" + std::to_wstring(generation);
+      std::wstring owner = L"VibeshineSteamSeat|seat=" + seat_wide + L"|generation=" + std::to_wstring(generation);
       const auto v4 = key_for(deterministic_filter_key(seat_id, generation, narrow(published_path), false));
       const auto v6 = key_for(deterministic_filter_key(seat_id, generation, narrow(published_path), true));
       if (!add_filter(engine, guid(v4), provider_key, sublayer_key, FWPM_LAYER_ALE_AUTH_CONNECT_V4, app_id->data, app_id->size, owner, error) ||
           !add_filter(engine, guid(v6), provider_key, sublayer_key, FWPM_LAYER_ALE_AUTH_CONNECT_V6, app_id->data, app_id->size, owner, error)) {
-        FwpmFreeMemory0(reinterpret_cast<void **>(&app_id)); FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); return false;
+        FwpmFreeMemory0(reinterpret_cast<void **>(&app_id)); FwpmTransactionAbort0(engine); discard_published(); FwpmEngineClose0(engine); return false;
       }
       FwpmFreeMemory0(reinterpret_cast<void **>(&app_id));
       filter_keys_.push_back(v4); filter_keys_.push_back(v6); published.push_back(published_path);
     }
     status = FwpmTransactionCommit0(engine);
-    if (status != ERROR_SUCCESS) { FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); filter_keys_.clear(); error = "WFP filter transaction commit failed (" + std::to_string(status) + ")."; return false; }
+    if (status != ERROR_SUCCESS) { FwpmTransactionAbort0(engine); filter_keys_.clear(); discard_published(); FwpmEngineClose0(engine); error = "WFP filter transaction commit failed (" + std::to_string(status) + ")."; return false; }
     engine_ = engine; seat_id_ = seat_id; generation_ = generation;
     preparation_ = {.mirror_root = mirror, .cache_root = cache, .steam_executable = mirror / L"steam.exe",
                     .proxy_executable = mirror / L"steamwebhelper.exe", .manifest_digest = digest_manifest(published),
@@ -382,15 +658,33 @@ namespace steam_offline {
     if (!active()) { error = "Steam isolation filters are not installed."; return false; }
 #ifdef _WIN32
     if (!local_system()) { error = "Steam isolation health must be checked by the SYSTEM broker."; return false; }
-    for (const auto &key : filter_keys_) {
-      FWPM_FILTER0 *filter = nullptr;
-      const auto guid_key = guid(key);
-      if (FwpmFilterGetByKey0(static_cast<HANDLE>(engine_), &guid_key, &filter) != ERROR_SUCCESS || !filter) {
-        if (filter) FwpmFreeMemory0(reinterpret_cast<void **>(&filter));
-        error = "A persistent Steam seat filter is missing; reconnect is blocked."; return false;
+    const auto provider = guid(provider_key_bytes); const auto sublayer = guid(sublayer_key_bytes);
+    if (!validate_owned_schema(static_cast<HANDLE>(engine_), provider, sublayer, error)) return false;
+    FWPM_FILTER_ENUM_TEMPLATE0 templ {}; templ.providerKey = const_cast<GUID *>(&provider);
+    HANDLE enumeration = nullptr;
+    auto status = FwpmFilterCreateEnumHandle0(static_cast<HANDLE>(engine_), &templ, &enumeration);
+    if (status != ERROR_SUCCESS || !enumeration) { error = "Owned WFP filter health enumeration failed; reconnect is blocked."; return false; }
+    std::vector<std::array<std::uint8_t, 16>> observed; observed.reserve(filter_keys_.size());
+    constexpr UINT32 page_size = 128, max_pages = 128;
+    bool ok = true; UINT32 pages = 0;
+    while (ok && pages++ < max_pages) {
+      UINT32 count = 0; FWPM_FILTER0 **filters = nullptr;
+      status = FwpmFilterEnum0(static_cast<HANDLE>(engine_), enumeration, page_size, &filters, &count);
+      if (status != ERROR_SUCCESS) { ok = false; break; }
+      if (count == 0) { if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
+      if (observed.size() + count > filter_keys_.size()) { ok = false; if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters)); break; }
+      for (UINT32 i = 0; i < count; ++i) if (filters[i]) {
+        filter_owner owner;
+        if (!filters[i]->subLayerKey || std::memcmp(filters[i]->subLayerKey, &sublayer, sizeof(sublayer)) != 0 ||
+            !parse_filter_owner(filters[i]->displayData.description, owner) || owner.seat != std::wstring {seat_id_.begin(), seat_id_.end()} || owner.generation != generation_) { ok = false; break; }
+        std::array<std::uint8_t, 16> key {}; std::memcpy(key.data(), &filters[i]->filterKey, sizeof(GUID)); observed.push_back(key);
       }
-      FwpmFreeMemory0(reinterpret_cast<void **>(&filter));
+      if (filters) FwpmFreeMemory0(reinterpret_cast<void **>(&filters));
     }
+    if (pages > max_pages || observed.size() != filter_keys_.size()) ok = false;
+    if (ok) for (const auto &key : filter_keys_) if (std::ranges::find(observed, key) == observed.end()) { ok = false; break; }
+    (void)FwpmFilterDestroyEnumHandle0(static_cast<HANDLE>(engine_), enumeration);
+    if (!ok) { error = "A persistent owned Steam seat filter is missing or mismatched; reconnect is blocked."; return false; }
     return true;
 #else
     error = "Steam isolation is Windows-only."; return false;
@@ -400,7 +694,14 @@ namespace steam_offline {
   bool manager_t::release(std::string &error) noexcept {
     if (!engine_) return true;
 #ifdef _WIN32
+    if (quarantined_) { error = "Steam seat remains quarantined because worker termination was not proven; filters stay installed."; return false; }
     if (!local_system()) { error = "Steam isolation cleanup must run by the SYSTEM broker."; return false; }
+    const auto program_data_root = program_data();
+    if (!program_data_root || !under_root(preparation_.mirror_root, *program_data_root) ||
+        !remove_owned_tree(preparation_.mirror_root)) {
+      error = "The isolated Steam mirror could not be securely removed; filters remain installed.";
+      return false;
+    }
     auto *engine = static_cast<HANDLE>(engine_);
     auto status = FwpmTransactionBegin0(engine, 0);
     if (status == ERROR_SUCCESS) {
@@ -417,7 +718,7 @@ namespace steam_offline {
       return false;
     }
     FwpmEngineClose0(engine);
-    engine_ = nullptr; filter_keys_.clear(); preparation_ = {}; seat_id_.clear(); generation_ = 0;
+    engine_ = nullptr; filter_keys_.clear(); preparation_ = {}; seat_id_.clear(); generation_ = 0; quarantined_ = false;
     return true;
 #else
     error = "Steam isolation is Windows-only."; return false;

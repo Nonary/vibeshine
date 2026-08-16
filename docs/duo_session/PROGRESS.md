@@ -46,15 +46,17 @@ for a non-console Windows session; the proof rig required a remote-session IDD
 created through `SWD\\RemoteDisplayEnum` with
 `IDDCX_ADAPTER_FLAGS_REMOTE_SESSION_DRIVER`.
 
-### Steam offline isolation (opt-in, user-mode source/runtime gate incomplete)
+### Steam offline isolation (opt-in, source-corrected; runtime gate incomplete)
 
 The paired-client setting is default-off and is effective only when terminal
-emulation is also enabled. Its value is carried through the authenticated launch
+emulation is also enabled. Its value is carried through authenticated launch
 material into the SYSTEM-owned private worker. Before resuming it, the SYSTEM
-service discovers the exact configured Steam command, publishes a reparse-safe
-real-file mirror, and installs persistent V4/V6 ALE AppId block filters through
-the documented BFE user-mode API. Filter and mirror admission failure aborts the
-launch; the console-user worker cannot add or remove WFP objects.
+service resolves ProgramData through the OS, creates SYSTEM/Admin-only protected
+roots, stages a bounded real-file mirror with no-follow/reparse rejection, and
+publishes it atomically. It then validates a persistent provider+sublayer schema
+and installs exact V4/V6 ALE AppId block filters through the documented BFE
+user-mode API. Filter and mirror admission failure aborts the launch; the
+console-user worker cannot add or remove WFP objects.
 
 When enabled, the app launcher adds one bounded, idempotent
 `-master_ipc_name_override vibeshine-seat-<safe-seat-token>` only when the
@@ -71,9 +73,22 @@ rewrites both CEF cache and user-data arguments to a seat-private root, launches
 the copied real helper by exact sibling path, waits for it, and propagates its
 exit. No SYS/INF/CAT/callout, special certificate, TESTSIGNING, DLL patch,
 injection, IFEO, or AppContainer is part of this implementation. This is
-source-ready pending runtime proof, including copied Steam launch, proxy/cache
-separation, console-vs-clone path filtering, game online behavior, BFE restart,
-and update/relaunch escape detection.
+This is product offline-like behavior, not a cryptographic sandbox. Because the
+console and seat intentionally share one Windows SID/profile, an intentionally
+hostile same-console-user process can copy/rename Steam or launch the original
+console path outside the mirror; standard path-based AppId WFP has no distinct
+principal and cannot close that race. The worker monitor detects Steam client
+images outside the exact mirror and poisons/terminates the seat job, but there is
+no pre-network zero-window guarantee and administrator/higher-priority policy can
+override a standard user-mode filter. Filters remain persistent and quarantined
+when termination cannot be proven. Source correction was rejected by Daybreak's
+first pass for filesystem, WFP lifetime, recursion, cache ACL, proxy argv,
+monitoring, and ownership gaps; those corrections are now represented here.
+No build, test execution, install, Steam launch, or live WFP mutation has been
+performed. Remaining runtime gates are copied Steam launch, proxy/cache
+separation, console-vs-clone path filtering, game-online behavior, BFE restart,
+Steam updater/self-relaunch escape handling, and validation of the proxy against
+Steam's actual CEF argument behavior.
 
 ### Windows account and application-token semantics
 
@@ -1402,7 +1417,7 @@ At the start of a new session:
    the provisioned shared WebRTC SDK. Reconfigure from the committed lane tip
    before compiling or packaging; never reuse the canonical Sunshine build tree.
 
-## User-mode Steam isolation source checkpoint (2026-08-16)
+## User-mode Steam isolation source checkpoint (2026-08-16, Daybreak correction)
 
 The custom Steam kernel WFP driver, IOCTL ABI, WDK project, INF/CAT packaging,
 installer actions, and special-signing option have been removed. The replacement
@@ -1412,11 +1427,27 @@ transaction before a seat worker resumes and are removed only after its process
 tree is confirmed stopped; missing filters or BFE admission failure poison the
 seat and leave cleanup fail-closed.
 
-The manager stages a bounded real-file per-seat Steam client mirror, excludes
-game libraries and volatile profile state, retains `steamservice.exe` outside
-the mirror, and publishes an ordinary user-mode webhelper proxy plus renamed
-real helper. Steam's direct command is rewritten to the mirror and a private
-cache/user-data root while games retain their configured library paths.
+The manager derives a protected root from OS ProgramData, uses randomized
+SYSTEM-owned staging and no-follow/reparse rejection, bounds recursive files,
+bytes, depth and path length, excludes game libraries/volatile state, retains
+`steamservice.exe` outside the mirror, and publishes an ordinary user-mode
+webhelper proxy plus renamed real helper. Cache/htmlcache/userdata leaves are
+created by SYSTEM with seat-user Modify ACLs before launch. Steam's direct
+command is rewritten to the mirror and private cache/user-data root while games
+retain their configured library paths. WFP cleanup is scoped, paginated,
+structured by exact seat/generation ownership, and health uses one scoped
+enumeration rather than per-filter polling.
+
+Daybreak's first-pass rejection identified a critical path-only filesystem
+boundary, weak WFP lifetime/schema checks, unbounded recursion, cache ACL and
+proxy argument failures, and teardown/performance gaps. Those source corrections
+are represented above. The remaining deliberate limitation is same-console-SID
+hostile bypass: standard AppId filters cannot distinguish a malicious process
+that launches the original Steam path. The job monitor poisons/terminates
+out-of-mirror Steam images, but does not provide a pre-network zero-window
+security boundary; administrator/higher-priority WFP policy may also override
+standard user-mode filters. Filters remain persistent when worker termination is
+not proven.
 
 This checkpoint is source/static only: no build, unit-test execution, install,
 Steam launch, live WFP mutation, or runtime proof was performed. Required proof

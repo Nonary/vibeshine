@@ -65,10 +65,21 @@ namespace steam_offline {
     }
   }
 
-  bool is_recognized_client_image(const std::string_view image_name) noexcept {
-    const auto image = lowercase(basename(image_name));
-    return image == "steam.exe" || image == "steamwebhelper.exe" || image == "gameoverlayui.exe" ||
-      image == "steamerrorreporter.exe" || image == "steamerrorreporter64.exe";
+  bool game_library_outside_mirror(const std::string_view game_path,
+                                   const std::string_view mirror_root) noexcept {
+    if (game_path.empty() || mirror_root.empty()) return false;
+    auto normalize = [](std::string value) {
+      std::ranges::transform(value, value.begin(), [](char ch) {
+        if (ch == '/') return '\\';
+        return static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+      });
+      while (value.size() > 3 && value.ends_with("\\")) value.pop_back();
+      return value;
+    };
+    const auto game = normalize(std::string {game_path});
+    auto mirror = normalize(std::string {mirror_root});
+    if (!mirror.ends_with("\\")) mirror.push_back('\\');
+    return game.size() <= mirror.size() || game.compare(0, mirror.size(), mirror) != 0;
   }
 
   bool is_configured_steam_client(const std::string_view command_line) noexcept {

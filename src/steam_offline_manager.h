@@ -37,6 +37,11 @@ namespace steam_offline {
                                preparation_t &result, std::string &error) noexcept;
     [[nodiscard]] bool healthy(std::string &error) const noexcept;
     [[nodiscard]] bool release(std::string &error) noexcept;
+    // Keep persistent filters installed when termination cannot be proven.
+    // A quarantined manager is intentionally non-releasable until a later
+    // reconciliation observes that the isolated tree is gone.
+    void quarantine() noexcept { quarantined_ = true; }
+    void clear_quarantine() noexcept { quarantined_ = false; }
     [[nodiscard]] bool active() const noexcept { return engine_ != nullptr && !filter_keys_.empty(); }
     [[nodiscard]] const preparation_t &preparation() const noexcept { return preparation_; }
 
@@ -46,6 +51,7 @@ namespace steam_offline {
     preparation_t preparation_;
     std::string seat_id_;
     std::uint64_t generation_ {};
+    bool quarantined_ {};
   };
 
   // The command and app manifest are read by the SYSTEM broker, never from a
