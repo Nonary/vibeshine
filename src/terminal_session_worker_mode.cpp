@@ -2,7 +2,7 @@
 
 #ifdef _WIN32
   #include "config.h"
-  #include "mail.h"
+  #include "globals.h"
   #include "network.h"
   #include "process.h"
   #include "rtsp.h"
@@ -64,6 +64,21 @@ namespace terminal_session::worker_mode {
       bool active {};
     };
 
+    // MinGW hides the Win11 advanced-color record behind NTDDI_VERSION. Keep
+    // the documented 36-byte ABI local so the worker retains the Windows 10
+    // target baseline while querying the newer opcode at runtime.
+    struct advanced_color_info_v2_t {
+      DISPLAYCONFIG_DEVICE_INFO_HEADER header {};
+      UINT32 value {};
+      DISPLAYCONFIG_COLOR_ENCODING color_encoding {};
+      UINT32 bits_per_color_channel {};
+      UINT32 active_color_mode {};
+    };
+    static_assert(sizeof(advanced_color_info_v2_t) == 36);
+
+    constexpr UINT32 advanced_color_active = 1u << 1;
+    constexpr UINT32 advanced_color_mode_hdr = 2;
+
     std::optional<hdr_target_t> current_hdr_target(std::string &error) {
       DWORD session_id = 0xffffffffu;
       if (!ProcessIdToSessionId(GetCurrentProcessId(), &session_id) || session_id == 0 ||
@@ -82,7 +97,7 @@ namespace terminal_session::worker_mode {
         if (queried == ERROR_INSUFFICIENT_BUFFER) continue;
         if (queried != ERROR_SUCCESS || path_count != 1) break;
         const auto &path = paths.front();
-        DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 color {};
+        advanced_color_info_v2_t color {};
         color.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2;
         color.header.size = sizeof(color);
         color.header.adapterId = path.targetInfo.adapterId;
@@ -94,7 +109,7 @@ namespace terminal_session::worker_mode {
           .source_id = path.sourceInfo.id,
           .target_adapter = path.targetInfo.adapterId,
           .target_id = path.targetInfo.id,
-          .active = color.advancedColorActive != 0 && color.activeColorMode == DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR,
+          .active = (color.value & advanced_color_active) != 0 && color.active_color_mode == advanced_color_mode_hdr,
         };
       }
       error = "The managed seat did not expose exactly one queryable display target.";
