@@ -420,6 +420,31 @@ TEST(TerminalSessionService, ControlChallengeIsPeerBoundAndOneUse) {
   EXPECT_EQ(rejected_peer->reason, terminal_session::protocol::reject_reason::unauthenticated_peer);
 }
 
+TEST(TerminalSessionService, ResponseBindingIsThePostReplyBoundary) {
+  const terminal_session::protocol::request_t request {
+    .operation = terminal_session::protocol::opcode::control_challenge,
+    .client_uuid = "client",
+    .generation = 4,
+    .launch_id = 8,
+  };
+  terminal_session::protocol::response_t response {
+    .accepted = true,
+    .client_uuid = request.client_uuid,
+    .generation = request.generation,
+    .launch_id = request.launch_id,
+  };
+  EXPECT_TRUE(terminal_session::service::response_binds_to_request(response, request));
+
+  response.client_uuid = "other-client";
+  EXPECT_FALSE(terminal_session::service::response_binds_to_request(response, request));
+  response.client_uuid = request.client_uuid;
+  ++response.generation;
+  EXPECT_FALSE(terminal_session::service::response_binds_to_request(response, request));
+  response.generation = request.generation;
+  ++response.launch_id;
+  EXPECT_FALSE(terminal_session::service::response_binds_to_request(response, request));
+}
+
 TEST(TerminalSessionService, ReleaseDispositionIsBoundIntoTheOneUseChallenge) {
   terminal_session::service::endpoint_t endpoint {[](const auto &request) {
     return terminal_session::protocol::response_t {

@@ -236,12 +236,15 @@ namespace terminal_session::service {
                          << " bytes=" << bytes;
       return std::nullopt;
     }
-    if (!authenticate_service_peer(*pipe)) {
-      BOOST_LOG(warning) << "Terminal broker IPC server identity changed during the transaction.";
-      return std::nullopt;
-    }
+    // The reply was received on the same pipe handle that was authenticated
+    // before the request. The server intentionally disconnects its one-shot
+    // instance immediately after replying, so Windows may no longer report a
+    // server PID here. A newly-created pipe server cannot inject a reply into
+    // this already-connected handle; retain the pre-request peer check and
+    // bind the reply to the exact request below instead of rejecting a valid
+    // response after its server has disconnected.
     auto response = protocol::decode_response(std::span<const std::uint8_t> {buffer.data(), bytes});
-    if (!response || response->client_uuid != request.client_uuid || response->generation != request.generation || response->launch_id != request.launch_id) {
+    if (!response || !response_binds_to_request(*response, request)) {
       BOOST_LOG(warning) << "Terminal broker IPC response did not bind to its request.";
       return std::nullopt;
     }

@@ -40,6 +40,17 @@ namespace terminal_session::service {
   // directions of the peer check can be tested without a live service.
   [[nodiscard]] std::wstring expected_installed_image(std::wstring_view module_path, bool service_image);
 
+  /**
+   * A one-shot broker may close its named-pipe instance immediately after
+   * writing its reply. The reply must therefore bind to the authenticated
+   * request without relying on post-disconnect pipe metadata.
+   */
+  [[nodiscard]] inline bool response_binds_to_request(const protocol::response_t &response, const protocol::request_t &request) {
+    return response.client_uuid == request.client_uuid &&
+           response.generation == request.generation &&
+           response.launch_id == request.launch_id;
+  }
+
 #ifdef _WIN32
   /** Authenticate an already-connected pipe server as the installed LocalSystem broker. */
   [[nodiscard]] bool authenticate_service_peer(platf::dxgi::INamedPipe &pipe);
