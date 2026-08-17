@@ -2122,6 +2122,7 @@ namespace nvhttp {
     std::copy(rikey.cbegin(), rikey.cend(), std::back_inserter(launch_session->gcm_key));
 
     launch_session->host_audio = host_audio;
+    const auto client_settings = get_named_cert_by_uuid(launch_session->client_uuid);
     // Terminal Emulation only exposes the Isolated Session applet. An
     // ordinary launch remains a console launch unless the applet reservation
     // is consumed or this paired client already owns a retained seat.
