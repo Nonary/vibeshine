@@ -131,6 +131,11 @@ TEST(RemoteSession, DisconnectControlsCompleteAsDisplayedLaunchFailures) {
 
 TEST(RemoteSession, IsolatedSessionProjectsOnlyForSecondaryNonTerminalCallers) {
   const std::vector<remote_session::app_t> configured {{1, "one", "One", false}};
+  const auto not_opted_in = remote_session::project(caller("secondary"), game(), {}, configured, false);
+  EXPECT_TRUE(std::none_of(not_opted_in.catalogue.begin(), not_opted_in.catalogue.end(), [](const auto &entry) {
+    return entry.id == remote_session::isolated_session_id;
+  }));
+
   const auto secondary = remote_session::project(caller("secondary"), game(), {}, configured, true);
   ASSERT_EQ(secondary.catalogue.back().id, remote_session::isolated_session_id);
   EXPECT_EQ(secondary.catalogue.back().title, "Isolated Session");

@@ -1538,3 +1538,36 @@ response as absent, but challenge/IPC/protocol failures and malformed present
 state as unavailable. Deterministic broker tests cover all three statuses and
 the unavailable-to-console decision boundary. This correction is source/static
 only; tests, builds, install, and live service validation remain outstanding.
+
+## Isolated-session applet contract correction (2026-08-16)
+
+The first installed build disproved the preceding persistent-routing model. In
+that build, enabling `terminal_session_enabled` immediately classified every
+ordinary application launch as terminal and then removed synthetic controls
+from the catalogue. The result was the inverse of the intended user flow: the
+`Isolated Session` applet was hidden, ordinary applications were redirected,
+and no successful isolated-seat launch was recorded in the live log. Repeated
+client-list polling also queried the broker for every paired client and
+amplified named-pipe retry noise.
+
+The corrected contract treats the paired-client setting as an applet opt-in,
+not a persistent route. An opted-out client stays on the console, does not query
+the terminal broker, and does not receive the applet. An opted-in client with an
+authoritatively absent seat also stays on the console and receives the
+`Isolated Session` applet. Launching that control arms the existing 30-second
+client-bound reservation; only the next valid configured-app launch consumes
+it and requests a terminal route. A present retained seat remains terminal for
+reconnect, while an unavailable status for an opted-in client remains
+fail-closed so it cannot accidentally fall through to the console.
+
+Terminal launch material is now populated only on the retained/armed route.
+Steam offline isolation follows that paired client's separate opt-in instead
+of being forced for every isolated launch. Direct synthetic launch requests are
+rejected unless the authenticated paired client enabled the feature. The Web UI
+description now explains the applet and 30-second flow explicitly.
+
+This correction supersedes the persistent-terminal wording in the three
+preceding source-only checkpoints. It is source/static only: the corrected code
+has not yet been built, installed, or validated through Moonlight. The currently
+installed build still contains the disproven behavior until a new installer is
+explicitly requested and applied.

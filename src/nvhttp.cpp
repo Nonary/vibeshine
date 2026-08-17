@@ -83,17 +83,26 @@ namespace nvhttp {
 
   namespace {
     struct terminal_client_state_t {
-      bool persistent {};
+      bool opted_in {};
       terminal_session::snapshot_result_t lookup;
 
       [[nodiscard]] terminal_session::route_mode_e mode() const noexcept {
-        return terminal_session::route_mode(persistent, lookup.status);
+        return terminal_session::route_mode(opted_in, lookup.status);
       }
     };
 
     terminal_client_state_t terminal_client_state(std::string_view uuid) {
+      const bool opted_in = get_client_terminal_session_enabled(std::string {uuid});
+      if (!opted_in) {
+        // Terminal Emulation is an applet opt-in, not a persistent route. Do
+        // not contact the broker for ordinary console clients.
+        return {
+          .opted_in = false,
+          .lookup = {.status = terminal_session::snapshot_status_e::absent},
+        };
+      }
       return {
-        .persistent = get_client_terminal_session_enabled(std::string {uuid}),
+        .opted_in = true,
         .lookup = terminal_session::snapshot_result(uuid),
       };
     }
@@ -2113,16 +2122,11 @@ namespace nvhttp {
     std::copy(rikey.cbegin(), rikey.cend(), std::back_inserter(launch_session->gcm_key));
 
     launch_session->host_audio = host_audio;
-    auto client_settings = get_named_cert_by_uuid(launch_session->client_uuid);
-    launch_session->terminal_session_requested = client_settings && client_settings->terminal_session_enabled;
-    launch_session->steam_offline_isolation = steam_offline::enabled_for_terminal(
-      launch_session->terminal_session_requested, client_settings && client_settings->steam_offline_isolation);
-    if (launch_session->terminal_session_requested) {
-      // A private RTSP worker cannot consult the main process's certificate
-      // chain, so the broker must receive the paired certificate with the
-      // one-use launch material. This value never leaves protected local IPC.
-      launch_session->client_cert = client_settings->cert;
-    }
+    // Terminal Emulation only exposes the Isolated Session applet. An
+    // ordinary launch remains a console launch unless the applet reservation
+    // is consumed or this paired client already owns a retained seat.
+    launch_session->terminal_session_requested = false;
+    launch_session->steam_offline_isolation = false;
     struct parsed_display_mode_t {
       int width = 0;
       int height = 0;
@@ -3172,10 +3176,10 @@ namespace nvhttp {
       .app = std::move(projected_app),
     };
     auto projection = remote_session::project(caller, game, terminal_mode || !console_mode ? remote_session::owner_t {} : remote_owner_for_client(identity.uuid), remote_configured_apps,
-                                              console_mode && terminal_session::supported());
+                                              terminal_state.opted_in && console_mode && terminal_session::supported());
     if (terminal_mode) {
       // Remote Input/Monitor controls belong to the main process's display
-      // plane. A terminal-enabled client sees only its ordinary applications;
+      // plane. A client with a retained terminal seat sees only its ordinary applications;
       // reconnect is driven by the per-seat serverinfo state above.
       std::erase_if(projection.catalogue, [](const remote_session::app_t &entry) { return entry.synthetic; });
     }
@@ -3258,9 +3262,9 @@ namespace nvhttp {
     const auto terminal_state = terminal_client_state(request_identity.uuid);
     const auto terminal_route_mode = terminal_state.mode();
 
-    // A terminal-enabled client owns a separate process/session plane. Route
-    // its authenticated configured-app request before consulting any console
-    // app state or mutating the main process's runtime/display configuration.
+    // A retained seat owns a separate process/session plane. Otherwise an
+    // opted-in client remains on the console unless it armed the one-shot
+    // Isolated Session applet immediately before this configured-app launch.
     if (synthetic_control == remote_session::control_e::none) {
       const auto terminal_client_settings = get_named_cert_by_uuid(request_identity.uuid);
       if (terminal_route_mode == terminal_session::route_mode_e::unavailable) {
@@ -3273,7 +3277,8 @@ namespace nvhttp {
       const auto requested_app = proc::proc.resolve_app(appid_str, appuuid_str);
       std::unique_lock one_shot_transition_lock {normal_http_app_transition_mutex, std::defer_lock};
       bool armed_isolated_session = false;
-      if (!terminal_mode && terminal_session::supported() && terminal_client_settings && requested_app) {
+      if (!terminal_mode && terminal_session::supported() && terminal_client_settings &&
+          terminal_client_settings->terminal_session_enabled && requested_app) {
         one_shot_transition_lock.lock();
         if (remote_owner_for_client(request_identity.uuid).role == remote_session::role_e::none) {
           armed_isolated_session = remote_session::consume_isolated_session(request_identity.uuid);
@@ -3295,11 +3300,10 @@ namespace nvhttp {
         config::merge_config_overrides(requested_runtime_overrides, terminal_client_settings->config_overrides);
 
         auto launch_session = make_launch_session(terminal_host_audio, args, request, false, &request_identity);
-        if (!launch_session->terminal_session_requested) {
-          launch_session->terminal_session_requested = true;
-          launch_session->steam_offline_isolation = steam_offline::enabled_for_terminal(true, true);
-          launch_session->client_cert = terminal_client_settings->cert;
-        }
+        launch_session->terminal_session_requested = true;
+        launch_session->steam_offline_isolation = steam_offline::enabled_for_terminal(
+          true, terminal_client_settings->steam_offline_isolation);
+        launch_session->client_cert = terminal_client_settings->cert;
         publish_terminal_session_route(
           tree,
           request,
@@ -3352,6 +3356,13 @@ namespace nvhttp {
         return;
       }
       if (synthetic_control == remote_session::control_e::isolated_session) {
+        const auto terminal_client_settings = get_named_cert_by_uuid(identity.uuid);
+        if (!terminal_client_settings || !terminal_client_settings->terminal_session_enabled) {
+          tree.put("root.resume", 0);
+          tree.put("root.<xmlattr>.status_code", 403);
+          tree.put("root.<xmlattr>.status_message", "Isolated Session is not enabled for this paired client");
+          return;
+        }
         if (terminal_route_mode == terminal_session::route_mode_e::unavailable) {
           tree.put("root.resume", 0);
           tree.put("root.<xmlattr>.status_code", 503);
@@ -3960,11 +3971,10 @@ namespace nvhttp {
       config::merge_config_overrides(requested_runtime_overrides, terminal_client_settings->config_overrides);
 
       auto launch_session = make_launch_session(terminal_host_audio, args, request, false, &resume_identity);
-      if (!launch_session->terminal_session_requested) {
-        launch_session->terminal_session_requested = true;
-        launch_session->steam_offline_isolation = steam_offline::enabled_for_terminal(true, true);
-        launch_session->client_cert = terminal_client_settings->cert;
-      }
+      launch_session->terminal_session_requested = true;
+      launch_session->steam_offline_isolation = steam_offline::enabled_for_terminal(
+        true, terminal_client_settings->steam_offline_isolation);
+      launch_session->client_cert = terminal_client_settings->cert;
       launch_session->appid = seat.app_id;
       if (const auto running_app = proc::proc.resolve_app(seat.app_id)) {
         rtsp_stream::launch_session_t::app_metadata_t metadata;
@@ -4826,7 +4836,12 @@ namespace nvhttp {
       config_overrides = std::move(normalized_overrides);
     }
 
-    if (terminal_session_enabled.has_value() && !*terminal_session_enabled) {
+    const auto current_client_settings = get_named_cert_by_uuid(uuid);
+    const bool disabling_terminal_session = terminal_session_enabled.has_value() &&
+                                            !*terminal_session_enabled &&
+                                            current_client_settings &&
+                                            current_client_settings->terminal_session_enabled;
+    if (disabling_terminal_session) {
       const auto seat_lookup = terminal_session::snapshot_result(uuid);
       if (seat_lookup.status == terminal_session::snapshot_status_e::unavailable) {
         BOOST_LOG(warning) << "Refusing to disable terminal emulation for paired client " << uuid

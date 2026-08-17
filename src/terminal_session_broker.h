@@ -84,14 +84,10 @@ namespace terminal_session {
     unavailable,
   };
 
-  [[nodiscard]] constexpr route_mode_e route_mode(const bool persistent, const snapshot_status_e status) noexcept {
-    if (persistent || status == snapshot_status_e::present) return route_mode_e::terminal;
+  [[nodiscard]] constexpr route_mode_e route_mode(const bool opted_in, const snapshot_status_e status) noexcept {
+    if (!opted_in) return route_mode_e::console;
+    if (status == snapshot_status_e::present) return route_mode_e::terminal;
     return status == snapshot_status_e::absent ? route_mode_e::console : route_mode_e::unavailable;
-  }
-
-  /** A retained one-shot seat owns terminal routing until it is gone. */
-  [[nodiscard]] constexpr bool effective_terminal_mode(bool persistent, const state_t &state) noexcept {
-    return persistent || state.exists;
   }
 
   struct runtime_hooks_t {
