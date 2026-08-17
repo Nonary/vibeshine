@@ -1571,3 +1571,34 @@ preceding source-only checkpoints. It is source/static only: the corrected code
 has not yet been built, installed, or validated through Moonlight. The currently
 installed build still contains the disproven behavior until a new installer is
 explicitly requested and applied.
+
+## Universal applet and forced terminal policy correction (2026-08-16)
+
+The installed `e7e6d27eb` build exposed a second contract misunderstanding in
+the preceding section. `terminal_session_enabled` is not the permission to see
+or use the `Isolated Session` applet. These are two independent entry points:
+
+- `Isolated Session` is a universal synthetic application for paired clients.
+  It arms one authenticated client's next configured-app launch for 30 seconds.
+- `Terminal Emulation` is the persistent per-client policy. When enabled, every
+  ordinary application launch from that client requests a terminal seat without
+  requiring the applet first.
+
+The source now restores forced terminal routing for the persistent setting,
+including launch material and the client's independent Steam-isolation choice.
+The applet is projected independently of that setting, retained in terminal,
+game-owner, Remote Input, and Remote Monitor catalogues, and its authenticated
+control no longer requires the persistent setting or a particular remote role.
+One-shot consumption likewise no longer depends on the persistent setting.
+
+The useful polling correction remains: `/api/clients/list` consults the broker
+only for clients with forced Terminal Emulation when it needs private-seat
+connected state. Exact Moonlight lifecycle calls still perform authoritative
+retained-seat recovery for their authenticated caller, so one-shot reconnects
+remain fail-closed without multiplying every Web UI refresh by the number of
+paired devices.
+
+This section supersedes the applet-opt-in interpretation immediately above.
+The correction is committed-source work only until a subsequent explicit build
+and installation; the currently installed `e7e6d27eb` build still has the
+incorrect coupled behavior.

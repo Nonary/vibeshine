@@ -402,7 +402,7 @@
         "prefer_10bit_description": "When this client requests HDR, send a 10-bit SDR stream instead. HEVC or AV1 Main10 is required.",
         "route_target": "Route this client to",
         "terminal_session": "Terminal Emulation",
-        "terminal_session_description": "Add an Isolated Session app to this device's Moonlight app list. Launch it, then launch the application you want within 30 seconds. Ordinary applications continue to use the normal console unless armed this way; the isolated desktop uses a managed Vibeshine account while Moonlight remains paired to this host.",
+        "terminal_session_description": "Always launch this device's applications inside a separate Windows terminal desktop owned by a managed Vibeshine account. The universal Isolated Session app remains available to every paired client for one-shot isolated launches; Moonlight stays paired to this host.",
         "steam_offline_isolation": "Steam offline isolation",
         "steam_offline_isolation_description": "Offline the seat's Steam client processes after you prepare eligible games in Steam Offline Mode. Online-required games and third-party launchers may fail; game network traffic remains allowed.",
         "sections": {

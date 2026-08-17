@@ -83,26 +83,17 @@ namespace nvhttp {
 
   namespace {
     struct terminal_client_state_t {
-      bool opted_in {};
+      bool force_terminal {};
       terminal_session::snapshot_result_t lookup;
 
       [[nodiscard]] terminal_session::route_mode_e mode() const noexcept {
-        return terminal_session::route_mode(opted_in, lookup.status);
+        return terminal_session::route_mode(force_terminal, lookup.status);
       }
     };
 
     terminal_client_state_t terminal_client_state(std::string_view uuid) {
-      const bool opted_in = get_client_terminal_session_enabled(std::string {uuid});
-      if (!opted_in) {
-        // Terminal Emulation is an applet opt-in, not a persistent route. Do
-        // not contact the broker for ordinary console clients.
-        return {
-          .opted_in = false,
-          .lookup = {.status = terminal_session::snapshot_status_e::absent},
-        };
-      }
       return {
-        .opted_in = true,
+        .force_terminal = get_client_terminal_session_enabled(std::string {uuid}),
         .lookup = terminal_session::snapshot_result(uuid),
       };
     }
@@ -2123,11 +2114,16 @@ namespace nvhttp {
 
     launch_session->host_audio = host_audio;
     const auto client_settings = get_named_cert_by_uuid(launch_session->client_uuid);
-    // Terminal Emulation only exposes the Isolated Session applet. An
-    // ordinary launch remains a console launch unless the applet reservation
-    // is consumed or this paired client already owns a retained seat.
-    launch_session->terminal_session_requested = false;
-    launch_session->steam_offline_isolation = false;
+    // Terminal Emulation is the persistent policy. The separate Isolated
+    // Session applet may also mark an individual launch later in launch().
+    launch_session->terminal_session_requested = client_settings && client_settings->terminal_session_enabled;
+    launch_session->steam_offline_isolation = steam_offline::enabled_for_terminal(
+      launch_session->terminal_session_requested, client_settings && client_settings->steam_offline_isolation);
+    if (launch_session->terminal_session_requested) {
+      // A private RTSP worker cannot consult the main process's certificate
+      // chain, so the broker receives it with the protected launch material.
+      launch_session->client_cert = client_settings->cert;
+    }
     struct parsed_display_mode_t {
       int width = 0;
       int height = 0;
@@ -3054,9 +3050,12 @@ namespace nvhttp {
           }
         }
       }
-      const auto terminal_state = terminal_client_state(named_cert.uuid);
-      if (!connected && terminal_state.mode() != terminal_session::route_mode_e::console) {
-        connected = terminal_state.lookup.state.connected;
+      // Do not turn the Web UI's periodic all-client refresh into a broker
+      // transaction for every paired device. Forced clients still report the
+      // private seat connection; Moonlight lifecycle endpoints perform the
+      // authoritative retained one-shot lookup for their exact caller.
+      if (!connected && named_cert.terminal_session_enabled) {
+        connected = terminal_client_state(named_cert.uuid).lookup.state.connected;
       }
       named_cert_node["connected"] = connected;
       named_cert_nodes.push_back(named_cert_node);
@@ -3177,12 +3176,20 @@ namespace nvhttp {
       .app = std::move(projected_app),
     };
     auto projection = remote_session::project(caller, game, terminal_mode || !console_mode ? remote_session::owner_t {} : remote_owner_for_client(identity.uuid), remote_configured_apps,
-                                              terminal_state.opted_in && console_mode && terminal_session::supported());
+                                              terminal_session::supported());
     if (terminal_mode) {
       // Remote Input/Monitor controls belong to the main process's display
-      // plane. A client with a retained terminal seat sees only its ordinary applications;
-      // reconnect is driven by the per-seat serverinfo state above.
-      std::erase_if(projection.catalogue, [](const remote_session::app_t &entry) { return entry.synthetic; });
+      // plane. Keep the universal Isolated Session applet, but strip controls
+      // that cannot act on the private seat.
+      std::erase_if(projection.catalogue, [](const remote_session::app_t &entry) {
+        return entry.synthetic && remote_session::identify(entry.id, entry.uuid) != remote_session::control_e::isolated_session;
+      });
+      if (terminal_session::supported() &&
+          std::none_of(projection.catalogue.begin(), projection.catalogue.end(), [](const remote_session::app_t &entry) {
+            return remote_session::identify(entry.id, entry.uuid) == remote_session::control_e::isolated_session;
+          })) {
+        projection.catalogue.push_back(remote_session::synthetic(remote_session::control_e::isolated_session));
+      }
     }
 
     for (const auto &entry : projection.catalogue) {
@@ -3263,9 +3270,9 @@ namespace nvhttp {
     const auto terminal_state = terminal_client_state(request_identity.uuid);
     const auto terminal_route_mode = terminal_state.mode();
 
-    // A retained seat owns a separate process/session plane. Otherwise an
-    // opted-in client remains on the console unless it armed the one-shot
-    // Isolated Session applet immediately before this configured-app launch.
+    // Terminal Emulation persistently forces this client onto the private
+    // plane. Independently, the universal Isolated Session applet can arm one
+    // configured-app launch for a client that normally uses the console.
     if (synthetic_control == remote_session::control_e::none) {
       const auto terminal_client_settings = get_named_cert_by_uuid(request_identity.uuid);
       if (terminal_route_mode == terminal_session::route_mode_e::unavailable) {
@@ -3278,12 +3285,9 @@ namespace nvhttp {
       const auto requested_app = proc::proc.resolve_app(appid_str, appuuid_str);
       std::unique_lock one_shot_transition_lock {normal_http_app_transition_mutex, std::defer_lock};
       bool armed_isolated_session = false;
-      if (!terminal_mode && terminal_session::supported() && terminal_client_settings &&
-          terminal_client_settings->terminal_session_enabled && requested_app) {
+      if (!terminal_mode && terminal_session::supported() && terminal_client_settings && requested_app) {
         one_shot_transition_lock.lock();
-        if (remote_owner_for_client(request_identity.uuid).role == remote_session::role_e::none) {
-          armed_isolated_session = remote_session::consume_isolated_session(request_identity.uuid);
-        }
+        armed_isolated_session = remote_session::consume_isolated_session(request_identity.uuid);
         if (!armed_isolated_session) {
           one_shot_transition_lock.unlock();
         }
@@ -3357,25 +3361,16 @@ namespace nvhttp {
         return;
       }
       if (synthetic_control == remote_session::control_e::isolated_session) {
-        const auto terminal_client_settings = get_named_cert_by_uuid(identity.uuid);
-        if (!terminal_client_settings || !terminal_client_settings->terminal_session_enabled) {
-          tree.put("root.resume", 0);
-          tree.put("root.<xmlattr>.status_code", 403);
-          tree.put("root.<xmlattr>.status_message", "Isolated Session is not enabled for this paired client");
-          return;
-        }
         if (terminal_route_mode == terminal_session::route_mode_e::unavailable) {
           tree.put("root.resume", 0);
           tree.put("root.<xmlattr>.status_code", 503);
           tree.put("root.<xmlattr>.status_message", "Terminal session status is unavailable; Isolated Session cannot be armed");
           return;
         }
-        if (terminal_route_mode != terminal_session::route_mode_e::console || !terminal_session::supported()) {
+        if (!terminal_session::supported()) {
           tree.put("root.resume", 0);
           tree.put("root.<xmlattr>.status_code", 403);
-          tree.put("root.<xmlattr>.status_message", !terminal_session::supported()
-                                                        ? "Isolated Session is not supported on this host"
-                                                        : "Isolated Session is not available while this client owns a terminal session");
+          tree.put("root.<xmlattr>.status_message", "Isolated Session is not supported on this host");
           return;
         }
         remote_session::arm_isolated_session(identity.uuid);

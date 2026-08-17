@@ -84,9 +84,8 @@ namespace terminal_session {
     unavailable,
   };
 
-  [[nodiscard]] constexpr route_mode_e route_mode(const bool opted_in, const snapshot_status_e status) noexcept {
-    if (!opted_in) return route_mode_e::console;
-    if (status == snapshot_status_e::present) return route_mode_e::terminal;
+  [[nodiscard]] constexpr route_mode_e route_mode(const bool force_terminal, const snapshot_status_e status) noexcept {
+    if (force_terminal || status == snapshot_status_e::present) return route_mode_e::terminal;
     return status == snapshot_status_e::absent ? route_mode_e::console : route_mode_e::unavailable;
   }
 

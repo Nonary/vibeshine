@@ -129,10 +129,10 @@ TEST(RemoteSession, DisconnectControlsCompleteAsDisplayedLaunchFailures) {
   EXPECT_FALSE(remote_session::successful_control_completion(remote_session::control_e::monitor));
 }
 
-TEST(RemoteSession, IsolatedSessionProjectsOnlyForSecondaryNonTerminalCallers) {
+TEST(RemoteSession, IsolatedSessionProjectsForEverySupportedCaller) {
   const std::vector<remote_session::app_t> configured {{1, "one", "One", false}};
-  const auto not_opted_in = remote_session::project(caller("secondary"), game(), {}, configured, false);
-  EXPECT_TRUE(std::none_of(not_opted_in.catalogue.begin(), not_opted_in.catalogue.end(), [](const auto &entry) {
+  const auto unsupported = remote_session::project(caller("secondary"), game(), {}, configured, false);
+  EXPECT_TRUE(std::none_of(unsupported.catalogue.begin(), unsupported.catalogue.end(), [](const auto &entry) {
     return entry.id == remote_session::isolated_session_id;
   }));
 
@@ -142,14 +142,20 @@ TEST(RemoteSession, IsolatedSessionProjectsOnlyForSecondaryNonTerminalCallers) {
   EXPECT_EQ(*remote_session::synthetic_artwork_filename(remote_session::control_e::isolated_session), "isolated-session.png");
 
   const auto owner = remote_session::project(caller("owner"), game(), {}, configured, true);
-  EXPECT_TRUE(std::none_of(owner.catalogue.begin(), owner.catalogue.end(), [](const auto &entry) {
+  EXPECT_TRUE(std::any_of(owner.catalogue.begin(), owner.catalogue.end(), [](const auto &entry) {
+    return entry.id == remote_session::isolated_session_id;
+  }));
+
+  const auto monitor = remote_session::project(caller("monitor"), {}, {.role = remote_session::role_e::monitor}, configured, true);
+  EXPECT_TRUE(std::any_of(monitor.catalogue.begin(), monitor.catalogue.end(), [](const auto &entry) {
     return entry.id == remote_session::isolated_session_id;
   }));
 }
 
 TEST(RemoteSession, IsolatedSessionDispatchPreservesLaunchPermissions) {
   EXPECT_TRUE(remote_session::dispatch(caller("secondary"), game(), {}, remote_session::control_e::isolated_session).allowed);
-  EXPECT_FALSE(remote_session::dispatch(caller("owner"), game(), {}, remote_session::control_e::isolated_session).allowed);
+  EXPECT_TRUE(remote_session::dispatch(caller("owner"), game(), {}, remote_session::control_e::isolated_session).allowed);
+  EXPECT_TRUE(remote_session::dispatch(caller("monitor"), {}, {.role = remote_session::role_e::monitor}, remote_session::control_e::isolated_session).allowed);
   EXPECT_FALSE(remote_session::dispatch(caller("secondary", true, false), game(), {}, remote_session::control_e::isolated_session).allowed);
 }
 

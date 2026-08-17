@@ -77,16 +77,18 @@ namespace remote_session {
       return !reserved_name(app.title);
     });
     const auto append_isolated_session = [&] {
-      if (include_isolated_session && owner.role == role_e::none && !owns_game(caller, game)) {
+      if (include_isolated_session) {
         result.catalogue.push_back(synthetic(control_e::isolated_session));
       }
     };
     if (owner.role == role_e::monitor) {
       result.catalogue = {synthetic(control_e::resume), synthetic(control_e::disconnect_monitor)};
+      append_isolated_session();
       return result;
     }
     if (owner.role == role_e::input) {
       result.catalogue = {synthetic(control_e::disconnect_input)};
+      append_isolated_session();
       return result;
     }
     if (owns_game(caller, game)) {
@@ -128,7 +130,7 @@ namespace remote_session {
         break;
       case control_e::isolated_session:
         result.permission = permission_e::launch;
-        result.allowed = caller.may_launch && owner.role == role_e::none && !owns_game(caller, game);
+        result.allowed = caller.may_launch;
         break;
       case control_e::monitor:
         result.permission = permission_e::launch;

@@ -56,18 +56,18 @@ TEST(TerminalSessionBroker, RoutingRequiresAuthoritativeSeatStatus) {
   using terminal_session::snapshot_status_e;
 
   EXPECT_EQ(terminal_session::route_mode(false, snapshot_status_e::absent), route_mode_e::console);
-  EXPECT_EQ(terminal_session::route_mode(false, snapshot_status_e::present), route_mode_e::console);
-  EXPECT_EQ(terminal_session::route_mode(false, snapshot_status_e::unavailable), route_mode_e::console);
+  EXPECT_EQ(terminal_session::route_mode(false, snapshot_status_e::present), route_mode_e::terminal);
+  EXPECT_EQ(terminal_session::route_mode(false, snapshot_status_e::unavailable), route_mode_e::unavailable);
   EXPECT_EQ(terminal_session::route_mode(true, snapshot_status_e::present), route_mode_e::terminal);
-  EXPECT_EQ(terminal_session::route_mode(true, snapshot_status_e::absent), route_mode_e::console);
-  EXPECT_EQ(terminal_session::route_mode(true, snapshot_status_e::unavailable), route_mode_e::unavailable);
+  EXPECT_EQ(terminal_session::route_mode(true, snapshot_status_e::absent), route_mode_e::terminal);
+  EXPECT_EQ(terminal_session::route_mode(true, snapshot_status_e::unavailable), route_mode_e::terminal);
 }
 
 TEST(TerminalSessionBroker, SnapshotTransportFailureDoesNotBecomeConsoleAbsence) {
   terminal_session::register_runtime_hooks({});
   const auto unavailable = terminal_session::snapshot_result("after-restart");
   EXPECT_EQ(unavailable.status, terminal_session::snapshot_status_e::unavailable);
-  EXPECT_EQ(terminal_session::route_mode(true, unavailable.status), terminal_session::route_mode_e::unavailable);
+  EXPECT_EQ(terminal_session::route_mode(false, unavailable.status), terminal_session::route_mode_e::unavailable);
 
   terminal_session::register_runtime_hooks({
     .snapshot = [](std::string_view) {
@@ -76,7 +76,7 @@ TEST(TerminalSessionBroker, SnapshotTransportFailureDoesNotBecomeConsoleAbsence)
   });
   const auto absent = terminal_session::snapshot_result("authoritatively-absent");
   EXPECT_EQ(absent.status, terminal_session::snapshot_status_e::absent);
-  EXPECT_EQ(terminal_session::route_mode(true, absent.status), terminal_session::route_mode_e::console);
+  EXPECT_EQ(terminal_session::route_mode(false, absent.status), terminal_session::route_mode_e::console);
 
   terminal_session::register_runtime_hooks({
     .snapshot = [](std::string_view) {
