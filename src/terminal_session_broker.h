@@ -89,6 +89,16 @@ namespace terminal_session {
     return status == snapshot_status_e::absent ? route_mode_e::console : route_mode_e::unavailable;
   }
 
+  /**
+   * A true value must come only from the atomic, client-bound consumption of an
+   * Isolated Session reservation. Once consumed, the associated configured-app
+   * launch must attempt terminal admission rather than interpreting a stale
+   * snapshot as permission to use the console.
+   */
+  [[nodiscard]] constexpr route_mode_e launch_route_mode(const route_mode_e recovered_mode, const bool isolated_session_consumed) noexcept {
+    return isolated_session_consumed ? route_mode_e::terminal : recovered_mode;
+  }
+
   struct runtime_hooks_t {
     std::function<route_t(request_t)> prepare;
     std::function<snapshot_result_t(std::string_view client_uuid)> snapshot;

@@ -125,6 +125,12 @@ TEST(RemoteSession, DisconnectControlsCompleteAsDisplayedLaunchFailures) {
   ASSERT_TRUE(game_disconnect);
   EXPECT_EQ(game_disconnect->status_code, 410);
 
+  const auto isolated = remote_session::successful_control_completion(remote_session::control_e::isolated_session);
+  ASSERT_TRUE(isolated);
+  EXPECT_EQ(isolated->status_code, 410);
+  EXPECT_EQ(isolated->status_message,
+            "Isolated gaming session armed. Launch your next application within 30 seconds to attempt to connect in an isolated gaming session.");
+
   EXPECT_FALSE(remote_session::successful_control_completion(remote_session::control_e::resume));
   EXPECT_FALSE(remote_session::successful_control_completion(remote_session::control_e::monitor));
 }

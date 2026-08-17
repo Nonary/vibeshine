@@ -1,4 +1,5 @@
 #include "terminal_session_service.h"
+#include "logging.h"
 
 #ifdef _WIN32
   #include <array>
@@ -185,6 +186,10 @@ namespace terminal_session::service {
       // Reject a pipe squatter before allowing it to consume the bounded
       // receive timeout on the broker's single admission endpoint.
       if (!identity.authenticated) {
+        BOOST_LOG(debug) << "Terminal broker rejected an unauthenticated pipe client."
+                           << " pid_present=" << has_pid
+                           << " sid_present=" << has_sid
+                           << " creation_present=" << has_creation;
         pipe->disconnect();
         continue;
       }
@@ -194,6 +199,10 @@ namespace terminal_session::service {
       if (receive == platf::dxgi::PipeResult::Success && bytes <= buffer.size()) {
         const auto reply = endpoint_.handle(std::span<const std::uint8_t> {buffer.data(), bytes}, identity);
         if (!reply.empty()) (void) pipe->send(reply, 1500);
+      } else {
+        BOOST_LOG(warning) << "Terminal broker did not receive a complete authenticated request."
+                           << " result=" << static_cast<int>(receive)
+                           << " bytes=" << bytes;
       }
       pipe->disconnect();
     }
@@ -202,16 +211,40 @@ namespace terminal_session::service {
   std::optional<protocol::response_t> pipe_client_t::transact(const protocol::request_t &request, int timeout_ms) {
     platf::dxgi::FramedPipeFactory factory {std::make_unique<platf::dxgi::NamedPipeFactory>()};
     auto pipe = factory.create_client(std::string {broker_pipe_name});
-    if (!pipe) return std::nullopt;
-    if (!authenticate_service_peer(*pipe)) return std::nullopt;
+    if (!pipe) {
+      BOOST_LOG(warning) << "Terminal broker IPC connection could not be opened.";
+      return std::nullopt;
+    }
+    if (!authenticate_service_peer(*pipe)) {
+      BOOST_LOG(warning) << "Terminal broker IPC server identity did not match the installed SYSTEM service.";
+      return std::nullopt;
+    }
     const auto encoded = protocol::encode(request);
-    if (encoded.empty() || encoded.size() > protocol::max_message_size || !pipe->send(encoded, timeout_ms)) return std::nullopt;
+    if (encoded.empty() || encoded.size() > protocol::max_message_size) {
+      BOOST_LOG(warning) << "Terminal broker IPC request serialization was invalid.";
+      return std::nullopt;
+    }
+    if (!pipe->send(encoded, timeout_ms)) {
+      BOOST_LOG(warning) << "Terminal broker IPC request send failed.";
+      return std::nullopt;
+    }
     std::array<std::uint8_t, protocol::max_message_size> buffer {};
     std::size_t bytes = 0;
-    if (pipe->receive(buffer, bytes, timeout_ms) != platf::dxgi::PipeResult::Success || bytes > buffer.size()) return std::nullopt;
-    if (!authenticate_service_peer(*pipe)) return std::nullopt;
+    const auto receive = pipe->receive(buffer, bytes, timeout_ms);
+    if (receive != platf::dxgi::PipeResult::Success || bytes > buffer.size()) {
+      BOOST_LOG(warning) << "Terminal broker IPC response receive failed. result=" << static_cast<int>(receive)
+                         << " bytes=" << bytes;
+      return std::nullopt;
+    }
+    if (!authenticate_service_peer(*pipe)) {
+      BOOST_LOG(warning) << "Terminal broker IPC server identity changed during the transaction.";
+      return std::nullopt;
+    }
     auto response = protocol::decode_response(std::span<const std::uint8_t> {buffer.data(), bytes});
-    if (!response || response->client_uuid != request.client_uuid || response->generation != request.generation || response->launch_id != request.launch_id) return std::nullopt;
+    if (!response || response->client_uuid != request.client_uuid || response->generation != request.generation || response->launch_id != request.launch_id) {
+      BOOST_LOG(warning) << "Terminal broker IPC response did not bind to its request.";
+      return std::nullopt;
+    }
     return response;
   }
 #endif
