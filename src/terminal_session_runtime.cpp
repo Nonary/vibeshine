@@ -4,6 +4,7 @@
 #include "terminal_session_worker.h"
 #include "terminal_session_service.h"
 #include "steam_offline_policy.h"
+#include "logging.h"
 
 #include <algorithm>
 #include <limits>
@@ -407,7 +408,10 @@ namespace terminal_session {
         };
         challenge.ticket.operation = protocol::opcode::control_query;
         const auto issued = service::pipe_client_t::transact(challenge);
-        if (!issued || !issued->accepted || !issued->ticket) return snapshot_status_e::unavailable;
+        if (!issued || !issued->accepted || !issued->ticket) {
+          BOOST_LOG(warning) << "Terminal broker snapshot challenge was unavailable.";
+          return snapshot_status_e::unavailable;
+        }
         protocol::request_t query {
           .operation = protocol::opcode::control_query,
           .client_uuid = std::string {uuid},
@@ -416,7 +420,10 @@ namespace terminal_session {
           .ticket = *issued->ticket,
         };
         const auto response = service::pipe_client_t::transact(query);
-        if (!response || !response->accepted) return snapshot_status_e::unavailable;
+        if (!response || !response->accepted) {
+          BOOST_LOG(warning) << "Terminal broker snapshot query was unavailable.";
+          return snapshot_status_e::unavailable;
+        }
         if (!response->state_exists) return snapshot_status_e::absent;
         if (response->owner_generation == 0 || response->owner_launch_id == 0 || response->app_id <= 0 ||
             response->rtsp_port == 0 || response->control_port == 0 || response->video_port == 0 || response->audio_port == 0 ||

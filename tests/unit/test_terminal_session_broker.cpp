@@ -63,6 +63,15 @@ TEST(TerminalSessionBroker, RoutingRequiresAuthoritativeSeatStatus) {
   EXPECT_EQ(terminal_session::route_mode(true, snapshot_status_e::unavailable), route_mode_e::terminal);
 }
 
+TEST(TerminalSessionBroker, ConsumedIsolatedReservationNeverFallsBackToConsole) {
+  using terminal_session::route_mode_e;
+
+  EXPECT_EQ(terminal_session::launch_route_mode(route_mode_e::console, false), route_mode_e::console);
+  EXPECT_EQ(terminal_session::launch_route_mode(route_mode_e::terminal, false), route_mode_e::terminal);
+  EXPECT_EQ(terminal_session::launch_route_mode(route_mode_e::unavailable, false), route_mode_e::unavailable);
+  EXPECT_EQ(terminal_session::launch_route_mode(route_mode_e::unavailable, true), route_mode_e::terminal);
+}
+
 TEST(TerminalSessionBroker, SnapshotTransportFailureDoesNotBecomeConsoleAbsence) {
   terminal_session::register_runtime_hooks({});
   const auto unavailable = terminal_session::snapshot_result("after-restart");

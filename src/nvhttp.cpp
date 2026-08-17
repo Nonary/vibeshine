@@ -3267,6 +3267,29 @@ namespace nvhttp {
     // this before resolve_app() so a stale/foreign control cannot collide with
     // an apps.json id and launch a real process.
     const auto synthetic_control = remote_session::identify(util::from_view(appid_str), appuuid_str);
+
+    // Arming is intentionally independent of seat recovery. At this point no
+    // terminal seat is expected to exist yet, and querying the SYSTEM broker
+    // first turns a transient broker status failure into a client-visible
+    // failure before the one-shot reservation is ever created. The next real
+    // application launch is the first operation that needs broker admission.
+    if (synthetic_control == remote_session::control_e::isolated_session) {
+      if (!terminal_session::supported()) {
+        tree.put("root.resume", 0);
+        tree.put("root.<xmlattr>.status_code", 403);
+        tree.put("root.<xmlattr>.status_message", "Isolated Session is not supported on this host");
+        return;
+      }
+      remote_session::arm_isolated_session(request_identity.uuid);
+      const auto completion = *remote_session::successful_control_completion(synthetic_control);
+      tree.put("root.resume", 0);
+      tree.put("root.gamesession", 0);
+      tree.put("root.<xmlattr>.status_code", completion.status_code);
+      tree.put("root.<xmlattr>.status_message", std::string {completion.status_message});
+      BOOST_LOG(info) << "Isolated Session armed for the next configured-app launch.";
+      return;
+    }
+
     const auto terminal_state = terminal_client_state(request_identity.uuid);
     const auto terminal_route_mode = terminal_state.mode();
 
@@ -3275,12 +3298,6 @@ namespace nvhttp {
     // configured-app launch for a client that normally uses the console.
     if (synthetic_control == remote_session::control_e::none) {
       const auto terminal_client_settings = get_named_cert_by_uuid(request_identity.uuid);
-      if (terminal_route_mode == terminal_session::route_mode_e::unavailable) {
-        tree.put("root.gamesession", 0);
-        tree.put("root.<xmlattr>.status_code", 503);
-        tree.put("root.<xmlattr>.status_message", "Terminal session status is unavailable; console routing is disabled");
-        return;
-      }
       const bool terminal_mode = terminal_client_settings && terminal_route_mode == terminal_session::route_mode_e::terminal;
       const auto requested_app = proc::proc.resolve_app(appid_str, appuuid_str);
       std::unique_lock one_shot_transition_lock {normal_http_app_transition_mutex, std::defer_lock};
@@ -3292,7 +3309,24 @@ namespace nvhttp {
           one_shot_transition_lock.unlock();
         }
       }
-      if (terminal_mode || armed_isolated_session) {
+      const auto launch_route_mode = terminal_session::launch_route_mode(terminal_route_mode, armed_isolated_session);
+      // A consumed one-shot is already committed to the terminal path, so do
+      // not turn a stale/recovering snapshot into a console fallback. Its
+      // prepare transaction will either establish the exact seat or report the
+      // broker's actionable error to the client.
+      if (launch_route_mode == terminal_session::route_mode_e::unavailable) {
+        tree.put("root.gamesession", 0);
+        tree.put("root.<xmlattr>.status_code", 503);
+        tree.put("root.<xmlattr>.status_message", "Terminal session status is unavailable; console routing is disabled");
+        return;
+      }
+      if (launch_route_mode == terminal_session::route_mode_e::terminal) {
+        if (!terminal_client_settings) {
+          tree.put("root.gamesession", 0);
+          tree.put("root.<xmlattr>.status_code", 403);
+          tree.put("root.<xmlattr>.status_message", "The paired client identity is no longer authorized");
+          return;
+        }
         const bool terminal_host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
         if (!requested_app) {
           tree.put("root.gamesession", 0);
@@ -3358,27 +3392,6 @@ namespace nvhttp {
         tree.put("root.resume", 0);
         tree.put("root.<xmlattr>.status_code", 403);
         tree.put("root.<xmlattr>.status_message", "Remote session action is not permitted for this caller");
-        return;
-      }
-      if (synthetic_control == remote_session::control_e::isolated_session) {
-        if (terminal_route_mode == terminal_session::route_mode_e::unavailable) {
-          tree.put("root.resume", 0);
-          tree.put("root.<xmlattr>.status_code", 503);
-          tree.put("root.<xmlattr>.status_message", "Terminal session status is unavailable; Isolated Session cannot be armed");
-          return;
-        }
-        if (!terminal_session::supported()) {
-          tree.put("root.resume", 0);
-          tree.put("root.<xmlattr>.status_code", 403);
-          tree.put("root.<xmlattr>.status_message", "Isolated Session is not supported on this host");
-          return;
-        }
-        remote_session::arm_isolated_session(identity.uuid);
-        const auto completion = *remote_session::successful_control_completion(synthetic_control);
-        tree.put("root.resume", 0);
-        tree.put("root.gamesession", 0);
-        tree.put("root.<xmlattr>.status_code", completion.status_code);
-        tree.put("root.<xmlattr>.status_message", std::string {completion.status_message});
         return;
       }
       if (decision.resume && decision.resume_role == remote_session::role_e::game && current_appid > 0) {
