@@ -198,7 +198,18 @@ namespace terminal_session::service {
       const auto receive = pipe->receive(buffer, bytes, 1500);
       if (receive == platf::dxgi::PipeResult::Success && bytes <= buffer.size()) {
         const auto reply = endpoint_.handle(std::span<const std::uint8_t> {buffer.data(), bytes}, identity);
-        if (!reply.empty()) (void) pipe->send(reply, 1500);
+        if (!reply.empty() && pipe->send(reply, broker_reply_delivery_ack_timeout_ms)) {
+          std::array<std::uint8_t, 1> acknowledgement {};
+          std::size_t acknowledgement_bytes = 0;
+          const auto acknowledgement_result = pipe->receive(acknowledgement, acknowledgement_bytes, broker_reply_delivery_ack_timeout_ms);
+          if (acknowledgement_result != platf::dxgi::PipeResult::Success ||
+              acknowledgement_bytes > acknowledgement.size() ||
+              !is_broker_reply_delivery_ack(std::span<const std::uint8_t> {acknowledgement.data(), acknowledgement_bytes})) {
+            BOOST_LOG(debug) << "Terminal broker reply delivery acknowledgement was unavailable."
+                             << " result=" << static_cast<int>(acknowledgement_result)
+                             << " bytes=" << acknowledgement_bytes;
+          }
+        }
       } else {
         BOOST_LOG(warning) << "Terminal broker did not receive a complete authenticated request."
                            << " result=" << static_cast<int>(receive)
@@ -236,12 +247,16 @@ namespace terminal_session::service {
                          << " bytes=" << bytes;
       return std::nullopt;
     }
+    const std::array<std::uint8_t, 1> acknowledgement {broker_reply_delivery_ack};
+    if (!pipe->send(acknowledgement, broker_reply_delivery_ack_timeout_ms)) {
+      BOOST_LOG(debug) << "Terminal broker reply delivery acknowledgement could not be sent.";
+    }
     // The reply was received on the same pipe handle that was authenticated
-    // before the request. The server intentionally disconnects its one-shot
-    // instance immediately after replying, so Windows may no longer report a
-    // server PID here. A newly-created pipe server cannot inject a reply into
-    // this already-connected handle; retain the pre-request peer check and
-    // bind the reply to the exact request below instead of rejecting a valid
+    // before the request. The receipt above permits the server to disconnect
+    // its one-shot instance, so Windows may no longer report a server PID
+    // here. A newly-created pipe server cannot inject a reply into this
+    // already-connected handle; retain the pre-request peer check and bind
+    // the reply to the exact request below instead of rejecting a valid
     // response after its server has disconnected.
     auto response = protocol::decode_response(std::span<const std::uint8_t> {buffer.data(), bytes});
     if (!response || !response_binds_to_request(*response, request)) {

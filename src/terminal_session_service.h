@@ -6,6 +6,9 @@
 #include <utility>
 #include <thread>
 #include <atomic>
+#include <array>
+#include <cstdint>
+#include <span>
 #include <string_view>
 #include <string>
 
@@ -49,6 +52,15 @@ namespace terminal_session::service {
     return response.client_uuid == request.client_uuid &&
            response.generation == request.generation &&
            response.launch_id == request.launch_id;
+  }
+
+  // The service uses one request/one reply pipe instances. Waiting for this
+  // bounded acknowledgement prevents DisconnectNamedPipe from discarding a
+  // reply that is still buffered for the client.
+  inline constexpr std::uint8_t broker_reply_delivery_ack = 0xa5;
+  inline constexpr int broker_reply_delivery_ack_timeout_ms = 1500;
+  [[nodiscard]] constexpr bool is_broker_reply_delivery_ack(std::span<const std::uint8_t> bytes) {
+    return bytes.size() == 1 && bytes.front() == broker_reply_delivery_ack;
   }
 
 #ifdef _WIN32

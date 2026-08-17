@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstring>
@@ -443,6 +444,21 @@ TEST(TerminalSessionService, ResponseBindingIsThePostReplyBoundary) {
   response.generation = request.generation;
   ++response.launch_id;
   EXPECT_FALSE(terminal_session::service::response_binds_to_request(response, request));
+}
+
+TEST(TerminalSessionService, OneShotReplyAcknowledgementIsExact) {
+  const std::array<std::uint8_t, 1> acknowledgement {terminal_session::service::broker_reply_delivery_ack};
+  EXPECT_TRUE(terminal_session::service::is_broker_reply_delivery_ack(acknowledgement));
+  EXPECT_EQ(terminal_session::service::broker_reply_delivery_ack_timeout_ms, 1500);
+
+  const std::array<std::uint8_t, 1> wrong_acknowledgement {0};
+  const std::array<std::uint8_t, 0> empty_acknowledgement {};
+  const std::array<std::uint8_t, 2> oversized_acknowledgement {
+    terminal_session::service::broker_reply_delivery_ack, terminal_session::service::broker_reply_delivery_ack
+  };
+  EXPECT_FALSE(terminal_session::service::is_broker_reply_delivery_ack(wrong_acknowledgement));
+  EXPECT_FALSE(terminal_session::service::is_broker_reply_delivery_ack(empty_acknowledgement));
+  EXPECT_FALSE(terminal_session::service::is_broker_reply_delivery_ack(oversized_acknowledgement));
 }
 
 TEST(TerminalSessionService, ReleaseDispositionIsBoundIntoTheOneUseChallenge) {
