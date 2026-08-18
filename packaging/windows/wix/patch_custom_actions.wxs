@@ -15,6 +15,11 @@
     <Property Id="FACTORYRESET" Value="0" Secure="yes"/>
     <Property Id="INSTALL_SUDOVDA" Value="1" Secure="yes"/>
     <Property Id="INSTALL_VIRTUAL_DISPLAY_DRIVER" Secure="yes"/>
+    <!-- The build must contain the vetted payload before this property can
+         select it.  The default-off value keeps ordinary install/upgrade
+         packages completely inert with respect to TermService. -->
+    <Property Id="INSTALL_TERMINAL_ISOLATION" Value="0" Secure="yes"/>
+    <Property Id="VIBESHINE_TERMINAL_REBOOT" Value="0" Secure="yes"/>
     <Property Id="SKIP_REMOVE_CONFLICTING_PRODUCTS" Value="0" Secure="yes"/>
     <Condition Message="Administrator privileges are required.">Privileged</Condition>
     <Feature Id="VibeshineExtras" Title="Vibeshine Components" Level="1" Absent="disallow">
@@ -26,6 +31,9 @@
       <ComponentRef Id="StartMenuShortcut"/>
       <ComponentRef Id="SudoVdaRegistryDefaults"/>
       <ComponentRef Id="ArpCustomUninstallEntry"/>
+<?if $(var.TerminalIsolationEnabled) = "1" ?>
+      <ComponentRef Id="TerminalIsolationPayload"/>
+<?endif?>
     </Feature>
 
     <InstallExecuteSequence>
@@ -65,14 +73,44 @@
       <Custom Action="InstallVirtualDisplayDriver" After="SetInstallVirtualDisplayDriver">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>
       <Custom Action="SetRegisterVulkanHdrLayer" After="InstallVirtualDisplayDriver">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>
       <Custom Action="RegisterVulkanHdrLayer" After="SetRegisterVulkanHdrLayer">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>
+<?if $(var.TerminalIsolationEnabled) = "1" ?>
+      <!-- Schedule MSI rollback before the deferred activation.  The action
+           does not reboot or restart TermService; it restores only an owned
+           ServiceDll and leaves post-boot verification armed. -->
+      <Custom Action="SetTerminalIsolationInstall" After="RegisterVulkanHdrLayer">NOT REMOVE AND INSTALL_TERMINAL_ISOLATION = "1"</Custom>
+      <Custom Action="SetTerminalIsolationMsiRollback" After="SetTerminalIsolationInstall">NOT REMOVE AND INSTALL_TERMINAL_ISOLATION = "1"</Custom>
+      <Custom Action="TerminalIsolationMsiRollback" After="SetTerminalIsolationMsiRollback">NOT REMOVE AND INSTALL_TERMINAL_ISOLATION = "1"</Custom>
+      <Custom Action="TerminalIsolationInstall" After="TerminalIsolationMsiRollback">NOT REMOVE AND INSTALL_TERMINAL_ISOLATION = "1"</Custom>
+      <Custom Action="SetTerminalIsolationRebootInstall" After="TerminalIsolationInstall">NOT REMOVE AND INSTALL_TERMINAL_ISOLATION = "1"</Custom>
+      <Custom Action="TerminalIsolationRebootProbeInstall" After="SetTerminalIsolationRebootInstall">NOT REMOVE AND INSTALL_TERMINAL_ISOLATION = "1"</Custom>
+<?endif?>
       <Custom Action="SetMigrateConfig" After="RegisterVulkanHdrLayer">NOT Installed AND NOT REMOVE</Custom>
       <Custom Action="MigrateConfig" After="SetMigrateConfig">NOT Installed AND NOT REMOVE</Custom>
       <Custom Action="SetRunInstallerMigrations" After="MigrateConfig">NOT Installed AND NOT REMOVE</Custom>
       <Custom Action="RunInstallerMigrations" After="SetRunInstallerMigrations">NOT Installed AND NOT REMOVE</Custom>
 
-      <!-- Uninstall before file removal -->
+      <!-- Roll back the old product for both manual uninstall and major
+           replacement.  Property 0 therefore leaves the incoming product
+           native; only an explicit property 1 may re-arm it. -->
+<?if $(var.TerminalIsolationEnabled) = "1" ?>
+      <!-- Only an actually installed optional component invokes the
+           manifest-bound helper.  A package without the optional component
+           makes property-0 uninstall a no-op for terminal isolation. -->
+      <Custom Action="SetTerminalIsolationUninstallRollback" Before="TerminalIsolationUninstallRollback">REMOVE="ALL" AND ?TerminalIsolationPayload = 3</Custom>
+      <Custom Action="TerminalIsolationUninstallRollback" Before="TerminalIsolationUninstall">REMOVE="ALL" AND ?TerminalIsolationPayload = 3</Custom>
+      <Custom Action="SetTerminalIsolationUninstall" Before="TerminalIsolationUninstall">REMOVE="ALL" AND ?TerminalIsolationPayload = 3</Custom>
+      <Custom Action="TerminalIsolationUninstall" Before="RemoveFiles">REMOVE="ALL" AND ?TerminalIsolationPayload = 3</Custom>
+      <Custom Action="SetTerminalIsolationRebootUninstall" After="TerminalIsolationUninstall">REMOVE="ALL" AND ?TerminalIsolationPayload = 3</Custom>
+      <Custom Action="TerminalIsolationRebootProbeUninstall" After="SetTerminalIsolationRebootUninstall">REMOVE="ALL" AND ?TerminalIsolationPayload = 3</Custom>
+<?endif?>
       <Custom Action="SetRestoreNvPrefsUndo" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <Custom Action="RestoreNvPrefsUndo" After="SetRestoreNvPrefsUndo">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+
+      <!-- MSI owns reboot scheduling.  The native CA only publishes whether
+           its committed action left a pending restart; REBOOT=ReallySuppress
+           is intentionally left to Windows Installer so it returns 3010
+           without rebooting automatically. -->
+      <ScheduleReboot After="InstallFinalize">VIBESHINE_TERMINAL_REBOOT = "1" AND ((NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE))</ScheduleReboot>
 
       <!-- Remove Virtual Display Driver only when explicitly requested by uninstall properties. -->
       <Custom Action="SetUnregisterVulkanHdrLayer" After="RestoreNvPrefsUndo">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>

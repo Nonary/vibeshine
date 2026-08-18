@@ -17,6 +17,17 @@ option(SUNSHINE_CONFIGURE_ONLY "Configure special files only, then exit." OFF)
 option(SUNSHINE_ENABLE_TRAY "Enable system tray icon." ON)
 option(SUNSHINE_ENABLE_WEBRTC "Enable WebRTC streaming support (Windows only)." OFF)
 
+# Experimental native RDP-Tcp terminal isolation.  This is deliberately a
+# separate build-time gate from the MSI property: an ordinary build contains
+# no wrapper payload at all, while a vetted test package can expose the
+# default-off INSTALL_TERMINAL_ISOLATION property.
+if(WIN32)
+    option(SUNSHINE_ENABLE_TERMINAL_ISOLATION
+        "Package the experimental native RDP-Tcp terminal-isolation component." OFF)
+    set(SUNSHINE_TERMINAL_ISOLATION_ASSET_DIR "" CACHE PATH
+        "Vetted TermWrap.dll, Zydis.dll, and LICENSE asset directory for terminal isolation.")
+endif()
+
 option(SUNSHINE_SYSTEM_VULKAN_HEADERS "Use system installation of vulkan-headers rather than the submodule." OFF)
 option(SUNSHINE_SYSTEM_WAYLAND_PROTOCOLS "Use system installation of wayland-protocols rather than the submodule." OFF)
 

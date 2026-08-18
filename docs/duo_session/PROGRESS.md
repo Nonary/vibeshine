@@ -988,10 +988,10 @@ password contract but cannot by itself provide arbitrary Duo-style seat count.
   startup disables any exact managed account left enabled by a prior crash, and
   uninstall invokes the same sweep before deleting those accounts.
 - The provider requires the already-live TermWrap plus inbox `termsrv.dll`
-  combination and the exact enabled `Sunshine-Idd` listener. It does not write a
-  Windows DLL, enable a listener, restart TermService, or modify either
-  prerequisite automatically. Missing prerequisites fail before account/session
-  mutation.
+  combination and the normal enabled, NLA-protected `RDP-Tcp` listener on its
+  native port. It does not write a Windows DLL, enable a listener, restart
+  TermService, or modify either prerequisite automatically. Missing or
+  insecure prerequisites fail before account/session mutation.
 - A hidden inbox RDP ActiveX controller runs with a privilege-disabled
   LocalSystem token on a random SYSTEM-only private window station and desktop.
   It receives the ephemeral managed credential only over a
@@ -1602,3 +1602,85 @@ This section supersedes the applet-opt-in interpretation immediately above.
 The correction is committed-source work only until a subsequent explicit build
 and installation; the currently installed `e7e6d27eb` build still has the
 incorrect coupled behavior.
+
+## Optional terminal-isolation package hardening (2026-08-16)
+
+The optional terminal-isolation package remains deliberately disabled for
+ordinary installs and upgrades. A test package may include it, but the MSI
+property is still default-off and must be explicitly selected with
+`INSTALL_TERMINAL_ISOLATION=1`. A major replacement whose incoming property
+remains `0` rolls an existing owned ServiceDll back to native before the old
+product is removed; only explicit property `1` may re-arm it. The retained
+content-addressed payload remains available for rollback compensation; a
+different manifest is deliberately rejected until a transaction-aware state
+restore design exists.
+
+The test package now uses a real MSI rollback custom action immediately before
+deferred activation, plus a separate elevated uninstall rollback action. Both
+restore only a state-owned ServiceDll, never restart TermService or reboot, and
+leave a SYSTEM boot-verification task and immutable payload in place until the
+native postboot state is proven. After native state is verified, rollback marks
+the dedicated state `rolled-back` but retains the protected payload and forensic
+metadata; a later explicit opt-in can reuse or add a content-addressed version.
+The current source intentionally blocks that manifest-changing rebind rather
+than risking a partial major-upgrade transition.
+Payload and helper files are content-addressed under the dedicated
+`ProgramData\Vibeshine\TerminalIsolation` root; no recursive ACL operation or
+recursive delete of the broader `ProgramData\Vibeshine` tree is permitted.
+Unknown foreign state is ignored by product uninstall, while an owned malformed
+state fails closed.
+
+The product root is created with a protected SYSTEM/Administrators-only ACL
+before ownership validation; an existing foreign `ProgramData\Vibeshine` root
+is never seized or rewritten. Install, rollback, and verification actions are
+serialized by a bounded Global mutex. MSI schedules a reboot only when the
+published state remains `pending-restart` or `pending-native-restart`; an
+already-loaded native rollback publishes `rolled-back` without requesting a
+restart. Old-product uninstall has a distinct rollback compensation action
+that re-arms the validated content-addressed state if the MSI transaction is
+later restored.
+
+An already-owned payload cannot be migrated in place: a different wrapper
+manifest is currently refused altogether because a major-upgrade rollback
+cannot yet restore the complete prior state and registry binding transactionally.
+This deliberate fail-closed testing limitation preserves the old product's
+state. Activation also refuses arbitrary custom
+install roots; the package and every manifest asset must be below a canonical,
+ACL-checked Program Files descendant. The verifier publishes `active`,
+`rolled-back`, or `foreign-unavailable` before attempting its nonfatal task
+removal. If rollback observes the native `termsrv.dll` already loaded, it
+publishes `rolled-back` immediately and does not re-arm a pending-native-
+restart task; this permits an explicit property-1 retry to stage a new
+content-addressed manifest without being blocked by the old product's
+uninstall action.
+
+The MSI-to-script boundary is a Windows-native `TerminalIsolationCA.dll`
+embedded in the MSI Binary table. Its three entry points accept only a
+delimiter-bound install-root/action pair, require a canonical Program Files
+descendant, reject reparse components and nontrusted write/ACL/owner grants,
+hash the script through a read handle against the configure-time pin, and
+launch only the exact System32 Windows PowerShell executable with
+`CreateProcessW`. The PowerShell checks remain in place as a second boundary;
+the CA is linked with a static MinGW/MSVC runtime where applicable, and a
+post-link import gate rejects non-system DLL dependencies before `package_msi`
+can complete. PowerShell is launched suspended inside a kill-on-close Job
+Object with a bounded wait; timeout and setup failures terminate the contained
+process. The option-off package has no CA target or MSI reference. No build or
+runtime validation of this native gate has been performed yet.
+
+Provider admission now requires active state, exact registry ownership of the
+content-addressed wrapper, matching SHA-256, and the wrapper's exact loaded path
+alongside the inbox System32 `termsrv.dll`. RDP listener admission reads the
+configured `PortNumber` and requires the live WTS listener to report that same
+port, rather than assuming 3389. The wrapper/Zydis/license hashes are checked
+against source-reviewed test-only pins at configure time; a self-describing
+manifest cannot authorize arbitrary binaries. This remains source/static-only
+until a clean review, explicit package build/install, and a separately approved
+reboot test.
+
+The pre-arm host gate independently pins the current Microsoft-signed x64
+System32 `termsrv.dll` SHA-256 and file version and verifies Authenticode before
+changing ServiceDll. This is patch-specific compatibility evidence, not full
+attestation of every Microsoft servicing state; a wrapper-produced attestation
+would still be required to prove runtime provenance beyond the pinned host
+identity.

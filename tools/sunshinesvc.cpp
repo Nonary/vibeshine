@@ -375,7 +375,7 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
 
   // The privileged service owns the sole production terminal broker endpoint.
   // Provider preflight remains fail-closed and never restarts TermService or
-  // enables the isolated listener on its own.
+  // changes the native RDP-Tcp listener on its own.
   // A previous service crash may have interrupted the narrow RDP bootstrap
   // interval. Never expose the broker until every tagged account is disabled.
   if (terminal_session::windows::secure_managed_accounts(false)) {

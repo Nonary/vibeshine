@@ -543,7 +543,8 @@ namespace VibeshineInstaller {
       });
 
       tipsStack.Children.Add(new TextBlock {
-        Text = "You can install or upgrade Vibeshine while actively streaming. No system restart is required. "
+        Text = "You can install or upgrade normal Vibeshine components while actively streaming; no system restart is required. "
+          + "If the experimental terminal-isolation option is explicitly enabled, Windows will request a restart before it becomes active. "
           + "After you click Install or Upgrade, the current streaming session will end, then you can usually "
           + "start streaming again after about 1–2 minutes without issues.",
         FontSize = 12.5,
@@ -2170,12 +2171,14 @@ namespace VibeshineInstaller {
       Console.WriteLine("Supported MSI properties:");
       Console.WriteLine("  INSTALL_ROOT=<path>  Install to a custom directory (default: %ProgramFiles%\\Sunshine)");
       Console.WriteLine("  INSTALL_VIRTUAL_DISPLAY_DRIVER=0  Use SudoVDA instead of the default Vibeshine Display Driver");
+      Console.WriteLine("  INSTALL_TERMINAL_ISOLATION=1  Enable the experimental native RDP-Tcp terminal-isolation component (test package only)");
       Console.WriteLine();
       Console.WriteLine("Examples:");
       Console.WriteLine("  VibeshineSetup.exe /qn");
       Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_ROOT=\"D:\\Vibeshine\"");
       Console.WriteLine("  VibeshineSetup.exe /x {PRODUCT-CODE} /qn");
       Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_VIRTUAL_DISPLAY_DRIVER=0");
+      Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_TERMINAL_ISOLATION=1");
       Console.WriteLine("  VibeshineSetup.exe /uninstall");
       Console.WriteLine("  VibeshineSetup.exe /uninstall /quiet");
       Console.WriteLine("  VibeshineSetup.exe --msi C:\\temp\\Vibeshine.msi /passive");

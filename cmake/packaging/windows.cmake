@@ -436,6 +436,10 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/plugins/"
         DESTINATION "plugins"
         COMPONENT assets)
 
+# Experimental native RDP-Tcp terminal isolation is independently gated and
+# contributes no files unless an explicit vetted asset directory was supplied.
+include("${CMAKE_SOURCE_DIR}/cmake/packaging/windows_terminal_isolation.cmake")
+
 # copy assets (excluding shaders) to build directory, for running without install
 file(COPY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/assets/"
         DESTINATION "${CMAKE_BINARY_DIR}/assets"

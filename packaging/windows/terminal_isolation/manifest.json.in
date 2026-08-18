@@ -1,0 +1,6 @@
+{
+  "schema": 2,
+  "provider": "native-rdp-tcp",
+  "assets": [
+@TERMINAL_ISOLATION_MANIFEST_ENTRIES@  ]
+}

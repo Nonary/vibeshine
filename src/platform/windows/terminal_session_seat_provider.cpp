@@ -12,18 +12,24 @@
 #include <WtsApi32.h>
 #include <winternl.h>
 #include <openssl/crypto.h>
+#include <openssl/evp.h>
+#include <openssl/sha.h>
 #include <openssl/rand.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cwctype>
 #include <filesystem>
+#include <fstream>
 #include <format>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
+#include <iterator>
 #include <set>
 #include <span>
 #include <string>
@@ -37,8 +43,16 @@ namespace terminal_session::windows {
   namespace {
     constexpr std::wstring_view account_prefix = L"VibeshineSeat";
     constexpr std::wstring_view account_comment = L"Managed by Vibeshine terminal seat broker";
-    constexpr std::wstring_view listener_name = L"Sunshine-Idd";
-    constexpr std::wstring_view listener_key = L"SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\Sunshine-Idd";
+    // The hidden ActiveX controller uses the normal Windows RDP endpoint. Do
+    // not create or depend on a product-specific listener: its registry and
+    // live WTS state are the listener contract validated below.
+    constexpr std::wstring_view listener_name = L"RDP-Tcp";
+    constexpr std::wstring_view listener_key = L"SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp";
+    // Test-only compatibility pins must agree with the installer-side pins;
+    // an edited state/manifest cannot authorize a different payload at runtime.
+    constexpr std::string_view test_termwrap_sha256 = "220f18e0b2c2091c5f684ec063c43831bffdf25e561bd123211cce883f8d25e2";
+    constexpr std::string_view test_zydis_sha256 = "5908be0af05bf7584328cf5d0ddde2c108d693709ffc77a13822fdceb75797e1";
+    constexpr std::string_view test_license_sha256 = "72966f08ceaacf34475e7824ac566f2e966bef3c5e46a190dc844c1155486614";
     // Stay below Windows' default dynamic client-port range (49152-65535).
     constexpr std::uint16_t first_worker_base_port = 40000;
     constexpr std::uint16_t worker_port_stride = 32;
@@ -376,7 +390,152 @@ namespace terminal_session::windows {
       return status.dwProcessId;
     }
 
+    struct terminal_isolation_contract_t {
+      std::filesystem::path owned_path;
+      std::string owned_sha256;
+    };
+
+    std::optional<std::filesystem::path> canonical_existing_path(const std::filesystem::path &path) {
+      std::error_code ec;
+      const auto canonical = std::filesystem::weakly_canonical(path, ec);
+      if (ec || !std::filesystem::is_regular_file(canonical, ec) || ec) return std::nullopt;
+      return canonical;
+    }
+
+    std::optional<std::string> sha256_file(const std::filesystem::path &path) {
+      std::ifstream file(path, std::ios::binary);
+      if (!file) return std::nullopt;
+      EVP_MD_CTX *context = EVP_MD_CTX_new();
+      if (!context || EVP_DigestInit_ex(context, EVP_sha256(), nullptr) != 1) {
+        if (context) EVP_MD_CTX_free(context);
+        return std::nullopt;
+      }
+      std::array<char, 64 * 1024> buffer {};
+      while (file) {
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const auto count = file.gcount();
+        if (count > 0 && EVP_DigestUpdate(context, buffer.data(), static_cast<std::size_t>(count)) != 1) {
+          EVP_MD_CTX_free(context);
+          return std::nullopt;
+        }
+      }
+      if (!file.eof()) {
+        EVP_MD_CTX_free(context);
+        return std::nullopt;
+      }
+      std::array<unsigned char, SHA256_DIGEST_LENGTH> digest {};
+      unsigned int digest_length = 0;
+      const bool finalized = EVP_DigestFinal_ex(context, digest.data(), &digest_length) == 1;
+      EVP_MD_CTX_free(context);
+      if (!finalized || digest_length != digest.size()) return std::nullopt;
+      std::string result;
+      result.reserve(SHA256_DIGEST_LENGTH * 2);
+      constexpr char hex[] = "0123456789abcdef";
+      for (const auto value : digest) {
+        result.push_back(hex[value >> 4]);
+        result.push_back(hex[value & 0xf]);
+      }
+      return result;
+    }
+
+    std::optional<terminal_isolation_contract_t> terminal_isolation_contract() {
+      try {
+      wchar_t program_data[32768] {};
+      const DWORD length = GetEnvironmentVariableW(L"ProgramData", program_data, static_cast<DWORD>(std::size(program_data)));
+      if (!length || length >= std::size(program_data)) return std::nullopt;
+      const auto root = std::filesystem::path {std::wstring {program_data, length}} / L"Vibeshine" / L"TerminalIsolation";
+      std::ifstream status_file(root / L"status.txt", std::ios::binary);
+      std::string status;
+      if (!status_file || !std::getline(status_file, status)) return std::nullopt;
+      while (!status.empty() && (status.back() == '\r' || status.back() == '\n' || status.back() == ' ' || status.back() == '\t')) status.pop_back();
+      std::transform(status.begin(), status.end(), status.begin(), [](const unsigned char value) { return static_cast<char>(std::tolower(value)); });
+      if (status != "active") return std::nullopt;
+      std::ifstream state_file(root / L"state.json", std::ios::binary);
+      if (!state_file) return std::nullopt;
+      const std::string state_text {std::istreambuf_iterator<char> {state_file}, std::istreambuf_iterator<char> {}};
+      const auto state = nlohmann::json::parse(state_text, nullptr, false);
+      if (state.is_discarded() || state.value("Schema", 0) != 2 || state.value("Owner", "") != "Vibeshine-native-rdp-tcp-v1" ||
+          state.value("Provider", "") != "native-rdp-tcp" || !state.contains("ManifestSha256") || !state.contains("ManifestPath") ||
+          !state.contains("PayloadDirectory") || !state.contains("OwnedServiceDll") || !state.contains("PayloadFiles") ||
+          !state.at("PayloadFiles").is_array()) return std::nullopt;
+      const auto manifest_sha = state.value("ManifestSha256", "");
+      if (manifest_sha.size() != SHA256_DIGEST_LENGTH * 2 ||
+          !std::all_of(manifest_sha.begin(), manifest_sha.end(), [](const unsigned char value) { return std::isxdigit(value) != 0; })) return std::nullopt;
+      const auto owned_text = state.value("OwnedServiceDll", "");
+      const auto payload_text = state.value("PayloadDirectory", "");
+      const auto manifest_text = state.value("ManifestPath", "");
+      if (owned_text.empty() || payload_text.empty() || manifest_text.empty()) return std::nullopt;
+      const auto owned = canonical_existing_path(std::filesystem::u8path(owned_text));
+      std::error_code payload_ec, manifest_ec;
+      const auto payload = std::filesystem::weakly_canonical(std::filesystem::u8path(payload_text), payload_ec);
+      const auto manifest = canonical_existing_path(std::filesystem::u8path(manifest_text));
+      std::error_code root_ec;
+      const auto canonical_root = std::filesystem::weakly_canonical(root, root_ec);
+      if (!owned || !manifest || payload_ec || root_ec || canonical_root.empty()) return std::nullopt;
+      const auto root_text = canonical_root.native() + L"\\";
+      const auto expected_payload = std::filesystem::weakly_canonical(canonical_root / L"payload" / std::filesystem::u8path(manifest_sha), payload_ec);
+      if (payload_ec || payload != expected_payload || manifest != payload / L"terminal-isolation-manifest.json" ||
+          owned->native().size() <= root_text.size() || owned->native().compare(0, root_text.size(), root_text) != 0 ||
+          owned->native() != (payload / L"TermWrap.dll").native()) return std::nullopt;
+      if (sha256_file(*manifest) != [&] {
+            std::string lower = manifest_sha;
+            std::transform(lower.begin(), lower.end(), lower.begin(), [](const unsigned char value) { return static_cast<char>(std::tolower(value)); });
+            return lower;
+          }()) return std::nullopt;
+      std::ifstream manifest_file(*manifest, std::ios::binary);
+      const std::string manifest_text_content {std::istreambuf_iterator<char> {manifest_file}, std::istreambuf_iterator<char> {}};
+      const auto embedded = nlohmann::json::parse(manifest_text_content, nullptr, false);
+      if (embedded.is_discarded() || embedded.value("schema", 0) != 2 || embedded.value("provider", "") != "native-rdp-tcp" ||
+          !embedded.contains("assets") || !embedded.at("assets").is_array() || embedded.at("assets").size() != 5 || state.at("PayloadFiles").size() != 5) return std::nullopt;
+      std::set<std::string> payload_names;
+      std::string expected;
+      for (const auto &asset : state.at("PayloadFiles")) {
+        if (!asset.contains("Name") || !asset.contains("Sha256")) return std::nullopt;
+        const auto name = asset.value("Name", "");
+        const auto hash = asset.value("Sha256", "");
+        if (!payload_names.insert(name).second) return std::nullopt;
+        if (name == "TermWrap.dll") {
+          expected = hash;
+          if (hash != test_termwrap_sha256) return std::nullopt;
+        } else if (name == "Zydis.dll" && hash != test_zydis_sha256) {
+          return std::nullopt;
+        } else if (name == "LICENSE" && hash != test_license_sha256) {
+          return std::nullopt;
+        }
+        const auto matches = std::count_if(embedded.at("assets").begin(), embedded.at("assets").end(), [&](const auto &embedded_asset) {
+          return embedded_asset.value("path", "") == name && embedded_asset.value("sha256", "") == hash;
+        });
+        if (matches != 1) return std::nullopt;
+      }
+      if (payload_names != std::set<std::string> {"TermWrap.dll", "Zydis.dll", "LICENSE", "terminal-isolation.ps1", "status-contract.txt"}) return std::nullopt;
+      if (expected.size() != SHA256_DIGEST_LENGTH * 2) return std::nullopt;
+      std::transform(expected.begin(), expected.end(), expected.begin(), [](const unsigned char value) { return static_cast<char>(std::tolower(value)); });
+      if (sha256_file(*owned) != expected) return std::nullopt;
+
+      HKEY key = nullptr;
+      constexpr std::wstring_view service_key = L"SYSTEM\\CurrentControlSet\\Services\\TermService\\Parameters";
+      if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, service_key.data(), 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) return std::nullopt;
+      wchar_t value[32768] {};
+      DWORD type = 0, size = sizeof(value);
+      const bool read = RegQueryValueExW(key, L"ServiceDll", nullptr, &type, reinterpret_cast<LPBYTE>(value), &size) == ERROR_SUCCESS &&
+        (type == REG_SZ || type == REG_EXPAND_SZ) && size >= sizeof(wchar_t) && size <= sizeof(value);
+      RegCloseKey(key);
+      if (!read) return std::nullopt;
+      value[(size / sizeof(wchar_t)) - 1] = L'\0';
+      wchar_t expanded[32768] {};
+      const DWORD expanded_length = ExpandEnvironmentStringsW(value, expanded, static_cast<DWORD>(std::size(expanded)));
+      if (!expanded_length || expanded_length >= std::size(expanded)) return std::nullopt;
+      const auto registry_path = canonical_existing_path(std::filesystem::path {expanded});
+      if (!registry_path || *registry_path != *owned) return std::nullopt;
+      return terminal_isolation_contract_t {.owned_path = *owned, .owned_sha256 = expected};
+      } catch (...) {
+        return std::nullopt;
+      }
+    }
+
     bool termwrap_loaded() {
+      const auto contract = terminal_isolation_contract();
+      if (!contract) return false;
       const auto pid = service_pid(L"TermService");
       if (!pid) return false;
       unique_handle snapshot {CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, *pid)};
@@ -387,7 +546,10 @@ namespace terminal_session::windows {
         do {
           std::wstring name {entry.szModule};
           std::transform(name.begin(), name.end(), name.begin(), ::towlower);
-          if (name == L"termwrap.dll") termwrap = true;
+          if (name == L"termwrap.dll") {
+            const auto loaded = canonical_existing_path(entry.szExePath);
+            termwrap = loaded && *loaded == contract->owned_path;
+          }
           if (name == L"termsrv.dll") {
             std::wstring system_directory(32768, L'\0');
             const UINT length = GetSystemDirectoryW(system_directory.data(), static_cast<UINT>(system_directory.size()));
@@ -402,6 +564,20 @@ namespace terminal_session::windows {
       return termwrap && inbox_termsrv;
     }
 
+    std::string terminal_isolation_status() {
+      wchar_t program_data[32768] {};
+      const DWORD length = GetEnvironmentVariableW(L"ProgramData", program_data, static_cast<DWORD>(std::size(program_data)));
+      if (!length || length >= std::size(program_data)) return {};
+      std::ifstream status_file(std::filesystem::path {std::wstring {program_data, length}} /
+                                L"Vibeshine" / L"TerminalIsolation" / L"status.txt", std::ios::binary);
+      if (!status_file) return {};
+      std::string status;
+      std::getline(status_file, status);
+      while (!status.empty() && (status.back() == '\r' || status.back() == '\n' || status.back() == ' ' || status.back() == '\t')) status.pop_back();
+      std::transform(status.begin(), status.end(), status.begin(), [](const unsigned char value) { return static_cast<char>(std::tolower(value)); });
+      return status;
+    }
+
     struct listener_contract_t {
       std::uint16_t port {};
       bool enabled {};
@@ -411,17 +587,27 @@ namespace terminal_session::windows {
       HKEY key = nullptr;
       if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, listener_key.data(), 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) return {};
       DWORD port = 0, enabled = 0, disabled = 1, logon_disabled = 1;
-      DWORD size = sizeof(DWORD);
-      const bool ok = RegQueryValueExW(key, L"PortNumber", nullptr, nullptr, reinterpret_cast<LPBYTE>(&port), &size) == ERROR_SUCCESS &&
-        (size = sizeof(DWORD), RegQueryValueExW(key, L"fEnableWinStation", nullptr, nullptr, reinterpret_cast<LPBYTE>(&enabled), &size) == ERROR_SUCCESS) &&
-        (size = sizeof(DWORD), RegQueryValueExW(key, L"WinStationDisabled", nullptr, nullptr, reinterpret_cast<LPBYTE>(&disabled), &size) == ERROR_SUCCESS) &&
-        (size = sizeof(DWORD), RegQueryValueExW(key, L"fLogonDisabled", nullptr, nullptr, reinterpret_cast<LPBYTE>(&logon_disabled), &size) == ERROR_SUCCESS);
+      DWORD security_layer = 0, min_encryption_level = 0, user_authentication = 0;
+      const auto query_dword = [key](LPCWSTR name, DWORD &value) {
+        DWORD type = 0, size = sizeof(value);
+        return RegQueryValueExW(key, name, nullptr, &type, reinterpret_cast<LPBYTE>(&value), &size) == ERROR_SUCCESS &&
+          type == REG_DWORD && size == sizeof(value);
+      };
+      const bool ok = query_dword(L"PortNumber", port) && query_dword(L"fEnableWinStation", enabled) &&
+        query_dword(L"WinStationDisabled", disabled) && query_dword(L"fLogonDisabled", logon_disabled) &&
+        query_dword(L"SecurityLayer", security_layer) && query_dword(L"MinEncryptionLevel", min_encryption_level) &&
+        query_dword(L"UserAuthentication", user_authentication);
       RegCloseKey(key);
       const auto wtsapi = GetModuleHandleW(L"Wtsapi32.dll");
       const auto query_listener = wtsapi ? reinterpret_cast<query_listener_config_w_t>(GetProcAddress(wtsapi, "WTSQueryListenerConfigW")) : nullptr;
       wts_listener_config_w_t live {};
       const bool live_ok = query_listener && query_listener(WTS_CURRENT_SERVER_HANDLE, nullptr, 0, const_cast<LPWSTR>(listener_name.data()), &live) != FALSE;
-      return {static_cast<std::uint16_t>(port), ok && live_ok && port >= 1024 && port <= 65535 && enabled == 1 && disabled == 0 && logon_disabled == 0 && live.fEnableListener != 0};
+      const bool secure_registry = security_layer >= 1 && min_encryption_level >= 2 && user_authentication == 1;
+      const bool valid_port = port > 0 && port <= std::numeric_limits<std::uint16_t>::max();
+      const bool secure_live = valid_port && live.fEnableListener != 0 && live.PortNumber == port &&
+        live.SecurityLayer >= 1 && live.MinEncryptionLevel >= 2 && live.UserAuthentication == 1;
+      return {valid_port ? static_cast<std::uint16_t>(port) : 0,
+              ok && secure_registry && live_ok && valid_port && enabled == 1 && disabled == 0 && logon_disabled == 0 && secure_live};
     }
 
     std::string unique_pipe_name() {
@@ -466,9 +652,24 @@ namespace terminal_session::windows {
     public:
       seat_pool::capability_t preflight() override {
         if (!is_system_process()) return {.error = "The terminal seat provider must run as LocalSystem."};
-        if (!termwrap_loaded()) return {.error = "TermWrap and the inbox termsrv.dll are not both active in TermService."};
+        if (!termwrap_loaded()) {
+          const auto isolation_status = terminal_isolation_status();
+          if (isolation_status == "pending-restart") {
+            return {.error = "Terminal isolation is installed but pending a Windows restart; managed terminal seats are unavailable until then."};
+          }
+          if (isolation_status == "pending-native-restart") {
+            return {.error = "Terminal isolation is rolling back to the native TermService and needs a Windows restart before managed terminal seats can be used."};
+          }
+          if (isolation_status == "foreign-unavailable") {
+            return {.error = "Terminal isolation found another TermService provider and left it unchanged; managed terminal seats remain disabled."};
+          }
+          if (isolation_status == "unavailable") {
+            return {.error = "Terminal isolation is unavailable; managed terminal seats remain disabled."};
+          }
+          return {.error = "Terminal isolation is not active; managed terminal seats remain disabled."};
+        }
         const auto listener = listener_contract();
-        if (!listener.enabled) return {.termwrap_ready = true, .error = "The Sunshine-Idd listener is absent, disabled, or not live; the broker will not restart TermService automatically."};
+        if (!listener.enabled) return {.termwrap_ready = true, .error = "The native RDP-Tcp listener is absent, disabled, insecure, or not live; the broker will not restart TermService automatically."};
         const auto controller = std::filesystem::path(module_path()).parent_path() / L"vibeshine_seat_controller.exe";
         if (!std::filesystem::is_regular_file(controller)) return {.termwrap_ready = true, .remote_display = true, .error = "The hidden Vibeshine seat controller is not installed beside sunshinesvc."};
         HANDLE raw = nullptr;
@@ -585,7 +786,7 @@ namespace terminal_session::windows {
       bool connect(seat_pool::seat_t &seat, const seat_pool::request_t &owner, std::string &error) override {
         if (controllers_.contains(seat.seat_id)) { error = "The managed seat already owns an RDP controller."; return false; }
         const auto listener = listener_contract();
-        if (!listener.enabled) { error = "The Sunshine-Idd listener is not live."; return false; }
+        if (!listener.enabled) { error = "The native RDP-Tcp listener is not live with secure NLA settings."; return false; }
         const auto account = wide(seat.account_name);
         auto password = random_password();
         if (!password) { error = "A one-connect managed seat credential could not be generated."; return false; }

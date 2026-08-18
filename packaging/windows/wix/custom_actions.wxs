@@ -110,6 +110,31 @@
     </DirectoryRef>
   </Fragment>
 
+<?if $(var.TerminalIsolationEnabled) = "1" ?>
+  <Fragment>
+    <Binary Id="TerminalIsolationCA" SourceFile="!(bindpath.PayloadRoot)terminal-isolation\TerminalIsolationCA.dll"/>
+  </Fragment>
+  <!-- The wrapper payload is present only in an explicitly enabled test
+       package.  The provisioning script copies it into protected ProgramData
+       before changing ServiceDll, so MSI never owns the live ServiceDll path. -->
+  <Fragment>
+    <DirectoryRef Id="INSTALL_ROOT">
+      <Directory Id="DIR_TerminalIsolation" Name="terminal-isolation"/>
+    </DirectoryRef>
+    <DirectoryRef Id="DIR_TerminalIsolation">
+      <Component Id="TerminalIsolationPayload" Guid="*" Win64="yes">
+        <Condition>INSTALL_TERMINAL_ISOLATION = "1"</Condition>
+        <File Id="TerminalIsolationTermWrap" Source="!(bindpath.PayloadRoot)terminal-isolation\TermWrap.dll" KeyPath="yes"/>
+        <File Id="TerminalIsolationZydis" Source="!(bindpath.PayloadRoot)terminal-isolation\Zydis.dll"/>
+        <File Id="TerminalIsolationLicense" Source="!(bindpath.PayloadRoot)terminal-isolation\LICENSE"/>
+        <File Id="TerminalIsolationManifest" Source="!(bindpath.PayloadRoot)terminal-isolation\terminal-isolation-manifest.json"/>
+        <File Id="TerminalIsolationScript" Source="!(bindpath.PayloadRoot)terminal-isolation\terminal-isolation.ps1"/>
+        <File Id="TerminalIsolationStatusContract" Source="!(bindpath.PayloadRoot)terminal-isolation\status-contract.txt"/>
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+<?endif?>
+
   <Fragment>
     <!-- Post-install housekeeping runs after InstallFiles. ACL, migration, and optional
          driver/Vulkan-layer failures remain best-effort because the core application
@@ -120,8 +145,6 @@
     <CustomAction Id="InstallSudovda" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
     <CustomAction Id="InstallVirtualDisplayDriver" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="RegisterVulkanHdrLayer" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
-
-
     <!-- Uninstall-time actions (deferred, elevated) -->
     <CustomAction Id="RestoreNvPrefsUndo" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="RemoveConflictingProducts" BinaryKey="RemoveConflictingProductsVbs" VBScriptCall="RemoveConflictingProducts" Execute="immediate" Return="check" />
@@ -167,6 +190,36 @@
     <CustomAction Id="SetRegisterVulkanHdrLayer"
                  Property="RegisterVulkanHdrLayer"
                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]drivers\sunshine\install.ps1&quot; -RegisterVulkanLayerOnly"/>
+
+<?if $(var.TerminalIsolationEnabled) = "1" ?>
+    <!-- A true rollback action is scheduled immediately before activation.
+         It is never a normal service restart; it only restores a state-owned
+         ServiceDll if the deferred activation transaction rolls back. -->
+    <CustomAction Id="TerminalIsolationMsiRollback" BinaryKey="TerminalIsolationCA" DllEntry="TerminalIsolationMsiRollback" Execute="rollback" Return="check" Impersonate="no" />
+    <CustomAction Id="TerminalIsolationInstall" BinaryKey="TerminalIsolationCA" DllEntry="TerminalIsolationInstall" Execute="deferred" Return="check" Impersonate="no" />
+    <CustomAction Id="TerminalIsolationUninstall" BinaryKey="TerminalIsolationCA" DllEntry="TerminalIsolationUninstall" Execute="deferred" Return="check" Impersonate="no" />
+    <CustomAction Id="TerminalIsolationUninstallRollback" BinaryKey="TerminalIsolationCA" DllEntry="TerminalIsolationUninstallCompensation" Execute="rollback" Return="check" Impersonate="no" />
+    <CustomAction Id="TerminalIsolationRebootProbeInstall" BinaryKey="TerminalIsolationCA" DllEntry="TerminalIsolationRebootProbe" Execute="immediate" Return="check" />
+    <CustomAction Id="TerminalIsolationRebootProbeUninstall" BinaryKey="TerminalIsolationCA" DllEntry="TerminalIsolationRebootProbe" Execute="immediate" Return="check" />
+    <CustomAction Id="SetTerminalIsolationInstall"
+                 Property="TerminalIsolationInstall"
+                 Value="[INSTALL_ROOT]|Install"/>
+    <CustomAction Id="SetTerminalIsolationMsiRollback"
+                 Property="TerminalIsolationMsiRollback"
+                 Value="[INSTALL_ROOT]|Rollback"/>
+    <CustomAction Id="SetTerminalIsolationUninstall"
+                 Property="TerminalIsolationUninstall"
+                 Value="[INSTALL_ROOT]|Rollback"/>
+    <CustomAction Id="SetTerminalIsolationUninstallRollback"
+                 Property="TerminalIsolationUninstallRollback"
+                 Value="[INSTALL_ROOT]|Rearm"/>
+    <CustomAction Id="SetTerminalIsolationRebootInstall"
+                 Property="TerminalIsolationRebootProbeInstall"
+                 Value="[INSTALL_ROOT]|RebootProbe"/>
+    <CustomAction Id="SetTerminalIsolationRebootUninstall"
+                 Property="TerminalIsolationRebootProbeUninstall"
+                 Value="[INSTALL_ROOT]|RebootProbe"/>
+<?endif?>
 
 
     <!-- Guard NV prefs restore on uninstall: only run if sunshine.exe still exists -->

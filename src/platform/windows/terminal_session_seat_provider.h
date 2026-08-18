@@ -1,6 +1,6 @@
 /**
  * @file src/platform/windows/terminal_session_seat_provider.h
- * @brief Privileged managed-account/Remote-IDD provider for terminal seats.
+ * @brief Privileged managed-account/native-RDP provider for terminal seats.
  */
 #pragma once
 

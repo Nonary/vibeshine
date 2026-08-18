@@ -43,9 +43,14 @@ set(CPACK_WIX_LIGHT_EXTRA_FLAGS
 
 # Define preprocessor variables for WiX sources
 # BinDir: directory containing built binaries (sunshine.exe) at packaging time
+set(_terminal_isolation_wix_enabled 0)
+if(SUNSHINE_ENABLE_TERMINAL_ISOLATION)
+  set(_terminal_isolation_wix_enabled 1)
+endif()
 set(CPACK_WIX_CANDLE_EXTRA_FLAGS
   "-dBinDir=${CMAKE_BINARY_DIR}"
   "-dVibeshineAppId=${WINDOWS_APP_USER_MODEL_ID}"
+  "-dTerminalIsolationEnabled=${_terminal_isolation_wix_enabled}"
   # Human-readable version for ARP DisplayVersion; ProductVersion itself is
   # ordinal-encoded (see below) and no longer matches the semver.
   "-dVibeshineSemVer=${PROJECT_VERSION_FULL}"

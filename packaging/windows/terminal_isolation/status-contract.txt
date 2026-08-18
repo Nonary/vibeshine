@@ -1,0 +1,7 @@
+Vibeshine terminal-isolation status contract (one lowercase value per line):
+active
+pending-restart
+pending-native-restart
+foreign-unavailable
+unavailable
+rolled-back
