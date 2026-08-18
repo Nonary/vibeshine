@@ -16,7 +16,10 @@ endif()
 # cache value on so older local build trees do not keep the previous optional
 # default. Only the TrueHDR feature DLL is bundled; VSR is not used.
 set(SUNSHINE_REQUIRE_TRUEHDR_RUNTIME ON CACHE BOOL "Fail Windows packaging when the TrueHDR runtime DLLs are missing." FORCE)
-set(SUNSHINE_TRUEHDR_RUNTIME_DIR "${CMAKE_BINARY_DIR}" CACHE PATH "Directory containing vibeshine_truehdr.dll and the NVIDIA NGX TrueHDR runtime DLL")
+set(SUNSHINE_TRUEHDR_RUNTIME_DIR "${CMAKE_BINARY_DIR}/truehdr-runtime" CACHE PATH "Directory containing vibeshine_truehdr.dll and the NVIDIA NGX TrueHDR runtime DLL")
+if("${SUNSHINE_TRUEHDR_RUNTIME_DIR}" STREQUAL "${CMAKE_BINARY_DIR}")
+    set(SUNSHINE_TRUEHDR_RUNTIME_DIR "${CMAKE_BINARY_DIR}/truehdr-runtime" CACHE PATH "Directory containing vibeshine_truehdr.dll and the NVIDIA NGX TrueHDR runtime DLL" FORCE)
+endif()
 set(SUNSHINE_TRUEHDR_RUNTIME_FILES "")
 foreach(_truehdr_runtime_name IN LISTS SUNSHINE_VDD_TRUEHDR_FILES)
     list(APPEND SUNSHINE_TRUEHDR_RUNTIME_FILES
