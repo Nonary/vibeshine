@@ -41,8 +41,9 @@
 #include <openssl/sha.h>
 
 // local includes
-#include "app_framegen_config.h"
 #include "app_catalog_policy.h"
+#include "app_framegen_config.h"
+#include "audio.h"
 #include "config.h"
 #include "crypto.h"
 #include "deferred_action.h"
@@ -1212,6 +1213,7 @@ namespace proc {
 
     _app = *resolved_app;
     _app_id = (int) util::from_view(_app.id);
+    audio::app_started();
 #ifdef _WIN32
     // A replacement app now owns the streaming display configuration. Any
     // deferred revert from the previous app must not fire when this session ends.
@@ -1903,8 +1905,18 @@ namespace proc {
 
     // Perform cleanup actions now if needed
     if (_process) {
+      std::unique_lock<std::mutex> stream_lifecycle_lock {nvhttp::stream_lifecycle_mutex(), std::try_to_lock};
+      if (!stream_lifecycle_lock.owns_lock()) {
+        // Teardown is already in flight on another thread. Blocking here
+        // parks the caller - including the single serverinfo worker, which
+        // made the host undiscoverable for the whole teardown tail
+        // (vibepollo#326). The gate owner performs the cleanup; report
+        // not-running without waiting on it.
+        BOOST_LOG(debug) << "[running] App exited but stream teardown is already in flight; deferring cleanup to the gate owner.";
+        return 0;
+      }
       BOOST_LOG(info) << "[running] _process.running() is false; calling terminate(). App exited with code ["sv << _process.native_exit_code() << "] for app '" << _app.name << "' (id=" << _app_id << ")";
-      terminate();
+      terminate(false, true);
     }
 
     return 0;
@@ -2006,6 +2018,10 @@ namespace proc {
       stream_lifecycle_lock =
         std::unique_lock<std::mutex> {nvhttp::stream_lifecycle_mutex()};
     }
+
+    // Mark termination before process teardown so a concurrent final audio
+    // owner restores directly instead of retaining state for the ended app.
+    audio::app_termination_requested();
 
     // App termination can remove a display directly and can continue through
     // process, undo-command, helper, watchdog, and deferred-config cleanup.
