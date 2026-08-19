@@ -48,6 +48,9 @@
 #define NTDDI_VERSION NTDDI_WIN10
 #include <Shlwapi.h>
 
+// lib includes
+#include <libvirtualgamepad/client.h>
+
 // local includes
 #include "misc.h"
 #include "src/platform/common_services.h"
@@ -200,6 +203,17 @@ namespace platf {
     }
     BOOST_LOG(warning) << "Unable to find MAC address for "sv << address;
     return "00:00:00:00:00:00"s;
+  }
+
+  bool is_virtual_gamepad_driver_available() {
+    // Opening the control interface is the only honest test: the driver package
+    // can be staged while the source device is not started, and a stream would
+    // fail in exactly that case.
+    lvg::client probe;
+    if (probe.connect() != ERROR_SUCCESS) {
+      return false;
+    }
+    return probe.available_profiles() != 0;
   }
 
   bool is_vigem_installed(std::string *version_out) {
