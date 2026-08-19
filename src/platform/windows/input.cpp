@@ -503,7 +503,8 @@ namespace platf {
     return config::input.gamepad == "vhf"sv ||
            config::input.gamepad == "vhf_xbox"sv ||
            config::input.gamepad == "vhf_ds4"sv ||
-           config::input.gamepad == "vhf_ds5"sv;
+           config::input.gamepad == "vhf_ds5"sv ||
+           config::input.gamepad == "vhf_switch"sv;
   }
 
   /**
@@ -519,7 +520,7 @@ namespace platf {
    * @return `true` when the selection always yields an Xbox controller.
    */
   static bool vhf_gamepad_is_xbox() {
-    return config::input.gamepad == "vhf_xbox"sv;
+    return config::input.gamepad == "vhf_xbox"sv || config::input.gamepad == "vhf_switch"sv;
   }
 
   /**
@@ -539,6 +540,9 @@ namespace platf {
     }
     if (config::input.gamepad == "vhf_xbox"sv) {
       return vhf_profile_e::xbox_series;
+    }
+    if (config::input.gamepad == "vhf_switch"sv) {
+      return vhf_profile_e::switch_pro;
     }
 
     if (metadata.type == LI_CTYPE_PS) {
@@ -1965,6 +1969,7 @@ namespace platf {
         supported_gamepad_t {"vhf_xbox", false, ""},
         supported_gamepad_t {"vhf_ds4", false, ""},
         supported_gamepad_t {"vhf_ds5", false, ""},
+        supported_gamepad_t {"vhf_switch", false, ""},
       };
 
       return gps;
@@ -1985,7 +1990,8 @@ namespace platf {
       supported_gamepad_t {"vhf", vhf_enabled, vhf_reason},
       supported_gamepad_t {"vhf_xbox", vhf_enabled, vhf_reason},
       supported_gamepad_t {"vhf_ds4", vhf_enabled, vhf_reason},
-      supported_gamepad_t {"vhf_ds5", vhf_enabled, vhf_reason}
+      supported_gamepad_t {"vhf_ds5", vhf_enabled, vhf_reason},
+      supported_gamepad_t {"vhf_switch", vhf_enabled, vhf_reason}
     };
 
     // A gamepad type that is unavailable only because its backend is not installed is not
