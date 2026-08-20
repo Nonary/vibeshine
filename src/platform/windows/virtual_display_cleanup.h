@@ -13,6 +13,27 @@ namespace platf::virtual_display_cleanup {
     restore_before_remove,
   };
 
+  enum class recovery_monitor_policy_t {
+    // Ordinary speculative cleanup keeps managed-session recovery alive when
+    // ownership admission defers the cleanup.
+    preserve_if_deferred,
+    // A terminal lease/restore boundary cancels recovery before admission, so
+    // an ownership deferral cannot revive an intentionally ended display.
+    disengage_before_admission,
+  };
+
+  enum class cleanup_admission_policy_t {
+    respect_managed_owners,
+    override_managed_owners,
+  };
+
+  constexpr bool cleanup_admitted(
+    const bool managed_cleanup_allowed,
+    const cleanup_admission_policy_t policy
+  ) noexcept {
+    return managed_cleanup_allowed || policy == cleanup_admission_policy_t::override_managed_owners;
+  }
+
   enum class cleanup_step_t {
     helper_revert,
     retained_probe_remove,
@@ -51,8 +72,15 @@ namespace platf::virtual_display_cleanup {
     bool enforce_db_restore = true,
     revert_order_t revert_order = revert_order_t::remove_before_restore,
     bool prefer_golden_if_current_missing = true,
-    std::optional<std::array<std::uint8_t, 16>> virtual_display_guid_bytes = std::nullopt
+    std::optional<std::array<std::uint8_t, 16>> virtual_display_guid_bytes = std::nullopt,
+    recovery_monitor_policy_t recovery_monitor_policy = recovery_monitor_policy_t::preserve_if_deferred,
+    cleanup_admission_policy_t cleanup_admission_policy = cleanup_admission_policy_t::respect_managed_owners
   );
+
+  // Execute the complete user-requested kill-switch contract. Unlike ordinary
+  // cleanup, this terminal action overrides managed ownership so recovery,
+  // restore, display removal, and watchdog shutdown cannot be deferred.
+  cleanup_result_t terminate_all(std::string_view reason);
 
   // Nonblocking observation for callers that must not begin display probing
   // while any cleanup path is removing a virtual display or restoring topology.

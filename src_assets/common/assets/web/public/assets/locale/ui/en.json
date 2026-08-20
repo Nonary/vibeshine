@@ -739,7 +739,8 @@
         "deleteSnapshot": "Delete snapshot",
         "replaceSnapshot": "Replace snapshot",
         "restartService": "Restart service",
-        "revokeSession": "Revoke session"
+        "revokeSession": "Revoke session",
+        "terminateVirtualDisplay": "Terminate virtual display"
       },
       "applying": "Applying",
       "confirm": {
@@ -752,7 +753,9 @@
         "restartDescription": "Active streams will disconnect and this interface will be unavailable while the service restarts.",
         "restartTitle": "Restart Vibeshine?",
         "revokeSessionDescription": "That browser will need to sign in again before it can manage this host.",
-        "revokeSessionTitle": "Revoke {browser}?"
+        "revokeSessionTitle": "Revoke {browser}?",
+        "terminateVirtualDisplayDescription": "Vibeshine will disengage automatic recovery, try to restore the physical display layout, remove every managed virtual display, and stop display watchdogs. Active streams using a virtual display will lose video.",
+        "terminateVirtualDisplayTitle": "Terminate every virtual display?"
       },
       "crash": {
         "acknowledged": "Crash acknowledged",
@@ -778,7 +781,8 @@
         "recoveryStatus": "Display recovery status is unavailable.",
         "sessions": "Trusted browser sessions are unavailable.",
         "snapshotCapture": "The display snapshot could not be captured.",
-        "snapshotNotDeleted": "The display recovery snapshot was not deleted."
+        "snapshotNotDeleted": "The display recovery snapshot was not deleted.",
+        "virtualDisplayTermination": "One or more managed virtual displays could not be terminated."
       },
       "notices": {
         "crashAcknowledged": "The crash notice was acknowledged.",
@@ -786,7 +790,8 @@
         "restartRequested": "Restart requested. Reconnect after the Vibeshine service comes back online.",
         "sessionRevoked": "{browser} was revoked.",
         "snapshotCaptured": "The current display layout is now the recovery baseline.",
-        "snapshotDeleted": "The display recovery snapshot was deleted."
+        "snapshotDeleted": "The display recovery snapshot was deleted.",
+        "virtualDisplayTerminated": "Automatic recovery was disengaged and managed virtual displays were terminated."
       },
       "recovery": {
         "available": "Available",
@@ -1366,6 +1371,18 @@
           "description": "Adjust interface size without changing the resolution requested by the client.",
           "label": "Windows scaling"
         },
+        "remote_monitor_mute_audio": {
+          "description": "Send picture and input without sending game or desktop audio to the Remote Monitor client.",
+          "label": "Mute audio on Remote Monitor"
+        },
+        "remote_monitor_disconnect_on_stream_end": {
+          "description": "Remove the client's extra monitor when its stream finishes. Leave this off to keep the monitor ready for Resume.",
+          "label": "Remove it when the Remote Monitor stream ends"
+        },
+        "remote_monitor_disconnect_on_client_disconnect": {
+          "description": "Remove the extra monitor as soon as the client connection drops or you use Disconnect, even if the monitor was waiting for Resume.",
+          "label": "Remove it when the client disconnects"
+        },
         "capture": {
           "description": "Automatic follows the capture backend Vibeshine already chooses for this Windows version. Override it only for compatibility or a specific pacing behavior.",
           "label": "Capture method"
@@ -1483,6 +1500,10 @@
           "description": "The core streaming-display choices, with display-specific controls below.",
           "title": "Virtual display"
         },
+        "display_remote_monitor": {
+          "description": "Use a paired device as an additional Windows display. Choose whether it receives audio and when the display is removed.",
+          "title": "Remote Monitor"
+        },
         "everyday_access": {
           "title": "Where you can manage and connect"
         },
@@ -1512,6 +1533,10 @@
         "everyday_recovery": {
           "description": "Choose what happens after a disconnect and keep a known-good desktop layout ready for restoration.",
           "title": "Display lifecycle and recovery"
+        },
+        "everyday_remote_monitor": {
+          "description": "Use a paired device as an additional Windows display. Choose whether it receives audio and when the display is removed.",
+          "title": "Remote Monitor"
         },
         "everyday_smoothness": {
           "description": "Virtual screens automatically match the game cap to the stream and switch between desktop and game refresh rates.",

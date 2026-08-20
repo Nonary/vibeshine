@@ -121,6 +121,7 @@ namespace stream {
     std::string uuid(const session_t &session);
     bool uuid_match(const session_t &session, const std::string_view &uuid);
     bool remote_role_match(const session_t &session, remote_session::role_e role, std::optional<std::uint64_t> generation = std::nullopt);
+    void mark_client_disconnected(session_t &session);
     int start(session_t &session, const std::string &addr_string);
     void stop(session_t &session);
     void join(session_t &session, bool lifecycle_lock_held = false);

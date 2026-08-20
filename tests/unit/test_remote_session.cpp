@@ -58,8 +58,17 @@ TEST(RemoteSession, CatalogueProjectionMatchesCallerOwnershipMatrix) {
   EXPECT_EQ(monitor.catalogue[1].id, remote_session::disconnect_monitor_id);
 
   const auto input = remote_session::project(caller("input"), {}, {.role = remote_session::role_e::input}, configured);
-  ASSERT_EQ(input.catalogue.size(), 1);
-  EXPECT_EQ(input.catalogue[0].id, remote_session::disconnect_input_id);
+  ASSERT_EQ(input.catalogue.size(), 3);
+  EXPECT_EQ(input.catalogue[0].id, 1);
+  EXPECT_EQ(input.catalogue[1].id, 2);
+  EXPECT_EQ(input.catalogue[2].id, remote_session::monitor_id);
+
+  const auto input_during_game = remote_session::project(caller("input"), game(), {.role = remote_session::role_e::input}, configured);
+  ASSERT_EQ(input_during_game.catalogue.size(), 4);
+  EXPECT_EQ(input_during_game.catalogue[0].id, remote_session::resume_id);
+  EXPECT_EQ(input_during_game.catalogue[1].id, remote_session::terminate_id);
+  EXPECT_EQ(input_during_game.catalogue[2].id, 42);
+  EXPECT_EQ(input_during_game.catalogue[3].id, remote_session::monitor_id);
 
   const auto game_owner_monitor = remote_session::project(caller("owner"), game(), {.role = remote_session::role_e::monitor, .retained = true}, configured);
   ASSERT_EQ(game_owner_monitor.catalogue.size(), 2);
@@ -106,6 +115,18 @@ TEST(RemoteSession, DispatchEnforcesCallerPermissionsAndRetention) {
   EXPECT_EQ(stale_monitor_launch.resume_role, remote_session::role_e::monitor);
   EXPECT_FALSE(remote_session::input_uses_display_or_audio(remote_session::role_e::input));
   EXPECT_TRUE(remote_session::input_uses_display_or_audio(remote_session::role_e::monitor));
+  EXPECT_FALSE(remote_session::uses_audio(remote_session::role_e::input, false));
+  EXPECT_TRUE(remote_session::uses_audio(remote_session::role_e::monitor, false));
+  EXPECT_FALSE(remote_session::uses_audio(remote_session::role_e::monitor, true));
+  EXPECT_TRUE(remote_session::uses_audio(remote_session::role_e::game, true));
+}
+
+TEST(RemoteSession, MonitorDisconnectPoliciesKeepStreamEndAndClientLossIndependent) {
+  EXPECT_FALSE(remote_session::disconnect_monitor_after_stream(false, false, false));
+  EXPECT_FALSE(remote_session::disconnect_monitor_after_stream(false, true, false));
+  EXPECT_TRUE(remote_session::disconnect_monitor_after_stream(false, true, true));
+  EXPECT_TRUE(remote_session::disconnect_monitor_after_stream(true, false, false));
+  EXPECT_TRUE(remote_session::disconnect_monitor_after_stream(true, true, true));
 }
 
 TEST(RemoteSession, StaleDisconnectControlsAreIdempotentButCannotTargetAnotherRole) {
@@ -176,14 +197,14 @@ TEST(RemoteSession, DisconnectControlsCompleteAsDisplayedLaunchFailures) {
   EXPECT_EQ(game_disconnect->status_message, "Active stream terminated. Remote Monitor and Remote Input remain connected.");
   EXPECT_EQ(
     remote_session::termination_confirmation_message(),
-    "This will close the active stream but leave Remote Monitor and Remote Input connected. Launch Terminate again within 10 seconds to confirm this was intentional."
+    "This will close the active stream but leave Remote Monitor and Remote Input connected. Launch Terminate again within 60 seconds to confirm this was intentional."
   );
 
   EXPECT_FALSE(remote_session::successful_control_completion(remote_session::control_e::resume));
   EXPECT_FALSE(remote_session::successful_control_completion(remote_session::control_e::monitor));
 }
 
-TEST(RemoteSession, TerminateRequiresSameClientAndGameGenerationWithinTenSeconds) {
+TEST(RemoteSession, TerminateAllowsMobileCatalogueRefreshWithinSixtySeconds) {
   const auto start = std::chrono::steady_clock::now();
   EXPECT_EQ(
     remote_session::arm_or_confirm_termination("client", 7, 42, start),
@@ -206,7 +227,15 @@ TEST(RemoteSession, TerminateRequiresSameClientAndGameGenerationWithinTenSeconds
     remote_session::terminate_confirmation_e::prompt
   );
   EXPECT_EQ(
-    remote_session::arm_or_confirm_termination("client", 8, 42, start + std::chrono::seconds {15}),
+    remote_session::arm_or_confirm_termination("client", 8, 42, start + std::chrono::seconds {45}),
+    remote_session::terminate_confirmation_e::confirmed
+  );
+  EXPECT_EQ(
+    remote_session::arm_or_confirm_termination("client", 8, 42, start + std::chrono::seconds {46}),
+    remote_session::terminate_confirmation_e::prompt
+  );
+  EXPECT_EQ(
+    remote_session::arm_or_confirm_termination("client", 8, 42, start + std::chrono::seconds {107}),
     remote_session::terminate_confirmation_e::prompt
   );
   remote_session::clear_termination_confirmation("client");
