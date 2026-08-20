@@ -3374,7 +3374,7 @@ namespace nvhttp {
       auto launch_session = make_launch_session(false, args, request, false, &identity);
       launch_session->role_generation = launch_session->id;
       launch_session->role = synthetic_control == remote_session::control_e::input ? remote_session::role_e::input : remote_session::role_e::monitor;
-      launch_session->host_audio = false;
+      launch_session->host_audio = remote_session::uses_host_audio(launch_session->role);
       launch_session->continuous_audio = false;
       if (launch_session->role == remote_session::role_e::monitor) {
         const auto mode = std::format("{}x{}@{}", launch_session->width, launch_session->height, launch_session->fps);
