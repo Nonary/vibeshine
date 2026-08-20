@@ -1251,6 +1251,7 @@ namespace rtsp_stream {
 #endif
 
       for (auto &slot : to_cleanup) {
+        stream::session::mark_client_disconnected(*slot);
         stream::session::stop(*slot);
         stream::session::join(*slot);
       }
