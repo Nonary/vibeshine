@@ -9,6 +9,7 @@
 #include <Windows.h>
 
 // standard includes
+#include <array>
 #include <cmath>
 #include <thread>
 #include <vector>
@@ -23,6 +24,7 @@
 #include "src/globals.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "vhf_gamepad.h"
 
 namespace platf {
   using namespace std::literals;
@@ -215,14 +217,24 @@ namespace platf {
 
   class vigem_t {
   public:
+    // Set before init() so the ViGEmBus diagnostics can tell "no gamepad support at all" from
+    // "a different driver is providing it".
+    bool vhf_gamepad_available {false};
+
     int init() {
       // Probe ViGEm during startup to see if we can successfully attach gamepads. The web UI exposes a
       // dedicated health endpoint and warning banner when ViGEm is missing, so avoid fatal logs here.
       client_t client {vigem_alloc()};
       VIGEM_ERROR status = vigem_connect(client.get());
       if (!VIGEM_SUCCESS(status)) {
-        // Do not emit a fatal log that creates a global error banner; the UI now shows a dedicated warning.
-        BOOST_LOG(warning) << "ViGEmBus is not installed or running; gamepad emulation will be unavailable until installed."sv;
+        // Only a problem if nothing else can provide a gamepad. With Vibeshine's own driver
+        // present, ViGEmBus is simply not in use, and warning about it sends people chasing a
+        // dependency they no longer need.
+        if (vhf_gamepad_available) {
+          BOOST_LOG(info) << "ViGEmBus is not installed; gamepad emulation will use the Vibeshine virtual gamepad driver."sv;
+        } else {
+          BOOST_LOG(warning) << "ViGEmBus is not installed or running; gamepad emulation will be unavailable until installed."sv;
+        }
       } else {
         vigem_disconnect(client.get());
       }
@@ -457,23 +469,121 @@ namespace platf {
     task_pool.push(&vigem_t::set_rgb_led, (vigem_t *) userdata, target, led_color.Red, led_color.Green, led_color.Blue);
   }
 
+  /**
+   * @brief The virtual gamepad driver backing a given gamepad slot.
+   */
+  enum class gamepad_backend_e {
+    none,
+    vigem,
+    vhf
+  };
+
   struct input_raw_t {
     ~input_raw_t() {
       delete vigem;
+      delete vhf;
     }
 
     vigem_t *vigem;
+    vhf_gamepad_t *vhf;
+
+    // Slots are allocated one at a time, so both backends can own gamepads simultaneously.
+    std::array<gamepad_backend_e, MAX_GAMEPADS> gamepad_backend {};
 
     decltype(CreateSyntheticPointerDevice) *fnCreateSyntheticPointerDevice;
     decltype(InjectSyntheticPointerInput) *fnInjectSyntheticPointerInput;
     decltype(DestroySyntheticPointerDevice) *fnDestroySyntheticPointerDevice;
   };
 
+  /**
+   * @brief Reports whether Vibeshine's own virtual gamepad driver is the configured backend.
+   * @return `true` when the VHF driver should be used instead of ViGEmBus.
+   */
+  static bool vhf_gamepad_selected() {
+    return config::input.gamepad == "vhf"sv ||
+           config::input.gamepad == "vhf_xbox"sv ||
+           config::input.gamepad == "vhf_xbox_one"sv ||
+           config::input.gamepad == "vhf_ds4"sv ||
+           config::input.gamepad == "vhf_ds5"sv ||
+           config::input.gamepad == "vhf_switch"sv;
+  }
+
+  /**
+   * @brief Reports whether the configured VHF controller has a touchpad.
+   * @return `true` when the selection always yields a PlayStation controller.
+   */
+  static bool vhf_gamepad_has_touchpad() {
+    return config::input.gamepad == "vhf_ds4"sv || config::input.gamepad == "vhf_ds5"sv;
+  }
+
+  /**
+   * @brief Reports whether the configured VHF controller definitely has no touchpad.
+   * @return `true` when the selection always yields an Xbox controller.
+   */
+  static bool vhf_gamepad_is_xbox() {
+    return config::input.gamepad == "vhf_xbox"sv ||
+           config::input.gamepad == "vhf_xbox_one"sv ||
+           config::input.gamepad == "vhf_switch"sv;
+  }
+
+  /**
+   * @brief Chooses which controller the VHF driver should present.
+   * @details An explicit `vhf_ds4`/`vhf_ds5` selection is honoured as-is. Plain `vhf` reuses the
+   *          same client-type and motion/touchpad rules that already drive DualShock 4 selection
+   *          on ViGEm, so a PlayStation client gets a PlayStation pad without extra configuration.
+   * @param metadata The client's reported gamepad capabilities.
+   * @return The profile to request.
+   */
+  static vhf_profile_e vhf_desired_profile(const gamepad_arrival_t &metadata) {
+    if (config::input.gamepad == "vhf_ds5"sv) {
+      return vhf_profile_e::dualsense;
+    }
+    if (config::input.gamepad == "vhf_ds4"sv) {
+      return vhf_profile_e::dualshock4;
+    }
+    if (config::input.gamepad == "vhf_xbox"sv) {
+      return vhf_profile_e::xbox_series;
+    }
+    if (config::input.gamepad == "vhf_xbox_one"sv) {
+      return vhf_profile_e::xbox_one;
+    }
+    if (config::input.gamepad == "vhf_switch"sv) {
+      return vhf_profile_e::switch_pro;
+    }
+
+    if (metadata.type == LI_CTYPE_PS) {
+      return vhf_profile_e::dualsense;
+    }
+    if (config::input.motion_as_ds4 && (metadata.capabilities & (LI_CCAP_ACCEL | LI_CCAP_GYRO))) {
+      return vhf_profile_e::dualsense;
+    }
+    if (config::input.touchpad_as_ds4 && (metadata.capabilities & LI_CCAP_TOUCHPAD)) {
+      return vhf_profile_e::dualsense;
+    }
+    return vhf_profile_e::automatic;
+  }
+
+  /**
+   * @brief Reports whether a gamepad slot is currently owned by the VHF driver.
+   * @param raw The input context.
+   * @param nr The gamepad index.
+   * @return `true` when the slot was allocated on the VHF backend.
+   */
+  static bool vhf_owns_gamepad(const input_raw_t *raw, int nr) {
+    return nr >= 0 && nr < MAX_GAMEPADS && raw->gamepad_backend[nr] == gamepad_backend_e::vhf;
+  }
+
   input_t input() {
     input_t result {new input_raw_t {}};
     auto &raw = *(input_raw_t *) result.get();
 
+    // Probe the VHF driver first: whether it is available decides how loudly a missing
+    // ViGEmBus should be reported.
+    raw.vhf = new vhf_gamepad_t {};
+    const bool vhf_available = raw.vhf->probe();
+
     raw.vigem = new vigem_t {};
+    raw.vigem->vhf_gamepad_available = vhf_available;
     if (raw.vigem->init()) {
       delete raw.vigem;
       raw.vigem = nullptr;
@@ -1194,6 +1304,34 @@ namespace platf {
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
     auto raw = (input_raw_t *) input.get();
 
+    if (id.globalIndex < 0 || id.globalIndex >= MAX_GAMEPADS) {
+      BOOST_LOG(error) << "Gamepad index out of range: "sv << id.globalIndex;
+      return -1;
+    }
+
+    if (vhf_gamepad_selected() && raw->vhf) {
+      const auto desired = vhf_desired_profile(metadata);
+      BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will use the Vibeshine virtual gamepad driver"sv;
+
+      if (raw->vhf->alloc(id, feedback_queue, desired) == 0) {
+        raw->gamepad_backend[id.globalIndex] = gamepad_backend_e::vhf;
+        return 0;
+      }
+
+      // An explicit request that the driver cannot satisfy is worth one retry with whatever it
+      // does offer, rather than dropping straight off the driver the user chose.
+      if (desired != vhf_profile_e::automatic &&
+          raw->vhf->alloc(id, feedback_queue, vhf_profile_e::automatic) == 0) {
+        BOOST_LOG(warning) << "Gamepad " << id.globalIndex << " could not use the requested controller type; the Vibeshine driver substituted the closest one it offers"sv;
+        raw->gamepad_backend[id.globalIndex] = gamepad_backend_e::vhf;
+        return 0;
+      }
+
+      // Falling back keeps a session playable rather than leaving the client with a dead
+      // controller, but it has to be loud: the user asked for a specific driver.
+      BOOST_LOG(error) << "Gamepad " << id.globalIndex << " could not be created on the Vibeshine virtual gamepad driver; falling back to ViGEmBus"sv;
+    }
+
     if (!raw->vigem) {
       return 0;
     }
@@ -1242,11 +1380,30 @@ namespace platf {
       }
     }
 
-    return raw->vigem->alloc_gamepad_internal(id, feedback_queue, selectedGamepadType);
+    const auto result = raw->vigem->alloc_gamepad_internal(id, feedback_queue, selectedGamepadType);
+    if (result == 0) {
+      raw->gamepad_backend[id.globalIndex] = gamepad_backend_e::vigem;
+    }
+
+    return result;
   }
 
   void free_gamepad(input_t &input, int nr) {
     auto raw = (input_raw_t *) input.get();
+
+    if (nr < 0 || nr >= MAX_GAMEPADS) {
+      return;
+    }
+
+    const auto backend = raw->gamepad_backend[nr];
+    raw->gamepad_backend[nr] = gamepad_backend_e::none;
+
+    if (backend == gamepad_backend_e::vhf) {
+      if (raw->vhf) {
+        raw->vhf->free(nr);
+      }
+      return;
+    }
 
     if (!raw->vigem) {
       return;
@@ -1532,7 +1689,14 @@ namespace platf {
    * @param gamepad_state The gamepad button/axis state sent from the client.
    */
   void gamepad_update(input_t &input, int nr, const gamepad_state_t &gamepad_state) {
-    auto vigem = ((input_raw_t *) input.get())->vigem;
+    auto raw = (input_raw_t *) input.get();
+
+    if (vhf_owns_gamepad(raw, nr)) {
+      raw->vhf->update(nr, gamepad_state);
+      return;
+    }
+
+    auto vigem = raw->vigem;
 
     // If there is no gamepad support
     if (!vigem) {
@@ -1564,7 +1728,15 @@ namespace platf {
    * @param touch The touch event.
    */
   void gamepad_touch(input_t &input, const gamepad_touch_t &touch) {
-    auto vigem = ((input_raw_t *) input.get())->vigem;
+    auto raw = (input_raw_t *) input.get();
+
+    if (vhf_owns_gamepad(raw, touch.id.globalIndex)) {
+      // Dropped when the slot's controller has no touchpad.
+      raw->vhf->touch(touch.id.globalIndex, touch);
+      return;
+    }
+
+    auto vigem = raw->vigem;
 
     // If there is no gamepad support
     if (!vigem) {
@@ -1670,7 +1842,15 @@ namespace platf {
    * @param motion The motion event.
    */
   void gamepad_motion(input_t &input, const gamepad_motion_t &motion) {
-    auto vigem = ((input_raw_t *) input.get())->vigem;
+    auto raw = (input_raw_t *) input.get();
+
+    if (vhf_owns_gamepad(raw, motion.id.globalIndex)) {
+      // Dropped when the slot's controller has no motion sensors.
+      raw->vhf->motion(motion.id.globalIndex, motion);
+      return;
+    }
+
+    auto vigem = raw->vigem;
 
     // If there is no gamepad support
     if (!vigem) {
@@ -1704,7 +1884,15 @@ namespace platf {
    * @param battery The battery event.
    */
   void gamepad_battery(input_t &input, const gamepad_battery_t &battery) {
-    auto vigem = ((input_raw_t *) input.get())->vigem;
+    auto raw = (input_raw_t *) input.get();
+
+    if (vhf_owns_gamepad(raw, battery.id.globalIndex)) {
+      // Dropped when the slot's controller has no battery.
+      raw->vhf->battery(battery.id.globalIndex, battery);
+      return;
+    }
+
+    auto vigem = raw->vigem;
 
     // If there is no gamepad support
     if (!vigem) {
@@ -1783,24 +1971,48 @@ namespace platf {
         supported_gamepad_t {"auto", true, ""},
         supported_gamepad_t {"x360", false, ""},
         supported_gamepad_t {"ds4", false, ""},
+        supported_gamepad_t {"vhf", false, ""},
+        supported_gamepad_t {"vhf_xbox", false, ""},
+        supported_gamepad_t {"vhf_xbox_one", false, ""},
+        supported_gamepad_t {"vhf_ds4", false, ""},
+        supported_gamepad_t {"vhf_ds5", false, ""},
+        supported_gamepad_t {"vhf_switch", false, ""},
       };
 
       return gps;
     }
 
-    auto vigem = ((input_raw_t *) input)->vigem;
-    auto enabled = vigem != nullptr;
+    auto raw = (input_raw_t *) input;
+    auto enabled = raw->vigem != nullptr;
     auto reason = enabled ? "" : "gamepads.vigem-not-available";
+
+    auto vhf_enabled = raw->vhf != nullptr && raw->vhf->available();
+    auto vhf_reason = vhf_enabled ? "" : "gamepads.vhf-not-available";
 
     // ds4 == ps4
     static std::vector gps {
       supported_gamepad_t {"auto", true, reason},
       supported_gamepad_t {"x360", enabled, reason},
-      supported_gamepad_t {"ds4", enabled, reason}
+      supported_gamepad_t {"ds4", enabled, reason},
+      supported_gamepad_t {"vhf", vhf_enabled, vhf_reason},
+      supported_gamepad_t {"vhf_xbox", vhf_enabled, vhf_reason},
+      supported_gamepad_t {"vhf_xbox_one", vhf_enabled, vhf_reason},
+      supported_gamepad_t {"vhf_ds4", vhf_enabled, vhf_reason},
+      supported_gamepad_t {"vhf_ds5", vhf_enabled, vhf_reason},
+      supported_gamepad_t {"vhf_switch", vhf_enabled, vhf_reason}
     };
 
+    // A gamepad type that is unavailable only because its backend is not installed is not
+    // worth a warning when another backend is providing controllers; it is just an option the
+    // user is not using.
+    const bool any_backend = enabled || vhf_enabled;
     for (auto &[name, is_enabled, reason_disabled] : gps) {
-      if (!is_enabled) {
+      if (is_enabled) {
+        continue;
+      }
+      if (any_backend) {
+        BOOST_LOG(debug) << "Gamepad " << name << " is unavailable (" << reason_disabled << ')';
+      } else {
         BOOST_LOG(warning) << "Gamepad " << name << " is disabled due to " << reason_disabled;
       }
     }
@@ -1815,8 +2027,15 @@ namespace platf {
   platform_caps::caps_t get_capabilities() {
     platform_caps::caps_t caps = 0;
 
-    // We support controller touchpad input as long as we're not emulating X360
-    if (config::input.gamepad != "x360"sv) {
+    // We support controller touchpad input as long as we're not emulating X360, which has no
+    // touchpad. On the VHF driver it depends on the controller: the PlayStation profiles have
+    // one, and plain `vhf` may still select one for a PlayStation client, so advertise it unless
+    // the selection rules out a touchpad entirely.
+    const bool vhf_without_touchpad =
+      vhf_gamepad_selected() && !vhf_gamepad_has_touchpad() &&
+      (vhf_gamepad_is_xbox() ||
+       (!config::input.motion_as_ds4 && !config::input.touchpad_as_ds4));
+    if (config::input.gamepad != "x360"sv && !vhf_without_touchpad) {
       caps |= platform_caps::controller_touch;
     }
 

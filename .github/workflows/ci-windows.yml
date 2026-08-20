@@ -1128,15 +1128,18 @@ jobs:
 
           # Production signing must produce a fully trusted (Valid) Authenticode chain. The
           # test-signing policy signs with an untrusted SignPath test certificate, whose chain
-          # is not Valid on the runner, so in that mode accept any present signature
-          # (Status != NotSigned) instead. Switching to a real production signing policy
-          # automatically re-enables the strict Valid requirement with no further edits.
+          # is not Valid on the runner, so in that mode accept an untrusted but intact
+          # signature. A HashMismatch still means bytes changed after signing and must fail.
+          # Switching to a real production signing policy automatically re-enables the strict
+          # Valid requirement with no further edits.
           $allowUntrustedSignatures = ($env:SIGNPATH_SIGNING_POLICY_SLUG -eq 'test-signing')
 
           function Test-Signed([string]$Path) {
             $sig = Get-AuthenticodeSignature -LiteralPath $Path
             if ($null -eq $sig.SignerCertificate) { return $false }
-            if ($allowUntrustedSignatures) { return ($sig.Status -ne 'NotSigned') }
+            if ($allowUntrustedSignatures) {
+              return ($sig.Status -ne 'NotSigned' -and $sig.Status -ne 'HashMismatch')
+            }
             return ($sig.Status -eq 'Valid')
           }
 
@@ -1177,7 +1180,8 @@ jobs:
           $optionalFirstParty = @('vibeshine_truehdr.dll')
           $vendorSkip = @(
             'SudoVDA.dll','nefconc.exe','SunshineVirtualDisplayDriver.dll','virtualdisplay_probe.exe',
-            'VkLayer_sunshine_hdr.dll','nvngx_truehdr.dll','nvngx_vsr.dll'
+            'VkLayer_sunshine_hdr.dll','VibeshineVhfGamepad.dll','VibeshineVhfGamepadDeviceSetup.exe',
+            'nvngx_truehdr.dll','nvngx_vsr.dll'
           )
 
           $allPe = @(Get-ChildItem -LiteralPath $extractDir -Recurse -File |
@@ -1219,6 +1223,119 @@ jobs:
             if ($vendorSkip -contains $f.Name) {
               $sig = Get-AuthenticodeSignature -LiteralPath $f.FullName
               Write-Host "[verify] skip vendor/catalog file: $($f.Name) (status=$($sig.Status), signer=$($sig.SignerCertificate.Subject))"
+            }
+          }
+
+          # The VHF package arrives unsigned: SignPath is not available on
+          # Nonary/libvirtualgamepad, so its catalog and setup tool are signed
+          # by this repository's MSI request instead. That inverts what this
+          # check is for. The signature assertions below now confirm OUR
+          # signing ran, rather than that upstream signed it, and the manifest
+          # hashes for those two files are expected not to match because
+          # signing rewrote them. Everything else is still hash-pinned, and the
+          # catalog-bound DLL must still be untouched.
+          $vhfPackageDir = Join-Path $extractDir 'Sunshine\drivers\vhf-gamepad'
+          $vhfManifestPath = Join-Path $vhfPackageDir 'manifest.json'
+          # cleanup.ps1 is deliberately present in every MSI so a later
+          # unbundled build can remove an older owned source node. A complete
+          # immutable payload is signaled by its manifest, not merely this
+          # directory existing.
+          if (Test-Path -LiteralPath $vhfManifestPath -PathType Leaf) {
+            $vhfRequired = @(
+              'driver\VibeshineVhfGamepad.inf',
+              'driver\VibeshineVhfGamepad.dll',
+              'driver\VibeshineVhfGamepad.cat',
+              'tools\VibeshineVhfGamepadDeviceSetup.exe',
+              'manifest.json',
+              'release-lock.json'
+            )
+            foreach ($relative in $vhfRequired) {
+              $path = Join-Path $vhfPackageDir $relative
+              if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-Item -LiteralPath $path).Length -le 0) {
+                $failures.Add("VHF gamepad package is incomplete: $relative")
+              }
+            }
+            try {
+                $vhfManifest = Get-Content -LiteralPath $vhfManifestPath -Raw | ConvertFrom-Json
+                $vhfManifestPayload = @(
+                  'driver/VibeshineVhfGamepad.inf',
+                  'driver/VibeshineVhfGamepad.dll',
+                  'driver/VibeshineVhfGamepad.cat',
+                  'tools/VibeshineVhfGamepadDeviceSetup.exe'
+                )
+                foreach ($requiredPayload in $vhfManifestPayload) {
+                  $entries = @($vhfManifest.files | Where-Object { $_.path -eq $requiredPayload })
+                  if ($entries.Count -ne 1) {
+                    throw "manifest lacks exactly one payload entry: $requiredPayload"
+                  }
+                }
+                # Rewritten by the signing request, so their recorded hashes are
+                # stale by design. The catalog still attests to the DLL, which is
+                # verified below, and the DLL's own hash is still checked here.
+                $vhfSignedDownstream = $vhfManifest.signing.channel -eq 'msi-request-signing'
+                $vhfDownstreamSigned = @(
+                  'driver/VibeshineVhfGamepad.cat',
+                  'tools/VibeshineVhfGamepadDeviceSetup.exe'
+                )
+                foreach ($entry in @($vhfManifest.files)) {
+                  if ($null -eq $entry -or [string]::IsNullOrWhiteSpace($entry.path) -or
+                      [string]::IsNullOrWhiteSpace($entry.sha256) -or
+                      $entry.path -match '(^|/)\.\.(/|$)|^[A-Za-z]:|^[/\\]') {
+                    throw 'manifest contains an invalid file entry'
+                  }
+                  $path = Join-Path $vhfPackageDir ($entry.path -replace '/', '\\')
+                  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                    throw "manifest file is missing: $($entry.path)"
+                  }
+                  if ($vhfSignedDownstream -and $vhfDownstreamSigned -contains $entry.path) {
+                    continue
+                  }
+                  $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+                  if ($actual -ne $entry.sha256.ToLowerInvariant()) {
+                    throw "manifest hash mismatch: $($entry.path)"
+                  }
+                }
+                $vhfCatalog = Join-Path $vhfPackageDir 'driver\VibeshineVhfGamepad.cat'
+                $vhfTool = Join-Path $vhfPackageDir 'tools\VibeshineVhfGamepadDeviceSetup.exe'
+                if (-not (Test-Signed $vhfCatalog)) { throw 'VHF catalog is unsigned or untrusted' }
+                if (-not (Test-Signed $vhfTool)) { throw 'VHF setup tool is unsigned or untrusted' }
+                if (-not $allowUntrustedSignatures) {
+                  $signTool = (Get-Command signtool.exe -ErrorAction Stop).Source
+                  foreach ($payload in @(
+                    (Join-Path $vhfPackageDir 'driver\VibeshineVhfGamepad.inf'),
+                    (Join-Path $vhfPackageDir 'driver\VibeshineVhfGamepad.dll')
+                  )) {
+                    & $signTool verify '/v' '/pa' '/c' $vhfCatalog $payload
+                    if ($LASTEXITCODE -ne 0) { throw "VHF catalog membership verification failed: $payload" }
+                  }
+                }
+                $vhfReleaseLockPath = Join-Path $vhfPackageDir 'release-lock.json'
+                $vhfReleaseLock = Get-Content -LiteralPath $vhfReleaseLockPath -Raw | ConvertFrom-Json
+                if ($null -eq $vhfReleaseLock -or $vhfReleaseLock.schema_version -ne 1) {
+                  throw 'release lock is missing or unsupported'
+                }
+                if ($vhfReleaseLock.source_revision -ne $vhfManifest.source_revision -or
+                    $vhfReleaseLock.driver_ver -ne $vhfManifest.driver_ver -or
+                    $vhfReleaseLock.catalog_signer_thumbprint -ne $vhfManifest.signing.signer_thumbprint -or
+                    $vhfReleaseLock.device_setup_signer_thumbprint -ne $vhfManifest.signing.device_setup_signer_thumbprint) {
+                  throw 'release lock does not match the signed VHF manifest'
+                }
+                if ($vhfManifest.signing.channel -eq 'external-catalog-signing') {
+                  if ($vhfReleaseLock.channel -ne 'production' -or
+                      [string]::IsNullOrWhiteSpace($vhfReleaseLock.release_tag) -or
+                      $vhfReleaseLock.release_asset_sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+                    throw 'production VHF package lacks a pinned release identity'
+                  }
+                } elseif ($vhfManifest.signing.channel -eq 'self-signed-local-test') {
+                  if ($vhfReleaseLock.channel -ne 'self-signed-local-test') {
+                    throw 'local-test VHF package has a non-local release lock'
+                  }
+                } else {
+                  throw 'VHF package declares an unsupported signing channel'
+                }
+                Write-Host '[verify] OK   immutable VHF gamepad package verified'
+            } catch {
+              $failures.Add("VHF gamepad package verification failed: $($_.Exception.Message)")
             }
           }
 

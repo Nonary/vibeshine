@@ -47,6 +47,52 @@ A literal single request would require migrating off the custom bootstrapper to 
 **WiX Burn** bundle (which SignPath can deep-sign), losing the custom installer
 UX. That is intentionally out of scope.
 
+## The VHF gamepad driver is signed here, not upstream
+
+SignPath is authorised for this repository. It is **not** authorised for
+`Nonary/libvirtualgamepad`, so that project cannot produce a production-signed
+driver release no matter how its own CI is arranged. Waiting for an
+origin-signed package would mean waiting forever.
+
+So the driver package ships **unsigned** and is signed as part of request 1,
+the MSI deep-sign, alongside the first-party PEs. Two files, and only two:
+
+| File | Element | Why |
+| --- | --- | --- |
+| `driver/VibeshineVhfGamepad.cat` | `<catalog-file>` | A driver package is trusted through its catalogue. This is what makes it installable. |
+| `tools/VibeshineVhfGamepadDeviceSetup.exe` | `<pe-file>` | Not listed in the INF's `CopyFiles`, so the catalogue does not hash it and signing it is safe. |
+
+`VibeshineVhfGamepad.dll` is **never** signed. The catalogue hashes it, so an
+Authenticode signature on the DLL changes the bytes the catalogue attests to
+and the driver stops installing. The DLL's integrity comes from the signed
+catalogue, which is how Windows validates a driver package anyway.
+
+### What this changes about verification
+
+The archive is still pinned by release tag and SHA-256; that check is unchanged
+and is what proves the bits came from the pinned release. What moves is *when*
+Authenticode is checked:
+
+- **At ingest** (`refresh_driver_package.ps1`): no signature exists yet, so the
+  signature checks are skipped for this channel. Every manifest hash is still
+  verified, because nothing has been signed at that point.
+- **After signing** (CI "Verify SignPath signatures", and `install.ps1` on the
+  user's machine): the catalogue and setup tool must carry a valid signature,
+  and their manifest hashes are deliberately **not** checked, because signing
+  rewrote them. The other payload hashes are still enforced.
+
+The package declares this with `signing.channel = "msi-request-signing"` and
+lists the affected files under `signing.signed_downstream`, so a consumer does
+not have to infer which hashes are expected to go stale. Produce such a package
+with `verify-driver-package.ps1 -UnsignedForMsiSigning`.
+
+### Approval order
+
+Unchanged, and it matters more now: approve the **MSI request first**. The
+driver catalogue is signed inside it, and the setup EXE request embeds the
+already-signed MSI. Approving out of order ships an installer whose driver
+cannot install.
+
 ## Slugs
 
 | Slug | File | Used by | Purpose |
@@ -71,10 +117,30 @@ invalidates the catalog hash and **breaks driver installation**. These must be
   `drivers/sunshine/nefconc.exe`,
   `drivers/sunshine/vulkan-layer/VkLayer_sunshine_hdr.dll`
   (libvirtualdisplay release, origin-signed upstream)
+- `drivers/vhf-gamepad/driver/VibeshineVhfGamepad.dll` (+ `.cat`) and
+  `drivers/vhf-gamepad/tools/VibeshineVhfGamepadDeviceSetup.exe`
+  (libvirtualgamepad release). The DLL is catalog-bound; the setup tool is not,
+  but both are hash-pinned by that package's immutable manifest, so the MSI
+  deep-sign step must leave both bytes unchanged.
 - `nvngx_truehdr.dll` (NVIDIA RTX Video SDK runtime, downloaded from the pinned TrueHDR runtime release)
 
 The recommended config (Strategy 1 below) excludes these by enumerating only
 first-party files explicitly.
+
+## VHF gamepad release boundary
+
+The VHF gamepad payload follows the same released-package model as the
+Vibeshine display driver, with a stricter immutable-artifact boundary. Before
+an MSI is assembled, CMake pins the libvirtualgamepad release tag, its archive
+SHA-256, and the expected catalog and root-device-tool signer thumbprints. The
+refresh step verifies those values, writes `release-lock.json` beside the
+package, and the installer verifies the lock against the signed catalog and
+setup tool. The production bundle remains disabled until those four pinned
+values are supplied for the first independently signed release.
+
+For local development, `SUNSHINE_ALLOW_LOCAL_VHF_GAMEPAD_TEST_PACKAGE` is an
+explicit separate path. It accepts only the driver package's exported local
+test certificate and never relaxes production release validation.
 
 ## First-party PEs that MUST be signed
 
