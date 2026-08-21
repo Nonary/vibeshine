@@ -988,42 +988,31 @@ namespace amf {
       if (config.pa_activity_type && !set_verified_int64(AMF_PA_ACTIVITY_TYPE, *config.pa_activity_type, "PA activity type")) return false;
     }
 
-// BEGIN INSERT1 (HEVC GDR configuration)
-// Check if the connected client explicitly requested Intra-Refresh (GDR)
+// BEGIN INSERT1 (HEVC Gradual Decoder Refresh configuration)
 if (client_config.enableIntraRefresh == 1) {
-  AMF_RESULT probe_res = encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_GOP_SIZE, 120);
+  constexpr int64_t GOP_SIZE = 120;
+  constexpr int64_t CTU_SIZE = 64;
+  if (encoder -> SetProperty(AMF_VIDEO_ENCODER_HEVC_GOP_SIZE, GOP_SIZE) == AMF_OK) {
+    const int64_t width = (encode_width > 0) ? encode_width : 3840;
+    const int64_t height = (encode_height > 0) ? encode_height : 2160;
+    const int64_t ctu_width = (width + CTU_SIZE - 1) / CTU_SIZE;
+    const int64_t ctu_height = (height + CTU_SIZE - 1) / CTU_SIZE;
 
-  if (probe_res == AMF_OK) {
-    BOOST_LOG(info) << "AMF: Client requested GDR. Initializing driver-autonomous HEVC Intra-Refresh...";
+    const int64_t ctbs_per_slot =
+      std::max < int64_t > (1, (ctu_height + GOP_SIZE - 1) / GOP_SIZE) * ctu_width;
 
-    int64_t gop_size = 120; 
-    encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_GOP_SIZE, gop_size);
-
-    int64_t actual_width = encode_width;   
-    int64_t actual_height = encode_height; 
-    
-    if (actual_width <= 0)  actual_width = 3840;
-    if (actual_height <= 0) actual_height = 2160;
-
-    int64_t ctu_size = 64;
-    int64_t ctu_width = (actual_width + (ctu_size - 1)) / ctu_size;
-    int64_t ctu_height = (actual_height + (ctu_size - 1)) / ctu_size;
-
-    int64_t ctu_rows_per_frame = (ctu_height + gop_size - 1) / gop_size;
-    if (ctu_rows_per_frame < 1) ctu_rows_per_frame = 1;
-
-    int64_t total_ctbs_per_frame = ctu_rows_per_frame * ctu_width;
-
-    if (!set_verified_int64(AMF_VIDEO_ENCODER_HEVC_INTRA_REFRESH_NUM_CTBS_PER_SLOT, total_ctbs_per_frame, "HEVC GDR CTBs per Slot")) {
+    if (!set_verified_int64(
+        AMF_VIDEO_ENCODER_HEVC_INTRA_REFRESH_NUM_CTBS_PER_SLOT,
+        ctbs_per_slot,
+        "HEVC GDR CTBs Per Slot")) {
       return false;
     }
-
-    BOOST_LOG(info) << "AMF: Native GDR mode successfully activated!";
-  } else {
-    BOOST_LOG(debug) << "AMF: Skipping GDR setup (H.264 or AV1 validation active)";
-  }
+    BOOST_LOG(info) <<
+      "AMF: HEVC Intra-Refresh (GDR) enabled.";
+  } 
 } else {
-  BOOST_LOG(info) << "AMF: Intra-Refresh disabled (not requested by client configuration)";
+  BOOST_LOG(info) <<
+    "AMF: Intra-Refresh disabled (not requested by client)";
 }
 // END INSERT1
     
@@ -1899,26 +1888,18 @@ if (client_config.enableIntraRefresh == 1) {
       return false;
     };
 
-// BEGIN INSERT2
-// Check if GDR is requested by client
-if (encoder && current_config.enableIntraRefresh == 1) {
-    AMF_RESULT res;
-
-    if (force_idr) {
-        res = surface->SetProperty(AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_NONE);
-        if (res != AMF_OK) {
-            BOOST_LOG(warning) << "AMF GDR: Failed to set FORCE_PICTURE_TYPE (IDR interception)";
-        }
-        res = surface->SetProperty(AMF_VIDEO_ENCODER_HEVC_INSERT_HEADER, true);
-        if (res != AMF_OK) {
-            BOOST_LOG(warning) << "AMF GDR: Failed to set INSERT_HEADER";
-        }
-    } else {
-        res = surface->SetProperty(AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_NONE);
-        if (res != AMF_OK) {
-            BOOST_LOG(warning) << "AMF GDR: Failed to set FORCE_PICTURE_TYPE (Normal operation)";
-        }
-    }
+// BEGIN INSERT2 (HEVC GDR IDR interception)
+if (encoder && current_config.enableIntraRefresh == 1 && force_idr) {
+  if (surface -> SetProperty(
+      AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE,
+      AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_NONE) != AMF_OK) {
+    BOOST_LOG(warning) << "AMF GDR: Failed to suppress IDR request";
+  }
+  if (surface -> SetProperty(
+      AMF_VIDEO_ENCODER_HEVC_INSERT_HEADER,
+      true) != AMF_OK) {
+    BOOST_LOG(warning) << "AMF GDR: Failed to insert VPS/SPS/PPS";
+  }
 }
 // END INSERT2
     
