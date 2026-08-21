@@ -2891,10 +2891,9 @@ namespace proc {
         }
 
         if (display_output) {
+          // `output` is the app command-log path, not a display selection. Only
+          // the dedicated field represents an explicit per-app display override.
           ctx.output_name_override = parse_env_val(this_env, *display_output);
-        } else if (!ctx.output.empty()) {
-          // Backward compatibility for apps saved before display output received its own field.
-          ctx.output_name_override = ctx.output;
         }
 
         if (cmd) {
