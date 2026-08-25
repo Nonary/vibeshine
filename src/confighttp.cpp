@@ -40,7 +40,6 @@
   #include <vector>
   #include <Windows.h>
 #endif
-
 // local includes
 #include "config.h"
 #include "confighttp.h"
@@ -216,7 +215,13 @@ namespace confighttp {
     return std::nullopt;
   }
 
+  std::recursive_mutex &apps_file_mutex() {
+    static std::recursive_mutex mutex;
+    return mutex;
+  }
+
   bool refresh_client_apps_cache(nlohmann::json &file_tree) {
+    std::lock_guard lock {apps_file_mutex()};
     try {
       sort_apps_by_name(file_tree);
       file_handler::write_file(config::stream.file_apps.c_str(), file_tree.dump(4));
@@ -351,6 +356,10 @@ namespace confighttp {
           continue;
         }
 
+        if (key.rfind("steam_", 0) == 0) {
+          continue;
+        }
+
         if (key.rfind("realtime_stats_", 0) == 0) {
           continue;
         }
@@ -396,6 +405,13 @@ namespace confighttp {
   // Platform-neutral frame limiter status (RTSS/NVCP on Windows, MangoHUD on Linux).
   void getFrameLimiterStatus(resp_https_t response, req_https_t request);
 #endif
+
+  // Steam provider endpoints are available on every supported host. The
+  // handlers remain provider-local in confighttp_steam.cpp.
+  void getSteamStatus(resp_https_t response, req_https_t request);
+  void getSteamGames(resp_https_t response, req_https_t request);
+  void postSteamForceSync(resp_https_t response, req_https_t request);
+  void postSteamLaunch(resp_https_t response, req_https_t request);
 
 #ifdef _WIN32
   // Forward declarations for Playnite handlers implemented in confighttp_playnite.cpp
@@ -1442,6 +1458,7 @@ namespace confighttp {
     print_req(request);
 
     try {
+      std::lock_guard apps_lock {apps_file_mutex()};
       std::string content = file_handler::read_file(config::stream.file_apps.c_str());
       nlohmann::json file_tree = nlohmann::json::parse(content);
 
@@ -1889,6 +1906,7 @@ namespace confighttp {
     std::stringstream ss;
     ss << request->content.rdbuf();
     try {
+      std::lock_guard apps_lock {apps_file_mutex()};
       // TODO: Input Validation
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
@@ -2113,6 +2131,7 @@ namespace confighttp {
     print_req(request);
 
     try {
+      std::lock_guard apps_lock {apps_file_mutex()};
       nlohmann::json output_tree;
       nlohmann::json new_apps = nlohmann::json::array();
       std::string file = file_handler::read_file(config::stream.file_apps.c_str());
@@ -4022,6 +4041,7 @@ namespace confighttp {
     print_req(request);
 
     try {
+      std::lock_guard apps_lock {apps_file_mutex()};
       nlohmann::json output_tree;
       nlohmann::json new_apps = nlohmann::json::array();
       std::string file = file_handler::read_file(config::stream.file_apps.c_str());
@@ -5476,6 +5496,10 @@ namespace confighttp {
 #if defined(_WIN32) || defined(__linux__)
     register_api_route("^/api/frame-limiter/status$", "GET", getFrameLimiterStatus);
 #endif
+    register_api_route("^/api/steam/status$", "GET", getSteamStatus);
+    register_api_route("^/api/steam/games$", "GET", getSteamGames);
+    register_api_route("^/api/steam/force_sync$", "POST", postSteamForceSync);
+    register_api_route("^/api/steam/launch$", "POST", postSteamLaunch);
 #ifdef _WIN32
     register_api_route("^/api/playnite/status$", "GET", getPlayniteStatus);
     register_api_route("^/api/rtss/status$", "GET", getRtssStatus);

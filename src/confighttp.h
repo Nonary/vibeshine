@@ -10,6 +10,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -67,6 +68,9 @@ namespace confighttp {
 
   // Writes the apps file and refreshes the client-visible app cache/list
   // Sorts entries by name for a stable UI.
+  // Callers that perform a read-modify-write transaction should hold this
+  // recursive mutex from the initial read through refresh.
+  std::recursive_mutex &apps_file_mutex();
   bool refresh_client_apps_cache(nlohmann::json &file_tree);
 
 }  // namespace confighttp
