@@ -226,6 +226,7 @@ namespace platf {
     dxgi,  ///< DXGI
     cuda,  ///< CUDA
     videotoolbox,  ///< VideoToolbox
+    vulkan,  ///< Vulkan
     unknown  ///< Unknown
   };
 
@@ -994,7 +995,10 @@ namespace platf {
   std::unique_ptr<host_stats_provider_t>
     create_host_stats_provider();
 
-  bool has_elevated_privileges();
-  void drop_elevated_privileges();
+  /** Resolve the render device path used for hardware encoding. */
+  std::string resolve_render_device();
+
+  bool has_elevated_privileges(bool all_caps);
+  void drop_elevated_privileges(bool all_caps);
 
 }  // namespace platf

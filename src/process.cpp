@@ -1319,10 +1319,14 @@ namespace proc {
       _env[ENV_LOSSLESS_LEGACY_AUTO_DETECT] = "";
     };
 
+#ifdef _WIN32
     const bool lossless_scaling_enabled = playnite_launcher::lossless::policy::should_enable_runtime(
       _app.lossless_scaling_enabled,
       _app.lossless_scaling_framegen
     );
+#else
+    const bool lossless_scaling_enabled = _app.lossless_scaling_enabled || _app.lossless_scaling_framegen;
+#endif
     _env["SUNSHINE_FRAME_GENERATION_PROVIDER"] =
       _app.frame_generation_enabled ? _app.frame_generation_provider : "";
 
@@ -2043,6 +2047,7 @@ namespace proc {
     std::error_code ec;
     const bool had_active_app = _app_id > 0;
     placebo = false;
+    std::chrono::seconds remaining_timeout = _app.exit_timeout;
 #ifdef _WIN32
     _deferred_launch = false;
     _lossless_should_start_support = false;
@@ -2050,7 +2055,6 @@ namespace proc {
 #endif
     // For Playnite-managed apps, request a graceful stop via Playnite first
 #ifdef _WIN32
-    std::chrono::seconds remaining_timeout = _app.exit_timeout;
     if (had_active_app && !_app.playnite_id.empty()) {
       bool should_request_playnite_stop = true;
       try {
@@ -2136,7 +2140,7 @@ namespace proc {
 
     _pipe.reset();
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
     // Clear the normal role before cleanup admission. The coordinator removes
     // only this stable identity when it has no retained Remote Monitor role;
     // otherwise the shared display remains protected for Resume.
