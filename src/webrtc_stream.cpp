@@ -87,6 +87,9 @@
   #if !defined(SUNSHINE_SHADERS_DIR)
     #define SUNSHINE_SHADERS_DIR SUNSHINE_ASSETS_DIR "/shaders/directx"
   #endif
+#elif defined(__linux__)
+  #include "src/display_helper_integration.h"
+  #include "src/platform/linux/private_display.h"
 #endif
 
 #ifdef __APPLE__
@@ -845,7 +848,7 @@ namespace webrtc_stream {
       std::atomic_bool active {false};
       std::atomic_size_t pending_session_creations {0};
       std::atomic_bool teardown_in_progress {false};
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
       std::optional<config::runtime_output_override_lease_t> output_override_lease;
 #endif
       std::shared_ptr<safe::mail_raw_t> mail;
@@ -3112,11 +3115,19 @@ namespace webrtc_stream {
       webrtc_capture.stream_start_params = std::move(stream_start_params);
       auto launch_session = build_launch_session(options, effective_app_id, audio_channels, prefer_10bit_sdr);
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
       std::optional<config::runtime_output_override_lease_t> pending_output_override_lease;
       auto output_override_guard = util::fail_guard([&]() {
         if (pending_output_override_lease) {
           (void) config::clear_runtime_output_name_override_if_lease(*pending_output_override_lease);
+        }
+      });
+#endif
+#ifdef __linux__
+      bool linux_private_display_prepared = false;
+      auto linux_private_display_guard = util::fail_guard([&]() {
+        if (linux_private_display_prepared) {
+          (void) platf::linux_private_display::revert();
         }
       });
 #endif
@@ -3130,14 +3141,15 @@ namespace webrtc_stream {
             config::set_runtime_output_name_override_with_lease(*launch_session->output_name_override);
         }
 #else
-        config::set_runtime_output_name_override(*launch_session->output_name_override);
+        pending_output_override_lease =
+          config::set_runtime_output_name_override_with_lease(*launch_session->output_name_override);
 #endif
       }
 
       desired_key = build_capture_config_key(effective_app_id, video_config, options);
 
       if (!rtsp_active) {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
         stream::cancel_paused_display_cleanup();
 #endif
         // Ensure the latest config is applied before starting capture.
@@ -3155,6 +3167,10 @@ namespace webrtc_stream {
         );
         if (webrtc_capture.stream_start_params) {
           webrtc_capture.stream_start_params->uses_virtual_display = launch_session->virtual_display;
+        }
+        if (launch_session->virtual_display_hdr_enabled == false) {
+          video_config.dynamicRange = 0;
+          video_config.force_sdr = true;
         }
         if (allow_display_changes ||
             launch_session->virtual_display_recreated_on_demand ||
@@ -3187,6 +3203,32 @@ namespace webrtc_stream {
                 << "Display helper validation did not confirm the WebRTC target; continuing with GPU capability probing.";
             }
           }
+        }
+#elif defined(__linux__)
+        const auto linux_private_display = platf::linux_private_display::prepare_session(
+          *launch_session,
+          !capture_already_active,
+          allow_display_changes
+        );
+        if (linux_private_display.active) {
+          linux_private_display_prepared = true;
+          pending_output_override_lease =
+            config::set_runtime_output_name_override_with_lease(linux_private_display.output_name);
+        } else if (linux_private_display.requested) {
+          return linux_private_display.error;
+        }
+        if (webrtc_capture.stream_start_params) {
+          webrtc_capture.stream_start_params->uses_virtual_display = launch_session->virtual_display;
+        }
+        if (launch_session->virtual_display_hdr_enabled == false) {
+          video_config.dynamicRange = 0;
+          video_config.force_sdr = true;
+        }
+        if (launch_session->virtual_display &&
+            (allow_display_changes || launch_session->virtual_display_recreated_on_demand ||
+             launch_session->virtual_display_needs_resume_apply) &&
+            !platf::linux_private_display::apply_session(*launch_session)) {
+          return std::string {"Failed to activate the Linux private streaming display."};
         }
 #endif
 
@@ -3229,6 +3271,12 @@ namespace webrtc_stream {
       video_config = build_video_config(options, prefer_10bit_sdr);
       apply_rtsp_video_overrides(video_config, rtsp_config);
       apply_rtx_hdr_stream_policy(video_config);
+#ifdef __linux__
+      if (launch_session->virtual_display_hdr_enabled == false) {
+        video_config.dynamicRange = 0;
+        video_config.force_sdr = true;
+      }
+#endif
       desired_key = build_capture_config_key(effective_app_id, video_config, options);
       launch_session->enable_hdr = video_config.dynamicRange != 0 &&
                                    !video_config.prefer_sdr_10bit &&
@@ -3252,11 +3300,14 @@ namespace webrtc_stream {
       webrtc_capture.app_id = effective_app_id > 0 ? std::optional<int> {effective_app_id} : std::nullopt;
       webrtc_capture.config_key = desired_key;
       webrtc_capture.published_bitrate_kbps.reset();
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
       if (pending_output_override_lease) {
         webrtc_capture.output_override_lease = pending_output_override_lease;
       }
       output_override_guard.disable();
+#endif
+#ifdef __linux__
+      linux_private_display_guard.disable();
 #endif
       webrtc_capture.feedback_shutdown.store(false, std::memory_order_release);
       #ifdef SUNSHINE_ENABLE_WEBRTC
@@ -3438,7 +3489,7 @@ namespace webrtc_stream {
         );
         if (finalized_shared_runtime) {
           // The centralized finalizer invalidates any output override lease.
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
           webrtc_capture.output_override_lease.reset();
 #endif
         }
