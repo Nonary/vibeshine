@@ -2031,6 +2031,7 @@ namespace proc {
     std::error_code ec;
     const bool had_active_app = _app_id > 0;
     placebo = false;
+    std::chrono::seconds remaining_timeout = _app.exit_timeout;
 #ifdef _WIN32
     _deferred_launch = false;
     _lossless_should_start_support = false;
@@ -2038,7 +2039,6 @@ namespace proc {
 #endif
     // For Playnite-managed apps, request a graceful stop via Playnite first
 #ifdef _WIN32
-    std::chrono::seconds remaining_timeout = _app.exit_timeout;
     if (had_active_app && !_app.playnite_id.empty()) {
       bool should_request_playnite_stop = true;
       try {

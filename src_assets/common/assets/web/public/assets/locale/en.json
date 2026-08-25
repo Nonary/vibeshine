@@ -656,6 +656,8 @@
     "frame_limiter_fps_limit_desc": "Optional global FPS limit for the frame limiter. RTSS supports up to three decimal places; NVIDIA Control Panel rounds fractional limits. Set to 0 to use the stream's requested FPS.",
     "frame_limiter_auto_virtual_framegen": "Virtual-screen game smoothness",
     "frame_limiter_auto_virtual_framegen_desc": "Automatic always keeps virtual screens at 4× the requested refresh. To avoid unnecessary desktop performance cost, WGC capture is capped at 2× on the desktop and at 4× for a confirmed game. The display mode never changes during streaming. Compatibility keeps a fixed 2× display and capture policy; Disabled turns off these adjustments.",
+    "rtss_allow_virtual_display_override": "Allow non-Reflex RTSS modes on virtual displays",
+    "rtss_allow_virtual_display_override_desc": "Virtual displays normally enforce NVIDIA Reflex because DLSS Frame Generation can otherwise add significant latency. Enable this only to apply the selected RTSS mode to virtual displays.",
     "ffmpeg_auto": "auto -- let ffmpeg decide (default)",
     "file_apps": "Apps File",
     "file_apps_desc": "The file where current apps of Vibeshine are stored.",
