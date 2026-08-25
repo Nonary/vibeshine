@@ -990,16 +990,21 @@ namespace amf {
 
 // BEGIN INSERT1 (HEVC Gradual Decoder Refresh configuration)
 if (client_config.enableIntraRefresh == 1) {
-  constexpr int64_t GOP_SIZE = 120;
+  constexpr int64_t GOP_SIZE = 120; 
   constexpr int64_t CTU_SIZE = 64;
-  if (encoder -> SetProperty(AMF_VIDEO_ENCODER_HEVC_GOP_SIZE, GOP_SIZE) == AMF_OK) {
+  
+  encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_NUM_GOPS_PER_IDR, 0);
+  
+  if (encoder->SetProperty(AMF_VIDEO_ENCODER_HEVC_GOP_SIZE, GOP_SIZE) == AMF_OK) {
     const int64_t width = (encode_width > 0) ? encode_width : 3840;
     const int64_t height = (encode_height > 0) ? encode_height : 2160;
-    const int64_t ctu_width = (width + CTU_SIZE - 1) / CTU_SIZE;
-    const int64_t ctu_height = (height + CTU_SIZE - 1) / CTU_SIZE;
+    
+    const int64_t ctu_width = (width + CTU_SIZE - 1) / CTU_SIZE;  
+    const int64_t ctu_height = (height + CTU_SIZE - 1) / CTU_SIZE; 
 
-    const int64_t ctbs_per_slot =
-      std::max < int64_t > (1, (ctu_height + GOP_SIZE - 1) / GOP_SIZE) * ctu_width;
+    constexpr int64_t TARGET_DURATION = GOP_SIZE; 
+    const int64_t ctbs_per_slot = 
+      std::max<int64_t>(1, (ctu_width * ctu_height) / TARGET_DURATION); 
 
     if (!set_verified_int64(
         AMF_VIDEO_ENCODER_HEVC_INTRA_REFRESH_NUM_CTBS_PER_SLOT,
@@ -1007,12 +1012,10 @@ if (client_config.enableIntraRefresh == 1) {
         "HEVC GDR CTBs Per Slot")) {
       return false;
     }
-    BOOST_LOG(info) <<
-      "AMF: HEVC Intra-Refresh (GDR) enabled.";
+    BOOST_LOG(info) << "AMF: Fixed HEVC GDR active. " << ctbs_per_slot << " CTBs/slot configured.";
   } 
 } else {
-  BOOST_LOG(info) <<
-    "AMF: Intra-Refresh disabled (not requested by client)";
+  BOOST_LOG(info) << "AMF: Intra-Refresh disabled (not requested by client)";
 }
 // END INSERT1
     
