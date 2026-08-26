@@ -999,6 +999,7 @@ namespace platf {
   std::string resolve_render_device();
 
   bool has_elevated_privileges(bool all_caps);
+  [[nodiscard]] bool drop_effective_elevated_privileges(bool all_caps);
   void drop_elevated_privileges(bool all_caps);
 
 }  // namespace platf
