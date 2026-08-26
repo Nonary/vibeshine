@@ -1895,7 +1895,7 @@ if (client_config.enableIntraRefresh == 1) {
 if (encoder && current_config.enableIntraRefresh == 1 && force_idr) {
   if (surface -> SetProperty(
       AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE,
-      AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_NONE) != AMF_OK) {
+      AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_I) != AMF_OK) {
     BOOST_LOG(warning) << "AMF GDR: Failed to suppress IDR request";
   }
   if (surface -> SetProperty(
