@@ -1313,8 +1313,7 @@ namespace platf {
       return nullptr;
     }
 
-    if (!gladLoaderLoadEGL(NULL)) {
-      BOOST_LOG(error) << "Failed to load EGL library symbols"sv;
+    if (!egl::ensure_loader()) {
       return nullptr;
     }
 

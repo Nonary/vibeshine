@@ -73,6 +73,7 @@ namespace config {
       int h264_coder;
       int aq;
       int vbv_percentage_increase;
+      int split_encode_mode;
     } nv_legacy;
 
     struct {
