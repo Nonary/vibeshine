@@ -25,10 +25,10 @@ namespace platf::mangohud {
       return std::filesystem::path(runtime_dir) / "vibeshine" / "mangohud";
     }
     if (const char *config_home = std::getenv("XDG_CONFIG_HOME"); config_home && *config_home) {
-      return std::filesystem::path(config_home) / "sunshine" / "mangohud-runtime";
+      return std::filesystem::path(config_home) / "vibeshine" / "mangohud-runtime";
     }
     if (const char *home = std::getenv("HOME"); home && *home) {
-      return std::filesystem::path(home) / ".config" / "sunshine" / "mangohud-runtime";
+      return std::filesystem::path(home) / ".config" / "vibeshine" / "mangohud-runtime";
     }
     return {};
   }

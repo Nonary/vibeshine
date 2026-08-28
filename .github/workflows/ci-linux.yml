@@ -16,7 +16,7 @@ jobs:
   build_linux:
     name: ${{ matrix.name }}
     env:
-      APP_ID: dev.lizardbyte.app.Sunshine
+      APP_ID: io.github.Nonary.vibeshine
       VERSION: ${{ inputs.release_version }}
     permissions:
       contents: read
@@ -86,8 +86,8 @@ jobs:
           echo "::add-matcher::.github/matchers/gcc.json"
           ./scripts/linux_build.sh \
             --publisher-name="${GITHUB_REPOSITORY_OWNER}" \
-            --publisher-website="https://app.lizardbyte.dev" \
-            --publisher-issue-url="https://app.lizardbyte.dev/support" \
+            --publisher-website="https://github.com/Nonary/vibeshine" \
+            --publisher-issue-url="https://github.com/Nonary/vibeshine/issues" \
             --skip-cleanup \
             --skip-package \
             --ubuntu-test-repo ${{ matrix.EXTRA_ARGS }}

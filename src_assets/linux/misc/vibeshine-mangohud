@@ -21,9 +21,9 @@ if [ -n "${VIBESHINE_MANGOHUD_STATE_DIR-}" ]; then
 elif [ -n "${XDG_RUNTIME_DIR-}" ]; then
   state_dir=$XDG_RUNTIME_DIR/vibeshine/mangohud
 elif [ -n "${XDG_CONFIG_HOME-}" ]; then
-  state_dir=$XDG_CONFIG_HOME/sunshine/mangohud-runtime
+  state_dir=$XDG_CONFIG_HOME/vibeshine/mangohud-runtime
 else
-  state_dir=${HOME:?}/.config/sunshine/mangohud-runtime
+  state_dir=${HOME:?}/.config/vibeshine/mangohud-runtime
 fi
 state_file=$state_dir/$appid.state
 

@@ -16,7 +16,7 @@ jobs:
   build_linux_flatpak:
     name: ${{ matrix.arch }}
     env:
-      APP_ID: dev.lizardbyte.app.Sunshine
+      APP_ID: io.github.Nonary.vibeshine
       MATRIX_ARCH: ${{ matrix.arch }}
       PLATFORM_VERSION: "24.08"
     permissions:

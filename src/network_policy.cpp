@@ -63,6 +63,6 @@ namespace net {
       }
     }
 
-    return !instancename.empty() ? instancename : "Sunshine";
+    return !instancename.empty() ? instancename : "Vibeshine";
   }
 }  // namespace net

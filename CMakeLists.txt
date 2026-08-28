@@ -17,7 +17,7 @@ endif()
 
 set(PROJECT_LICENSE "GPL-3.0-only")
 
-set(PROJECT_FQDN "dev.lizardbyte.app.Sunshine")
+set(PROJECT_FQDN "io.github.Nonary.vibeshine")
 set(WINDOWS_APP_USER_MODEL_ID "Vibeshine.Vibeshine")
 
 set(PROJECT_BRIEF_DESCRIPTION "GameStream host for Moonlight")  # must be <= 35 characters
