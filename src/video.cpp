@@ -3191,6 +3191,7 @@ namespace video {
           // trim allocated but unused portion of the pool based on timeouts
           trim_imgs();
           img_out->frame_timestamp.reset();
+          img_out->host_processing_timestamp.reset();
           img_out->capture_pacing_timestamp.reset();
           return true;
         } else {
@@ -5820,6 +5821,7 @@ namespace video {
       auto pull_free_image_callback = [&img](std::shared_ptr<platf::img_t> &img_out) -> bool {
         img_out = img;
         img_out->frame_timestamp.reset();
+        img_out->host_processing_timestamp.reset();
         img_out->capture_pacing_timestamp.reset();
         return true;
       };
