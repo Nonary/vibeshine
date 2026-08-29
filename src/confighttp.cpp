@@ -291,12 +291,14 @@ namespace confighttp {
              key == "rtx_hdr_peak_brightness";
     }
 
+#ifdef _WIN32
     std::string encode_config_override_value(const nlohmann::json &value) {
       if (value.is_string()) {
         return value.get<std::string>();
       }
       return value.dump();
     }
+#endif
 
     void normalize_adapter_config_pair(nlohmann::json &config_object) {
       if (!config_object.is_object()) {
@@ -2156,6 +2158,7 @@ namespace confighttp {
         return;
       }
 
+#ifdef _WIN32
       // Detect if the app being removed is the Playnite fullscreen launcher
       auto is_playnite_fullscreen = [](const nlohmann::json &app) -> bool {
         try {
@@ -2174,6 +2177,7 @@ namespace confighttp {
         } catch (...) {}
         return false;
       };
+#endif
 
       bool disabled_fullscreen_flag = false;
       for (size_t i = 0; i < apps_node.size(); ++i) {
