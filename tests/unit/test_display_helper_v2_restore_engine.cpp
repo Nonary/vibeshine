@@ -852,6 +852,166 @@ TEST(DisplayHelperV2RecoveryEngine, RotationStageFailureFailsRestoreWhenLayoutNe
   EXPECT_TRUE(harness.display.reassert_calls.empty());
 }
 
+// --- rotation reassert on the matching fast path (Vibepollo #406 class) ---
+
+// The OS can report a fully matching layout while the driver's pointer
+// transform is stale; a confirmed match with a non-default rotation must force
+// a same-value rotation refresh without touching topology or settings.
+TEST(DisplayHelperV2RecoveryEngine, ReassertsNonDefaultRotationOnMatchingFastPath) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+
+  auto baseline = make_snapshot({{"A"}, {"B"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 270}, {"B", 0}}));
+
+  harness.display.current = make_snapshot({{"B"}, {"A"}});
+  harness.display.current.m_primary_device = baseline.m_primary_device;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_EQ(harness.display.topology_calls, 0);
+  ASSERT_EQ(harness.display.reassert_calls.size(), 1u);
+  EXPECT_EQ(harness.display.reassert_calls.front().at("A"), 270);
+}
+
+// An all-default layout has no stale transform to refresh; the fast path must
+// stay a pure no-op.
+TEST(DisplayHelperV2RecoveryEngine, SkipsReassertWhenLayoutIsAllDefault) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+
+  auto baseline = make_snapshot({{"A"}, {"B"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 0}, {"B", 0}}));
+
+  harness.display.current = make_snapshot({{"B"}, {"A"}});
+  harness.display.current.m_primary_device = baseline.m_primary_device;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_TRUE(harness.display.reassert_calls.empty());
+  EXPECT_EQ(harness.display.apply_calls, 0);
+}
+
+// The reassert is best-effort: its failure must never fail a restore that was
+// already confirmed on screen.
+TEST(DisplayHelperV2RecoveryEngine, ReassertFailureDoesNotFailConfirmedRestore) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+
+  auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 90}}));
+
+  harness.display.current = baseline;
+  harness.display.reassert_result = false;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  ASSERT_EQ(harness.display.reassert_calls.size(), 1u);
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 1);
+}
+
+// A cancellation that lands during the final layout check must suppress both
+// the reassert side effect and the success bookkeeping.
+TEST(DisplayHelperV2RecoveryEngine, CancelledDuringConfirmSkipsReassert) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+
+  auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 270}}));
+
+  harness.display.current = baseline;
+  harness.display.on_current_layout_matches = [&] {
+    harness.cancellation.cancel();
+  };
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_TRUE(harness.display.reassert_calls.empty());
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_EQ(harness.display.topology_calls, 0);
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
+}
+
+// The full restore path owns rotation application; the forced reassert belongs
+// to the matching fast path only.
+TEST(DisplayHelperV2RecoveryEngine, FullRestoreAppliesRotationsWithoutReassert) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+
+  auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 270}}));
+
+  harness.display.current = make_snapshot({{"B"}});
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_EQ(harness.display.topology_calls, 1);
+  ASSERT_EQ(harness.display.rotation_apply_calls.size(), 1u);
+  EXPECT_EQ(harness.display.rotation_apply_calls.front().at("A"), 270);
+  EXPECT_TRUE(harness.display.reassert_calls.empty());
+}
+
+// A failed rotation stage whose rotation nevertheless landed (verify-level
+// layout match) must confirm via the second confirm_matches pass and still
+// perform the driver reassert there.
+TEST(DisplayHelperV2RecoveryEngine, SecondConfirmMatchReassertsAfterLateSettle) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+
+  auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 270}}));
+
+  harness.display.current = make_snapshot({{"B"}});
+  harness.display.apply_layout_rotations_result = false;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_EQ(harness.display.topology_calls, 1);
+  ASSERT_EQ(harness.display.rotation_apply_calls.size(), 1u);
+  ASSERT_EQ(harness.display.reassert_calls.size(), 1u);
+  EXPECT_EQ(harness.display.reassert_calls.front().at("A"), 270);
+}
+
+// Documents current policy: when the rotation stage fails and the layout never
+// matches, the restore fails after both apply attempts (no silent success).
+TEST(DisplayHelperV2RecoveryEngine, RotationStageFailureFailsRestoreWhenLayoutNeverMatches) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.add_device("B");
+
+  auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 270}}));
+
+  harness.display.current = make_snapshot({{"B"}});
+  harness.display.apply_layout_rotations_result = false;
+  harness.display.layout_matches_result = false;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_EQ(harness.display.topology_calls, 2);
+  EXPECT_EQ(harness.display.rotation_apply_calls.size(), 2u);
+  EXPECT_TRUE(harness.display.reassert_calls.empty());
+}
+
 // --- storage round trip in the legacy file format ---
 
 TEST(DisplayHelperV2FileStorage, LegacyFormatRoundTripWithLayouts) {
