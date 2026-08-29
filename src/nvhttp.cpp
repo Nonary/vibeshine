@@ -661,7 +661,16 @@ namespace nvhttp {
               return;
             }
             if (!ec) {
-              if (verify && !verify(session->connection->socket->native_handle(), session->connection->socket->lowest_layer().remote_endpoint())) {
+              SimpleWeb::error_code remote_endpoint_ec;
+              const auto remote_endpoint = session->connection->socket->lowest_layer().remote_endpoint(remote_endpoint_ec);
+              if (remote_endpoint_ec) {
+                if (this->on_error) {
+                  this->on_error(session->request, remote_endpoint_ec);
+                }
+                return;
+              }
+
+              if (verify && !verify(session->connection->socket->native_handle(), remote_endpoint)) {
                 this->write(session, on_verify_failed);
               } else {
                 this->read(session);
