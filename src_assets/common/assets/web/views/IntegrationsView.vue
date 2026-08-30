@@ -54,6 +54,7 @@ interface MangoHudStatus {
   fps_limit_millihz?: number;
   overlay_preset?: string;
   always_show_graph?: boolean;
+  limiter_method?: string;
   mangohud_available?: boolean;
   resolved_path?: string;
   message?: string;
@@ -137,7 +138,15 @@ interface MutationResult {
   error?: string;
 }
 
-type IntegrationId = 'steam' | 'lutris' | 'mangohud' | 'playnite' | 'rtss' | 'lossless' | 'vigem' | 'vulkan';
+type IntegrationId =
+  | 'steam'
+  | 'lutris'
+  | 'mangohud'
+  | 'playnite'
+  | 'rtss'
+  | 'lossless'
+  | 'vigem'
+  | 'vulkan';
 type SteamGameFilter = 'all' | 'included' | 'excluded';
 type PendingAction =
   | 'playnite-install'
@@ -180,6 +189,7 @@ const mangoDraft = ref({
   enabled: false,
   provider: 'auto',
   fpsLimit: 0,
+  limiterMethod: 'late',
   overlayPreset: 'custom',
   alwaysShowGraph: false,
 });
@@ -229,7 +239,10 @@ function lutrisGameId(game: LutrisGame): string {
 }
 
 function lutrisGameName(game: LutrisGame): string {
-  return String(game.name ?? '').trim() || t('ui.integrations.lutris.unknownGame', { id: lutrisGameId(game) });
+  return (
+    String(game.name ?? '').trim() ||
+    t('ui.integrations.lutris.unknownGame', { id: lutrisGameId(game) })
+  );
 }
 
 function exclusionEntries(): Array<{ id: string; name: string }> {
@@ -292,8 +305,14 @@ const filteredLutrisGames = computed(() => {
       const excluded = lutrisGameExcluded(game);
       if (lutrisGameFilter.value === 'included' && excluded) return false;
       if (lutrisGameFilter.value === 'excluded' && !excluded) return false;
-      return !query || lutrisGameName(game).toLocaleLowerCase().includes(query) ||
-        lutrisGameId(game).includes(query) || String(game.runner ?? '').toLocaleLowerCase().includes(query);
+      return (
+        !query ||
+        lutrisGameName(game).toLocaleLowerCase().includes(query) ||
+        lutrisGameId(game).includes(query) ||
+        String(game.runner ?? '')
+          .toLocaleLowerCase()
+          .includes(query)
+      );
     })
     .sort((left, right) => lutrisGameName(left).localeCompare(lutrisGameName(right)));
 });
@@ -301,7 +320,8 @@ const filteredLutrisGames = computed(() => {
 function setLutrisDraftExclusion(game: LutrisGame, excluded: boolean): void {
   const id = lutrisGameId(game);
   const next = new Set(lutrisExclusionDraft.value);
-  if (excluded) next.add(id); else next.delete(id);
+  if (excluded) next.add(id);
+  else next.delete(id);
   lutrisExclusionDraft.value = next;
 }
 
@@ -309,7 +329,8 @@ function setVisibleLutrisDraftExclusions(excluded: boolean): void {
   const next = new Set(lutrisExclusionDraft.value);
   for (const game of filteredLutrisGames.value) {
     const id = lutrisGameId(game);
-    if (excluded) next.add(id); else next.delete(id);
+    if (excluded) next.add(id);
+    else next.delete(id);
   }
   lutrisExclusionDraft.value = next;
 }
@@ -370,6 +391,7 @@ function resetMangoDraft(): void {
     enabled: mangohud.value?.enabled === true,
     provider: String(mangohud.value?.configured_provider || 'auto'),
     fpsLimit: Number(mangohud.value?.fps_limit ?? 0),
+    limiterMethod: String(mangohud.value?.limiter_method || 'late'),
     overlayPreset: String(mangohud.value?.overlay_preset || 'custom'),
     alwaysShowGraph: mangohud.value?.always_show_graph === true,
   };
@@ -382,6 +404,7 @@ const mangoDirty = computed(
     mangoDraft.value.enabled !== mangoOriginal.value.enabled ||
     mangoDraft.value.provider !== mangoOriginal.value.provider ||
     Number(mangoDraft.value.fpsLimit) !== Number(mangoOriginal.value.fpsLimit) ||
+    mangoDraft.value.limiterMethod !== mangoOriginal.value.limiterMethod ||
     mangoDraft.value.overlayPreset !== mangoOriginal.value.overlayPreset ||
     mangoDraft.value.alwaysShowGraph !== mangoOriginal.value.alwaysShowGraph,
 );
@@ -604,12 +627,22 @@ function lutrisSummary(): IntegrationSummary {
     id: 'lutris',
     name,
     description,
-    status: !enabled ? t('_common.disabled') : value.available ? t('ui.integrations.status.ready') : t('ui.integrations.status.notDetected'),
+    status: !enabled
+      ? t('_common.disabled')
+      : value.available
+        ? t('ui.integrations.status.ready')
+        : t('ui.integrations.status.notDetected'),
     tone: enabled && value.available ? 'success' : enabled ? 'warning' : 'neutral',
     details: [
-      value.game_count !== undefined ? t('ui.integrations.lutris.gameCount', { count: value.game_count }) : '',
-      value.importable_game_count !== undefined ? t('ui.integrations.lutris.importableCount', { count: value.importable_game_count }) : '',
-      value.steam_game_count ? t('ui.integrations.lutris.steamHandledBySteam', { count: value.steam_game_count }) : '',
+      value.game_count !== undefined
+        ? t('ui.integrations.lutris.gameCount', { count: value.game_count })
+        : '',
+      value.importable_game_count !== undefined
+        ? t('ui.integrations.lutris.importableCount', { count: value.importable_game_count })
+        : '',
+      value.steam_game_count
+        ? t('ui.integrations.lutris.steamHandledBySteam', { count: value.steam_game_count })
+        : '',
     ].filter(Boolean),
   };
 }
@@ -625,25 +658,43 @@ function mangoHudSummary(): IntegrationSummary {
     value.configured_provider === 'mangohud' ||
     value.configured_provider === 'proton' ||
     value.configured_provider === 'mangohud-proton';
-  const available = value.configured_provider === 'proton' || value.mangohud_available === true;
+  const protonSelected =
+    value.configured_provider === 'auto' ||
+    value.configured_provider === 'proton' ||
+    value.configured_provider === 'mangohud-proton';
+  const overlayMissing =
+    (value.configured_provider === 'auto' || value.configured_provider === 'mangohud-proton') &&
+    value.mangohud_available !== true;
+  const available = protonSelected || value.mangohud_available === true;
   const enabled = value.enabled === true && selected;
   return {
     id: 'mangohud',
     name,
     description,
-    status: !available
-      ? t('ui.integrations.status.notDetected')
-      : enabled
-        ? t('_common.active')
-        : selected
-          ? t('ui.integrations.status.ready')
-          : t('_common.disabled'),
-    tone: !available ? 'warning' : enabled ? 'success' : selected ? 'info' : 'neutral',
+    status: overlayMissing
+      ? t('ui.integrations.mangohud.overlayMissing')
+      : !available
+        ? t('ui.integrations.status.notDetected')
+        : enabled
+          ? t('_common.active')
+          : selected
+            ? t('ui.integrations.status.ready')
+            : t('_common.disabled'),
+    tone: overlayMissing
+      ? 'warning'
+      : !available
+        ? 'warning'
+        : enabled
+          ? 'success'
+          : selected
+            ? 'info'
+            : 'neutral',
     details: [
       value.fps_limit
         ? t('ui.integrations.mangohud.fixedLimit', { fps: value.fps_limit })
         : t('ui.integrations.mangohud.streamLimit'),
       value.resolved_path || '',
+      value.message || '',
     ].filter(Boolean),
   };
 }
@@ -961,17 +1012,24 @@ async function syncLutris(): Promise<void> {
   notice.value = '';
   try {
     const result = await apiPost<MutationResult>('/api/lutris/force_sync', {});
-    if (result.status === false) throw new Error(result.error || t('ui.integrations.errors.lutrisSyncRejected'));
+    if (result.status === false)
+      throw new Error(result.error || t('ui.integrations.errors.lutrisSyncRejected'));
     notice.value = t('ui.integrations.notices.lutrisSynced');
     await load(true);
   } catch (cause) {
-    errors.value = { ...errors.value, lutris: message(cause, t('ui.integrations.errors.lutrisSyncFailed')) };
+    errors.value = {
+      ...errors.value,
+      lutris: message(cause, t('ui.integrations.errors.lutrisSyncFailed')),
+    };
   } finally {
     syncing.value = false;
   }
 }
 
-async function setProviderEnabled(provider: 'steam' | 'lutris' | 'playnite', enabled: boolean): Promise<void> {
+async function setProviderEnabled(
+  provider: 'steam' | 'lutris' | 'playnite',
+  enabled: boolean,
+): Promise<void> {
   if (provider === 'steam' && steam.value?.forced) return;
   try {
     await apiPatch('/api/config', { [`${provider}_enabled`]: enabled });
@@ -993,13 +1051,17 @@ async function setLutrisPolicy(
     await apiPatch('/api/config', { [key]: value });
     if (lutris.value) {
       if (key === 'lutris_auto_sync') lutris.value.auto_sync = value;
-      else if (key === 'lutris_autosync_remove_uninstalled') lutris.value.autosync_remove_uninstalled = value;
+      else if (key === 'lutris_autosync_remove_uninstalled')
+        lutris.value.autosync_remove_uninstalled = value;
       else lutris.value.include_steam = value;
     }
     notice.value = t('ui.integrations.notices.providerUpdated');
     if (key === 'lutris_include_steam') await loadLutrisGames(false);
   } catch (cause) {
-    errors.value = { ...errors.value, lutris: message(cause, t('ui.integrations.errors.providerUpdateFailed')) };
+    errors.value = {
+      ...errors.value,
+      lutris: message(cause, t('ui.integrations.errors.providerUpdateFailed')),
+    };
   }
 }
 
@@ -1115,6 +1177,7 @@ async function saveMangoSettings(): Promise<void> {
       frame_limiter_enable: mangoDraft.value.enabled,
       frame_limiter_provider: mangoDraft.value.provider,
       frame_limiter_fps_limit: fps,
+      mangohud_limiter_method: mangoDraft.value.limiterMethod,
       mangohud_preset: mangoDraft.value.overlayPreset,
       mangohud_always_show_graph: mangoDraft.value.alwaysShowGraph,
     });
@@ -1731,6 +1794,25 @@ onMounted(() => void load());
                 </select>
               </SettingRow>
               <SettingRow
+                v-if="mangoDraft.provider === 'mangohud'"
+                :label="t('ui.integrations.mangohud.limiterMethod')"
+                :description="t('ui.integrations.mangohud.limiterMethodDescription')"
+                control-id="mangohud-limiter-method"
+              >
+                <select
+                  id="mangohud-limiter-method"
+                  v-model="mangoDraft.limiterMethod"
+                  class="integration-control"
+                >
+                  <option value="early">
+                    {{ t('ui.integrations.mangohud.limiterMethodEarly') }}
+                  </option>
+                  <option value="late">
+                    {{ t('ui.integrations.mangohud.limiterMethodLate') }}
+                  </option>
+                </select>
+              </SettingRow>
+              <SettingRow
                 :label="t('ui.integrations.mangohud.fpsLimit')"
                 :description="t('ui.integrations.mangohud.fpsLimitDescription')"
                 control-id="mangohud-fps-limit"
@@ -1802,7 +1884,10 @@ onMounted(() => void load());
             </div>
           </section>
         </div>
-        <div v-if="summary.id === 'steam' || summary.id === 'lutris' || isWindows" class="integration-row__actions">
+        <div
+          v-if="summary.id === 'steam' || summary.id === 'lutris' || isWindows"
+          class="integration-row__actions"
+        >
           <template v-if="summary.id === 'steam'">
             <AppButton
               v-if="!steam?.forced"
@@ -1827,8 +1912,26 @@ onMounted(() => void load());
             />
           </template>
           <template v-else-if="summary.id === 'lutris'">
-            <AppButton :label="lutris?.enabled === false ? t('ui.integrations.actions.enable') : t('ui.integrations.actions.disable')" variant="tertiary" size="compact" @click="setProviderEnabled('lutris', lutris?.enabled === false)" />
-            <AppButton icon="refresh" :label="t('ui.integrations.actions.rescan')" variant="secondary" size="compact" :busy="syncing" :busy-label="t('ui.integrations.syncing')" :disabled="lutris?.enabled === false || lutris?.available === false" @click="syncLutris" />
+            <AppButton
+              :label="
+                lutris?.enabled === false
+                  ? t('ui.integrations.actions.enable')
+                  : t('ui.integrations.actions.disable')
+              "
+              variant="tertiary"
+              size="compact"
+              @click="setProviderEnabled('lutris', lutris?.enabled === false)"
+            />
+            <AppButton
+              icon="refresh"
+              :label="t('ui.integrations.actions.rescan')"
+              variant="secondary"
+              size="compact"
+              :busy="syncing"
+              :busy-label="t('ui.integrations.syncing')"
+              :disabled="lutris?.enabled === false || lutris?.available === false"
+              @click="syncLutris"
+            />
           </template>
           <template v-else-if="summary.id === 'playnite'">
             <AppButton

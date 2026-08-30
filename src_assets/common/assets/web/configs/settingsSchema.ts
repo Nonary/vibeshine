@@ -462,6 +462,19 @@ const everydayPacingFields = (): SettingsField[] => [
     descriptionKey: 'ui.settings.fields.frame_limiter_fps_limit.description',
   }),
   select(
+    'mangohud_limiter_method',
+    [
+      option('early', 'ui.integrations.mangohud.limiterMethodEarly'),
+      option('late', 'ui.integrations.mangohud.limiterMethodLate'),
+    ],
+    {
+      labelKey: 'ui.integrations.mangohud.limiterMethod',
+      descriptionKey: 'ui.integrations.mangohud.limiterMethodDescription',
+      platform: 'linux',
+      visibleWhen: { key: 'frame_limiter_provider', equals: 'mangohud' },
+    },
+  ),
+  select(
     'mangohud_preset',
     [
       option('custom', 'ui.integrations.mangohud.presetCustom'),
@@ -504,20 +517,6 @@ export const settingsCategories: SettingsCategory[] = [
         ],
       },
       {
-        id: 'everyday_remote_monitor',
-        fields: remoteMonitorFields(),
-      },
-      {
-        id: 'everyday_resolution',
-        fields: [
-          modeRemapping({
-            labelKey: 'ui.settings.fields.dd_mode_remapping.label',
-            descriptionKey: 'ui.settings.fields.dd_mode_remapping.description',
-            simple: true,
-          }),
-        ],
-      },
-      {
         id: 'everyday_smoothness',
         visibleWhen: { key: 'virtual_display_mode', notEquals: 'disabled' },
         fields: [
@@ -536,7 +535,24 @@ export const settingsCategories: SettingsCategory[] = [
         ],
       },
       {
+        id: 'everyday_remote_monitor',
+        collapsed: true,
+        fields: remoteMonitorFields(),
+      },
+      {
+        id: 'everyday_resolution',
+        collapsed: true,
+        fields: [
+          modeRemapping({
+            labelKey: 'ui.settings.fields.dd_mode_remapping.label',
+            descriptionKey: 'ui.settings.fields.dd_mode_remapping.description',
+            simple: true,
+          }),
+        ],
+      },
+      {
         id: 'everyday_encoding',
+        collapsed: true,
         fields: [
           select('encoder', [option('', '_common.auto')], {
             labelKey: 'ui.settings.fields.encoder.label',
@@ -557,6 +573,7 @@ export const settingsCategories: SettingsCategory[] = [
       },
       {
         id: 'everyday_recovery',
+        collapsed: true,
         fields: [
           displayRecovery(),
           boolean('dd_config_revert_on_disconnect', {
@@ -587,6 +604,7 @@ export const settingsCategories: SettingsCategory[] = [
       },
       {
         id: 'everyday_automation',
+        collapsed: true,
         fields: [
           {
             key: 'global_prep_cmd',
@@ -964,6 +982,7 @@ export const settingsDefaults: Record<string, unknown> = {
   frame_limiter_enable: false,
   frame_limiter_provider: 'auto',
   frame_limiter_fps_limit: 0,
+  mangohud_limiter_method: 'late',
   mangohud_preset: 'custom',
   mangohud_always_show_graph: false,
   frame_limiter_auto_virtual_framegen: 'enabled',

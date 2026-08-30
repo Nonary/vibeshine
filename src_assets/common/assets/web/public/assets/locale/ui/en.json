@@ -585,7 +585,12 @@
     "fixedLimit": "Fixed limit: {fps} FPS",
     "fpsLimit": "Frame-rate limit",
     "fpsLimitDescription": "Use 0 to follow the client stream rate, or enter a fixed limit with up to three decimal places.",
+    "limiterMethod": "MangoHUD limiter timing",
+    "limiterMethodDescription": "Only applies when MangoHUD owns the limit. Early waits before presentation for smoother pacing with more latency. Late waits after presentation for lower latency, but cannot limit frame-generated output. The Proton limiter supports frame generation.",
+    "limiterMethodEarly": "Early — smoother pacing, more latency",
+    "limiterMethodLate": "Late — lower latency, no frame-generation limiting",
     "name": "MangoHUD",
+    "overlayMissing": "Proton ready · MangoHUD overlay missing",
     "overlayPreset": "Metrics and layout",
     "overlayPresetDescription": "Choose one of MangoHud's standard metric layouts, or keep the metrics from your MangoHud configuration.",
     "presetCustom": "Use MangoHud configuration",
@@ -594,8 +599,8 @@
     "presetFpsOnly": "FPS only",
     "presetHorizontal": "Horizontal",
     "provider": "Limiter provider",
-    "providerAuto": "Automatic — use MangoHUD on Linux",
-    "providerDescription": "Automatic uses MangoHUD. Proton uses the built-in DXVK or vkd3d-proton limiter for managed Steam games. MangoHUD + Proton keeps the overlay visible without using MangoHUD's limiter.",
+    "providerAuto": "Automatic — Proton limiter + MangoHUD overlay",
+    "providerDescription": "Automatic uses Proton's built-in DXVK or vkd3d-proton limiter for managed Steam games and keeps the MangoHUD overlay visible. Proton also limits frame-generated output. Choose MangoHUD to use its limiter with selectable early or late timing.",
     "providerMangoHud": "MangoHUD",
     "providerMangoHudProton": "MangoHUD + Proton",
     "providerProton": "Proton DXVK/VKD3D",
@@ -1594,7 +1599,7 @@
           "label": "Virtual-screen game smoothness"
         },
         "frame_limiter_provider": {
-          "description": "Used by manual limiting and automatic virtual-screen game smoothness. Automatic uses MangoHUD on Linux; on Windows it prefers RTSS, then NVIDIA Control Panel."
+          "description": "Used by manual limiting and automatic virtual-screen game smoothness. On Linux, Automatic uses the frame-generation-capable Proton limiter and presents MangoHUD; on Windows it prefers RTSS, then NVIDIA Control Panel."
         },
         "frame_limiter_fps_limit": {
           "description": "0 follows the stream rate. A nonzero value also replaces the automatically calculated virtual-screen limit."
@@ -1853,6 +1858,7 @@
           "off_linux": "Off — no automatic virtual-display refresh or game cap"
         },
         "frame_limiter_provider": {
+          "autoLinux": "Automatic — Proton limiter + MangoHUD overlay",
           "mangohud": "MangoHUD",
           "mangohudProton": "MangoHUD + Proton",
           "proton": "Proton DXVK/VKD3D",
