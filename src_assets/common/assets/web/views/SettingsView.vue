@@ -11,6 +11,7 @@ import { InlineAlert, LoadingSkeleton, PageHeader, StatusBadge, UiIcon } from '@
 import {
   captureOptionsForPlatform,
   frameGenerationOptionsForPlatform,
+  gamepadOptionsForPlatform,
   restartRequiredKeys,
   settingsCategories,
   settingsDefaults,
@@ -541,6 +542,8 @@ function optionsFor(field: SettingsField): SettingsOption[] {
         localizedOption('software', 'ui.settings.options.encoder.software'),
       ];
     }
+  } else if (field.key === 'gamepad') {
+    options = gamepadOptionsForPlatform(platform);
   } else if (field.key === 'capture') {
     options = captureOptionsForPlatform(platform);
   } else if (field.key === 'frame_limiter_auto_virtual_framegen') {

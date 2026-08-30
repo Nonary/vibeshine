@@ -29,6 +29,7 @@ import {
 } from '@/services/apps';
 import { searchCovers, updatePlayniteCover, uploadCover } from '@/services/covers';
 import {
+  gamepadOptionsForPlatform,
   settingsCategories,
   settingsDefaults,
   type SettingsField,
@@ -1012,6 +1013,9 @@ function overrideSelectOptions(key: string): Array<{ label: string; value: strin
   }
 
   let declaredOptions = field?.options ?? [];
+  if (key === 'gamepad') {
+    declaredOptions = gamepadOptionsForPlatform(String(overrideMetadata.value.platform ?? ''));
+  }
   if (key === 'encoder') {
     const auto: SettingsOption = { value: '', labelKey: '_common.auto' };
     const platform = String(overrideMetadata.value.platform ?? '').toLocaleLowerCase();
