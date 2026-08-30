@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -28,6 +29,12 @@ namespace video::policy {
   enum class capture_selection_e : std::uint8_t { process_preferred, exact_output, synthetic_black };
 
   [[nodiscard]] bool may_apply_process_display_preference(capture_selection_e selection);
+
+  /** Delay repeated display discovery without busy-looping during a persistent topology failure. */
+  [[nodiscard]] std::chrono::milliseconds display_retry_delay(std::size_t consecutive_failures);
+
+  /** Log the first failure and exponentially sparse reminders for a persistent retry loop. */
+  [[nodiscard]] bool should_log_display_retry(std::size_t consecutive_failures);
 
   std::optional<std::string> select_manual_display_output(
     capture_selection_e selection,
