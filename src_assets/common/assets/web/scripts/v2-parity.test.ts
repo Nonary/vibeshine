@@ -119,6 +119,28 @@ test('Linux exposes Remote Monitor behavior controls', () => {
   }
 });
 
+test('Everyday setup keeps core controls visible and collapses optional sections', () => {
+  const everyday = settingsCategories.find((category) => category.id === 'everyday');
+  assert.ok(everyday);
+  assert.deepEqual(
+    everyday.groups.slice(0, 2).map((group) => group.id),
+    ['everyday_display', 'everyday_smoothness'],
+  );
+
+  const groups = new Map(everyday.groups.map((group) => [group.id, group]));
+  assert.equal(groups.get('everyday_display')?.collapsed, undefined);
+  assert.equal(groups.get('everyday_smoothness')?.collapsed, undefined);
+  for (const id of [
+    'everyday_remote_monitor',
+    'everyday_resolution',
+    'everyday_encoding',
+    'everyday_recovery',
+    'everyday_automation',
+  ]) {
+    assert.equal(groups.get(id)?.collapsed, true, `${id} should use progressive disclosure`);
+  }
+});
+
 test('Linux virtual-display pacing uses Linux-specific copy', () => {
   assert.deepEqual(
     frameGenerationOptionsForPlatform('linux').map((option) => option.labelKey),
@@ -202,6 +224,29 @@ test('Linux uses display enumeration and persistence reset', () => {
     settingsView,
     /v-if="\(isWindowsHost \|\| isLinuxHost\) && activeCategory === 'display' && !isSearching"/,
   );
+  assert.match(settingsView, /v-if="supportsDisplayDeviceEnumeration && !displayDevicesError"/);
+});
+
+test('Settings protects drafts and keeps restart actions available', () => {
+  const settingsView = readFileSync(new URL('../views/SettingsView.vue', import.meta.url), 'utf8');
+  assert.match(settingsView, /<form[\s\S]*@submit\.prevent="save"/);
+  assert.match(settingsView, /class="button button--primary" type="submit"/);
+  assert.match(settingsView, /:disabled="loading \|\| saving \|\| isDirty"/);
+  assert.match(settingsView, /restartAvailable\.value \|\|= Boolean\(result\.restartRequired\)/);
+  assert.match(settingsView, /v-else-if="notice \|\| restartAvailable"/);
+  assert.match(settingsView, /:disabled="restarting"/);
+});
+
+test('Settings explains unavailable host metadata and virtual-display readiness', () => {
+  const settingsView = readFileSync(new URL('../views/SettingsView.vue', import.meta.url), 'utf8');
+  assert.match(settingsView, /metadataUnavailable\.value = true/);
+  assert.match(settingsView, /virtualDisplayUnavailable/);
+
+  const messages = JSON.parse(
+    readFileSync(new URL('../public/assets/locale/ui/en.json', import.meta.url), 'utf8'),
+  );
+  assert.equal(typeof messages.ui.settings.metadata_unavailable.description, 'string');
+  assert.equal(typeof messages.ui.settings.virtual_display_unavailable.description, 'string');
 });
 
 test('global command rows preserve order, verbatim text, and Windows elevation', () => {
