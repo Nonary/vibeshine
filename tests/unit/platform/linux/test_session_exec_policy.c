@@ -215,6 +215,7 @@ int main(void) {
 
   char *stream_environment[] = {
     "SUNSHINE_APP_ID=42", "SUNSHINE_APP_NAME=Literal $HOME; $(false) name=ok",
+    "SUNSHINE_CLIENT_NAME=Paired Client = $HOME; $(false)",
     "SUNSHINE_CLIENT_WIDTH=3840", "SUNSHINE_CLIENT_HEIGHT=2160",
     "SUNSHINE_CLIENT_FPS=59.940", "SUNSHINE_CLIENT_HDR=true",
     "SUNSHINE_CLIENT_GCMAP=65535", "SUNSHINE_CLIENT_HOST_AUDIO=false",
@@ -233,7 +234,7 @@ int main(void) {
   const char *invalid_environment[] = {"PATH=/tmp", "HOME=/tmp", "LD_PRELOAD=/tmp/a.so", "ENABLE_HDR_WSI=1",
     "SUNSHINE_CLIENT_HDR=1", "SUNSHINE_CLIENT_WIDTH=-1", "SUNSHINE_CLIENT_WIDTH=4294967296",
     "SUNSHINE_CLIENT_GCMAP=2147483648", "SUNSHINE_CLIENT_FPS=NaN", "SUNSHINE_CLIENT_FPS=0.000",
-    "SUNSHINE_CLIENT_FPS=60.0000000", "SUNSHINE_CLIENT_AUDIO_CONFIGURATION=9.1", "SUNSHINE_APP_NAME=bad\nname"};
+    "SUNSHINE_CLIENT_FPS=60.0000000", "SUNSHINE_CLIENT_AUDIO_CONFIGURATION=9.1", "SUNSHINE_APP_NAME=bad\nname", "SUNSHINE_CLIENT_NAME=bad\nname"};
   for (size_t i=0;i<sizeof(invalid_environment)/sizeof(invalid_environment[0]);++i)
     CHECK(!vibeshine_stream_environment_entry_is_safe(invalid_environment[i], NULL));
   char *duplicate_environment[] = {"SUNSHINE_CLIENT_WIDTH=1920", "SUNSHINE_CLIENT_WIDTH=3840"};
@@ -286,6 +287,7 @@ int main(void) {
   char *shell_fixture[] = {"/bin/sh", "-c",
     "test \"$SUNSHINE_CLIENT_WIDTH/$SUNSHINE_CLIENT_HEIGHT/$SUNSHINE_CLIENT_FPS\" = 3840/2160/59.940 && "
     "test \"$SUNSHINE_APP_NAME\" = 'Literal $HOME; $(false) name=ok' && "
+    "test \"$SUNSHINE_CLIENT_NAME\" = 'Paired Client = $HOME; $(false)' && "
     "test \"$SUNSHINE_CLIENT_AUDIO_CONFIGURATION/$SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS\" = 7.1/85301234567 && "
     "test \"$PROTON_KEEP_SONY_AUDIO_ENDPOINT_VISIBLE/$PROTON_SONY_WINDOWS_DEVICE_NAMES\" = 1/0 && "
     "test -z \"${LD_PRELOAD+x}\" && test \"${ENABLE_HDR_WSI-}\" = \"$1\"",

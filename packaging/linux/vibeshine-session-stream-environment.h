@@ -36,6 +36,7 @@ struct vibeshine_stream_environment_field {
 static const struct vibeshine_stream_environment_field vibeshine_stream_environment_fields[] = {
   {"SUNSHINE_APP_ID", VIBESHINE_STREAM_UNSIGNED, 10},
   {"SUNSHINE_APP_NAME", VIBESHINE_STREAM_TEXT, 4096},
+  {"SUNSHINE_CLIENT_NAME", VIBESHINE_STREAM_TEXT, 1024},
   {"SUNSHINE_CLIENT_WIDTH", VIBESHINE_STREAM_UNSIGNED, 10},
   {"SUNSHINE_CLIENT_HEIGHT", VIBESHINE_STREAM_UNSIGNED, 10},
   {"SUNSHINE_CLIENT_FPS", VIBESHINE_STREAM_DECIMAL, 17},
