@@ -160,6 +160,10 @@ interface SteamGame {
   artworkClientCompatible: boolean | null;
   appType: string;
   launchUri: string;
+  installed: boolean;
+  lastPlayed: number;
+  playtimeMinutes: number;
+  filtered: boolean;
 }
 
 interface LutrisGame {
@@ -515,9 +519,11 @@ const filteredPlayniteGames = computed(() => {
 });
 const filteredSteamGames = computed(() => {
   const query = form.name.trim().toLocaleLowerCase();
-  return query
-    ? steamGames.value.filter((game) => game.name.toLocaleLowerCase().includes(query))
-    : steamGames.value;
+  const games = steamGames.value.filter((game) => game.installed && !game.filtered);
+  return (query
+    ? games.filter((game) => game.name.toLocaleLowerCase().includes(query))
+    : games
+  ).sort((left, right) => left.name.localeCompare(right.name));
 });
 const filteredLutrisGames = computed(() => {
   const query = form.name.trim().toLocaleLowerCase();
@@ -1871,6 +1877,10 @@ function steamGame(value: unknown): SteamGame | null {
         : null,
     appType: asString(game.app_type),
     launchUri: asString(game.launch_uri) || `steam://rungameid/${steamId}`,
+    installed: game.installed === true,
+    lastPlayed: Number(game.last_played) || 0,
+    playtimeMinutes: Number(game.playtime_minutes) || 0,
+    filtered: game.filtered === true,
   };
 }
 
@@ -2032,7 +2042,7 @@ function selectSteamGame(game: SteamGame): void {
   form.uuid = canonicalSteamUuid(game.steamId) || newUuid();
   form.steamId = game.steamId;
   form.steamManaged = 'manual';
-  form.steamSource = 'installed';
+  form.steamSource = game.installed ? 'installed' : 'library';
   form.steamInstallDir = game.installDir;
   form.steamLibraryPath = game.libraryPath;
   form.steamIconPath = game.iconPath;
@@ -2165,44 +2175,64 @@ function useCustomApplication(): void {
 }
 
 function handleNameInput(): void {
+  const activePicker = steamPickerOpen.value ? 'steam' : lutrisPickerOpen.value ? 'lutris' : 'playnite';
   if (isPlayniteLinked.value) clearPlayniteLink();
   if (isSteamLinked.value) clearSteamLink();
   if (isLutrisLinked.value) clearLutrisLink();
   if (!isNew.value) return;
+  if (activePicker === 'steam') {
+    steamActiveIndex.value = -1;
+    return;
+  }
+  if (activePicker === 'lutris') {
+    lutrisActiveIndex.value = -1;
+    return;
+  }
   playniteActiveIndex.value = -1;
   openPlaynitePicker();
 }
 
-function movePlayniteActiveOption(delta: number): void {
-  const count = filteredPlayniteGames.value.length;
-  if (!count) return;
-  const current = playniteActiveIndex.value;
-  if (current < 0) {
-    playniteActiveIndex.value = delta < 0 ? count - 1 : 0;
-    return;
-  }
-  playniteActiveIndex.value = (current + delta + count) % count;
-}
-
 function handleNameKeydown(event: KeyboardEvent): void {
   if (!isNew.value) return;
+  const steamActive = steamPickerOpen.value;
+  const lutrisActive = lutrisPickerOpen.value;
+  const games = steamActive
+    ? filteredSteamGames.value
+    : lutrisActive
+      ? filteredLutrisGames.value
+      : filteredPlayniteGames.value;
+  const activeIndex = steamActive
+    ? steamActiveIndex
+    : lutrisActive
+      ? lutrisActiveIndex
+      : playniteActiveIndex;
+  const moveActiveOption = (delta: number) => {
+    if (!games.length) return;
+    activeIndex.value = activeIndex.value < 0
+      ? delta < 0 ? games.length - 1 : 0
+      : (activeIndex.value + delta + games.length) % games.length;
+  };
   if (event.key === 'ArrowDown') {
     event.preventDefault();
-    if (!playnitePickerOpen.value) openPlaynitePicker();
-    movePlayniteActiveOption(1);
+    if (!playnitePickerOpen.value && !steamActive && !lutrisActive) openPlaynitePicker();
+    moveActiveOption(1);
   } else if (event.key === 'ArrowUp') {
     event.preventDefault();
-    if (!playnitePickerOpen.value) openPlaynitePicker();
-    movePlayniteActiveOption(-1);
-  } else if (event.key === 'Enter' && playnitePickerOpen.value) {
+    if (!playnitePickerOpen.value && !steamActive && !lutrisActive) openPlaynitePicker();
+    moveActiveOption(-1);
+  } else if (event.key === 'Enter' && (playnitePickerOpen.value || steamActive || lutrisActive)) {
     event.preventDefault();
-    const game = filteredPlayniteGames.value[playniteActiveIndex.value];
-    if (game) {
-      selectPlayniteGame(game);
-    }
+    const game = games[activeIndex.value];
+    if (steamActive && game) selectSteamGame(game as SteamGame);
+    else if (lutrisActive && game) selectLutrisGame(game as LutrisGame);
+    else if (game) selectPlayniteGame(game as PlayniteGame);
   } else if (event.key === 'Escape') {
     playnitePickerOpen.value = false;
     playniteActiveIndex.value = -1;
+    steamPickerOpen.value = false;
+    steamActiveIndex.value = -1;
+    lutrisPickerOpen.value = false;
+    lutrisActiveIndex.value = -1;
   }
 }
 
