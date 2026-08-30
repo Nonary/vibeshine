@@ -3,7 +3,7 @@
 set -euo pipefail
 
 readonly handoff_helper=/usr/libexec/vibeshine/vibeshine-session-handoff
-readonly handoff_marker=/run/vibeshine/prelogin-handoff-complete
+readonly handoff_marker=/run/vibeshine/session-handoffs/$(/usr/bin/id -u)
 readonly maximum_delay=5
 
 should_log_attempt() {
