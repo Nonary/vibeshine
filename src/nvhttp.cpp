@@ -4309,8 +4309,24 @@ namespace nvhttp {
     }
 
     const bool no_active_sessions = !has_stream_session_activity();
+    bool retained_game_output_ready = false;
+    if (no_active_sessions) {
+      if (const auto retained_output = config::runtime_output_name_override(); retained_output && !retained_output->empty()) {
+        const auto capture_outputs = platf::display_names();
+        retained_game_output_ready =
+          std::find(capture_outputs.begin(), capture_outputs.end(), *retained_output) != capture_outputs.end();
+        if (retained_game_output_ready) {
+          BOOST_LOG(info) << "Resume will join the capture-ready retained game output '"
+                          << *retained_output << "'.";
+        }
+      }
+    }
     const bool joining_existing_game_output =
-      remote_session::joins_existing_game_output(remote_session::role_e::game, !no_active_sessions);
+      remote_session::joins_existing_game_output(
+        remote_session::role_e::game,
+        !no_active_sessions,
+        retained_game_output_ready
+      );
     const auto request_client_identity = resolve_client_identity_from_request(request);
 
     std::unordered_map<std::string, std::string> requested_runtime_overrides;
