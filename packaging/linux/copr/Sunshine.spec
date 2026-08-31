@@ -141,6 +141,7 @@ Requires: miniupnpc >= 2.2.4
 Requires: which >= 2.21
 Requires: kmod
 Requires: iproute
+Requires: jq
 Requires: pam
 Requires: socat
 Requires: util-linux
@@ -361,12 +362,25 @@ if [ ! -x "$(command -v rpm-ostree)" ]; then
       echo "warning: Vibeshine DRM installation failed; managed virtual displays are unavailable."
     fi
   fi
+  if %{_prefix}/libexec/vibeshine/vibeshine-prelogin-sync configure-auto; then
+    if %{_prefix}/libexec/vibeshine/vibeshine-prelogin-sync install-pam; then
+      systemctl daemon-reload || true
+      systemctl enable vibeshine-prelogin.service || \
+        echo "warning: could not enable Vibeshine pre-login streaming."
+    else
+      echo "warning: could not install the Plasma Login Manager handoff hook."
+    fi
+  else
+    echo "warning: configure a paired-client allowlist before enabling Vibeshine pre-login streaming."
+  fi
 else
   echo "rpm-ostree environment detected, skipping post install steps. Restart to apply the changes."
 fi
 
 %preun
 if [ "$1" -eq 0 ]; then
+  systemctl disable --now vibeshine-prelogin.service 2>/dev/null || true
+  %{_prefix}/libexec/vibeshine/vibeshine-prelogin-sync remove-pam || true
   systemctl stop vibeshine-vkms.service 2>/dev/null || true
   %{_prefix}/libexec/vibeshine/vibeshine-drm-install remove || \
     echo "warning: could not remove the Vibeshine HDR DRM module cleanly."
@@ -381,6 +395,7 @@ fi
 %{_prefix}/libexec/vibeshine/vibeshine-vkms-peercred
 %{_prefix}/libexec/vibeshine/vibeshine-session-handoff
 %{_prefix}/libexec/vibeshine/vibeshine-session-ready
+%{_prefix}/libexec/vibeshine/vibeshine-prelogin-sync
 %{_prefix}/libexec/vibeshine/kwin-preload/kwin_wayland
 %{_prefix}/lib/vibeshine/libvibeshine-kwin-gpu.so
 %{_libdir}/security/pam_vibeshine_session.so
@@ -401,6 +416,7 @@ fi
 %{_unitdir}/vibeshine-vkms-control.socket
 %{_unitdir}/vibeshine-vkms-control@.service
 %{_unitdir}/vibeshine-vkms.service
+%{_unitdir}/vibeshine-prelogin.service
 %{_unitdir}/vibeshine-session-restore@.service
 
 # Udev rules
