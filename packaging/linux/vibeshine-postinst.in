@@ -17,6 +17,7 @@ if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-machine-host" ]; t
       systemctl daemon-reload 2>/dev/null || true
       systemctl disable --now vibeshine-prelogin.service 2>/dev/null || true
       systemctl enable vibeshine.service || echo "warning: could not enable the Vibeshine machine host."
+      systemctl enable --now vibeshine-kwin-capability.path || echo "warning: could not enable the KWin capability watcher."
     else
       echo "warning: could not install the Plasma Login Manager handoff hook."
     fi

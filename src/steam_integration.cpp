@@ -1116,7 +1116,7 @@ namespace platf::steam {
   #else
       const auto app_id_string = std::to_string(app_id);
       if (std::getenv("VIBESHINE_MACHINE_HOST")) {
-        execl("/usr/libexec/vibeshine/vibeshine-session-exec", "vibeshine-session-exec", "steam", "-applaunch", app_id_string.c_str(), static_cast<char *>(nullptr));
+        execl("/usr/libexec/vibeshine/vibeshine-session-exec", "vibeshine-session-exec", "steam", app_id_string.c_str(), static_cast<char *>(nullptr));
       } else {
         execlp("steam", "steam", "-applaunch", app_id_string.c_str(), static_cast<char *>(nullptr));
       }

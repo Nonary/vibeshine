@@ -2165,6 +2165,22 @@ namespace nvhttp {
     return std::nullopt;
   }
 
+  bool greeter_client_allowed(std::string_view uuid) {
+    const auto *role = std::getenv("VIBESHINE_SESSION_ROLE");
+    if (!role || std::string_view {role} != "greeter") return true;
+    const auto *configured = std::getenv("VIBESHINE_ALLOWED_CLIENT_UUIDS");
+    if (!configured || !*configured || uuid.empty()) return false;
+    std::string_view remaining {configured};
+    while (!remaining.empty()) {
+      const auto separator = remaining.find(',');
+      const auto candidate = remaining.substr(0, separator);
+      if (candidate == uuid) return true;
+      if (separator == std::string_view::npos) break;
+      remaining.remove_prefix(separator + 1);
+    }
+    return false;
+  }
+
   void remember_tls_client_identity(const boost::asio::ip::tcp::endpoint &endpoint, const resolved_client_identity_t &identity) {
     const auto key = endpoint_key(endpoint);
     if (key.empty() || identity.uuid.empty()) {
@@ -5011,10 +5027,15 @@ namespace nvhttp {
         return verified;
       }
 
-      verified = 1;
-      if (auto identity = resolve_client_identity_from_peer_cert(x509_verify)) {
-        remember_tls_client_identity(remote_endpoint, *identity);
+      auto identity = resolve_client_identity_from_peer_cert(x509_verify);
+      if ((!identity || !greeter_client_allowed(identity->uuid)) &&
+          std::getenv("VIBESHINE_SESSION_ROLE") &&
+          std::string_view {std::getenv("VIBESHINE_SESSION_ROLE")} == "greeter") {
+        BOOST_LOG(warning) << "Pre-login TLS client is not in the administrator allowlist.";
+        return verified;
       }
+      verified = 1;
+      if (identity) remember_tls_client_identity(remote_endpoint, *identity);
       tl_peer_certificate = std::move(x509_verify);
 
       return verified;

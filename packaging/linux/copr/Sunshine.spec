@@ -371,6 +371,7 @@ if [ ! -x "$(command -v rpm-ostree)" ]; then
       systemctl daemon-reload || true
       systemctl disable --now vibeshine-prelogin.service 2>/dev/null || true
       systemctl enable vibeshine.service || echo "warning: could not enable the Vibeshine machine host."
+      systemctl enable --now vibeshine-kwin-capability.path || echo "warning: could not enable the KWin capability watcher."
     else
       echo "warning: could not install the Plasma Login Manager handoff hook."
     fi
@@ -384,6 +385,8 @@ fi
 %preun
 if [ "$1" -eq 0 ]; then
   systemctl disable --now vibeshine.service vibeshine-prelogin.service 2>/dev/null || true
+  systemctl disable --now vibeshine-kwin-capability.path 2>/dev/null || true
+  %{_prefix}/libexec/vibeshine/vibeshine-machine-host cleanup || true
   %{_prefix}/libexec/vibeshine/vibeshine-machine-host remove-pam || true
   systemctl stop vibeshine-vkms.service 2>/dev/null || true
   systemctl stop vibeshine-drm-setup.service 2>/dev/null || true
@@ -426,6 +429,8 @@ fi
 %{_unitdir}/vibeshine-machine-prepare.service
 %{_unitdir}/vibeshine.service
 %{_unitdir}/vibeshine-session-restore@.service
+%{_unitdir}/vibeshine-kwin-capability-refresh.service
+%{_unitdir}/vibeshine-kwin-capability.path
 
 # Udev rules
 %{_udevrulesdir}/*-sunshine.rules

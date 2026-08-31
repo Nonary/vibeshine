@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch KWin for Vibeshine capability refresh
+Documentation=https://github.com/Nonary/vibeshine
+
+[Path]
+PathChanged=/usr/bin/kwin_wayland
+Unit=vibeshine-kwin-capability-refresh.service
+
+[Install]
+WantedBy=multi-user.target
