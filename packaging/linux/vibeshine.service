@@ -1,0 +1,44 @@
+[Unit]
+Description=Vibeshine machine streaming host
+Documentation=https://github.com/Nonary/vibeshine
+Requires=vibeshine-machine-prepare.service
+Wants=vibeshine-vkms.service
+After=vibeshine-machine-prepare.service vibeshine-vkms.service display-manager.service
+ConditionPathExists=/etc/vibeshine/machine.conf
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=vibeshine
+Group=vibeshine
+SupplementaryGroups=video render vibeshine-uinput vibeshine-vkms
+StateDirectory=vibeshine
+StateDirectoryMode=0700
+CapabilityBoundingSet=CAP_SETGID CAP_SETUID CAP_SYS_ADMIN CAP_SYS_NICE
+ExecStart=/usr/libexec/vibeshine/vibeshine-machine-host run
+Restart=on-failure
+RestartSec=3
+RestartSteps=7
+RestartMaxDelaySec=5min
+TimeoutStartSec=infinity
+TimeoutStopSec=20
+UMask=0077
+ProtectSystem=strict
+ProtectHome=no
+PrivateTmp=no
+PrivateMounts=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=~@clock @debug @module @mount @reboot @swap
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=graphical.target

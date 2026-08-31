@@ -336,6 +336,11 @@ namespace platf {
       args.assign(parts.begin() + 1, parts.end());
     }
 
+    if (std::getenv("VIBESHINE_MACHINE_HOST")) {
+      args.insert(args.begin(), exe_path.string());
+      exe_path = v2::filesystem::path("/usr/libexec/vibeshine/vibeshine-session-exec");
+    }
+
     v2::process_stdio stdio {};
     stdio.in = nullptr;
     if (file) {

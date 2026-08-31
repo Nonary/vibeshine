@@ -138,6 +138,7 @@ BuildRequires: gcc14-c++
 
 # Common runtime requirements
 Requires: miniupnpc >= 2.2.4
+Requires: acl
 Requires: which >= 2.21
 Requires: kmod
 Requires: iproute
@@ -352,6 +353,9 @@ if [ ! -x "$(command -v rpm-ostree)" ]; then
     echo "error: udevadm not found or not executable."
   fi
 
+  %{_prefix}/libexec/vibeshine/vibeshine-kwin-capability prepare || \
+    echo "warning: could not prepare capability-free KWin for the Vibeshine GPU bridge."
+
   if %{_prefix}/libexec/vibeshine/vibeshine-drm-install install; then
     :
   else
@@ -362,16 +366,16 @@ if [ ! -x "$(command -v rpm-ostree)" ]; then
       echo "warning: Vibeshine DRM installation failed; managed virtual displays are unavailable."
     fi
   fi
-  if %{_prefix}/libexec/vibeshine/vibeshine-prelogin-sync configure-auto; then
-    if %{_prefix}/libexec/vibeshine/vibeshine-prelogin-sync install-pam; then
+  if %{_prefix}/libexec/vibeshine/vibeshine-machine-host configure-auto; then
+    if %{_prefix}/libexec/vibeshine/vibeshine-machine-host install-pam; then
       systemctl daemon-reload || true
-      systemctl enable vibeshine-prelogin.service || \
-        echo "warning: could not enable Vibeshine pre-login streaming."
+      systemctl disable --now vibeshine-prelogin.service 2>/dev/null || true
+      systemctl enable vibeshine.service || echo "warning: could not enable the Vibeshine machine host."
     else
       echo "warning: could not install the Plasma Login Manager handoff hook."
     fi
   else
-    echo "warning: configure a paired-client allowlist before enabling Vibeshine pre-login streaming."
+    echo "warning: configure a machine profile owner before enabling Vibeshine."
   fi
 else
   echo "rpm-ostree environment detected, skipping post install steps. Restart to apply the changes."
@@ -379,9 +383,11 @@ fi
 
 %preun
 if [ "$1" -eq 0 ]; then
-  systemctl disable --now vibeshine-prelogin.service 2>/dev/null || true
-  %{_prefix}/libexec/vibeshine/vibeshine-prelogin-sync remove-pam || true
+  systemctl disable --now vibeshine.service vibeshine-prelogin.service 2>/dev/null || true
+  %{_prefix}/libexec/vibeshine/vibeshine-machine-host remove-pam || true
   systemctl stop vibeshine-vkms.service 2>/dev/null || true
+  systemctl stop vibeshine-drm-setup.service 2>/dev/null || true
+  %{_prefix}/libexec/vibeshine/vibeshine-kwin-capability restore || true
   %{_prefix}/libexec/vibeshine/vibeshine-drm-install remove || \
     echo "warning: could not remove the Vibeshine HDR DRM module cleanly."
 fi
@@ -394,14 +400,15 @@ fi
 %{_prefix}/libexec/vibeshine/vibeshine-vkms-quiesce
 %{_prefix}/libexec/vibeshine/vibeshine-vkms-peercred
 %{_prefix}/libexec/vibeshine/vibeshine-session-handoff
-%{_prefix}/libexec/vibeshine/vibeshine-session-ready
-%{_prefix}/libexec/vibeshine/vibeshine-prelogin-sync
-%{_prefix}/libexec/vibeshine/kwin-preload/kwin_wayland
+%attr(0750,root,vibeshine) %caps(cap_setgid,cap_setuid=ep) %{_prefix}/libexec/vibeshine/vibeshine-session-exec
+%{_prefix}/libexec/vibeshine/vibeshine-machine-host
+%{_prefix}/libexec/vibeshine/vibeshine-kwin-capability
 %{_prefix}/lib/vibeshine/libvibeshine-kwin-gpu.so
 %{_libdir}/security/pam_vibeshine_session.so
 
 # Dedicated access group for the privileged virtual-display control socket
 %{_prefix}/lib/sysusers.d/vibeshine-vkms.conf
+%{_prefix}/lib/sysusers.d/vibeshine.conf
 
 # Versioned DKMS/direct-build source tree
 /usr/src/vibeshine-drm-*
@@ -416,7 +423,8 @@ fi
 %{_unitdir}/vibeshine-vkms-control.socket
 %{_unitdir}/vibeshine-vkms-control@.service
 %{_unitdir}/vibeshine-vkms.service
-%{_unitdir}/vibeshine-prelogin.service
+%{_unitdir}/vibeshine-machine-prepare.service
+%{_unitdir}/vibeshine.service
 %{_unitdir}/vibeshine-session-restore@.service
 
 # Udev rules

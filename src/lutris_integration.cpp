@@ -239,7 +239,11 @@ namespace platf::lutris {
         _exit(127);
       }
       setsid();
-      execl(executable.c_str(), executable.c_str(), uri.c_str(), static_cast<char *>(nullptr));
+      if (std::getenv("VIBESHINE_MACHINE_HOST")) {
+        execl("/usr/libexec/vibeshine/vibeshine-session-exec", "vibeshine-session-exec", executable.c_str(), uri.c_str(), static_cast<char *>(nullptr));
+      } else {
+        execl(executable.c_str(), executable.c_str(), uri.c_str(), static_cast<char *>(nullptr));
+      }
       const int error = errno;
       const auto ignored = write(error_pipe[1], &error, sizeof(error));
       (void) ignored;

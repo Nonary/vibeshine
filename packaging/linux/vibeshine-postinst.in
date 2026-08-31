@@ -1,20 +1,33 @@
 if command -v systemd-sysusers >/dev/null 2>&1; then
   systemd-sysusers "@VIBESHINE_SYSUSERS_INSTALL_DIR@/vibeshine-vkms.conf" || \
     echo "warning: could not create the dedicated vibeshine-vkms control group."
+  systemd-sysusers "@VIBESHINE_SYSUSERS_INSTALL_DIR@/vibeshine.conf" || \
+    echo "warning: could not create the dedicated Vibeshine service account."
 fi
 
-if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-prelogin-sync" ]; then
-  if "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-prelogin-sync" configure-auto; then
-    if "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-prelogin-sync" install-pam; then
+if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-exec" ]; then
+  chown root:vibeshine "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-exec"
+  chmod 0750 "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-exec"
+  setcap cap_setgid,cap_setuid=ep "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-exec"
+fi
+
+if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-machine-host" ]; then
+  if "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-machine-host" configure-auto; then
+    if "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-machine-host" install-pam; then
       systemctl daemon-reload 2>/dev/null || true
-      systemctl enable vibeshine-prelogin.service ||
-        echo "warning: could not enable Vibeshine pre-login streaming."
+      systemctl disable --now vibeshine-prelogin.service 2>/dev/null || true
+      systemctl enable vibeshine.service || echo "warning: could not enable the Vibeshine machine host."
     else
       echo "warning: could not install the Plasma Login Manager handoff hook."
     fi
   else
-    echo "warning: configure a paired-client allowlist before enabling Vibeshine pre-login streaming."
+    echo "warning: configure a machine profile owner before enabling Vibeshine."
   fi
+fi
+
+if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-kwin-capability" ]; then
+  "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-kwin-capability" prepare || \
+    echo "warning: could not prepare capability-free KWin for the Vibeshine GPU bridge."
 fi
 
 @VIBESHINE_BASE_POSTINST@
