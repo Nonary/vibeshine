@@ -1341,6 +1341,7 @@ fi
 %attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibeshine-session-exec
 %attr(0700,root,root) %caps(cap_kill,cap_setgid,cap_setuid+p) %{_prefix}/libexec/vibeshine/vibeshine-session-broker
 %{_prefix}/libexec/vibeshine/vibeshine-provider-scan
+%attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibeshine-steam-launch
 %{_prefix}/libexec/vibeshine/vibeshine-profile-import
 %attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibeshine-app-supervisor
 %{_prefix}/libexec/vibeshine/vibeshine-machine-host

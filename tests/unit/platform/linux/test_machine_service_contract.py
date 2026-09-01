@@ -27,6 +27,7 @@ host = (linux / "vibeshine-machine-host").read_text()
 host_unit = (linux / "vibeshine.service").read_text()
 launcher = (linux / "vibeshine-session-exec.c").read_text()
 broker = (linux / "vibeshine-session-broker.c").read_text()
+steam_launcher = (linux / "vibeshine-steam-launch.cpp").read_text()
 session_execution = launcher + "\n" + broker
 private_display = (root / "src/platform/linux/private_display.cpp").read_text()
 audio = (root / "src/platform/linux/audio.cpp").read_text()
@@ -546,6 +547,7 @@ rpm_entries = (
     "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-session-exec",
     "%attr(0700,root,root) %caps(cap_kill,cap_setgid,cap_setuid+p) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-session-broker",
     "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-app-supervisor",
+    "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-steam-launch",
     "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-kwin-session-environment",
     "%attr(0750,root,vibeshine) %caps(cap_sys_admin,cap_sys_nice+p) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-host",
 )
@@ -557,6 +559,7 @@ for capability_free_path in (
     "${CMAKE_INSTALL_FULL_BINDIR}/vibeshine",
     "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-session-exec",
     "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-app-supervisor",
+    "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-steam-launch",
     "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-kwin-session-environment",
 ):
     filelist_line = next(line for line in rpm_filelist.splitlines() if capability_free_path in line)
@@ -736,6 +739,7 @@ for unsafe_stop in (
 
 require(rpm, "%{_bindir}/vibeshine-mangohud", "RPM deterministic manifest")
 require(rpm, "%attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibeshine-app-supervisor", "RPM deterministic manifest")
+require(rpm, "%attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibeshine-steam-launch", "RPM deterministic manifest")
 require(rpm, "%attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibeshine-kwin-session-environment", "RPM deterministic manifest")
 require(rpm, "%attr(0750,root,vibeshine) %caps(cap_sys_admin,cap_sys_nice+p) %{_prefix}/libexec/vibeshine/vibeshine-host", "RPM deterministic manifest")
 require(rpm, "%attr(0700,root,root) %caps(cap_kill,cap_setgid,cap_setuid+p) %{_prefix}/libexec/vibeshine/vibeshine-session-broker", "RPM deterministic manifest")
