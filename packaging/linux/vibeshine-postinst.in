@@ -1,3 +1,5 @@
+#!/bin/sh
+
 if command -v systemd-sysusers >/dev/null 2>&1; then
   systemd-sysusers "@VIBESHINE_SYSUSERS_INSTALL_DIR@/vibeshine-vkms.conf" || \
     echo "warning: could not create the dedicated vibeshine-vkms control group."
@@ -5,25 +7,311 @@ if command -v systemd-sysusers >/dev/null 2>&1; then
     echo "warning: could not create the dedicated Vibeshine service account."
 fi
 
-if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-exec" ]; then
-  chown root:vibeshine "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-exec"
-  chmod 0750 "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-exec"
-  setcap cap_setgid,cap_setuid=ep "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-exec"
+vibeshine_controller="@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-controller"
+vibeshine_privileged_helper_is_safe() {
+  [ -f "$1" ] && [ ! -L "$1" ] && [ -x "$1" ] || return 1
+  [ "$(stat -c '%u:%g:%a:%h:%F' -- "$1")" = \
+    '0:0:755:1:regular file' ]
+}
+vibeshine_unmask_host_for_controller() {
+  timeout --signal=KILL 15 systemctl unmask --runtime vibeshine-session-exec.socket 2>/dev/null || return 1
+  timeout --signal=KILL 15 systemctl unmask --runtime vibeshine.service 2>/dev/null || return 1
+  vibeshine_host_state=$(timeout --signal=KILL 5 systemctl is-enabled \
+    vibeshine.service 2>/dev/null || true)
+  vibeshine_host_load=$(timeout --signal=KILL 5 systemctl show \
+    vibeshine.service --property=LoadState 2>/dev/null) || return 1
+  vibeshine_socket_state=$(timeout --signal=KILL 5 systemctl is-enabled \
+    vibeshine-session-exec.socket 2>/dev/null || true)
+  vibeshine_socket_load=$(timeout --signal=KILL 5 systemctl show \
+    vibeshine-session-exec.socket --property=LoadState 2>/dev/null) || return 1
+  case "$vibeshine_socket_state" in
+    disabled | static | indirect | generated | transient | linked | linked-runtime)
+      [ "$vibeshine_socket_load" = 'LoadState=loaded' ] || return 1 ;;
+    *) return 1 ;;
+  esac
+  case "$vibeshine_host_state" in
+    disabled | static | indirect | generated | transient | linked | linked-runtime)
+      [ "$vibeshine_host_load" = 'LoadState=loaded' ] ;;
+    *) return 1 ;;
+  esac
+}
+
+vibeshine_cgroup_is_quiescent() {
+  vibeshine_control_group=$1
+  [ -n "$vibeshine_control_group" ] || return 0
+  case "$vibeshine_control_group" in /*) ;; *) return 1 ;; esac
+  case "$vibeshine_control_group" in */../* | */..) return 1 ;; esac
+  vibeshine_cgroup_path=/sys/fs/cgroup$vibeshine_control_group
+  if [ ! -e "$vibeshine_cgroup_path" ] && [ ! -L "$vibeshine_cgroup_path" ]; then return 0; fi
+  [ -d "$vibeshine_cgroup_path" ] && [ ! -L "$vibeshine_cgroup_path" ] && \
+    [ -f "$vibeshine_cgroup_path/cgroup.events" ] && \
+    [ ! -L "$vibeshine_cgroup_path/cgroup.events" ] && \
+    grep -qx 'populated 0' "$vibeshine_cgroup_path/cgroup.events"
+}
+
+vibeshine_unit_is_quiescent() {
+  vibeshine_properties=$(timeout --signal=KILL 5 systemctl show "$1" \
+    --property=LoadState --property=ActiveState --property=SubState --property=MainPID \
+    --property=ControlGroup 2>/dev/null) || return 1
+  [ "$(printf '%s\n' "$vibeshine_properties" | wc -l | tr -d ' ')" = 5 ] || return 1
+  for vibeshine_property in LoadState ActiveState SubState MainPID ControlGroup; do
+    vibeshine_property_count=$(printf '%s\n' "$vibeshine_properties" | \
+      grep -c "^$vibeshine_property=" || true)
+    [ "$vibeshine_property_count" = 1 ] || return 1
+  done
+  vibeshine_load=$(printf '%s\n' "$vibeshine_properties" | sed -n 's/^LoadState=//p')
+  vibeshine_state=$(printf '%s\n' "$vibeshine_properties" | sed -n 's/^ActiveState=//p')
+  vibeshine_substate=$(printf '%s\n' "$vibeshine_properties" | sed -n 's/^SubState=//p')
+  vibeshine_pid=$(printf '%s\n' "$vibeshine_properties" | sed -n 's/^MainPID=//p')
+  vibeshine_control_group=$(printf '%s\n' "$vibeshine_properties" | sed -n 's/^ControlGroup=//p')
+  case "$vibeshine_load:$vibeshine_state:$vibeshine_substate" in
+    not-found:inactive:dead | \
+    loaded:inactive:dead | loaded:failed:failed | \
+    masked:inactive:dead | masked:failed:failed | \
+    masked-runtime:inactive:dead | masked-runtime:failed:failed) ;;
+    *) return 1 ;;
+  esac
+  [ "$vibeshine_pid" = 0 ] && vibeshine_cgroup_is_quiescent "$vibeshine_control_group"
+}
+
+vibeshine_unit_is_disabled() {
+  vibeshine_enabled=$(timeout --signal=KILL 5 systemctl is-enabled "$1" 2>/dev/null || true)
+  case "$vibeshine_enabled" in
+    disabled | masked | masked-runtime | static | indirect | generated | transient | linked | linked-runtime | not-found) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+vibeshine_unit_is_masked() {
+  vibeshine_enabled=$(timeout --signal=KILL 5 systemctl is-enabled "$1" 2>/dev/null || true)
+  vibeshine_load=$(timeout --signal=KILL 5 systemctl show "$1" \
+    --property=LoadState 2>/dev/null) || return 1
+  case "$vibeshine_enabled" in
+    masked | masked-runtime) [ "$vibeshine_load" = 'LoadState=masked' ] ;;
+    *) return 1 ;;
+  esac
+}
+
+vibeshine_broker_unit_is_safe() {
+  vibeshine_broker_unit=$1
+  case "$vibeshine_broker_unit" in vibeshine-session-exec@*.service) ;; *) return 1 ;; esac
+  vibeshine_broker_instance=${vibeshine_broker_unit#vibeshine-session-exec@}
+  vibeshine_broker_instance=${vibeshine_broker_instance%.service}
+  [ -n "$vibeshine_broker_instance" ] || return 1
+  case "$vibeshine_broker_instance" in *[!A-Za-z0-9_.:-]*) return 1 ;; esac
+}
+
+vibeshine_stop_exact_unit() {
+  timeout --signal=KILL 30 systemctl stop "$1" 2>/dev/null && return 0
+  timeout --signal=KILL 5 systemctl kill --kill-whom=all --signal=KILL "$1" 2>/dev/null || true
+  timeout --signal=KILL 10 systemctl stop "$1" 2>/dev/null || true
+}
+
+vibeshine_capture_broker_list() {
+  vibeshine_broker_list_path=$1
+  [ -f "$vibeshine_broker_list_path" ] && [ ! -L "$vibeshine_broker_list_path" ] || return 1
+  chmod 0600 "$vibeshine_broker_list_path" || return 1
+  (
+    ulimit -f 128 || exit 1
+    timeout --signal=KILL 5 systemctl list-units --all --plain \
+      --no-legend --no-pager --full 'vibeshine-session-exec@*.service' \
+      >"$vibeshine_broker_list_path" 2>/dev/null
+  ) || return 1
+  vibeshine_broker_list_size=$(stat -c '%s' -- "$vibeshine_broker_list_path") || return 1
+  case "$vibeshine_broker_list_size" in '' | *[!0-9]*) return 1 ;; esac
+  [ "$vibeshine_broker_list_size" -le 65536 ]
+}
+
+vibeshine_stop_brokers() (
+  vibeshine_broker_list=$(mktemp /run/vibeshine-broker-units.XXXXXX) || exit 1
+  trap 'rm -f -- "$vibeshine_broker_list"' 0
+  trap 'exit 1' HUP INT TERM
+  vibeshine_broker_attempt=0
+  vibeshine_broker_clean_passes=0
+  while [ "$vibeshine_broker_attempt" -lt 20 ]; do
+    vibeshine_broker_dirty=0
+    vibeshine_capture_broker_list "$vibeshine_broker_list" || return 1
+    vibeshine_seen_units='
+'
+    vibeshine_seen_count=0
+    while IFS= read -r vibeshine_line || [ -n "$vibeshine_line" ]; do
+      [ -n "$vibeshine_line" ] || continue
+      case "$vibeshine_line" in *""*) return 1 ;; esac
+      set -f
+      set -- $vibeshine_line
+      [ "${1:-}" = '●' ] && shift
+      [ "$#" -ge 4 ] || return 1
+      vibeshine_unit=$1
+      vibeshine_load=$2
+      vibeshine_state=$3
+      vibeshine_substate=$4
+      vibeshine_broker_unit_is_safe "$vibeshine_unit" || return 1
+      [ "$vibeshine_load" = loaded ] || return 1
+      case "$vibeshine_state:$vibeshine_substate" in *[!a-z:-]*) return 1 ;; esac
+      case "$vibeshine_seen_units" in *"
+$vibeshine_unit
+"*) return 1 ;; esac
+      vibeshine_seen_units="$vibeshine_seen_units$vibeshine_unit
+"
+      vibeshine_seen_count=$((vibeshine_seen_count + 1))
+      [ "$vibeshine_seen_count" -le 256 ] || return 1
+      if ! vibeshine_unit_is_quiescent "$vibeshine_unit"; then
+        vibeshine_broker_dirty=1
+        vibeshine_stop_exact_unit "$vibeshine_unit"
+        vibeshine_unit_is_quiescent "$vibeshine_unit" || return 1
+      fi
+    done <"$vibeshine_broker_list"
+    if [ "$vibeshine_broker_dirty" -eq 0 ]; then
+      vibeshine_broker_clean_passes=$((vibeshine_broker_clean_passes + 1))
+      [ "$vibeshine_broker_clean_passes" -lt 5 ] || return 0
+    else
+      vibeshine_broker_clean_passes=0
+    fi
+    vibeshine_broker_attempt=$((vibeshine_broker_attempt + 1))
+    sleep 0.1
+  done
+  return 1
+)
+
+vibeshine_quiesce_machine_host() {
+  vibeshine_have_systemd=0
+  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    vibeshine_have_systemd=1
+    timeout --signal=KILL 15 systemctl mask --runtime vibeshine.service \
+      vibeshine-session-exec.socket 2>/dev/null || return 1
+    vibeshine_unit_is_masked vibeshine.service || return 1
+    vibeshine_unit_is_masked vibeshine-session-exec.socket || return 1
+    vibeshine_stop_exact_unit vibeshine-session-exec.socket
+    vibeshine_unit_is_quiescent vibeshine-session-exec.socket || return 1
+    vibeshine_stop_brokers || return 1
+    for vibeshine_unit in vibeshine-session-controller.service vibeshine.service \
+      vibeshine-prelogin.service vibeshine-machine-prepare.service; do
+      vibeshine_stop_exact_unit "$vibeshine_unit"
+    done
+    timeout --signal=KILL 15 systemctl disable vibeshine-session-controller.service --now 2>/dev/null || true
+    timeout --signal=KILL 15 systemctl disable vibeshine.service --now 2>/dev/null || true
+    timeout --signal=KILL 15 systemctl disable vibeshine-prelogin.service --now 2>/dev/null || true
+    timeout --signal=KILL 15 systemctl disable vibeshine-machine-prepare.service --now 2>/dev/null || true
+  fi
+
+  if [ -e "$vibeshine_controller" ] || [ -L "$vibeshine_controller" ]; then
+    vibeshine_privileged_helper_is_safe "$vibeshine_controller" || return 1
+    [ "$vibeshine_have_systemd" -eq 1 ] || return 1
+    timeout --signal=KILL 40 "$vibeshine_controller" cleanup || return 1
+  fi
+
+  if [ "$vibeshine_have_systemd" -eq 1 ]; then
+    vibeshine_unit_is_masked vibeshine.service || return 1
+    vibeshine_unit_is_masked vibeshine-session-exec.socket || return 1
+    vibeshine_stop_exact_unit vibeshine-session-exec.socket
+    vibeshine_stop_brokers || return 1
+    for vibeshine_unit in vibeshine-session-exec.socket vibeshine-session-controller.service \
+      vibeshine.service vibeshine-prelogin.service vibeshine-machine-prepare.service; do
+      vibeshine_stop_exact_unit "$vibeshine_unit"
+      vibeshine_unit_is_quiescent "$vibeshine_unit" || return 1
+      vibeshine_unit_is_disabled "$vibeshine_unit" || return 1
+    done
+    vibeshine_stop_brokers || return 1
+  fi
+  if [ -S /run/vibeshine/session-broker.sock ] && [ ! -L /run/vibeshine/session-broker.sock ]; then
+    rm -f -- /run/vibeshine/session-broker.sock || return 1
+  fi
+  [ ! -e /run/vibeshine/session-broker.sock ] && [ ! -L /run/vibeshine/session-broker.sock ] && \
+    [ ! -e /run/vibeshine/session.env ] && [ ! -L /run/vibeshine/session.env ]
+}
+
+if ! vibeshine_quiesce_machine_host; then
+  echo "error: could not quiesce the existing machine host; leaving Vibeshine disabled." >&2
+  exit 1
 fi
 
-if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-machine-host" ]; then
-  if "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-machine-host" configure-auto; then
-    if "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-machine-host" install-pam; then
-      systemctl daemon-reload 2>/dev/null || true
-      systemctl disable --now vibeshine-prelogin.service 2>/dev/null || true
-      systemctl enable vibeshine.service || echo "warning: could not enable the Vibeshine machine host."
-      systemctl enable --now vibeshine-kwin-capability.path || echo "warning: could not enable the KWin capability watcher."
-    else
-      echo "warning: could not install the Plasma Login Manager handoff hook."
-    fi
-  else
-    echo "warning: configure a machine profile owner before enabling Vibeshine."
+# Upgrade away from the former capability-bearing main/client executables.
+# Native packages receive capture capabilities only from the machine unit;
+# only the socket-activated broker ever changes identity.
+vibeshine_main="@CMAKE_INSTALL_FULL_BINDIR@/vibeshine"
+vibeshine_session_client="@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-exec"
+for vibeshine_executable in "$vibeshine_main" "$vibeshine_session_client"; do
+  if [ ! -f "$vibeshine_executable" ] || [ -L "$vibeshine_executable" ]; then
+    echo "error: native executable is missing or unsafe: $vibeshine_executable" >&2
+    exit 1
   fi
+  chown root:root "$vibeshine_executable" || exit 1
+  chmod 0755 "$vibeshine_executable" || exit 1
+  setcap -r "$vibeshine_executable" 2>/dev/null || true
+  if [ -n "$(getcap "$vibeshine_executable" 2>/dev/null)" ]; then
+    echo "error: unsafe capabilities remain on $vibeshine_executable." >&2
+    exit 1
+  fi
+done
+
+vibeshine_session_broker="@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-broker"
+if [ ! -f "$vibeshine_session_broker" ] || [ -L "$vibeshine_session_broker" ]; then
+  echo "error: root-only session broker is missing or unsafe: $vibeshine_session_broker" >&2
+  exit 1
+fi
+chown root:root "$vibeshine_session_broker" || exit 1
+chmod 0700 "$vibeshine_session_broker" || exit 1
+setcap cap_kill,cap_setgid,cap_setuid=p "$vibeshine_session_broker" || exit 1
+if [ "$(stat -c '%U:%G:%a:%F' -- "$vibeshine_session_broker")" != \
+     'root:root:700:regular file' ] ||
+   [ "$(getcap "$vibeshine_session_broker" 2>/dev/null)" != \
+     "$vibeshine_session_broker cap_kill,cap_setgid,cap_setuid=p" ]; then
+  echo "error: root-only session broker permissions or capabilities are unsafe." >&2
+  exit 1
+fi
+
+vibeshine_private_host="@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-host"
+if [ ! -f "$vibeshine_private_host" ] || [ -L "$vibeshine_private_host" ]; then
+  echo "error: private Vibeshine host is missing or unsafe: $vibeshine_private_host" >&2
+  exit 1
+fi
+vibeshine_public_identity=$(stat -Lc '%d:%i' -- "$vibeshine_main") || exit 1
+vibeshine_broker_identity=$(stat -Lc '%d:%i' -- "$vibeshine_session_broker") || exit 1
+vibeshine_private_identity=$(stat -Lc '%d:%i' -- "$vibeshine_private_host") || exit 1
+if [ "$vibeshine_public_identity" = "$vibeshine_private_identity" ] ||
+   [ "$vibeshine_broker_identity" = "$vibeshine_private_identity" ]; then
+  echo "error: privileged broker and private/public hosts must be distinct inodes." >&2
+  exit 1
+fi
+chown root:vibeshine "$vibeshine_private_host" || exit 1
+chmod 0750 "$vibeshine_private_host" || exit 1
+setcap cap_sys_admin,cap_sys_nice=p "$vibeshine_private_host" || exit 1
+if [ "$(stat -c '%U:%G:%a:%F' -- "$vibeshine_private_host")" != \
+     'root:vibeshine:750:regular file' ] ||
+   [ "$(getcap "$vibeshine_private_host" 2>/dev/null)" != \
+     "$vibeshine_private_host cap_sys_admin,cap_sys_nice=p" ]; then
+  echo "error: private Vibeshine host permissions or capabilities are unsafe." >&2
+  exit 1
+fi
+if [ "$(getcap "$vibeshine_session_broker" 2>/dev/null)" != \
+     "$vibeshine_session_broker cap_kill,cap_setgid,cap_setuid=p" ]; then
+  echo "error: private-host setup altered the session broker capabilities." >&2
+  exit 1
+fi
+for vibeshine_executable in "$vibeshine_main" "$vibeshine_session_client"; do
+  if [ -n "$(getcap "$vibeshine_executable" 2>/dev/null)" ]; then
+    echo "error: a public Vibeshine entrypoint gained file capabilities: $vibeshine_executable" >&2
+    exit 1
+  fi
+done
+
+vibeshine_machine_configured=0
+vibeshine_machine_host="@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-machine-host"
+if [ -e "$vibeshine_machine_host" ] || [ -L "$vibeshine_machine_host" ]; then
+  vibeshine_privileged_helper_is_safe "$vibeshine_machine_host" || {
+    echo "error: installed Vibeshine machine helper is unsafe." >&2
+    exit 1
+  }
+  "$vibeshine_machine_host" remove-pam || \
+    echo "warning: could not remove the obsolete Plasma Login Manager handoff hook."
+fi
+systemctl disable --now vibeshine-prelogin.service 2>/dev/null || true
+systemctl daemon-reload 2>/dev/null || true
+if vibeshine_privileged_helper_is_safe "$vibeshine_machine_host" && \
+   "$vibeshine_machine_host" configure-auto; then
+  vibeshine_machine_configured=1
+else
+  echo "warning: configure a machine profile owner before enabling Vibeshine."
 fi
 
 if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-kwin-capability" ]; then
@@ -31,6 +319,10 @@ if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-kwin-capability" ]
     echo "warning: could not prepare capability-free KWin for the Vibeshine GPU bridge."
 fi
 
+VIBESHINE_EXECUTABLE_PATH="@CMAKE_INSTALL_FULL_BINDIR@/vibeshine"
+VIBESHINE_EXECUTABLE_CAPABILITY_MODE=unit
+export VIBESHINE_EXECUTABLE_PATH
+export VIBESHINE_EXECUTABLE_CAPABILITY_MODE
 @VIBESHINE_BASE_POSTINST@
 
 # Build/register the managed virtual-display module. Package installation may
@@ -46,5 +338,23 @@ if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-drm-install" ]; th
     else
       echo "warning: Vibeshine DRM installation failed; managed virtual displays are unavailable."
     fi
+  fi
+fi
+
+if [ "$vibeshine_machine_configured" -eq 1 ]; then
+  systemctl enable --now vibeshine-kwin-capability.path || echo "warning: could not enable the KWin capability watcher."
+  if ! systemctl enable vibeshine-session-controller.service; then
+    vibeshine_quiesce_machine_host || true
+    echo "error: could not enable the Vibeshine controller safely; all machine-host units remain off." >&2
+    exit 1
+  fi
+  # Keep the host masked until the new controller is the next component that
+  # can activate it; never expose it to an obsolete PAM/helper start request.
+  if ! vibeshine_unmask_host_for_controller ||
+     ! systemctl start vibeshine-session-controller.service; then
+    timeout --signal=KILL 15 systemctl mask --runtime vibeshine.service 2>/dev/null || true
+    vibeshine_quiesce_machine_host || true
+    echo "error: could not start the Vibeshine controller safely; all machine-host units remain off." >&2
+    exit 1
   fi
 fi
