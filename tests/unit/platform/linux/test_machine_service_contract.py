@@ -723,9 +723,13 @@ for lifecycle, label in (
         "SendSIGKILL=no",
         "--property=Job",
         "systemctl freeze",
+        "--kill-after=2 60 systemctl stop",
         "FreezerState=frozen",
         "frozen 1",
         "vibeshine_controller_remains_frozen",
+        "vibeshine_thaw_controller",
+        "systemctl thaw",
+        "FreezerState=running",
         "vibeshine-session-controller.service",
         "vibeshine.service",
         "vibeshine-prelogin.service",
@@ -785,7 +789,8 @@ for lifecycle, label in (
     first_restore_stop = quiesce.index("vibeshine_stop_restore_instances || return 1", host_mask_at)
     broker_drain_at = quiesce.index("vibeshine_stop_brokers || return 1", first_restore_stop)
     frozen_proof_at = quiesce.index("vibeshine_controller_remains_frozen || return 1", broker_drain_at)
-    controller_stop_at = quiesce.index("vibeshine_stop_exact_unit vibeshine-session-controller.service", frozen_proof_at)
+    thaw_at = quiesce.index("vibeshine_thaw_controller || return 1", frozen_proof_at)
+    controller_stop_at = quiesce.index("vibeshine_stop_exact_unit vibeshine-session-controller.service", thaw_at)
     remove_pam_at = normalized.index("vibeshine_run_optional_legacy_command remove-pam", first_restore_stop)
     last_restore_stop = normalized.rindex("vibeshine_stop_restore_instances || return 1")
     legacy_cleanup_at = normalized.rindex("vibeshine_cleanup_legacy_transition_state || return 1")
@@ -805,6 +810,7 @@ for lifecycle, label in (
         < first_restore_stop
         < broker_drain_at
         < frozen_proof_at
+        < thaw_at
         < controller_stop_at
     ):
         raise AssertionError(f"{label} does not fence the old controller/host and drain GPU ownership in fail-closed order")
@@ -822,6 +828,28 @@ for function_name in (
     require(rpm_pre, f"{function_name}() (", "RPM pre-replacement subshell isolation")
 require(rpm_post, "vibeshine_stop_brokers() (", "RPM post-replacement subshell isolation")
 require(rpm_preun, "vibeshine_preun_stop_brokers() (", "RPM preun subshell isolation")
+
+# Pacman runs the same install script before and after replacement. The second
+# invocation must accept the fully masked, quiescent state left by the first
+# instead of attempting to activate a drop-in through the runtime host mask.
+for invariant in (
+    "vibeshine_preserved_quiesce_is_safe",
+    "vibeshine_runtime_root_is_safe_or_absent",
+    "vibeshine_control_socket_is_masked",
+    "vibeshine_broker_socket_is_masked",
+    "vibeshine_host_unit_is_masked",
+    "vibeshine_control_instances_are_quiescent",
+    "vibeshine_brokers_are_quiescent",
+    "vibeshine_restore_instances_are_quiescent",
+    "! -e \"$vibeshine_broker_socket\"",
+    "! -e \"$vibeshine_control_socket\"",
+):
+    require(arch_pre, invariant, "Arch preserved quiesce detection")
+arch_quiesce = arch_pre.rsplit("\ndo_quiesce_machine_host() {\n", 1)[1].split("\n}\n", 1)[0]
+preserved_at = arch_quiesce.index("vibeshine_preserved_quiesce_is_safe && return 0")
+select_at = arch_quiesce.index("vibeshine_select_upgrade_kill_mode || return 1")
+if not preserved_at < select_at:
+    raise AssertionError("Arch post-upgrade does not recognize preserved quiesce before fence activation")
 for command in (
     "systemctl daemon-reload || exit 1",
     ") || exit 1",

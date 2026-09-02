@@ -471,7 +471,9 @@ vibeshine_stop_exact_unit() {
   # Never bypass a service's ordered resource teardown.  Killing systemctl
   # only abandons the client while its manager job continues; killing the unit
   # cgroup can strand live GPU imports and is therefore forbidden here.
-  timeout --signal=TERM --kill-after=2 30 systemctl stop "$1" 2>/dev/null
+  # Controller cleanup can legitimately spend more than 30 seconds draining
+  # the host and GPU bindings; keep waiting for the manager's ordered stop.
+  timeout --signal=TERM --kill-after=2 60 systemctl stop "$1" 2>/dev/null
 }
 vibeshine_bounded_unit_list() (
   vibeshine_unit_pattern=$1
@@ -758,6 +760,20 @@ vibeshine_controller_remains_frozen() {
     printf '%%s\n' "$vibeshine_controller_state" | grep -qx "ControlGroup=$vibeshine_controller_cgroup" && \
     printf '%%s\n' "$vibeshine_controller_state" | grep -qx 'FreezerState=frozen'
 }
+vibeshine_thaw_controller() {
+  [ "$vibeshine_controller_was_frozen" -eq 1 ] || return 0
+  timeout --signal=KILL 15 systemctl thaw \
+    vibeshine-session-controller.service 2>/dev/null || return 1
+  vibeshine_controller_was_frozen=0
+  vibeshine_controller_state=$(timeout --signal=KILL 5 systemctl show \
+    vibeshine-session-controller.service --property=ActiveState --property=SubState \
+    --property=MainPID --property=ControlGroup --property=FreezerState 2>/dev/null) || return 1
+  printf '%%s\n' "$vibeshine_controller_state" | grep -qx 'ActiveState=active' && \
+    printf '%%s\n' "$vibeshine_controller_state" | grep -qx 'SubState=running' && \
+    printf '%%s\n' "$vibeshine_controller_state" | grep -qx "MainPID=$vibeshine_controller_pid" && \
+    printf '%%s\n' "$vibeshine_controller_state" | grep -qx "ControlGroup=$vibeshine_controller_cgroup" && \
+    printf '%%s\n' "$vibeshine_controller_state" | grep -qx 'FreezerState=running'
+}
 vibeshine_run_optional_legacy_command() {
   if [ ! -e "$vibeshine_legacy_host" ] && [ ! -L "$vibeshine_legacy_host" ]; then return 2; fi
   vibeshine_privileged_helper_is_safe "$vibeshine_legacy_host" || return 1
@@ -925,9 +941,11 @@ vibeshine_quiesce_machine_host() {
     vibeshine_stop_restore_instances || return 1
     vibeshine_stop_brokers || return 1
     vibeshine_controller_remains_frozen || return 1
+    # systemd refuses StopUnit for a frozen service. Admission and the host are
+    # already masked here, so thaw the controller only for its ordered stop.
+    vibeshine_thaw_controller || return 1
     vibeshine_stop_exact_unit vibeshine-session-controller.service
     vibeshine_unit_is_quiescent vibeshine-session-controller.service || return 1
-    vibeshine_controller_was_frozen=0
     vibeshine_stop_exact_unit vibeshine-prelogin.service
     vibeshine_stop_exact_unit vibeshine-machine-prepare.service
     timeout --signal=KILL 15 systemctl disable vibeshine-session-controller.service --now 2>/dev/null || true
@@ -1112,7 +1130,7 @@ vibeshine_stop_exact_unit() {
   # Never bypass a service's ordered resource teardown.  Killing systemctl
   # only abandons the client while its manager job continues; killing the unit
   # cgroup can strand live GPU imports and is therefore forbidden here.
-  timeout --signal=TERM --kill-after=2 30 systemctl stop "$1" 2>/dev/null
+  timeout --signal=TERM --kill-after=2 60 systemctl stop "$1" 2>/dev/null
 }
 vibeshine_bounded_broker_list() (
   vibeshine_broker_list=$(mktemp /run/vibeshine-broker-units.XXXXXX) || exit 1
@@ -1463,7 +1481,7 @@ vibeshine_preun_stop_exact_unit() {
   # Never bypass a service's ordered resource teardown.  Killing systemctl
   # only abandons the client while its manager job continues; killing the unit
   # cgroup can strand live GPU imports and is therefore forbidden here.
-  timeout --signal=TERM --kill-after=2 30 systemctl stop "$1" 2>/dev/null
+  timeout --signal=TERM --kill-after=2 60 systemctl stop "$1" 2>/dev/null
 }
 vibeshine_preun_bounded_broker_list() (
   vibeshine_broker_list=$(mktemp /run/vibeshine-broker-units.XXXXXX) || exit 1
