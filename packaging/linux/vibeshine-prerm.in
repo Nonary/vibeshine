@@ -113,7 +113,8 @@ vibeshine_stop_brokers() (
     vibeshine_seen_count=0
     while IFS= read -r vibeshine_line || [ -n "$vibeshine_line" ]; do
       [ -n "$vibeshine_line" ] || continue
-      case "$vibeshine_line" in *""*) return 1 ;; esac
+      case "$vibeshine_line" in *"
+"*) return 1 ;; esac
       set -f
       set -- $vibeshine_line
       [ "${1:-}" = '●' ] && shift
@@ -216,14 +217,10 @@ case "${1:-}" in
     if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
       timeout --signal=KILL 30 systemctl stop vibeshine-vkms.service 2>/dev/null || true
       timeout --signal=KILL 30 systemctl stop vibeshine-drm-setup.service 2>/dev/null || true
-      timeout --signal=KILL 15 systemctl disable vibeshine-kwin-capability.path --now 2>/dev/null || true
     fi
     if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-drm-install" ]; then
       "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-drm-install" remove || \
         echo "warning: could not remove the Vibeshine HDR DRM module cleanly."
-    fi
-    if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-kwin-capability" ]; then
-      "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-kwin-capability" restore || true
     fi
     ;;
 esac

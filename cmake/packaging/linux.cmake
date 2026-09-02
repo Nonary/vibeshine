@@ -184,8 +184,6 @@ else()
                     "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-session-exec@.service"
                     "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-session-controller.service"
                     "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine.service"
-                    "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-kwin-capability-refresh.service"
-                    "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-kwin-capability.path"
                     DESTINATION "${VIBESHINE_SYSTEM_UNIT_INSTALL_DIR}")
             # Both the Plasma desktop and Plasma Login greeter start their own
             # KWin instance.  Publish each compositor's generated Wayland/X11

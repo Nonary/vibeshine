@@ -1322,8 +1322,31 @@ if [ ! -x "$(command -v rpm-ostree)" ]; then
     echo "error: udevadm not found or not executable."
   fi
 
-  %{_prefix}/libexec/vibeshine/vibeshine-kwin-capability prepare || \
-    echo "warning: could not prepare capability-free KWin for the Vibeshine GPU bridge."
+  vibeshine_restore_kwin_capability() {
+    # Earlier Vibeshine builds removed cap_sys_nice from the distro KWin binary
+    # so the GPU bridge could be preloaded. The bridge is now a trusted
+    # set-user-ID library, so give KWin its realtime capability back.
+    kwin=/usr/bin/kwin_wayland
+    marker=user.vibeshine.cap_sys_nice_removed
+    timeout --signal=KILL 15 systemctl disable vibeshine-kwin-capability.path --now 2>/dev/null || true
+    rm -f /etc/systemd/system/multi-user.target.wants/vibeshine-kwin-capability.path
+    [ -f "$kwin" ] && [ ! -L "$kwin" ] || return 0
+    if command -v getfattr >/dev/null 2>&1; then
+      getfattr -n "$marker" --only-values "$kwin" >/dev/null 2>&1 || return 0
+    elif command -v python3 >/dev/null 2>&1; then
+      python3 -c 'import os, sys; os.getxattr(sys.argv[1], sys.argv[2])' "$kwin" "$marker" 2>/dev/null || return 0
+    else
+      return 0
+    fi
+    if setcap cap_sys_nice=ep "$kwin"; then
+      setfattr -x "$marker" "$kwin" 2>/dev/null || \
+        python3 -c 'import os, sys; os.removexattr(sys.argv[1], sys.argv[2])' "$kwin" "$marker" 2>/dev/null || true
+      echo "restored cap_sys_nice on $kwin (removed by an earlier Vibeshine build)"
+    else
+      echo "warning: could not restore cap_sys_nice on $kwin; reinstall the kwin package." >&2
+    fi
+  }
+  vibeshine_restore_kwin_capability || true
 
   if %{_prefix}/libexec/vibeshine/vibeshine-drm-install install; then
     :
@@ -1345,7 +1368,6 @@ if [ ! -x "$(command -v rpm-ostree)" ]; then
   systemctl disable --now vibeshine-prelogin.service 2>/dev/null || true
   systemctl daemon-reload || exit 1
   if "$vibeshine_machine_helper" configure-auto; then
-    systemctl enable --now vibeshine-kwin-capability.path || echo "warning: could not enable the KWin capability watcher."
     if ! systemctl enable vibeshine-session-controller.service; then
       vibeshine_quiesce_machine_host || true
       echo "error: could not enable the Vibeshine controller safely; all machine-host units remain off." >&2
@@ -1560,10 +1582,8 @@ if [ "$1" -eq 0 ]; then
     echo "error: refusing to uninstall while Vibeshine cgroups or session state remain." >&2
     exit 1
   }
-  timeout --signal=KILL 15 systemctl disable vibeshine-kwin-capability.path --now 2>/dev/null || true
   timeout --signal=KILL 30 systemctl stop vibeshine-vkms.service 2>/dev/null || true
   timeout --signal=KILL 30 systemctl stop vibeshine-drm-setup.service 2>/dev/null || true
-  %{_prefix}/libexec/vibeshine/vibeshine-kwin-capability restore || true
   %{_prefix}/libexec/vibeshine/vibeshine-drm-install remove || \
     echo "warning: could not remove the Vibeshine HDR DRM module cleanly."
 fi
@@ -1586,8 +1606,7 @@ fi
 %{_prefix}/libexec/vibeshine/vibeshine-machine-host
 %attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibeshine-kwin-session-environment
 %attr(0750,root,vibeshine) %caps(cap_sys_admin,cap_sys_nice+p) %{_prefix}/libexec/vibeshine/vibeshine-host
-%{_prefix}/libexec/vibeshine/vibeshine-kwin-capability
-%{_prefix}/lib/vibeshine/libvibeshine-kwin-gpu.so
+%attr(4755,root,root) %{_libdir}/libvibeshine-kwin-gpu.so
 
 # Dedicated access group for the privileged virtual-display control socket
 %{_prefix}/lib/sysusers.d/vibeshine-vkms.conf
@@ -1611,8 +1630,6 @@ fi
 %{_unitdir}/vibeshine-session-exec@.service
 %{_unitdir}/vibeshine-session-controller.service
 %{_unitdir}/vibeshine.service
-%{_unitdir}/vibeshine-kwin-capability-refresh.service
-%{_unitdir}/vibeshine-kwin-capability.path
 
 # Udev rules
 %{_udevrulesdir}/*-sunshine.rules
