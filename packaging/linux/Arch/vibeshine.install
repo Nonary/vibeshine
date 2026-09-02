@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 
 do_secure_executables() {
+  # pacman's own systemd-sysusers hook only runs after the whole transaction,
+  # but this scriptlet starts vibeshine-vkms-control.socket (SocketGroup=
+  # vibeshine-vkms) before that. Create both account sets now so a first
+  # install does not fail to resolve the group.
   systemd-sysusers /usr/lib/sysusers.d/vibeshine.conf
+  systemd-sysusers /usr/lib/sysusers.d/vibeshine-vkms.conf
   local executable client broker host public_identity broker_identity host_identity
   local broker_capabilities host_capabilities
   executable=$(readlink -f /usr/bin/vibeshine) || return 1
@@ -792,6 +797,10 @@ do_install_prelogin() {
       return 1
     fi
   else
+    # Lift the runtime masks that do_quiesce_machine_host applied so the
+    # follow-up command below can actually start the host without a reboot.
+    vibeshine_unmask_host_for_controller ||
+      echo 'warning: the Vibeshine host units stay masked until the next reboot.' >&2
     echo '==> ACTION REQUIRED: Vibeshine could not choose the desktop user who owns streaming on this machine.' >&2
     echo "    Run:  sudo $helper configure USER" >&2
     echo '    then: sudo systemctl enable --now vibeshine-session-controller.service' >&2

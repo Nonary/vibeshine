@@ -47,6 +47,24 @@ At this point, Vibeshine differs from upstream Sunshine by roughly **99,800 chan
 
 ---
 
+## Linux (beta)
+
+Vibeshine now runs natively on Linux as a set of machine-wide system services with its own
+virtual-display kernel driver. The beta targets **Arch Linux and CachyOS**, and it is developed and
+tested on **CachyOS with KDE Plasma 6 on Wayland**. You need Linux 6.16 or newer with matching
+kernel headers, a Plasma Wayland session started by SDDM or Plasma Login Manager, and a GPU with a
+hardware H.264 encoder. Pre-login streaming is NVIDIA-only.
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/Nonary/vibeshine/vibe/scripts/linux_install.sh
+sudo bash linux_install.sh
+```
+
+The script checks the requirements, installs the kernel headers and the package, opens the firewall,
+and prints whether a reboot is needed. Manual steps, verification, and troubleshooting are in the
+[Linux install guide](docs/linux/install.md). AppImage, Flatpak, Debian, Fedora, and Docker builds
+are not part of this beta.
+
 ## Does Vibeshine aim to replace Sunshine or Apollo?
 
 No. Vibeshine is intended as a **complementary fork**, not a replacement.
