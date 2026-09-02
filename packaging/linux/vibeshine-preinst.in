@@ -676,6 +676,16 @@ vibeshine_abort_quiesce() {
   # drop the fence so post-replacement can bring the new host up cleanly.
   vibeshine_stop_exact_unit vibeshine-session-controller.service
   vibeshine_stop_exact_unit vibeshine.service
+  # Socket paths that outlived a masked-then-stopped unit would keep the next
+  # controller's cleanup failing; drop them only once their unit is stopped.
+  if vibeshine_unit_is_quiescent vibeshine-session-exec.socket &&
+     [ -S "$vibeshine_broker_socket" ] && [ ! -L "$vibeshine_broker_socket" ]; then
+    rm -f -- "$vibeshine_broker_socket" 2>/dev/null || true
+  fi
+  if vibeshine_unit_is_quiescent vibeshine-vkms-control.socket &&
+     [ -S "$vibeshine_control_socket" ] && [ ! -L "$vibeshine_control_socket" ]; then
+    rm -f -- "$vibeshine_control_socket" 2>/dev/null || true
+  fi
   rm -f -- "$vibeshine_host_upgrade_dropin" 2>/dev/null || true
   rmdir -- "$vibeshine_host_upgrade_dropin_dir" 2>/dev/null || true
   systemctl daemon-reload 2>/dev/null || true
@@ -737,6 +747,12 @@ vibeshine_quiesce_machine_host() {
     vq vibeshine_broker_socket_is_masked || return 1
     vibeshine_stop_exact_unit vibeshine-session-exec.socket
     vq vibeshine_unit_is_quiescent vibeshine-session-exec.socket || return 1
+    # Same RemoveOnStop= loss as the control socket above: a stale broker path
+    # keeps the controller's admission closed until it is removed.
+    if [ -S "$vibeshine_broker_socket" ] && [ ! -L "$vibeshine_broker_socket" ]; then
+      vibeshine_quiesce_step='remove stale session broker socket'
+      rm -f -- "$vibeshine_broker_socket" || return 1
+    fi
     vibeshine_stop_exact_unit vibeshine.service
     vq vibeshine_unit_is_quiescent vibeshine.service || return 1
     vq timeout --signal=KILL 15 systemctl mask --runtime \
