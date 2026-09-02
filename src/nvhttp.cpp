@@ -3159,8 +3159,6 @@ namespace nvhttp {
         const auto salt = get_arg(args, "salt", "");
         const bool replacing = map_id_sess.contains(uniqID);
         const auto admission = pairing_policy::admit_pending_session(
-          std::getenv("VIBESHINE_SESSION_ROLE") &&
-            std::string_view {std::getenv("VIBESHINE_SESSION_ROLE")} == "greeter",
           uniqID,
           client_certificate,
           salt,
@@ -3168,8 +3166,7 @@ namespace nvhttp {
           replacing
         );
         if (!admission.accepted) {
-          tree.put("root.<xmlattr>.status_code", admission.failure_message == "Too many pending pairing sessions"sv ? 429 : admission.failure_message == "Pairing is disabled before login"sv ? 403 :
-                                                                                                                                                                                                400);
+          tree.put("root.<xmlattr>.status_code", admission.failure_message == "Too many pending pairing sessions"sv ? 429 : 400);
           tree.put("root.<xmlattr>.status_message", admission.failure_message);
           return;
         }
