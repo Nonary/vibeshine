@@ -1,1 +1,2 @@
 u vibeshine - "Vibeshine machine host" /var/lib/vibeshine /usr/bin/nologin
+g vibeshine-uinput - -

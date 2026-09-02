@@ -545,7 +545,8 @@ vibeshine_stop_brokers() (
 '
     while IFS= read -r vibeshine_line || [ -n "$vibeshine_line" ]; do
       [ -n "$vibeshine_line" ] || continue
-      case "$vibeshine_line" in *""*) return 1 ;; esac
+      case "$vibeshine_line" in *"
+"*) return 1 ;; esac
       set -f
       set -- $vibeshine_line
       [ "${1:-}" = '●' ] && shift
@@ -586,7 +587,8 @@ vibeshine_stop_restore_instances() (
 '
   while IFS= read -r vibeshine_line || [ -n "$vibeshine_line" ]; do
     [ -n "$vibeshine_line" ] || continue
-    case "$vibeshine_line" in *""*) return 1 ;; esac
+    case "$vibeshine_line" in *"
+"*) return 1 ;; esac
     set -f
     set -- $vibeshine_line
     [ "${1:-}" = '●' ] && shift
@@ -617,7 +619,8 @@ vibeshine_restore_instances_are_quiescent() (
 '
   while IFS= read -r vibeshine_line || [ -n "$vibeshine_line" ]; do
     [ -n "$vibeshine_line" ] || continue
-    case "$vibeshine_line" in *""*) return 1 ;; esac
+    case "$vibeshine_line" in *"
+"*) return 1 ;; esac
     set -f
     set -- $vibeshine_line
     [ "${1:-}" = '●' ] && shift
@@ -1137,7 +1140,8 @@ vibeshine_stop_brokers() (
 '
     while IFS= read -r vibeshine_line || [ -n "$vibeshine_line" ]; do
       [ -n "$vibeshine_line" ] || continue
-      case "$vibeshine_line" in *""*) return 1 ;; esac
+      case "$vibeshine_line" in *"
+"*) return 1 ;; esac
       set -f
       set -- $vibeshine_line
       [ "${1:-}" = '●' ] && shift
@@ -1355,7 +1359,9 @@ if [ ! -x "$(command -v rpm-ostree)" ]; then
       exit 1
     fi
   else
-    echo "warning: configure a machine profile owner before enabling Vibeshine."
+    echo "==> ACTION REQUIRED: Vibeshine could not choose the desktop user who owns streaming on this machine." >&2
+    echo "    Run:  sudo /usr/libexec/vibeshine/vibeshine-machine-host configure USER" >&2
+    echo "    then: sudo systemctl enable --now vibeshine-session-controller.service" >&2
   fi
 else
   echo "rpm-ostree environment detected, skipping post install steps. Restart to apply the changes."
@@ -1463,7 +1469,8 @@ vibeshine_preun_stop_brokers() (
 '
     while IFS= read -r vibeshine_line || [ -n "$vibeshine_line" ]; do
       [ -n "$vibeshine_line" ] || continue
-      case "$vibeshine_line" in *""*) return 1 ;; esac
+      case "$vibeshine_line" in *"
+"*) return 1 ;; esac
       set -f
       set -- $vibeshine_line
       [ "${1:-}" = '●' ] && shift

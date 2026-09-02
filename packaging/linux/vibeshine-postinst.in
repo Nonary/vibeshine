@@ -174,7 +174,8 @@ vibeshine_stop_brokers() (
     vibeshine_seen_count=0
     while IFS= read -r vibeshine_line || [ -n "$vibeshine_line" ]; do
       [ -n "$vibeshine_line" ] || continue
-      case "$vibeshine_line" in *""*) return 1 ;; esac
+      case "$vibeshine_line" in *"
+"*) return 1 ;; esac
       set -f
       set -- $vibeshine_line
       [ "${1:-}" = '●' ] && shift
@@ -349,7 +350,9 @@ if vibeshine_privileged_helper_is_safe "$vibeshine_machine_host" && \
    "$vibeshine_machine_host" configure-auto; then
   vibeshine_machine_configured=1
 else
-  echo "warning: configure a machine profile owner before enabling Vibeshine."
+  echo "==> ACTION REQUIRED: Vibeshine could not choose the desktop user who owns streaming on this machine." >&2
+  echo "    Run:  sudo /usr/libexec/vibeshine/vibeshine-machine-host configure USER" >&2
+  echo "    then: sudo systemctl enable --now vibeshine-session-controller.service" >&2
 fi
 
 if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-kwin-capability" ]; then

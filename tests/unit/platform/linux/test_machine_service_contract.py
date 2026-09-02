@@ -108,7 +108,7 @@ for exact_predicate in (
     '"$observed_active" == yes',
     '"$observed_state" == active',
     '"$observed_class" == user',
-    '"$observed_service" == plasmalogin',
+    'desktop_service_supported "$observed_service"',
     '"$observed_class" == greeter',
     '"$observed_service" == plasmalogin-greeter',
 ):
@@ -260,6 +260,15 @@ forbid(controller, '[[ -S "$candidate_runtime/bus" ]]', "capability-bounded runt
 # The network host owns machine state but no login lifecycle. Its only
 # privilege expansion is the existing KMS binary plus the narrow session shim.
 require(sysusers, 'u vibeshine - "Vibeshine machine host" /var/lib/vibeshine /usr/bin/nologin', "machine account")
+require(sysusers, "g vibeshine-uinput - -", "virtual input group the host unit joins")
+require(controller, 'desktop_service_supported() { [[ "$1" =~ ^(plasmalogin|sddm|sddm-autologin)$ ]]; }',
+        "SDDM and Plasma Login Manager desktop sessions")
+uinput_rules = (linux / "70-vibeshine-uinput.rules").read_text()
+for rule in (
+    'KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="vibeshine-uinput", MODE="0660"',
+    'KERNEL=="uhid", SUBSYSTEM=="misc", GROUP="vibeshine-uinput", MODE="0660"',
+):
+    require(uinput_rules, rule, "dedicated virtual input device group")
 require(host_unit, "Requires=vibeshine-session-exec.socket", "broker-loss host revocation")
 require(host_unit, "Wants=vibeshine-vkms.service", "machine host unit")
 require(host_unit, "After=vibeshine-session-controller.service vibeshine-session-exec.socket", "ordered machine-host startup")
