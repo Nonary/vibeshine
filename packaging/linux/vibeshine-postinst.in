@@ -8,14 +8,51 @@ if command -v systemd-sysusers >/dev/null 2>&1; then
 fi
 
 vibeshine_controller="@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-controller"
+vibeshine_host_upgrade_dropin_dir=/run/systemd/system/vibeshine.service.d
+vibeshine_host_upgrade_dropin=$vibeshine_host_upgrade_dropin_dir/90-vibeshine-safe-upgrade.conf
 vibeshine_privileged_helper_is_safe() {
   [ -f "$1" ] && [ ! -L "$1" ] && [ -x "$1" ] || return 1
   [ "$(stat -c '%u:%g:%a:%h:%F' -- "$1")" = \
     '0:0:755:1:regular file' ]
 }
 vibeshine_unmask_host_for_controller() {
-  timeout --signal=KILL 15 systemctl unmask --runtime vibeshine-session-exec.socket 2>/dev/null || return 1
+  vibeshine_unit_is_quiescent vibeshine-session-controller.service || return 1
+  vibeshine_unit_is_quiescent vibeshine-session-exec.socket || return 1
+  if [ -e "$vibeshine_host_upgrade_dropin" ] || [ -L "$vibeshine_host_upgrade_dropin" ]; then
+    [ -f "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
+    [ "$(stat -c '%u:%g:%a:%h:%F' -- "$vibeshine_host_upgrade_dropin")" = \
+      '0:0:644:1:regular file' ] || return 1
+    vibeshine_upgrade_contents=$(sed -n '1,6p' -- "$vibeshine_host_upgrade_dropin") || return 1
+    case "$vibeshine_upgrade_contents" in
+      '[Unit]
+RefuseManualStart=yes
+
+[Service]
+KillMode=process
+SendSIGKILL=no' | \
+      '[Unit]
+RefuseManualStart=yes
+
+[Service]
+KillMode=control-group
+SendSIGKILL=no') ;;
+      *) return 1 ;;
+    esac
+    rm -f -- "$vibeshine_host_upgrade_dropin" || return 1
+    rmdir -- "$vibeshine_host_upgrade_dropin_dir" 2>/dev/null || true
+  fi
+  systemctl daemon-reload || return 1
   timeout --signal=KILL 15 systemctl unmask --runtime vibeshine.service 2>/dev/null || return 1
+  systemctl daemon-reload || return 1
+  vibeshine_new_host_properties=$(timeout --signal=KILL 5 systemctl show vibeshine.service \
+    --property=RefuseManualStart --property=KillMode --property=SendSIGKILL 2>/dev/null) || return 1
+  printf '%s\n' "$vibeshine_new_host_properties" | grep -qx 'RefuseManualStart=no' || return 1
+  printf '%s\n' "$vibeshine_new_host_properties" | grep -qx 'KillMode=control-group' || return 1
+  printf '%s\n' "$vibeshine_new_host_properties" | grep -qx 'SendSIGKILL=no' || return 1
+  timeout --signal=KILL 15 systemctl unmask --runtime vibeshine-vkms-control.socket 2>/dev/null || return 1
+  systemctl start vibeshine-vkms-control.socket || return 1
+  systemctl is-active --quiet vibeshine-vkms-control.socket || return 1
+  timeout --signal=KILL 15 systemctl unmask --runtime vibeshine-session-exec.socket 2>/dev/null || return 1
   vibeshine_host_state=$(timeout --signal=KILL 5 systemctl is-enabled \
     vibeshine.service 2>/dev/null || true)
   vibeshine_host_load=$(timeout --signal=KILL 5 systemctl show \
@@ -102,9 +139,10 @@ vibeshine_broker_unit_is_safe() {
 }
 
 vibeshine_stop_exact_unit() {
-  timeout --signal=KILL 30 systemctl stop "$1" 2>/dev/null && return 0
-  timeout --signal=KILL 5 systemctl kill --kill-whom=all --signal=KILL "$1" 2>/dev/null || true
-  timeout --signal=KILL 10 systemctl stop "$1" 2>/dev/null || true
+  # Never bypass a service's ordered resource teardown.  Killing systemctl
+  # only abandons the client while its manager job continues; killing the unit
+  # cgroup can strand live GPU imports and is therefore forbidden here.
+  timeout --signal=TERM --kill-after=2 30 systemctl stop "$1" 2>/dev/null
 }
 
 vibeshine_capture_broker_list() {
