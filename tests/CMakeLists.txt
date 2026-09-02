@@ -2275,3 +2275,7 @@ if(SUNSHINE_TEST_PYTHON_EXECUTABLE)
 endif()
 
 sunshine_register_component(NAME test_component_utility_hex TEST_SOURCE unit/test_utility_hex.cpp)
+
+sunshine_register_component(NAME test_component_round_robin TEST_SOURCE unit/test_round_robin.cpp)
+sunshine_register_component(NAME test_component_stat_tracker_bounds TEST_SOURCE unit/test_stat_tracker_bounds.cpp
+    LINK_LIBRARIES Boost::format)
