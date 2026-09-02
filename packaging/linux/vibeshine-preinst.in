@@ -655,6 +655,41 @@ vibeshine_cleanup_legacy_transition_state() {
   )
 }
 
+vibeshine_quiesce_step=''
+# Run one quiesce step and remember its name for the failure report.
+vq() {
+  vibeshine_quiesce_step=$*
+  "$@"
+}
+
+# Undo a partial quiesce. Without this a failed check left the controller
+# frozen behind runtime masks and the upgrade fence, with the old host still
+# running and nothing able to restart it until a reboot.
+vibeshine_abort_quiesce() {
+  echo "error: could not quiesce the existing Vibeshine host (failed step: ${vibeshine_quiesce_step:-unknown}); the previous host is left running." >&2
+  if [ "${vibeshine_controller_was_frozen:-0}" -eq 1 ]; then
+    timeout --signal=KILL 15 systemctl thaw vibeshine-session-controller.service 2>/dev/null || true
+    vibeshine_controller_was_frozen=0
+  fi
+  # Pre-replacement never unmasks anything: fail closed by stopping the
+  # controller and host under the fence (systemd thaws before it stops), then
+  # drop the fence so post-replacement can bring the new host up cleanly.
+  vibeshine_stop_exact_unit vibeshine-session-controller.service
+  vibeshine_stop_exact_unit vibeshine.service
+  rm -f -- "$vibeshine_host_upgrade_dropin" 2>/dev/null || true
+  rmdir -- "$vibeshine_host_upgrade_dropin_dir" 2>/dev/null || true
+  systemctl daemon-reload 2>/dev/null || true
+}
+
+vibeshine_quiesce_or_abort() {
+  vibeshine_quiesce_step=''
+  if vibeshine_quiesce_machine_host; then
+    return 0
+  fi
+  vibeshine_abort_quiesce
+  return 1
+}
+
 vibeshine_quiesce_machine_host() {
   vibeshine_have_systemd=0
   if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
@@ -664,53 +699,60 @@ vibeshine_quiesce_machine_host() {
     # controller cgroup before changing any dependency. This is the transaction
     # barrier which prevents its legacy reconcile path from issuing a
     # concurrent hard kill or connector release.
-    vibeshine_select_upgrade_kill_mode || return 1
-    vibeshine_prepare_host_upgrade_fence || return 1
-    vibeshine_freeze_controller || return 1
-    vibeshine_host_is_stable_or_quiescent || return 1
-    vibeshine_activate_host_upgrade_fence || return 1
-    vibeshine_controller_remains_frozen || return 1
-    vibeshine_host_is_stable_or_quiescent || return 1
+    vq vibeshine_select_upgrade_kill_mode || return 1
+    vq vibeshine_prepare_host_upgrade_fence || return 1
+    vq vibeshine_freeze_controller || return 1
+    vq vibeshine_host_is_stable_or_quiescent || return 1
+    vq vibeshine_activate_host_upgrade_fence || return 1
+    vq vibeshine_controller_remains_frozen || return 1
+    vq vibeshine_host_is_stable_or_quiescent || return 1
 
     # An already-loaded legacy PAM handle can start a restore worker that
     # restarts the host. Runtime-mask that template before every other stop and
     # deliberately leave it masked after replacement.
-    timeout --signal=KILL 15 systemctl mask --runtime \
+    vq timeout --signal=KILL 15 systemctl mask --runtime \
       'vibeshine-session-restore@.service' 2>/dev/null || return 1
-    vibeshine_restore_template_is_masked || return 1
-    vibeshine_disable_legacy_handoff || return 1
+    vq vibeshine_restore_template_is_masked || return 1
+    vq vibeshine_disable_legacy_handoff || return 1
 
-    timeout --signal=KILL 15 systemctl mask --runtime \
+    vq timeout --signal=KILL 15 systemctl mask --runtime \
       vibeshine-vkms-control.socket 2>/dev/null || return 1
-    vibeshine_control_socket_is_masked || return 1
+    vq vibeshine_control_socket_is_masked || return 1
     vibeshine_stop_exact_unit vibeshine-vkms-control.socket
-    vibeshine_unit_is_quiescent vibeshine-vkms-control.socket || return 1
-    vibeshine_control_instances_are_quiescent || return 1
+    vq vibeshine_unit_is_quiescent vibeshine-vkms-control.socket || return 1
+    # Masking the socket unit before stopping it drops its RemoveOnStop=
+    # configuration, so the listening path survives the stop. Nothing can
+    # accept on it any more; remove it so the instance check sees a clean slate.
+    if [ -S "$vibeshine_control_socket" ] && [ ! -L "$vibeshine_control_socket" ]; then
+      vibeshine_quiesce_step='remove stale vkms control socket'
+      rm -f -- "$vibeshine_control_socket" || return 1
+    fi
+    vq vibeshine_control_instances_are_quiescent || return 1
 
     # Closing the required broker socket may start the host stop. The verified
     # process-mode fence directs one TERM to the old wrapper and forbids the
     # service manager from escalating against its GPU-owning child.
-    timeout --signal=KILL 15 systemctl mask --runtime \
+    vq timeout --signal=KILL 15 systemctl mask --runtime \
       vibeshine-session-exec.socket 2>/dev/null || return 1
-    vibeshine_broker_socket_is_masked || return 1
+    vq vibeshine_broker_socket_is_masked || return 1
     vibeshine_stop_exact_unit vibeshine-session-exec.socket
-    vibeshine_unit_is_quiescent vibeshine-session-exec.socket || return 1
+    vq vibeshine_unit_is_quiescent vibeshine-session-exec.socket || return 1
     vibeshine_stop_exact_unit vibeshine.service
-    vibeshine_unit_is_quiescent vibeshine.service || return 1
-    timeout --signal=KILL 15 systemctl mask --runtime \
+    vq vibeshine_unit_is_quiescent vibeshine.service || return 1
+    vq timeout --signal=KILL 15 systemctl mask --runtime \
       vibeshine.service 2>/dev/null || return 1
-    vibeshine_host_unit_is_masked || return 1
+    vq vibeshine_host_unit_is_masked || return 1
 
-    vibeshine_stop_restore_instances || return 1
+    vq vibeshine_stop_restore_instances || return 1
 
     # Broker admission is already closed. Every remaining worker name is
     # validated and stopped as one exact unit; no wildcard stop is trusted.
-    vibeshine_stop_brokers || return 1
-    vibeshine_controller_remains_frozen || return 1
+    vq vibeshine_stop_brokers || return 1
+    vq vibeshine_controller_remains_frozen || return 1
     # systemd atomically thaws a frozen unit immediately before executing its
     # stop job, so there is no userspace thaw-to-stop window.
     vibeshine_stop_exact_unit vibeshine-session-controller.service
-    vibeshine_unit_is_quiescent vibeshine-session-controller.service || return 1
+    vq vibeshine_unit_is_quiescent vibeshine-session-controller.service || return 1
     vibeshine_controller_was_frozen=0
     vibeshine_stop_exact_unit vibeshine-prelogin.service
     vibeshine_stop_exact_unit vibeshine-machine-prepare.service
@@ -795,7 +837,7 @@ vibeshine_quiesce_machine_host() {
 # Upgrades must quiesce the installed architecture before the package manager
 # replaces its helpers or unit files. Any ambiguity leaves admission disabled
 # and aborts replacement; the same checks are safe to retry.
-if ! vibeshine_quiesce_machine_host; then
+if ! vibeshine_quiesce_or_abort; then
   echo "error: installed Vibeshine services did not quiesce; replacement is blocked and admission remains disabled." >&2
   exit 1
 fi
