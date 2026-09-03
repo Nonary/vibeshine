@@ -261,7 +261,7 @@ forbid(controller, '[[ -S "$candidate_runtime/bus" ]]', "capability-bounded runt
 # privilege expansion is the existing KMS binary plus the narrow session shim.
 require(sysusers, 'u vibeshine - "Vibeshine machine host" /var/lib/vibeshine /usr/bin/nologin', "machine account")
 require(sysusers, "g vibeshine-uinput - -", "virtual input group the host unit joins")
-require(controller, 'desktop_service_supported() { [[ "$1" =~ ^(plasmalogin|sddm|sddm-autologin)$ ]]; }',
+require(controller, 'desktop_service_supported() { [[ "$1" =~ ^(plasmalogin|plasmalogin-autologin|sddm|sddm-autologin)$ ]]; }',
         "SDDM and Plasma Login Manager desktop sessions")
 uinput_rules = (linux / "70-vibeshine-uinput.rules").read_text()
 for rule in (
