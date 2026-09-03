@@ -1786,6 +1786,10 @@ namespace nvhttp {
   constexpr auto pairing_session_expiry = std::chrono::minutes(10);
   client_t client_root;
   std::mutex client_mutex;
+  // This is deliberately separate from client_root: an unreadable or
+  // semantically invalid state file must never turn into an empty in-memory
+  // database that a later metadata save can persist over the real one.
+  std::atomic_bool authorization_state_ready {false};
   std::atomic<uint32_t> session_id_counter;
 
   using args_t = SimpleWeb::CaseInsensitiveMultimap;
@@ -1858,15 +1862,6 @@ namespace nvhttp {
 
   void clear_tls_client_identities();
 
-  void clear_loaded_client_authorization() {
-    {
-      std::lock_guard<std::mutex> lock(client_mutex);
-      cert_chain.clear();
-      client_root = client_t {};
-    }
-    clear_tls_client_identities();
-  }
-
   std::string get_arg(const args_t &args, const char *name, const char *default_value = nullptr) {
     auto it = args.find(name);
     if (it == std::end(args)) {
@@ -1879,17 +1874,39 @@ namespace nvhttp {
     return it->second;
   }
 
-  bool save_state_snapshot_locked(const client_t &client) {
+  bool save_state_snapshot_locked(const client_t &client, const bool allow_missing_state = false) {
     // The caller owns statefile::state_mutex(). Authorization-expanding
     // callers also keep client_mutex locked until this write succeeds or their
     // in-memory mutation is rolled back.
+    if (!authorization_state_ready.load(std::memory_order_acquire)) {
+      BOOST_LOG(error) << "Refusing to save pairing state because no valid state snapshot is loaded."sv;
+      return false;
+    }
+
     const auto &sunshine_path = statefile::sunshine_state_path();
     const auto &vibeshine_path = statefile::vibeshine_state_path();
 
     pt::ptree root;
 
-    if (!statefile::load_json_for_update(sunshine_path, root)) {
-      return false;
+    const auto primary_result = statefile::load_json(sunshine_path, root);
+    if (primary_result != statefile::json_load_result_e::loaded) {
+      pt::ptree backup_root;
+      const auto backup_result = statefile::load_json(statefile::sunshine_state_backup_path(), backup_root);
+      if (backup_result == statefile::json_load_result_e::loaded) {
+        BOOST_LOG(warning) << "Using the Sunshine state recovery copy while saving "sv << sunshine_path;
+        root = std::move(backup_root);
+      } else if (allow_missing_state &&
+                 primary_result == statefile::json_load_result_e::missing &&
+                 backup_result == statefile::json_load_result_e::missing) {
+        // Only first-run initialization may create a state tree with no
+        // existing snapshot. Runtime saves must never replace an unavailable
+        // state file with a partial tree.
+        root = {};
+      } else {
+        BOOST_LOG(error) << "Refusing to replace unavailable Sunshine state "sv << sunshine_path
+                         << " while saving pairing data."sv;
+        return false;
+      }
     }
 
     pt::ptree root_node;
@@ -1944,7 +1961,7 @@ namespace nvhttp {
     root.put_child("root", root_node);
 
     try {
-      statefile::write_json_atomic(sunshine_path, root);
+      statefile::write_sunshine_state_atomic(root);
     } catch (std::exception &e) {
       BOOST_LOG(error) << "Couldn't write "sv << sunshine_path << ": "sv << e.what();
       return false;
@@ -2008,38 +2025,188 @@ namespace nvhttp {
     return save_state_snapshot_locked(client_root_snapshot());
   }
 
-  void load_state() {
+  bool load_state() {
     statefile::migrate_recent_state_keys();
     const auto &sunshine_path = statefile::sunshine_state_path();
     const auto &vibeshine_path = statefile::vibeshine_state_path();
+    const auto sunshine_backup_path = statefile::sunshine_state_backup_path();
 
     std::lock_guard<std::mutex> state_lock(statefile::state_mutex());
 
-    if (!fs::exists(sunshine_path)) {
-      BOOST_LOG(info) << "File "sv << sunshine_path << " doesn't exist"sv;
-      http::unique_id = uuid_util::uuid_t::generate().string();
-      update::state.last_notified_version.clear();
-      clear_loaded_client_authorization();
-      return;
-    }
+    struct parsed_state_t {
+      std::string unique_id;
+      client_t client;
+      std::vector<crypto::x509_t> certificates;
+      nlohmann::json remote_display_layout;
+    };
+
+    const auto parse_state = [](const pt::ptree &tree) -> std::optional<parsed_state_t> {
+      try {
+        auto unique_id = tree.get_optional<std::string>("root.uniqueid");
+        if (!unique_id || !pairing_policy::valid_unique_id(*unique_id)) {
+          return std::nullopt;
+        }
+
+        parsed_state_t parsed;
+        parsed.unique_id = std::move(*unique_id);
+        if (auto root = tree.get_child_optional("root")) {
+          // Import from old format.
+          if (auto device_nodes = root->get_child_optional("devices")) {
+            for (auto &[_, device_node] : *device_nodes) {
+              if (device_node.count("certs")) {
+                for (auto &[_, element] : device_node.get_child("certs")) {
+                  if (parsed.client.named_devices.size() >= pairing_policy::max_paired_clients) {
+                    throw std::length_error("too many legacy paired clients");
+                  }
+                  named_cert_t named_cert;
+                  named_cert.name = ""s;
+                  named_cert.cert = element.get_value<std::string>();
+                  named_cert.uuid = uuid_util::uuid_t::generate().string();
+                  parsed.client.named_devices.emplace_back(std::move(named_cert));
+                }
+              }
+            }
+          }
+
+          if (root->count("named_devices")) {
+            for (auto &[_, element] : root->get_child("named_devices")) {
+              if (parsed.client.named_devices.size() >= pairing_policy::max_paired_clients) {
+                throw std::length_error("too many paired clients");
+              }
+              named_cert_t named_cert;
+              named_cert.name = element.get_child("name").get_value<std::string>();
+              named_cert.cert = element.get_child("cert").get_value<std::string>();
+              named_cert.uuid = element.get_child("uuid").get_value<std::string>();
+              named_cert.hdr_profile = element.get<std::string>("hdr_profile", "");
+              named_cert.display_mode = element.get<std::string>("display_mode", "");
+              named_cert.output_name_override = element.get<std::string>("output_name_override", "");
+              named_cert.virtual_display_mode_override = element.get<std::string>("virtual_display_mode", "");
+              named_cert.virtual_display_layout_override = element.get<std::string>("virtual_display_layout", "");
+              named_cert.always_use_virtual_display = element.get<bool>("always_use_virtual_display", false);
+              named_cert.enabled = element.get<bool>("enabled", true);
+              named_cert.prefer_10bit_sdr = element.get<bool>("prefer_10bit_sdr", false);
+              if (auto last_seen = element.get_optional<std::int64_t>("last_seen")) {
+                named_cert.last_seen = *last_seen;
+              } else {
+                named_cert.last_seen.reset();
+              }
+              if (auto overrides_node = element.get_child_optional("config_overrides")) {
+                for (auto &[key, value] : *overrides_node) {
+                  if (!key.empty()) {
+                    named_cert.config_overrides[key] = value.get_value<std::string>();
+                  }
+                }
+              }
+              std::unordered_map<std::string, std::string> normalized_overrides;
+              config::merge_config_overrides(normalized_overrides, named_cert.config_overrides);
+              named_cert.config_overrides = std::move(normalized_overrides);
+              parsed.client.named_devices.emplace_back(std::move(named_cert));
+            }
+          }
+          parsed.client.remote_display_layout_json = root->get<std::string>(
+            "remote_display_layout", parsed.client.remote_display_layout_json
+          );
+        }
+
+        try {
+          parsed.remote_display_layout = remote_display_topology::normalize_layout(
+            nlohmann::json::parse(parsed.client.remote_display_layout_json)
+          );
+        } catch (...) {
+          parsed.remote_display_layout = remote_display_topology::normalize_layout(nlohmann::json {});
+        }
+        parsed.client.remote_display_layout_json = parsed.remote_display_layout.dump();
+
+        std::vector<std::string> certificate_identities;
+        std::vector<pairing_policy::paired_client_record_view_t> paired_client_records;
+        if (!build_paired_client_records(
+              parsed.client,
+              certificate_identities,
+              paired_client_records,
+              &parsed.certificates
+            )) {
+          return std::nullopt;
+        }
+        return parsed;
+      } catch (const std::exception &e) {
+        BOOST_LOG(error) << "Pairing state is malformed: "sv << e.what();
+        return std::nullopt;
+      }
+    };
 
     pt::ptree tree;
-    try {
-      pt::read_json(sunshine_path, tree);
-    } catch (std::exception &e) {
-      BOOST_LOG(error) << "Couldn't read "sv << sunshine_path << ": "sv << e.what();
-      clear_loaded_client_authorization();
-      return;
+    const auto primary_result = statefile::load_json(sunshine_path, tree);
+    std::optional<parsed_state_t> parsed;
+    bool recovered_from_backup = false;
+    auto backup_result = statefile::json_load_result_e::missing;
+
+    if (primary_result == statefile::json_load_result_e::loaded) {
+      parsed = parse_state(tree);
     }
 
-    auto unique_id_p = tree.get_optional<std::string>("root.uniqueid");
-    if (!unique_id_p) {
-      // This file doesn't contain moonlight credentials
-      http::unique_id = uuid_util::uuid_t::generate().string();
-      clear_loaded_client_authorization();
-      return;
+    pt::ptree backup_tree;
+    if (!parsed) {
+      backup_result = statefile::load_json(sunshine_backup_path, backup_tree);
+      if (backup_result == statefile::json_load_result_e::loaded) {
+        parsed = parse_state(backup_tree);
+        recovered_from_backup = parsed.has_value();
+      }
     }
-    http::unique_id = std::move(*unique_id_p);
+
+    if (!parsed) {
+      if (primary_result == statefile::json_load_result_e::missing &&
+          backup_result == statefile::json_load_result_e::missing &&
+          http::credentials_created_this_run) {
+        // A genuinely new profile has no state or prior credential material.
+        // Establish and persist the identity before opening the network
+        // listeners, so a later restart cannot manufacture a different host
+        // identity. An existing profile with both snapshots missing fails
+        // closed below instead of being mistaken for first run.
+        http::unique_id = uuid_util::uuid_t::generate().string();
+        update::state.last_notified_version.clear();
+#ifdef _WIN32
+        http::shared_virtual_display_guid.clear();
+#endif
+        {
+          std::lock_guard<std::mutex> lock(client_mutex);
+          cert_chain.clear();
+          client_root = client_t {};
+        }
+        authorization_state_ready.store(true, std::memory_order_release);
+        if (!save_state_snapshot_locked(client_t {}, true)) {
+          authorization_state_ready.store(false, std::memory_order_release);
+          BOOST_LOG(error) << "Could not establish durable Sunshine pairing state at "sv << sunshine_path;
+          return false;
+        }
+        return true;
+      }
+
+      BOOST_LOG(error) << "Could not load a valid Sunshine pairing state from "sv
+                       << sunshine_path << " or its recovery copy " << sunshine_backup_path
+                       << "; refusing to start with a new host identity."sv;
+      return false;
+    }
+
+    http::unique_id = parsed->unique_id;
+
+    if (recovered_from_backup) {
+      // Restore the primary so the next process does not depend on the backup.
+      // If this repair cannot be written, the in-memory state is still valid
+      // and the backup remains available for the next restart.
+      try {
+        statefile::write_sunshine_state_atomic(backup_tree);
+      } catch (const std::exception &e) {
+        BOOST_LOG(error) << "Could not restore Sunshine state from recovery copy: "sv << e.what();
+      }
+    } else {
+      // Keep the recovery copy current even when it was absent or stale. This
+      // is best effort because the primary is already valid and usable.
+      try {
+        statefile::write_json_atomic(sunshine_backup_path, tree);
+      } catch (const std::exception &e) {
+        BOOST_LOG(warning) << "Could not refresh Sunshine state recovery copy: "sv << e.what();
+      }
+    }
 
     if (!vibeshine_path.empty() && fs::exists(vibeshine_path)) {
       try {
@@ -2063,107 +2230,17 @@ namespace nvhttp {
 #endif
     }
 
-    client_t client;
-    try {
-      if (auto root = tree.get_child_optional("root")) {
-        // Import from old format
-        if (auto device_nodes = root->get_child_optional("devices")) {
-          for (auto &[_, device_node] : *device_nodes) {
-            auto uniqID = device_node.get<std::string>("uniqueid");
-
-            if (device_node.count("certs")) {
-              for (auto &[_, el] : device_node.get_child("certs")) {
-                if (client.named_devices.size() >= pairing_policy::max_paired_clients) {
-                  throw std::length_error("too many legacy paired clients");
-                }
-                named_cert_t named_cert;
-                named_cert.name = ""s;
-                named_cert.cert = el.get_value<std::string>();
-                named_cert.uuid = uuid_util::uuid_t::generate().string();
-                client.named_devices.emplace_back(named_cert);
-              }
-            }
-          }
-        }
-
-        if (root->count("named_devices")) {
-          for (auto &[_, el] : root->get_child("named_devices")) {
-            if (client.named_devices.size() >= pairing_policy::max_paired_clients) {
-              throw std::length_error("too many paired clients");
-            }
-            named_cert_t named_cert;
-            named_cert.name = el.get_child("name").get_value<std::string>();
-            named_cert.cert = el.get_child("cert").get_value<std::string>();
-            named_cert.uuid = el.get_child("uuid").get_value<std::string>();
-            named_cert.hdr_profile = el.get<std::string>("hdr_profile", "");
-            named_cert.display_mode = el.get<std::string>("display_mode", "");
-            named_cert.output_name_override = el.get<std::string>("output_name_override", "");
-            named_cert.virtual_display_mode_override = el.get<std::string>("virtual_display_mode", "");
-            named_cert.virtual_display_layout_override = el.get<std::string>("virtual_display_layout", "");
-            named_cert.always_use_virtual_display = el.get<bool>("always_use_virtual_display", false);
-            named_cert.enabled = el.get<bool>("enabled", true);
-            named_cert.prefer_10bit_sdr = el.get<bool>("prefer_10bit_sdr", false);
-            if (auto last_seen = el.get_optional<std::int64_t>("last_seen")) {
-              named_cert.last_seen = *last_seen;
-            } else {
-              named_cert.last_seen.reset();
-            }
-            named_cert.config_overrides.clear();
-            if (auto overrides_node = el.get_child_optional("config_overrides")) {
-              for (auto &[k, v] : *overrides_node) {
-                if (k.empty()) {
-                  continue;
-                }
-                named_cert.config_overrides[k] = v.get_value<std::string>();
-              }
-            }
-            {
-              std::unordered_map<std::string, std::string> normalized_overrides;
-              config::merge_config_overrides(normalized_overrides, named_cert.config_overrides);
-              named_cert.config_overrides = std::move(normalized_overrides);
-            }
-            client.named_devices.emplace_back(named_cert);
-          }
-        }
-        client.remote_display_layout_json = root->get<std::string>("remote_display_layout", client.remote_display_layout_json);
-      }
-    } catch (const std::exception &e) {
-      BOOST_LOG(error) << "Pairing state is malformed: "sv << e.what();
-      clear_loaded_client_authorization();
-      return;
-    }
-
-    nlohmann::json remote_display_layout;
-    try {
-      remote_display_layout = remote_display_topology::normalize_layout(nlohmann::json::parse(client.remote_display_layout_json));
-    } catch (...) {
-      remote_display_layout = remote_display_topology::normalize_layout(nlohmann::json {});
-    }
-    client.remote_display_layout_json = remote_display_layout.dump();
-
-    std::vector<std::string> certificate_identities;
-    std::vector<pairing_policy::paired_client_record_view_t> paired_client_records;
-    std::vector<crypto::x509_t> parsed_certificates;
-    if (!build_paired_client_records(
-          client,
-          certificate_identities,
-          paired_client_records,
-          &parsed_certificates
-        )) {
-      BOOST_LOG(error) << "Pairing state contains invalid, ambiguous, or oversized client identities.";
-      clear_loaded_client_authorization();
-      return;
-    }
-
     {
       std::lock_guard<std::mutex> lock(client_mutex);
       cert_chain.clear();
-      for (auto &certificate : parsed_certificates) {
+      for (auto &certificate : parsed->certificates) {
         cert_chain.add(std::move(certificate));
       }
-      client_root = std::move(client);
+      client_root = std::move(parsed->client);
     }
-    remote_display_topology::instance().set_layout(std::move(remote_display_layout));
+    authorization_state_ready.store(true, std::memory_order_release);
+    remote_display_topology::instance().set_layout(std::move(parsed->remote_display_layout));
+    return true;
   }
 
   bool is_placeholder_client_name(const std::string &name) {
@@ -2175,6 +2252,12 @@ namespace nvhttp {
   }
 
   bool add_authorized_client(const std::string &name, std::string &&cert) {
+    auto candidate_certificate = crypto::x509(cert);
+    auto candidate_identity = exact_certificate_identity(candidate_certificate);
+    if (!candidate_identity) {
+      return false;
+    }
+
     named_cert_t named_cert;
     named_cert.name = display_client_name_for_session(name, std::string {}, "Moonlight Client"s);
     named_cert.cert = std::move(cert);
@@ -2196,12 +2279,38 @@ namespace nvhttp {
     std::lock_guard<std::mutex> state_lock(statefile::state_mutex());
     std::lock_guard<std::mutex> client_lock(client_mutex);
 
-    if (client_root.named_devices.size() >= pairing_policy::max_paired_clients) {
+    if (!fresh_state && !authorization_state_ready.load(std::memory_order_acquire)) {
+      BOOST_LOG(error) << "Refusing to pair a client because durable pairing state is unavailable."sv;
       return false;
     }
-    client_root.named_devices.emplace_back(std::move(named_cert));
+
     std::vector<std::string> certificate_identities;
     std::vector<pairing_policy::paired_client_record_view_t> records;
+    if (!build_paired_client_records(client_root, certificate_identities, records)) {
+      return false;
+    }
+
+    const auto admission = pairing_policy::admit_paired_client(records, *candidate_identity);
+    if (admission.status == pairing_policy::paired_client_admission_e::reject) {
+      return false;
+    }
+
+    if (admission.status == pairing_policy::paired_client_admission_e::reauthorize) {
+      auto &existing = client_root.named_devices[admission.index];
+      if (existing.enabled) {
+        return true;
+      }
+
+      existing.enabled = true;
+      if (!fresh_state && !save_state_snapshot_locked(client_root)) {
+        existing.enabled = false;
+        return false;
+      }
+      BOOST_LOG(info) << "Re-authorized existing paired client UUID: " << existing.uuid;
+      return true;
+    }
+
+    client_root.named_devices.emplace_back(std::move(named_cert));
     if (!build_paired_client_records(client_root, certificate_identities, records)) {
       client_root.named_devices.pop_back();
       return false;
@@ -5207,7 +5316,18 @@ namespace nvhttp {
     bool clean_slate = config::sunshine.flags[config::flag::FRESH_STATE];
 
     if (!clean_slate) {
-      load_state();
+      if (!load_state()) {
+        // Do not expose a newly generated uniqueid when durable pairing state
+        // is unavailable. The controller will retry after the filesystem or
+        // profile issue is repaired, while the recovery copy remains intact.
+        BOOST_LOG(fatal) << "HTTP interface is stopping because durable pairing state could not be loaded."sv;
+        shutdown_event->raise(true);
+        return;
+      }
+    } else {
+      // FRESH_STATE is an explicit, non-persistent test/reset mode. It is the
+      // only path allowed to operate without a durable state snapshot.
+      authorization_state_ready.store(true, std::memory_order_release);
     }
 
     auto pkey = file_handler::read_file(config::nvhttp.pkey.c_str());
@@ -5460,6 +5580,12 @@ namespace nvhttp {
   }
 
   bool erase_all_clients() {
+    if (!config::sunshine.flags[config::flag::FRESH_STATE] &&
+        !authorization_state_ready.load(std::memory_order_acquire)) {
+      BOOST_LOG(error) << "Refusing to erase pairing state because durable state is unavailable."sv;
+      return false;
+    }
+
     std::vector<named_cert_t> clients;
     {
       std::lock_guard<std::mutex> lock(client_mutex);
@@ -5604,6 +5730,10 @@ namespace nvhttp {
     bool previously_enabled = false;
     bool persisted = false;
     const bool fresh_state = config::sunshine.flags[config::flag::FRESH_STATE];
+    if (!fresh_state && !authorization_state_ready.load(std::memory_order_acquire)) {
+      BOOST_LOG(error) << "Refusing to change pairing authorization because durable state is unavailable."sv;
+      return false;
+    }
     if (!fresh_state) {
       statefile::migrate_recent_state_keys();
     }
@@ -5729,6 +5859,12 @@ namespace nvhttp {
   // (Windows-only) display_helper_integration is included above
 
   bool unpair_client(const std::string_view uuid) {
+    if (!config::sunshine.flags[config::flag::FRESH_STATE] &&
+        !authorization_state_ready.load(std::memory_order_acquire)) {
+      BOOST_LOG(error) << "Refusing to remove pairing state because durable state is unavailable."sv;
+      return false;
+    }
+
     bool removed = false;
     {
       std::lock_guard<std::mutex> lock(client_mutex);

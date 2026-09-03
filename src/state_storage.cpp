@@ -35,7 +35,7 @@ namespace statefile {
 
     std::once_flag migration_once;
 
-    using json_load_result_e = policy::load_result_e;
+    using policy_load_result_e = policy::load_result_e;
 
     /**
      * @brief Best-effort rename of an unparseable state file out of the way so a
@@ -119,7 +119,7 @@ namespace statefile {
       return {policy::read_status_e::loaded, std::move(contents)};
     }
 
-    json_load_result_e load_tree_for_update(const fs::path &path, pt::ptree &out) {
+    policy_load_result_e load_tree_for_update(const fs::path &path, pt::ptree &out) {
       return policy::load_json_for_update(
         path.string(),
         out,
@@ -145,7 +145,21 @@ namespace statefile {
     }
 
     void write_tree(const fs::path &path, const pt::ptree &tree) {
-      write_json_atomic(path.string(), tree);
+      if (path.string() == sunshine_state_path()) {
+        write_sunshine_state_atomic(tree);
+      } else {
+        write_json_atomic(path.string(), tree);
+      }
+    }
+
+    void write_json_atomic_direct(const std::string &path, const pt::ptree &tree) {
+      policy::write_json_atomic(
+        path,
+        tree,
+        [](const std::string &target, const std::string &contents) {
+          return file_handler::write_file(target.c_str(), contents) == 0;
+        },
+        read_state_file);
     }
 
 #ifdef _WIN32
@@ -416,6 +430,10 @@ namespace statefile {
       }
     }
 #endif
+
+    policy_load_result_e load_tree_for_read(const fs::path &path, pt::ptree &out) {
+      return policy::load_json_for_read(path.string(), out, read_state_file);
+    }
   }  // namespace
 
   std::mutex &state_mutex() {
@@ -424,13 +442,53 @@ namespace statefile {
   }
 
   void write_json_atomic(const std::string &path, const pt::ptree &tree) {
-    policy::write_json_atomic(
-      path,
-      tree,
-      [](const std::string &target, const std::string &contents) {
-        return file_handler::write_file(target.c_str(), contents) == 0;
-      },
-      read_state_file);
+    // All callers use this entry point for JSON updates, including credentials
+    // and API-token persistence. Route the primary through the paired-state
+    // writer so those updates refresh the recovery copy too.
+    if (!path.empty() && path == sunshine_state_path()) {
+      write_sunshine_state_atomic(tree);
+      return;
+    }
+    write_json_atomic_direct(path, tree);
+  }
+
+  std::string sunshine_state_backup_path() {
+    const auto &path = sunshine_state_path();
+    return path.empty() ? std::string {} : path + ".bak";
+  }
+
+  void write_sunshine_state_atomic(const pt::ptree &tree) {
+    const auto &path = sunshine_state_path();
+    write_json_atomic_direct(path, tree);
+
+    const auto backup_path = sunshine_state_backup_path();
+    if (backup_path.empty()) {
+      return;
+    }
+    try {
+      write_json_atomic_direct(backup_path, tree);
+    } catch (const std::exception &e) {
+      // The primary snapshot is already durable. Keep serving it, but report
+      // that the recovery copy could not be refreshed so the next save can
+      // retry it.
+      BOOST_LOG(error) << "statefile: failed to refresh Sunshine state backup "sv
+                       << backup_path << ": "sv << e.what();
+    }
+  }
+
+  json_load_result_e load_json(const std::string &path, pt::ptree &tree) {
+    const auto result = load_tree_for_read(fs::path {path}, tree);
+    switch (result) {
+      case policy::load_result_e::loaded:
+        return json_load_result_e::loaded;
+      case policy::load_result_e::missing:
+        return json_load_result_e::missing;
+      case policy::load_result_e::corrupt:
+        return json_load_result_e::corrupt;
+      case policy::load_result_e::failed:
+        return json_load_result_e::failed;
+    }
+    return json_load_result_e::failed;
   }
 
   bool load_json_for_update(const std::string &path, pt::ptree &tree) {
@@ -656,6 +714,7 @@ namespace statefile {
 
     static constexpr std::string_view known_config_files[] {
       "sunshine_state.json"sv,
+      "sunshine_state.json.bak"sv,
       "vibeshine_state.json"sv,
       "sunshine.conf"sv,
       "apps.json"sv,
@@ -693,21 +752,24 @@ namespace statefile {
       std::lock_guard<std::mutex> guard(state_mutex());
 
       pt::ptree old_tree;
-      const auto old_load_result = load_tree_for_update(old_path, old_tree);
-      if (old_load_result == json_load_result_e::failed) {
+      // Migration runs before the durable startup snapshot is selected. Keep
+      // this inspection non-destructive: quarantining the primary here could
+      // make a retry see "missing" and mint a replacement host identity.
+      const auto old_load_result = load_tree_for_read(old_path, old_tree);
+      if (old_load_result == policy::load_result_e::failed) {
         return;
       }
 
       pt::ptree new_tree;
-      const auto new_load_result = load_tree_for_update(new_path, new_tree);
-      if (new_load_result == json_load_result_e::failed) {
+      const auto new_load_result = load_tree_for_read(new_path, new_tree);
+      if (new_load_result == policy::load_result_e::failed) {
         return;
       }
 
       bool old_modified = false;
       bool new_modified = false;
 
-      if (old_load_result == json_load_result_e::loaded) {
+      if (old_load_result == policy::load_result_e::loaded) {
         auto old_root_it = old_tree.find("root");
         if (old_root_it != old_tree.not_found()) {
           auto &old_root = old_root_it->second;
@@ -770,7 +832,7 @@ namespace statefile {
     const fs::path path(path_str);
 
     pt::ptree root;
-    if (load_tree_for_update(path, root) == json_load_result_e::failed) {
+    if (load_tree_for_update(path, root) == policy::load_result_e::failed) {
       return;
     }
 
@@ -847,7 +909,7 @@ namespace statefile {
     const fs::path path(path_str);
 
     pt::ptree root;
-    if (load_tree_for_update(path, root) == json_load_result_e::failed) {
+    if (load_tree_for_update(path, root) == policy::load_result_e::failed) {
       return;
     }
 
@@ -952,7 +1014,7 @@ namespace statefile {
     const fs::path path(path_str);
 
     pt::ptree root;
-    if (load_tree_for_update(path, root) == json_load_result_e::failed) {
+    if (load_tree_for_update(path, root) == policy::load_result_e::failed) {
       return;
     }
 
@@ -992,7 +1054,7 @@ namespace statefile {
     std::lock_guard<std::mutex> guard(state_mutex());
     const fs::path path(path_str);
     pt::ptree root;
-    if (load_tree_for_update(path, root) == json_load_result_e::failed) {
+    if (load_tree_for_update(path, root) == policy::load_result_e::failed) {
       return;
     }
 
@@ -1074,7 +1136,7 @@ namespace statefile {
     std::lock_guard<std::mutex> guard(state_mutex());
     const fs::path path(path_str);
     pt::ptree root;
-    if (load_tree_for_update(path, root) == json_load_result_e::failed) {
+    if (load_tree_for_update(path, root) == policy::load_result_e::failed) {
       return;
     }
     auto &root_node = ensure_root(root);
