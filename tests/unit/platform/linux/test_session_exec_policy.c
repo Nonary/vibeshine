@@ -126,7 +126,9 @@ int main(void) {
   CHECK(run_command_bounded("/usr/bin/printf", print_arguments, 500,
                             command_output, sizeof(command_output)) == 0);
   CHECK(application_unit_name_is_safe("vibeshine-app-7-1.service"));
+  CHECK(application_unit_name_is_safe("vibeshine-app-7-1-2.service"));
   CHECK(!application_unit_name_is_safe("vibeshine-app-7.service"));
+  CHECK(!application_unit_name_is_safe("vibeshine-app-7-1-x.service"));
   CHECK(!application_unit_name_is_safe("vibeshine-app-7-1.service.extra"));
   CHECK(!application_unit_name_is_safe("--all"));
   CHECK(application_cgroup_path_is_safe(
