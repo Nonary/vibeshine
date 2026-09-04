@@ -1484,6 +1484,7 @@ namespace confighttp {
         "elevated",
         "auto-detach",
         "wait-all",
+        "prefer-10bit-sdr",
         "gen1-framegen-fix",
         "gen2-framegen-fix",
         "dlss-framegen-capture-fix",  // backward compatibility

@@ -3391,6 +3391,9 @@ namespace proc {
         auto virtual_display_mode = app_node.get_optional<std::string>("virtual-display-mode"s);
         auto virtual_display_layout = app_node.get_optional<std::string>("virtual-display-layout"s);
         auto dd_config_override = app_node.get_optional<std::string>("dd-configuration-option"s);
+        if (const auto prefer_10bit_sdr = app_node.get_optional<bool>("prefer-10bit-sdr"s)) {
+          ctx.prefer_10bit_sdr = *prefer_10bit_sdr;
+        }
 
         // Parse per-app global config overrides from the JSON view (preserves types for nested values).
         // We keep values in the raw config-file representation (strings are raw, non-strings use JSON dump).

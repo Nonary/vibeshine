@@ -71,6 +71,7 @@ export interface AppForm {
   prepCmd: PrepCmd[];
   detached: string[];
   virtualScreen: boolean;
+  prefer10BitSdr: boolean | null;
   virtualDisplayMode: AppVirtualDisplayMode | null;
   virtualDisplayLayout: AppVirtualDisplayLayout | null;
   frameGenerationProvider: FrameGenerationProvider;
@@ -120,6 +121,7 @@ export interface ServerApp {
   'prep-cmd'?: Array<{ do?: string; undo?: string; elevated?: boolean }>;
   detached?: string[];
   'virtual-screen'?: boolean;
+  'prefer-10bit-sdr'?: boolean;
   'playnite-id'?: string | undefined;
   'playnite-managed'?: 'manual' | string | undefined;
   'gen1-framegen-fix'?: boolean;

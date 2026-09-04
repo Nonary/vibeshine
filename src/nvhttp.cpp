@@ -2889,7 +2889,16 @@ namespace nvhttp {
     launch_session->gcmap = (int) util::from_view(get_arg(args, "gcmap", "0"));
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
     launch_session->client_vrr_requested = util::from_view(get_arg(args, "clientVrrRequested", "0"));
-    launch_session->prefer_sdr_10bit = client_settings && client_settings->prefer_10bit_sdr;
+    // Resume requests usually omit appid. Resolve the running application's
+    // preference as well, before display preparation and HDR request overrides.
+    auto color_app_ctx = launch_app_ctx;
+    if (!color_app_ctx && launch_session->appid <= 0 && launch_appuuid_arg.empty()) {
+      color_app_ctx = proc::proc.resolve_app(proc::proc.current_app_id());
+    }
+    launch_session->prefer_sdr_10bit = rtsp_stream::hdr_request_policy::resolve_prefer_10bit_sdr(
+      client_settings && client_settings->prefer_10bit_sdr,
+      color_app_ctx ? color_app_ctx->prefer_10bit_sdr : std::nullopt
+    );
 #if defined(_WIN32) || defined(__linux__)
     {
       const auto hdr_request = rtsp_stream::hdr_request_policy::apply(
