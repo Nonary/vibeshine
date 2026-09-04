@@ -21,6 +21,7 @@
 #include <vibeshine_drm_uapi.h>
 
 // local includes
+#include "capture_status.h"
 #include "cuda.h"
 #include "graphics.h"
 #include "hdr_policy.h"
@@ -942,6 +943,7 @@ namespace platf {
 
       capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override {
         if (presentation_mode.event_capture_enabled()) {
+          const linux_capture_status::managed_capture_scope observed_capture;
           if (auto result = capture_presentation_events(push_captured_image_cb, pull_free_image_cb, cursor)) {
             return *result;
           }
@@ -965,6 +967,10 @@ namespace platf {
             presentation_pending = true;
           }
         }
+      }
+
+      [[nodiscard]] bool is_event_driven_capture() const override {
+        return presentation_mode.event_capture_enabled();
       }
 
       bool is_hdr() {

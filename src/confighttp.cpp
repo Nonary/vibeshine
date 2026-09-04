@@ -69,6 +69,7 @@
 #ifdef _WIN32
   #include "platform/windows/virtual_display_cleanup.h"
 #elif defined(__linux__)
+  #include "platform/linux/capture_status.h"
   #include "platform/linux/private_display.h"
 #endif
 
@@ -2679,10 +2680,32 @@ namespace confighttp {
 #endif
     // Build/release date provided by CMake (ISO 8601 when available)
     output_tree["release_date"] = PROJECT_RELEASE_DATE;
+    // UI status reads must never start a capture or probe an encoder.
+    bool probe_complete = false;
+    const auto encoder_caps = video::advertised_encoder_capabilities(false, &probe_complete);
+    output_tree["encoder_status"] = {
+      {"state", probe_complete ? "ready" : video::has_attempted_encoder_probe() ? "failed" : "unknown"},
+      {"h264", probe_complete},
+      {"hevc", probe_complete && encoder_caps.hevc_mode >= 2},
+      {"av1", probe_complete && encoder_caps.av1_mode >= 2},
+    };
 #if defined(__linux__)
+    const char *session_role = std::getenv("VIBESHINE_SESSION_ROLE");
+    const std::string role = session_role ? session_role : "unknown";
+    output_tree["linux"] = {{"session_role", role == "desktop" || role == "greeter" ? role : "unknown"}};
+    const bool managed_active = platf::linux_capture_status::managed_event_capture_active();
+    output_tree["capture_status"] = {
+      {"configured_backend", config::video.capture},
+      {"observed_backend", managed_active ? "kms" : "unknown"},
+      {"managed_event_driven", managed_active},
+      {"virtual_display_configured", config::video.virtual_display_mode != config::video_t::virtual_display_mode_e::disabled},
+    };
+    const bool virtual_capable = platf::linux_private_display::capable();
+    const bool virtual_ready = platf::linux_private_display::ready();
     output_tree["virtual_display"] = {
-      {"capable", platf::linux_private_display::capable()},
-      {"ready", platf::linux_private_display::ready()},
+      {"capable", virtual_capable},
+      {"ready", virtual_ready},
+      {"reason", virtual_ready ? "" : virtual_capable ? "session_or_output_unavailable" : "driver_or_outputs_unavailable"},
       {"backend", "kscreen-vkms"},
       {"modes", {"per_client", "shared"}},
       {"layouts", {"exclusive", "extended", "extended_primary", "extended_isolated", "extended_primary_isolated"}},

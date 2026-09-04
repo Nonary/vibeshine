@@ -3,6 +3,11 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+  matchesPlatform,
+  settingsFields,
+  optionsForPlatform,
+  encoderFamilyFor,
+  fieldForPlatform,
   captureOptionsForPlatform,
   frameGenerationOptionsForPlatform,
   gamepadOptionsForPlatform,
@@ -47,10 +52,7 @@ test('gamepad options follow the host platform', () => {
     new URL('../../web-legacy/configs/configSelectOptions.ts', import.meta.url),
     'utf8',
   );
-  assert.match(
-    legacyOptions,
-    /linux:\s*\['xone', 'ds4', 'ds5', 'switch'\]/,
-  );
+  assert.match(legacyOptions, /linux:\s*\['xone', 'ds4', 'ds5', 'switch'\]/);
 });
 
 test('Linux keeps common virtual-display policy and hides Windows display internals', () => {
@@ -103,7 +105,7 @@ test('Linux keeps common virtual-display policy and hides Windows display intern
 test('Linux exposes Remote Monitor behavior controls', () => {
   const remoteMonitor = settingsCategories
     .flatMap((category) => category.groups)
-    .find((group) => group.id === 'everyday_remote_monitor');
+    .find((group) => group.id === 'display_remote_monitor');
   assert.ok(remoteMonitor);
 
   for (const key of [
@@ -119,26 +121,33 @@ test('Linux exposes Remote Monitor behavior controls', () => {
   }
 });
 
-test('Everyday setup keeps core controls visible and collapses optional sections', () => {
-  const everyday = settingsCategories.find((category) => category.id === 'everyday');
-  assert.ok(everyday);
+test('Everyday prioritizes screen, appearance, audio and input on Linux', () => {
+  const everyday = settingsCategories.find((category) => category.id === 'everyday')!;
+  const groups = everyday.groups.filter((group) => matchesPlatform(group, 'linux'));
   assert.deepEqual(
-    everyday.groups.slice(0, 2).map((group) => group.id),
-    ['everyday_display', 'everyday_smoothness'],
+    groups.map((group) => group.id),
+    ['everyday_display', 'everyday_appearance', 'everyday_audio', 'everyday_input'],
   );
-
-  const groups = new Map(everyday.groups.map((group) => [group.id, group]));
-  assert.equal(groups.get('everyday_display')?.collapsed, undefined);
-  assert.equal(groups.get('everyday_smoothness')?.collapsed, undefined);
-  for (const id of [
-    'everyday_remote_monitor',
-    'everyday_resolution',
-    'everyday_encoding',
-    'everyday_recovery',
-    'everyday_automation',
-  ]) {
-    assert.equal(groups.get(id)?.collapsed, true, `${id} should use progressive disclosure`);
-  }
+  assert.ok(groups.every((group) => !group.collapsed));
+  const keys = groups.flatMap((group) => group.fields.map((field) => field.key));
+  for (const key of [
+    'virtual_display_mode',
+    'virtual_display_layout',
+    'dd_resolution_option',
+    'dd_refresh_rate_option',
+    'dd_virtual_display_scale',
+    'stream_audio',
+    'controller',
+  ])
+    assert.ok(keys.includes(key));
+  for (const key of [
+    'capture',
+    'encoder',
+    'fec_percentage',
+    'global_prep_cmd',
+    'frame_limiter_auto_virtual_framegen',
+  ])
+    assert.ok(!keys.includes(key));
 });
 
 test('Linux virtual-display pacing uses Linux-specific copy', () => {
@@ -317,4 +326,30 @@ test('host compute readouts label current and peak values explicitly', () => {
     /ENC[\s\S]*t\('stats\.current'\)[\s\S]*current\.encoder[\s\S]*t\('stats\.peak'\)[\s\S]*peak\.encoder/,
   );
   assert.doesNotMatch(chart, /t\('stats\.peak'\)[^\n]*\/[^\n]*t\('stats\.current'\)/);
+});
+
+test('advanced encoder settings have actual fields and platform-aware options', () => {
+  for (const key of [
+    'nvenc_twopass',
+    'nvenc_spatial_aq',
+    'qsv_coder',
+    'amd_rc',
+    'vaapi_strict_rc_buffer',
+    'vk_tune',
+    'sw_preset',
+    'vt_software',
+    'keybindings',
+    'session_token_ttl_seconds',
+    'realtime_stats_show_host_stats',
+  ])
+    assert.ok(settingsFields.has(key), key);
+  assert.equal(encoderFamilyFor('vaapi'), 'vaapi');
+  assert.equal(encoderFamilyFor('vulkan'), 'vulkan');
+  assert.equal(encoderFamilyFor('nvenc_legacy'), 'nvidia');
+  assert.equal(matchesPlatform(settingsFields.get('qsv_coder')!, 'linux'), false);
+  assert.equal(fieldForPlatform(settingsFields.get('adapter_name')!, 'linux').kind, 'text');
+  assert.equal(
+    optionsForPlatform(settingsFields.get('virtual_display_mode')!, 'linux')[0].value,
+    'per_client',
+  );
 });

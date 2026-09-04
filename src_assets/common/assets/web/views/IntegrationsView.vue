@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { useUnsavedChanges } from '@/composables/useUnsavedChanges';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 
+import PlaynitePolicySettings from '@/components/settings/PlaynitePolicySettings.vue';
 import { ApiError, apiGet, apiPatch, apiPost } from '@/api/client';
 import {
   AppButton,
@@ -495,7 +498,7 @@ async function load(preserveNotice = false): Promise<void> {
 
   if (mangoResult?.status === 'fulfilled') {
     mangohud.value = mangoResult.value;
-    resetMangoDraft();
+    if (!mangoDirty.value && !mangoSaving.value) resetMangoDraft();
   } else if (mangoResult) {
     nextErrors.mangohud = message(mangoResult.reason, t('ui.integrations.errors.mangohudStatus'));
   }
@@ -595,9 +598,7 @@ function steamSummary(): IntegrationSummary {
     ? t('_common.disabled')
     : !value.available
       ? t('ui.integrations.status.notDetected')
-      : value.forced
-        ? t('ui.integrations.steam.forced')
-        : t('ui.integrations.status.ready');
+      : t('_common.enabled');
   return {
     id: 'steam',
     name,
@@ -609,9 +610,8 @@ function steamSummary(): IntegrationSummary {
         ? t('ui.integrations.steam.gameCount', { count: value.game_count })
         : '',
       value.importable_game_count !== undefined
-        ? t('ui.integrations.steam.importableCount', { count: value.importable_game_count })
+        ? t('ui.integrations.steam.synchronizedCount', { count: value.importable_game_count })
         : '',
-      value.forced ? t('ui.integrations.steam.linuxForced') : '',
     ].filter(Boolean),
   };
 }
@@ -1173,16 +1173,28 @@ async function saveMangoSettings(): Promise<void> {
   try {
     const fps = Math.max(0, Math.min(1000, Number(mangoDraft.value.fpsLimit) || 0));
     mangoDraft.value.fpsLimit = fps;
-    await apiPatch('/api/config', {
-      frame_limiter_enable: mangoDraft.value.enabled,
-      frame_limiter_provider: mangoDraft.value.provider,
+    const submitted = { ...mangoDraft.value };
+    const result = await apiPatch<{ status?: boolean }>('/api/config', {
+      frame_limiter_enable: submitted.enabled,
+      frame_limiter_provider: submitted.provider,
       frame_limiter_fps_limit: fps,
-      mangohud_limiter_method: mangoDraft.value.limiterMethod,
-      mangohud_preset: mangoDraft.value.overlayPreset,
-      mangohud_always_show_graph: mangoDraft.value.alwaysShowGraph,
+      mangohud_limiter_method: submitted.limiterMethod,
+      mangohud_preset: submitted.overlayPreset,
+      mangohud_always_show_graph: submitted.alwaysShowGraph,
     });
+    if (result.status === false) throw new Error(t('ui.integrations.errors.mangohudUpdateFailed'));
+    mangoOriginal.value = submitted;
+    mangohud.value = {
+      ...mangohud.value,
+      enabled: submitted.enabled,
+      configured_provider: submitted.provider,
+      fps_limit: submitted.fpsLimit,
+      limiter_method: submitted.limiterMethod,
+      overlay_preset: submitted.overlayPreset,
+      always_show_graph: submitted.alwaysShowGraph,
+    };
+    delete errors.value.mangohud;
     notice.value = t('ui.integrations.notices.mangohudUpdated');
-    await load(true);
   } catch (cause) {
     errors.value = {
       ...errors.value,
@@ -1193,6 +1205,16 @@ async function saveMangoSettings(): Promise<void> {
   }
 }
 
+useUnsavedChanges(computed(() => mangoDirty.value || mangoSaving.value));
+const route = useRoute();
+watch(
+  () => [loading.value, route.hash],
+  async () => {
+    if (loading.value || !route.hash) return;
+    await nextTick();
+    document.getElementById(route.hash.slice(1))?.scrollIntoView({ block: 'start' });
+  },
+);
 onMounted(() => void load());
 </script>
 
@@ -1243,6 +1265,7 @@ onMounted(() => void load());
         v-for="summary in summaries"
         :key="summary.id"
         class="integration-row"
+        :class="{ 'integration-row--steam': summary.id === 'steam' }"
         :aria-labelledby="`integration-${summary.id}`"
       >
         <span class="integration-row__icon" aria-hidden="true">
@@ -1262,10 +1285,14 @@ onMounted(() => void load());
             <h2 :id="`integration-${summary.id}`">{{ summary.name }}</h2>
             <StatusBadge :label="summary.status" :tone="summary.tone" compact />
           </div>
-          <p>{{ summary.description }}</p>
+          <PlaynitePolicySettings v-if="summary.id === 'playnite' && isWindows" />
           <ul v-if="summary.details.length" class="integration-details">
             <li v-for="detail in summary.details" :key="detail">{{ detail }}</li>
           </ul>
+          <p v-if="summary.id === 'steam' && steam?.forced" class="integration-notice">
+            {{ t('ui.integrations.steam.linuxForced') }}
+          </p>
+          <p class="integration-row__description">{{ summary.description }}</p>
           <section
             v-if="summary.id === 'steam'"
             class="integration-settings"
@@ -1280,56 +1307,68 @@ onMounted(() => void load());
 
             <div class="integration-settings__rows">
               <SettingRow
+                class="steam-setting-row"
                 :label="t('ui.integrations.steam.autoSync')"
                 :description="t('ui.integrations.steam.autoSyncDescription')"
                 control-id="steam-auto-sync"
               >
-                <input
-                  id="steam-auto-sync"
-                  class="integration-switch"
-                  type="checkbox"
-                  :checked="steamAutoSyncEnabled()"
-                  @change="
-                    setSteamPolicy('steam_auto_sync', ($event.target as HTMLInputElement).checked)
-                  "
-                />
+                <label class="vs-switch">
+                  <input
+                    id="steam-auto-sync"
+                    type="checkbox"
+                    :checked="steamAutoSyncEnabled()"
+                    @change="
+                      setSteamPolicy('steam_auto_sync', ($event.target as HTMLInputElement).checked)
+                    "
+                  />
+                  <span class="vs-switch__track" aria-hidden="true" />
+                  <span class="vs-sr-only">{{ t('ui.integrations.steam.autoSync') }}</span>
+                </label>
               </SettingRow>
               <SettingRow
+                class="steam-setting-row"
                 :label="t('ui.integrations.steam.removeUninstalled')"
                 :description="t('ui.integrations.steam.removeUninstalledDescription')"
                 control-id="steam-remove-uninstalled"
               >
-                <input
-                  id="steam-remove-uninstalled"
-                  class="integration-switch"
-                  type="checkbox"
-                  :checked="steamRemoveUninstalledEnabled()"
-                  :disabled="steam?.sync_all_installed === false"
-                  @change="
-                    setSteamPolicy(
-                      'steam_autosync_remove_uninstalled',
-                      ($event.target as HTMLInputElement).checked,
-                    )
-                  "
-                />
+                <label class="vs-switch">
+                  <input
+                    id="steam-remove-uninstalled"
+                    type="checkbox"
+                    :checked="steamRemoveUninstalledEnabled()"
+                    :disabled="steam?.sync_all_installed === false"
+                    @change="
+                      setSteamPolicy(
+                        'steam_autosync_remove_uninstalled',
+                        ($event.target as HTMLInputElement).checked,
+                      )
+                    "
+                  />
+                  <span class="vs-switch__track" aria-hidden="true" />
+                  <span class="vs-sr-only">{{ t('ui.integrations.steam.removeUninstalled') }}</span>
+                </label>
               </SettingRow>
               <SettingRow
+                class="steam-setting-row"
                 :label="t('ui.integrations.steam.syncAllInstalled')"
                 :description="t('ui.integrations.steam.syncAllInstalledDescription')"
                 control-id="steam-sync-all-installed"
               >
-                <input
-                  id="steam-sync-all-installed"
-                  class="integration-switch"
-                  type="checkbox"
-                  :checked="steam?.sync_all_installed !== false"
-                  @change="
-                    setSteamPolicy(
-                      'steam_sync_all_installed',
-                      ($event.target as HTMLInputElement).checked,
-                    )
-                  "
-                />
+                <label class="vs-switch">
+                  <input
+                    id="steam-sync-all-installed"
+                    type="checkbox"
+                    :checked="steam?.sync_all_installed !== false"
+                    @change="
+                      setSteamPolicy(
+                        'steam_sync_all_installed',
+                        ($event.target as HTMLInputElement).checked,
+                      )
+                    "
+                  />
+                  <span class="vs-switch__track" aria-hidden="true" />
+                  <span class="vs-sr-only">{{ t('ui.integrations.steam.syncAllInstalled') }}</span>
+                </label>
               </SettingRow>
               <SettingRow
                 :label="t('ui.integrations.steam.recentGames')"
@@ -1380,17 +1419,21 @@ onMounted(() => void load());
               <details class="integration-advanced">
                 <summary>{{ t('ui.integrations.steam.advancedSettings') }}</summary>
                 <SettingRow
+                  class="steam-setting-row"
                   :label="t('ui.integrations.steam.includeTools')"
                   :description="t('ui.integrations.steam.includeToolsDescription')"
                   control-id="steam-include-tools"
                 >
-                  <input
-                    id="steam-include-tools"
-                    class="integration-switch"
-                    type="checkbox"
-                    :checked="steamIncludeToolsEnabled()"
-                    @change="setSteamIncludeTools(($event.target as HTMLInputElement).checked)"
-                  />
+                  <label class="vs-switch">
+                    <input
+                      id="steam-include-tools"
+                      type="checkbox"
+                      :checked="steamIncludeToolsEnabled()"
+                      @change="setSteamIncludeTools(($event.target as HTMLInputElement).checked)"
+                    />
+                    <span class="vs-switch__track" aria-hidden="true" />
+                    <span class="vs-sr-only">{{ t('ui.integrations.steam.includeTools') }}</span>
+                  </label>
                 </SettingRow>
               </details>
             </div>
@@ -2125,6 +2168,62 @@ onMounted(() => void load());
   background: var(--vs-color-bg-subtle);
 }
 
+/* Steam is the primary library integration, so keep its policy controls on
+   the page instead of presenting them as a second card. */
+.integration-row--steam .integration-row__icon {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.integration-row--steam .integration-settings {
+  gap: var(--vs-space-8);
+  padding-top: var(--vs-space-8);
+}
+
+.integration-row--steam .integration-row__description {
+  margin-top: calc(-1 * var(--vs-space-2));
+}
+
+.integration-row--steam .integration-settings__rows {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.integration-row--steam .integration-settings__rows :deep(.vs-setting-row) {
+  min-block-size: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--vs-space-16);
+  padding: var(--vs-space-8) 0;
+}
+
+.integration-row--steam .integration-settings__rows :deep(.vs-setting-row + .vs-setting-row) {
+  border-top: 0;
+}
+
+.integration-row--steam .integration-settings__rows :deep(.vs-setting-row__control) {
+  min-inline-size: auto;
+}
+
+.integration-row--steam .integration-settings__rows :deep(.vs-setting-row__copy) {
+  gap: var(--vs-space-2);
+}
+
+.integration-row--steam .integration-settings__rows :deep(.vs-setting-row__description) {
+  max-inline-size: 42rem;
+}
+
+.integration-row--steam .integration-details {
+  margin-top: 0;
+}
+
+.integration-notice {
+  color: var(--vs-color-text-tertiary);
+  font-size: var(--vs-type-size-metadata);
+  font-style: italic;
+}
+
 .integration-settings__rows :deep(.vs-setting-row) {
   padding: var(--vs-space-12);
 }
@@ -2133,18 +2232,12 @@ onMounted(() => void load());
   border-top: var(--vs-border-width) solid var(--vs-color-border-subtle);
 }
 
-.integration-switch {
-  width: 1.15rem;
-  height: 1.15rem;
-  accent-color: var(--vs-color-accent);
-}
-
 .integration-advanced {
-  border-top: var(--vs-border-width) solid var(--vs-color-border-subtle);
+  margin-top: var(--vs-space-4);
 }
 
 .integration-advanced summary {
-  padding: var(--vs-space-12);
+  padding: var(--vs-space-6) 0;
   color: var(--vs-color-text-secondary);
   cursor: pointer;
   font-size: var(--vs-type-size-metadata);
@@ -2152,7 +2245,8 @@ onMounted(() => void load());
 }
 
 .integration-advanced :deep(.vs-setting-row) {
-  border-top: var(--vs-border-width) solid var(--vs-color-border-subtle);
+  border-top: 0;
+  padding-top: var(--vs-space-8);
 }
 
 .integration-advanced--manager {
@@ -2206,21 +2300,29 @@ onMounted(() => void load());
 
 .game-manager {
   display: grid;
-  overflow: hidden;
   gap: 0;
-  border: var(--vs-border-width) solid var(--vs-color-border-subtle);
-  border-radius: var(--vs-radius-control);
+  margin-top: var(--vs-space-4);
 }
 
 .game-manager__heading {
-  padding: var(--vs-space-12);
-  background: var(--vs-color-bg-subtle);
+  padding: var(--vs-space-8) 0;
+  cursor: pointer;
+  list-style-position: outside;
+}
+
+.game-manager__heading::marker {
+  color: var(--vs-color-text-tertiary);
 }
 
 .game-manager__heading > div,
 .integration-settings__heading > div {
   display: grid;
   gap: var(--vs-space-2);
+}
+
+.game-manager[open] > .game-manager__toolbar {
+  margin-top: var(--vs-space-8);
+  border-top: var(--vs-border-width) solid var(--vs-color-border-subtle);
 }
 
 .game-manager__toolbar {
