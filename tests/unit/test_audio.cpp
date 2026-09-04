@@ -154,6 +154,26 @@ TEST(AudioSinkPolicy, PreservesPriorityAndEmptyFallbacks) {
   EXPECT_TRUE(select_sink(no_virtual, "", 2, false).empty());
 }
 
+TEST(AudioSinkPolicy, CaptureOnlyRequiresExplicitSelectedSinkAndPreservesVirtualRouting) {
+  const sink_catalog_t sinks {"host", "virtual-stereo", "virtual-51", "virtual-71"};
+  const auto physical = select_stream_sink(sinks, "second-device", "", 2, true);
+  EXPECT_TRUE(capture_sink_without_routing(true, "second-device", "", physical));
+  EXPECT_FALSE(capture_sink_without_routing(false, "second-device", "", physical));
+  EXPECT_FALSE(capture_sink_without_routing(true, "", "", "host"));
+
+  // Virtual sinks still take precedence when host audio is disabled or a
+  // managed virtual sink is explicitly configured.
+  const auto automatic_virtual = select_stream_sink(sinks, "second-device", "", 2, false);
+  EXPECT_FALSE(capture_sink_without_routing(true, "second-device", "", automatic_virtual));
+  const auto managed_virtual = select_stream_sink(sinks, "second-device", "second-device", 2, true);
+  EXPECT_FALSE(capture_sink_without_routing(true, "second-device", "second-device", managed_virtual));
+
+  const sink_catalog_t no_virtual {"host", std::nullopt, std::nullopt, std::nullopt};
+  const auto selected = select_stream_sink(no_virtual, "second-device", "", 2, false);
+  EXPECT_TRUE(capture_sink_without_routing(true, "second-device", "", selected));
+  EXPECT_TRUE(capture_sink_without_routing(true, "host", "", "host"));
+}
+
 TEST(AudioSinkPolicy, ManagedVirtualSinkOverridesHostAudioRequest) {
   const sink_catalog_t sinks {
     "host",

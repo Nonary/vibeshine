@@ -71,6 +71,7 @@ export const clientOverrideableKeys = new Set([
   'keybindings',
   'ds5_inputtino_randomize_mac',
   'audio_sink',
+  'audio_sink_capture_only',
   'virtual_sink',
   'stream_audio',
   'adapter_name',
@@ -748,6 +749,7 @@ export const settingsCategories: SettingsCategory[] = [
         fields: [
           boolean('stream_audio'),
           text('audio_sink', { monospace: true, stacked: true }),
+          boolean('audio_sink_capture_only', { platform: 'windows' }),
           text('virtual_sink', { monospace: true, stacked: true }),
           boolean('install_steam_audio_drivers', { platform: 'windows' }),
         ],
@@ -994,6 +996,7 @@ export const settingsDefaults: Record<string, unknown> = {
   key_repeat_frequency: 24.9,
   install_steam_audio_drivers: true,
   audio_sink: '',
+  audio_sink_capture_only: false,
   virtual_sink: '',
   encoder: '',
   nvenc_preset: 1,
