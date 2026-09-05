@@ -57,6 +57,7 @@
 #include "remote_display_topology.h"
 #include "platform/common.h"
 #include "state_storage.h"
+#include "state_storage_policy.h"
 #ifdef _WIN32
   #include "platform/windows/display.h"
   #include "platform/windows/display_helper_request_policy.h"
@@ -1958,6 +1959,7 @@ namespace nvhttp {
       named_cert_nodes.push_back(std::make_pair(""s, named_cert_node));
     }
     root_node.put_child("named_devices", named_cert_nodes);
+    root_node.erase("devices");  // Legacy certificates now have canonical records.
     root.put_child("root", root_node);
 
     try {
@@ -2154,10 +2156,16 @@ namespace nvhttp {
     }
 
     if (!parsed) {
-      if (primary_result == statefile::json_load_result_e::missing &&
-          backup_result == statefile::json_load_result_e::missing &&
+      const auto bootstrap = [](const auto result, const pt::ptree &snapshot) {
+        return result == statefile::json_load_result_e::missing ||
+               (result == statefile::json_load_result_e::loaded &&
+                statefile::policy::valid_primary_state(snapshot, true) &&
+                !statefile::policy::valid_primary_state(snapshot, false));
+      };
+      if (bootstrap(primary_result, tree) && bootstrap(backup_result, backup_tree) &&
           http::credentials_created_this_run) {
-        // A genuinely new profile has no state or prior credential material.
+        // A new profile has no host identity or prior TLS credential material.
+        // Credential-only/metadata bootstrap files may precede host startup.
         // Establish and persist the identity before opening the network
         // listeners, so a later restart cannot manufacture a different host
         // identity. An existing profile with both snapshots missing fails

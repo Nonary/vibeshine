@@ -2,6 +2,7 @@
 #include "state_storage_policy.h"
 
 #include "config.h"
+#include "crypto.h"
 #include "file_handler.h"
 #include "logging.h"
 #include "utility.h"
@@ -119,6 +120,30 @@ namespace statefile {
       return {policy::read_status_e::loaded, std::move(contents)};
     }
 
+    bool valid_primary_snapshot(const pt::ptree &tree, bool allow_bootstrap) {
+      if (!policy::valid_primary_state(tree, allow_bootstrap)) return false;
+      std::set<std::string> identities;
+      const auto certificate = [&identities](const std::string &pem) {
+        auto parsed = crypto::x509(pem);
+        return parsed && identities.insert(crypto::pem(parsed)).second;
+      };
+      if (const auto devices = tree.get_child_optional("root.named_devices")) {
+        for (const auto &[key, device] : *devices) {
+          if (!certificate(device.get<std::string>("cert"))) return false;
+        }
+      }
+      if (const auto devices = tree.get_child_optional("root.devices")) {
+        for (const auto &[key, device] : *devices) {
+          if (const auto certs = device.get_child_optional("certs")) {
+            for (const auto &[cert_key, cert] : *certs) {
+              if (!certificate(cert.get_value<std::string>())) return false;
+            }
+          }
+        }
+      }
+      return true;
+    }
+
     bool is_auxiliary_state(const std::string &path) {
       return !path.empty() && path == vibeshine_state_path() && path != sunshine_state_path();
     }
@@ -136,6 +161,12 @@ namespace statefile {
     }
 
     policy_load_result_e load_tree_for_update(const fs::path &path, pt::ptree &out) {
+      if (!path.empty() && path.string() == sunshine_state_path()) {
+        return policy::load_primary_state_for_update(path.string(), out, read_state_file,
+          [](const std::string &target, const std::string &contents) {
+            return file_handler::write_file(target.c_str(), contents) == 0;
+          }, valid_primary_snapshot);
+      }
       if (is_auxiliary_state(path.string())) {
         return load_auxiliary_state(path.string(), out);
       }
@@ -483,6 +514,15 @@ namespace statefile {
       return;
     }
     write_json_atomic_direct(path, tree);
+    if (!path.empty() && path == config::sunshine.credentials_file) {
+      // A custom credential path must have its own recovery copy; never use
+      // the host-state credentials when the administrator selected another file.
+      try {
+        write_json_atomic_direct(path + ".bak", tree);
+      } catch (const std::exception &e) {
+        BOOST_LOG(error) << "statefile: failed to refresh custom credential backup: " << e.what();
+      }
+    }
   }
 
   std::string sunshine_state_backup_path() {
@@ -492,6 +532,11 @@ namespace statefile {
 
   void write_sunshine_state_atomic(const pt::ptree &tree) {
     const auto &path = sunshine_state_path();
+    pt::ptree backup;
+    const auto backup_status = policy::load_json_for_read(sunshine_state_backup_path(), backup, read_state_file);
+    if (!policy::primary_write_allowed(tree, backup_status, backup, valid_primary_snapshot)) {
+      throw std::runtime_error("refusing to replace primary state with an invalid or partial snapshot");
+    }
     write_json_atomic_direct(path, tree);
 
     const auto backup_path = sunshine_state_backup_path();
@@ -537,6 +582,17 @@ namespace statefile {
       return config::nvhttp.vibeshine_file_state;
     }
     return config::nvhttp.file_state;
+  }
+
+  bool recover_credentials(const std::string &path) {
+    std::lock_guard<std::mutex> lock(state_mutex());
+    const auto result = policy::recover_credentials(path, read_state_file,
+      [](const std::string &target, const std::string &contents) {
+        return file_handler::write_file(target.c_str(), contents) == 0;
+      }, path != sunshine_state_path() && path != vibeshine_state_path());
+    // Managed state seeds its backup only after full pairing/auxiliary-state
+    // validation. Custom credential files have no later startup validator.
+    return result == policy::load_result_e::loaded || result == policy::load_result_e::missing;
   }
 
   bool secure_private_directory(const std::string &path) {
@@ -789,10 +845,9 @@ namespace statefile {
       std::lock_guard<std::mutex> guard(state_mutex());
 
       pt::ptree old_tree;
-      // Migration runs before the durable startup snapshot is selected. Keep
-      // this inspection non-destructive: quarantining the primary here could
-      // make a retry see "missing" and mint a replacement host identity.
-      const auto old_load_result = load_tree_for_read(old_path, old_tree);
+      // Recover the primary before moving shared keys, without quarantining it
+      // or ever turning malformed host state into an empty metadata snapshot.
+      const auto old_load_result = load_tree_for_update(old_path, old_tree);
       if (old_load_result == policy::load_result_e::failed) {
         return;
       }
