@@ -551,7 +551,9 @@ require(load_body, "sunshine_state_backup_path", "durable pairing-state recovery
 require(load_body, "write_sunshine_state_atomic", "durable pairing-state recovery")
 require(load_body, "refusing to start with a new host identity", "durable pairing-state recovery")
 require(load_body, "http::credentials_created_this_run", "durable fresh-profile detection")
-require(state_storage, "const auto old_load_result = load_tree_for_read", "non-destructive state migration")
+require(state_storage, "const auto old_load_result = load_tree_for_update", "validated primary-state migration")
+primary_update_body = state_storage.split("policy_load_result_e load_tree_for_update", 1)[1].split("bool load_tree_if_exists", 1)[0]
+require(primary_update_body, "policy::load_primary_state_for_update", "primary recovery before metadata migration")
 require(state_storage, "const auto new_load_result = load_tree_for_read", "non-destructive state migration")
 require(save_snapshot_body, "const auto primary_result = statefile::load_json", "pairing save recovery")
 require(save_snapshot_body, "Using the Sunshine state recovery copy", "pairing save recovery")
