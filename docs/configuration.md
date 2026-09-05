@@ -27,9 +27,15 @@ location by modifying the configuration file.
 |---------|-------------------------------------------------|
 | Docker  | @code{}/config@endcode                          |
 | FreeBSD | @code{}~/.config/sunshine@endcode               |
-| Linux   | @code{}~/.config/vibeshine@endcode              |
+| Linux (native package) | @code{}/var/lib/vibeshine@endcode |
+| Linux (standalone) | @code{}~/.config/vibeshine@endcode (or `$XDG_CONFIG_HOME/vibeshine`) |
 | macOS   | @code{}~/.config/sunshine@endcode               |
 | Windows | @code{}%ProgramFiles%\\Sunshine\\config@endcode |
+
+Native Linux packages share one machine profile across the login screen and desktop.
+Edit settings through the Web UI; use `vibeshine paths` to locate files and
+`sudo vibeshine logs` for diagnostics. Package upgrades import the selected desktop
+user's legacy `~/.config/vibeshine` profile once and preserve existing machine settings.
 
 Although it is recommended to use the configuration UI, it is possible manually configure Sunshine by
 editing the `conf` file in a text editor. Use the examples as reference.
@@ -1248,7 +1254,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Linux setup</td>
         <td colspan="2">@code{}
-            sudo /usr/libexec/vibeshine/vibeshine-drm-install install
+            sudo vibeshine driver install
             sudo systemctl enable --now vibeshine-vkms.service
             @endcode
             Native packages and <code>vibeshine-drm-setup.service</code> attempt this installation

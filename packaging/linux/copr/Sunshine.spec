@@ -1399,8 +1399,8 @@ if [ ! -x "$(command -v rpm-ostree)" ]; then
       exit 1
     fi
   else
-    echo "==> ACTION REQUIRED: Vibeshine could not choose the desktop user who owns streaming on this machine." >&2
-    echo "    Run:  sudo /usr/libexec/vibeshine/vibeshine-machine-host configure USER" >&2
+    echo "==> ACTION REQUIRED: Vibeshine could not prepare the machine profile; review the preceding setup or migration error." >&2
+    echo "    Run:  sudo vibeshine configure USER" >&2
     echo "    then: sudo systemctl enable --now vibeshine-session-controller.service" >&2
   fi
 else
