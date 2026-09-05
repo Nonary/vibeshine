@@ -569,6 +569,21 @@ namespace statefile {
     return json_load_result_e::failed;
   }
 
+  json_load_result_e load_primary_state(pt::ptree &tree) {
+    const auto result = load_tree_for_update(fs::path {sunshine_state_path()}, tree);
+    switch (result) {
+      case policy::load_result_e::loaded:
+        return json_load_result_e::loaded;
+      case policy::load_result_e::missing:
+        return json_load_result_e::missing;
+      case policy::load_result_e::corrupt:
+        return json_load_result_e::corrupt;
+      case policy::load_result_e::failed:
+        return json_load_result_e::failed;
+    }
+    return json_load_result_e::failed;
+  }
+
   bool load_json_for_update(const std::string &path, pt::ptree &tree) {
     return load_tree_for_update(fs::path(path), tree) != policy::load_result_e::failed;
   }

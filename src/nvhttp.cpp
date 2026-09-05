@@ -1889,25 +1889,14 @@ namespace nvhttp {
 
     pt::ptree root;
 
-    const auto primary_result = statefile::load_json(sunshine_path, root);
-    if (primary_result != statefile::json_load_result_e::loaded) {
-      pt::ptree backup_root;
-      const auto backup_result = statefile::load_json(statefile::sunshine_state_backup_path(), backup_root);
-      if (backup_result == statefile::json_load_result_e::loaded) {
-        BOOST_LOG(warning) << "Using the Sunshine state recovery copy while saving "sv << sunshine_path;
-        root = std::move(backup_root);
-      } else if (allow_missing_state &&
-                 primary_result == statefile::json_load_result_e::missing &&
-                 backup_result == statefile::json_load_result_e::missing) {
-        // Only first-run initialization may create a state tree with no
-        // existing snapshot. Runtime saves must never replace an unavailable
-        // state file with a partial tree.
-        root = {};
-      } else {
-        BOOST_LOG(error) << "Refusing to replace unavailable Sunshine state "sv << sunshine_path
-                         << " while saving pairing data."sv;
-        return false;
-      }
+    // Startup, metadata writers and pairing saves must use the same selector.
+    // A failed decision is final; retrying the backup here could roll credentials
+    // back after the selector refused an older snapshot for a valid bootstrap.
+    const auto primary_result = statefile::load_primary_state(root);
+    if (primary_result != statefile::json_load_result_e::loaded &&
+        !(allow_missing_state && primary_result == statefile::json_load_result_e::missing)) {
+      BOOST_LOG(error) << "Refusing to replace unavailable Sunshine state while saving pairing data.";
+      return false;
     }
 
     pt::ptree root_node;
@@ -2137,22 +2126,13 @@ namespace nvhttp {
     };
 
     pt::ptree tree;
-    const auto primary_result = statefile::load_json(sunshine_path, tree);
+    const auto primary_result = statefile::load_primary_state(tree);
+    if (primary_result == statefile::json_load_result_e::failed) {
+      return false;
+    }
     std::optional<parsed_state_t> parsed;
-    bool recovered_from_backup = false;
-    auto backup_result = statefile::json_load_result_e::missing;
-
     if (primary_result == statefile::json_load_result_e::loaded) {
       parsed = parse_state(tree);
-    }
-
-    pt::ptree backup_tree;
-    if (!parsed) {
-      backup_result = statefile::load_json(sunshine_backup_path, backup_tree);
-      if (backup_result == statefile::json_load_result_e::loaded) {
-        parsed = parse_state(backup_tree);
-        recovered_from_backup = parsed.has_value();
-      }
     }
 
     if (!parsed) {
@@ -2162,7 +2142,7 @@ namespace nvhttp {
                 statefile::policy::valid_primary_state(snapshot, true) &&
                 !statefile::policy::valid_primary_state(snapshot, false));
       };
-      if (bootstrap(primary_result, tree) && bootstrap(backup_result, backup_tree) &&
+      if (bootstrap(primary_result, tree) &&
           http::credentials_created_this_run) {
         // A new profile has no host identity or prior TLS credential material.
         // Credential-only/metadata bootstrap files may precede host startup.
@@ -2197,23 +2177,12 @@ namespace nvhttp {
 
     http::unique_id = parsed->unique_id;
 
-    if (recovered_from_backup) {
-      // Restore the primary so the next process does not depend on the backup.
-      // If this repair cannot be written, the in-memory state is still valid
-      // and the backup remains available for the next restart.
-      try {
-        statefile::write_sunshine_state_atomic(backup_tree);
-      } catch (const std::exception &e) {
-        BOOST_LOG(error) << "Could not restore Sunshine state from recovery copy: "sv << e.what();
-      }
-    } else {
-      // Keep the recovery copy current even when it was absent or stale. This
-      // is best effort because the primary is already valid and usable.
-      try {
-        statefile::write_json_atomic(sunshine_backup_path, tree);
-      } catch (const std::exception &e) {
-        BOOST_LOG(warning) << "Could not refresh Sunshine state recovery copy: "sv << e.what();
-      }
+    // Selection already restored a damaged primary. Refresh only the validated
+    // chosen snapshot, without making another independent recovery decision.
+    try {
+      statefile::write_json_atomic(sunshine_backup_path, tree);
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Could not refresh Sunshine state recovery copy: "sv << e.what();
     }
 
     if (!vibeshine_path.empty()) {
