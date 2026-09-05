@@ -2208,10 +2208,12 @@ namespace nvhttp {
       }
     }
 
-    if (!vibeshine_path.empty() && fs::exists(vibeshine_path)) {
+    if (!vibeshine_path.empty()) {
       try {
         pt::ptree vibeshine_tree;
-        pt::read_json(vibeshine_path, vibeshine_tree);
+        if (statefile::load_json(vibeshine_path, vibeshine_tree) != statefile::json_load_result_e::loaded) {
+          throw std::runtime_error("notification state is unavailable");
+        }
         update::state.last_notified_version = vibeshine_tree.get("root.last_notified_version", "");
 #ifdef _WIN32
         http::shared_virtual_display_guid = vibeshine_tree.get("root.shared_virtual_display_guid", "");
