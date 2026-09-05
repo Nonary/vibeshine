@@ -546,17 +546,17 @@ if not (
     raise AssertionError("pairing persistence must lock state before taking the client snapshot")
 
 load_body = nvhttp.split("bool load_state()", 1)[1].split("bool is_placeholder_client_name", 1)[0]
-require(load_body, "statefile::load_json", "durable pairing-state recovery")
+require(load_body, "statefile::load_primary_state(tree)", "authoritative pairing-state recovery")
 require(load_body, "sunshine_state_backup_path", "durable pairing-state recovery")
-require(load_body, "write_sunshine_state_atomic", "durable pairing-state recovery")
+require(load_body, "primary_result == statefile::json_load_result_e::failed", "pairing recovery refusal")
 require(load_body, "refusing to start with a new host identity", "durable pairing-state recovery")
 require(load_body, "http::credentials_created_this_run", "durable fresh-profile detection")
 require(state_storage, "const auto old_load_result = load_tree_for_update", "validated primary-state migration")
 primary_update_body = state_storage.split("policy_load_result_e load_tree_for_update", 1)[1].split("bool load_tree_if_exists", 1)[0]
 require(primary_update_body, "policy::load_primary_state_for_update", "primary recovery before metadata migration")
 require(state_storage, "const auto new_load_result = load_tree_for_read", "non-destructive state migration")
-require(save_snapshot_body, "const auto primary_result = statefile::load_json", "pairing save recovery")
-require(save_snapshot_body, "Using the Sunshine state recovery copy", "pairing save recovery")
+require(save_snapshot_body, "const auto primary_result = statefile::load_primary_state(root)", "authoritative pairing save recovery")
+require(save_snapshot_body, "Refusing to replace unavailable Sunshine state", "pairing save recovery refusal")
 require(save_body, "authorization_state_ready", "pairing persistence load gate")
 require(nvhttp, "Refusing to pair a client because durable pairing state is unavailable", "pairing persistence load gate")
 
