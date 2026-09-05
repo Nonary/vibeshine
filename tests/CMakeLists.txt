@@ -535,8 +535,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}/packaging/linux/steamos/tests/test-local-hdr.py")
         set_tests_properties(test_component_linux_steamos_local_hdr PROPERTIES LABELS "component")
+        add_test(NAME test_component_linux_steamos_pairing_migration
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}/packaging/linux/steamos/tests/test-pairing-migration.py")
+        set_tests_properties(test_component_linux_steamos_pairing_migration PROPERTIES LABELS "component")
     endif()
     sunshine_register_component(NAME test_component_linux_pipewire_cuda_policy TEST_SOURCE unit/platform/linux/test_pipewire_cuda_policy.cpp)
+    pkg_check_modules(TEST_PIPEWIRE QUIET IMPORTED_TARGET libpipewire-0.3)
+    if(TEST_PIPEWIRE_FOUND)
+        sunshine_register_component(NAME test_component_linux_pipewire_format
+            TEST_SOURCE unit/platform/linux/test_pipewire_format.cpp
+            LINK_LIBRARIES PkgConfig::TEST_PIPEWIRE)
+    endif()
     sunshine_register_component(NAME test_component_linux_vulkan_encode_policy TEST_SOURCE unit/platform/linux/test_vulkan_encode_policy.cpp)
     sunshine_register_component(NAME test_component_linux_capture_status TEST_SOURCE unit/platform/linux/test_capture_status.cpp)
     sunshine_register_component(NAME test_component_linux_private_display_capture_policy TEST_SOURCE unit/platform/linux/test_private_display_capture_policy.cpp)
