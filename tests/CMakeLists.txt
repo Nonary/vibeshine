@@ -551,6 +551,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             TEST_SOURCE unit/platform/linux/test_pipewire_format.cpp
             LINK_LIBRARIES PkgConfig::TEST_PIPEWIRE)
     endif()
+    sunshine_register_component(NAME test_component_linux_cuda_interop TEST_SOURCE unit/platform/linux/test_cuda_interop.cpp)
+    if(TARGET test_component_linux_cuda_interop)
+        target_include_directories(test_component_linux_cuda_interop SYSTEM PRIVATE
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/nv-codec-headers/include")
+    endif()
     sunshine_register_component(NAME test_component_linux_vulkan_encode_policy TEST_SOURCE unit/platform/linux/test_vulkan_encode_policy.cpp)
     sunshine_register_component(NAME test_component_linux_capture_status TEST_SOURCE unit/platform/linux/test_capture_status.cpp)
     sunshine_register_component(NAME test_component_linux_private_display_capture_policy TEST_SOURCE unit/platform/linux/test_private_display_capture_policy.cpp)
