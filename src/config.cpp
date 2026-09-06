@@ -58,6 +58,10 @@
 #include "version_compare.h"
 #include "webrtc_stream.h"
 
+#ifdef __linux__
+  #include "platform/linux/private_display.h"
+#endif
+
 #ifdef _WIN32
   #include "platform/windows/hotkey_manager.h"
   #include "platform/windows/misc.h"
