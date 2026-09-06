@@ -7,6 +7,9 @@ else()
 endif()
 
 # AppImage
+if(SUNSHINE_BUILD_STEAMOS)
+    list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_BUILD_STEAMOS=1)
+endif()
 if(${SUNSHINE_BUILD_APPIMAGE})
     # use relative assets path for AppImage
     string(REPLACE "${CMAKE_INSTALL_PREFIX}" ".${CMAKE_INSTALL_PREFIX}" SUNSHINE_ASSETS_DIR_DEF ${SUNSHINE_ASSETS_DIR})
@@ -77,7 +80,8 @@ if(${SUNSHINE_ENABLE_DRM} AND LIBDRM_FOUND AND LIBCAP_FOUND)
         list(APPEND PLATFORM_LIBRARIES ${LIBCAP_LIBRARIES})
     endif()
     list(APPEND PLATFORM_TARGET_FILES
-            "${CMAKE_SOURCE_DIR}/src/platform/linux/kmsgrab.cpp")
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/kmsgrab.cpp"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/kms_capture_client.cpp")
     list(APPEND SUNSHINE_DEFINITIONS EGL_NO_X11=1)
 endif()
 
@@ -228,7 +232,7 @@ if(GIO_FOUND)
 endif()
 
 # Pipewire
-if(${SUNSHINE_ENABLE_KWIN} OR ${SUNSHINE_ENABLE_PORTAL})
+if(${SUNSHINE_ENABLE_KWIN} OR ${SUNSHINE_ENABLE_PORTAL} OR SUNSHINE_ENABLE_GAMESCOPE)
     pkg_check_modules(PIPEWIRE libpipewire-0.3 REQUIRED)
 else()
     set(PIPEWIRE_FOUND OFF)
@@ -241,6 +245,18 @@ if(PIPEWIRE_FOUND)
 endif()
 
 # XDG portal
+if(SUNSHINE_ENABLE_GAMESCOPE)
+    if(NOT WAYLAND_FOUND OR NOT PIPEWIRE_FOUND)
+        message(FATAL_ERROR "Gamescope capture requires Wayland and PipeWire")
+    endif()
+    add_compile_definitions(SUNSHINE_BUILD_GAMESCOPE)
+    GEN_WAYLAND("${CMAKE_SOURCE_DIR}/src/platform/linux/protocols" "" gamescope-pipewire)
+    GEN_WAYLAND("${CMAKE_SOURCE_DIR}/src/platform/linux/protocols" "" vibeshine-capture-v1)
+    list(APPEND PLATFORM_TARGET_FILES
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescope_session.cpp"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescopegrab.cpp")
+endif()
+
 set(PORTAL_FOUND OFF)
 if(PIPEWIRE_FOUND AND GIO_FOUND AND ${SUNSHINE_ENABLE_PORTAL})
     set(PORTAL_FOUND ON)
@@ -346,6 +362,8 @@ list(APPEND PLATFORM_TARGET_FILES
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(APPEND PLATFORM_TARGET_FILES
             "${CMAKE_SOURCE_DIR}/src/platform/linux/private_display.h"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/private_display_mode_client.h"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/private_display_mode_client.cpp"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/private_display_restore_policy.h"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/private_display.cpp")
 endif()

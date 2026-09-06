@@ -55,6 +55,7 @@
   #include "src/platform/windows/virtual_display_cleanup.h"
 #elif defined(__linux__)
   #include "src/platform/linux/capability_sanitizer.h"
+  #include "src/platform/linux/maintenance_cli.h"
   #include "src/platform/linux/private_display.h"
 
   #include <pthread.h>
@@ -263,6 +264,19 @@ WINAPI BOOL ConsoleCtrlHandler(DWORD type) {
 
 int main(int argc, char *argv[]) {
 #ifdef __linux__
+  #ifdef SUNSHINE_BUILD_STEAMOS
+  if (platf::linux_cli::command(argc, argv)) {
+    std::fputs("Vibeshine: native Linux maintenance commands are unavailable in the SteamOS user bundle.\n", stderr);
+    return 2;
+  }
+  #else
+  // Maintenance never enters host initialization. In particular, sudo must
+  // reach the root-owned administrative helper before the host-only capability
+  // policy rejects a root process. No configuration or logging is parsed here.
+  if (const auto result = platf::linux_cli::dispatch(argc, argv)) {
+    return *result;
+  }
+  #endif
   if (!platf::linux_security::sanitize_startup_capabilities()) {
     const int error_number = errno ? errno : EPERM;
     std::fprintf(stderr, "Vibeshine: failed to sanitize Linux startup capabilities: %s\n",
@@ -289,6 +303,20 @@ int main(int argc, char *argv[]) {
 #endif
 
   lifetime::argv = argv;
+
+#ifdef SUNSHINE_BUILD_STEAMOS
+  // Resolve assets from the executable's release, including launches outside
+  // the wrapper and upgrades which switch the "current" symlink underneath us.
+  std::error_code bundle_error;
+  const auto bundle_executable = std::filesystem::read_symlink("/proc/self/exe", bundle_error);
+  if (!bundle_error) {
+    std::filesystem::current_path(bundle_executable.parent_path().parent_path(), bundle_error);
+  }
+  if (bundle_error) {
+    std::fprintf(stderr, "Vibeshine: cannot resolve SteamOS bundle: %s\n", bundle_error.message().c_str());
+    return 1;
+  }
+#endif
 
 #ifdef _WIN32
   // Avoid searching the PATH in case a user has configured their system insecurely

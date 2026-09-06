@@ -67,6 +67,13 @@
   #include "src/steam_integration.h"
 #endif
 #include "vaapi.h"
+#ifdef SUNSHINE_BUILD_STEAMOS
+  #include "private_vaapi_environment.h"
+#endif
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+  #include "gamescope_session.h"
+  #include "gamescopegrab.h"
+#endif
 
 #ifdef __GNUC__
   #define SUNSHINE_GNUC_EXTENSION __extension__
@@ -363,7 +370,17 @@ namespace platf {
       stdio.err = nullptr;
     }
 
+#ifdef SUNSHINE_BUILD_STEAMOS
+    const auto child_env = linux_private_vaapi::child_environment(
+      env,
+      std::getenv("VIBESHINE_PRIVATE_VAAPI"),
+      std::getenv("LIBVA_DRIVERS_PATH"),
+      std::getenv("LIBVA_DRIVER_NAME")
+    );
+    auto env_init = child_env.to_process_environment();
+#else
     auto env_init = env.to_process_environment();
+#endif
     boost::asio::system_executor exec;
 
     try {
@@ -1074,6 +1091,9 @@ namespace platf {
 
   namespace source {
     enum source_e : std::size_t {
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+      GAMESCOPE,  ///< Gamescope compositor-owned PipeWire stream
+#endif
 #ifdef SUNSHINE_BUILD_CUDA
       NVFBC,  ///< NvFBC
 #endif
@@ -1097,6 +1117,12 @@ namespace platf {
   }  // namespace source
 
   static std::bitset<source::MAX_FLAGS> sources;
+
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+  bool gamescope_capture_selected() {
+    return sources[source::GAMESCOPE];
+  }
+#endif
 
 #ifdef SUNSHINE_BUILD_CUDA
   std::vector<std::string> nvfbc_display_names();
@@ -1156,6 +1182,11 @@ namespace platf {
 #endif
 
   std::vector<std::string> display_names(mem_type_e hwdevice_type) {
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+    if (sources[source::GAMESCOPE]) {
+      return gamescope_display_names();
+    }
+#endif
 #ifdef SUNSHINE_BUILD_CUDA
     // display using NvFBC only supports mem_type_e::cuda
     if (sources[source::NVFBC] && hwdevice_type == mem_type_e::cuda) {
@@ -1208,31 +1239,39 @@ namespace platf {
     (void) required_adapter;
     // Keep KMS as first element to check before dropping CAP_SYS_ADMIN
 #ifdef SUNSHINE_BUILD_DRM
-    const bool prefer_private_hdr_kms =
+    // SteamOS KWin rounds PipeWire refresh rates and converts capture to SDR.
+    // Managed outputs use completed DRM frames for both exact pacing and HDR;
+    // their privileged operations run in the restricted capture helper.
+  #ifdef SUNSHINE_BUILD_STEAMOS
+    const bool require_managed_kms = linux_private_display::is_kernel_output(display_name);
+  #else
+    const bool require_managed_kms = false;
+  #endif
+    const bool prefer_private_kms =
       !sources[source::KMS] &&
-      platf::linux_private_display_capture::prefer_kms(
+      (require_managed_kms || platf::linux_private_display_capture::prefer_kms(
         config.dynamicRange,
         config.force_sdr,
         config.prefer_sdr_10bit,
         linux_private_display::is_private_output(display_name)
-      );
-    if (prefer_private_hdr_kms) {
-      BOOST_LOG(info) << "Linux private HDR display detected; preferring direct KMS capture over the configured compositor capture path."sv;
+      ));
+    if (prefer_private_kms) {
+      BOOST_LOG(info) << "Capturing the private display through completed DRM frames."sv;
 
       // KMS display initialization resolves stable connector names through the
       // state populated by enumeration. This must run while CAP_SYS_ADMIN is
       // still available, before the normal compositor path drops it below.
       const auto kms_outputs = kms_display_names(hwdevice_type);
       if (kms_outputs.empty()) {
-        BOOST_LOG(error) << "Direct KMS capture is unavailable for private HDR display ["sv
-                         << display_name << "]; refusing an HDR compositor fallback."sv;
+        BOOST_LOG(error) << "Direct KMS capture is unavailable for private display ["sv
+                         << display_name << "]; refusing a compositor fallback that loses the requested mode or HDR."sv;
         return nullptr;
       } else if (auto kms = kms_display(hwdevice_type, display_name, config)) {
-        BOOST_LOG(info) << "Screencasting private HDR display ["sv << display_name << "] with KMS"sv;
+        BOOST_LOG(info) << "Screencasting private display ["sv << display_name << "] with KMS"sv;
         return kms;
       } else {
-        BOOST_LOG(error) << "Direct KMS capture failed for private HDR display ["sv
-                         << display_name << "]; refusing an HDR compositor fallback."sv;
+        BOOST_LOG(error) << "Direct KMS capture failed for private display ["sv
+                         << display_name << "]; refusing a compositor fallback that loses the requested mode or HDR."sv;
         return nullptr;
       }
     }
@@ -1272,6 +1311,11 @@ namespace platf {
       }
     }
 
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+    if (sources[source::GAMESCOPE]) {
+      return gamescope_display(hwdevice_type, display_name, config);
+    }
+#endif
 #ifdef SUNSHINE_BUILD_CUDA
     if (sources[source::NVFBC] && hwdevice_type == mem_type_e::cuda) {
       BOOST_LOG(info) << "Screencasting with NvFBC"sv;
@@ -1307,6 +1351,7 @@ namespace platf {
   }
 
   std::unique_ptr<deinit_t> init() {
+    sources.reset();
     // enable low latency mode for AMD
     // https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/30039
     set_env("AMD_DEBUG", "lowlatencyenc");
@@ -1333,6 +1378,28 @@ namespace platf {
     }
 #endif
 
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+    if ((config::video.capture.empty() || config::video.capture == "gamescope") && gamescope_available()) {
+      sources[source::GAMESCOPE] = true;
+      // SteamOS publishes DISPLAY in gamescope-environment rather than in
+      // the user manager. Import it only after verifying the compositor.
+      (void) gamescope_session::import_x11_display();
+      BOOST_LOG(info) << "Using Gamescope compositor capture for the current session."sv;
+    }
+    bool native_compositor_selected = sources[source::GAMESCOPE];
+#else
+    bool native_compositor_selected = false;
+#endif
+#if defined(SUNSHINE_BUILD_STEAMOS) && defined(SUNSHINE_BUILD_KWIN)
+    // Desktop Mode provides KWin's native screencast interface. Select it
+    // before portal enumeration, which can open an interactive consent dialog.
+    // Gaming Mode keeps the Gamescope backend selected above.
+    if (config::video.capture.empty() && sources.none() && verify_kwin()) {
+      sources[source::KWIN] = true;
+      native_compositor_selected = true;
+      BOOST_LOG(info) << "Using KWin compositor capture for SteamOS Desktop Mode."sv;
+    }
+#endif
 #ifdef SUNSHINE_BUILD_CUDA
     if (((config::video.capture.empty() && sources.none()) || config::video.capture == "nvfbc") && verify_nvfbc()) {
       sources[source::NVFBC] = true;
@@ -1364,12 +1431,12 @@ namespace platf {
 #ifdef SUNSHINE_BUILD_X11
     // We enumerate this capture backend regardless of other suitable sources,
     // since it may be needed as a NvFBC fallback for software encoding on X11.
-    if ((config::video.capture.empty() || config::video.capture == "x11") && verify_x11()) {
+    if (((config::video.capture.empty() && !native_compositor_selected) || config::video.capture == "x11") && verify_x11()) {
       sources[source::X11] = true;
     }
 #endif
 #ifdef SUNSHINE_BUILD_PORTAL
-    if ((config::video.capture.empty() || config::video.capture == "portal") && verify_portal()) {
+    if (((config::video.capture.empty() && !native_compositor_selected) || config::video.capture == "portal") && verify_portal()) {
       sources[source::PORTAL] = true;
     }
 #endif

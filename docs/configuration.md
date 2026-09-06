@@ -27,9 +27,15 @@ location by modifying the configuration file.
 |---------|-------------------------------------------------|
 | Docker  | @code{}/config@endcode                          |
 | FreeBSD | @code{}~/.config/sunshine@endcode               |
-| Linux   | @code{}~/.config/vibeshine@endcode              |
+| Linux (native package) | @code{}/var/lib/vibeshine@endcode |
+| Linux (standalone) | @code{}~/.config/vibeshine@endcode (or `$XDG_CONFIG_HOME/vibeshine`) |
 | macOS   | @code{}~/.config/sunshine@endcode               |
 | Windows | @code{}%ProgramFiles%\\Sunshine\\config@endcode |
+
+Native Linux packages share one machine profile across the login screen and desktop.
+Edit settings through the Web UI; use `vibeshine paths` to locate files and
+`sudo vibeshine logs` for diagnostics. Package upgrades import the selected desktop
+user's legacy `~/.config/vibeshine` profile once and preserve existing machine settings.
 
 Although it is recommended to use the configuration UI, it is possible manually configure Sunshine by
 editing the `conf` file in a text editor. Use the examples as reference.
@@ -1248,7 +1254,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Linux setup</td>
         <td colspan="2">@code{}
-            sudo /usr/libexec/vibeshine/vibeshine-drm-install install
+            sudo vibeshine driver install
             sudo systemctl enable --now vibeshine-vkms.service
             @endcode
             Native packages and <code>vibeshine-drm-setup.service</code> attempt this installation
@@ -2743,7 +2749,16 @@ this option to replace the running app immediately. The default is `true`.
             @endcode</td>
     </tr>
     <tr>
-        <td rowspan="9">Choices</td>
+        <td rowspan="10">Choices</td>
+        <td>gamescope</td>
+        <td>Capture the Gamescope compositor's main output through PipeWire in SDR.
+            Automatically preferred when Gamescope is available. Supports downscaling
+            within the physical output. HDR requires the version-matched Vibeshine Gamescope
+            capture patch and a working Main10 hardware encoder; stock Gamescope remains SDR.
+            Independent virtual modes are unavailable.
+            @note{Applies to Linux only.}</td>
+    </tr>
+    <tr>
         <td>nvfbc</td>
         <td>Use NVIDIA Frame Buffer Capture to capture direct to GPU memory. This is usually the fastest method for
             NVIDIA cards. NvFBC does not have native Wayland support and does not work with XWayland.
