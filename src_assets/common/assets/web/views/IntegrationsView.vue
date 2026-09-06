@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import GameLibrarySetup from '../../web-legacy/components/GameLibrarySetup.vue';
 import { useUnsavedChanges } from '@/composables/useUnsavedChanges';
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
@@ -413,7 +414,7 @@ const mangoDirty = computed(
 );
 
 function steamAutoSyncEnabled(): boolean {
-  return steam.value?.auto_sync !== false;
+  return steam.value?.auto_sync === true;
 }
 
 function steamRemoveUninstalledEnabled(): boolean {
@@ -1216,12 +1217,35 @@ watch(
   },
 );
 onMounted(() => void load());
+const librarySetupOpen = ref(false);
+function libraryRequest(
+  method: 'GET' | 'POST' | 'PATCH',
+  path: string,
+  body?: Record<string, unknown>,
+): Promise<any> {
+  return method === 'GET'
+    ? apiGet(path)
+    : method === 'PATCH'
+      ? apiPatch(path, body ?? {})
+      : apiPost(path, body ?? {});
+}
 </script>
 
 <template>
   <div class="page page--narrow integrations-page">
+    <GameLibrarySetup
+      v-model:open="librarySetupOpen"
+      :platform="system.metadata?.platform || ''"
+      :request="libraryRequest"
+      @saved="load()"
+    />
     <PageHeader :title="t('ui.integrations.title')" :description="t('ui.integrations.description')">
       <template #actions>
+        <AppButton
+          icon="integrations"
+          label="Setup Game Library Integration"
+          @click="librarySetupOpen = true"
+        />
         <AppButton
           icon="refresh"
           :label="t('ui.integrations.actions.refreshStatus')"
@@ -1336,7 +1360,7 @@ onMounted(() => void load());
                     id="steam-remove-uninstalled"
                     type="checkbox"
                     :checked="steamRemoveUninstalledEnabled()"
-                    :disabled="steam?.sync_all_installed === false"
+                    :disabled="steam?.sync_all_installed !== true"
                     @change="
                       setSteamPolicy(
                         'steam_autosync_remove_uninstalled',
@@ -1358,7 +1382,7 @@ onMounted(() => void load());
                   <input
                     id="steam-sync-all-installed"
                     type="checkbox"
-                    :checked="steam?.sync_all_installed !== false"
+                    :checked="steam?.sync_all_installed === true"
                     @change="
                       setSteamPolicy(
                         'steam_sync_all_installed',
@@ -1382,7 +1406,7 @@ onMounted(() => void load());
                     type="number"
                     min="0"
                     :value="steam?.recent_games ?? 10"
-                    :disabled="steam?.sync_all_installed !== false"
+                    :disabled="steam?.sync_all_installed === true"
                     @change="
                       setSteamRecentPolicy(
                         'steam_recent_games',
@@ -1405,7 +1429,7 @@ onMounted(() => void load());
                     type="number"
                     min="0"
                     :value="steam?.recent_max_age_days ?? 30"
-                    :disabled="steam?.sync_all_installed !== false"
+                    :disabled="steam?.sync_all_installed === true"
                     @change="
                       setSteamRecentPolicy(
                         'steam_recent_max_age_days',
