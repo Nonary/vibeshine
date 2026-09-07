@@ -5,6 +5,10 @@
 #include <map>
 #include <vector>
 
+#ifdef _WIN32
+  #include <windows.h>
+#endif
+
 namespace lifecycle = platf::steam::lifecycle;
 
 namespace {
@@ -172,3 +176,14 @@ TEST(SteamProcessTracker, RefusesToSignalWhenPidIdentityChanged) {
   EXPECT_EQ(result.skipped, 1U);
   EXPECT_TRUE(controller.signals.empty());
 }
+
+#ifdef _WIN32
+TEST(SteamProcessTracker, WindowsSnapshotIncludesCurrentProcessIdentity) {
+  const auto processes = lifecycle::snapshot_processes();
+  ASSERT_TRUE(processes.has_value());
+  const auto current = processes->processes.find(GetCurrentProcessId());
+  ASSERT_NE(current, processes->processes.end());
+  EXPECT_FALSE(current->second.executable.empty());
+  EXPECT_NE(current->second.start_time_ticks, 0U);
+}
+#endif
