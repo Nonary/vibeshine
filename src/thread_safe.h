@@ -326,7 +326,12 @@ namespace safe {
       }
 
       while (_queue.empty()) {
-        if (!_continue || _cv.wait_for(ul, delay) == std::cv_status::timeout) {
+        // A zero-duration pop is used as a poll in hot paths. Calling
+        // condition_variable::wait_for(0) can still yield until the next
+        // Windows scheduler tick, turning a nominally nonblocking operation
+        // into a recurring ~15.6ms stall.
+        if (!_continue || delay <= decltype(delay)::zero() ||
+            _cv.wait_for(ul, delay) == std::cv_status::timeout) {
           return util::false_v<status_t>;
         }
       }
