@@ -1616,6 +1616,7 @@ fi
 %{_prefix}/libexec/vibeshine/vibeshine-vkms-peercred
 %{_prefix}/libexec/vibeshine/vibeshine-session-controller
 %attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibeshine-session-exec
+%attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibeshine-display-power
 %attr(0700,root,root) %caps(cap_kill,cap_setgid,cap_setuid+p) %{_prefix}/libexec/vibeshine/vibeshine-session-broker
 %{_prefix}/libexec/vibeshine/vibeshine-provider-scan
 %attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibeshine-steam-launch

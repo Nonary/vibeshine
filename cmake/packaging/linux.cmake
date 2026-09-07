@@ -107,6 +107,11 @@ else()
         set_target_properties(vibeshine_session_broker PROPERTIES OUTPUT_NAME "vibeshine-session-broker")
         target_include_directories(vibeshine_session_broker PRIVATE "${LIBCAP_INCLUDE_DIRS}")
         target_link_libraries(vibeshine_session_broker PRIVATE "${LIBCAP_LIBRARIES}")
+        add_executable(vibeshine_display_power
+                "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-display-power.c")
+        set_target_properties(vibeshine_display_power PROPERTIES OUTPUT_NAME "vibeshine-display-power")
+        target_include_directories(vibeshine_display_power PRIVATE ${GIO_INCLUDE_DIRS})
+        target_link_libraries(vibeshine_display_power PRIVATE ${GIO_LIBRARIES})
         add_executable(vibeshine_app_supervisor
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-app-supervisor.c")
         set_target_properties(vibeshine_app_supervisor PROPERTIES OUTPUT_NAME "vibeshine-app-supervisor")
@@ -160,7 +165,7 @@ else()
                 DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
         install(TARGETS vibeshine_session_exec vibeshine_app_supervisor
                 vibeshine_profile_import vibeshine_kwin_session_environment
-                vibeshine_provider_scan vibeshine_steam_launch
+                vibeshine_provider_scan vibeshine_steam_launch vibeshine_display_power
                 RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
         install(TARGETS vibeshine_session_broker
                 RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}"
@@ -283,6 +288,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(CPACK_RPM_USER_FILELIST
             "%attr(0755,root,root) ${CMAKE_INSTALL_FULL_BINDIR}/vibeshine"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-session-exec"
+            "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-display-power"
             "%attr(0700,root,root) %caps(cap_kill,cap_setgid,cap_setuid+p) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-session-broker"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-app-supervisor"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-steam-launch"
