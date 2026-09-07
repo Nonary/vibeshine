@@ -33,7 +33,9 @@
 
         <n-button size="medium" class="apps-header__action" @click="librarySetupOpen = true">
           <i class="fas fa-puzzle-piece" />
-          <span>Setup Game Library Integration</span>
+          <span>{{
+            libraryConfigured ? 'Library manager settings' : 'Setup Game Library Integration'
+          }}</span>
         </n-button>
 
         <n-button
@@ -118,9 +120,16 @@
             <i class="fas fa-plus" />
             <span>{{ $t('apps.add_application') }}</span>
           </n-button>
-          <n-button size="medium" type="default" @click="librarySetupOpen = true">
+          <n-button
+            v-if="!libraryConfigured"
+            size="medium"
+            type="default"
+            @click="librarySetupOpen = true"
+          >
             <i class="fas fa-puzzle-piece" />
-            <span>Setup Game Library Integration</span>
+            <span>{{
+              libraryConfigured ? 'Library manager settings' : 'Setup Game Library Integration'
+            }}</span>
           </n-button>
         </div>
       </div>
@@ -130,14 +139,15 @@
       v-model:open="librarySetupOpen"
       :platform="configStore.metadata?.platform || ''"
       :request="libraryRequest"
-      @saved="reload"
+      @configured="libraryConfigured = $event"
+      @saved="librariesSaved"
     />
     <AppEditModal v-model="showModal" :app="currentApp" @saved="reload" @deleted="reload" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
 import GameLibrarySetup from '@/components/GameLibrarySetup.vue';
 import AppEditModal from '@/components/AppEditModal.vue';
 import { useAppsStore } from '@/stores/apps';
@@ -158,6 +168,7 @@ const router = useRouter();
 const { t } = useI18n();
 
 const librarySetupOpen = ref(false);
+const libraryConfigured = ref(false);
 async function libraryRequest(
   method: 'GET' | 'POST' | 'PATCH',
   path: string,
@@ -165,6 +176,9 @@ async function libraryRequest(
 ) {
   const response = await http.request({ method, url: path, data: body });
   return response.data;
+}
+async function librariesSaved() {
+  await Promise.all([reload(), configStore.fetchConfig(true), fetchPlayniteStatus()]);
 }
 const syncBusy = ref(false);
 const isWindows = computed(
@@ -287,7 +301,19 @@ async function fetchPlayniteStatus(): Promise<void> {
   }
 }
 
+let refreshTimer: number | undefined;
+let refreshing = false;
+onBeforeUnmount(() => window.clearInterval(refreshTimer));
 onMounted(async () => {
+  refreshTimer = window.setInterval(async () => {
+    if (document.hidden || refreshing || showModal.value || librarySetupOpen.value) return;
+    refreshing = true;
+    try {
+      await reload();
+    } finally {
+      refreshing = false;
+    }
+  }, 5000);
   try {
     await configStore.fetchConfig?.();
   } catch {}

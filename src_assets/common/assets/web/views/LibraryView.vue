@@ -219,8 +219,12 @@ function syncQuery(): void {
   void router.replace({ query });
 }
 
-async function load(): Promise<void> {
-  loading.value = true;
+let refreshing = false;
+let refreshTimer: number | undefined;
+async function load(silent = false): Promise<void> {
+  if (refreshing) return;
+  refreshing = true;
+  if (!silent) loading.value = true;
   error.value = '';
   try {
     apps.value = await fetchApps();
@@ -230,9 +234,10 @@ async function load(): Promise<void> {
     if (!liveIds.has(focusedUuid.value))
       focusedUuid.value = appUuid(apps.value[0] ?? ({} as AppRecord));
   } catch (cause) {
-    error.value = serviceError(cause, 'ui.library.errors.load');
+    if (!silent) error.value = serviceError(cause, 'ui.library.errors.load');
   } finally {
     loading.value = false;
+    refreshing = false;
   }
 }
 
@@ -461,6 +466,9 @@ watch(loadMoreSentinel, (current, previous) => {
 });
 
 onMounted(() => {
+  refreshTimer = window.setInterval(() => {
+    if (!document.hidden && !deleteBusy.value && !librarySetupOpen.value) void load(true);
+  }, 5000);
   if ('IntersectionObserver' in window) {
     observer = new IntersectionObserver(
       (entries) => {
@@ -475,11 +483,13 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  window.clearInterval(refreshTimer);
   window.clearTimeout(queryTimer);
   observer?.disconnect();
   document.removeEventListener('pointerdown', onDocumentPointerDown);
 });
 const librarySetupOpen = ref(false);
+const libraryConfigured = ref(false);
 function libraryRequest(
   method: 'GET' | 'POST' | 'PATCH',
   path: string,
@@ -499,13 +509,14 @@ function libraryRequest(
       v-model:open="librarySetupOpen"
       :platform="system.metadata?.platform || ''"
       :request="libraryRequest"
+      @configured="libraryConfigured = $event"
       @saved="load()"
     />
     <PageHeader :title="t('ui.library.page.title')" :description="t('ui.library.page.description')">
       <template #actions>
         <AppButton
           icon="integrations"
-          label="Setup Game Library Integration"
+          :label="libraryConfigured ? 'Library manager settings' : 'Setup Game Library Integration'"
           @click="librarySetupOpen = true"
         />
         <RouterLink class="button button--secondary" to="/integrations"
@@ -532,7 +543,7 @@ function libraryRequest(
           icon="refresh"
           size="compact"
           :label="t('ui.library.actions.tryAgain')"
-          @click="load"
+          @click="load()"
         />
       </template>
     </InlineAlert>

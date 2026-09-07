@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "source_revision": "52cbb8f27cbeb18baec53ca5d7b88081f0787a06",
+  "driver_ver": "08/21/2026,0.1.0.30",
+  "platform": "x64",
+  "protocol_version": 2,
+  "signing": {
+    "channel": "msi-request-signing",
+    "signed_downstream": [
+      "driver/VibeshineVhfGamepad.cat",
+      "tools/VibeshineVhfGamepadDeviceSetup.exe"
+    ],
+    "unsigned_payloads": [
+      "driver/VibeshineVhfGamepad.cat",
+      "driver/VibeshineVhfGamepad.dll",
+      "tools/VibeshineVhfGamepadDeviceSetup.exe"
+    ],
+    "catalog_membership": {
+      "basis": "fresh-inf2cat",
+      "generator": "Inf2Cat",
+      "files": {
+        "driver/VibeshineVhfGamepad.inf": "6294f6244eb7f48831312fce152b22330253ed5dc1a53b471499534e9af51089",
+        "driver/VibeshineVhfGamepad.dll": "d23efa318cad9909a639b2c60bb4244f094c20174cf4b1b494642a75d30099a7",
+        "driver/VibeshineVhfGamepad.cat": "1ed1ad442017fa8fb0271bb7c0796bf7555111b2c9bfcf833098973480292412"
+      }
+    }
+  },
+  "files": [
+    {
+      "path": "driver/VibeshineVhfGamepad.inf",
+      "sha256": "6294f6244eb7f48831312fce152b22330253ed5dc1a53b471499534e9af51089"
+    },
+    {
+      "path": "driver/VibeshineVhfGamepad.dll",
+      "sha256": "d23efa318cad9909a639b2c60bb4244f094c20174cf4b1b494642a75d30099a7"
+    },
+    {
+      "path": "driver/VibeshineVhfGamepad.cat",
+      "sha256": "1ed1ad442017fa8fb0271bb7c0796bf7555111b2c9bfcf833098973480292412"
+    },
+    {
+      "path": "tools/VibeshineVhfGamepadDeviceSetup.exe",
+      "sha256": "370a35d98416535bdc2beeda5f33d3605c11ff57a06d5501132241e37ded7e81"
+    }
+  ]
+}
