@@ -174,6 +174,8 @@ class LocalGamescopeGuards(unittest.TestCase):
                 patches.enter_context(mock.patch.object(activation.os, 'geteuid', return_value=0))
                 patches.enter_context(mock.patch.object(activation.os, 'chown'))
                 patches.enter_context(mock.patch.object(pathlib.Path, 'stat', root_owned_stat))
+                patches.enter_context(mock.patch.object(
+                    pathlib.Path, 'lstat', lambda path: root_owned_stat(path, follow_symlinks=False)))
                 patches.enter_context(mock.patch.object(wrapper, 'verify_capabilities'))
                 run = patches.enter_context(mock.patch.object(activation.subprocess, 'run'))
                 yield types.SimpleNamespace(parent=parent, destination=destination, opt=opt,
