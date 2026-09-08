@@ -143,6 +143,9 @@ def inspect_archive(archive, version):
     required = FIXED | {f'usr/bin/vibeshine-{version}',
                         'usr/share/vibeshine/web/index.html',
                         'usr/share/vibeshine/web/v2/index.html'}
+    required.update(f'usr/src/vibeshine-drm-{version.split("-")[0]}/{name}' for name in
+                    ('Makefile', 'build-module', 'dkms.conf', 'vkms_drv.c',
+                     'vibeshine_drm_uapi.h', 'vibeshine_drm_version.h', 'vibeshine_drm_vrr.h'))
     if required - members.keys():
         raise DeployError(f'Missing artifacts: {sorted(required - members.keys())}')
     for name in required:
@@ -1057,7 +1060,7 @@ def root_package_install(args):
     write_json(STATE / 'latest.json', {'id': identifier})
     print(f'Root-private candidate retained at {package}.\n'
           'Pacman owns this installation; recovery uses pacman and its cached packages.\n'
-          'The native installer may update system packages and install kernel headers.', flush=True)
+          'The native installer installs dependencies and matching kernel headers, not a full system upgrade.', flush=True)
     command = ['/usr/bin/bash', str(REPO / 'scripts/linux_install.sh'), '--package', str(package)]
     if args.yes:
         command.append('--yes')
@@ -1543,7 +1546,7 @@ def build_install(args):
             build_native_package(archive_path, package, args.version)
             print(f'Local package: {package}\n'
                   'Installation replaces conflicting host packages and preserves original profiles.\n'
-                  'The native installer may update system packages and install kernel headers.\n'
+                  'The native installer installs dependencies and matching kernel headers, not a full system upgrade.\n'
                   'Recovery uses pacman, not the file rollback journal. Streams will disconnect.')
             if not args.yes and not confirm_install():
                 raise DeployError('Installation cancelled; the local package was retained')
