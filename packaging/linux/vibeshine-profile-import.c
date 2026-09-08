@@ -24,7 +24,7 @@
 
 static const char destination_prefix[] = "/var/lib/.vibeshine-profile.";
 static const char destination_suffix[] = "/incoming";
-static const char source_relative[] = ".config/vibeshine";
+static const char *source_profiles[] = {".config/vibeshine", ".config/sunshine"};
 
 enum {
   maximum_depth = 32,
@@ -327,6 +327,25 @@ static bool destination_copy_budget(int destination, uint64_t *maximum_bytes) {
   return *maximum_bytes > 0;
 }
 
+static int open_source_profile(int home) {
+  int source = -1;
+  for (size_t index = 0; index < sizeof(source_profiles) / sizeof(source_profiles[0]); ++index) {
+    const int candidate = open_beneath(home, source_profiles[index],
+                                      O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (candidate < 0 && errno == ENOENT) continue;
+    if (candidate < 0 || source >= 0) {
+      const int error = candidate < 0 ? errno : EEXIST;
+      if (candidate >= 0) close(candidate);
+      if (source >= 0) close(source);
+      errno = error;
+      return -1;
+    }
+    source = candidate;
+  }
+  if (source < 0) errno = ENOENT;
+  return source;
+}
+
 int main(int argc, char **argv) {
   umask(0077);
   if (argc != 3 || geteuid() != 0) {
@@ -387,8 +406,7 @@ int main(int argc, char **argv) {
     free(passwd_buffer);
     return 1;
   }
-  const int source = open_beneath(home, source_relative,
-                                  O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+  const int source = open_source_profile(home);
   if (source < 0) {
     const int open_error = errno;
     close(home);
@@ -401,7 +419,7 @@ int main(int argc, char **argv) {
       return 0;
     }
     errno = open_error;
-    report_error("could not open the confined desktop profile");
+    report_error("could not open an unambiguous confined desktop profile (keep only the intended profile at its standard location)");
     return 1;
   }
   struct stat source_attributes;

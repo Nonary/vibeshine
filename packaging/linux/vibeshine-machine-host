@@ -401,7 +401,7 @@ rewrite_machine_cover_paths() {
   temporary=$(/usr/bin/mktemp --tmpdir="$machine_profile" .apps-migrate.XXXXXX)
   /usr/bin/chmod 0600 "$temporary"
   if ! capability_free_exec /usr/bin/timeout --signal=KILL 10 \
-      /usr/bin/jq --arg old "$old_prefix" --arg new "$new_prefix" '
+      /usr/bin/jq --arg old "$old_prefix" --arg sunshine "$account_home/.config/sunshine/covers/" --arg new "$new_prefix" '
           def safe_suffix($value):
             ($value | type) == "string" and
             ($value | length) > 0 and
@@ -413,6 +413,10 @@ rewrite_machine_cover_paths() {
                 .["image-path"] = "box.png"
               elif (.["image-path"] | startswith($old)) then
                 (.["image-path"] | ltrimstr($old)) as $suffix
+                | .["image-path"] =
+                    (if safe_suffix($suffix) then $new + $suffix else "box.png" end)
+              elif (.["image-path"] | startswith($sunshine)) then
+                (.["image-path"] | ltrimstr($sunshine)) as $suffix
                 | .["image-path"] =
                     (if safe_suffix($suffix) then $new + $suffix else "box.png" end)
               elif (.["image-path"] | startswith($new)) then
@@ -507,6 +511,10 @@ publish_migrated_profile() (
   /usr/bin/chown root:root "$incoming" || exit 1
   /usr/bin/chmod 0700 "$incoming" || exit 1
   profile_is_safe "$incoming" || exit 1
+  # Normalize only the private staged copy; never rename the desktop original.
+  if [[ ! -e "$incoming/vibeshine.conf" && -f "$incoming/sunshine.conf" ]]; then
+    /usr/bin/mv -- "$incoming/sunshine.conf" "$incoming/vibeshine.conf" || exit 1
+  fi
   /usr/bin/find "$incoming" -xdev -mindepth 1 -type d -exec /usr/bin/chown root:root '{}' +
   /usr/bin/find "$incoming" -xdev -mindepth 1 -type d -exec /usr/bin/chmod 0700 '{}' +
   /usr/bin/find "$incoming" -xdev -mindepth 1 -type f -exec /usr/bin/chown root:root '{}' +
@@ -566,8 +574,12 @@ configure_automatically() {
       valid_user "$user" || continue
       case "$shell" in */nologin|*/false|'') continue ;; esac
       accounts+=("$user")
-      state=$home/.config/vibeshine/sunshine_state.json
-      user_exec "$user" /usr/bin/test -f "$state" && ! user_exec "$user" /usr/bin/test -L "$state" && candidates+=("$user")
+      for state in "$home/.config/"{vibeshine,sunshine}/sunshine_state.json; do
+        if user_exec "$user" /usr/bin/test -f "$state" && ! user_exec "$user" /usr/bin/test -L "$state"; then
+          candidates+=("$user")
+          break
+        fi
+      done
     done < <(/usr/bin/getent passwd)
     if ((${#candidates[@]} == 1)); then
       selected=${candidates[0]}

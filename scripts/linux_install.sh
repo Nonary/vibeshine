@@ -46,6 +46,7 @@ allow_prerelease=1
 use_repo=1
 skip_checks=0
 pacman_confirm=()
+replacement_confirm=()
 check_failures=0
 warnings=()
 workdir=''
@@ -83,7 +84,8 @@ parse_args() {
       --stable) allow_prerelease=0; shift ;;
       --no-repo) use_repo=0; shift ;;
       --skip-checks) skip_checks=1; shift ;;
-      --yes) pacman_confirm=(--noconfirm); shift ;;
+      --yes) pacman_confirm=(--noconfirm)
+        replacement_confirm=(--noconfirm --ask=4); shift ;;
       -h | --help) usage; exit 0 ;;
       *) die "unknown option: $1 (see --help)" ;;
     esac
@@ -298,9 +300,9 @@ install_from_repo() {
   if [[ -n "$requested_version" ]]; then
     local arch_version="${requested_version//-/}"
     arch_version="${arch_version//+/.}"
-    pacman -Syu "${pacman_confirm[@]}" "vibeshine=${arch_version}-1"
+    pacman -Syu "${replacement_confirm[@]}" "vibeshine=${arch_version}-1"
   else
-    pacman -Syu "${pacman_confirm[@]}" vibeshine
+    pacman -Syu "${replacement_confirm[@]}" vibeshine
   fi
 }
 
@@ -357,7 +359,7 @@ install_from_package() {
   # Keep the system consistent first: a partial upgrade against an old
   # library set is the most common reason a fresh pacman -U fails to start.
   pacman -Syu "${pacman_confirm[@]}"
-  pacman -U "${pacman_confirm[@]}" "$local_package"
+  pacman -U "${replacement_confirm[@]}" -- "$local_package"
 }
 
 install_vibeshine() {
