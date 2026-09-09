@@ -9,7 +9,9 @@
 
 namespace config {
   struct steam_t {
-    bool enabled = true;
+    // Linux enables Steam in normalize_steam_policy(). Other platforms must
+    // opt in so upgrading does not bypass an existing Playnite catalog policy.
+    bool enabled = false;
     bool auto_sync = true;
     bool sync_all_installed = true;
     int recent_games = 10;

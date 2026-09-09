@@ -34,6 +34,25 @@ int main(void) {
   CHECK(parse_number("0", 0, 10, &number) && number == 0);
   CHECK(parse_number("10", 1, 10, &number) && number == 10);
 
+  char *global_fps[] = {"vibeshine-session-exec", "global-fps", "1", NULL};
+  CHECK(global_fps_arguments_are_safe(3, global_fps));
+  global_fps[2] = "1000000";
+  CHECK(global_fps_arguments_are_safe(3, global_fps));
+  const char *invalid_global_fps[] = {
+    "", "0", "01", "+1", "-1", " 1", "1 ", "1.0", "1e3", "1000001",
+    "184467440737095516160", "60000;touch /tmp/x", "60000\n", "../60000"
+  };
+  for (size_t index = 0; index < sizeof(invalid_global_fps) / sizeof(invalid_global_fps[0]); ++index) {
+    global_fps[2] = (char *) invalid_global_fps[index];
+    CHECK(!global_fps_arguments_are_safe(3, global_fps));
+  }
+  global_fps[2] = "60000";
+  CHECK(!global_fps_arguments_are_safe(2, global_fps));
+  CHECK(!global_fps_arguments_are_safe(4, global_fps));
+  CHECK(!global_fps_arguments_are_safe(3, NULL));
+  global_fps[2] = NULL;
+  CHECK(!global_fps_arguments_are_safe(3, global_fps));
+
   char *valid_steam_direct[] = {
     "vibeshine-session-broker", "steam-direct", "1182900",
     "mangohud-proton", "116000", "3", "1", "late", "0", "0", NULL

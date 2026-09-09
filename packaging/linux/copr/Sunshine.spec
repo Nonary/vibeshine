@@ -1619,6 +1619,9 @@ fi
 %attr(0700,root,root) %caps(cap_kill,cap_setgid,cap_setuid+p) %{_prefix}/libexec/vibeshine/vibeshine-session-broker
 %{_prefix}/libexec/vibeshine/vibeshine-provider-scan
 %attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibeshine-steam-launch
+%attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibeshine-global-fps
+%{_libdir}/libvibeshine_frame_limiter.so
+%{_datadir}/vulkan/implicit_layer.d/VkLayer_vibeshine_frame_limiter.json
 %{_prefix}/libexec/vibeshine/vibeshine-profile-import
 %attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibeshine-app-supervisor
 %{_prefix}/libexec/vibeshine/vibeshine-machine-host

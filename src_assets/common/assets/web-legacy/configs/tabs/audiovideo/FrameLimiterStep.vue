@@ -62,6 +62,7 @@ interface FrameLimiterStatus {
   can_bootstrap_profile?: boolean;
   profile_found?: boolean;
   mangohud_available?: boolean;
+  global_limiter_available?: boolean;
 }
 
 const status = ref<FrameLimiterStatus>();
@@ -134,6 +135,8 @@ const providerLabelFor = (id: string) => {
       return t('frameLimiter.provider.nvcp');
     case 'rtss':
       return t('frameLimiter.provider.rtss');
+    case 'global':
+      return t('frameLimiter.provider.global');
     case 'mangohud':
       return t('frameLimiter.provider.mangohud');
     case 'proton':
@@ -152,6 +155,7 @@ const providerOptions = computed(() =>
   isLinux.value
     ? [
         { label: providerLabelFor('auto'), value: 'auto' },
+        { label: providerLabelFor('global'), value: 'global' },
         { label: providerLabelFor('mangohud-proton'), value: 'mangohud-proton' },
         { label: providerLabelFor('proton'), value: 'proton' },
         { label: providerLabelFor('mangohud'), value: 'mangohud' },
@@ -296,7 +300,8 @@ const virtualAutoCapCoversDisabledLimiter = computed(
     usingVirtualDisplay.value &&
     autoVirtualLimiter.value &&
     (isLinux.value
-      ? effectiveProvider.value === 'proton' ||
+      ? (effectiveProvider.value === 'global' && !!status.value?.global_limiter_available) ||
+        effectiveProvider.value === 'proton' ||
         effectiveProvider.value === 'mangohud-proton' ||
         !!status.value?.mangohud_available
       : rtssUsable.value || nvDriverFallbackReady.value),
@@ -313,6 +318,11 @@ const statusBadgeClass = computed(() => {
   }
   if (effectiveProvider.value === 'mangohud') {
     return status.value.mangohud_available
+      ? 'bg-success/10 text-success'
+      : 'bg-warning/10 text-warning';
+  }
+  if (effectiveProvider.value === 'global') {
+    return status.value.global_limiter_available
       ? 'bg-success/10 text-success'
       : 'bg-warning/10 text-warning';
   }
@@ -356,6 +366,11 @@ const statusMessage = computed(() => {
     return status.value.mangohud_available
       ? t('frameLimiter.status.mangohudDetected')
       : t('frameLimiter.status.mangohudNotDetected');
+  }
+  if (effectiveProvider.value === 'global') {
+    return status.value.global_limiter_available
+      ? t('frameLimiter.status.globalReady')
+      : t('frameLimiter.status.globalMissing');
   }
   if (effectiveProvider.value === 'proton') {
     return t('frameLimiter.status.protonReady');

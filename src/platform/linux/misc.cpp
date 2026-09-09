@@ -322,9 +322,10 @@ namespace platf {
       }
       exe_path = v2::filesystem::path("/usr/libexec/vibeshine/vibeshine-session-exec");
       if (const auto semantic_steam = platf::steam::session_launch_arguments(cmd)) {
-        // Direct Steam launch is deliberately semantic: the capability-free
-        // client sends only validated policy values, and the broker resolves
-        // all user-owned metadata after entering the selected desktop UID.
+        // Steam handoffs and direct launches are semantic: the client sends
+        // only validated actions/IDs/policy values. In particular, Big Picture
+        // must reach the existing Steam process rather than an app scope that
+        // can fail before the handoff or clean up Steam's detached children.
         args = *semantic_steam;
       } else {
         // The capability-bearing helper resolves the administrator-authorized

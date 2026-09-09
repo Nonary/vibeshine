@@ -1930,6 +1930,11 @@ namespace playnite_launcher::lossless {
     STARTUPINFOW si {sizeof(si)};
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_SHOWNORMAL;
+    // Service launches otherwise inherit a noninteractive window station.
+    // Lossless Scaling must share the logged-on user's game desktop.
+    wchar_t desktop[] = L"winsta0\\default";
+    si.lpDesktop = desktop;
+    const auto working_directory = std::filesystem::path(exe).parent_path().wstring();
     PROCESS_INFORMATION pi {};
     std::wstring cmd = L"\"" + exe + L"\"";
     std::vector<wchar_t> cmdline(cmd.begin(), cmd.end());
@@ -1963,7 +1968,10 @@ namespace playnite_launcher::lossless {
       if (user_token) {
         LPVOID raw_env = nullptr;
         if (!CreateEnvironmentBlock(&raw_env, user_token.get(), FALSE)) {
-          raw_env = nullptr;
+          const DWORD err = GetLastError();
+          BOOST_LOG(warning) << "Lossless Scaling: failed to create the user's environment, error=" << err;
+          SetLastError(err);
+          return false;
         }
         std::unique_ptr<void, decltype(&DestroyEnvironmentBlock)> env_block(raw_env, DestroyEnvironmentBlock);
         BOOL ok = FALSE;
@@ -1984,7 +1992,7 @@ namespace playnite_launcher::lossless {
             FALSE,
             CREATE_UNICODE_ENVIRONMENT,
             env_block.get(),
-            nullptr,
+            working_directory.empty() ? nullptr : working_directory.c_str(),
             &si,
             &pi
           );
@@ -2001,14 +2009,21 @@ namespace playnite_launcher::lossless {
         if (ok) {
           launched = true;
         } else {
+          const DWORD err = GetLastError();
           close_process_handles();
+          SetLastError(err);
+          return false;
         }
       } else {
-        BOOST_LOG(debug) << "Lossless Scaling: no user token available for impersonated launch";
+        BOOST_LOG(warning) << "Lossless Scaling: no interactive user token available for launch";
+        SetLastError(ERROR_NO_TOKEN);
+        return false;
       }
     }
     if (!launched) {
-      if (!CreateProcessW(exe.c_str(), cmdline.data(), nullptr, nullptr, FALSE, CREATE_UNICODE_ENVIRONMENT, nullptr, nullptr, &si, &pi)) {
+      // This path is only for a host already running as the desktop user.
+      // A failed user launch must never fall back to the service's identity.
+      if (!CreateProcessW(exe.c_str(), cmdline.data(), nullptr, nullptr, FALSE, CREATE_UNICODE_ENVIRONMENT, nullptr, working_directory.empty() ? nullptr : working_directory.c_str(), &si, &pi)) {
         DWORD err = GetLastError();
         BOOST_LOG(warning) << "Lossless Scaling: CreateProcess fallback failed, error=" << err;
         close_process_handles();

@@ -358,6 +358,7 @@ namespace confighttp {
   #include "confighttp.h"
   #include "src/config.h"
   #include "src/platform/linux/mangohud_policy.h"
+  #include "src/platform/linux/global_fps.h"
 
 namespace confighttp {
 
@@ -380,11 +381,14 @@ namespace confighttp {
     const bool proton_selected = platf::mangohud::proton_provider_selected(config::frame_limiter.provider);
     const bool proton_overlay_selected =
       platf::mangohud::proton_overlay_provider_selected(config::frame_limiter.provider);
+    const bool global_selected = config::frame_limiter.provider == "global";
+    const bool global_available = platf::global_fps::is_available();
+    const bool global_active = platf::global_fps::is_active();
     const bool active = config::frame_limiter.enable && ((selected && available) || proton_selected);
     send_response(response, {
       {"enabled", config::frame_limiter.enable},
       {"configured_provider", config::frame_limiter.provider.empty() ? "auto" : config::frame_limiter.provider},
-      {"active_provider", active ?
+      {"active_provider", global_active ? "global" : active ?
                             (proton_overlay_selected && available ?
                                "mangohud-proton" : proton_selected ? "proton" : "mangohud") :
                             "none"},
@@ -394,12 +398,17 @@ namespace confighttp {
       {"always_show_graph", config::frame_limiter.mangohud_always_show_graph},
       {"limiter_method", config::frame_limiter.mangohud_limiter_method},
       {"mangohud_available", available},
+      {"global_limiter_available", global_available},
+      {"global_limiter_active", global_active},
       {"resolved_path", path.string()},
-      {"message", proton_overlay_selected ?
+      {"message", global_selected ?
+                    (global_available ?
+                       "The global Vulkan limiter applies during streams to native Vulkan and Proton DXVK/VKD3D games of the installed layer architecture, including games opened from the desktop. Restart games after installing the layer. OpenGL and isolated sandbox installs are not covered." :
+                       "The global Vulkan limiter layer is not installed. Install the native Vibeshine package to enable it.") : proton_overlay_selected ?
                     (available ?
-                       "The MangoHUD overlay and Proton DXVK/VKD3D limiter are ready for managed Steam games." :
+                       "The MangoHUD overlay and Proton DXVK/VKD3D limiter are ready for managed Steam games. Desktop streams use the global Vulkan limiter when its native layer is installed." :
                        "The Proton DXVK/VKD3D limiter is ready, but MangoHUD was not found in PATH; the overlay will be unavailable.") : proton_selected ?
-                    "The Proton DXVK/VKD3D frame limiter is selected for managed Steam D3D9-12 games." : available ?
+                    "Proton limits managed Steam D3D9-12 games; desktop streams use the global Vulkan limiter when its native layer is installed." : available ?
                     "MangoHUD is installed and ready for launched games." :
                     "MangoHUD was not found in PATH; install it to enable Linux frame limiting."}
     });

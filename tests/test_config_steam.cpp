@@ -2,6 +2,24 @@
 
 #include <gtest/gtest.h>
 
+TEST(SteamConfig, DefaultsDoNotOptOtherPlatformsIntoLibrarySync) {
+  std::unordered_map<std::string, std::string> vars;
+  const auto result = config::parse_steam(vars);
+#if defined(__linux__)
+  EXPECT_TRUE(result.enabled);
+#else
+  EXPECT_FALSE(result.enabled);
+#endif
+  EXPECT_FALSE(config::normalize_steam_policy(config::steam_t {}, false).enabled);
+  EXPECT_TRUE(config::normalize_steam_policy(config::steam_t {}, true).enabled);
+}
+
+TEST(SteamConfig, PreservesExplicitOptIn) {
+  std::unordered_map<std::string, std::string> vars {{"steam_enabled", "true"}};
+  EXPECT_TRUE(config::parse_steam(vars).enabled);
+  EXPECT_TRUE(vars.empty());
+}
+
 TEST(SteamConfig, ParsesIndependentFlags) {
   std::unordered_map<std::string, std::string> vars {{"steam_enabled", "off"}, {"steam_auto_sync", "off"}};
   const auto result = config::parse_steam(vars);

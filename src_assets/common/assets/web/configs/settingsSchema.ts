@@ -1091,7 +1091,7 @@ export function optionsForPlatform(field: SettingsField, platform: string): Sett
   if (field.key === 'frame_limiter_provider' && platform.toLowerCase().includes('linux'))
     return [
       option('auto', 'ui.settings.options.frame_limiter_provider.autoLinux'),
-      ...['mangohud', 'proton', 'mangohud-proton', 'none'].map((value) =>
+      ...['global', 'mangohud', 'proton', 'mangohud-proton', 'none'].map((value) =>
         option(
           value,
           `ui.settings.options.frame_limiter_provider.${value === 'mangohud-proton' ? 'mangohudProton' : value}`,

@@ -346,6 +346,9 @@ int main(int argc, char *argv[]) {
   // if anything is logged prior to this point, it will appear in stdout, but not in the log viewer in the UI
   // the version should be printed to the log before anything else
   BOOST_LOG(info) << PROJECT_NAME << " version: " << PROJECT_VERSION << " commit: " << PROJECT_VERSION_COMMIT;
+  if (const auto log_path = logging::current_log_file(); !log_path.empty()) {
+    BOOST_LOG(info) << "Current log file: " << log_path.string();
+  }
 #ifdef _WIN32
   const auto windows_version = platf::query_windows_version();
   BOOST_LOG(info) << "Windows version: product=" << windows_version.product_name

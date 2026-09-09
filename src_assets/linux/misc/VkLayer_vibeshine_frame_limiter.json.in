@@ -1,0 +1,13 @@
+{
+  "file_format_version": "1.2.1",
+  "layer": {
+    "name": "VK_LAYER_VIBESHINE_frame_limiter",
+    "type": "GLOBAL",
+    "library_path": "@VIBESHINE_FRAME_LIMITER_LIBRARY@",
+    "library_arch": "@VIBESHINE_FRAME_LIMITER_ARCH@",
+    "api_version": "1.4.0",
+    "implementation_version": "1",
+    "description": "Vibeshine session FPS limiter",
+    "disable_environment": { "VIBESHINE_DISABLE_FRAME_LIMITER": "1" }
+  }
+}

@@ -73,6 +73,7 @@
   #include <Psapi.h>
 #elif defined(__linux__)
   #include "platform/linux/mangohud_policy.h"
+  #include "platform/linux/global_fps.h"
   #include "platform/linux/mangohud_state.h"
   #include "platform/linux/secure_open.h"
   #include "platform/linux/smooth_motion_policy.h"
@@ -1337,6 +1338,7 @@ namespace proc {
     _env["SUNSHINE_CLIENT_ENABLE_SOPS"] = launch_session->enable_sops ? "true" : "false";
 
 #ifdef __linux__
+    platf::global_fps::set_managed_steam(!_app.steam_id.empty());
     const bool mangohud_uses_lossless_limit =
       _app.lossless_scaling_framegen &&
       boost::iequals(_app.frame_generation_provider, "lossless-scaling");
@@ -1540,8 +1542,8 @@ namespace proc {
           }
         }
       } else {
-        BOOST_LOG(warning)
-          << "The Proton DXVK/VKD3D frame limiter requires a managed Steam Proton application.";
+        BOOST_LOG(info)
+          << "Desktop and unmanaged applications use the global Vulkan frame limiter during the stream.";
       }
     } else if (mangohud_policy.enabled) {
       if (!mangohud_available) {
@@ -2437,6 +2439,7 @@ namespace proc {
     std::error_code ec;
     const bool had_active_app = _app_id > 0;
 #ifdef __linux__
+    platf::global_fps::set_managed_steam(false);
     if (!_app.steam_id.empty()) {
       platf::mangohud::remove_state(_app.steam_id);
     }

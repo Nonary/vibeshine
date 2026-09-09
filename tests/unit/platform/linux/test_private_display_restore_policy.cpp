@@ -11,7 +11,7 @@
 namespace policy = platf::linux_private_display::restore_policy;
 
 TEST(LinuxPrivateDisplayRestorePolicy, PrefersConnectedPhysicalGuard) {
-  constexpr std::array candidates {
+  const std::array candidates {
     policy::candidate_t {"Virtual-1", true, true, true},
     policy::candidate_t {"HDMI-A-1", true, true, false},
   };
@@ -20,7 +20,7 @@ TEST(LinuxPrivateDisplayRestorePolicy, PrefersConnectedPhysicalGuard) {
 }
 
 TEST(LinuxPrivateDisplayRestorePolicy, FallsBackToPrivateGuardForPrivateBaseline) {
-  constexpr std::array candidates {
+  const std::array candidates {
     policy::candidate_t {"Virtual-2", true, true, true},
   };
 
@@ -28,7 +28,7 @@ TEST(LinuxPrivateDisplayRestorePolicy, FallsBackToPrivateGuardForPrivateBaseline
 }
 
 TEST(LinuxPrivateDisplayRestorePolicy, RetiringPrivateOutputCannotGuardItsOwnDisconnect) {
-  constexpr std::array candidates {
+  const std::array candidates {
     policy::candidate_t {"Virtual-1", true, true, true, true},
   };
 
@@ -36,7 +36,7 @@ TEST(LinuxPrivateDisplayRestorePolicy, RetiringPrivateOutputCannotGuardItsOwnDis
 }
 
 TEST(LinuxPrivateDisplayRestorePolicy, DistinctPrivateOutputCanGuardRetirement) {
-  constexpr std::array candidates {
+  const std::array candidates {
     policy::candidate_t {"Virtual-1", true, true, true, true},
     policy::candidate_t {"Virtual-2", true, true, true, false},
   };
@@ -45,7 +45,7 @@ TEST(LinuxPrivateDisplayRestorePolicy, DistinctPrivateOutputCanGuardRetirement) 
 }
 
 TEST(LinuxPrivateDisplayRestorePolicy, RejectsDisabledAndDisconnectedGuards) {
-  constexpr std::array candidates {
+  const std::array candidates {
     policy::candidate_t {"HDMI-A-1", false, true, false},
     policy::candidate_t {"DP-1", true, false, false},
   };
@@ -54,7 +54,7 @@ TEST(LinuxPrivateDisplayRestorePolicy, RejectsDisabledAndDisconnectedGuards) {
 }
 
 TEST(LinuxPrivateDisplayRestorePolicy, EnabledDisconnectedBaselineHasNoUsableGuard) {
-  constexpr std::array candidates {
+  const std::array candidates {
     policy::candidate_t {"HDMI-A-1", true, false, false},
   };
 
@@ -62,12 +62,32 @@ TEST(LinuxPrivateDisplayRestorePolicy, EnabledDisconnectedBaselineHasNoUsableGua
 }
 
 TEST(LinuxPrivateDisplayRestorePolicy, HeadlessBaselineHasNoUsableGuard) {
-  constexpr std::array candidates {
+  const std::array candidates {
     policy::candidate_t {"HDMI-A-1", false, true, false},
     policy::candidate_t {"Virtual-1", false, false, true},
   };
 
   EXPECT_FALSE(policy::select_guard(candidates).has_value());
+}
+
+TEST(LinuxPrivateDisplayRestorePolicy, OwnsNamesReadWhileBuildingSnapshotCandidates) {
+  std::vector<policy::candidate_t> candidates;
+  {
+    std::string output_name {"HDMI-A-1"};
+    candidates.push_back({output_name, true, true, false});
+    // Snapshot traversal reuses/destroys its local string before guard selection.
+    output_name.replace(0, output_name.size(), "Virtual1");
+    EXPECT_EQ(policy::select_guard(candidates), "HDMI-A-1");
+  }
+
+  EXPECT_EQ(policy::select_guard(candidates), "HDMI-A-1");
+  const std::map<std::string, std::vector<std::string>> activations {
+    {"HDMI-A-1", {"output.HDMI-A-1.enable"}},
+  };
+  EXPECT_EQ(
+    policy::guard_activation(policy::select_guard(candidates), activations),
+    std::make_optional(activations.at("HDMI-A-1"))
+  );
 }
 
 TEST(LinuxPrivateDisplayRestorePolicy, MissingGuardActivationFailsSafely) {

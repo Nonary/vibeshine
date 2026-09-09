@@ -59,6 +59,8 @@ interface MangoHudStatus {
   always_show_graph?: boolean;
   limiter_method?: string;
   mangohud_available?: boolean;
+  global_limiter_available?: boolean;
+  global_limiter_active?: boolean;
   resolved_path?: string;
   message?: string;
 }
@@ -655,6 +657,7 @@ function mangoHudSummary(): IntegrationSummary {
   if (!value) return failedSummary('mangohud', name, description);
   const selected =
     value.configured_provider === 'auto' ||
+    value.configured_provider === 'global' ||
     value.configured_provider === 'mangohud' ||
     value.configured_provider === 'proton' ||
     value.configured_provider === 'mangohud-proton';
@@ -662,11 +665,20 @@ function mangoHudSummary(): IntegrationSummary {
     value.configured_provider === 'auto' ||
     value.configured_provider === 'proton' ||
     value.configured_provider === 'mangohud-proton';
+  const globalActive = value.global_limiter_active === true;
   const overlayMissing =
+    !globalActive &&
     (value.configured_provider === 'auto' || value.configured_provider === 'mangohud-proton') &&
     value.mangohud_available !== true;
-  const available = protonSelected || value.mangohud_available === true;
+  const available =
+    globalActive ||
+    (value.configured_provider === 'global'
+      ? value.global_limiter_available === true
+      : protonSelected || value.mangohud_available === true);
   const enabled = value.enabled === true && selected;
+  // Virtual-display policy can activate the global limiter independently of
+  // the manual enable switch. Report the running lease in that case too.
+  const active = globalActive || (enabled && value.configured_provider !== 'global');
   return {
     id: 'mangohud',
     name,
@@ -675,7 +687,7 @@ function mangoHudSummary(): IntegrationSummary {
       ? t('ui.integrations.mangohud.overlayMissing')
       : !available
         ? t('ui.integrations.status.notDetected')
-        : enabled
+        : active
           ? t('_common.active')
           : selected
             ? t('ui.integrations.status.ready')
@@ -684,7 +696,7 @@ function mangoHudSummary(): IntegrationSummary {
       ? 'warning'
       : !available
         ? 'warning'
-        : enabled
+        : active
           ? 'success'
           : selected
             ? 'info'
@@ -1824,6 +1836,7 @@ onMounted(() => void load());
                   class="integration-control"
                 >
                   <option value="auto">{{ t('ui.integrations.mangohud.providerAuto') }}</option>
+                  <option value="global">{{ t('ui.integrations.mangohud.providerGlobal') }}</option>
                   <option value="mangohud">
                     {{ t('ui.integrations.mangohud.providerMangoHud') }}
                   </option>

@@ -66,9 +66,9 @@ struct worker_t {
 namespace thread_pool_util { using ThreadPool = worker_t; }
 #define DISABLE_LEFT_BUTTON_DELAY ((worker_t::task_id_t) 0x01)
 #define ENABLE_LEFT_BUTTON_DELAY nullptr
-constexpr int BUTTON_LEFT = 1, BUTTON_RIGHT = 3;
+constexpr int BUTTON_LEFT = 1, BUTTON_RIGHT = 3, BUTTON_X2 = 5;
 constexpr int MOUSE_BUTTON_UP_EVENT_MAGIC_GEN5 = 1;
-namespace config { struct { bool mouse = true; } input; }
+namespace config { struct { bool mouse = true; std::map<short, short> keybindings; } input; }
 namespace util::endian {
   template<class T> T big(T value) { return value; }
   template<class T> T little(T value) { return value; }
@@ -86,22 +86,23 @@ struct input_t {
   bool mouse_left_button_delay = true;
   std::mutex input_queue_lock;
   std::list<int> input_queue;
+  int shortcutFlags = 0;
 };
-std::array<std::uint8_t, 5> mouse_press {};
-std::array<input_t *, 5> mouse_press_owner {};
 worker_t::task_id_t key_press_repeat_id {};
 std::unordered_map<int, bool> key_press;
 int platf_input;
-int vk_from_kpid(int x) { return x; }
-int flags_from_kpid(int) { return 0; }
+int vk_from_kpid(int x) { return x >> 8; }
+int flags_from_kpid(int x) { return x & 0xFF; }
 struct event_t {
   int button; bool release;
   bool operator==(const event_t &) const = default;
 };
 std::vector<event_t> events;
+struct key_event_t { int key; bool release; int flags; };
+std::vector<key_event_t> key_events;
 namespace platf {
   void button_mouse(int, int button, bool release) { events.push_back({button, release}); }
-  void keyboard_update(int, int, bool, int) {}
+  void keyboard_update(int, int key, bool release, int flags) { key_events.push_back({key, release, flags}); }
 }
 '''
 
@@ -232,6 +233,26 @@ int main(int argc, char **argv) {
     button(b, BUTTON_RIGHT, true); expect({{3, false}});
     reset(b); task_pool.drain(); expect({{3, false}});
     button(a, BUTTON_RIGHT, true); expect({{3, false}, {3, true}});
+  } else if (test == "side_button_disconnect") {
+    button(a, BUTTON_X2, false); reset(a); task_pool.drain();
+    expect({{BUTTON_X2, false}, {BUTTON_X2, true}});
+  } else if (test == "foreign_side_button_release") {
+    button(a, BUTTON_X2, false); button(b, BUTTON_X2, false);
+    button(b, BUTTON_X2, true); reset(b); task_pool.drain();
+    expect({{BUTTON_X2, false}});
+    reset(a); task_pool.drain();
+    expect({{BUTTON_X2, false}, {BUTTON_X2, true}});
+  } else if (test == "remapped_alt_disconnect") {
+    config::input.keybindings[0x14] = 0xA4; // Caps Lock mapped to Left Alt
+    key_press[(0x14 << 8) | 1] = true;
+    a->shortcutFlags = 2;
+    reset(a); task_pool.drain();
+    assert(key_events.size() == 1);
+    assert(key_events[0].key == 0xA4 && key_events[0].release && key_events[0].flags == 1);
+    assert(!key_press[(0x14 << 8) | 1]);
+    assert(a->shortcutFlags == 0);
+    reset(a); task_pool.drain();
+    assert(key_events.size() == 1);
   } else { return 2; }
 }
 '''
@@ -242,7 +263,10 @@ def main():
     parser.add_argument('--source', type=Path, default=ROOT / 'src/input.cpp')
     args = parser.parse_args()
     source = args.source.read_text()
+    mouse_state = '\n'.join(line for line in source.splitlines()
+                            if 'static std::array<' in line and 'mouse_press' in line)
     handlers = '\n'.join(function(source, signature) for signature in (
+        'short map_keycode(short keycode)',
         'void passthrough(std::shared_ptr<input_t> &input, PNV_REL_MOUSE_MOVE_PACKET packet)',
         'void passthrough(std::shared_ptr<input_t> &input, PNV_MOUSE_BUTTON_PACKET packet)',
         'void reset(std::shared_ptr<input_t> &input)',
@@ -257,12 +281,13 @@ def main():
         'overlapping_owner_disconnects_first', 'overlapping_owner_releases_first',
         'foreign_release_after_newer_press', 'foreign_relative_release',
         'foreign_right_release',
+        'side_button_disconnect', 'foreign_side_button_release', 'remapped_alt_disconnect',
     ]
     failures = []
     with tempfile.TemporaryDirectory(prefix='delayed-mouse-release-') as temp:
         cpp = Path(temp) / 'test.cpp'
         binary = Path(temp) / 'test'
-        cpp.write_text(PRELUDE + handlers + TESTS)
+        cpp.write_text(PRELUDE + mouse_state + '\n' + handlers + TESTS)
         subprocess.run(['c++', '-std=c++20', '-Wall', '-Wextra', '-Wno-sign-compare',
                         str(cpp), '-o', str(binary)], check=True)
         for case in cases:

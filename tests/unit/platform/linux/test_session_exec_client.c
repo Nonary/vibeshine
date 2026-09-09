@@ -62,11 +62,61 @@ static int check_client_termination(int signal_number, bool pending) {
   return 0;
 }
 
+static int check_global_limiter_parent_death(void) {
+  int previous_subreaper = 0;
+  CHECK(!prctl(PR_GET_CHILD_SUBREAPER, &previous_subreaper, 0, 0, 0));
+  CHECK(!prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0));
+  int peers[2], child_pid_pipe[2];
+  CHECK(!socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, peers));
+  CHECK(!pipe(child_pid_pipe));
+  const pid_t host = fork();
+  CHECK(host >= 0);
+  if (!host) {
+    alarm(5); // Do not strand the fixture host if client initialization fails.
+    close(peers[0]);
+    close(child_pid_pipe[0]);
+    const pid_t client = fork();
+    if (client < 0) _exit(1);
+    if (!client) {
+      close(child_pid_pipe[1]);
+      alarm(3); // Bound a missing parent-death signal regression.
+      const pid_t expected_parent = getppid();
+      if (!drop_client_capabilities() || !restore_termination_signals() ||
+          !bind_global_limiter_to_parent(expected_parent)) _exit(1);
+      if (send(peers[1], "R", 1, MSG_NOSIGNAL) != 1) _exit(1);
+      _exit(relay_responses(peers[1], 42));
+    }
+    close(peers[1]);
+    if (write(child_pid_pipe[1], &client, sizeof(client)) != (ssize_t) sizeof(client)) _exit(1);
+    close(child_pid_pipe[1]);
+    for (;;) pause();
+  }
+  close(peers[1]);
+  close(child_pid_pipe[1]);
+  pid_t client = -1;
+  CHECK(read(child_pid_pipe[0], &client, sizeof(client)) == (ssize_t) sizeof(client));
+  close(child_pid_pipe[0]);
+  char ready = 0;
+  CHECK(recv(peers[0], &ready, 1, 0) == 1 && ready == 'R');
+  CHECK(!kill(host, SIGKILL));
+  int status = 0;
+  CHECK(waitpid(host, &status, 0) == host);
+  CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL);
+  CHECK(waitpid(client, &status, 0) == client);
+  CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
+  // The broker sees EOF and invokes its existing worker cancellation path.
+  CHECK(recv(peers[0], &ready, 1, MSG_DONTWAIT) == 0);
+  close(peers[0]);
+  CHECK(!prctl(PR_SET_CHILD_SUBREAPER, previous_subreaper, 0, 0, 0));
+  return 0;
+}
+
 int main(void) {
   CHECK(!check_client_termination(SIGTERM, true));
   CHECK(!check_client_termination(SIGTERM, false));
   CHECK(!check_client_termination(SIGINT, false));
   CHECK(!check_client_termination(SIGHUP, false));
+  CHECK(!check_global_limiter_parent_death());
 
   uint64_t generation = 0;
   CHECK(!parse_generation(NULL, &generation));
@@ -117,6 +167,9 @@ int main(void) {
   CHECK(child >= 0);
   if (!child) {
     if (!drop_client_capabilities() || prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1) _exit(1);
+    if (bind_global_limiter_to_parent(1) || errno != ESRCH) _exit(1);
+    // Model a parent change during capability discard/PDEATHSIG setup.
+    if (bind_global_limiter_to_parent(getppid() + 1) || errno != ESRCH) _exit(1);
     cap_t current = cap_get_proc();
     cap_t empty = cap_init();
     const bool clear = current && empty && cap_compare(current, empty) == 0;
@@ -128,6 +181,6 @@ int main(void) {
   CHECK(waitpid(child, &status, 0) == child);
   CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
-  puts("PASS: unprivileged session client termination, framing and capability discard");
+  puts("PASS: session client termination, parent-death cleanup, framing and capability discard");
   return 0;
 }

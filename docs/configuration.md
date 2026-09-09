@@ -2901,7 +2901,7 @@ this option to replace the running app immediately. The default is `true`.
 
 ## Frame Limiter
 
-These options integrate with Proton and MangoHUD on Linux and RTSS or NVIDIA Control Panel on Windows to
+These options integrate with the global Vulkan limiter, Proton and MangoHUD on Linux and RTSS or NVIDIA Control Panel on Windows to
 manage frame pacing and related behavior during a stream.
 They appear in the Frame Limiter section of the settings UI.
 
@@ -2946,9 +2946,13 @@ They appear in the Frame Limiter section of the settings UI.
             @endcode</td>
     </tr>
     <tr>
-        <td rowspan="7">Choices</td>
+        <td rowspan="8">Choices</td>
         <td>auto</td>
-        <td>On Linux, use Proton's DXVK/VKD3D limiter and present the MangoHUD overlay. On Windows, prefer RTSS when available and otherwise fall back to NVIDIA Control Panel.</td>
+        <td>On Linux, use Proton's DXVK/VKD3D limiter and MangoHUD overlay for managed Steam games, and the global Vulkan limiter for desktop or unmanaged applications. On Windows, prefer RTSS when available and otherwise fall back to NVIDIA Control Panel.</td>
+    </tr>
+    <tr>
+        <td>global</td>
+        <td>Limit Vulkan presentations across the streamed Linux desktop, including games launched from an already-running Steam client. Requires the implicit Vulkan layer installed by the native Vibeshine package.</td>
     </tr>
     <tr>
         <td>mangohud</td>
@@ -2975,6 +2979,16 @@ They appear in the Frame Limiter section of the settings UI.
         <td>Disable all frame limiter providers.</td>
     </tr>
 </table>
+
+The global Linux provider applies to native Vulkan and Proton DXVK/VKD3D presentations, including
+frame-generated output, for the architecture of the installed layer (normally 64-bit). Games need
+restarting after the layer is first installed; afterward they can remain open across stream starts
+and stops. It does not require per-game Steam launch options or MangoHUD. OpenGL, wined3d,
+32-bit games with only the 64-bit layer installed, and isolated Flatpak/AppImage setups are not covered.
+The layer excludes common desktop compositors and the streaming host. It disables pacing when the
+last stream ends. After its helper stops updating, the lease expires in two seconds and the layer
+checks for that change at most 100 milliseconds later.
+Set `VIBESHINE_DISABLE_FRAME_LIMITER=1` in an application's environment to opt it out.
 
 ### frame_limiter_fps_limit
 
@@ -4408,9 +4422,9 @@ runtime version is written to the log on every AMD HDR HEVC attempt (search for
 
 ### steam_enabled
 
-Enables local Steam library discovery, synchronization, and launch support. This setting is always enabled on Linux. On other platforms it can be combined with `playnite_enabled` or used by itself.
+Enables local Steam library discovery, synchronization, and launch support. This setting is always enabled on Linux. On other platforms it is opt-in and can be combined with `playnite_enabled` or used by itself. Steam synchronization has its own filters; enable it explicitly if you also use Playnite filtering.
 
-Default: `true`
+Default: `true` on Linux; `false` on other platforms.
 
 ### steam_auto_sync
 

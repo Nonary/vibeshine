@@ -610,10 +610,11 @@
         "presetFpsOnly": "FPS only",
         "presetHorizontal": "Horizontal",
         "provider": "Limiter provider",
-        "providerAuto": "Automatic — Proton limiter + MangoHUD overlay",
-        "providerDescription": "Automatic uses Proton's built-in DXVK or vkd3d-proton limiter for managed Steam games and keeps the MangoHUD overlay visible. Proton also limits frame-generated output. Choose MangoHUD to use its limiter with selectable early or late timing.",
+        "providerAuto": "Automatic — Proton games or global Vulkan",
+        "providerDescription": "Automatic uses Proton with the MangoHUD overlay for managed Steam games and the global Vulkan limiter for desktop streams. Global Vulkan also covers games opened from an existing Steam client and frame-generated presentations, using the native package layer. Restart games after installing it. OpenGL, other process architectures and isolated sandbox installs are not covered. Choose MangoHUD for its early or late limiter.",
         "providerMangoHud": "MangoHUD",
         "providerMangoHudProton": "MangoHUD + Proton",
+        "providerGlobal": "Global Vulkan limiter",
         "providerProton": "Proton DXVK/VKD3D",
         "providerNone": "None",
         "settingsDescription": "Choose the limiter, whether MangoHUD remains visible, and how the frame limit is calculated.",
@@ -1960,7 +1961,8 @@
           "off_linux": "Off — no automatic virtual-display refresh or game cap"
         },
         "frame_limiter_provider": {
-          "autoLinux": "Automatic — Proton limiter + MangoHUD overlay",
+          "autoLinux": "Automatic — Proton for managed Steam games; global Vulkan for desktop streams",
+          "global": "Global Vulkan limiter",
           "mangohud": "MangoHUD",
           "mangohudProton": "MangoHUD + Proton",
           "proton": "Proton DXVK/VKD3D",

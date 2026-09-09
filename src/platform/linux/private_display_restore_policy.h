@@ -8,11 +8,11 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <string_view>
 
 namespace platf::linux_private_display::restore_policy {
   struct candidate_t {
-    std::string_view name;
+    // Candidates outlive the loop-local names read from KScreen's JSON.
+    std::string name;
     bool enabled {false};
     bool connected {false};
     bool private_output {false};

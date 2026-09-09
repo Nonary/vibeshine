@@ -40,6 +40,23 @@ static bool restore_termination_signals(void) {
   return !sigprocmask(SIG_UNBLOCK, &signals, NULL);
 }
 
+static bool bind_global_limiter_to_parent(pid_t parent_pid) {
+  // Arm after capability discard: privilege transitions may clear PDEATHSIG.
+  // The client owns the broker connection, whose closure cancels the desktop
+  // lease writer. An abruptly terminated host must not leave that lease live.
+  if (parent_pid <= 1) {
+    errno = ESRCH;
+    return false;
+  }
+  if (prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0)) return false;
+  // Parent death before prctl() does not send a retroactive signal.
+  if (getppid() != parent_pid) {
+    errno = ESRCH;
+    return false;
+  }
+  return true;
+}
+
 static bool parse_generation(const char *value, uint64_t *generation) {
   if (!value || !value[0] || !generation) return false;
   for (const unsigned char *cursor = (const unsigned char *) value; *cursor; ++cursor) {
@@ -211,10 +228,14 @@ static int relay_responses(int socket_fd, uint64_t generation) {
 }
 
 int main(int argc, char **argv) {
+  const pid_t parent_pid = getppid();
   uint64_t generation = 0;
   if (!drop_client_capabilities()) return fail("could not discard inherited capabilities");
   if (!restore_termination_signals()) return fail("could not restore termination signals");
   if (argc < 2) return 2;
+  if (!strcmp(argv[1], "global-fps") && !bind_global_limiter_to_parent(parent_pid)) {
+    return fail("could not bind global FPS limiter to its host process");
+  }
   if (!parse_generation(getenv("VIBESHINE_SESSION_GENERATION"), &generation)) {
     errno = 0;
     return fail("missing or invalid VIBESHINE_SESSION_GENERATION");

@@ -1327,7 +1327,9 @@ namespace platf {
       // An explicit profile must not be replaced by an automatic/client-selected profile or by
       // ViGEmBus. Otherwise a failed Switch Pro allocation makes the client override appear to
       // win even though the user selected a specific VHF profile.
-      if (desired != vhf_profile_e::automatic) {
+      // `desired` may have been inferred from client type or capabilities even
+      // for the automatic option. Only a configured profile forbids fallback.
+      if (config::input.gamepad != "vhf"sv) {
         BOOST_LOG(error) << "Gamepad " << id.globalIndex << " could not create the requested Vibeshine controller profile; refusing to substitute another profile"sv;
         return -1;
       }
@@ -1337,7 +1339,7 @@ namespace platf {
     }
 
     if (!raw->vigem) {
-      return 0;
+      return -1;
     }
 
     VIGEM_TARGET_TYPE selectedGamepadType;

@@ -90,8 +90,16 @@ fail: {
 
 static bool application_arguments_are_safe(int argc, char **argv) {
   if (!argv || argc < 3 || argc > VIBESHINE_APP_MAX_ARGUMENTS + 2 ||
-      !argv[0] || !argv[1] || strcmp(argv[1], "--") ||
+      !argv[0] || !argv[1] ||
       !argv[2] || argv[2][0] != '/') return false;
+  if (strcmp(argv[1], "--")) {
+    // Only this fixed desktop action may retain a successful launcher's
+    // descendants. Arbitrary applications keep the normal leader lifetime.
+    if (strcmp(argv[1], "--steam-big-picture") || argc != 4 ||
+        strcmp(argv[2], "/usr/bin/steam") || !argv[3] ||
+        (strcmp(argv[3], "steam://open/bigpicture") &&
+         strcmp(argv[3], "steam://close/bigpicture"))) return false;
+  }
   size_t total = 0;
   for (int index = 2; index < argc; ++index) {
     if (!argv[index]) return false;
@@ -254,7 +262,8 @@ static int wait_status_exit_code(int status) {
   return 126;
 }
 
-static int supervise_application(char **arguments, int watchdog_fd, int signal_fd) {
+static int supervise_application(char **arguments, int watchdog_fd, int signal_fd,
+                                 bool keep_steam_descendants) {
   const enum watchdog_result initial_watchdog = inspect_watchdog(watchdog_fd);
   if (initial_watchdog != WATCHDOG_OPEN) {
     return initial_watchdog == WATCHDOG_EOF ? 128 + SIGTERM : 126;
@@ -303,11 +312,17 @@ static int supervise_application(char **arguments, int watchdog_fd, int signal_f
     supervisor_error = launch_watchdog == WATCHDOG_ERROR;
   }
   close(startup[1]);
-  while (!application_reaped && !cancellation_signal && !supervisor_error) {
+  while (!cancellation_signal && !supervisor_error) {
     bool have_children = false;
     reap_available_children(application, &application_reaped,
                             &application_status, &have_children);
-    if (application_reaped) break;
+    // Steam's bootstrap can exit successfully after starting a daemon (even
+    // one that calls setsid()). As a subreaper, keep those descendants in the
+    // existing watchdog-owned unit. An existing-client URI handoff has none
+    // and returns immediately; a failed bootstrap still triggers cleanup.
+    if (application_reaped &&
+        (!keep_steam_descendants || wait_status_exit_code(application_status) != 0 ||
+         !have_children)) break;
     if (!have_children) {
       supervisor_error = true;
       break;
@@ -355,8 +370,12 @@ static int supervise_application(char **arguments, int watchdog_fd, int signal_f
     }
   }
 
-  const bool cleaned = terminate_application_group(
-    application, &application_reaped, &application_status);
+  // A Steam bootstrap may have been reaped hours ago, and a setsid daemon
+  // can leave its former process-group ID free for reuse. Never signal that
+  // stale PGID. Exiting this supervisor triggers the enclosing unit's
+  // ExitType=main / KillMode=control-group cleanup for all remaining children.
+  const bool cleaned = (keep_steam_descendants && application_reaped) ||
+    terminate_application_group(application, &application_reaped, &application_status);
   if (!cleaned || supervisor_error || !application_reaped) return 126;
   if (cancellation_signal) return 128 + cancellation_signal;
   return wait_status_exit_code(application_status);
@@ -372,7 +391,8 @@ int main(int argc, char **argv) {
   sigset_t signals;
   int signal_fd = -1;
   if (!configure_signal_fd(&signals, &signal_fd)) return 126;
-  const int result = supervise_application(&argv[2], STDIN_FILENO, signal_fd);
+  const int result = supervise_application(&argv[2], STDIN_FILENO, signal_fd,
+                                           !strcmp(argv[1], "--steam-big-picture"));
   close(signal_fd);
   return result;
 }

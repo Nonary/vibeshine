@@ -505,6 +505,47 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     sunshine_register_component(NAME test_component_linux_hdr_policy TEST_SOURCE unit/platform/linux/test_hdr_policy.cpp)
     sunshine_register_component(NAME test_component_linux_private_display_mode_policy TEST_SOURCE unit/platform/linux/test_private_display_mode_policy.cpp)
     sunshine_register_component(NAME test_component_linux_mangohud_policy TEST_SOURCE unit/platform/linux/test_mangohud_policy.cpp)
+    if(SUNSHINE_TEST_ENABLE_COMPONENT)
+        set(_global_fps_vulkan_headers "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/build-deps/third-party/FFmpeg/Vulkan-Headers/include")
+        if(NOT EXISTS "${_global_fps_vulkan_headers}/vulkan/vk_layer.h")
+            unset(_global_fps_vulkan_headers)
+            unset(_global_fps_vulkan_headers CACHE)
+            find_path(_global_fps_vulkan_headers vulkan/vk_layer.h REQUIRED)
+        endif()
+        add_library(test_global_fps_layer SHARED "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/linux/frame_limiter_layer.cpp")
+        target_include_directories(test_global_fps_layer PRIVATE "${_global_fps_vulkan_headers}")
+        set_target_properties(test_global_fps_layer PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+        target_link_options(test_global_fps_layer PRIVATE "-Wl,-Bsymbolic")
+        target_link_libraries(test_global_fps_layer PRIVATE Threads::Threads)
+        add_executable(test_component_linux_global_fps_chain "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_frame_limiter_layer.cpp")
+        target_include_directories(test_component_linux_global_fps_chain PRIVATE "${_global_fps_vulkan_headers}" "${SUNSHINE_TEST_REPOSITORY_ROOT}")
+        target_compile_options(test_component_linux_global_fps_chain PRIVATE -UNDEBUG)
+        add_dependencies(test_component_linux_global_fps_chain test_global_fps_layer)
+        target_link_libraries(test_component_linux_global_fps_chain PRIVATE ${CMAKE_DL_LIBS})
+        add_test(NAME test_component_linux_global_fps_chain
+                COMMAND test_component_linux_global_fps_chain "$<TARGET_FILE:test_global_fps_layer>")
+        set_tests_properties(test_component_linux_global_fps_chain PROPERTIES LABELS "component" TIMEOUT 10)
+        add_executable(test_global_fps_helper "${SUNSHINE_TEST_REPOSITORY_ROOT}/packaging/linux/vibeshine-global-fps.cpp")
+        target_include_directories(test_global_fps_helper PRIVATE "${SUNSHINE_TEST_REPOSITORY_ROOT}")
+        target_link_libraries(test_global_fps_helper PRIVATE Threads::Threads)
+        find_program(_global_fps_python NAMES python3 REQUIRED)
+        add_test(NAME test_component_linux_global_fps_helper
+                COMMAND "${_global_fps_python}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_global_fps_helper.py"
+                        "$<TARGET_FILE:test_global_fps_helper>" "$<TARGET_FILE:test_component_linux_global_fps_chain>"
+                        "$<TARGET_FILE:test_global_fps_layer>")
+        set_tests_properties(test_component_linux_global_fps_helper PROPERTIES LABELS "component" TIMEOUT 15 SKIP_RETURN_CODE 77)
+        add_test(NAME test_component_linux_global_fps_controller
+                COMMAND "${_global_fps_python}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_global_fps_controller.py")
+        set_tests_properties(test_component_linux_global_fps_controller PROPERTIES
+                LABELS "component" TIMEOUT 60 SKIP_RETURN_CODE 77 ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}")
+        add_test(NAME test_component_linux_global_fps_broker_dispatch
+                COMMAND "${_global_fps_python}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_global_fps_broker_dispatch.py")
+        set_tests_properties(test_component_linux_global_fps_broker_dispatch PROPERTIES LABELS "component" TIMEOUT 30)
+        add_test(NAME test_component_linux_steam_big_picture_supervisor
+                COMMAND "${_global_fps_python}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_steam_big_picture_supervisor.py")
+        set_tests_properties(test_component_linux_steam_big_picture_supervisor PROPERTIES
+                LABELS "component" TIMEOUT 45 SKIP_RETURN_CODE 77 ENVIRONMENT "CC=${CMAKE_C_COMPILER}")
+    endif()
     add_test(
         NAME test_component_linux_mangohud_wrapper
         COMMAND sh

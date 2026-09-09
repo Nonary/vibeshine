@@ -1875,6 +1875,11 @@
     "autoVirtualFramegenHint": "Automatic always keeps virtual screens at 4× the requested refresh. To avoid unnecessary desktop performance cost, WGC capture is capped at 2× on the desktop and at 4× for a confirmed game. Stream FPS stays the same. Disabled turns off these automatic adjustments; Compatibility uses a fixed 2× display and capture policy.",
     "provider": {
       "auto": "Auto (RTSS, then NVIDIA driver)",
+      "autoLinux": "Automatic — Proton games or global Vulkan",
+      "global": "Global Vulkan limiter",
+      "mangohud": "MangoHUD",
+      "proton": "Proton DXVK/VKD3D",
+      "mangohudProton": "MangoHUD + Proton",
       "nvcp": "NVIDIA driver",
       "rtss": "RTSS (recommended)",
       "none": "None"

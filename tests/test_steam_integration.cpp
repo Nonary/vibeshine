@@ -1,4 +1,5 @@
 #include "src/steam_integration.h"
+#include "src/platform/linux/steam_session_command.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -390,6 +391,37 @@ TEST(SteamLaunch, StreamOwnedEnvironmentFeaturesRequireDirectLaunch) {
   EXPECT_TRUE(requires_direct_environment_launch(false, true));
   EXPECT_TRUE(requires_direct_environment_launch(true, true));
   EXPECT_FALSE(requires_direct_environment_launch(false, false));
+}
+
+TEST(SteamLaunch, RoutesExistingBigPictureEntriesThroughSemanticHandoff) {
+  for (const auto &action : {std::string {"open"}, std::string {"close"}}) {
+    for (const auto &prefix : {"setsid steam steam://", "steam steam://", "/usr/bin/steam steam://"}) {
+      const auto args = session_handoff_arguments(prefix + action + "/bigpicture");
+      ASSERT_TRUE(args);
+      EXPECT_EQ(*args, (std::vector<std::string> {"steam-big-picture", action}));
+    }
+  }
+}
+
+TEST(SteamLaunch, DoesNotWrapGeneratedSteamHandoffAsAnArbitraryApp) {
+  const auto args = session_handoff_arguments("/usr/libexec/vibeshine/vibeshine-session-exec steam 480");
+  ASSERT_TRUE(args);
+  EXPECT_EQ(*args, (std::vector<std::string> {"steam", "480"}));
+}
+
+TEST(SteamLaunch, LeavesCustomCommandsAndMalformedHandoffsForAppAuthorization) {
+  for (const auto command : {
+         "setsid steam steam://open/bigpicture; touch /tmp/extra",
+         "steam steam://open/bigpicture --extra",
+         "steam steam://install/480",
+         "/usr/libexec/vibeshine/vibeshine-session-exec steam-big-picture other",
+         "/usr/libexec/vibeshine/vibeshine-session-exec steam 0",
+         "/usr/libexec/vibeshine/vibeshine-session-exec steam 0480",
+         "/usr/libexec/vibeshine/vibeshine-session-exec steam 4294967296",
+         "/usr/libexec/vibeshine/vibeshine-session-exec steam 480 trailing",
+         "/usr/libexec/vibeshine/vibeshine-session-exec steam "}) {
+    EXPECT_FALSE(session_handoff_arguments(command)) << command;
+  }
 }
 
 #ifdef __linux__

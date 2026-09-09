@@ -15,6 +15,7 @@ import {
   settingsDefaults,
   type SettingsField,
 } from '../configs/settingsSchema.ts';
+import { getConfigSelectOptions } from '../configs/configSelectOptions.ts';
 import {
   displayFieldVisibility,
   downsampleHostHistory,
@@ -181,7 +182,7 @@ test('Linux virtual-display pacing uses Linux-specific copy', () => {
   }
 });
 
-test('Linux Proton and MangoHUD limiter choices stay aligned with legacy UI', () => {
+test('Linux global, Proton and MangoHUD limiter choices stay aligned across selectors', () => {
   assert.equal(settingsDefaults.frame_limiter_provider, 'auto');
   assert.equal(settingsDefaults.mangohud_limiter_method, 'late');
 
@@ -202,7 +203,24 @@ test('Linux Proton and MangoHUD limiter choices stay aligned with legacy UI', ()
   const messages = JSON.parse(
     readFileSync(new URL('../public/assets/locale/ui/en.json', import.meta.url), 'utf8'),
   );
-  assert.match(messages.ui.integrations.mangohud.providerAuto, /Proton.*MangoHUD/i);
+  assert.match(messages.ui.integrations.mangohud.providerAuto, /Proton.*global Vulkan/i);
+  assert.match(
+    messages.ui.integrations.mangohud.providerDescription,
+    /managed Steam games.*desktop streams/i,
+  );
+  const provider = settingsFields.get('frame_limiter_provider');
+  assert.ok(provider);
+  for (const platform of ['linux', 'windows']) {
+    const schemaOptions: Array<string | number> = optionsForPlatform(provider, platform).map(
+      (option) => option.value,
+    );
+    const selectOptions = getConfigSelectOptions('frame_limiter_provider', {
+      platform,
+      t: (key) => key,
+    }).map((option) => option.value);
+    assert.equal(schemaOptions.includes('global'), platform === 'linux');
+    assert.equal(selectOptions.includes('global'), platform === 'linux');
+  }
   assert.match(messages.ui.integrations.mangohud.limiterMethodDescription, /latency/i);
   assert.match(messages.ui.integrations.mangohud.limiterMethodDescription, /frame generation/i);
 
@@ -210,6 +228,7 @@ test('Linux Proton and MangoHUD limiter choices stay aligned with legacy UI', ()
     new URL('../../web-legacy/configs/tabs/audiovideo/FrameLimiterStep.vue', import.meta.url),
     'utf8',
   );
+  assert.match(legacyStep, /value: 'global'/);
   assert.match(legacyStep, /value: 'mangohud-proton'/);
   assert.match(legacyStep, /value: 'proton'/);
   assert.match(legacyStep, /setting-key="mangohud_limiter_method"/);

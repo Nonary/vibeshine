@@ -1862,7 +1862,8 @@
     "autoVirtualFramegenHint": "Enabled uses 4× refresh while a game is active and 1× on the desktop. Stream FPS stays the same, so overall performance should not be affected; games with uneven frame pacing can capture much more smoothly. Disabled turns off these automatic adjustments and the virtual-display limiter. Legacy uses a fixed 2× refresh for the entire stream.",
     "provider": {
       "auto": "Auto (RTSS, then NVIDIA driver)",
-      "autoLinux": "Automatic — Proton limiter + MangoHUD overlay",
+      "autoLinux": "Automatic — Proton games or global Vulkan",
+      "global": "Global Vulkan limiter",
       "mangohud": "MangoHUD",
       "mangohudProton": "MangoHUD + Proton",
       "proton": "Proton DXVK/VKD3D",
@@ -1910,6 +1911,8 @@
       "nvcpUnavailable": "NVIDIA driver integration (NvAPI) unavailable.",
       "mangohudDetected": "MangoHUD detected and ready for launched games.",
       "mangohudNotDetected": "MangoHUD was not found. Install it to enable Linux frame limiting.",
+      "globalReady": "Global Vulkan limiter installed. Covers the installed layer architecture during streams; restart games after first installation.",
+      "globalMissing": "Install the native Vibeshine package to enable the global Vulkan limiter.",
       "protonReady": "Proton's DXVK/VKD3D limiter is ready for managed Steam games and supports frame generation.",
       "protonMangoHudReady": "Proton's frame-generation-capable limiter is ready, with the MangoHUD overlay visible.",
       "protonReadyMangoHudMissing": "Proton's limiter is ready, but MangoHUD was not found, so the overlay will not be visible.",

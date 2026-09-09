@@ -67,6 +67,7 @@ extern "C" {
   #include "platform/windows/virtual_display_cleanup.h"
 #elif defined(__linux__)
   #include "platform/linux/private_display.h"
+  #include "platform/linux/global_fps.h"
 #endif
 
 #define IDX_START_A 0
@@ -1775,7 +1776,9 @@ namespace stream {
 
     auto &io = ctx.io_context;
 
-    udp::endpoint peer;
+    // Audio and video receives remain pending concurrently. Each operation
+    // must own its endpoint storage until its completion handler runs.
+    udp::endpoint peers[2];
 
     std::array<char, 2048> buf[2];
     std::function<void(const boost::system::error_code, size_t)> recv_func[2];
@@ -1808,6 +1811,7 @@ namespace stream {
 
     auto recv_func_init = [&](udp::socket &sock, int buf_elem, std::map<av_session_id_t, message_queue_t> &peer_to_session) {
       recv_func[buf_elem] = [&, buf_elem](const boost::system::error_code &ec, size_t bytes) {
+        auto &peer = peers[buf_elem];
         auto fg = util::fail_guard([&]() {
           sock.async_receive_from(asio::buffer(buf[buf_elem]), peer, 0, recv_func[buf_elem]);
         });
@@ -1850,8 +1854,8 @@ namespace stream {
     recv_func_init(video_sock, 0, peer_to_video_session);
     recv_func_init(audio_sock, 1, peer_to_audio_session);
 
-    video_sock.async_receive_from(asio::buffer(buf[0]), peer, 0, recv_func[0]);
-    audio_sock.async_receive_from(asio::buffer(buf[1]), peer, 0, recv_func[1]);
+    video_sock.async_receive_from(asio::buffer(buf[0]), peers[0], 0, recv_func[0]);
+    audio_sock.async_receive_from(asio::buffer(buf[1]), peers[1], 0, recv_func[1]);
 
     while (!broadcast_shutdown_event->peek()) {
       io.run();
@@ -2884,6 +2888,11 @@ namespace stream {
       }
 #endif
 
+#ifdef __linux__
+      // WebRTC can acquire a lease before the first session is committed.
+      // Also release it when that startup fails before platform callbacks run.
+      platf::global_fps::stop();
+#endif
       if (shared_platform_started) {
         platf::streaming_will_stop();
         shared_platform_started = false;
@@ -3196,6 +3205,9 @@ namespace stream {
           session::start_shared_platform_if_needed();
         }
 #else
+#ifdef __linux__
+        platf::global_fps::start(session.config.monitor.framerate, session.virtual_display.active);
+#endif
         session::start_shared_platform_if_needed();
 #endif
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1

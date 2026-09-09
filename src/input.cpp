@@ -111,10 +111,11 @@ namespace input {
 
   static task_pool_util::TaskPool::task_id_t key_press_repeat_id {};
   static std::unordered_map<key_press_id_t, bool> key_press {};
-  static std::array<std::uint8_t, 5> mouse_press {};
+  // Moonlight button IDs are one-based and include BUTTON_X2 (5).
+  static std::array<std::uint8_t, BUTTON_X2 + 1> mouse_press {};
   // The logical release may precede the host release by 10 ms. Keep ownership
   // until the host receives the release, including during session cleanup.
-  static std::array<input_t *, 5> mouse_press_owner {};
+  static std::array<input_t *, BUTTON_X2 + 1> mouse_press_owner {};
 
   static platf::input_t platf_input;
   class platform_mouse_backend_t: public mouse_input::backend_t {
@@ -1763,9 +1764,11 @@ namespace input {
           // already released
           continue;
         }
-        platf::keyboard_update(platf_input, vk_from_kpid(kp.first) & 0x00FF, true, flags_from_kpid(kp.first));
+        // Match the key injected on key-down, including configured remappings.
+        platf::keyboard_update(platf_input, map_keycode(vk_from_kpid(kp.first)), true, flags_from_kpid(kp.first));
         key_press[kp.first] = false;
       }
+      input->shortcutFlags = 0;
     });
   }
 

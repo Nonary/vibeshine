@@ -54,6 +54,18 @@ transition and package lifecycle operation. Each application scope runs the
 capability-free `vibeshine-app-supervisor`; a broker-worker-owned watchdog pipe
 forces bounded descendant cleanup even if the worker or broker is killed.
 
+The fixed Steam Big Picture open/close actions also use this user-service
+boundary so a cold Steam start has the desktop user's writable home and
+network access. Its narrowly validated supervisor mode retains descendants
+after a successful Steam bootstrap exits, including daemons adopted by the
+subreaper. Existing-client handoffs exit normally when they have no children;
+failed bootstraps and session/watchdog cancellation retain the normal bounded
+cleanup. Arbitrary application commands keep their original leader lifetime.
+After the Steam bootstrap has been reaped, the supervisor exits on cancellation
+instead of signaling its potentially reused process-group ID. The enclosing
+unit's `ExitType=main`, `KillMode=control-group`, and `RemainAfterExit=no` perform
+the remaining descendant cleanup, including daemons that called `setsid()`.
+
 KWin creates the session's Xwayland display and authority file after the user
 manager has already started it. A native, unprivileged `ExecStartPost` helper
 reads those exact generated arguments from the session KWin process, validates

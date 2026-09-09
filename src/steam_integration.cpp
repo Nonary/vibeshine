@@ -2,6 +2,7 @@
 #include "steam_integration.h"
 
 #if defined(__linux__)
+  #include "platform/linux/steam_session_command.h"
   #include "provider_scan_protocol.h"
 #endif
 
@@ -1156,6 +1157,9 @@ namespace platf::steam {
   std::optional<std::vector<std::string>> session_launch_arguments(
     std::string_view command
   ) {
+    if (auto handoff = session_handoff_arguments(command)) {
+      return handoff;
+    }
     std::vector<std::string> tokens;
     std::size_t offset = 0;
     while (offset < command.size()) {

@@ -495,6 +495,34 @@ namespace platf::linux_private_display {
       return false;
     }
 
+    struct custom_mode_request_t {
+      std::string output_name;
+      display_device::Resolution resolution;
+      display_device::FloatingPoint refresh;
+    };
+
+    std::optional<json> wait_for_custom_modes(const std::vector<custom_mode_request_t> &requests) {
+      std::optional<json> configuration;
+      // KScreen can acknowledge creation before a query publishes the mode.
+      // Verify every requested mode before accepting the resulting topology;
+      // selecting the nearest mode again could silently fall back to 60 Hz.
+      (void) wait_for_configuration([&](const json &published) {
+        for (const auto &request : requests) {
+          const auto *output = find_output(published, request.output_name);
+          if (!output || !connected(*output)) {
+            return false;
+          }
+          const auto mode = best_mode_id(*output, request.resolution, request.refresh);
+          if (mode.empty() || !mode_matches_refresh(*output, mode, request.refresh)) {
+            return false;
+          }
+        }
+        configuration = published;
+        return true;
+      });
+      return configuration;
+    }
+
     std::pair<int, int> logical_size(const json &output) {
       const auto size = output.value("size", json::object());
       const auto scale = std::max(0.25, output.value("scale", 1.0));
@@ -1032,14 +1060,13 @@ namespace platf::linux_private_display {
       if (!execute_configuration({custom_mode}, "custom-mode creation")) {
         return false;
       }
-      configuration = query_configuration();
+      configuration = wait_for_custom_modes({{session.virtual_display_device_id, *resolution, *refresh}});
       if (!configuration) {
+        BOOST_LOG(error) << "Linux private display: requested custom mode did not publish for "
+                         << session.virtual_display_device_id;
         return false;
       }
       target_before = find_output(*configuration, session.virtual_display_device_id);
-      if (!target_before) {
-        return false;
-      }
       mode_id = best_mode_id(*target_before, resolution, refresh);
     }
     if (mode_id.empty()) {
@@ -1396,6 +1423,7 @@ namespace platf::linux_private_display {
     }
 
     std::vector<std::string> custom_modes;
+    std::vector<custom_mode_request_t> custom_mode_requests;
     for (auto &entry : desired) {
       if (!entry.owned_client) {
         continue;
@@ -1413,6 +1441,7 @@ namespace platf::linux_private_display {
       if (is_managed_output(entry.name) &&
           (entry.mode_id.empty() || !mode_matches_refresh(*output, entry.mode_id, refresh))) {
         entry.mode_id.clear();
+        custom_mode_requests.push_back({entry.name, resolution, refresh});
         custom_modes.push_back(
           "output." + entry.name + ".addCustomMode." +
           std::to_string(resolution.m_width) + "." +
@@ -1427,8 +1456,9 @@ namespace platf::linux_private_display {
       if (!execute_configuration(custom_modes, "Remote Monitor custom-mode creation")) {
         return false;
       }
-      configuration = query_configuration();
+      configuration = wait_for_custom_modes(custom_mode_requests);
       if (!configuration) {
+        BOOST_LOG(error) << "Linux Remote Monitor: requested custom modes did not publish.";
         return false;
       }
       for (auto &entry : desired) {

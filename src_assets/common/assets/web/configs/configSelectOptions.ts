@@ -444,6 +444,7 @@ export function getConfigSelectOptions(
       const options = platform.includes('linux')
         ? [
             { label: t('frameLimiter.provider.autoLinux'), value: 'auto' },
+            { label: t('ui.integrations.mangohud.providerGlobal'), value: 'global' },
             { label: t('frameLimiter.provider.mangohudProton'), value: 'mangohud-proton' },
             { label: t('frameLimiter.provider.proton'), value: 'proton' },
             { label: t('frameLimiter.provider.mangohud'), value: 'mangohud' },

@@ -35,6 +35,8 @@ static const char application_supervisor_path[] =
   "/usr/libexec/vibeshine/vibeshine-app-supervisor";
 static const char steam_launch_path[] =
   "/usr/libexec/vibeshine/vibeshine-steam-launch";
+static const char global_fps_path[] =
+  "/usr/libexec/vibeshine/vibeshine-global-fps";
 // Steam can still be settling its previous transient launch unit when the
 // next request arrives.  Retry only the desktop Steam fallback; the direct
 // launcher and arbitrary app commands must never be replayed automatically.
@@ -621,6 +623,13 @@ static bool steam_direct_arguments_are_safe(int argc, char **argv) {
          (limited || strcmp(argv[8], "0"));
 }
 
+static bool global_fps_arguments_are_safe(int argc, char **argv) {
+  unsigned long limit_millihz = 0;
+  return argc == 3 && argv && argv[2] &&
+         argv[2][0] >= '1' && argv[2][0] <= '9' &&
+         parse_number(argv[2], 1, 1000000, &limit_millihz);
+}
+
 static bool parse_channel_mapping(const char *value, size_t channels,
                                   unsigned char mapping[8]) {
   if (!value || !mapping || channels < 1 || channels > 8) return false;
@@ -1067,6 +1076,10 @@ static int supervise_user_service(const char *unit, char *const arguments[]) {
 
 static int exec_user_service(const struct session_identity *identity, const char *directory,
                              char *const command_argv[], bool recover_steam_launch) {
+  const bool steam_big_picture = command_argv && command_argv[0] && command_argv[1] &&
+    !command_argv[2] && !strcmp(command_argv[0], "/usr/bin/steam") &&
+    (!strcmp(command_argv[1], "steam://open/bigpicture") ||
+     !strcmp(command_argv[1], "steam://close/bigpicture"));
   char unit[192], environment_home[PATH_MAX + 16], environment_user[80], environment_logname[80];
   char environment_runtime[PATH_MAX + 32], environment_config[PATH_MAX + 32];
   char environment_data[PATH_MAX + 32], environment_pipewire[PATH_MAX + 32];
@@ -1147,7 +1160,7 @@ static int exec_user_service(const struct session_identity *identity, const char
     }
     arguments[index++] = "--";
     arguments[index++] = (char *) application_supervisor_path;
-    arguments[index++] = "--";
+    arguments[index++] = steam_big_picture ? "--steam-big-picture" : "--";
     for (size_t command_index = 0; command_argv[command_index]; ++command_index) {
       if (index + 1 >= sizeof(arguments) / sizeof(arguments[0])) return 126;
       arguments[index++] = command_argv[command_index];
@@ -1172,7 +1185,7 @@ static int execute_request(int argc, char **argv,
   if (argc < 2) return 2;
   enum operation {
     DISPLAY_QUERY, DISPLAY_APPLY, AUDIO_GET_DEFAULT, AUDIO_LIST_SINKS, AUDIO_SET_DEFAULT,
-    AUDIO_CREATE_NULL, AUDIO_REMOVE_NULL, AUDIO_CAPTURE, STEAM, STEAM_DIRECT, LUTRIS,
+    AUDIO_CREATE_NULL, AUDIO_REMOVE_NULL, AUDIO_CAPTURE, STEAM, STEAM_BIG_PICTURE, STEAM_DIRECT, GLOBAL_FPS, LUTRIS,
     PROVIDER_STEAM_SCAN, PROVIDER_LUTRIS_SCAN, PROVIDER_STEAM_ARTWORK, PROVIDER_LUTRIS_ARTWORK, APP
   } operation;
   unsigned long first_number = 0, second_number = 0, third_number = 0;
@@ -1198,9 +1211,15 @@ static int execute_request(int argc, char **argv,
            parse_number(argv[4], 1, 8192, &third_number) &&
            parse_channel_mapping(argv[5], second_number, channel_mapping)) operation = AUDIO_CAPTURE;
   else if (!strcmp(argv[1], "steam") && argc == 3 && numeric_suffix(argv[2], "") && !strcmp(identity->role, "desktop")) operation = STEAM;
+  else if (!strcmp(argv[1], "steam-big-picture") && argc == 3 &&
+           (!strcmp(argv[2], "open") || !strcmp(argv[2], "close")) &&
+           !strcmp(identity->role, "desktop")) operation = STEAM_BIG_PICTURE;
   else if (!strcmp(argv[1], "steam-direct") &&
            steam_direct_arguments_are_safe(argc, argv) &&
            !strcmp(identity->role, "desktop")) operation = STEAM_DIRECT;
+  else if (!strcmp(argv[1], "global-fps") &&
+           global_fps_arguments_are_safe(argc, argv) &&
+           !strcmp(identity->role, "desktop")) operation = GLOBAL_FPS;
   else if (!strcmp(argv[1], "lutris") && argc == 3 && numeric_suffix(argv[2], "") && !strcmp(identity->role, "desktop")) operation = LUTRIS;
   else if (!strcmp(argv[1], "provider-steam-scan") && argc == 2 && !strcmp(identity->role, "desktop")) operation = PROVIDER_STEAM_SCAN;
   else if (!strcmp(argv[1], "provider-lutris-scan") && argc == 2 && !strcmp(identity->role, "desktop")) operation = PROVIDER_LUTRIS_SCAN;
@@ -1292,11 +1311,29 @@ static int execute_request(int argc, char **argv,
       execv("/usr/bin/steam", arguments);
       break;
     }
+    case STEAM_BIG_PICTURE: {
+      // The user manager provides writable home/network access for a cold
+      // Steam start. Keep its daemon descendants under the generation-bound
+      // supervisor; an existing-client handoff still exits immediately.
+      char *const arguments[] = {
+        "/usr/bin/steam",
+        !strcmp(argv[2], "open") ? "steam://open/bigpicture" : "steam://close/bigpicture",
+        NULL
+      };
+      return exec_user_service(identity, NULL, arguments, false);
+    }
     case STEAM_DIRECT: {
       char *const arguments[] = {
         (char *) steam_launch_path, argv[2], argv[3], argv[4], argv[5],
         argv[6], argv[7], argv[8], argv[9], NULL
       };
+      return exec_user_service(identity, NULL, arguments, false);
+    }
+    case GLOBAL_FPS: {
+      // The broker namespace deliberately mounts homes read-only. Launch the
+      // unprivileged lease writer in the desktop user's manager, retaining
+      // the existing app-supervisor/watchdog cancellation on disconnect.
+      char *const arguments[] = {(char *) global_fps_path, argv[2], NULL};
       return exec_user_service(identity, NULL, arguments, false);
     }
     case LUTRIS: {

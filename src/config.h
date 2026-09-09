@@ -319,7 +319,7 @@ namespace config {
 
     // Provider selector. Linux defaults to Proton with a MangoHUD overlay;
     // Windows defaults to RTSS or NVIDIA Control Panel.
-    // Supported values: "auto", "mangohud", "proton", "mangohud-proton",
+    // Supported values: "auto", "global" (Linux Vulkan), "mangohud", "proton", "mangohud-proton",
     // "nvidia-control-panel", "rtss", "none".
     std::string provider;
 

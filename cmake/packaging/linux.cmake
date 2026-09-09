@@ -49,6 +49,37 @@ else()
     find_package(Udev)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Globally discoverable even for games started by an existing Steam
+        # process. It remains inert until the host publishes a live FPS lease.
+        if(NOT VULKAN_HEADERS_DIR)
+            set(VULKAN_HEADERS_DIR "${CMAKE_SOURCE_DIR}/third-party/build-deps/third-party/FFmpeg/Vulkan-Headers/include")
+        endif()
+        if(NOT EXISTS "${VULKAN_HEADERS_DIR}/vulkan/vk_layer.h")
+            unset(VULKAN_HEADERS_DIR)
+            unset(VULKAN_HEADERS_DIR CACHE)
+            find_path(VULKAN_HEADERS_DIR vulkan/vk_layer.h REQUIRED)
+        endif()
+        add_library(vibeshine_frame_limiter SHARED
+                "${CMAKE_SOURCE_DIR}/src/platform/linux/frame_limiter_layer.cpp")
+        target_include_directories(vibeshine_frame_limiter PRIVATE "${VULKAN_HEADERS_DIR}")
+        set_target_properties(vibeshine_frame_limiter PROPERTIES
+                CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+        target_link_options(vibeshine_frame_limiter PRIVATE "-Wl,-Bsymbolic")
+        target_link_libraries(vibeshine_frame_limiter PRIVATE Threads::Threads)
+        set(VIBESHINE_FRAME_LIMITER_LIBRARY "${CMAKE_INSTALL_FULL_LIBDIR}/libvibeshine_frame_limiter.so")
+        math(EXPR VIBESHINE_FRAME_LIMITER_ARCH "${CMAKE_SIZEOF_VOID_P} * 8")
+        configure_file("${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/VkLayer_vibeshine_frame_limiter.json.in"
+                "${CMAKE_CURRENT_BINARY_DIR}/VkLayer_vibeshine_frame_limiter.json" @ONLY)
+        target_compile_definitions(sunshine PRIVATE
+                VIBESHINE_FRAME_LIMITER_MANIFEST="${CMAKE_INSTALL_FULL_DATADIR}/vulkan/implicit_layer.d/VkLayer_vibeshine_frame_limiter.json")
+        install(TARGETS vibeshine_frame_limiter LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+        install(FILES "${CMAKE_CURRENT_BINARY_DIR}/VkLayer_vibeshine_frame_limiter.json"
+                DESTINATION "${CMAKE_INSTALL_DATADIR}/vulkan/implicit_layer.d")
+
+        add_executable(vibeshine_global_fps "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-global-fps.cpp")
+        set_target_properties(vibeshine_global_fps PROPERTIES OUTPUT_NAME "vibeshine-global-fps")
+        target_include_directories(vibeshine_global_fps PRIVATE "${CMAKE_SOURCE_DIR}")
+        target_link_libraries(vibeshine_global_fps PRIVATE Threads::Threads)
         add_executable(vibeshine_session_exec
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-session-exec.c")
         set_target_properties(vibeshine_session_exec PROPERTIES OUTPUT_NAME "vibeshine-session-exec")
@@ -110,7 +141,7 @@ else()
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-session-controller"
                 "${CMAKE_CURRENT_BINARY_DIR}/vibeshine-drm-install"
                 DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
-        install(TARGETS vibeshine_session_exec vibeshine_app_supervisor
+        install(TARGETS vibeshine_session_exec vibeshine_app_supervisor vibeshine_global_fps
                 vibeshine_profile_import vibeshine_kwin_session_environment
                 vibeshine_provider_scan vibeshine_steam_launch
                 RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")

@@ -176,6 +176,15 @@ int main(int argc, char **argv) {
   CHECK(!application_arguments_are_safe(3, relative));
   CHECK(!application_arguments_are_safe(3, wrong_separator));
   CHECK(!application_arguments_are_safe(2, valid));
+  char *steam[] = {"vibeshine-app-supervisor", "--steam-big-picture", "/usr/bin/steam", "steam://open/bigpicture", NULL};
+  CHECK(application_arguments_are_safe(4, steam));
+  steam[3] = "steam://close/bigpicture";
+  CHECK(application_arguments_are_safe(4, steam));
+  steam[3] = "steam://install/480";
+  CHECK(!application_arguments_are_safe(4, steam));
+  steam[3] = "steam://open/bigpicture";
+  steam[2] = "/tmp/steam";
+  CHECK(!application_arguments_are_safe(4, steam));
   CHECK(supervisor_hardening_works());
 
   int watchdog[2] = {-1, -1};

@@ -37,6 +37,10 @@
   #include "platform/windows/display.h"
 #endif
 
+#ifdef __linux__
+  #include "platform/linux/global_fps.h"
+#endif
+
 // lib includes
 #include <boost/algorithm/string.hpp>
 #include <moonlight-common-c/src/Input.h>
@@ -3334,6 +3338,8 @@ namespace webrtc_stream {
       keep_runtime_overrides = true;
 #ifdef _WIN32
       acquire_webrtc_frame_limiter_locked(*webrtc_capture.stream_start_params);
+#elif defined(__linux__)
+      platf::global_fps::start(video_config.framerate, launch_session->virtual_display);
 #endif
       stream::session::arm_shared_runtime_cleanup(
         launch_session->virtual_display_guid_bytes
