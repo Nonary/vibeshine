@@ -77,7 +77,10 @@ for validation and remaining work.
 
 ## Does Vibeshine aim to replace Sunshine or Apollo?
 
-No. Vibeshine is intended as a **complementary fork**, not a replacement.
+Yes. Vibeshine replaces Sunshine or Apollo as your streaming host. On Linux,
+use one host installation at a time: replace an existing Sunshine, Vibeshine,
+or Vibepollo installation when installing Vibeshine, and preserve your
+configuration and pairing data during the transition.
 
 In addition, for users who prefer Apollo’s ecosystem, there is a [Vibepollo](https://github.com/Nonary/Vibepollo) that brings Vibeshine’s feature set to Apollo. This exists primarily to serve Apollo users who asked for Vibeshine‑style capabilities while staying on Apollo.
 
