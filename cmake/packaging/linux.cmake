@@ -159,6 +159,7 @@ else()
         install(PROGRAMS
                 "${LIBVIRTUALDISPLAY_LINUX_ROOT}/packaging/vibeshine-vkms"
                 "${LIBVIRTUALDISPLAY_LINUX_ROOT}/packaging/vibeshine-vkms-quiesce"
+                "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-global-limiter.py"
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-machine-host"
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-session-controller"
                 "${CMAKE_CURRENT_BINARY_DIR}/vibeshine-drm-install"
@@ -338,6 +339,7 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "\
             libopus0, \
             libpulse0, \
             pulseaudio-utils, \
+            python3, \
             libva2, \
             libva-drm2, \
             libwayland-client0, \
@@ -352,6 +354,7 @@ set(CPACK_RPM_PACKAGE_REQUIRES "\
             ${CPACK_RPM_PLATFORM_PACKAGE_REQUIRES} \
             /usr/bin/pactl, \
             /usr/bin/parec, \
+            /usr/bin/python3, \
             /usr/bin/wayland-info, \
             /usr/bin/xdpyinfo, \
             libcap >= 2.22, \

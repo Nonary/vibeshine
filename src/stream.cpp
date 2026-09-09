@@ -66,6 +66,7 @@ extern "C" {
   #include "platform/windows/virtual_display.h"
   #include "platform/windows/virtual_display_cleanup.h"
 #elif defined(__linux__)
+  #include "platform/linux/frame_limiter.h"
   #include "drm_timing_trace.h"
   #include "platform/linux/private_display.h"
   #include "src/platform/linux/display_backend.h"
@@ -658,7 +659,7 @@ namespace stream {
       std::chrono::steady_clock::time_point start_time {std::chrono::steady_clock::now()};
     } stats;
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
     struct {
       bool active = false;
       std::array<std::uint8_t, 16> guid_bytes {};
@@ -3088,6 +3089,9 @@ namespace stream {
           is_paused || shared_runtime_still_owned
         );
 #else
+#ifdef __linux__
+        platf::frame_limiter_streaming_stop(platf::frame_limiter_owner::rtsp);
+#endif
         const session::shared_runtime_finalize_context_t finalize_context {
           .ignore_current_rtsp_teardown = true,
           .apply_deferred_config = false,
@@ -3202,8 +3206,8 @@ namespace stream {
           webrtc_stream::set_rtsp_capture_config(session.config.monitor, session.config.audio);
         }
         webrtc_stream::set_rtsp_sessions_active(true);
-#ifdef _WIN32
-        // Apply RTSS frame limit if enabled (Windows-only)
+#if defined(_WIN32) || defined(__linux__)
+        // Apply the stream-owned limiter independently of application launch.
         std::optional<int> lossless_rtss_limit;
         const bool using_lossless_provider = session.config.lossless_scaling_framegen &&
                                              boost::iequals(session.config.frame_generation_provider, "lossless-scaling");
@@ -3228,10 +3232,15 @@ namespace stream {
           .frame_generation_provider = session.config.frame_generation_provider,
           .uses_virtual_display = session.virtual_display.active,
           .capture_mode = config::video.capture,
+#ifdef _WIN32
           .auto_capture_uses_wgc = platf::dxgi::should_use_wgc_default(),
+#else
+          .auto_capture_uses_wgc = false,
+#endif
           .auto_virtual_framegen_limiter = config::frame_limiter.virtual_display_limiter_enabled(),
           .virtual_display_refresh_multiplier = config::frame_limiter.fixed_virtual_display_refresh_multiplier(),
         });
+#ifdef _WIN32
         const bool defer_stream_start = platf::is_running_as_system() && !user_session_ready();
         if (defer_stream_start) {
           deferred_stream_start_t deferred {.policy = policy};
@@ -3244,6 +3253,10 @@ namespace stream {
           );
           session::start_shared_platform_if_needed();
         }
+#else
+        platf::frame_limiter_streaming_start(platf::frame_limiter_owner::rtsp, policy);
+        session::start_shared_platform_if_needed();
+#endif
 #else
         session::start_shared_platform_if_needed();
 #endif
@@ -3312,8 +3325,10 @@ namespace stream {
                       << " source=" << static_cast<int>(session->config.monitor.capture_source)
                       << " output='" << session->config.monitor.capture_output.value_or(std::string {}) << "'.";
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
       session->virtual_display.active = launch_session.virtual_display;
+#endif
+#ifdef _WIN32
       session->virtual_display.guid_bytes = launch_session.virtual_display_guid_bytes;
       if (session->virtual_display.active) {
         VDISPLAY::setWatchdogFeedingEnabled(true);
