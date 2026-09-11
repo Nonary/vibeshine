@@ -144,6 +144,7 @@ else()
                 "${SQLITE3_LIBRARIES}")
         add_executable(vibeshine_steam_launch
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-steam-launch.cpp"
+                "${CMAKE_SOURCE_DIR}/src/steam_process_tracker.cpp"
                 "${CMAKE_SOURCE_DIR}/src/provider_scan_protocol.cpp"
                 "${CMAKE_SOURCE_DIR}/src/steam_integration.cpp")
         set_target_properties(vibeshine_steam_launch PROPERTIES
