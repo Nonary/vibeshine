@@ -37,7 +37,7 @@ HOST = 'vibeshine.service'
 CONTROLLER = 'vibeshine-session-controller.service'
 SOCKET = 'vibeshine-session-exec.socket'
 HELPERS = (
-    'app-supervisor', 'display-power', 'drm-install', 'host',
+    'app-supervisor', 'display-power', 'drm-install', 'global-limiter.py', 'host',
     'kwin-session-environment', 'machine-host', 'profile-import', 'provider-scan',
     'session-broker', 'session-controller', 'session-exec', 'steam-launch',
     'vkms', 'vkms-peercred', 'vkms-quiesce',
