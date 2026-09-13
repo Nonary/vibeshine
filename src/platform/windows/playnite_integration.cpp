@@ -315,7 +315,7 @@ namespace platf::playnite {
         return false;
       }
       std::filesystem::path d(dir);
-      return std::filesystem::exists(d / "extension.yaml") && std::filesystem::exists(d / "SunshinePlaynite.psm1");
+      return std::filesystem::exists(d / "extension.yaml") && std::filesystem::exists(d / "SunshinePlaynite.dll");
     } catch (...) {
       return false;
     }
@@ -1926,7 +1926,7 @@ namespace platf::playnite {
       BOOST_LOG(debug) << "Playnite installer: srcDir=" << srcDir.string();
       BOOST_LOG(debug) << "Playnite installer: src exists? " << (std::filesystem::exists(srcDir) ? "yes" : "no");
       BOOST_LOG(debug) << "Playnite installer: src file(extension.yaml) exists? " << (std::filesystem::exists(srcDir / L"extension.yaml") ? "yes" : "no");
-      BOOST_LOG(debug) << "Playnite installer: src file(SunshinePlaynite.psm1) exists? " << (std::filesystem::exists(srcDir / L"SunshinePlaynite.psm1") ? "yes" : "no");
+      BOOST_LOG(debug) << "Playnite installer: src file(SunshinePlaynite.dll) exists? " << (std::filesystem::exists(srcDir / L"SunshinePlaynite.dll") ? "yes" : "no");
       if (!std::filesystem::exists(srcDir)) {
         error_out = "Plugin source not found: " + srcDir.string();
         return false;
@@ -1964,10 +1964,13 @@ namespace platf::playnite {
         return !ec;
       };
 
-      if (!copy_one(L"extension.yaml") || !copy_one(L"SunshinePlaynite.psm1")) {
+      if (!copy_one(L"extension.yaml") || !copy_one(L"SunshinePlaynite.dll")) {
         error_out = "Failed to copy plugin files to " + destDir.string();
         return false;
       }
+      // Remove the retired script module when upgrading an existing install.
+      ec.clear();
+      std::filesystem::remove(destDir / L"SunshinePlaynite.psm1", ec);
       BOOST_LOG(info) << "Playnite installer: deployed plugin to " << destDir.string();
       return true;
     } catch (const std::exception &e) {

@@ -82,7 +82,7 @@ namespace confighttp {
         state.extensions_dir = destPath;
         state.installed =
           std::filesystem::exists(state.extensions_dir / "extension.yaml") &&
-          std::filesystem::exists(state.extensions_dir / "SunshinePlaynite.psm1");
+          std::filesystem::exists(state.extensions_dir / "SunshinePlaynite.dll");
       } else if (active) {
         state.installed = true;
       }
