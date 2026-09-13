@@ -12,7 +12,17 @@ list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
 
 # Build the Playnite 11 .NET plugin into the runtime/package layout. Do not copy
 # the SDK or project sources into the installer; Playnite supplies Playnite.SDK.
-find_program(SUNSHINE_DOTNET_EXECUTABLE dotnet REQUIRED)
+set(SUNSHINE_DOTNET_EXECUTABLE "" CACHE FILEPATH
+        "Path to dotnet used to build the Playnite plugin")
+if(NOT SUNSHINE_DOTNET_EXECUTABLE)
+    find_program(SUNSHINE_DOTNET_EXECUTABLE
+            NAMES dotnet dotnet.exe
+            HINTS "$ENV{DOTNET_ROOT}" "$ENV{ProgramFiles}/dotnet")
+endif()
+if(NOT SUNSHINE_DOTNET_EXECUTABLE)
+    message(FATAL_ERROR
+            "dotnet was not found. Install the .NET SDK or set SUNSHINE_DOTNET_EXECUTABLE.")
+endif()
 set(SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR
         "${CMAKE_SOURCE_DIR}/plugins/playnite/SunshinePlaynite")
 set(SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_DIR
