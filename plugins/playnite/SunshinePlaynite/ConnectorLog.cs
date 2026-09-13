@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using Playnite.SDK;
 
 namespace SunshinePlaynite
@@ -11,10 +12,12 @@ namespace SunshinePlaynite
         private readonly object sync = new object();
         private readonly ILogger playniteLog;
         private readonly string path;
+        private int debugEnabled;
 
-        public ConnectorLog(ILogger playniteLog)
+        public ConnectorLog(ILogger playniteLog, bool enableDebugLogging)
         {
             this.playniteLog = playniteLog;
+            debugEnabled = enableDebugLogging ? 1 : 0;
             var root = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             var directory = Path.Combine(root, "Sunshine", "logs");
             Directory.CreateDirectory(directory);
@@ -23,10 +26,18 @@ namespace SunshinePlaynite
             Info("=== Sunshine Playnite Connector starting ===");
         }
 
-        public void Debug(string message) { Write("DEBUG", message); }
+        public void Debug(string message)
+        {
+            if (Volatile.Read(ref debugEnabled) != 0) Write("DEBUG", message);
+        }
         public void Info(string message) { Write("INFO", message); }
         public void Warn(string message) { Write("WARN", message); }
         public void Error(string message) { Write("ERROR", message); }
+
+        public void SetDebugEnabled(bool enabled)
+        {
+            Volatile.Write(ref debugEnabled, enabled ? 1 : 0);
+        }
 
         private void Write(string level, string message)
         {

@@ -33,11 +33,18 @@ namespace SunshinePlaynite
         private NamedPipeServerStream pendingPipe;
         private Timer snapshotTimer;
         private int started;
+        private int libraryNotificationsEnabled = 1;
 
-        public ConnectorService(IPlayniteAPI api, ILogger logger)
+        public ConnectorService(IPlayniteAPI api, ILogger logger, bool enableDebugLogging)
         {
             this.api = api;
-            log = new ConnectorLog(logger);
+            log = new ConnectorLog(logger, enableDebugLogging);
+        }
+
+        public void ApplySettings(bool notifyLibraryChanges, bool enableDebugLogging)
+        {
+            Volatile.Write(ref libraryNotificationsEnabled, notifyLibraryChanges ? 1 : 0);
+            log.SetDebugEnabled(enableDebugLogging);
         }
 
         public void Start()
@@ -108,8 +115,15 @@ namespace SunshinePlaynite
             if (timer != null) timer.Change(3000, Timeout.Infinite);
         }
 
-        private void GamesChanged(object sender, ItemCollectionChangedEventArgs<Game> args) { QueueSnapshot(); }
-        private void GamesUpdated(object sender, ItemUpdatedEventArgs<Game> args) { QueueSnapshot(); }
+        private void GamesChanged(object sender, ItemCollectionChangedEventArgs<Game> args)
+        {
+            if (Volatile.Read(ref libraryNotificationsEnabled) != 0) QueueSnapshot();
+        }
+
+        private void GamesUpdated(object sender, ItemUpdatedEventArgs<Game> args)
+        {
+            if (Volatile.Read(ref libraryNotificationsEnabled) != 0) QueueSnapshot();
+        }
 
         private void ServerLoop(CancellationToken token)
         {
