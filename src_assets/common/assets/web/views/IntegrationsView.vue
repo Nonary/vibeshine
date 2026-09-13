@@ -2172,7 +2172,11 @@ function libraryRequest(
             />
           </template>
           <AppButton
-            v-else-if="summary.id === 'vigem' && (!vigem?.installed || !vigem?.version_compatible)"
+            v-else-if="
+              summary.id === 'vigem' &&
+              vigem?.required !== false &&
+              (!vigem?.installed || !vigem?.version_compatible)
+            "
             :label="
               vigem?.installed
                 ? t('ui.integrations.actions.repair')
