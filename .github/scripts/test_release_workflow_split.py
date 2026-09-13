@@ -37,7 +37,7 @@ class ReleaseWorkflowSplitTest(unittest.TestCase):
         self.assertIn("should_release", build_inputs["build_only"])
         self.assertEqual(
             build_inputs["build_tests"],
-            "${{ needs.release-candidate.outputs.should_release != 'true' }}",
+            "false",
         )
         self.assertNotIn("require_signpath_signing", build_inputs)
         self.assertEqual(
@@ -298,7 +298,7 @@ class ReleaseWorkflowSplitTest(unittest.TestCase):
         self.assertIn("artifact_source_run_id", inputs)
         self.assertIn("build_only", inputs)
         self.assertEqual(inputs["build_tests"]["type"], "boolean")
-        self.assertEqual(inputs["build_tests"]["default"], "true")
+        self.assertEqual(inputs["build_tests"]["default"], "false")
         self.assertIn("resolve_source_artifacts", jobs)
         self.assertIn("release_artifacts", jobs)
         self.assertIn("inputs.build_only == false", jobs["sign_windows_msi"]["if"])
@@ -547,11 +547,6 @@ class WindowsWorkflowEfficiencyTest(unittest.TestCase):
         self.assertNotIn("-toolchain", install)
         self.assertNotIn(
             "-DBUILD_WERROR=ON \\\n            # Release tag builds",
-            workflow_text,
-        )
-        self.assertIn(
-            "          # Release tag builds omit test targets; ordinary reusable-workflow calls retain them.\n"
-            "          cmake \\",
             workflow_text,
         )
         self.assertIn(

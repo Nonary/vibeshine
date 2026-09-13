@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "source_revision": "52cbb8f27cbeb18baec53ca5d7b88081f0787a06",
-  "driver_ver": "08/21/2026,0.1.0.30",
+  "source_revision": "0b3970e1a8c839f14f20a7c8eaf48ff59b8c1986",
+  "driver_ver": "09/13/2026,0.1.0.34",
   "platform": "x64",
   "protocol_version": 2,
   "signing": {
@@ -19,28 +19,28 @@
       "basis": "fresh-inf2cat",
       "generator": "Inf2Cat",
       "files": {
-        "driver/VibeshineVhfGamepad.inf": "6294f6244eb7f48831312fce152b22330253ed5dc1a53b471499534e9af51089",
-        "driver/VibeshineVhfGamepad.dll": "d23efa318cad9909a639b2c60bb4244f094c20174cf4b1b494642a75d30099a7",
-        "driver/VibeshineVhfGamepad.cat": "1ed1ad442017fa8fb0271bb7c0796bf7555111b2c9bfcf833098973480292412"
+        "driver/VibeshineVhfGamepad.inf": "2725cf477661cbdac7e5ef85cc28c30d8056cc56fe6feaf07d07f5eec38a5785",
+        "driver/VibeshineVhfGamepad.dll": "2de266d01d9a31272ff29876a61f6b8b1a3f2eb9d79a071bd36a9848f9b8dd95",
+        "driver/VibeshineVhfGamepad.cat": "6a61a1e6f05a8ad2cc0e792f44007736f418141193e082cd3f336be6dec62334"
       }
     }
   },
   "files": [
     {
       "path": "driver/VibeshineVhfGamepad.inf",
-      "sha256": "6294f6244eb7f48831312fce152b22330253ed5dc1a53b471499534e9af51089"
+      "sha256": "2725cf477661cbdac7e5ef85cc28c30d8056cc56fe6feaf07d07f5eec38a5785"
     },
     {
       "path": "driver/VibeshineVhfGamepad.dll",
-      "sha256": "d23efa318cad9909a639b2c60bb4244f094c20174cf4b1b494642a75d30099a7"
+      "sha256": "2de266d01d9a31272ff29876a61f6b8b1a3f2eb9d79a071bd36a9848f9b8dd95"
     },
     {
       "path": "driver/VibeshineVhfGamepad.cat",
-      "sha256": "1ed1ad442017fa8fb0271bb7c0796bf7555111b2c9bfcf833098973480292412"
+      "sha256": "6a61a1e6f05a8ad2cc0e792f44007736f418141193e082cd3f336be6dec62334"
     },
     {
       "path": "tools/VibeshineVhfGamepadDeviceSetup.exe",
-      "sha256": "370a35d98416535bdc2beeda5f33d3605c11ff57a06d5501132241e37ded7e81"
+      "sha256": "d58c2ad5943c9cdf96d122a5dc6e66689ef04dc9db054d803ec500b866b1e4fc"
     }
   ]
 }
