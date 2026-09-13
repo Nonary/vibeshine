@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using System.Reflection;
 using Playnite.SDK;
+using Playnite.SDK.Data;
 
 namespace SunshinePlaynite
 {
@@ -40,6 +42,12 @@ namespace SunshinePlaynite
             set { SetValue(ref enableDebugLogging, value); }
         }
 
+        [DontSerialize]
+        public string SettingsTitle
+        {
+            get { return "Sunshine Playnite Connector - v" + GetPluginVersion(); }
+        }
+
         public void BeginEdit()
         {
             editingSnapshot = new SunshinePlayniteSettings();
@@ -71,6 +79,21 @@ namespace SunshinePlaynite
             ConnectorEnabled = source.ConnectorEnabled;
             NotifyLibraryChanges = source.NotifyLibraryChanges;
             EnableDebugLogging = source.EnableDebugLogging;
+        }
+
+        private static string GetPluginVersion()
+        {
+            var assembly = typeof(SunshinePlaynitePlugin).Assembly;
+            var attribute = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
+            if (attribute != null && !string.IsNullOrWhiteSpace(attribute.InformationalVersion))
+            {
+                var version = attribute.InformationalVersion;
+                var metadataIndex = version.IndexOf('+');
+                return metadataIndex >= 0 ? version.Substring(0, metadataIndex) : version;
+            }
+
+            var assemblyVersion = assembly.GetName().Version;
+            return assemblyVersion == null ? "unknown" : assemblyVersion.ToString(3);
         }
     }
 }
