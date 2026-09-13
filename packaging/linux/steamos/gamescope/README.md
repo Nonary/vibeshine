@@ -5,6 +5,11 @@ scene. The patch is pinned to Valve Gamescope **3.16.23.5**, commit
 `1290cbc1a7ca625688bde8728d8e3b1e703d6a40`. `source-lock.json` records the patch
 checksum. It does not create an independent virtual output or change panel modes.
 
+An opt-in second patch adds **startup selection of a separate DRM scanout
+device** for virtual-monitor hardware validation on Linux, including CachyOS.
+It is a prerequisite, not live Gaming Mode virtual-monitor support. See
+[the implementation status and validation sequence](VIRTUAL-DISPLAY.md#implementation-status--2026-09-12).
+
 The patch also tracks Steam overlay changes when deciding whether to capture a
 new frame, preventing overlay-only menu updates from waiting for a game commit.
 See [the virtual-display investigation](VIRTUAL-DISPLAY.md) for the Gaming Mode
@@ -68,6 +73,38 @@ automatically SteamOS-compatible. See the local SDK notes in [AUDIT.md](../AUDIT
 This staging command does not activate a system extension, set file capabilities
 or replace the live compositor. The [system-extension release requirements](../sysext/README.md)
 still apply before privileged Gaming Mode deployment.
+
+### Experimental separate scanout device
+
+Add `--experimental-drm-scanout` to the build command to apply the second,
+checksum-pinned patch and run its device-selection regression checks. The
+default build retains only the HDR capture patch. `build-features.json` in the
+staging root records which variant was built.
+
+The experimental compositor accepts `--drm-device /dev/dri/cardN` separately
+from `--prefer-vk-device vendor:device` and `--prefer-output Virtual-N`.
+The first selects a KMS primary node; the second selects the Vulkan renderer;
+the third selects a connector **on that KMS device**. Resolve the actual card
+and connector on the test host; card numbers are not stable identifiers.
+An invalid or inaccessible explicit node fails without choosing another card.
+
+On a separate card, Gamescope fully composes the scene and waits for Vulkan
+completion before submitting it. Existing Vulkan export/plane import modifier
+intersection is retained; an empty intersection fails with a diagnostic.
+The patch also handles missing optional plane fences at teardown and the
+XBGR2101010 format on a primary-only device. Producer-buffer retention through
+capture and encoding still needs a hardware audit.
+
+This option is startup-only. It does not migrate an existing Steam session,
+lease a connector, apply client modes, restore the physical display, or provide
+simultaneous physical/virtual outputs. Use it only in a separately controlled
+test session on an unused managed connector until the hardware gates pass.
+
+The device-selection test can also run without Linux graphics libraries:
+
+```bash
+python3 packaging/linux/steamos/tests/test-gamescope-scanout.py /path/to/patched/gamescope
+```
 
 ## Hardware validation
 

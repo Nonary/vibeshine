@@ -6,5 +6,7 @@
   "patch": "0001-hdr10-pipewire-capture.patch",
   "patch_sha256": "5efe37309d3112adce03b7fd9e66c1f9515a3f70333164f83e5dad5c073d3725",
   "protocol": "vibeshine_capture_v1",
-  "profile": 1
+  "profile": 1,
+  "scanout_patch": "0002-separate-drm-scanout-device.patch",
+  "scanout_patch_sha256": "e445ea6616c9f915b0cd55cef4d21330ad5c8ed021074dd5b189c419339fa6ef"
 }

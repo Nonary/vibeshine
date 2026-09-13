@@ -16,12 +16,17 @@ parser.add_argument('work', type=pathlib.Path, help='New, empty build workspace'
 parser.add_argument('stage', type=pathlib.Path, help='New staging root (DESTDIR)')
 parser.add_argument('--jobs', type=int, default=4)
 parser.add_argument('--meson-option', action='append', default=[])
+parser.add_argument('--experimental-drm-scanout', action='store_true',
+                    help='Build the separate scanout-device prerequisite for isolated GPU validation')
 args = parser.parse_args()
 here = pathlib.Path(__file__).resolve().parent
 lock = json.loads((here / 'source-lock.json').read_text())
 patch = here / lock['patch']
 if hashlib.sha256(patch.read_bytes()).hexdigest() != lock['patch_sha256']:
     raise SystemExit('Patch checksum does not match source-lock.json')
+scanout_patch = here / lock['scanout_patch'] if args.experimental_drm_scanout else None
+if scanout_patch and hashlib.sha256(scanout_patch.read_bytes()).hexdigest() != lock['scanout_patch_sha256']:
+    raise SystemExit('Scanout patch checksum does not match source-lock.json')
 work, stage = args.work.resolve(), args.stage.resolve()
 for directory in [work, stage]:
     if directory.exists():
@@ -40,6 +45,10 @@ run(['git', 'submodule', 'update', '--init', '--recursive', '--depth', '1', '--'
      'subprojects/wlroots', 'subprojects/libliftoff', 'subprojects/vkroots', 'src/reshade', 'thirdparty/SPIRV-Headers'], cwd=source)
 run(['git', 'apply', '--check', str(patch)], cwd=source)
 run(['git', 'apply', str(patch)], cwd=source)
+if scanout_patch:
+    run(['git', 'apply', '--check', str(scanout_patch)], cwd=source)
+    run(['git', 'apply', str(scanout_patch)], cwd=source)
+    run(['python3', str(here.parent / 'tests/test-gamescope-scanout.py'), str(source)])
 run(['meson', 'setup', str(build), str(source), '--buildtype=release', '--prefix=/opt/vibeshine-gamescope',
      '-Denable_openvr_support=false', '-Dpipewire=enabled', '-Drt_cap=enabled', '-Ddrm_backend=enabled',
      '-Dsdl2_backend=enabled', '-Dinput_emulation=enabled', '-Davif_screenshots=enabled',
@@ -48,4 +57,9 @@ run(['meson', 'compile', '-C', str(build), '-j', str(args.jobs)])
 run(['meson', 'install', '-C', str(build), '--no-rebuild'], env={**os.environ, 'DESTDIR': str(stage)})
 shutil.copytree(source / 'scripts', stage / 'opt/vibeshine-gamescope/share/gamescope/scripts', dirs_exist_ok=True)
 (stage / 'source-lock.json').write_text(json.dumps(lock, indent=2) + '\n')
+(stage / 'build-features.json').write_text(json.dumps({
+    'hdr_capture_profile': 1,
+    'experimental_drm_scanout': args.experimental_drm_scanout,
+    'gaming_mode_live_output_switching': False,
+}, indent=2) + '\n')
 print(f'Built and staged {lock["tag"]} + HDR capture profile 1 at {stage}')

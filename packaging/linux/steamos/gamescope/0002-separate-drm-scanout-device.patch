@@ -1,0 +1,237 @@
+Subject: [PATCH] drm: separate scanout from Vulkan rendering for virtual-output validation
+
+Startup-only prerequisite; does not switch a running Gaming Mode session.
+
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -89,6 +89,7 @@
+ 	{ "disable-layers", no_argument, nullptr, 0 },
+ 	{ "debug-layers", no_argument, nullptr, 0 },
+ 	{ "prefer-output", required_argument, nullptr, 'O' },
++	{ "drm-device", required_argument, nullptr, 0 },
+ 	{ "default-touch-mode", required_argument, nullptr, 0 },
+ 	{ "generate-drm-mode", required_argument, nullptr, 0 },
+ 	{ "immediate-flips", no_argument, nullptr, 0 },
+@@ -226,6 +227,7 @@
+ 	"\n"
+ 	"Embedded mode options:\n"
+ 	"  -O, --prefer-output            list of connectors in order of preference (ex: DP-1,DP-2,DP-3,HDMI-A-1)\n"
++	"  --drm-device                  KMS primary node for scanout, independent of the Vulkan renderer\n"
+ 	"  --default-touch-mode           0: hover, 1: left, 2: right, 3: middle, 4: passthrough\n"
+ 	"  --generate-drm-mode            DRM mode generation algorithm (cvt, fixed)\n"
+ 	"  --immediate-flips              Enable immediate flips, may result in tearing\n"
+@@ -691,6 +693,7 @@
+ int g_nPreferredOutputHeight = 0;
+ bool g_bExposeWayland = false;
+ const char *g_sOutputName = nullptr;
++const char *g_sDRMDevice = nullptr;
+ bool g_bDebugLayers = false;
+ bool g_bForceDisableColorMgmt = false;
+ bool g_bRt = false;
+@@ -798,6 +801,8 @@
+ 					g_upscaleFilterSharpness = parse_integer( optarg, opt_name );
+ 				} else if (strcmp(opt_name, "rt") == 0) {
+ 					g_bRt = true;
++				} else if (strcmp(opt_name, "drm-device") == 0) {
++					g_sDRMDevice = optarg;
+ 				} else if (strcmp(opt_name, "prefer-vk-device") == 0) {
+ 					unsigned vendorID;
+ 					unsigned deviceID;
+--- a/src/main.hpp
++++ b/src/main.hpp
+@@ -28,6 +28,7 @@
+ 
+ extern float g_mouseSensitivity;
+ extern const char *g_sOutputName;
++extern const char *g_sDRMDevice;
+ 
+ enum class GamescopeUpscaleFilter : uint32_t
+ {
+--- a/src/Backends/DRMBackend.cpp
++++ b/src/Backends/DRMBackend.cpp
+@@ -101,6 +101,7 @@
+ 
+ struct drm_t {
+ 	bool bUseLiftoff;
++	bool bSeparateScanoutDevice = false;
+ 
+ 	int fd = -1;
+ 
+@@ -1211,6 +1212,72 @@
+ 	liftoff_log_scope.vlogf(priority, fmt, args);
+ }
+ 
++static bool open_drm_scanout_device(struct drm_t *drm)
++{
++	dev_t render_dev_id = 0;
++	const bool have_render_device = vulkan_primary_dev_id(&render_dev_id);
++	drm->device_name = nullptr;
++	if (g_sDRMDevice != nullptr)
++	{
++		if (g_sDRMDevice[0] != '/')
++		{
++			drm_log.errorf("--drm-device requires an absolute KMS primary-node path");
++			return false;
++		}
++		drm->device_name = strdup(g_sDRMDevice);
++	}
++	else if (have_render_device)
++	{
++		drmDevice *device = nullptr;
++		if (drmGetDeviceFromDevId(render_dev_id, 0, &device) != 0)
++		{
++			drm_log.errorf("Failed to find the Vulkan renderer's DRM device");
++			return false;
++		}
++		if (device->available_nodes & (1 << DRM_NODE_PRIMARY))
++			drm->device_name = strdup(device->nodes[DRM_NODE_PRIMARY]);
++		drmFreeDevice(&device);
++		if (!drm->device_name)
++			return false;
++	}
++	if (g_sDRMDevice && !drm->device_name)
++		return false;
++
++	// Keep logind/libseat ownership and its hotplug notifications. An explicit
++	// device must never fall back to another card on failure.
++	drm->fd = wlsession_open_kms(drm->device_name);
++	if (drm->fd < 0)
++	{
++		drm_log.errorf("Could not open requested KMS device '%s'", drm->device_name ? drm->device_name : "auto");
++		free(drm->device_name);
++		drm->device_name = nullptr;
++		return false;
++	}
++	if (drmGetNodeTypeFromFd(drm->fd) != DRM_NODE_PRIMARY || !drmIsKMS(drm->fd))
++	{
++		drm_log.errorf("Selected scanout device is not a KMS primary node");
++		wlsession_close_kms();
++		drm->fd = -1;
++		free(drm->device_name);
++		drm->device_name = nullptr;
++		return false;
++	}
++	struct stat attributes {};
++	if (fstat(drm->fd, &attributes) != 0)
++	{
++		wlsession_close_kms();
++		drm->fd = -1;
++		free(drm->device_name);
++		drm->device_name = nullptr;
++		return false;
++	}
++	drm->bSeparateScanoutDevice = !have_render_device || attributes.st_rdev != render_dev_id;
++	drm_log.infof("KMS scanout '%s': %s Vulkan render device",
++		drm->device_name ? drm->device_name : "auto",
++		drm->bSeparateScanoutDevice ? "separate from" : "same as");
++	return true;
++}
++
+ bool init_drm(struct drm_t *drm, int width, int height, int refresh)
+ {
+ 	load_pnps();
+@@ -1221,36 +1288,8 @@
+ 	drm->preferred_height = height;
+ 	drm->preferred_refresh = refresh;
+ 
+-	drm->device_name = nullptr;
+-	dev_t dev_id = 0;
+-	if (vulkan_primary_dev_id(&dev_id)) {
+-		drmDevice *drm_dev = nullptr;
+-		if (drmGetDeviceFromDevId(dev_id, 0, &drm_dev) != 0) {
+-			drm_log.errorf("Failed to find DRM device with device ID %" PRIu64, (uint64_t)dev_id);
+-			return false;
+-		}
+-		assert(drm_dev->available_nodes & (1 << DRM_NODE_PRIMARY));
+-		drm->device_name = strdup(drm_dev->nodes[DRM_NODE_PRIMARY]);
+-		drm_log.infof("opening DRM node '%s'", drm->device_name);
+-	}
+-	else
+-	{
+-		drm_log.infof("warning: picking an arbitrary DRM device");
+-	}
+-
+-	drm->fd = wlsession_open_kms( drm->device_name );
+-	if ( drm->fd < 0 )
+-	{
+-		drm_log.errorf("Could not open KMS device");
++	if (!open_drm_scanout_device(drm))
+ 		return false;
+-	}
+-
+-	if ( !drmIsKMS( drm->fd ) )
+-	{
+-		drm_log.errorf( "'%s' is not a KMS device", drm->device_name );
+-		wlsession_close_kms();
+-		return -1;
+-	}
+ 
+ 	if (drmSetClientCap(drm->fd, DRM_CLIENT_CAP_ATOMIC, 1) != 0) {
+ 		drm_log.errorf("drmSetClientCap(ATOMIC) failed");
+@@ -1386,6 +1425,7 @@
+ 		case DRM_FORMAT_XRGB2101010:
+ 			g_nDRMFormatOverlay = DRM_FORMAT_ARGB2101010;
+ 			break;
++		case DRM_FORMAT_XBGR2101010:
+ 		case DRM_FORMAT_ABGR2101010:
+ 			g_nDRMFormatOverlay = DRM_FORMAT_ABGR2101010;
+ 			break;
+@@ -1491,7 +1531,8 @@
+ 	for ( std::unique_ptr< gamescope::CDRMPlane > &pPlane : drm->planes )
+ 	{
+ 		pPlane->GetProperties().FB_ID->SetPendingValue( req, 0, true );
+-		pPlane->GetProperties().IN_FENCE_FD->SetPendingValue( req, -1, true );
++		if ( pPlane->GetProperties().IN_FENCE_FD )
++			pPlane->GetProperties().IN_FENCE_FD->SetPendingValue( req, -1, true );
+ 		pPlane->GetProperties().CRTC_ID->SetPendingValue( req, 0, true );
+ 		pPlane->GetProperties().SRC_X->SetPendingValue( req, 0, true );
+ 		pPlane->GetProperties().SRC_Y->SetPendingValue( req, 0, true );
+@@ -3495,6 +3536,9 @@
+ 
+ 			bool bNeedsFullComposite = false;
+ 			bNeedsFullComposite |= cv_composite_force;
++			// A separate scanout card receives a single completed composition,
++			// including Steam overlays; never scan out game planes directly.
++			bNeedsFullComposite |= g_DRM.bSeparateScanoutDevice;
+ 			bNeedsFullComposite |= bWasFirstFrame;
+ 			bNeedsFullComposite |= pFrameInfo->useFSRLayer0;
+ 			bNeedsFullComposite |= pFrameInfo->useNISLayer0;
+@@ -3727,7 +3771,9 @@
+ 				xwm_log.errorf("Failed to prepare 1-layer flip (%s), trying again with previous mode if modeset needed", strerror( -ret ));
+ 
+ 				// Try once again to in case we need to fall back to another mode.
+-				ret = drm_prepare( &g_DRM, bAsync, &compositeFrameInfo );
++				// Keep the completed single-plane image on the separate card,
++				// including modeset retry; raw game planes are not its contract.
++				ret = drm_prepare( &g_DRM, bAsync, g_DRM.bSeparateScanoutDevice ? &presentCompFrameInfo : &compositeFrameInfo );
+ 
+ 				// Happens when we're VT-switched away
+ 				if ( ret == -EACCES )
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -2166,7 +2166,11 @@
+ 		else
+ 		{
+ 			std::span<const uint64_t> modifiers = GetBackend()->GetSupportedModifiers( drmFormat );
+-			assert( !modifiers.empty() );
++			if ( modifiers.empty() )
++			{
++				vk_log.errorf("Scanout plane has no modifiers for DRM format %#x", drmFormat);
++				return false;
++			}
+ 			possibleModifiers = modifiers.data();
+ 			numPossibleModifiers = modifiers.size();
+ 		}
+@@ -2192,7 +2196,11 @@
+ 			modifiers.push_back( modifier );
+ 		}
+ 
+-		assert( modifiers.size() > 0 );
++		if ( modifiers.empty() )
++		{
++			vk_log.errorf("No exportable Vulkan/scanout modifier intersection for DRM format %#x", drmFormat);
++			return false;
++		}
+ 
+ 		modifierListInfo = {
+ 			.sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT,

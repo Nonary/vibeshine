@@ -101,6 +101,77 @@ that it caused the observed artifact. Fixing it requires retaining the producer
 buffer through GPU read completion or copying into consumer-owned storage with
 proper synchronization. It is not fixed by the menu patch.
 
+## Implementation status — 2026-09-12
+
+The virtual-monitor work has resumed. The first prerequisite patch,
+`0002-separate-drm-scanout-device.patch`, adds explicit startup KMS device
+selection while retaining Vulkan rendering on the chosen hardware GPU.
+It forces full composition on a separate scanout device, including modeset
+retry, and rejects invalid device selection or an empty export/import modifier
+intersection. Build it with `--experimental-drm-scanout`; it is not enabled in
+the default patched Gamescope build or in the host's capability report.
+
+The regression harness executes the actual patched device-opening function
+against simulated DRM/session APIs. It covers default and explicit selection,
+same-device and separate-device rendering, missing renderer identification,
+invalid paths, inaccessible devices, non-primary/non-KMS descriptors, stat
+failure, and resource cleanup. Passing this harness does not prove compositor
+compilation, GPU import, captured pixels, or stream playback.
+
+Validation on September 12:
+
+- Both checksum-pinned patches apply in order to a fresh archive of the locked
+  Valve commit and reproduce the tested source files.
+- The scanout-selection and existing overlay-repaint regression harnesses pass
+  on the development Mac.
+- The complete patched Gamescope compositor and WSI layer compile and link in
+  an isolated Ubuntu 24.04 **ARM64** container with GCC 13.3 and Wayland 1.23.1.
+  DRM, PipeWire, and SDL backends are enabled; OpenVR, input emulation, and AVIF
+  screenshots are disabled for this compilation check. This is not a CachyOS
+  or SteamOS x86_64 artifact, and the container has no GPU/KMS access.
+- No live compositor, Steam session, driver, or host service was changed.
+
+### CachyOS integration boundary
+
+CachyOS `gamescope-session` revision
+`f151b891b3936f1a90ae3c7a659adf2298f484ea` uses
+`gamescope-session.service`, `gamescope-session.target`, and
+`/usr/lib/steamos/gamescope-session`. The launcher publishes `DISPLAY` and
+`GAMESCOPE_WAYLAND_DISPLAY` in `$XDG_RUNTIME_DIR/gamescope-environment`
+before sending readiness. Its service deliberately unsets `XAUTHORITY` and
+uses `XDG_SESSION_TYPE=x11` for applications, while SDDM owns a Wayland login
+session. Detection must use the authoritative login and service state, not
+the application's `XDG_SESSION_TYPE` or the distribution name.
+
+The current Vibeshine machine controller and broker remain Plasma-specific.
+They require Plasma service readiness, KScreen, and a desktop Xauthority
+file. Gaming Mode needs a distinct verified session binding, bounded
+environment discovery under the selected user's identity, and compositor
+operations through the existing generation-bound broker. Merely accepting a
+Gamescope socket in the controller would leave display/capture/application
+operations with the wrong session contract.
+
+### Next hardware gate and remaining implementation
+
+1. Build the experimental compositor for the target Linux ABI. In an isolated
+   session, present an animated pattern to an unused managed connector with
+   the hardware GPU rendering and `vibeshine_drm` scanning out. Verify the
+   accepted resolution/refresh, complete frames, HDR pixel values, and teardown.
+2. Audit buffer reuse through the managed completed-frame capture path. Vulkan
+   completion before DRM submission does not establish encoder ownership.
+3. Implement a compositor control/lease protocol for switching the **existing**
+   Gaming Mode session between physical and virtual output, acknowledged mode
+   changes, and restoration on normal release, failed activation, and owner loss.
+   Startup `--drm-device` selection alone cannot perform this transition.
+4. Add the matching Gamescope controller/broker binding for both CachyOS and
+   SteamOS, then connect the host display backend and KMS capture routing.
+5. Validate Big Picture, games, overlay changes, reconnects, logout, suspend,
+   and restore. Simultaneous local/virtual output remains a separate compositor
+   requirement unless explicitly selected for this implementation.
+
+CachyOS source: [session launcher](https://github.com/CachyOS/gamescope-session/blob/f151b891b3936f1a90ae3c7a659adf2298f484ea/usr/lib/steamos/gamescope-session),
+[service](https://github.com/CachyOS/gamescope-session/blob/f151b891b3936f1a90ae3c7a659adf2298f484ea/usr/lib/systemd/user/gamescope-session.service).
+
 References: [pinned compositor source](https://github.com/ValveSoftware/gamescope/blob/1290cbc1a7ca625688bde8728d8e3b1e703d6a40/src/steamcompmgr.cpp),
 [pinned DRM backend](https://github.com/ValveSoftware/gamescope/blob/1290cbc1a7ca625688bde8728d8e3b1e703d6a40/src/Backends/DRMBackend.cpp),
 [PipeWire buffer lifecycle](https://docs.pipewire.org/page_streams.html).
