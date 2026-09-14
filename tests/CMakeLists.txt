@@ -859,3 +859,16 @@ if(APPLE)
     sunshine_register_component(NAME test_component_av_audio_policy TEST_SOURCE unit/platform/macos/test_av_audio.mm
         PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/macos/av_audio_policy.cpp")
 endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET libinputtino)
+    foreach(profile ds4 ds5)
+        add_executable(test_${profile}_usb unit/platform/linux/test_${profile}_usb.cpp)
+        target_include_directories(test_${profile}_usb PRIVATE "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/inputtino/include")
+        add_test(NAME test_component_${profile}_usb COMMAND test_${profile}_usb)
+    endforeach()
+    # Manual only: creates temporary devices visible to the desktop and Steam.
+    add_executable(probe_playstation_uhid integration/probe_playstation_uhid.cpp
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/linux/input/inputtino_ds4.cpp")
+    target_include_directories(probe_playstation_uhid PRIVATE "${SUNSHINE_TEST_REPOSITORY_ROOT}")
+    target_link_libraries(probe_playstation_uhid PRIVATE inputtino::libinputtino)
+endif()
