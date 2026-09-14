@@ -86,20 +86,33 @@ int main(void) {
   CHECK(!steam_direct_arguments_are_safe(11, valid_steam_direct));
 
   char *global_limiter[] = {
-    "vibeshine-session-broker", "global-limiter", "proton", "59940", "custom", "0", "late", NULL
+    "vibeshine-session-broker", "global-limiter", "proton", "59940", "custom", "0", "late", "sdr", NULL
   };
-  CHECK(global_limiter_arguments_are_safe(7, global_limiter));
-  CHECK(!global_limiter_arguments_are_safe(6, global_limiter));
+  CHECK(global_limiter_arguments_are_safe(8, global_limiter));
+  CHECK(!global_limiter_arguments_are_safe(7, global_limiter));
+  global_limiter[7] = "sdr10";
+  CHECK(global_limiter_arguments_are_safe(8, global_limiter));
+  global_limiter[7] = "hdr";
+  CHECK(global_limiter_arguments_are_safe(8, global_limiter));
+  global_limiter[7] = "pq";
+  CHECK(!global_limiter_arguments_are_safe(8, global_limiter));
+  global_limiter[7] = "sdr";
   global_limiter[2] = "mangohud";
   global_limiter[6] = "early";
-  CHECK(global_limiter_arguments_are_safe(7, global_limiter));
+  CHECK(global_limiter_arguments_are_safe(8, global_limiter));
   global_limiter[3] = "59940;touch /tmp/untrusted";
-  CHECK(!global_limiter_arguments_are_safe(7, global_limiter));
+  CHECK(!global_limiter_arguments_are_safe(8, global_limiter));
   global_limiter[3] = "0";
-  CHECK(!global_limiter_arguments_are_safe(7, global_limiter));
+  CHECK(!global_limiter_arguments_are_safe(8, global_limiter));
   global_limiter[3] = "59940";
   global_limiter[4] = "/tmp/preset";
-  CHECK(!global_limiter_arguments_are_safe(7, global_limiter));
+  CHECK(!global_limiter_arguments_are_safe(8, global_limiter));
+  global_limiter[2] = "disabled";
+  global_limiter[3] = "0";
+  global_limiter[4] = "custom";
+  global_limiter[6] = "late";
+  global_limiter[7] = "sdr10";
+  CHECK(global_limiter_arguments_are_safe(8, global_limiter));
 
   CHECK(xauthority_mode_is_safe(0600));
   CHECK(xauthority_mode_is_safe(0400));
