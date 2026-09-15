@@ -100,6 +100,25 @@ test('Linux keeps common virtual-display policy and hides Windows display intern
     const field = fields.find((candidate) => candidate.key === key);
     assert.deepEqual(field?.platform, ['windows', 'linux'], `${key} must support Linux cleanup`);
   }
+
+  const waylandHdrCompatibility = fields.find(
+    (candidate) => candidate.key === 'wayland_hdr_compatibility',
+  );
+  assert.equal(
+    waylandHdrCompatibility?.platform,
+    'linux',
+    'Wayland HDR compatibility must remain Linux-only',
+  );
+  const legacyAudioVideo = readFileSync(
+    new URL('../../web-legacy/configs/tabs/AudioVideo.vue', import.meta.url),
+    'utf8',
+  );
+  const legacyStore = readFileSync(
+    new URL('../../web-legacy/stores/config.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(legacyAudioVideo, /v-model:checked="config\.wayland_hdr_compatibility"/);
+  assert.match(legacyStore, /wayland_hdr_compatibility:\s*false/);
 });
 
 test('Linux exposes Remote Monitor behavior controls', () => {

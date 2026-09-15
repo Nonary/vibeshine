@@ -246,6 +246,9 @@ namespace proc {
     std::atomic<int> _app_id;
 
     bp::environment _env;
+    // Entries inserted by a prior stream must not leak into a later launch,
+    // while values loaded from apps.json remain explicit user configuration.
+    std::unordered_set<std::string> _stream_owned_environment_keys;
     std::vector<ctx_t> _apps;
     ctx_t _app;
     std::chrono::steady_clock::time_point _app_launch_time;
