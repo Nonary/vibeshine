@@ -1,6 +1,7 @@
 # Sunshine Playnite Connector
 
-This is the compiled Playnite 11 replacement for the retired PowerShell script extension.
+This is the compiled Playnite 10 replacement for the retired PowerShell script extension.
+Playnite 11 uses a separate, incompatible SDK and will require its own connector port after release.
 
 ## Build
 

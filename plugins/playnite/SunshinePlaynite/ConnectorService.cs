@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
@@ -19,10 +22,17 @@ namespace SunshinePlaynite
     internal sealed class ConnectorService : IDisposable
     {
         private const string ControlPipeName = "Sunshine.PlayniteExtension";
+        private const int DataConnectionTimeoutMs = 5000;
+        private const int HelloTimeoutMs = 5000;
+        private const int ShutdownFlushTimeoutMs = 500;
+        private const uint ProcessQueryLimitedInformation = 0x1000;
         private readonly IPlayniteAPI api;
         private readonly ConnectorLog log;
         private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+        private readonly object lifecycleLock = new object();
         private readonly object coreLock = new object();
+        private readonly object gameStateLock = new object();
+        private readonly object snapshotLock = new object();
         private readonly ConcurrentDictionary<string, PipeConnection> launchers = new ConcurrentDictionary<string, PipeConnection>();
         private readonly ConcurrentDictionary<Guid, byte> sunshineGames = new ConcurrentDictionary<Guid, byte>();
         private readonly ConcurrentDictionary<Guid, byte> pendingGames = new ConcurrentDictionary<Guid, byte>();
@@ -49,64 +59,124 @@ namespace SunshinePlaynite
 
         public void Start()
         {
-            if (Interlocked.Exchange(ref started, 1) != 0) return;
-            cancellation = new CancellationTokenSource();
-            api.Database.Games.ItemCollectionChanged += GamesChanged;
-            api.Database.Games.ItemUpdated += GamesUpdated;
-            snapshotTimer = new Timer(_ => SendSnapshot(), null, Timeout.Infinite, Timeout.Infinite);
-            serverTask = Task.Factory.StartNew(() => ServerLoop(cancellation.Token), cancellation.Token,
-                TaskCreationOptions.LongRunning, TaskScheduler.Default);
-            log.Info("Compiled Playnite plugin started");
+            lock (lifecycleLock)
+            {
+                if (Volatile.Read(ref started) != 0) return;
+                var nextCancellation = new CancellationTokenSource();
+                try
+                {
+                    cancellation = nextCancellation;
+                    api.Database.Games.ItemCollectionChanged += GamesChanged;
+                    api.Database.Games.ItemUpdated += GamesUpdated;
+                    snapshotTimer = new Timer(_ => SendSnapshot(), null, Timeout.Infinite, Timeout.Infinite);
+                    serverTask = Task.Factory.StartNew(() => ServerLoop(nextCancellation.Token), nextCancellation.Token,
+                        TaskCreationOptions.LongRunning, TaskScheduler.Default);
+                    Volatile.Write(ref started, 1);
+                    log.Info("Compiled Playnite plugin started");
+                }
+                catch
+                {
+                    try { api.Database.Games.ItemCollectionChanged -= GamesChanged; } catch { }
+                    try { api.Database.Games.ItemUpdated -= GamesUpdated; } catch { }
+                    try { if (snapshotTimer != null) snapshotTimer.Dispose(); } catch { }
+                    snapshotTimer = null;
+                    serverTask = null;
+                    cancellation = null;
+                    nextCancellation.Dispose();
+                    throw;
+                }
+            }
         }
 
         public void Stop()
         {
-            if (Interlocked.Exchange(ref started, 0) == 0) return;
-            log.Info("Beginning shutdown");
-            SendShutdownHandoff();
-            Thread.Sleep(400);
-            try { api.Database.Games.ItemCollectionChanged -= GamesChanged; } catch { }
-            try { api.Database.Games.ItemUpdated -= GamesUpdated; } catch { }
-            try { snapshotTimer.Dispose(); } catch { }
-            try { cancellation.Cancel(); } catch { }
-            try { pendingPipe.Dispose(); } catch { }
-            ReplaceCore(null);
-            foreach (var item in launchers.ToArray())
+            lock (lifecycleLock)
             {
-                PipeConnection ignored;
-                if (launchers.TryRemove(item.Key, out ignored)) ignored.Dispose();
-                environmentScopes.Clear(item.Key);
+                if (Volatile.Read(ref started) == 0) return;
+                Volatile.Write(ref started, 0);
+                log.Info("Beginning shutdown");
+                try
+                {
+                    try { SendShutdownHandoff(); }
+                    catch (Exception ex) { log.Warn("Shutdown handoff failed: " + ex.Message); }
+                    try { FlushConnections(ShutdownFlushTimeoutMs); }
+                    catch (Exception ex) { log.Warn("Shutdown flush failed: " + ex.Message); }
+                }
+                finally
+                {
+                    try { api.Database.Games.ItemCollectionChanged -= GamesChanged; } catch { }
+                    try { api.Database.Games.ItemUpdated -= GamesUpdated; } catch { }
+
+                    var timer = snapshotTimer;
+                    snapshotTimer = null;
+                    try { if (timer != null) timer.Dispose(); } catch { }
+
+                    var stopCancellation = cancellation;
+                    try { if (stopCancellation != null) stopCancellation.Cancel(); } catch { }
+                    try { if (pendingPipe != null) pendingPipe.Dispose(); } catch { }
+                    pendingPipe = null;
+                    try { ReplaceCore(null); } catch { }
+                    foreach (var item in launchers.ToArray())
+                    {
+                        PipeConnection ignored;
+                        if (launchers.TryRemove(item.Key, out ignored))
+                        {
+                            try { ignored.Dispose(); } catch { }
+                        }
+                        try { environmentScopes.Clear(item.Key); } catch { }
+                    }
+                    lock (gameStateLock)
+                    {
+                        pendingGames.Clear();
+                        sunshineGames.Clear();
+                    }
+
+                    var task = serverTask;
+                    serverTask = null;
+                    try { if (task != null) task.Wait(1000); } catch { }
+                    cancellation = null;
+                    try { if (stopCancellation != null) stopCancellation.Dispose(); } catch { }
+                    log.Info("Connector stopped");
+                }
             }
-            try { serverTask.Wait(1000); } catch { }
-            log.Info("Connector stopped");
         }
 
         public void Dispose()
         {
             Stop();
             log.Dispose();
-            if (cancellation != null) cancellation.Dispose();
         }
 
         public void GameStarted(Game game)
         {
             if (game == null) return;
             log.Info("Game started: " + game.Name + " [" + game.Id + "]");
-            if (launchers.Values.Any(x => SameId(x.GameId, game.Id))) sunshineGames.TryAdd(game.Id, 0);
-            SendStatus("gameStarted", game);
+            var payload = RunOnUi(() => BuildStatus("gameStarted", game), true);
+            lock (gameStateLock)
+            {
+                if (launchers.Values.Any(x => SameId(x.GameId, game.Id))) sunshineGames.TryAdd(game.Id, 0);
+                SendCore(payload);
+                Broadcast(payload, null);
+            }
         }
 
         public void GameStopped(Game game)
         {
             if (game == null) return;
             log.Info("Game stopped: " + game.Name + " [" + game.Id + "]");
-            byte ignored;
-            if (!sunshineGames.TryRemove(game.Id, out ignored))
+            var payload = RunOnUi(() => BuildStatus("gameStopped", game), true);
+            lock (gameStateLock)
             {
-                log.Debug("Ignoring stop status for an untracked game: " + game.Id);
-                return;
+                byte ignored;
+                pendingGames.TryRemove(game.Id, out ignored);
+                if (!sunshineGames.TryRemove(game.Id, out ignored))
+                {
+                    log.Debug("Ignoring stop status for an untracked game: " + game.Id);
+                    return;
+                }
+                SendCore(payload);
+                Broadcast(payload, null);
             }
-            SendStatus("gameStopped", game);
         }
 
         public void QueueSnapshot()
@@ -145,15 +215,14 @@ namespace SunshinePlaynite
                     control.Dispose();
                     control = null;
                     pendingPipe = data;
-                    WaitForConnection(data, token);
+                    WaitForConnection(data, token, DataConnectionTimeoutMs);
 
                     var reader = new StreamReader(data, new UTF8Encoding(false), false, 8192, true);
                     var writer = new StreamWriter(data, new UTF8Encoding(false), 8192, true) { AutoFlush = true };
-                    var helloLine = reader.ReadLine();
+                    var helloLine = ReadLine(reader, token, HelloTimeoutMs);
                     if (helloLine == null) throw new IOException("No hello received");
                     var hello = ParseObject(helloLine);
-                    var role = GetString(hello, "role");
-                    if (string.IsNullOrEmpty(role)) role = GetCore() == null ? "sunshine" : "launcher";
+                    var role = ValidateClient(data, hello);
                     var connection = new PipeConnection(pipeName, data, reader, writer, log);
                     data = null;
                     if (string.Equals(role, "sunshine", StringComparison.OrdinalIgnoreCase))
@@ -170,6 +239,10 @@ namespace SunshinePlaynite
                     }
                 }
                 catch (OperationCanceledException) { break; }
+                catch (TimeoutException ex)
+                {
+                    if (!token.IsCancellationRequested) log.Warn("Pipe handshake timed out: " + ex.Message);
+                }
                 catch (Exception ex)
                 {
                     if (!token.IsCancellationRequested) log.Warn("Pipe connection failed: " + ex.Message);
@@ -187,37 +260,128 @@ namespace SunshinePlaynite
         private static NamedPipeServerStream CreateServer(string name, PipeSecurity security)
         {
             const PipeOptions options = PipeOptions.Asynchronous;
-            if (security != null)
-            {
-                return new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
-                    options, 65536, 65536, security);
-            }
+            if (security == null) throw new ArgumentNullException(nameof(security));
             return new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
-                options, 65536, 65536);
+                options, 65536, 65536, security);
         }
 
         private static PipeSecurity CreatePipeSecurity()
         {
-            try
+            SecurityIdentifier user;
+            using (var identity = WindowsIdentity.GetCurrent())
             {
-                var security = new PipeSecurity();
-                var allow = AccessControlType.Allow;
-                security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), PipeAccessRights.FullControl, allow));
-                security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.InteractiveSid, null), PipeAccessRights.ReadWrite, allow));
-                security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.WorldSid, null), PipeAccessRights.ReadWrite, allow));
-                var user = WindowsIdentity.GetCurrent().User;
-                if (user != null) security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.FullControl, allow));
-                return security;
+                user = identity.User;
             }
-            catch { return null; }
+            if (user == null) throw new InvalidOperationException("Could not resolve the Playnite user SID");
+
+            var security = new PipeSecurity();
+            security.SetAccessRuleProtection(true, false);
+            security.SetOwner(user);
+            security.AddAccessRule(new PipeAccessRule(
+                new SecurityIdentifier(WellKnownSidType.NetworkSid, null),
+                PipeAccessRights.ReadWrite,
+                AccessControlType.Deny));
+            security.AddAccessRule(new PipeAccessRule(
+                new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                PipeAccessRights.FullControl,
+                AccessControlType.Allow));
+            security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.FullControl, AccessControlType.Allow));
+            return security;
         }
 
-        private static void WaitForConnection(NamedPipeServerStream pipe, CancellationToken token)
+        private static void WaitForConnection(NamedPipeServerStream pipe, CancellationToken token, int timeoutMs = Timeout.Infinite)
         {
             var wait = pipe.WaitForConnectionAsync();
-            while (!wait.Wait(200)) token.ThrowIfCancellationRequested();
+            var elapsed = Stopwatch.StartNew();
+            while (!wait.Wait(200))
+            {
+                token.ThrowIfCancellationRequested();
+                if (timeoutMs != Timeout.Infinite && elapsed.ElapsedMilliseconds >= timeoutMs)
+                    throw new TimeoutException("Client did not connect to the data pipe");
+            }
             if (!pipe.IsConnected) throw new IOException("Pipe failed to connect");
         }
+
+        private static string ReadLine(StreamReader reader, CancellationToken token, int timeoutMs)
+        {
+            var read = reader.ReadLineAsync();
+            var elapsed = Stopwatch.StartNew();
+            while (!read.Wait(200))
+            {
+                token.ThrowIfCancellationRequested();
+                if (elapsed.ElapsedMilliseconds >= timeoutMs)
+                    throw new TimeoutException("Client did not send a hello message");
+            }
+            return read.GetAwaiter().GetResult();
+        }
+
+        private static string ValidateClient(NamedPipeServerStream pipe, IDictionary<string, object> hello)
+        {
+            if (!string.Equals(GetString(hello, "type"), "hello", StringComparison.Ordinal))
+                throw new UnauthorizedAccessException("Invalid client hello message");
+
+            var role = GetString(hello, "role");
+            if (!string.Equals(role, "sunshine", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(role, "launcher", StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("Invalid client role");
+
+            uint actualPid;
+            var claimedPid = GetInt(hello, "pid");
+            if (!claimedPid.HasValue || claimedPid.Value <= 0 ||
+                !GetNamedPipeClientProcessId(pipe.SafePipeHandle, out actualPid) ||
+                actualPid != (uint)claimedPid.Value)
+                throw new UnauthorizedAccessException("Client PID validation failed");
+
+            var executable = GetProcessExecutableName(actualPid);
+            var validExecutable = string.Equals(role, "launcher", StringComparison.OrdinalIgnoreCase)
+                ? string.Equals(executable, "playnite-launcher.exe", StringComparison.OrdinalIgnoreCase)
+                : string.Equals(executable, "sunshine.exe", StringComparison.OrdinalIgnoreCase) ||
+                  string.Equals(executable, "vibeshine.exe", StringComparison.OrdinalIgnoreCase);
+            if (!validExecutable)
+                throw new UnauthorizedAccessException("Client executable does not match its declared role");
+
+            return role;
+        }
+
+        private static string GetProcessExecutableName(uint processId)
+        {
+            var process = OpenProcess(ProcessQueryLimitedInformation, false, processId);
+            if (process == IntPtr.Zero)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not inspect the pipe client process");
+            try
+            {
+                var capacity = 32768;
+                var path = new StringBuilder(capacity);
+                if (!QueryFullProcessImageName(process, 0, path, ref capacity))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not resolve the pipe client executable");
+                return Path.GetFileName(path.ToString());
+            }
+            finally
+            {
+                CloseHandle(process);
+            }
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetNamedPipeClientProcessId(
+            Microsoft.Win32.SafeHandles.SafePipeHandle pipe,
+            out uint clientProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool QueryFullProcessImageName(
+            IntPtr process,
+            int flags,
+            StringBuilder executablePath,
+            ref int size);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr handle);
 
         private static void WriteHandshake(Stream control, string pipeName)
         {
@@ -276,7 +440,7 @@ namespace SunshinePlaynite
             var id = GetString(message, "id");
             if (command == "launch" && Guid.TryParse(id, out var gameId))
             {
-                sunshineGames.TryAdd(gameId, 0);
+                lock (gameStateLock) sunshineGames.TryAdd(gameId, 0);
                 var environment = GetEnvironment(message);
                 RunOnUi(() => environmentScopes.RunTemporary(environment, () => api.StartGame(gameId)), false);
             }
@@ -326,7 +490,7 @@ namespace SunshinePlaynite
                         var command = GetString(message, "command");
                         if (command == "launch" && Guid.TryParse(GetString(message, "id"), out var gameId))
                         {
-                            sunshineGames.TryAdd(gameId, 0);
+                            lock (gameStateLock) sunshineGames.TryAdd(gameId, 0);
                             environmentScopes.Set(connection.Id, GetEnvironment(message));
                             RunOnUi(() => api.StartGame(gameId), false);
                         }
@@ -350,25 +514,49 @@ namespace SunshinePlaynite
 
         private void SendSnapshot()
         {
-            var target = GetCore();
-            if (target == null) return;
-            try
+            lock (snapshotLock)
             {
-                var snapshot = RunOnUi(BuildSnapshot, true);
-                target.Send(Serialize(new Dictionary<string, object> { ["type"] = "snapshotStart" }));
-                target.Send(Serialize(new Dictionary<string, object> { ["type"] = "plugins", ["payload"] = snapshot.Plugins }));
-                target.Send(Serialize(new Dictionary<string, object> { ["type"] = "categories", ["payload"] = snapshot.Categories }));
-                for (var index = 0; index < snapshot.Games.Count; index += 100)
+                var target = GetCore();
+                if (target == null) return;
+                try
                 {
-                    target.Send(Serialize(new Dictionary<string, object>
+                    var snapshot = RunOnUi(BuildSnapshot, true);
+                    var messages = new List<string>
                     {
-                        ["type"] = "games", ["payload"] = snapshot.Games.Skip(index).Take(100).ToArray()
+                        Serialize(new Dictionary<string, object> { ["type"] = "snapshotStart" }),
+                        Serialize(new Dictionary<string, object> { ["type"] = "plugins", ["payload"] = snapshot.Plugins }),
+                        Serialize(new Dictionary<string, object> { ["type"] = "categories", ["payload"] = snapshot.Categories })
+                    };
+                    if (snapshot.Games.Count == 0)
+                    {
+                        messages.Add(Serialize(new Dictionary<string, object>
+                        {
+                            ["type"] = "games", ["payload"] = new object[0]
+                        }));
+                    }
+                    else
+                    {
+                        for (var index = 0; index < snapshot.Games.Count; index += 100)
+                        {
+                            messages.Add(Serialize(new Dictionary<string, object>
+                            {
+                                ["type"] = "games", ["payload"] = snapshot.Games.Skip(index).Take(100).ToArray()
+                            }));
+                        }
+                    }
+                    messages.Add(Serialize(new Dictionary<string, object>
+                    {
+                        ["type"] = "snapshotComplete", ["games"] = snapshot.Games.Count
                     }));
+                    if (!target.SendBatch(messages))
+                    {
+                        log.Warn("Snapshot connection closed before it could be queued");
+                        return;
+                    }
+                    log.Info(string.Format("Snapshot completed: categories={0} games={1}", snapshot.Categories.Count, snapshot.Games.Count));
                 }
-                target.Send(Serialize(new Dictionary<string, object> { ["type"] = "snapshotComplete", ["games"] = snapshot.Games.Count }));
-                log.Info(string.Format("Snapshot completed: categories={0} games={1}", snapshot.Categories.Count, snapshot.Games.Count));
+                catch (Exception ex) { log.Warn("Snapshot failed: " + ex.Message); }
             }
-            catch (Exception ex) { log.Warn("Snapshot failed: " + ex.Message); }
         }
 
         private Snapshot BuildSnapshot()
@@ -445,13 +633,6 @@ namespace SunshinePlaynite
             }
         }
 
-        private void SendStatus(string name, Game game)
-        {
-            var payload = RunOnUi(() => BuildStatus(name, game), true);
-            SendCore(payload);
-            Broadcast(payload, null);
-        }
-
         private string BuildStatus(string name, Game game)
         {
             var action = GetAction(game);
@@ -485,9 +666,10 @@ namespace SunshinePlaynite
         {
             foreach (var game in RunOnUi(() => api.Database.Games.Where(x => x.IsRunning).ToArray(), true))
             {
-                if (!sunshineGames.ContainsKey(game.Id))
+                var payload = BuildStatus("gameStarted", game);
+                lock (gameStateLock)
                 {
-                    var payload = BuildStatus("gameStarted", game);
+                    if (!game.IsRunning || sunshineGames.ContainsKey(game.Id)) continue;
                     SendCore(payload);
                     var delivered = Broadcast(payload, null);
                     if (delivered == 0) pendingGames.TryAdd(game.Id, 0);
@@ -502,10 +684,15 @@ namespace SunshinePlaynite
             var preferred = running.FirstOrDefault(x => SameId(launcher.GameId, x.Id));
             foreach (var game in preferred == null ? running : new[] { preferred })
             {
-                launcher.Send(BuildStatus("gameStarted", game));
-                sunshineGames.TryAdd(game.Id, 0);
-                byte ignored;
-                pendingGames.TryRemove(game.Id, out ignored);
+                var payload = BuildStatus("gameStarted", game);
+                lock (gameStateLock)
+                {
+                    if (!game.IsRunning) continue;
+                    var queued = launcher.Send(payload);
+                    sunshineGames.TryAdd(game.Id, 0);
+                    byte ignored;
+                    if (queued) pendingGames.TryRemove(game.Id, out ignored);
+                }
             }
         }
 
@@ -514,9 +701,18 @@ namespace SunshinePlaynite
             foreach (var gameId in pendingGames.Keys.ToArray())
             {
                 var game = RunOnUi(() => api.Database.Games.Get(gameId), true);
-                if (game != null) launcher.Send(BuildStatus("gameStarted", game));
-                byte ignored;
-                pendingGames.TryRemove(gameId, out ignored);
+                var payload = game == null || !game.IsRunning ? null : BuildStatus("gameStarted", game);
+                lock (gameStateLock)
+                {
+                    byte ignored;
+                    if (!pendingGames.ContainsKey(gameId)) continue;
+                    if (game == null || !game.IsRunning)
+                    {
+                        pendingGames.TryRemove(gameId, out ignored);
+                        continue;
+                    }
+                    if (launcher.Send(payload)) pendingGames.TryRemove(gameId, out ignored);
+                }
             }
         }
 
@@ -533,6 +729,19 @@ namespace SunshinePlaynite
                 {
                     ["type"] = "status", ["status"] = new Dictionary<string, object> { ["name"] = "playniteExiting" }
                 }), null);
+            }
+        }
+
+        private void FlushConnections(int timeoutMs)
+        {
+            var connections = new HashSet<PipeConnection>(launchers.Values);
+            var currentCore = GetCore();
+            if (currentCore != null) connections.Add(currentCore);
+            var elapsed = Stopwatch.StartNew();
+            foreach (var connection in connections)
+            {
+                var remaining = timeoutMs - (int)elapsed.ElapsedMilliseconds;
+                if (remaining <= 0 || !connection.Flush(remaining)) break;
             }
         }
 
@@ -635,10 +844,14 @@ namespace SunshinePlaynite
 
     internal sealed class PipeConnection : IDisposable
     {
-        private readonly BlockingCollection<string> outbox = new BlockingCollection<string>();
+        private readonly BlockingCollection<OutboundMessage> outbox = new BlockingCollection<OutboundMessage>();
         private readonly CancellationTokenSource cancellation = new CancellationTokenSource();
+        private readonly AutoResetEvent writeProgress = new AutoResetEvent(false);
+        private readonly object sendLock = new object();
         private readonly ConnectorLog log;
         private readonly Task writerTask;
+        private long nextSequence;
+        private long completedSequence;
         private int disposed;
 
         public PipeConnection(string id, NamedPipeServerStream stream, StreamReader reader, StreamWriter writer, ConnectorLog log)
@@ -656,8 +869,44 @@ namespace SunshinePlaynite
 
         public bool Send(string payload)
         {
-            if (Volatile.Read(ref disposed) != 0) return false;
-            try { outbox.Add(payload); return true; } catch { return false; }
+            return SendBatch(new[] { payload });
+        }
+
+        public bool SendBatch(IEnumerable<string> payloads)
+        {
+            if (payloads == null) return false;
+            lock (sendLock)
+            {
+                if (Volatile.Read(ref disposed) != 0) return false;
+                try
+                {
+                    foreach (var payload in payloads)
+                    {
+                        var sequence = nextSequence + 1;
+                        outbox.Add(new OutboundMessage(sequence, payload));
+                        Volatile.Write(ref nextSequence, sequence);
+                    }
+                    return true;
+                }
+                catch { return false; }
+            }
+        }
+
+        public bool Flush(int timeoutMs)
+        {
+            var target = Volatile.Read(ref nextSequence);
+            if (Volatile.Read(ref completedSequence) >= target) return true;
+            var elapsed = Stopwatch.StartNew();
+            try
+            {
+                while (Volatile.Read(ref disposed) == 0 && Volatile.Read(ref completedSequence) < target)
+                {
+                    var remaining = timeoutMs - (int)elapsed.ElapsedMilliseconds;
+                    if (remaining <= 0 || !writeProgress.WaitOne(remaining)) return false;
+                }
+                return Volatile.Read(ref completedSequence) >= target;
+            }
+            catch (ObjectDisposedException) { return false; }
         }
 
         private void WriteLoop()
@@ -666,25 +915,46 @@ namespace SunshinePlaynite
             {
                 while (!cancellation.IsCancellationRequested)
                 {
-                    string line;
-                    if (!outbox.TryTake(out line, 500)) continue;
-                    Writer.WriteLine(line);
+                    OutboundMessage message;
+                    if (!outbox.TryTake(out message, 500)) continue;
+                    Writer.WriteLine(message.Payload);
                     Writer.Flush();
+                    Volatile.Write(ref completedSequence, message.Sequence);
+                    writeProgress.Set();
                 }
             }
             catch (Exception ex) { if (!cancellation.IsCancellationRequested) log.Debug("Pipe writer stopped: " + ex.Message); }
+            finally { try { writeProgress.Set(); } catch { } }
         }
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref disposed, 1) != 0) return;
+            lock (sendLock)
+            {
+                if (Interlocked.Exchange(ref disposed, 1) != 0) return;
+                try { outbox.CompleteAdding(); } catch { }
+            }
+            try { writeProgress.Set(); } catch { }
             try { cancellation.Cancel(); } catch { }
             try { Stream.Dispose(); } catch { }
             try { writerTask.Wait(500); } catch { }
             try { Reader.Dispose(); } catch { }
             try { Writer.Dispose(); } catch { }
-            outbox.Dispose();
-            cancellation.Dispose();
+            try { outbox.Dispose(); } catch { }
+            try { writeProgress.Dispose(); } catch { }
+            try { cancellation.Dispose(); } catch { }
+        }
+
+        private sealed class OutboundMessage
+        {
+            public OutboundMessage(long sequence, string payload)
+            {
+                Sequence = sequence;
+                Payload = payload;
+            }
+
+            public long Sequence { get; private set; }
+            public string Payload { get; private set; }
         }
     }
 
@@ -722,13 +992,16 @@ namespace SunshinePlaynite
 
         public void RunTemporary(IDictionary<string, string> values, Action action)
         {
-            var previous = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            try
+            lock (sync)
             {
-                foreach (var item in values) { previous[item.Key] = Environment.GetEnvironmentVariable(item.Key); Environment.SetEnvironmentVariable(item.Key, item.Value); }
-                action();
+                var previous = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                try
+                {
+                    foreach (var item in values) { previous[item.Key] = Environment.GetEnvironmentVariable(item.Key); Environment.SetEnvironmentVariable(item.Key, item.Value); }
+                    action();
+                }
+                finally { foreach (var item in previous) Environment.SetEnvironmentVariable(item.Key, item.Value); }
             }
-            finally { foreach (var item in previous) Environment.SetEnvironmentVariable(item.Key, item.Value); }
         }
 
         private void Reconcile(IEnumerable<string> keys)

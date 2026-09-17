@@ -10,7 +10,7 @@ list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
         Mscms.lib
         version.lib)
 
-# Build the Playnite 11 .NET plugin into the runtime/package layout. Do not copy
+# Build the Playnite 10 .NET plugin into the runtime/package layout. Do not copy
 # the SDK or project sources into the installer; Playnite supplies Playnite.SDK.
 set(SUNSHINE_DOTNET_EXECUTABLE "" CACHE FILEPATH
         "Path to dotnet used to build the Playnite plugin")
@@ -32,6 +32,10 @@ set(SUNSHINE_PLAYNITE_PLUGIN_DLL
 file(GLOB SUNSHINE_PLAYNITE_PLUGIN_SOURCES CONFIGURE_DEPENDS
         "${SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR}/*.cs"
         "${SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR}/*.csproj"
+        "${SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR}/*.props"
+        "${SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR}/*.resx"
+        "${SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR}/*.targets"
+        "${SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR}/*.xaml"
         "${SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR}/extension.yaml")
 
 add_custom_command(
