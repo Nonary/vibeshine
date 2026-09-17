@@ -31,6 +31,7 @@
 #include <ctime>
 #include <filesystem>
 #include <iomanip>
+#include <Windows.h>
 #include <KnownFolders.h>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -46,7 +47,6 @@
 #include <utility>
 #include <UserEnv.h>
 #include <vector>
-#include <Windows.h>
 #include <winrt/base.h>
 #include <WtsApi32.h>
 // boost filesystem for process launch helpers
