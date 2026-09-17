@@ -705,7 +705,10 @@ namespace platf::playnite {
           std::sort(last_categories_.begin(), last_categories_.end(), [](const auto &a, const auto &b) {
             return a.name < b.name;
           });
-          new_snapshot_ = true;
+          // Categories begin legacy P10 snapshots; clear now so empty libraries cannot retain stale games.
+          last_games_.clear();
+          game_ids_.clear();
+          new_snapshot_ = false;
         }
         // Best-effort: refresh persisted names (categories) using latest snapshot
         {
@@ -845,6 +848,9 @@ namespace platf::playnite {
         BOOST_LOG(debug) << "Playnite: library snapshot starting";
         std::scoped_lock lk(mutex_);
         snapshot_markers_supported_ = true;
+        last_games_.clear();
+        game_ids_.clear();
+        new_snapshot_ = false;
       } else if (msg.type == MT::SnapshotComplete) {
         std::size_t total = 0;
         {
