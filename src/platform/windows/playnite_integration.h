@@ -49,20 +49,9 @@ namespace platf::playnite {
    */
   void stop_client_for_session();
 
-  /**
-   * @brief Attempt to install the Playnite plugin in the default location.
-   * @param[out] error Set to a human-readable error message on failure.
-   * @return `true` on successful installation, `false` on failure.
-   */
-  bool install_plugin(std::string &error);
-
-  /**
-   * @brief Install the Playnite plugin to a specific destination directory.
-   * @param[in] dest_dir Absolute path to the target installation directory.
-   * @param[out] error Set to a human-readable error message on failure.
-   * @return `true` on success, `false` on failure.
-   */
-  bool install_plugin_to(const std::string &dest_dir, std::string &error);
+  // Install the plugin, optionally closing and relaunching Playnite around deployment.
+  bool install_plugin(std::string &error, bool restart_playnite = true);
+  bool install_plugin_to(const std::string &dest_dir, std::string &error, bool restart_playnite = true);
   /**
    * @brief Uninstall the Playnite plugin from the target Extensions directory.
    * @param[out] error Set to a human-readable error message on failure.
