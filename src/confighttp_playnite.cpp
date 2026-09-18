@@ -326,25 +326,25 @@ namespace confighttp {
     print_req(request);
     std::string err;
     nlohmann::json out;
-    bool request_restart = false;
+    bool request_restart = true;
     try {
       std::stringstream ss;
       ss << request->content.rdbuf();
       if (ss.rdbuf()->in_avail() > 0) {
         auto in = nlohmann::json::parse(ss);
-        request_restart = in.value("restart", false);
+        request_restart = in.value("restart", true);
       }
     } catch (...) {
-      // ignore body parse errors; treat as no-restart
+      // Keep the safe restart default when the optional body cannot be parsed.
     }
     // Prefer same resolved dir as status
     std::string target;
     bool have_target = platf::playnite::get_extension_target_dir(target);
     bool ok = false;
     if (have_target) {
-      ok = platf::playnite::install_plugin_to(target, err);
+      ok = platf::playnite::install_plugin_to(target, err, request_restart);
     } else {
-      ok = platf::playnite::install_plugin(err);
+      ok = platf::playnite::install_plugin(err, request_restart);
     }
     std::ostringstream log_msg;
     log_msg << "Playnite install: " << (ok ? "success" : "failed");
@@ -360,10 +360,8 @@ namespace confighttp {
     if (!ok) {
       out["error"] = err;
     }
-    // Optionally close and restart Playnite to pick up the new plugin
-    if (ok && request_restart) {
-      bool restarted = platf::playnite::restart_playnite();
-      out["restarted"] = restarted;
+    if (request_restart) {
+      out["restarted"] = ok;
     }
     send_response(response, out);
   }
