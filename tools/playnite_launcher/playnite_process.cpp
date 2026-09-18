@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <winsock2.h>
+#include <windows.h>
 #include <Psapi.h>
 #include <shellapi.h>
 #include <ShlObj.h>
@@ -16,8 +18,6 @@
 #include <system_error>
 #include <utility>
 #include <wincrypt.h>
-#include <winsock2.h>
-#include <windows.h>
 
 namespace playnite_launcher::playnite {
   namespace {

@@ -5,11 +5,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <windows.h>
 #include <Psapi.h>
 #include <thread>
 #include <TlHelp32.h>
 #include <vector>
-#include <windows.h>
 
 using namespace std::chrono_literals;
 
