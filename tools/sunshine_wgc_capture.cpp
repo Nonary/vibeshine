@@ -35,6 +35,7 @@
 #include "src/utility.h"  // For RAII utilities
 
 // platform includes
+#include <Windows.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <inspectable.h>  // For IInspectable
@@ -42,7 +43,6 @@
 #include <ShellScalingApi.h>  // For DPI awareness
 #include <ShlObj.h>
 #include <Windows.Graphics.Capture.Interop.h>
-#include <Windows.h>
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Metadata.h>  // For ApiInformation
