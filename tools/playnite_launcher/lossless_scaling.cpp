@@ -25,6 +25,7 @@
 #include <locale>
 #include <memory>
 #include <optional>
+#include <windows.h>
 #include <Psapi.h>
 #include <shlobj.h>
 #include <string>
@@ -35,7 +36,6 @@
 #include <UserEnv.h>
 #include <utility>
 #include <vector>
-#include <windows.h>
 #include <winrt/base.h>
 
 using namespace std::chrono_literals;

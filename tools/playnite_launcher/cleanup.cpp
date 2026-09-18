@@ -11,9 +11,9 @@
 #include <functional>
 #include <string>
 #include <thread>
+#include <windows.h>
 #include <TlHelp32.h>
 #include <vector>
-#include <windows.h>
 
 using namespace std::chrono_literals;
 
