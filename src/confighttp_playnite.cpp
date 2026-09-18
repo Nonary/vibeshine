@@ -45,9 +45,9 @@
   #include "state_storage.h"
 
   // Windows headers
+  #include <windows.h>
   #include <KnownFolders.h>
   #include <ShlObj.h>
-  #include <windows.h>
   #include <ws2tcpip.h>
 
   // boost
