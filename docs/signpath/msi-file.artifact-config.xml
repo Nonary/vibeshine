@@ -60,7 +60,7 @@
     <pe-file path="Sunshine/vibeshine_truehdr.dll"><authenticode-sign/></pe-file>
 
     <!-- Bundled first-party Playnite extension -->
-    <pe-file path="Sunshine/plugins/playnite/SunshinePlaynite/SunshinePlaynite.dll"><authenticode-sign/></pe-file>
+    <pe-file path="Sunshine/plugins/playnite/SunshinePlaynite/VibeshinePlaynite.dll"><authenticode-sign/></pe-file>
 
     <!-- Sunshine/tools\ -->
     <pe-file path="Sunshine/tools/sunshinesvc.exe"><authenticode-sign/></pe-file>
