@@ -396,7 +396,7 @@ namespace confighttp {
     } catch (...) {
       // ignore body parse errors; treat as no-restart
     }
-    bool ok = platf::playnite::uninstall_plugin(err);
+    bool ok = platf::playnite::uninstall_plugin(err, request_restart);
     {
       std::ostringstream log_msg;
       log_msg << "Playnite uninstall: " << (ok ? "success" : "failed")
@@ -410,9 +410,8 @@ namespace confighttp {
     if (!ok) {
       out["error"] = err;
     }
-    if (ok && request_restart) {
-      bool restarted = platf::playnite::restart_playnite();
-      out["restarted"] = restarted;
+    if (request_restart) {
+      out["restarted"] = ok;
     }
     send_response(response, out);
   }

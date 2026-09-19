@@ -2083,7 +2083,8 @@ namespace platf::playnite {
     return do_install_plugin_impl(dest_dir, restart, error);
   }
 
-  static bool do_uninstall_plugin_impl(std::string &error) {
+  static bool do_uninstall_plugin_impl(std::string &error, bool restart) {
+    std::scoped_lock install_lock(g_plugin_install_mutex);
     try {
       std::string target;
       if (!platf::playnite::get_extension_target_dir(target)) {
@@ -2096,6 +2097,26 @@ namespace platf::playnite {
         BOOST_LOG(info) << "Playnite uninstaller: target does not exist; nothing to do";
         return true;
       }
+
+      std::wstring playniteExe;
+      if (restart && !resolve_playnite_launch_exe(playniteExe)) {
+        error = "Could not resolve the Playnite executable before uninstalling the plugin.";
+        return false;
+      }
+      if (!stop_playnite()) {
+        error = "Could not stop Playnite before uninstalling the plugin.";
+        return false;
+      }
+
+      bool launch_attempted = false;
+      auto relaunch_guard = util::fail_guard([&]() {
+        if (restart && !launch_attempted) {
+          try {
+            launch_playnite(playniteExe);
+          } catch (...) {}
+        }
+      });
+
       std::error_code ec;
       auto removed = std::filesystem::remove_all(destDir, ec);
       if (ec) {
@@ -2104,7 +2125,14 @@ namespace platf::playnite {
         return false;
       }
       BOOST_LOG(info) << "Playnite uninstaller: removed files count=" << removed << " path=" << destDir.string();
-      return true;
+
+      launch_attempted = restart;
+      bool relaunched = !restart || launch_playnite(playniteExe);
+      relaunch_guard.disable();
+      if (!relaunched) {
+        error = "Playnite plugin was removed, but Playnite could not be relaunched.";
+      }
+      return relaunched;
     } catch (const std::exception &e) {
       error = e.what();
       BOOST_LOG(warning) << "Playnite uninstaller: exception: " << e.what();
@@ -2116,8 +2144,8 @@ namespace platf::playnite {
     }
   }
 
-  bool uninstall_plugin(std::string &error) {
-    return do_uninstall_plugin_impl(error);
+  bool uninstall_plugin(std::string &error, bool restart) {
+    return do_uninstall_plugin_impl(error, restart);
   }
 
   // --- Version helpers ---
