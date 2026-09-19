@@ -715,6 +715,7 @@
         "none": "No executable command configured"
       },
       "controls": {
+        "includePlaynite": "Include Playnite",
         "region": "Library controls"
       },
       "cover": {
@@ -734,6 +735,8 @@
         "description": "Add an application to make it available to your streaming clients.",
         "noMatchDescription": "Nothing matches “{search}”. Try a different search or clear it.",
         "noMatchTitle": "No matching applications",
+        "playniteExcludedDescription": "Playnite applications are hidden. Enable Include Playnite to show them.",
+        "showPlaynite": "Include Playnite",
         "title": "No applications yet"
       },
       "errors": {
