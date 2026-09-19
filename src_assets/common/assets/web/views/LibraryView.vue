@@ -29,7 +29,6 @@ type SortMode = 'name' | 'name-desc' | 'source';
 
 const PAGE_SIZE = 72;
 const VIEW_STORAGE_KEY = 'vibeshine.library.view';
-const INCLUDE_PLAYNITE_STORAGE_KEY = 'vibeshine.library.includePlaynite';
 const validSortModes = new Set<SortMode>(['name', 'name-desc', 'source']);
 
 const route = useRoute();
@@ -41,7 +40,6 @@ const error = ref('');
 const search = ref(queryValue(route.query.q));
 const sort = ref<SortMode>(parseSort(route.query.sort));
 const viewMode = ref<ViewMode>(readStoredView());
-const includePlaynite = ref(readStoredIncludePlaynite());
 const renderLimit = ref(PAGE_SIZE);
 const selectedUuids = ref(new Set<string>());
 const focusedUuid = ref('');
@@ -80,14 +78,6 @@ function readStoredView(): ViewMode {
   }
 }
 
-function readStoredIncludePlaynite(): boolean {
-  try {
-    return window.localStorage.getItem(INCLUDE_PLAYNITE_STORAGE_KEY) !== 'false';
-  } catch {
-    return true;
-  }
-}
-
 function commandSummary(app: AppRecord): string {
   if (Array.isArray(app.cmd)) return app.cmd.filter((part) => typeof part === 'string').join(' ');
   if (typeof app.cmd === 'string' && app.cmd.trim()) return app.cmd;
@@ -103,20 +93,6 @@ function isRemoteSessionApp(app: AppRecord): boolean {
   return app['remote-session'] === 'input' || app['remote-session'] === 'monitor';
 }
 
-function isPlayniteAutoSynced(app: AppRecord): boolean {
-  return (
-    typeof app['playnite-id'] === 'string' &&
-    app['playnite-id'].trim().length > 0 &&
-    app['playnite-managed'] !== 'manual'
-  );
-}
-
-function isPlayniteApp(app: AppRecord): boolean {
-  if (typeof app['playnite-id'] === 'string' && app['playnite-id'].trim().length > 0) return true;
-  if (app['playnite-fullscreen'] === true) return true;
-  return app.name === 'Playnite (Fullscreen)';
-}
-
 function serviceError(cause: unknown, fallbackKey: string): string {
   if (cause instanceof AppServiceError && cause.code === 'missing-app-uuid') {
     return t('ui.library.errors.missingUuidGeneric');
@@ -130,7 +106,6 @@ const filteredApps = computed(() => {
   const candidates = apps.value
     .map((app, sourceIndex) => ({ app, sourceIndex }))
     .filter(({ app }) => {
-      if (!includePlaynite.value && isPlayniteApp(app)) return false;
       if (!query) return true;
       return `${displayName(app)} ${commandSummary(app)}`
         .toLocaleLowerCase(locale.value)
@@ -152,11 +127,6 @@ const resultLabel = computed(() => {
   const count = filteredApps.value.length;
   return t(count === 1 ? 'ui.library.result.one' : 'ui.library.result.many', { count });
 });
-const noMatchDescription = computed(() =>
-  !includePlaynite.value && !search.value.trim()
-    ? t('ui.library.empty.playniteExcludedDescription')
-    : t('ui.library.empty.noMatchDescription', { search: search.value }),
-);
 
 function setView(mode: ViewMode): void {
   viewMode.value = mode;
@@ -403,22 +373,6 @@ watch([search, sort], () => {
   queryTimer = window.setTimeout(syncQuery, 120);
 });
 
-watch(includePlaynite, (include) => {
-  renderLimit.value = PAGE_SIZE;
-  try {
-    window.localStorage.setItem(INCLUDE_PLAYNITE_STORAGE_KEY, String(include));
-  } catch {
-    // Storage can be unavailable in locked-down browser profiles; the in-memory filter still works.
-  }
-
-  const visibleIds = new Set(filteredApps.value.map(appUuid).filter(Boolean));
-  selectedUuids.value = new Set([...selectedUuids.value].filter((uuid) => visibleIds.has(uuid)));
-  if (!visibleIds.has(selectionAnchor.value)) selectionAnchor.value = '';
-  if (!visibleIds.has(focusedUuid.value)) {
-    focusedUuid.value = appUuid(filteredApps.value[0] ?? ({} as AppRecord));
-  }
-});
-
 watch(
   () => [route.query.q, route.query.sort],
   ([query, sortQuery]) => {
@@ -507,11 +461,6 @@ onBeforeUnmount(() => {
         </select>
       </label>
 
-      <label class="vs-checkbox library-playnite-filter">
-        <input v-model="includePlaynite" type="checkbox" />
-        <span>{{ t('ui.library.controls.includePlaynite') }}</span>
-      </label>
-
       <div class="library-view-toggle" role="group" :aria-label="t('ui.library.view.label')">
         <AppButton
           size="compact"
@@ -576,23 +525,12 @@ onBeforeUnmount(() => {
     <EmptyState
       v-else-if="!filteredApps.length && !error"
       :title="t('ui.library.empty.noMatchTitle')"
-      :description="noMatchDescription"
+      :description="t('ui.library.empty.noMatchDescription', { search })"
       icon="search"
       compact
     >
       <template #actions>
-        <AppButton
-          v-if="search"
-          variant="secondary"
-          :label="t('ui.library.search.clear')"
-          @click="search = ''"
-        />
-        <AppButton
-          v-else-if="!includePlaynite"
-          variant="secondary"
-          :label="t('ui.library.empty.showPlaynite')"
-          @click="includePlaynite = true"
-        />
+        <AppButton variant="secondary" :label="t('ui.library.search.clear')" @click="search = ''" />
       </template>
     </EmptyState>
 
@@ -652,29 +590,9 @@ onBeforeUnmount(() => {
                 <UiIcon name="check" :size="16" aria-hidden="true" />
                 <span class="vs-sr-only">{{ t('ui.library.selection.selected') }}</span>
               </span>
-              <span
-                v-if="viewMode === 'grid' && isPlayniteAutoSynced(app)"
-                class="library-item__source-chip library-item__source-chip--overlay"
-                :title="`${t('apps.playnite_badge')} · ${t('playnite.section_auto_sync')}`"
-              >
-                <span>{{ t('apps.playnite_badge') }}</span>
-                <span aria-hidden="true">·</span>
-                <span>{{ t('playnite.section_auto_sync') }}</span>
-              </span>
             </span>
             <span class="library-item__copy">
-              <span class="library-item__title-line">
-                <span class="library-item__title">{{ displayName(app) }}</span>
-                <span
-                  v-if="viewMode === 'list' && isPlayniteAutoSynced(app)"
-                  class="library-item__source-chip library-item__source-chip--inline"
-                  :title="`${t('apps.playnite_badge')} · ${t('playnite.section_auto_sync')}`"
-                >
-                  <span>{{ t('apps.playnite_badge') }}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>{{ t('playnite.section_auto_sync') }}</span>
-                </span>
-              </span>
+              <span class="library-item__title">{{ displayName(app) }}</span>
               <span
                 v-if="commandSummary(app)"
                 class="library-item__command vs-monospace"
@@ -835,12 +753,6 @@ onBeforeUnmount(() => {
   flex: 0 1 12rem;
 }
 
-.library-playnite-filter {
-  flex: none;
-  padding-inline: var(--vs-space-4);
-  white-space: nowrap;
-}
-
 .library-view-toggle {
   gap: var(--vs-space-2);
   padding: var(--vs-space-2);
@@ -970,43 +882,6 @@ onBeforeUnmount(() => {
   color: var(--vs-color-text-on-accent);
 }
 
-.library-item__source-chip {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: var(--vs-space-4);
-  padding: var(--vs-space-4) var(--vs-space-8);
-  overflow: hidden;
-  border: var(--vs-border-width) solid
-    color-mix(in srgb, var(--vs-color-accent-default) 45%, transparent);
-  border-radius: var(--vs-radius-pill);
-  background: color-mix(in srgb, var(--vs-color-bg-canvas) 86%, transparent);
-  color: var(--vs-color-accent-default);
-  font-size: var(--vs-type-size-metadata);
-  font-weight: var(--vs-type-weight-semibold);
-  line-height: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-.library-item__source-chip--overlay {
-  position: absolute;
-  z-index: 1;
-  inset-block-start: var(--vs-space-8);
-  inset-inline-end: var(--vs-space-8);
-  max-inline-size: calc(100% - var(--vs-space-16));
-  box-shadow: var(--vs-shadow-raised);
-  backdrop-filter: blur(8px);
-  transition: opacity var(--vs-motion-duration-control) var(--vs-motion-easing-standard);
-}
-
-.library-item:hover .library-item__source-chip--overlay,
-.library-item:focus-within .library-item__source-chip--overlay,
-.library-item--selected .library-item__source-chip--overlay {
-  opacity: 0;
-}
-
 .library-item__copy {
   display: grid;
   min-inline-size: 0;
@@ -1014,16 +889,7 @@ onBeforeUnmount(() => {
   padding: var(--vs-space-12);
 }
 
-.library-item__title-line {
-  display: flex;
-  min-inline-size: 0;
-  align-items: center;
-  gap: var(--vs-space-8);
-}
-
 .library-item__title {
-  min-inline-size: 0;
-  flex: 0 1 auto;
   overflow: hidden;
   font-weight: var(--vs-type-weight-semibold);
   line-height: var(--vs-type-line-height-control);
@@ -1163,8 +1029,7 @@ onBeforeUnmount(() => {
 
 @media (prefers-reduced-motion: reduce) {
   .library-item__open,
-  .library-item__actions,
-  .library-item__source-chip {
+  .library-item__actions {
     transition: none;
   }
 }
