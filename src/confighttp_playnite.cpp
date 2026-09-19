@@ -68,6 +68,7 @@ namespace confighttp {
 
   struct playnite_install_state_t {
     std::optional<bool> installed;
+    bool legacy_plugin = false;
     std::filesystem::path extensions_dir;
   };
 
@@ -80,9 +81,11 @@ namespace confighttp {
       std::string destPath;
       if (platf::playnite::get_extension_target_dir(destPath)) {
         state.extensions_dir = destPath;
-        state.installed =
-          std::filesystem::exists(state.extensions_dir / "extension.yaml") &&
-          std::filesystem::exists(state.extensions_dir / "SunshinePlaynite.dll");
+        const bool has_manifest = std::filesystem::exists(state.extensions_dir / "extension.yaml");
+        const bool has_dll = std::filesystem::exists(state.extensions_dir / "SunshinePlaynite.dll");
+        const bool has_legacy_module = std::filesystem::exists(state.extensions_dir / "SunshinePlaynite.psm1");
+        state.installed = has_manifest && has_dll;
+        state.legacy_plugin = has_manifest && !has_dll && has_legacy_module;
       } else if (active) {
         state.installed = true;
       }
@@ -152,6 +155,7 @@ namespace confighttp {
       out["installed"] = nullptr;
     }
     out["extensions_dir"] = dest.string();
+    out["legacy_plugin"] = install_state.legacy_plugin;
     // Version info and update flag
     auto normalize_ver = [](std::string s) {
       // strip leading 'v' and whitespace
@@ -211,7 +215,11 @@ namespace confighttp {
       out["packaged_version"] = packaged_ver;
     }
     bool update_available = false;
-    if (out["installed"].is_boolean() && out["installed"].get<bool>() && have_installed && have_packaged) {
+    if (install_state.legacy_plugin && have_packaged) {
+      // The packaged DLL supersedes the legacy PowerShell module even if a
+      // downstream build happens to reuse the same version number.
+      update_available = true;
+    } else if (out["installed"].is_boolean() && out["installed"].get<bool>() && have_installed && have_packaged) {
       update_available = semver_cmp(installed_ver, packaged_ver) < 0;
     }
     out["update_available"] = update_available;
@@ -221,6 +229,7 @@ namespace confighttp {
     // keeping the line available when debugging.
     BOOST_LOG(debug) << "Playnite status: active=" << out["active"]
                      << ", dir=" << (dest.empty() ? std::string("(unknown)") : dest.string())
+                     << ", legacy_plugin=" << (install_state.legacy_plugin ? "true" : "false")
                      << ", installed_version=" << (have_installed ? installed_ver : std::string(""))
                      << ", packaged_version=" << (have_packaged ? packaged_ver : std::string(""))
                      << ", update_available=" << (update_available ? "true" : "false");
