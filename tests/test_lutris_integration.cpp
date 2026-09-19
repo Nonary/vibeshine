@@ -12,8 +12,10 @@ TEST(LutrisDiscovery, ReadsInstalledGamesAndClassifiesSteam) {
                     ("vibeshine-lutris-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   fs::create_directories(base);
   const auto path = base / "pga.db";
+  const auto path_bytes = path.u8string();
+  const std::string path_utf8 {path_bytes.begin(), path_bytes.end()};
   sqlite3 *database = nullptr;
-  ASSERT_EQ(sqlite3_open(path.c_str(), &database), SQLITE_OK);
+  ASSERT_EQ(sqlite3_open(path_utf8.c_str(), &database), SQLITE_OK);
   const char *schema =
     "CREATE TABLE games(id INTEGER, name TEXT, slug TEXT, runner TEXT, platform TEXT, directory TEXT, "
     "configpath TEXT, service TEXT, service_id TEXT, lastplayed INTEGER, playtime REAL, installed INTEGER);"

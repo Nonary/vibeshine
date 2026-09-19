@@ -203,6 +203,7 @@ stripped in CI and never signed on the runner). The `msi-file` config is the
 | `dxgi-info.exe` | `Sunshine\tools\` |
 | `audio-info.exe` | `Sunshine\tools\` |
 | `playnite-launcher.exe` | `Sunshine\tools\` |
+| `VibeshinePlaynite.dll` | `Sunshine\plugins\playnite\SunshinePlaynite\` |
 | `sunshine_wgc_capture.exe` | `Sunshine\tools\` |
 | `sunshine_display_helper.exe` | `Sunshine\tools\` |
 | `virtualdisplay_probe.exe` | `Sunshine\drivers\sunshine\` |

@@ -45,9 +45,9 @@
   #include "state_storage.h"
 
   // Windows headers
+  #include <windows.h>
   #include <KnownFolders.h>
   #include <ShlObj.h>
-  #include <windows.h>
   #include <ws2tcpip.h>
 
   // boost
@@ -68,6 +68,7 @@ namespace confighttp {
 
   struct playnite_install_state_t {
     std::optional<bool> installed;
+    bool legacy_plugin = false;
     std::filesystem::path extensions_dir;
   };
 
@@ -80,9 +81,12 @@ namespace confighttp {
       std::string destPath;
       if (platf::playnite::get_extension_target_dir(destPath)) {
         state.extensions_dir = destPath;
-        state.installed =
-          std::filesystem::exists(state.extensions_dir / "extension.yaml") &&
-          std::filesystem::exists(state.extensions_dir / "SunshinePlaynite.psm1");
+        const bool has_manifest = std::filesystem::exists(state.extensions_dir / "extension.yaml");
+        const bool has_dll = std::filesystem::exists(state.extensions_dir / "VibeshinePlaynite.dll");
+        const bool has_legacy_dll = std::filesystem::exists(state.extensions_dir / "SunshinePlaynite.dll");
+        const bool has_legacy_module = std::filesystem::exists(state.extensions_dir / "SunshinePlaynite.psm1");
+        state.installed = has_manifest && has_dll;
+        state.legacy_plugin = has_manifest && !has_dll && (has_legacy_dll || has_legacy_module);
       } else if (active) {
         state.installed = true;
       }
@@ -152,6 +156,7 @@ namespace confighttp {
       out["installed"] = nullptr;
     }
     out["extensions_dir"] = dest.string();
+    out["legacy_plugin"] = install_state.legacy_plugin;
     // Version info and update flag
     auto normalize_ver = [](std::string s) {
       // strip leading 'v' and whitespace
@@ -211,7 +216,11 @@ namespace confighttp {
       out["packaged_version"] = packaged_ver;
     }
     bool update_available = false;
-    if (out["installed"].is_boolean() && out["installed"].get<bool>() && have_installed && have_packaged) {
+    if (install_state.legacy_plugin && have_packaged) {
+      // The packaged DLL supersedes the legacy PowerShell module even if a
+      // downstream build happens to reuse the same version number.
+      update_available = true;
+    } else if (out["installed"].is_boolean() && out["installed"].get<bool>() && have_installed && have_packaged) {
       update_available = semver_cmp(installed_ver, packaged_ver) < 0;
     }
     out["update_available"] = update_available;
@@ -221,6 +230,7 @@ namespace confighttp {
     // keeping the line available when debugging.
     BOOST_LOG(debug) << "Playnite status: active=" << out["active"]
                      << ", dir=" << (dest.empty() ? std::string("(unknown)") : dest.string())
+                     << ", legacy_plugin=" << (install_state.legacy_plugin ? "true" : "false")
                      << ", installed_version=" << (have_installed ? installed_ver : std::string(""))
                      << ", packaged_version=" << (have_packaged ? packaged_ver : std::string(""))
                      << ", update_available=" << (update_available ? "true" : "false");
@@ -326,25 +336,25 @@ namespace confighttp {
     print_req(request);
     std::string err;
     nlohmann::json out;
-    bool request_restart = false;
+    bool request_restart = true;
     try {
       std::stringstream ss;
       ss << request->content.rdbuf();
       if (ss.rdbuf()->in_avail() > 0) {
         auto in = nlohmann::json::parse(ss);
-        request_restart = in.value("restart", false);
+        request_restart = in.value("restart", true);
       }
     } catch (...) {
-      // ignore body parse errors; treat as no-restart
+      // Keep the safe restart default when the optional body cannot be parsed.
     }
     // Prefer same resolved dir as status
     std::string target;
     bool have_target = platf::playnite::get_extension_target_dir(target);
     bool ok = false;
     if (have_target) {
-      ok = platf::playnite::install_plugin_to(target, err);
+      ok = platf::playnite::install_plugin_to(target, err, request_restart);
     } else {
-      ok = platf::playnite::install_plugin(err);
+      ok = platf::playnite::install_plugin(err, request_restart);
     }
     std::ostringstream log_msg;
     log_msg << "Playnite install: " << (ok ? "success" : "failed");
@@ -360,10 +370,8 @@ namespace confighttp {
     if (!ok) {
       out["error"] = err;
     }
-    // Optionally close and restart Playnite to pick up the new plugin
-    if (ok && request_restart) {
-      bool restarted = platf::playnite::restart_playnite();
-      out["restarted"] = restarted;
+    if (request_restart) {
+      out["restarted"] = ok;
     }
     send_response(response, out);
   }
@@ -389,7 +397,7 @@ namespace confighttp {
     } catch (...) {
       // ignore body parse errors; treat as no-restart
     }
-    bool ok = platf::playnite::uninstall_plugin(err);
+    bool ok = platf::playnite::uninstall_plugin(err, request_restart);
     {
       std::ostringstream log_msg;
       log_msg << "Playnite uninstall: " << (ok ? "success" : "failed")
@@ -403,9 +411,8 @@ namespace confighttp {
     if (!ok) {
       out["error"] = err;
     }
-    if (ok && request_restart) {
-      bool restarted = platf::playnite::restart_playnite();
-      out["restarted"] = restarted;
+    if (request_restart) {
+      out["restarted"] = ok;
     }
     send_response(response, out);
   }
