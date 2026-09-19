@@ -29,6 +29,12 @@ set(SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_DIR
         "${CMAKE_BINARY_DIR}/plugins/playnite/SunshinePlaynite")
 set(SUNSHINE_PLAYNITE_PLUGIN_DLL
         "${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_DIR}/SunshinePlaynite.dll")
+set(SUNSHINE_PLAYNITE_PLUGIN_ICON
+        "${CMAKE_SOURCE_DIR}/src_assets/common/assets/web/public/images/logo-sunshine-45.png")
+set(SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_FILES
+        "${SUNSHINE_PLAYNITE_PLUGIN_DLL}"
+        "${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_DIR}/extension.yaml"
+        "${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_DIR}/icon.png")
 file(GLOB SUNSHINE_PLAYNITE_PLUGIN_SOURCES CONFIGURE_DEPENDS
         "${SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR}/*.cs"
         "${SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR}/*.csproj"
@@ -39,7 +45,7 @@ file(GLOB SUNSHINE_PLAYNITE_PLUGIN_SOURCES CONFIGURE_DEPENDS
         "${SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR}/extension.yaml")
 
 add_custom_command(
-        OUTPUT "${SUNSHINE_PLAYNITE_PLUGIN_DLL}"
+        OUTPUT ${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_FILES}
         COMMAND ${CMAKE_COMMAND} -E make_directory "${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_DIR}"
         COMMAND "${SUNSHINE_DOTNET_EXECUTABLE}" build
                 "${SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR}/SunshinePlaynite.csproj"
@@ -47,11 +53,11 @@ add_custom_command(
                 --output "${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_DIR}"
                 --nologo
                 -p:ContinuousIntegrationBuild=true
-        DEPENDS ${SUNSHINE_PLAYNITE_PLUGIN_SOURCES}
+        DEPENDS ${SUNSHINE_PLAYNITE_PLUGIN_SOURCES} "${SUNSHINE_PLAYNITE_PLUGIN_ICON}"
         COMMENT "Building Sunshine Playnite plugin"
         VERBATIM
 )
-add_custom_target(build_playnite_plugin DEPENDS "${SUNSHINE_PLAYNITE_PLUGIN_DLL}")
+add_custom_target(build_playnite_plugin DEPENDS ${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_FILES})
 add_dependencies(sunshine build_playnite_plugin)
 
 # Ensure the Windows display helper is built and placed next to the Sunshine binary

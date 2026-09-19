@@ -1938,9 +1938,13 @@ namespace platf::playnite {
       BOOST_LOG(debug) << "Playnite installer: src exists? " << (std::filesystem::exists(srcDir) ? "yes" : "no");
       BOOST_LOG(debug) << "Playnite installer: src file(extension.yaml) exists? " << (std::filesystem::exists(srcDir / L"extension.yaml") ? "yes" : "no");
       BOOST_LOG(debug) << "Playnite installer: src file(SunshinePlaynite.dll) exists? " << (std::filesystem::exists(srcDir / L"SunshinePlaynite.dll") ? "yes" : "no");
+      BOOST_LOG(debug) << "Playnite installer: src file(icon.png) exists? " << (std::filesystem::exists(srcDir / L"icon.png") ? "yes" : "no");
       const auto srcManifest = srcDir / L"extension.yaml";
       const auto srcDll = srcDir / L"SunshinePlaynite.dll";
-      if (!std::filesystem::is_regular_file(srcManifest) || !std::filesystem::is_regular_file(srcDll)) {
+      const auto srcIcon = srcDir / L"icon.png";
+      if (!std::filesystem::is_regular_file(srcManifest) ||
+          !std::filesystem::is_regular_file(srcDll) ||
+          !std::filesystem::is_regular_file(srcIcon)) {
         error_out = "Required plugin files were not found in " + srcDir.string();
         return false;
       }
@@ -1985,13 +1989,17 @@ namespace platf::playnite {
 
       const auto destManifest = destDir / L"extension.yaml";
       const auto destDll = destDir / L"SunshinePlaynite.dll";
+      const auto destIcon = destDir / L"icon.png";
       const auto tempManifest = destDir / L"extension.yaml.vibeshine-new";
       const auto tempDll = destDir / L"SunshinePlaynite.dll.vibeshine-new";
+      const auto tempIcon = destDir / L"icon.png.vibeshine-new";
       auto cleanup_temps = [&]() {
         std::error_code cleanup_ec;
         std::filesystem::remove(tempManifest, cleanup_ec);
         cleanup_ec.clear();
         std::filesystem::remove(tempDll, cleanup_ec);
+        cleanup_ec.clear();
+        std::filesystem::remove(tempIcon, cleanup_ec);
       };
       cleanup_temps();
       auto cleanup_guard = util::fail_guard([&]() {
@@ -2019,15 +2027,23 @@ namespace platf::playnite {
         return false;
       };
 
-      bool deployed = copy_to_temp(srcDll, tempDll) && copy_to_temp(srcManifest, tempManifest);
+      bool deployed = copy_to_temp(srcDll, tempDll) &&
+                      copy_to_temp(srcIcon, tempIcon) &&
+                      copy_to_temp(srcManifest, tempManifest);
       if (deployed) {
-        deployed = same_size(srcDll, tempDll) && same_size(srcManifest, tempManifest);
+        deployed = same_size(srcDll, tempDll) &&
+                   same_size(srcIcon, tempIcon) &&
+                   same_size(srcManifest, tempManifest);
       }
       if (deployed) {
-        deployed = replace_file(tempDll, destDll) && replace_file(tempManifest, destManifest);
+        deployed = replace_file(tempDll, destDll) &&
+                   replace_file(tempIcon, destIcon) &&
+                   replace_file(tempManifest, destManifest);
       }
       if (deployed) {
-        deployed = same_size(srcDll, destDll) && same_size(srcManifest, destManifest);
+        deployed = same_size(srcDll, destDll) &&
+                   same_size(srcIcon, destIcon) &&
+                   same_size(srcManifest, destManifest);
       }
       cleanup_temps();
       cleanup_guard.disable();

@@ -20,5 +20,8 @@
 
   <ItemGroup>
     <None Include="extension.yaml" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../src_assets/common/assets/web/public/images/logo-sunshine-45.png"
+          Link="icon.png"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
