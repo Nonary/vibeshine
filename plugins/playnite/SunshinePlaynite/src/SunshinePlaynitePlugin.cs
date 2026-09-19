@@ -2,7 +2,6 @@ using System;
 using System.Windows.Controls;
 using Playnite.SDK;
 using Playnite.SDK.Events;
-using Playnite.SDK.Models;
 using Playnite.SDK.Plugins;
 
 namespace SunshinePlaynite
