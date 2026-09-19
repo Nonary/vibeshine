@@ -32,6 +32,11 @@ namespace platf::lutris {
     using database_ptr = std::unique_ptr<sqlite3, database_deleter>;
     using statement_ptr = std::unique_ptr<sqlite3_stmt, statement_deleter>;
 
+    std::string path_to_utf8(const std::filesystem::path &path) {
+      const auto bytes = path.u8string();
+      return {bytes.begin(), bytes.end()};
+    }
+
     std::string text(sqlite3_stmt *statement, int column) {
       const auto *value = sqlite3_column_text(statement, column);
       return value ? reinterpret_cast<const char *>(value) : std::string {};
@@ -126,8 +131,9 @@ namespace platf::lutris {
     const auto database_path = requested_database.empty() ? default_database_path() : requested_database;
     if (database_path.empty()) return {};
 
+    const auto database_path_utf8 = path_to_utf8(database_path);
     sqlite3 *raw_database = nullptr;
-    if (sqlite3_open_v2(database_path.c_str(), &raw_database,
+    if (sqlite3_open_v2(database_path_utf8.c_str(), &raw_database,
                         SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nullptr) != SQLITE_OK) {
       if (raw_database) sqlite3_close(raw_database);
       return {};
