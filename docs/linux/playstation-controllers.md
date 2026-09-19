@@ -142,6 +142,13 @@ Without an active stream the installed Proton hook is inert. Existing game
 processes keep their launch environment. The controller speaker is not made the
 system's default audio output.
 
+Vibeshine-aware Moonlight clients also include a PlayStation-controller bitmap
+in the launch request. A direct Proton launch with compatibility enabled waits
+up to two seconds for the matching virtual DualSense and its audio playback
+endpoint to enumerate before Steam starts the game. This prevents one-time
+Sony/Wwise initialization from racing the controller and its audio endpoint.
+Older clients omit the hint and retain the previous launch ordering.
+
 The game must implement native haptics/adaptive triggers. Test the actual Proton
 build and game, especially controller reconnects. The initial 007-only diagnostic
 settings below are historical and are superseded by this global policy once the

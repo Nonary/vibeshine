@@ -2890,6 +2890,12 @@ namespace nvhttp {
     launch_session->surround_params = (get_arg(args, "surroundParams", ""));
     launch_session->continuous_audio = util::from_view(get_arg(args, "continuousAudio", "0"));
     launch_session->gcmap = (int) util::from_view(get_arg(args, "gcmap", "0"));
+    const auto playstation_gamepad_mask =
+      (int) util::from_view(get_arg(args, "psmap", "0"));
+    launch_session->playstation_gamepad_mask =
+      playstation_gamepad_mask > 0 ?
+        playstation_gamepad_mask & launch_session->gcmap & 0xFFFF :
+        0;
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
     launch_session->client_vrr_requested = util::from_view(get_arg(args, "clientVrrRequested", "0"));
     // Resume requests usually omit appid. Resolve the running application's
