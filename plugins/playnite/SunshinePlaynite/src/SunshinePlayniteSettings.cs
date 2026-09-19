@@ -45,7 +45,7 @@ namespace SunshinePlaynite
         [DontSerialize]
         public string SettingsTitle
         {
-            get { return "Sunshine Playnite Connector - v" + GetPluginVersion(); }
+            get { return "Vibeshine Playnite Connector - v" + GetPluginVersion(); }
         }
 
         public void BeginEdit()

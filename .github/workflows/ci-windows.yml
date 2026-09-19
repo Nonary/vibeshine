@@ -1382,7 +1382,7 @@ jobs:
           $firstParty = @(
             'sunshine.exe','uninstall.exe','libwebrtc.dll','zlib1.dll',
             'sunshinesvc.exe','dxgi-info.exe','audio-info.exe',
-            'playnite-launcher.exe','sunshine_wgc_capture.exe','sunshine_display_helper.exe',
+            'playnite-launcher.exe','sunshine_wgc_capture.exe','sunshine_display_helper.exe','VibeshinePlaynite.dll',
             'virtualdisplay_probe.exe','VkLayer_sunshine_hdr.dll'
           )
           $optionalFirstParty = @('vibeshine_truehdr.dll')

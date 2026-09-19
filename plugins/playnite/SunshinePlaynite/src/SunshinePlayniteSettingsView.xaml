@@ -36,7 +36,7 @@
                       IsChecked="{Binding EnableDebugLogging}" />
             <TextBlock Margin="24,3,0,10"
                        Opacity="0.68"
-                       Text="Write additional diagnostic messages to the Sunshine log folder. Enable this only while troubleshooting."
+                       Text="Write additional diagnostic messages to the connector log folder. Enable this only while troubleshooting."
                        TextWrapping="Wrap" />
 
             <Border Margin="0,12,0,0"
@@ -48,7 +48,7 @@
                     <TextBlock FontWeight="SemiBold" Text="Connection details" />
                     <TextBlock Margin="0,5,0,0"
                                Opacity="0.72"
-                               Text="Vibeshine connects automatically over the local Sunshine.PlayniteExtension named pipe. No address, port, or credentials are required."
+                               Text="Vibeshine connects automatically over a secured local named pipe. No address, port, or credentials are required."
                                TextWrapping="Wrap" />
                 </StackPanel>
             </Border>

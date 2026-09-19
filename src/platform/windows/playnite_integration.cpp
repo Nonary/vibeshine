@@ -316,7 +316,7 @@ namespace platf::playnite {
         return false;
       }
       std::filesystem::path d(dir);
-      return std::filesystem::exists(d / "extension.yaml") && std::filesystem::exists(d / "SunshinePlaynite.dll");
+      return std::filesystem::exists(d / "extension.yaml") && std::filesystem::exists(d / "VibeshinePlaynite.dll");
     } catch (...) {
       return false;
     }
@@ -1937,10 +1937,10 @@ namespace platf::playnite {
       BOOST_LOG(debug) << "Playnite installer: srcDir=" << srcDir.string();
       BOOST_LOG(debug) << "Playnite installer: src exists? " << (std::filesystem::exists(srcDir) ? "yes" : "no");
       BOOST_LOG(debug) << "Playnite installer: src file(extension.yaml) exists? " << (std::filesystem::exists(srcDir / L"extension.yaml") ? "yes" : "no");
-      BOOST_LOG(debug) << "Playnite installer: src file(SunshinePlaynite.dll) exists? " << (std::filesystem::exists(srcDir / L"SunshinePlaynite.dll") ? "yes" : "no");
+      BOOST_LOG(debug) << "Playnite installer: src file(VibeshinePlaynite.dll) exists? " << (std::filesystem::exists(srcDir / L"VibeshinePlaynite.dll") ? "yes" : "no");
       BOOST_LOG(debug) << "Playnite installer: src file(icon.png) exists? " << (std::filesystem::exists(srcDir / L"icon.png") ? "yes" : "no");
       const auto srcManifest = srcDir / L"extension.yaml";
-      const auto srcDll = srcDir / L"SunshinePlaynite.dll";
+      const auto srcDll = srcDir / L"VibeshinePlaynite.dll";
       const auto srcIcon = srcDir / L"icon.png";
       if (!std::filesystem::is_regular_file(srcManifest) ||
           !std::filesystem::is_regular_file(srcDll) ||
@@ -1988,10 +1988,10 @@ namespace platf::playnite {
       });
 
       const auto destManifest = destDir / L"extension.yaml";
-      const auto destDll = destDir / L"SunshinePlaynite.dll";
+      const auto destDll = destDir / L"VibeshinePlaynite.dll";
       const auto destIcon = destDir / L"icon.png";
       const auto tempManifest = destDir / L"extension.yaml.vibeshine-new";
-      const auto tempDll = destDir / L"SunshinePlaynite.dll.vibeshine-new";
+      const auto tempDll = destDir / L"VibeshinePlaynite.dll.vibeshine-new";
       const auto tempIcon = destDir / L"icon.png.vibeshine-new";
       auto cleanup_temps = [&]() {
         std::error_code cleanup_ec;
@@ -2047,6 +2047,11 @@ namespace platf::playnite {
       }
       cleanup_temps();
       cleanup_guard.disable();
+      if (deployed) {
+        ec.clear();
+        std::filesystem::remove(destDir / L"SunshinePlaynite.dll", ec);
+        deployed = !ec;
+      }
       if (deployed) {
         ec.clear();
         std::filesystem::remove(destDir / L"SunshinePlaynite.psm1", ec);

@@ -82,10 +82,11 @@ namespace confighttp {
       if (platf::playnite::get_extension_target_dir(destPath)) {
         state.extensions_dir = destPath;
         const bool has_manifest = std::filesystem::exists(state.extensions_dir / "extension.yaml");
-        const bool has_dll = std::filesystem::exists(state.extensions_dir / "SunshinePlaynite.dll");
+        const bool has_dll = std::filesystem::exists(state.extensions_dir / "VibeshinePlaynite.dll");
+        const bool has_legacy_dll = std::filesystem::exists(state.extensions_dir / "SunshinePlaynite.dll");
         const bool has_legacy_module = std::filesystem::exists(state.extensions_dir / "SunshinePlaynite.psm1");
         state.installed = has_manifest && has_dll;
-        state.legacy_plugin = has_manifest && !has_dll && has_legacy_module;
+        state.legacy_plugin = has_manifest && !has_dll && (has_legacy_dll || has_legacy_module);
       } else if (active) {
         state.installed = true;
       }

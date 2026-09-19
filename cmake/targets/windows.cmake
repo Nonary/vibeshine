@@ -28,7 +28,7 @@ set(SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR
 set(SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_DIR
         "${CMAKE_BINARY_DIR}/plugins/playnite/SunshinePlaynite")
 set(SUNSHINE_PLAYNITE_PLUGIN_DLL
-        "${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_DIR}/SunshinePlaynite.dll")
+        "${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_DIR}/VibeshinePlaynite.dll")
 set(SUNSHINE_PLAYNITE_PLUGIN_ICON
         "${CMAKE_SOURCE_DIR}/src_assets/common/assets/web/public/images/logo-sunshine-45.png")
 set(SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_FILES
@@ -50,6 +50,9 @@ list(APPEND SUNSHINE_PLAYNITE_PLUGIN_SOURCES
 add_custom_command(
         OUTPUT ${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_FILES}
         COMMAND ${CMAKE_COMMAND} -E make_directory "${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+                "${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_DIR}/SunshinePlaynite.dll"
+                "${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_DIR}/SunshinePlaynite.pdb"
         COMMAND "${SUNSHINE_DOTNET_EXECUTABLE}" build
                 "${SUNSHINE_PLAYNITE_PLUGIN_SOURCE_DIR}/SunshinePlaynite.csproj"
                 --configuration Release
@@ -57,7 +60,7 @@ add_custom_command(
                 --nologo
                 -p:ContinuousIntegrationBuild=true
         DEPENDS ${SUNSHINE_PLAYNITE_PLUGIN_SOURCES} "${SUNSHINE_PLAYNITE_PLUGIN_ICON}"
-        COMMENT "Building Sunshine Playnite plugin"
+        COMMENT "Building Vibeshine Playnite plugin"
         VERBATIM
 )
 add_custom_target(build_playnite_plugin DEPENDS ${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_FILES})
