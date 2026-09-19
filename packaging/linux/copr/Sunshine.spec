@@ -148,6 +148,7 @@ Requires: iproute
 Requires: jq
 Requires: /usr/bin/pactl
 Requires: /usr/bin/parec
+Requires: /usr/bin/python3
 Requires: /usr/bin/wayland-info
 Requires: /usr/bin/xdpyinfo
 Requires: socat
@@ -159,6 +160,7 @@ Recommends: make
 
 %if 0%{?fedora}
 # Fedora runtime requirements
+Requires: python3 >= 3.9
 Requires: libayatana-appindicator3 >= 0.5.3
 Requires: libcap >= 2.22
 Requires: libcurl >= 7.0
@@ -177,6 +179,7 @@ Requires: vulkan-loader
 
 %if 0%{?suse_version}
 # OpenSUSE runtime requirements
+Requires: python311
 Requires: libappindicator3-1
 Requires: libcap2
 Requires: libcurl4
@@ -654,7 +657,9 @@ vibeshine_select_upgrade_kill_mode() {
     return 0
   fi
   vibeshine_privileged_helper_is_safe "$vibeshine_legacy_host" || return 1
-  if grep -Fqx '  trap mark_host_shutdown TERM INT HUP' "$vibeshine_legacy_host"; then
+  if grep -Fqx '  trap request_host_shutdown TERM INT HUP' "$vibeshine_legacy_host"; then
+    vibeshine_upgrade_kill_mode=mixed
+  elif grep -Fqx '  trap mark_host_shutdown TERM INT HUP' "$vibeshine_legacy_host"; then
     vibeshine_upgrade_kill_mode=control-group
   elif grep -Fqx "  trap 'forward_host_signal TERM' TERM" "$vibeshine_legacy_host" && \
        grep -Fqx "  trap 'forward_host_signal INT' INT" "$vibeshine_legacy_host" && \
@@ -672,7 +677,7 @@ vibeshine_prepare_host_upgrade_fence() (
     '0:0:755:directory' ] || exit 1
   vibeshine_upgrade_temporary=$(mktemp /run/vibeshine-host-upgrade.XXXXXX) || exit 1
   trap 'rm -f -- "$vibeshine_upgrade_temporary"' 0
-  case "$vibeshine_upgrade_kill_mode" in process | control-group) ;; *) exit 1 ;; esac
+  case "$vibeshine_upgrade_kill_mode" in mixed | process | control-group) ;; *) exit 1 ;; esac
   printf '[Unit]\nRefuseManualStart=yes\n\n[Service]\nKillMode=%%s\nSendSIGKILL=no\n' \
     "$vibeshine_upgrade_kill_mode" >"$vibeshine_upgrade_temporary" || exit 1
   chmod 0600 -- "$vibeshine_upgrade_temporary" || exit 1
@@ -1038,6 +1043,12 @@ RefuseManualStart=yes
 
 [Service]
 KillMode=control-group
+SendSIGKILL=no' | \
+      '[Unit]
+RefuseManualStart=yes
+
+[Service]
+KillMode=mixed
 SendSIGKILL=no') ;;
       *) return 1 ;;
     esac
@@ -1050,7 +1061,7 @@ SendSIGKILL=no') ;;
   vibeshine_new_host_properties=$(timeout --signal=KILL 5 systemctl show vibeshine.service \
     --property=RefuseManualStart --property=KillMode --property=SendSIGKILL 2>/dev/null) || return 1
   printf '%%s\n' "$vibeshine_new_host_properties" | grep -qx 'RefuseManualStart=no' && \
-    printf '%%s\n' "$vibeshine_new_host_properties" | grep -qx 'KillMode=control-group' && \
+    printf '%%s\n' "$vibeshine_new_host_properties" | grep -qx 'KillMode=mixed' && \
     printf '%%s\n' "$vibeshine_new_host_properties" | grep -qx 'SendSIGKILL=no' || return 1
   timeout --signal=KILL 15 systemctl unmask --runtime vibeshine-vkms-control.socket 2>/dev/null || return 1
   systemctl start vibeshine-vkms-control.socket || return 1
@@ -1209,6 +1220,8 @@ vibeshine_quiesce_machine_host() {
   vibeshine_unit_is_masked vibeshine-session-exec.socket || return 1
   vibeshine_stop_exact_unit vibeshine-session-exec.socket
   vibeshine_unit_is_quiescent vibeshine-session-exec.socket || return 1
+  vibeshine_stop_exact_unit vibeshine.service
+  vibeshine_unit_is_quiescent vibeshine.service || return 1
   vibeshine_stop_brokers || return 1
   for vibeshine_unit in vibeshine-session-controller.service vibeshine.service \
     vibeshine-prelogin.service vibeshine-machine-prepare.service; do
@@ -1225,6 +1238,8 @@ vibeshine_quiesce_machine_host() {
   vibeshine_unit_is_masked vibeshine.service || return 1
   vibeshine_unit_is_masked vibeshine-session-exec.socket || return 1
   vibeshine_stop_exact_unit vibeshine-session-exec.socket
+  vibeshine_stop_exact_unit vibeshine.service
+  vibeshine_unit_is_quiescent vibeshine.service || return 1
   vibeshine_stop_brokers || return 1
   for vibeshine_unit in vibeshine-session-exec.socket vibeshine-session-controller.service \
     vibeshine.service vibeshine-prelogin.service vibeshine-machine-prepare.service; do
@@ -1559,6 +1574,8 @@ vibeshine_preun_quiesce() {
     vibeshine_preun_unit_is_masked vibeshine-session-exec.socket || return 1
     vibeshine_preun_stop_exact_unit vibeshine-session-exec.socket
     vibeshine_preun_unit_is_quiescent vibeshine-session-exec.socket || return 1
+    vibeshine_preun_stop_exact_unit vibeshine.service
+    vibeshine_preun_unit_is_quiescent vibeshine.service || return 1
     vibeshine_preun_stop_brokers || return 1
     for vibeshine_unit in vibeshine-session-controller.service vibeshine.service \
       vibeshine-prelogin.service vibeshine-machine-prepare.service; do
@@ -1579,6 +1596,8 @@ vibeshine_preun_quiesce() {
     vibeshine_preun_unit_is_masked vibeshine.service || return 1
     vibeshine_preun_unit_is_masked vibeshine-session-exec.socket || return 1
     vibeshine_preun_stop_exact_unit vibeshine-session-exec.socket
+    vibeshine_preun_stop_exact_unit vibeshine.service
+    vibeshine_preun_unit_is_quiescent vibeshine.service || return 1
     vibeshine_preun_stop_brokers || return 1
     for vibeshine_unit in vibeshine-session-exec.socket vibeshine-session-controller.service \
       vibeshine.service vibeshine-prelogin.service vibeshine-machine-prepare.service; do

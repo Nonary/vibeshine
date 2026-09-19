@@ -167,6 +167,8 @@ vibeshine_quiesce_for_removal() {
     vibeshine_unit_is_masked vibeshine-session-exec.socket || return 1
     vibeshine_stop_exact_unit vibeshine-session-exec.socket
     vibeshine_unit_is_quiescent vibeshine-session-exec.socket || return 1
+    vibeshine_stop_exact_unit vibeshine.service
+    vibeshine_unit_is_quiescent vibeshine.service || return 1
     vibeshine_stop_brokers || return 1
     for vibeshine_unit in vibeshine-session-controller.service vibeshine.service \
       vibeshine-prelogin.service vibeshine-machine-prepare.service; do
@@ -189,6 +191,8 @@ vibeshine_quiesce_for_removal() {
     vibeshine_unit_is_masked vibeshine.service || return 1
     vibeshine_unit_is_masked vibeshine-session-exec.socket || return 1
     vibeshine_stop_exact_unit vibeshine-session-exec.socket
+    vibeshine_stop_exact_unit vibeshine.service
+    vibeshine_unit_is_quiescent vibeshine.service || return 1
     vibeshine_stop_brokers || return 1
     for vibeshine_unit in vibeshine-session-exec.socket vibeshine-session-controller.service \
       vibeshine.service vibeshine-prelogin.service vibeshine-machine-prepare.service; do
