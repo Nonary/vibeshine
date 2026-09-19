@@ -4,4 +4,5 @@ Author: Nonary / Noklef
 Version: 0.5.1
 Module: SunshinePlaynite.dll
 Type: GenericPlugin
+Icon: icon.png
 Description: Adds two-way communication between Vibeshine and Playnite, allowing you to launch games from Playnite and have Sunshine automatically start streaming them.
