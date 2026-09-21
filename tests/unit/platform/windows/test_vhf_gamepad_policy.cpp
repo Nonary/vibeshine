@@ -16,10 +16,12 @@ extern "C" {
 
 namespace {
 
+  using platf::vhf_gamepad::backend_e;
   using platf::vhf_gamepad::decode_rumble_rgb;
   using platf::vhf_gamepad::make_input_state;
   using platf::vhf_gamepad::normalized_state_t;
   using platf::vhf_gamepad::rumble_rgb_t;
+  using platf::vhf_gamepad::select_automatic_backend;
   using platf::vhf_gamepad::select_automatic_profile;
   using platf::vhf_gamepad::supported_button_mask;
   using platf::vhf_gamepad::to_milli_units;
@@ -42,6 +44,13 @@ namespace {
   }
 
   class VhfGamepadPolicyTest: public testing::Test {};
+
+  TEST_F(VhfGamepadPolicyTest, AutomaticBackendFallsBackToVhfWhenVigemIsUnavailable) {
+    EXPECT_EQ(select_automatic_backend(true, true), backend_e::vigem);
+    EXPECT_EQ(select_automatic_backend(true, false), backend_e::vigem);
+    EXPECT_EQ(select_automatic_backend(false, true), backend_e::vhf);
+    EXPECT_EQ(select_automatic_backend(false, false), backend_e::unavailable);
+  }
 
   TEST_F(VhfGamepadPolicyTest, AutomaticProfilePrefersXinputThenPlaystation) {
     const auto all_public =
@@ -247,6 +256,10 @@ namespace {
     EXPECT_TRUE(feedback.has_rgb);
     EXPECT_EQ(feedback.red, 0xAA);
     EXPECT_TRUE(feedback.has_trigger_effects);
+    // The client masks these bits when enabling the physical trigger programs.
+    EXPECT_EQ(feedback.trigger_event_flags & DS_EFFECT_LEFT_TRIGGER, DS_EFFECT_LEFT_TRIGGER);
+    EXPECT_EQ(feedback.trigger_event_flags & DS_EFFECT_RIGHT_TRIGGER, DS_EFFECT_RIGHT_TRIGGER);
+    EXPECT_EQ(feedback.trigger_event_flags, 0x0C);
     EXPECT_EQ(feedback.left_effect.mode, static_cast<std::uint8_t>(lvg::trigger_effect_mode::weapon));
     EXPECT_EQ(feedback.left_effect.parameters[0], 0x42);
     EXPECT_EQ(feedback.right_effect.mode, static_cast<std::uint8_t>(lvg::trigger_effect_mode::feedback));
@@ -271,6 +284,54 @@ namespace {
     EXPECT_FALSE(feedback.has_rgb);
     EXPECT_EQ(feedback.red, 0);
     EXPECT_FALSE(feedback.has_trigger_effects);
+    EXPECT_EQ(feedback.trigger_event_flags, 0);
+  }
+
+  TEST_F(VhfGamepadPolicyTest, PlaystationTriggerReleaseStillEnablesBothEffectUpdates) {
+    lvg::playstation_output_feedback payload {};
+    payload.valid = lvg::ps_output_triggers_valid;
+
+    lvg::feedback_event event {};
+    event.type = lvg::feedback_type::playstation_output;
+    event.payload_size = sizeof(payload);
+    std::memcpy(event.payload, &payload, sizeof(payload));
+
+    rumble_rgb_t feedback {};
+    ASSERT_TRUE(decode_rumble_rgb(event, feedback));
+    EXPECT_TRUE(feedback.has_trigger_effects);
+    // Off is a program too: clearing the validity bits would leave the old effect active.
+    EXPECT_EQ(feedback.trigger_event_flags, DS_EFFECT_LEFT_TRIGGER | DS_EFFECT_RIGHT_TRIGGER);
+    EXPECT_EQ(feedback.left_effect.mode, 0);
+    EXPECT_EQ(feedback.right_effect.mode, 0);
+  }
+
+  TEST_F(VhfGamepadPolicyTest, AdaptiveTriggerChangesAreNotDuplicateFeedback) {
+    rumble_rgb_t previous {};
+    previous.has_trigger_effects = true;
+    previous.trigger_event_flags = DS_EFFECT_LEFT_TRIGGER | DS_EFFECT_RIGHT_TRIGGER;
+    previous.left_effect.mode = static_cast<std::uint8_t>(lvg::trigger_effect_mode::weapon);
+    previous.right_effect.mode = static_cast<std::uint8_t>(lvg::trigger_effect_mode::feedback);
+
+    EXPECT_EQ(previous, previous);
+    // raise_feedback discards equal reports before inspecting adaptive effects.
+    auto changed = previous;
+    changed.left_effect.mode = 0;
+    EXPECT_FALSE(previous == changed);
+    changed = previous;
+    changed.right_effect.mode = 0;
+    EXPECT_FALSE(previous == changed);
+    changed = previous;
+    changed.left_effect.parameters.back() = 0x42;
+    EXPECT_FALSE(previous == changed);
+    changed = previous;
+    changed.right_effect.parameters.back() = 0x24;
+    EXPECT_FALSE(previous == changed);
+    changed = previous;
+    changed.trigger_event_flags = DS_EFFECT_LEFT_TRIGGER;
+    EXPECT_FALSE(previous == changed);
+    changed = previous;
+    changed.has_trigger_effects = false;
+    EXPECT_FALSE(previous == changed);
   }
 
   TEST_F(VhfGamepadPolicyTest, TouchEventTypesMapToTheProtocol) {

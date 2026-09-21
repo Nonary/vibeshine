@@ -8,7 +8,16 @@
 
 namespace statefile {
 
+  enum class json_load_result_e {
+    loaded,
+    missing,
+    corrupt,
+    failed,
+  };
+
   const std::string &sunshine_state_path();
+
+  std::string sunshine_state_backup_path();
 
   const std::string &vibeshine_state_path();
 
@@ -19,13 +28,38 @@ namespace statefile {
    *
    * Callers that are updating shared Sunshine/Vibeshine state should still hold state_mutex()
    * around their read/modify/write transaction; this helper only prevents partial or
-   * interleaved on-disk writes from leaving malformed JSON behind.
+   * interleaved on-disk writes from leaving malformed JSON behind. Configured
+   * primary and auxiliary state writes also refresh their .bak recovery copy.
    */
   void write_json_atomic(const std::string &path, const boost::property_tree::ptree &tree);
 
   /**
+   * @brief Persist the primary Sunshine state and refresh its recovery copy.
+   *
+   * The backup is written only after the primary has been atomically replaced,
+   * so it remains a last-known-good snapshot if a later primary write is
+   * interrupted or the primary is found unreadable.
+   */
+  void write_sunshine_state_atomic(const boost::property_tree::ptree &tree);
+
+  /**
+   * @brief Read a state file while preserving enough detail for recovery.
+   *
+   * Malformed or blank content is reported without changing the source; failed
+   * inspection or reads are never treated as an empty state. The auxiliary state
+   * is validated and recovered from its .bak copy before returning; callers hold
+   * state_mutex() around reads as well as read/modify/write transactions.
+   */
+  json_load_result_e load_json(const std::string &path, boost::property_tree::ptree &tree);
+
+  /** Authoritative primary snapshot selection for startup and saves. Caller holds state_mutex(). */
+  json_load_result_e load_primary_state(boost::property_tree::ptree &tree);
+
+  /**
    * @brief Load an existing JSON file before a read/modify/write update.
    *
+   * Primary and auxiliary state recover from validated backups first and fail closed
+   * when damaged state has no usable snapshot. The rules below apply to other files.
    * Returns true (with @p tree populated, or empty when there is nothing usable to
    * preserve) when it is safe for the caller to proceed and rewrite the file:
    *   - Missing or blank files yield an empty tree.
@@ -47,6 +81,9 @@ namespace statefile {
    * touching intentionally private subdirectories such as credentials.
    */
   void repair_config_permissions();
+
+  /** Restore the configured credential file before HTTP initialization. Locks state_mutex(). */
+  bool recover_credentials(const std::string &path);
 
   void migrate_recent_state_keys();
 

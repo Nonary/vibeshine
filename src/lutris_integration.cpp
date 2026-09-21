@@ -1,11 +1,17 @@
 #include "lutris_integration.h"
 
+#if defined(__linux__)
+  #include "provider_scan_protocol.h"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sqlite3.h>
 #include <string_view>
@@ -55,19 +61,22 @@ namespace platf::lutris {
       return {};
     }
 
-    std::filesystem::path discover_image(const std::filesystem::path &lutris_data,
-                                         const std::string &slug) {
+    std::filesystem::path discover_artwork(const std::filesystem::path &lutris_data,
+                                           const std::string &slug) {
       if (slug.empty()) return {};
-      // Sunshine's catalog image contract is PNG. Prefer Lutris' generated
-      // application icon; JPEG cover art remains visible through the API but
-      // is not passed to clients that require a PNG signature.
+      return first_existing(lutris_data / "coverart", slug, {".png", ".jpg", ".jpeg", ".webp"});
+    }
+
+    std::filesystem::path discover_icon(const std::filesystem::path &lutris_data,
+                                        const std::string &slug) {
+      if (slug.empty()) return {};
       auto data_home = lutris_data.parent_path();
       for (const auto size : {"256x256", "128x128", "64x64", "48x48"}) {
         auto image = first_existing(data_home / "icons/hicolor" / size / "apps",
                                     "lutris_" + slug, {".png"});
         if (!image.empty()) return image;
       }
-      return first_existing(lutris_data / "coverart", slug, {".png"});
+      return {};
     }
 
     void hash_bytes(std::uint64_t &hash, std::string_view value) {
@@ -80,7 +89,40 @@ namespace platf::lutris {
       hash *= prime;
     }
 
+    void hash_path(std::uint64_t &hash, const std::filesystem::path &path) {
+      hash_bytes(hash, path.generic_string());
+      if (path.empty()) return;
+      std::error_code error;
+      const auto size = std::filesystem::file_size(path, error);
+      hash_bytes(hash, error ? "missing" : std::to_string(size));
+      error.clear();
+      const auto modified = std::filesystem::last_write_time(path, error);
+      hash_bytes(hash, error ? "unstatable" : std::to_string(modified.time_since_epoch().count()));
+    }
+
 #if defined(__linux__)
+    bool machine_host_mode() {
+      const auto *value = std::getenv("VIBESHINE_MACHINE_HOST");
+      return value && *value;
+    }
+
+    std::shared_ptr<const provider_scan::lutris_catalog_t> machine_lutris_catalog() {
+      static std::mutex mutex;
+      static std::shared_ptr<const provider_scan::lutris_catalog_t> cached;
+      static std::chrono::steady_clock::time_point refreshed_at {};
+      static bool initialized = false;
+      constexpr auto cache_lifetime = std::chrono::seconds {2};
+      const auto now = std::chrono::steady_clock::now();
+      std::lock_guard lock {mutex};
+      if (!initialized || now - refreshed_at >= cache_lifetime) {
+        auto scanned = provider_scan::scan_lutris_session();
+        cached = scanned ? std::make_shared<const provider_scan::lutris_catalog_t>(std::move(*scanned)) : nullptr;
+        refreshed_at = now;
+        initialized = true;
+      }
+      return cached;
+    }
+
     std::filesystem::path find_lutris_executable() {
       const auto *path_value = std::getenv("PATH");
       if (!path_value || !*path_value) return {};
@@ -104,12 +146,15 @@ namespace platf::lutris {
 
   std::filesystem::path default_database_path() {
 #if defined(__linux__)
-    if (const auto *xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
+    if (machine_host_mode()) return {};
+    const auto *xdg = std::getenv("XDG_DATA_HOME");
+    if (xdg && *xdg) {
       const auto candidate = std::filesystem::path(xdg) / "lutris/pga.db";
       std::error_code error;
       if (std::filesystem::is_regular_file(candidate, error)) return candidate;
     }
-    if (const auto *home = std::getenv("HOME"); home && *home) {
+    const auto *home = std::getenv("HOME");
+    if (home && *home) {
       for (const auto &relative : {
              std::filesystem::path(".local/share/lutris/pga.db"),
              std::filesystem::path(".var/app/net.lutris.Lutris/data/lutris/pga.db")}) {
@@ -122,12 +167,37 @@ namespace platf::lutris {
     return {};
   }
 
+  bool database_available() {
+#if defined(__linux__)
+    if (machine_host_mode()) {
+      const auto catalog = machine_lutris_catalog();
+      return catalog && catalog->database_available;
+    }
+#endif
+    return !default_database_path().empty();
+  }
+
+  bool discovery_ready() {
+#if defined(__linux__)
+    if (machine_host_mode()) return static_cast<bool>(machine_lutris_catalog());
+#endif
+    return true;
+  }
+
   std::vector<game_t> discover(const std::filesystem::path &requested_database) {
+#if defined(__linux__)
+    if (machine_host_mode()) {
+      const auto catalog = machine_lutris_catalog();
+      return catalog && catalog->database_available ? catalog->games : std::vector<game_t> {};
+    }
+#endif
     const auto database_path = requested_database.empty() ? default_database_path() : requested_database;
     if (database_path.empty()) return {};
 
+    // SQLite expects UTF-8, including when native filesystem paths use UTF-16.
+    const auto database_path_utf8 = database_path.u8string();
     sqlite3 *raw_database = nullptr;
-    if (sqlite3_open_v2(database_path.c_str(), &raw_database,
+    if (sqlite3_open_v2(reinterpret_cast<const char *>(database_path_utf8.c_str()), &raw_database,
                         SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nullptr) != SQLITE_OK) {
       if (raw_database) sqlite3_close(raw_database);
       return {};
@@ -159,7 +229,8 @@ namespace platf::lutris {
       game.service_id = text(statement.get(), 8);
       game.last_played = sqlite3_column_int64(statement.get(), 9);
       game.playtime_seconds = sqlite3_column_double(statement.get(), 10);
-      game.image_path = discover_image(lutris_data, game.slug);
+      game.artwork_path = discover_artwork(lutris_data, game.slug);
+      game.icon_path = discover_icon(lutris_data, game.slug);
       game.stable_id = game.steam_backed() && !game.service_id.empty() ?
                          "steam:" + game.service_id :
                          "lutris:" + std::to_string(game.id);
@@ -177,6 +248,9 @@ namespace platf::lutris {
       hash_bytes(hash, game.service_id);
       hash_bytes(hash, game.directory.generic_string());
       hash_bytes(hash, game.config_path);
+      hash_bytes(hash, game.session_artwork_revision);
+      hash_path(hash, game.artwork_path);
+      hash_path(hash, game.icon_path);
     }
     return hash;
   }
@@ -187,6 +261,10 @@ namespace platf::lutris {
 
   bool executable_available() {
 #if defined(__linux__)
+    if (machine_host_mode()) {
+      const auto catalog = machine_lutris_catalog();
+      return catalog && catalog->executable_available;
+    }
     return !find_lutris_executable().empty();
 #else
     return false;
@@ -195,9 +273,11 @@ namespace platf::lutris {
 
   bool launch(std::int64_t id) {
 #if defined(__linux__)
-    const auto executable = find_lutris_executable();
     const auto uri = launch_uri(id);
-    if (executable.empty() || uri.empty()) return false;
+    if (uri.empty()) return false;
+    const bool machine_host = machine_host_mode();
+    const auto executable = machine_host ? std::filesystem::path {} : find_lutris_executable();
+    if (!machine_host && executable.empty()) return false;
 
     int error_pipe[2] {-1, -1};
     if (pipe(error_pipe) != 0 || fcntl(error_pipe[1], F_SETFD, FD_CLOEXEC) == -1) {
@@ -222,7 +302,12 @@ namespace platf::lutris {
         _exit(127);
       }
       setsid();
-      execl(executable.c_str(), executable.c_str(), uri.c_str(), static_cast<char *>(nullptr));
+      if (machine_host) {
+        const auto id_string = std::to_string(id);
+        execl("/usr/libexec/vibeshine/vibeshine-session-exec", "vibeshine-session-exec", "lutris", id_string.c_str(), static_cast<char *>(nullptr));
+      } else {
+        execl(executable.c_str(), executable.c_str(), uri.c_str(), static_cast<char *>(nullptr));
+      }
       const int error = errno;
       const auto ignored = write(error_pipe[1], &error, sizeof(error));
       (void) ignored;

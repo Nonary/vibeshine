@@ -1,0 +1,39 @@
+#!/bin/sh
+
+# Ordinary removal and upgrades deliberately preserve the administrator's
+# machine policy and the service-owned pairings/settings. Debian's explicit
+# purge operation revokes them. Other package formats expose the equivalent
+# deliberate operation through `vibeshine-machine-host reset` before removal.
+[ "${1:-}" = purge ] || exit 0
+
+for vibeshine_file in \
+  /etc/vibeshine/machine.conf \
+  /etc/vibeshine/prelogin.conf \
+  /etc/vibeshine/session-commands; do
+  rm -f -- "$vibeshine_file" || exit 1
+done
+rmdir -- /etc/vibeshine 2>/dev/null || true
+
+vibeshine_profile=/var/lib/vibeshine
+if [ -L "$vibeshine_profile" ]; then
+  rm -f -- "$vibeshine_profile" || exit 1
+elif [ -d "$vibeshine_profile" ]; then
+  if mountpoint -q -- "$vibeshine_profile"; then
+    echo "error: refusing to purge mounted machine state: $vibeshine_profile" >&2
+    exit 1
+  fi
+  if [ "$(stat -c '%U:%G:%a:%F' -- /var/lib 2>/dev/null)" != 'root:root:755:directory' ]; then
+    echo 'error: refusing to purge machine state beneath an unsafe /var/lib.' >&2
+    exit 1
+  fi
+  rm -rf --one-file-system -- "$vibeshine_profile" || exit 1
+elif [ -e "$vibeshine_profile" ]; then
+  rm -f -- "$vibeshine_profile" || exit 1
+fi
+
+if [ -e "$vibeshine_profile" ] || [ -L "$vibeshine_profile" ]; then
+  echo 'error: Vibeshine machine state remains after purge.' >&2
+  exit 1
+fi
+
+echo 'Removed Vibeshine machine policy, credentials, pairings, and shared settings.'

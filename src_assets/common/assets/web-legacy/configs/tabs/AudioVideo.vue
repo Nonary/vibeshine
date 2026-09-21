@@ -156,7 +156,7 @@ const virtualDisplayMode = computed<'disabled' | 'per_client' | 'shared'>({
 const virtualDisplayScale = computed<number>({
   get() {
     const value = Number(config.value?.['dd_virtual_display_scale']);
-    return Number.isFinite(value) ? value : -1;
+    return Number.isFinite(value) ? value : 0;
   },
   set(value) {
     if (!config.value) return;
@@ -264,6 +264,12 @@ function selectVirtualDisplayLayout(v: unknown) {
 
     <PlatformLayout>
       <template #windows>
+        <ConfigFieldRenderer
+          setting-key="audio_sink_capture_only"
+          v-model="config.audio_sink_capture_only"
+          class="mb-6"
+        />
+
         <ConfigFieldRenderer
           setting-key="virtual_sink"
           v-model="config.virtual_sink"
@@ -468,6 +474,21 @@ function selectVirtualDisplayLayout(v: unknown) {
               </div>
             </transition>
 
+            <div
+              class="mt-4 rounded-lg border border-dark/10 bg-surface/20 p-3 dark:border-light/10 sm:p-4"
+            >
+              <n-checkbox v-model:checked="config.remote_monitor_confirm_app_replacement">
+                <div class="flex flex-col">
+                  <span class="text-sm font-medium">
+                    {{ $t('config.remote_monitor_confirm_app_replacement') }}
+                  </span>
+                  <span class="mt-1 text-[11px] leading-snug opacity-70">
+                    {{ $t('config.remote_monitor_confirm_app_replacement_desc') }}
+                  </span>
+                </div>
+              </n-checkbox>
+            </div>
+
             <PlatformLayout>
               <template #windows>
                 <div
@@ -572,6 +593,23 @@ function selectVirtualDisplayLayout(v: unknown) {
                       </span>
                       <span class="mt-1 text-[11px] leading-snug opacity-70">
                         {{ $t('config.vulkan_hdr_layer_desc') }}
+                      </span>
+                    </div>
+                  </n-checkbox>
+                </div>
+              </template>
+              <template #linux>
+                <div
+                  v-if="virtualDisplayMode !== 'disabled'"
+                  class="mt-4 border-t border-dark/5 pt-4 dark:border-light/5"
+                >
+                  <n-checkbox v-model:checked="config.wayland_hdr_compatibility">
+                    <div class="flex flex-col">
+                      <span class="text-sm font-medium">
+                        {{ $t('config.wayland_hdr_compatibility') }}
+                      </span>
+                      <span class="mt-1 text-[11px] leading-snug opacity-70">
+                        {{ $t('config.wayland_hdr_compatibility_desc') }}
                       </span>
                     </div>
                   </n-checkbox>

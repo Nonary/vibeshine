@@ -67,9 +67,14 @@ jobs:
               for key, value in values.items():
                 print(f"{key}={value}", file=fh)
 
-          def skip(reason):
+          def skip(reason, *, release_version="", release_commit=""):
             print(f"::notice::{reason}")
-            output(should_release="false", tag_name="", release_version="", release_commit="")
+            output(
+              should_release="false",
+              tag_name="",
+              release_version=release_version,
+              release_commit=release_commit,
+            )
             sys.exit(0)
 
           def version_key(tag):
@@ -121,6 +126,9 @@ jobs:
           event_name = os.environ["EVENT_NAME"]
           if event_name not in {"push", "workflow_dispatch"}:
             skip("Release gate only applies to push and manual workflow_dispatch events.")
+
+          if event_name == "push" and os.environ.get("GITHUB_REF_TYPE") != "tag":
+            skip("Branch push: package builds wait for a release tag.")
 
           run("git", "fetch", "--force", "--tags")
 
@@ -198,7 +206,10 @@ jobs:
     name: Windows
     needs:
       - release-candidate
-    if: github.event_name != 'push' || needs.release-candidate.outputs.should_release == 'true'
+    # Branch pushes only select candidates. Build release artifacts once, on the tag push.
+    if: >-
+      ${{ github.event_name != 'push' ||
+          (github.ref_type == 'tag' && needs.release-candidate.outputs.should_release == 'true') }}
     permissions:
       actions: read
       contents: read
@@ -206,7 +217,7 @@ jobs:
     with:
       use_self_hosted: ${{ needs.release-candidate.outputs.should_release == 'true' || (github.event_name == 'workflow_dispatch' && inputs.use_self_hosted) }}
       build_only: ${{ needs.release-candidate.outputs.should_release == 'true' }}
-      build_tests: ${{ needs.release-candidate.outputs.should_release != 'true' }}
+      build_tests: false
       release_commit: ${{ needs.release-candidate.outputs.release_commit || github.sha }}
       release_version: ${{ needs.release-candidate.outputs.release_version || '0.0.0' }}
       release_tag: ${{ needs.release-candidate.outputs.tag_name }}
@@ -224,12 +235,10 @@ jobs:
     name: Arch Linux
     needs:
       - release-candidate
-    # vibe-test is the Linux release-candidate branch. Build its installable
-    # Arch/CachyOS artifact on every push without opening a production release.
+    # Match Windows: release preparation must not build packages before the tag push.
     if: >-
       ${{ github.event_name != 'push' ||
-          github.ref == 'refs/heads/vibe-test' ||
-          needs.release-candidate.outputs.should_release == 'true' }}
+          (github.ref_type == 'tag' && needs.release-candidate.outputs.should_release == 'true') }}
     permissions:
       contents: read
     uses: ./.github/workflows/ci-archlinux.yml

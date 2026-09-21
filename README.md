@@ -47,9 +47,40 @@ At this point, Vibeshine differs from upstream Sunshine by roughly **99,800 chan
 
 ---
 
+## Linux (beta)
+
+Vibeshine now runs natively on Linux as a set of machine-wide system services with its own
+virtual-display kernel driver. The beta targets **Arch Linux and CachyOS**, and it is developed and
+tested on **CachyOS with KDE Plasma 6 on Wayland**. You need Linux 6.16 or newer with matching
+kernel headers, a Plasma Wayland session started by SDDM or Plasma Login Manager, and a GPU with a
+hardware H.264 encoder. Pre-login streaming is NVIDIA-only.
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/Nonary/vibeshine/vibe-test/scripts/linux_install.sh
+sudo bash linux_install.sh
+```
+
+The script checks the requirements, installs the kernel headers and the package, opens the firewall,
+and prints whether a reboot is needed. Manual steps, verification, and troubleshooting are in the
+[Linux install guide](docs/linux/install.md). AppImage, Flatpak, Debian, Fedora, and Docker builds
+are not part of this beta.
+
+SteamOS development uses a separate [user bundle](packaging/linux/steamos/README.md)
+which leaves the read-only operating system untouched. Its experimental Gaming
+Mode path supports stock Gamescope SDR capture and an optional
+[patched Gamescope HDR10 path](packaging/linux/steamos/gamescope/README.md).
+Gaming Mode automatically uses the existing Gamescope output even when virtual
+display is selected. Desktop display/layout preferences are preserved for the
+next Desktop Mode session; Gaming Mode does not create independent monitors.
+See the [SteamOS audit](packaging/linux/steamos/AUDIT.md)
+for validation and remaining work.
+
 ## Does Vibeshine aim to replace Sunshine or Apollo?
 
-No. Vibeshine is intended as a **complementary fork**, not a replacement.
+Yes. Vibeshine replaces Sunshine or Apollo as your streaming host. On Linux,
+use one host installation at a time: replace an existing Sunshine, Vibeshine,
+or Vibepollo installation when installing Vibeshine, and preserve your
+configuration and pairing data during the transition.
 
 In addition, for users who prefer Apollo’s ecosystem, there is a [Vibepollo](https://github.com/Nonary/Vibepollo) that brings Vibeshine’s feature set to Apollo. This exists primarily to serve Apollo users who asked for Vibeshine‑style capabilities while staying on Apollo.
 

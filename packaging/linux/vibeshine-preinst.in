@@ -1,0 +1,878 @@
+#!/bin/sh
+
+vibeshine_controller="@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-controller"
+vibeshine_legacy_host="@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-machine-host"
+vibeshine_legacy_handoff="@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-handoff"
+vibeshine_runtime_root=/run/vibeshine
+vibeshine_broker_socket=/run/vibeshine/session-broker.sock
+vibeshine_control_socket=/run/vibeshine/vkms-control.sock
+vibeshine_host_upgrade_dropin_dir=/run/systemd/system/vibeshine.service.d
+vibeshine_host_upgrade_dropin=$vibeshine_host_upgrade_dropin_dir/90-vibeshine-safe-upgrade.conf
+vibeshine_controller_was_frozen=0
+vibeshine_upgrade_kill_mode=
+vibeshine_legacy_handoff_directory=/run/vibeshine/session-handoffs
+vibeshine_legacy_restore_directory=/run/vibeshine/session-restores
+vibeshine_legacy_transition_lock=/run/vibeshine/session-handoff.lock
+vibeshine_legacy_prelogin_marker=/run/vibeshine/prelogin-handoff-complete
+
+vibeshine_cgroup_is_quiescent() {
+  vibeshine_control_group=$1
+  [ -n "$vibeshine_control_group" ] || return 0
+  case "$vibeshine_control_group" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  case "$vibeshine_control_group" in
+    */../* | */..) return 1 ;;
+  esac
+  vibeshine_cgroup_path=/sys/fs/cgroup$vibeshine_control_group
+  if [ ! -e "$vibeshine_cgroup_path" ] && [ ! -L "$vibeshine_cgroup_path" ]; then
+    return 0
+  fi
+  [ -d "$vibeshine_cgroup_path" ] && [ ! -L "$vibeshine_cgroup_path" ] && \
+    [ -f "$vibeshine_cgroup_path/cgroup.events" ] && \
+    [ ! -L "$vibeshine_cgroup_path/cgroup.events" ] && \
+    grep -qx 'populated 0' "$vibeshine_cgroup_path/cgroup.events"
+}
+
+vibeshine_unit_is_quiescent() {
+  vibeshine_properties=$(timeout --signal=KILL 5 systemctl show "$1" \
+    --property=LoadState --property=ActiveState --property=SubState --property=MainPID \
+    --property=ControlGroup 2>/dev/null) || return 1
+  [ "$(printf '%s\n' "$vibeshine_properties" | wc -l | tr -d ' ')" = 5 ] || return 1
+  for vibeshine_property in LoadState ActiveState SubState MainPID ControlGroup; do
+    vibeshine_property_count=$(printf '%s\n' "$vibeshine_properties" | \
+      grep -c "^$vibeshine_property=" || true)
+    [ "$vibeshine_property_count" = 1 ] || return 1
+  done
+  vibeshine_load=$(printf '%s\n' "$vibeshine_properties" | sed -n 's/^LoadState=//p')
+  vibeshine_state=$(printf '%s\n' "$vibeshine_properties" | sed -n 's/^ActiveState=//p')
+  vibeshine_substate=$(printf '%s\n' "$vibeshine_properties" | sed -n 's/^SubState=//p')
+  vibeshine_pid=$(printf '%s\n' "$vibeshine_properties" | sed -n 's/^MainPID=//p')
+  vibeshine_control_group=$(printf '%s\n' "$vibeshine_properties" | sed -n 's/^ControlGroup=//p')
+  case "$vibeshine_load:$vibeshine_state:$vibeshine_substate" in
+    not-found:inactive:dead | \
+    loaded:inactive:dead | loaded:failed:failed | \
+    masked:inactive:dead | masked:failed:failed | \
+    masked-runtime:inactive:dead | masked-runtime:failed:failed) ;;
+    *) return 1 ;;
+  esac
+  [ "$vibeshine_pid" = 0 ] && vibeshine_cgroup_is_quiescent "$vibeshine_control_group"
+}
+
+vibeshine_unit_is_disabled() {
+  vibeshine_enabled=$(timeout --signal=KILL 5 systemctl is-enabled "$1" 2>/dev/null || true)
+  case "$vibeshine_enabled" in
+    disabled | masked | masked-runtime | static | indirect | generated | transient | linked | linked-runtime | not-found) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+vibeshine_restore_template_is_masked() {
+  vibeshine_restore_mask=$(timeout --signal=KILL 5 systemctl is-enabled \
+    'vibeshine-session-restore@.service' 2>/dev/null || true)
+  vibeshine_restore_load=$(timeout --signal=KILL 5 systemctl show \
+    'vibeshine-session-restore@.service' --property=LoadState 2>/dev/null) || return 1
+  case "$vibeshine_restore_mask" in
+    masked | masked-runtime) [ "$vibeshine_restore_load" = 'LoadState=masked' ] ;;
+    *) return 1 ;;
+  esac
+}
+
+vibeshine_host_unit_is_masked() {
+  vibeshine_host_mask=$(timeout --signal=KILL 5 systemctl is-enabled \
+    vibeshine.service 2>/dev/null || true)
+  vibeshine_host_load=$(timeout --signal=KILL 5 systemctl show \
+    vibeshine.service --property=LoadState 2>/dev/null) || return 1
+  case "$vibeshine_host_mask" in
+    masked | masked-runtime) [ "$vibeshine_host_load" = 'LoadState=masked' ] ;;
+    *) return 1 ;;
+  esac
+}
+
+vibeshine_broker_socket_is_masked() {
+  vibeshine_socket_mask=$(timeout --signal=KILL 5 systemctl is-enabled \
+    vibeshine-session-exec.socket 2>/dev/null || true)
+  vibeshine_socket_load=$(timeout --signal=KILL 5 systemctl show \
+    vibeshine-session-exec.socket --property=LoadState 2>/dev/null) || return 1
+  case "$vibeshine_socket_mask" in
+    masked | masked-runtime) [ "$vibeshine_socket_load" = 'LoadState=masked' ] ;;
+    *) return 1 ;;
+  esac
+}
+
+vibeshine_control_socket_is_masked() {
+  vibeshine_socket_mask=$(timeout --signal=KILL 5 systemctl is-enabled \
+    vibeshine-vkms-control.socket 2>/dev/null || true)
+  vibeshine_socket_load=$(timeout --signal=KILL 5 systemctl show \
+    vibeshine-vkms-control.socket --property=LoadState 2>/dev/null) || return 1
+  case "$vibeshine_socket_mask" in
+    masked | masked-runtime) [ "$vibeshine_socket_load" = 'LoadState=masked' ] ;;
+    *) return 1 ;;
+  esac
+}
+
+vibeshine_restore_unit_is_safe() {
+  vibeshine_restore_unit=$1
+  case "$vibeshine_restore_unit" in
+    vibeshine-session-restore@*.service) ;;
+    *) return 1 ;;
+  esac
+  vibeshine_restore_instance=${vibeshine_restore_unit#vibeshine-session-restore@}
+  vibeshine_restore_instance=${vibeshine_restore_instance%.service}
+  case "$vibeshine_restore_instance" in
+    [1-9]*) ;;
+    *) return 1 ;;
+  esac
+  case "$vibeshine_restore_instance" in
+    *[!0-9]*) return 1 ;;
+  esac
+}
+
+vibeshine_broker_unit_is_safe() {
+  vibeshine_broker_unit=$1
+  case "$vibeshine_broker_unit" in
+    vibeshine-session-exec@*.service) ;;
+    *) return 1 ;;
+  esac
+  vibeshine_broker_instance=${vibeshine_broker_unit#vibeshine-session-exec@}
+  vibeshine_broker_instance=${vibeshine_broker_instance%.service}
+  [ -n "$vibeshine_broker_instance" ] || return 1
+  case "$vibeshine_broker_instance" in
+    *[!A-Za-z0-9_.:-]*) return 1 ;;
+  esac
+}
+
+vibeshine_control_unit_is_safe() {
+  vibeshine_control_unit=$1
+  case "$vibeshine_control_unit" in
+    vibeshine-vkms-control@*.service) ;;
+    *) return 1 ;;
+  esac
+  vibeshine_control_instance=${vibeshine_control_unit#vibeshine-vkms-control@}
+  vibeshine_control_instance=${vibeshine_control_instance%.service}
+  [ -n "$vibeshine_control_instance" ] || return 1
+  case "$vibeshine_control_instance" in
+    *[!A-Za-z0-9_.:-]*) return 1 ;;
+  esac
+}
+
+vibeshine_stop_exact_unit() {
+  # Never bypass a service's ordered resource teardown.  Killing systemctl
+  # only abandons the client while its manager job continues; killing the unit
+  # cgroup can strand live GPU imports and is therefore forbidden here.
+  # Controller cleanup can legitimately spend more than 30 seconds draining
+  # the host and GPU bindings; keep waiting for the manager's ordered stop.
+  timeout --signal=TERM --kill-after=2 60 systemctl stop "$1" 2>/dev/null
+}
+
+vibeshine_capture_unit_list() {
+  vibeshine_unit_list_path=$1
+  vibeshine_unit_list_pattern=$2
+  [ -f "$vibeshine_unit_list_path" ] && [ ! -L "$vibeshine_unit_list_path" ] || return 1
+  chmod 0600 "$vibeshine_unit_list_path" || return 1
+  (
+    ulimit -f 128 || exit 1
+    timeout --signal=KILL 5 systemctl list-units \
+      --all --plain --no-legend --no-pager --full \
+      "$vibeshine_unit_list_pattern" >"$vibeshine_unit_list_path" 2>/dev/null
+  ) || return 1
+  vibeshine_unit_list_size=$(stat -c '%s' -- "$vibeshine_unit_list_path") || return 1
+  case "$vibeshine_unit_list_size" in '' | *[!0-9]*) return 1 ;; esac
+  [ "$vibeshine_unit_list_size" -le 65536 ]
+}
+
+vibeshine_control_instances_are_quiescent() (
+  vibeshine_control_list=$(mktemp /run/vibeshine-control-units.XXXXXX) || exit 1
+  trap 'rm -f -- "$vibeshine_control_list"' 0
+  trap 'exit 1' HUP INT TERM
+  vibeshine_control_attempt=0
+  vibeshine_control_clean_passes=0
+  while [ "$vibeshine_control_attempt" -lt 100 ]; do
+    vibeshine_control_dirty=0
+    vibeshine_capture_unit_list "$vibeshine_control_list" \
+      'vibeshine-vkms-control@*.service' || return 1
+    vibeshine_seen_units='
+'
+    vibeshine_seen_count=0
+    while IFS= read -r vibeshine_line || [ -n "$vibeshine_line" ]; do
+      [ -n "$vibeshine_line" ] || continue
+      case "$vibeshine_line" in *"\r"*) return 1 ;; esac
+      set -f
+      set -- $vibeshine_line
+      [ "${1:-}" = '●' ] && shift
+      [ "$#" -ge 4 ] || return 1
+      vibeshine_unit=$1
+      vibeshine_load=$2
+      vibeshine_state=$3
+      vibeshine_substate=$4
+      vibeshine_control_unit_is_safe "$vibeshine_unit" || return 1
+      [ "$vibeshine_load" = loaded ] || return 1
+      case "$vibeshine_state:$vibeshine_substate" in *[!a-z:-]*) return 1 ;; esac
+      case "$vibeshine_seen_units" in *"
+$vibeshine_unit
+"*) return 1 ;; esac
+      vibeshine_seen_units="$vibeshine_seen_units$vibeshine_unit
+"
+      vibeshine_seen_count=$((vibeshine_seen_count + 1))
+      [ "$vibeshine_seen_count" -le 256 ] || return 1
+      if ! vibeshine_unit_is_quiescent "$vibeshine_unit"; then
+        vibeshine_control_dirty=1
+      fi
+    done <"$vibeshine_control_list"
+    if [ "$vibeshine_control_dirty" -eq 0 ]; then
+      vibeshine_control_clean_passes=$((vibeshine_control_clean_passes + 1))
+      [ "$vibeshine_control_clean_passes" -lt 5 ] || {
+        [ ! -e "$vibeshine_control_socket" ] && [ ! -L "$vibeshine_control_socket" ]
+        return
+      }
+    else
+      vibeshine_control_clean_passes=0
+    fi
+    vibeshine_control_attempt=$((vibeshine_control_attempt + 1))
+    sleep 0.1
+  done
+  return 1
+)
+
+vibeshine_select_upgrade_kill_mode() {
+  if [ ! -e "$vibeshine_legacy_host" ] && [ ! -L "$vibeshine_legacy_host" ]; then
+    vibeshine_unit_is_quiescent vibeshine.service || return 1
+    vibeshine_upgrade_kill_mode=control-group
+    return 0
+  fi
+  vibeshine_privileged_helper_is_safe "$vibeshine_legacy_host" || return 1
+  if grep -Fqx '  trap request_host_shutdown TERM INT HUP' "$vibeshine_legacy_host"; then
+    vibeshine_upgrade_kill_mode=mixed
+  elif grep -Fqx '  trap mark_host_shutdown TERM INT HUP' "$vibeshine_legacy_host"; then
+    vibeshine_upgrade_kill_mode=control-group
+  elif grep -Fqx "  trap 'forward_host_signal TERM' TERM" "$vibeshine_legacy_host" && \
+       grep -Fqx "  trap 'forward_host_signal INT' INT" "$vibeshine_legacy_host" && \
+       grep -Fqx "  trap 'forward_host_signal HUP' HUP" "$vibeshine_legacy_host"; then
+    vibeshine_upgrade_kill_mode=process
+  else
+    return 1
+  fi
+}
+
+vibeshine_prepare_host_upgrade_fence() (
+  [ ! -L "$vibeshine_host_upgrade_dropin_dir" ] && \
+    [ ! -L "$vibeshine_host_upgrade_dropin" ] || exit 1
+  install -d -o root -g root -m 0755 -- "$vibeshine_host_upgrade_dropin_dir" || exit 1
+  [ "$(stat -c '%u:%g:%a:%F' -- "$vibeshine_host_upgrade_dropin_dir")" = \
+    '0:0:755:directory' ] || exit 1
+  vibeshine_upgrade_temporary=$(mktemp /run/vibeshine-host-upgrade.XXXXXX) || exit 1
+  trap 'rm -f -- "$vibeshine_upgrade_temporary"' 0
+  case "$vibeshine_upgrade_kill_mode" in mixed | process | control-group) ;; *) exit 1 ;; esac
+  printf '[Unit]\nRefuseManualStart=yes\n\n[Service]\nKillMode=%s\nSendSIGKILL=no\n' \
+    "$vibeshine_upgrade_kill_mode" >"$vibeshine_upgrade_temporary" || exit 1
+  chmod 0600 -- "$vibeshine_upgrade_temporary" || exit 1
+  if [ -e "$vibeshine_host_upgrade_dropin" ]; then
+    [ "$(stat -c '%u:%g:%a:%h:%F' -- "$vibeshine_host_upgrade_dropin")" = \
+      '0:0:644:1:regular file' ] || exit 1
+    cmp -s -- "$vibeshine_upgrade_temporary" "$vibeshine_host_upgrade_dropin" || exit 1
+  fi
+  install -o root -g root -m 0644 -- "$vibeshine_upgrade_temporary" \
+    "$vibeshine_host_upgrade_dropin" || exit 1
+  [ "$(stat -c '%u:%g:%a:%h:%F' -- "$vibeshine_host_upgrade_dropin")" = \
+    '0:0:644:1:regular file' ] || exit 1
+)
+
+vibeshine_activate_host_upgrade_fence() {
+  systemctl daemon-reload || exit 1
+  vibeshine_host_stop_properties=$(timeout --signal=KILL 5 systemctl show vibeshine.service \
+    --property=RefuseManualStart --property=KillMode --property=SendSIGKILL 2>/dev/null) || exit 1
+  printf '%s\n' "$vibeshine_host_stop_properties" | grep -qx 'RefuseManualStart=yes' || exit 1
+  printf '%s\n' "$vibeshine_host_stop_properties" | \
+    grep -qx "KillMode=$vibeshine_upgrade_kill_mode" || exit 1
+  printf '%s\n' "$vibeshine_host_stop_properties" | grep -qx 'SendSIGKILL=no' || exit 1
+}
+
+vibeshine_host_is_stable_or_quiescent() {
+  vibeshine_host_state=$(timeout --signal=KILL 5 systemctl show vibeshine.service \
+    --property=ActiveState --property=SubState --property=MainPID \
+    --property=ControlGroup --property=Job 2>/dev/null) || return 1
+  vibeshine_host_active=$(printf '%s\n' "$vibeshine_host_state" | sed -n 's/^ActiveState=//p')
+  vibeshine_host_substate=$(printf '%s\n' "$vibeshine_host_state" | sed -n 's/^SubState=//p')
+  vibeshine_host_pid=$(printf '%s\n' "$vibeshine_host_state" | sed -n 's/^MainPID=//p')
+  vibeshine_host_cgroup=$(printf '%s\n' "$vibeshine_host_state" | sed -n 's/^ControlGroup=//p')
+  vibeshine_host_job=$(printf '%s\n' "$vibeshine_host_state" | sed -n 's/^Job=//p')
+  [ -z "$vibeshine_host_job" ] || return 1
+  if [ "$vibeshine_host_active" = active ] && [ "$vibeshine_host_substate" = running ]; then
+    case "$vibeshine_host_pid" in '' | 0 | *[!0-9]*) return 1 ;; esac
+    case "$vibeshine_host_cgroup" in /*) return 0 ;; *) return 1 ;; esac
+  fi
+  case "$vibeshine_host_active:$vibeshine_host_substate:$vibeshine_host_pid" in
+    inactive:dead:0 | failed:failed:0) vibeshine_cgroup_is_quiescent "$vibeshine_host_cgroup" ;;
+    *) return 1 ;;
+  esac
+}
+
+vibeshine_freeze_controller() {
+  if vibeshine_unit_is_quiescent vibeshine-session-controller.service; then
+    vibeshine_controller_was_frozen=0
+    return 0
+  fi
+  vibeshine_controller_state=$(timeout --signal=KILL 5 systemctl show \
+    vibeshine-session-controller.service --property=ActiveState --property=SubState \
+    --property=MainPID --property=ControlGroup --property=FreezerState 2>/dev/null) || return 1
+  vibeshine_controller_active=$(printf '%s\n' "$vibeshine_controller_state" | sed -n 's/^ActiveState=//p')
+  vibeshine_controller_substate=$(printf '%s\n' "$vibeshine_controller_state" | sed -n 's/^SubState=//p')
+  vibeshine_controller_pid=$(printf '%s\n' "$vibeshine_controller_state" | sed -n 's/^MainPID=//p')
+  vibeshine_controller_cgroup=$(printf '%s\n' "$vibeshine_controller_state" | sed -n 's/^ControlGroup=//p')
+  [ "$vibeshine_controller_active" = active ] && \
+    [ "$vibeshine_controller_substate" = running ] || return 1
+  case "$vibeshine_controller_pid" in '' | 0 | *[!0-9]*) return 1 ;; esac
+  case "$vibeshine_controller_cgroup" in /*) ;; *) return 1 ;; esac
+  case "$vibeshine_controller_cgroup" in */../* | */..) return 1 ;; esac
+  timeout --signal=TERM --kill-after=2 15 systemctl freeze \
+    vibeshine-session-controller.service 2>/dev/null || return 1
+  vibeshine_controller_state=$(timeout --signal=KILL 5 systemctl show \
+    vibeshine-session-controller.service --property=ActiveState --property=SubState \
+    --property=MainPID --property=ControlGroup --property=FreezerState 2>/dev/null) || return 1
+  printf '%s\n' "$vibeshine_controller_state" | grep -qx 'ActiveState=active' || return 1
+  printf '%s\n' "$vibeshine_controller_state" | grep -qx 'SubState=running' || return 1
+  printf '%s\n' "$vibeshine_controller_state" | grep -qx "MainPID=$vibeshine_controller_pid" || return 1
+  printf '%s\n' "$vibeshine_controller_state" | grep -qx "ControlGroup=$vibeshine_controller_cgroup" || return 1
+  printf '%s\n' "$vibeshine_controller_state" | grep -qx 'FreezerState=frozen' || return 1
+  vibeshine_controller_freeze_path=/sys/fs/cgroup$vibeshine_controller_cgroup/cgroup.freeze
+  vibeshine_controller_events_path=/sys/fs/cgroup$vibeshine_controller_cgroup/cgroup.events
+  [ -f "$vibeshine_controller_freeze_path" ] && [ ! -L "$vibeshine_controller_freeze_path" ] && \
+    grep -qx '1' "$vibeshine_controller_freeze_path" && \
+    [ -f "$vibeshine_controller_events_path" ] && [ ! -L "$vibeshine_controller_events_path" ] && \
+    grep -qx 'populated 1' "$vibeshine_controller_events_path" && \
+    grep -qx 'frozen 1' "$vibeshine_controller_events_path" || return 1
+  vibeshine_controller_was_frozen=1
+}
+
+vibeshine_controller_remains_frozen() {
+  [ "$vibeshine_controller_was_frozen" -eq 1 ] || return 0
+  vibeshine_controller_state=$(timeout --signal=KILL 5 systemctl show \
+    vibeshine-session-controller.service --property=ActiveState --property=SubState \
+    --property=MainPID --property=ControlGroup --property=FreezerState 2>/dev/null) || return 1
+  printf '%s\n' "$vibeshine_controller_state" | grep -qx 'ActiveState=active' && \
+    printf '%s\n' "$vibeshine_controller_state" | grep -qx 'SubState=running' && \
+    printf '%s\n' "$vibeshine_controller_state" | grep -qx "MainPID=$vibeshine_controller_pid" && \
+    printf '%s\n' "$vibeshine_controller_state" | grep -qx "ControlGroup=$vibeshine_controller_cgroup" && \
+    printf '%s\n' "$vibeshine_controller_state" | grep -qx 'FreezerState=frozen'
+}
+
+vibeshine_thaw_controller() {
+  [ "$vibeshine_controller_was_frozen" -eq 1 ] || return 0
+  timeout --signal=KILL 15 systemctl thaw \
+    vibeshine-session-controller.service 2>/dev/null || return 1
+  vibeshine_controller_was_frozen=0
+  vibeshine_controller_state=$(timeout --signal=KILL 5 systemctl show \
+    vibeshine-session-controller.service --property=ActiveState --property=SubState \
+    --property=MainPID --property=ControlGroup --property=FreezerState 2>/dev/null) || return 1
+  printf '%s\n' "$vibeshine_controller_state" | grep -qx 'ActiveState=active' && \
+    printf '%s\n' "$vibeshine_controller_state" | grep -qx 'SubState=running' && \
+    printf '%s\n' "$vibeshine_controller_state" | grep -qx "MainPID=$vibeshine_controller_pid" && \
+    printf '%s\n' "$vibeshine_controller_state" | grep -qx "ControlGroup=$vibeshine_controller_cgroup" && \
+    printf '%s\n' "$vibeshine_controller_state" | grep -qx 'FreezerState=running'
+}
+
+vibeshine_stop_brokers() (
+  vibeshine_broker_list=$(mktemp /run/vibeshine-broker-units.XXXXXX) || exit 1
+  trap 'rm -f -- "$vibeshine_broker_list"' 0
+  trap 'exit 1' HUP INT TERM
+  vibeshine_broker_attempt=0
+  vibeshine_broker_clean_passes=0
+  while [ "$vibeshine_broker_attempt" -lt 20 ]; do
+    vibeshine_broker_dirty=0
+    vibeshine_capture_unit_list "$vibeshine_broker_list" \
+      'vibeshine-session-exec@*.service' || return 1
+    vibeshine_seen_units='
+'
+    vibeshine_seen_count=0
+    while IFS= read -r vibeshine_line || [ -n "$vibeshine_line" ]; do
+      [ -n "$vibeshine_line" ] || continue
+      case "$vibeshine_line" in *""*) return 1 ;; esac
+      set -f
+      set -- $vibeshine_line
+      [ "${1:-}" = '●' ] && shift
+      [ "$#" -ge 4 ] || return 1
+      vibeshine_unit=$1
+      vibeshine_load=$2
+      vibeshine_state=$3
+      vibeshine_substate=$4
+      vibeshine_broker_unit_is_safe "$vibeshine_unit" || return 1
+      [ "$vibeshine_load" = loaded ] || return 1
+      case "$vibeshine_state:$vibeshine_substate" in *[!a-z:-]*) return 1 ;; esac
+      case "$vibeshine_seen_units" in *"
+$vibeshine_unit
+"*) return 1 ;; esac
+      vibeshine_seen_units="$vibeshine_seen_units$vibeshine_unit
+"
+      vibeshine_seen_count=$((vibeshine_seen_count + 1))
+      [ "$vibeshine_seen_count" -le 256 ] || return 1
+      if ! vibeshine_unit_is_quiescent "$vibeshine_unit"; then
+        vibeshine_broker_dirty=1
+        vibeshine_stop_exact_unit "$vibeshine_unit"
+        vibeshine_unit_is_quiescent "$vibeshine_unit" || return 1
+      fi
+    done <"$vibeshine_broker_list"
+    if [ "$vibeshine_broker_dirty" -eq 0 ]; then
+      vibeshine_broker_clean_passes=$((vibeshine_broker_clean_passes + 1))
+      [ "$vibeshine_broker_clean_passes" -lt 5 ] || return 0
+    else
+      vibeshine_broker_clean_passes=0
+    fi
+    vibeshine_broker_attempt=$((vibeshine_broker_attempt + 1))
+    sleep 0.1
+  done
+  return 1
+)
+
+vibeshine_stop_restore_instances() (
+  vibeshine_restore_list=$(mktemp /run/vibeshine-restore-units.XXXXXX) || exit 1
+  trap 'rm -f -- "$vibeshine_restore_list"' 0
+  trap 'exit 1' HUP INT TERM
+  vibeshine_capture_unit_list "$vibeshine_restore_list" \
+    'vibeshine-session-restore@*.service' || return 1
+  vibeshine_seen_units='
+'
+  vibeshine_seen_count=0
+  while IFS= read -r vibeshine_line || [ -n "$vibeshine_line" ]; do
+    [ -n "$vibeshine_line" ] || continue
+    case "$vibeshine_line" in *""*) return 1 ;; esac
+    set -f
+    set -- $vibeshine_line
+    [ "${1:-}" = '●' ] && shift
+    [ "$#" -ge 4 ] || return 1
+    vibeshine_unit=$1
+    vibeshine_load=$2
+    vibeshine_state=$3
+    vibeshine_substate=$4
+    vibeshine_restore_unit_is_safe "$vibeshine_unit" || return 1
+    case "$vibeshine_load" in loaded | masked) ;; *) return 1 ;; esac
+    case "$vibeshine_state:$vibeshine_substate" in *[!a-z:-]*) return 1 ;; esac
+    case "$vibeshine_seen_units" in *"
+$vibeshine_unit
+"*) return 1 ;; esac
+    vibeshine_seen_units="$vibeshine_seen_units$vibeshine_unit
+"
+    vibeshine_seen_count=$((vibeshine_seen_count + 1))
+    [ "$vibeshine_seen_count" -le 256 ] || return 1
+    vibeshine_stop_exact_unit "$vibeshine_unit"
+    vibeshine_unit_is_quiescent "$vibeshine_unit" || return 1
+  done <"$vibeshine_restore_list"
+)
+
+vibeshine_brokers_are_quiescent() {
+  vibeshine_stop_brokers
+}
+
+vibeshine_restore_instances_are_quiescent() (
+  vibeshine_restore_list=$(mktemp /run/vibeshine-restore-units.XXXXXX) || exit 1
+  trap 'rm -f -- "$vibeshine_restore_list"' 0
+  trap 'exit 1' HUP INT TERM
+  vibeshine_capture_unit_list "$vibeshine_restore_list" \
+    'vibeshine-session-restore@*.service' || return 1
+  vibeshine_seen_units='
+'
+  vibeshine_seen_count=0
+  while IFS= read -r vibeshine_line || [ -n "$vibeshine_line" ]; do
+    [ -n "$vibeshine_line" ] || continue
+    case "$vibeshine_line" in *""*) return 1 ;; esac
+    set -f
+    set -- $vibeshine_line
+    [ "${1:-}" = '●' ] && shift
+    [ "$#" -ge 4 ] || return 1
+    vibeshine_unit=$1
+    vibeshine_load=$2
+    vibeshine_state=$3
+    vibeshine_substate=$4
+    vibeshine_restore_unit_is_safe "$vibeshine_unit" || return 1
+    case "$vibeshine_load" in loaded | masked) ;; *) return 1 ;; esac
+    case "$vibeshine_state:$vibeshine_substate" in *[!a-z:-]*) return 1 ;; esac
+    case "$vibeshine_seen_units" in *"
+$vibeshine_unit
+"*) return 1 ;; esac
+    vibeshine_seen_units="$vibeshine_seen_units$vibeshine_unit
+"
+    vibeshine_seen_count=$((vibeshine_seen_count + 1))
+    [ "$vibeshine_seen_count" -le 256 ] || return 1
+    vibeshine_unit_is_quiescent "$vibeshine_unit" || return 1
+  done <"$vibeshine_restore_list"
+)
+
+vibeshine_privileged_helper_is_safe() {
+  [ -f "$1" ] && [ ! -L "$1" ] && [ -x "$1" ] || return 1
+  [ "$(stat -c '%u:%g:%a:%h:%F' -- "$1")" = \
+    '0:0:755:1:regular file' ]
+}
+
+vibeshine_run_optional_legacy_command() {
+  if [ ! -e "$vibeshine_legacy_host" ] && [ ! -L "$vibeshine_legacy_host" ]; then
+    return 2
+  fi
+  vibeshine_privileged_helper_is_safe "$vibeshine_legacy_host" || return 1
+  timeout --signal=KILL 40 "$vibeshine_legacy_host" "$1" >/dev/null 2>&1
+  vibeshine_command_status=$?
+  [ "$vibeshine_command_status" -eq 0 ] && return 0
+  [ "$vibeshine_command_status" -eq 2 ] && return 2
+  return 1
+}
+
+vibeshine_runtime_root_is_safe_or_absent() {
+  if [ ! -e "$vibeshine_runtime_root" ] && [ ! -L "$vibeshine_runtime_root" ]; then
+    return 0
+  fi
+  [ -d "$vibeshine_runtime_root" ] && [ ! -L "$vibeshine_runtime_root" ] || return 1
+  [ "$(stat -c '%u:%g:%a:%F' -- "$vibeshine_runtime_root")" = '0:0:755:directory' ]
+}
+
+vibeshine_legacy_handoff_process_is_running() {
+  for vibeshine_proc in /proc/[0-9]*; do
+    [ -d "$vibeshine_proc" ] || continue
+    if grep -Fzxq -- "$vibeshine_legacy_handoff" "$vibeshine_proc/cmdline" 2>/dev/null; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+vibeshine_wait_for_legacy_handoff() {
+  vibeshine_handoff_attempt=0
+  vibeshine_handoff_clean_passes=0
+  while [ "$vibeshine_handoff_attempt" -lt 400 ]; do
+    if vibeshine_legacy_handoff_process_is_running; then
+      vibeshine_handoff_clean_passes=0
+    else
+      vibeshine_handoff_clean_passes=$((vibeshine_handoff_clean_passes + 1))
+      [ "$vibeshine_handoff_clean_passes" -lt 10 ] || return 0
+    fi
+    vibeshine_handoff_attempt=$((vibeshine_handoff_attempt + 1))
+    sleep 0.1
+  done
+  return 1
+}
+
+vibeshine_disable_legacy_handoff() {
+  if [ ! -e "$vibeshine_legacy_handoff" ] && [ ! -L "$vibeshine_legacy_handoff" ]; then
+    return 0
+  fi
+  [ -f "$vibeshine_legacy_handoff" ] && [ ! -L "$vibeshine_legacy_handoff" ] || return 1
+  vibeshine_handoff_attributes=$(stat -c '%u:%g:%a:%h' -- "$vibeshine_legacy_handoff") || return 1
+  case "$vibeshine_handoff_attributes" in
+    '0:0:755:1' | '0:0:0:1') ;;
+    *) return 1 ;;
+  esac
+  vibeshine_legacy_handoff_identity=$(stat -Lc '%d:%i' -- "$vibeshine_legacy_handoff") || return 1
+  chmod 000 -- "$vibeshine_legacy_handoff" || return 1
+  vibeshine_handoff_attributes=$(stat -Lc '%d:%i:%u:%g:%a:%h' -- \
+    "$vibeshine_legacy_handoff") || return 1
+  [ "$vibeshine_handoff_attributes" = \
+    "$vibeshine_legacy_handoff_identity:0:0:0:1" ] || return 1
+
+  # A PAM module already loaded by the login manager can still fork this exact
+  # script. Mode 000 closes new execs; consecutive exact argv scans drain any
+  # interpreter that passed exec admission before the mode change.
+  vibeshine_wait_for_legacy_handoff
+}
+
+vibeshine_legacy_state_file_is_safe() {
+  vibeshine_legacy_state_path=$1
+  vibeshine_legacy_state_name=${vibeshine_legacy_state_path##*/}
+  case "$vibeshine_legacy_state_name" in [1-9]*) ;; *) return 1 ;; esac
+  case "$vibeshine_legacy_state_name" in *[!0-9]*) return 1 ;; esac
+  [ -f "$vibeshine_legacy_state_path" ] && [ ! -L "$vibeshine_legacy_state_path" ] || return 1
+  vibeshine_legacy_state_attributes=$(stat -c '%u:%g:%a:%h:%s' -- \
+    "$vibeshine_legacy_state_path") || return 1
+  case "$vibeshine_legacy_state_attributes" in
+    0:0:600:1:* | 0:0:644:1:*) ;;
+    *) return 1 ;;
+  esac
+  vibeshine_legacy_state_size=${vibeshine_legacy_state_attributes##*:}
+  case "$vibeshine_legacy_state_size" in '' | *[!0-9]*) return 1 ;; esac
+  [ "$vibeshine_legacy_state_size" -le 4096 ] || return 1
+  {
+    IFS= read -r vibeshine_legacy_state_user &&
+      IFS= read -r vibeshine_legacy_state_uid &&
+      IFS= read -r vibeshine_legacy_state_token &&
+      ! IFS= read -r vibeshine_legacy_state_extra
+  } <"$vibeshine_legacy_state_path" || return 1
+  case "$vibeshine_legacy_state_user" in [a-z_]*) ;; *) return 1 ;; esac
+  case "$vibeshine_legacy_state_user" in *[!a-z0-9_-]*) return 1 ;; esac
+  [ "$vibeshine_legacy_state_uid" = "$vibeshine_legacy_state_name" ] || return 1
+  [ "${#vibeshine_legacy_state_token}" -eq 32 ] || return 1
+  case "$vibeshine_legacy_state_token" in *[!0-9a-f]*) return 1 ;; esac
+}
+
+vibeshine_remove_legacy_state_directory() {
+  vibeshine_legacy_directory=$1
+  if [ ! -e "$vibeshine_legacy_directory" ] && [ ! -L "$vibeshine_legacy_directory" ]; then
+    return 0
+  fi
+  [ -d "$vibeshine_legacy_directory" ] && [ ! -L "$vibeshine_legacy_directory" ] || return 1
+  vibeshine_legacy_directory_attributes=$(stat -c '%u:%g:%a' -- \
+    "$vibeshine_legacy_directory") || return 1
+  case "$vibeshine_legacy_directory_attributes" in
+    '0:0:700' | '0:0:755') ;;
+    *) return 1 ;;
+  esac
+  for vibeshine_legacy_state_path in \
+    "$vibeshine_legacy_directory"/* \
+    "$vibeshine_legacy_directory"/.[!.]* \
+    "$vibeshine_legacy_directory"/..?*; do
+    if [ ! -e "$vibeshine_legacy_state_path" ] && [ ! -L "$vibeshine_legacy_state_path" ]; then
+      continue
+    fi
+    vibeshine_legacy_state_file_is_safe "$vibeshine_legacy_state_path" || return 1
+    rm -f -- "$vibeshine_legacy_state_path" || return 1
+  done
+  rmdir -- "$vibeshine_legacy_directory" || return 1
+  [ ! -e "$vibeshine_legacy_directory" ] && [ ! -L "$vibeshine_legacy_directory" ]
+}
+
+vibeshine_remove_legacy_prelogin_marker() {
+  if [ ! -e "$vibeshine_legacy_prelogin_marker" ] && [ ! -L "$vibeshine_legacy_prelogin_marker" ]; then
+    return 0
+  fi
+  [ -f "$vibeshine_legacy_prelogin_marker" ] && \
+    [ ! -L "$vibeshine_legacy_prelogin_marker" ] || return 1
+  vibeshine_prelogin_marker_attributes=$(stat -c '%u:%g:%a:%h:%s' -- \
+    "$vibeshine_legacy_prelogin_marker") || return 1
+  case "$vibeshine_prelogin_marker_attributes" in
+    0:0:644:1:*) ;;
+    *) return 1 ;;
+  esac
+  vibeshine_prelogin_marker_size=${vibeshine_prelogin_marker_attributes##*:}
+  case "$vibeshine_prelogin_marker_size" in '' | *[!0-9]*) return 1 ;; esac
+  [ "$vibeshine_prelogin_marker_size" -le 256 ] || return 1
+  {
+    IFS= read -r vibeshine_prelogin_marker_user &&
+      ! IFS= read -r vibeshine_prelogin_marker_extra
+  } <"$vibeshine_legacy_prelogin_marker" || return 1
+  case "$vibeshine_prelogin_marker_user" in [a-z_]*) ;; *) return 1 ;; esac
+  case "$vibeshine_prelogin_marker_user" in *[!a-z0-9_-]*) return 1 ;; esac
+  rm -f -- "$vibeshine_legacy_prelogin_marker" || return 1
+  [ ! -e "$vibeshine_legacy_prelogin_marker" ] && [ ! -L "$vibeshine_legacy_prelogin_marker" ]
+}
+
+vibeshine_cleanup_legacy_transition_state() {
+  (
+    vibeshine_runtime_root_is_safe_or_absent || exit 1
+    if [ -e "$vibeshine_legacy_transition_lock" ] || [ -L "$vibeshine_legacy_transition_lock" ]; then
+      [ -f "$vibeshine_legacy_transition_lock" ] && \
+        [ ! -L "$vibeshine_legacy_transition_lock" ] || exit 1
+      [ "$(stat -c '%u:%g:%a:%h:%s' -- "$vibeshine_legacy_transition_lock")" = \
+        '0:0:600:1:0' ] || exit 1
+      exec 9<>"$vibeshine_legacy_transition_lock" || exit 1
+      timeout --signal=KILL 10 flock --exclusive 9 || exit 1
+    fi
+    vibeshine_wait_for_legacy_handoff || exit 1
+    vibeshine_remove_legacy_state_directory "$vibeshine_legacy_handoff_directory" || exit 1
+    vibeshine_remove_legacy_state_directory "$vibeshine_legacy_restore_directory" || exit 1
+    vibeshine_remove_legacy_prelogin_marker || exit 1
+    if [ -e "$vibeshine_legacy_transition_lock" ] || [ -L "$vibeshine_legacy_transition_lock" ]; then
+      rm -f -- "$vibeshine_legacy_transition_lock" || exit 1
+    fi
+    [ ! -e "$vibeshine_legacy_transition_lock" ] && \
+      [ ! -L "$vibeshine_legacy_transition_lock" ]
+  )
+}
+
+vibeshine_quiesce_step=''
+# Run one quiesce step and remember its name for the failure report.
+vq() {
+  vibeshine_quiesce_step=$*
+  "$@"
+}
+
+# Undo a partial quiesce. Without this a failed check left the controller
+# frozen behind runtime masks and the upgrade fence, with the old host still
+# running and nothing able to restart it until a reboot.
+vibeshine_abort_quiesce() {
+  echo "error: could not quiesce the existing Vibeshine host (failed step: ${vibeshine_quiesce_step:-unknown}); the previous host is left running." >&2
+  if [ "${vibeshine_controller_was_frozen:-0}" -eq 1 ]; then
+    timeout --signal=KILL 15 systemctl thaw vibeshine-session-controller.service 2>/dev/null || true
+    vibeshine_controller_was_frozen=0
+  fi
+  # Pre-replacement never unmasks anything: fail closed by stopping the
+  # controller and host under the fence, then drop the fence so
+  # post-replacement can bring the new host up cleanly.
+  vibeshine_stop_exact_unit vibeshine-session-controller.service
+  vibeshine_stop_exact_unit vibeshine.service
+  # Socket paths that outlived a masked-then-stopped unit would keep the next
+  # controller's cleanup failing; drop them only once their unit is stopped.
+  if vibeshine_unit_is_quiescent vibeshine-session-exec.socket &&
+     [ -S "$vibeshine_broker_socket" ] && [ ! -L "$vibeshine_broker_socket" ]; then
+    rm -f -- "$vibeshine_broker_socket" 2>/dev/null || true
+  fi
+  if vibeshine_unit_is_quiescent vibeshine-vkms-control.socket &&
+     [ -S "$vibeshine_control_socket" ] && [ ! -L "$vibeshine_control_socket" ]; then
+    rm -f -- "$vibeshine_control_socket" 2>/dev/null || true
+  fi
+  rm -f -- "$vibeshine_host_upgrade_dropin" 2>/dev/null || true
+  rmdir -- "$vibeshine_host_upgrade_dropin_dir" 2>/dev/null || true
+  systemctl daemon-reload 2>/dev/null || true
+}
+
+vibeshine_quiesce_or_abort() {
+  vibeshine_quiesce_step=''
+  if vibeshine_quiesce_machine_host; then
+    return 0
+  fi
+  vibeshine_abort_quiesce
+  return 1
+}
+
+vibeshine_quiesce_machine_host() {
+  vibeshine_have_systemd=0
+  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    vibeshine_have_systemd=1
+
+    # Stage (but do not load) the old-host stop fence, then freeze the exact old
+    # controller cgroup before changing any dependency. This is the transaction
+    # barrier which prevents its legacy reconcile path from issuing a
+    # concurrent hard kill or connector release.
+    vq vibeshine_select_upgrade_kill_mode || return 1
+    vq vibeshine_prepare_host_upgrade_fence || return 1
+    vq vibeshine_freeze_controller || return 1
+    vq vibeshine_host_is_stable_or_quiescent || return 1
+    vq vibeshine_activate_host_upgrade_fence || return 1
+    vq vibeshine_controller_remains_frozen || return 1
+    vq vibeshine_host_is_stable_or_quiescent || return 1
+
+    # An already-loaded legacy PAM handle can start a restore worker that
+    # restarts the host. Runtime-mask that template before every other stop and
+    # deliberately leave it masked after replacement.
+    vq timeout --signal=KILL 15 systemctl mask --runtime \
+      'vibeshine-session-restore@.service' 2>/dev/null || return 1
+    vq vibeshine_restore_template_is_masked || return 1
+    vq vibeshine_disable_legacy_handoff || return 1
+
+    vq timeout --signal=KILL 15 systemctl mask --runtime \
+      vibeshine-vkms-control.socket 2>/dev/null || return 1
+    vq vibeshine_control_socket_is_masked || return 1
+    vibeshine_stop_exact_unit vibeshine-vkms-control.socket
+    vq vibeshine_unit_is_quiescent vibeshine-vkms-control.socket || return 1
+    # Masking the socket unit before stopping it drops its RemoveOnStop=
+    # configuration, so the listening path survives the stop. Nothing can
+    # accept on it any more; remove it so the instance check sees a clean slate.
+    if [ -S "$vibeshine_control_socket" ] && [ ! -L "$vibeshine_control_socket" ]; then
+      vibeshine_quiesce_step='remove stale vkms control socket'
+      rm -f -- "$vibeshine_control_socket" || return 1
+    fi
+    vq vibeshine_control_instances_are_quiescent || return 1
+
+    # Closing the required broker socket may start the host stop. The verified
+    # process-mode fence directs one TERM to the old wrapper and forbids the
+    # service manager from escalating against its GPU-owning child.
+    vq timeout --signal=KILL 15 systemctl mask --runtime \
+      vibeshine-session-exec.socket 2>/dev/null || return 1
+    vq vibeshine_broker_socket_is_masked || return 1
+    vibeshine_stop_exact_unit vibeshine-session-exec.socket
+    vq vibeshine_unit_is_quiescent vibeshine-session-exec.socket || return 1
+    # Same RemoveOnStop= loss as the control socket above: a stale broker path
+    # keeps the controller's admission closed until it is removed.
+    if [ -S "$vibeshine_broker_socket" ] && [ ! -L "$vibeshine_broker_socket" ]; then
+      vibeshine_quiesce_step='remove stale session broker socket'
+      rm -f -- "$vibeshine_broker_socket" || return 1
+    fi
+    vibeshine_stop_exact_unit vibeshine.service
+    vq vibeshine_unit_is_quiescent vibeshine.service || return 1
+    vq timeout --signal=KILL 15 systemctl mask --runtime \
+      vibeshine.service 2>/dev/null || return 1
+    vq vibeshine_host_unit_is_masked || return 1
+
+    vq vibeshine_stop_restore_instances || return 1
+
+    # Broker admission is already closed. Every remaining worker name is
+    # validated and stopped as one exact unit; no wildcard stop is trusted.
+    vq vibeshine_stop_brokers || return 1
+    vq vibeshine_controller_remains_frozen || return 1
+    # systemd refuses StopUnit for a frozen service. Admission and the host are
+    # already masked here, so thaw the controller only for its ordered stop.
+    vq vibeshine_thaw_controller || return 1
+    vibeshine_stop_exact_unit vibeshine-session-controller.service
+    vq vibeshine_unit_is_quiescent vibeshine-session-controller.service || return 1
+    vibeshine_stop_exact_unit vibeshine-prelogin.service
+    vibeshine_stop_exact_unit vibeshine-machine-prepare.service
+    timeout --signal=KILL 15 systemctl disable vibeshine-session-controller.service --now 2>/dev/null || true
+    timeout --signal=KILL 15 systemctl disable vibeshine.service --now 2>/dev/null || true
+    timeout --signal=KILL 15 systemctl disable vibeshine-prelogin.service --now 2>/dev/null || true
+    timeout --signal=KILL 15 systemctl disable vibeshine-machine-prepare.service --now 2>/dev/null || true
+  fi
+
+  if [ "$vibeshine_have_systemd" -eq 0 ]; then
+    vibeshine_disable_legacy_handoff || return 1
+  fi
+  vibeshine_runtime_root_is_safe_or_absent || return 1
+
+  if [ "$vibeshine_have_systemd" -eq 0 ] && \
+     { [ -e "$vibeshine_controller" ] || [ -L "$vibeshine_controller" ]; }; then
+    vibeshine_privileged_helper_is_safe "$vibeshine_controller" || return 1
+    timeout --signal=KILL 40 "$vibeshine_controller" cleanup || return 1
+  elif [ "$vibeshine_have_systemd" -eq 0 ]; then
+    vibeshine_run_optional_legacy_command cleanup
+    vibeshine_legacy_status=$?
+    case "$vibeshine_legacy_status" in
+      0 | 2) ;;
+      *) return 1 ;;
+    esac
+  fi
+
+  # Both the immediately prior helper and the current helper support this
+  # migration. Exit 2 alone means an older helper did not implement the verb.
+  vibeshine_run_optional_legacy_command remove-pam
+  vibeshine_legacy_status=$?
+  case "$vibeshine_legacy_status" in
+    0 | 2) ;;
+    *) return 1 ;;
+  esac
+
+  if [ "$vibeshine_have_systemd" -eq 1 ]; then
+    # Repeat after cleanup to catch a worker accepted just before admission
+    # closed, then prove every old/new cgroup is empty before replacement.
+    vibeshine_restore_template_is_masked || return 1
+    vibeshine_host_unit_is_masked || return 1
+    vibeshine_broker_socket_is_masked || return 1
+    vibeshine_stop_restore_instances || return 1
+    vibeshine_stop_exact_unit vibeshine.service
+    vibeshine_unit_is_quiescent vibeshine.service || return 1
+    vibeshine_stop_exact_unit vibeshine-session-exec.socket
+    vibeshine_stop_brokers || return 1
+    for vibeshine_unit in \
+      vibeshine-session-exec.socket \
+      vibeshine-session-controller.service \
+      vibeshine.service \
+      vibeshine-prelogin.service \
+      vibeshine-machine-prepare.service; do
+      vibeshine_stop_exact_unit "$vibeshine_unit"
+      vibeshine_unit_is_quiescent "$vibeshine_unit" || return 1
+      vibeshine_unit_is_disabled "$vibeshine_unit" || return 1
+    done
+    vibeshine_brokers_are_quiescent || return 1
+    vibeshine_restore_instances_are_quiescent || return 1
+  fi
+
+  # Only after PAM admission and the directly executed legacy helper are both
+  # closed may obsolete transition state be validated and removed.
+  vibeshine_cleanup_legacy_transition_state || return 1
+
+  # A stopped socket may leave only its inert filesystem node on older units.
+  # Remove that exact socket after every owning cgroup has been proven empty.
+  if [ -S "$vibeshine_broker_socket" ] && [ ! -L "$vibeshine_broker_socket" ]; then
+    rm -f -- "$vibeshine_broker_socket" || return 1
+  fi
+    [ ! -e "$vibeshine_broker_socket" ] && [ ! -L "$vibeshine_broker_socket" ] && \
+    [ ! -e "$vibeshine_legacy_handoff_directory" ] && \
+    [ ! -L "$vibeshine_legacy_handoff_directory" ] && \
+    [ ! -e "$vibeshine_legacy_restore_directory" ] && \
+    [ ! -L "$vibeshine_legacy_restore_directory" ] && \
+    [ ! -e "$vibeshine_legacy_transition_lock" ] && \
+    [ ! -L "$vibeshine_legacy_transition_lock" ] && \
+    [ ! -e "$vibeshine_legacy_prelogin_marker" ] && \
+    [ ! -L "$vibeshine_legacy_prelogin_marker" ]
+}
+
+# Upgrades must quiesce the installed architecture before the package manager
+# replaces its helpers or unit files. Any ambiguity leaves admission disabled
+# and aborts replacement; the same checks are safe to retry.
+if ! vibeshine_quiesce_or_abort; then
+  echo "error: installed Vibeshine services did not quiesce; replacement is blocked and admission remains disabled." >&2
+  exit 1
+fi

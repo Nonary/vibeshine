@@ -34,6 +34,7 @@
 
 namespace VDISPLAY {
   enum class DRIVER_STATUS;
+  enum class DRIVER_SELECTION;
 }
 
 #endif
@@ -47,6 +48,14 @@ namespace proc {
 
 #ifdef _WIN32
   extern std::atomic<VDISPLAY::DRIVER_STATUS> vDisplayDriverStatus;
+  extern std::atomic<VDISPLAY::DRIVER_SELECTION> vDisplayDriverSelection;
+  struct vdisplay_driver_status_snapshot_t {
+    VDISPLAY::DRIVER_STATUS status;
+    VDISPLAY::DRIVER_SELECTION selection;
+  };
+  vdisplay_driver_status_snapshot_t vDisplayDriverStatusSnapshot();
+  void setVDisplayDriverStatus(VDISPLAY::DRIVER_STATUS status);
+  void setVDisplayDriverStatus(VDISPLAY::DRIVER_STATUS status, VDISPLAY::DRIVER_SELECTION selection);
   void initVDisplayDriver();
 #endif
 
@@ -59,6 +68,7 @@ namespace proc {
     bool uses_playnite {false};
     std::string playnite_id;
     std::string client_uuid;
+    std::uint64_t normal_vdd_identity_token {0};
     std::chrono::steady_clock::time_point launch_started_at {};
   };
 
@@ -140,6 +150,8 @@ namespace proc {
     bool frame_gen_limiter_fix;
     bool elevated;
     bool virtual_screen {false};
+    // Unset inherits the device preference; false allows normal client HDR requests.
+    std::optional<bool> prefer_10bit_sdr;
     std::optional<config::video_t::virtual_display_mode_e> virtual_display_mode_override;
     std::optional<config::video_t::virtual_display_layout_e> virtual_display_layout_override;
     bool auto_detach;
@@ -234,6 +246,9 @@ namespace proc {
     std::atomic<int> _app_id;
 
     bp::environment _env;
+    // Entries inserted by a prior stream must not leak into a later launch,
+    // while values loaded from apps.json remain explicit user configuration.
+    std::unordered_set<std::string> _stream_owned_environment_keys;
     std::vector<ctx_t> _apps;
     ctx_t _app;
     std::chrono::steady_clock::time_point _app_launch_time;
@@ -292,6 +307,7 @@ namespace proc {
 
   bool check_valid_png(const std::filesystem::path &path);
   std::string validate_app_image_path(std::string app_image_path);
+  std::optional<std::string> read_validated_app_image(const std::string &validated_path);
   std::string calculate_app_cover_fingerprint(std::string app_image_path);
   void refresh(const std::string &file_name);
   std::optional<proc::proc_t> parse(const std::string &file_name);

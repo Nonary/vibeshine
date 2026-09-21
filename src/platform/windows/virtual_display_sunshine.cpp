@@ -114,7 +114,7 @@ namespace VDISPLAY_SUNSHINE {
     uint32_t base_fps_millihz = 0,
     bool framegen_refresh_active = false,
     int framegen_refresh_multiplier = 1,
-    bool hdr_requested = false,
+    std::optional<bool> hdr_requested = std::nullopt,
     bool allow_pending_enumeration = false,
     bool replace_existing = true,
     bool preserve_peer_displays = false
@@ -159,6 +159,7 @@ namespace VDISPLAY_SUNSHINE {
 
   static bool ensure_driver_is_ready_impl(RestartCooldownBehavior cooldown_behavior, std::stop_token stop_token = {});
   static DRIVER_STATUS open_vdisplay_device_impl(std::stop_token stop_token, OpenRecoveryBehavior recovery_behavior);
+  static DRIVER_STATUS open_vdisplay_device_with_status(std::stop_token stop_token, OpenRecoveryBehavior recovery_behavior);
   static bool start_ping_thread_impl(
     std::function<void()> fail_cb,
     std::stop_token stop_token,
@@ -175,7 +176,7 @@ namespace VDISPLAY_SUNSHINE {
     uint32_t base_fps_millihz,
     bool framegen_refresh_active,
     int framegen_refresh_multiplier,
-    bool hdr_requested,
+    std::optional<bool> hdr_requested,
     bool allow_pending_enumeration,
     bool replace_existing,
     bool preserve_peer_displays,
@@ -3046,7 +3047,10 @@ namespace VDISPLAY_SUNSHINE {
       return false;
     }
 
-    bool reset_hdr_state_for_sdr(const DisplayConfigTarget &output, std::stop_token stop_token = {}) {
+    bool reset_hdr_state_for_sdr(const DisplayConfigTarget &output, std::optional<bool> hdr_requested, std::stop_token stop_token = {}) {
+      if (!VDISPLAY::policy::should_reset_hdr_state_for_stream(hdr_requested, true)) {
+        return false;
+      }
       if (stop_token.stop_requested()) {
         return false;
       }
@@ -3061,7 +3065,7 @@ namespace VDISPLAY_SUNSHINE {
                          << " active_color_mode=" << info->active_color_mode
                          << " color_encoding=" << static_cast<unsigned int>(info->color_encoding)
                          << " bits_per_color_channel=" << info->bits_per_color_channel;
-        if (!VDISPLAY::policy::should_reset_hdr_state_for_stream(false, info->hdr_enabled)) {
+        if (!VDISPLAY::policy::should_reset_hdr_state_for_stream(hdr_requested, info->hdr_enabled)) {
           return true;
         }
       }
@@ -3251,11 +3255,38 @@ namespace VDISPLAY_SUNSHINE {
       return name;
     }
 
+    std::optional<std::wstring> resolve_virtual_monitor_device_path_for_id(const std::string &device_id) {
+      if (device_id.empty()) {
+        return std::nullopt;
+      }
+      const auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(
+        display_device::DeviceEnumerationDetail::Minimal
+      );
+      if (devices) {
+        for (const auto &device : *devices) {
+          if (equals_ci(device.m_device_id, device_id) &&
+              is_virtual_display_device(device) && !device.m_monitor_device_path.empty()) {
+            return platf::from_utf8(device.m_monitor_device_path);
+          }
+        }
+      }
+      return std::nullopt;
+    }
+
     std::optional<std::wstring> resolve_monitor_device_path_once(
       const std::optional<std::wstring> &display_name,
       const std::optional<std::string> &device_id,
       const std::optional<std::string> &client_name = std::nullopt
     ) {
+      // Creation can return before a GDI name exists. The helper's stable
+      // device GUID is not a CCD name: resolve it again on every attempt so a
+      // deferred scale can follow the exact target as Windows publishes it.
+      if (device_id) {
+        if (auto path = resolve_virtual_monitor_device_path_for_id(*device_id)) {
+          return path;
+        }
+      }
+
       std::optional<std::string> normalized_target;
       if (display_name && !display_name->empty()) {
         normalized_target = normalize_display_name(platf::to_utf8(*display_name));
@@ -4555,6 +4586,10 @@ namespace VDISPLAY_SUNSHINE {
       if (!lock_recovery_operation(operation_lock, state, stop_token)) {
         return false;
       }
+      proc::setVDisplayDriverStatus(
+        DRIVER_STATUS::UNKNOWN,
+        VDISPLAY::DRIVER_SELECTION::UNKNOWN
+      );
       if (!ensure_driver_is_ready_impl(RestartCooldownBehavior::skip, stop_token)) {
         BOOST_LOG(warning) << "Virtual display recovery: driver not ready for " << state.describe_target();
         return false;
@@ -4563,10 +4598,7 @@ namespace VDISPLAY_SUNSHINE {
         return false;
       }
 
-      proc::vDisplayDriverStatus.store(
-        open_vdisplay_device_impl(stop_token, OpenRecoveryBehavior::transport_only),
-        std::memory_order_release
-      );
+      open_vdisplay_device_with_status(stop_token, OpenRecoveryBehavior::transport_only);
       const auto driver_status = proc::vDisplayDriverStatus.load(std::memory_order_acquire);
       if (driver_status != DRIVER_STATUS::OK) {
         BOOST_LOG(warning) << "Virtual display recovery: failed to reopen driver (status="
@@ -5137,7 +5169,7 @@ namespace VDISPLAY_SUNSHINE {
       closeVDisplayDevice();
     }
 
-    const auto status = open_vdisplay_device_impl(stop_token, recovery_behavior);
+    const auto status = open_vdisplay_device_with_status(stop_token, recovery_behavior);
     if (status != DRIVER_STATUS::OK) {
       BOOST_LOG(warning) << operation << ": failed to open Sunshine virtual display driver transport (status="
                          << static_cast<int>(status) << ").";
@@ -5247,11 +5279,21 @@ namespace VDISPLAY_SUNSHINE {
     return DRIVER_STATUS::OK;
   }
 
+  static DRIVER_STATUS open_vdisplay_device_with_status(
+    std::stop_token stop_token,
+    OpenRecoveryBehavior recovery_behavior
+  ) {
+    proc::setVDisplayDriverStatus(VDISPLAY::DRIVER_STATUS::UNKNOWN, VDISPLAY::DRIVER_SELECTION::UNKNOWN);
+    const auto status = open_vdisplay_device_impl(stop_token, recovery_behavior);
+    proc::setVDisplayDriverStatus(status, VDISPLAY::DRIVER_SELECTION::VIBESHINE);
+    return status;
+  }
+
   DRIVER_STATUS openVDisplayDevice() {
     // proc::initVDisplayDriver() probes/restarts the adapter immediately before
     // this call. Limit this phase to opening the transport so one initialization
     // attempt cannot enter a second PnP recovery cycle.
-    return open_vdisplay_device_impl({}, OpenRecoveryBehavior::transport_only);
+    return open_vdisplay_device_with_status({}, OpenRecoveryBehavior::transport_only);
   }
 
   static bool ensure_driver_is_ready_impl(RestartCooldownBehavior cooldown_behavior, std::stop_token stop_token) {
@@ -6301,7 +6343,7 @@ namespace VDISPLAY_SUNSHINE {
       uint32_t base_fps_millihz,
       bool framegen_refresh_active,
       int framegen_refresh_multiplier,
-      bool hdr_requested,
+      std::optional<bool> hdr_requested,
       bool allow_pending_enumeration,
       bool replace_existing,
       bool preserve_peer_displays,
@@ -6326,7 +6368,7 @@ namespace VDISPLAY_SUNSHINE {
                        << "' client_name='" << (s_client_name ? s_client_name : "(null)")
                        << "' hdr_profile='" << (s_hdr_profile ? s_hdr_profile : "(null)")
                        << "' width=" << width << " height=" << height << " fps=" << fps
-                       << " hdr_requested=" << hdr_requested
+                       << " hdr_requested=" << (hdr_requested ? (*hdr_requested ? "enabled" : "disabled") : "unchanged")
                        << " guid=" << requested_uuid.string();
 
       if (VDISPLAY::policy::should_teardown_conflicting_virtual_displays(preserve_peer_displays) &&
@@ -6532,19 +6574,9 @@ namespace VDISPLAY_SUNSHINE {
       create_request.display_id = display_id;
       create_request.width = width;
       create_request.height = height;
-      if (effective_scale > 0) {
-        const auto dpi = 96.0 * static_cast<double>(effective_scale) / 100.0;
-        create_request.physical_width_mm = std::clamp(
-          static_cast<std::uint32_t>(std::lround(static_cast<double>(width) * 25.4 / dpi)),
-          sunshine_driver::kMinPhysicalSizeMillimeters,
-          sunshine_driver::kMaxPhysicalSizeMillimeters
-        );
-        create_request.physical_height_mm = std::clamp(
-          static_cast<std::uint32_t>(std::lround(static_cast<double>(height) * 25.4 / dpi)),
-          sunshine_driver::kMinPhysicalSizeMillimeters,
-          sunshine_driver::kMaxPhysicalSizeMillimeters
-        );
-      }
+      // Keep the driver's normal monitor dimensions. Encoding DPI in the
+      // physical size can make Windows classify the display as a handheld.
+      // Apply requested scaling through set_display_scale_percent after activation.
       create_request.refresh_rate_millihz = descriptor_fps;
       create_request.requested_timeout_ms = DRIVER_LEASE_TIMEOUT_MS;
       create_request.hdr_max_luminance_nits = static_cast<std::uint32_t>(
@@ -6975,9 +7007,9 @@ namespace VDISPLAY_SUNSHINE {
       }
 
       std::optional<bool> effective_hdr_enabled;
-      if (hdr_requested) {
+      if (hdr_requested == true) {
         const bool hdr_enabled = request_hdr10_advanced_color(output, stop_token);
-        switch (VDISPLAY::policy::hdr_failure_action(hdr_requested, hdr_enabled, confirmed_active)) {
+        switch (VDISPLAY::policy::hdr_failure_action(true, hdr_enabled, confirmed_active)) {
           case VDISPLAY::policy::hdr_activation_failure_action::none:
             effective_hdr_enabled = true;
             break;
@@ -6996,7 +7028,7 @@ namespace VDISPLAY_SUNSHINE {
             }
             break;
         }
-      } else if (reset_hdr_state_for_sdr(output, stop_token)) {
+      } else if (reset_hdr_state_for_sdr(output, hdr_requested, stop_token)) {
         // A stable virtual-display identity can retain Windows' per-monitor HDR
         // user setting from an earlier HDR stream. Confirm the SDR state before
         // the session helper snapshots it, so its APPLY stays a no-op.
@@ -7108,7 +7140,7 @@ namespace VDISPLAY_SUNSHINE {
     uint32_t base_fps_millihz,
     bool framegen_refresh_active,
     int framegen_refresh_multiplier,
-    bool hdr_requested,
+    std::optional<bool> hdr_requested,
     bool allow_pending_enumeration,
     bool replace_existing,
     bool preserve_peer_displays,
@@ -7192,7 +7224,7 @@ namespace VDISPLAY_SUNSHINE {
           return std::nullopt;
         }
 
-        if (open_vdisplay_device_impl(stop_token, OpenRecoveryBehavior::transport_only) != DRIVER_STATUS::OK) {
+        if (open_vdisplay_device_with_status(stop_token, OpenRecoveryBehavior::transport_only) != DRIVER_STATUS::OK) {
           BOOST_LOG(warning) << "Failed to re-open Sunshine virtual display driver after recovery.";
           return std::nullopt;
         }
@@ -7231,19 +7263,20 @@ namespace VDISPLAY_SUNSHINE {
         );
         if (scale_percent > 0) {
 
-          auto apply_scale_to_path = [scale_percent](const std::wstring &path) {
+          auto apply_scale_to_path = [scale_percent](const std::wstring &path, const bool report_missing_target = true) {
             const auto scale_result = VDISPLAY::set_display_scale_percent(path, scale_percent);
             if (scale_result.applied) {
               BOOST_LOG(info) << "Virtual display scale: requested " << scale_result.requested_percent
                               << "%, recommended " << scale_result.recommended_percent
                               << "%, previous " << scale_result.previous_percent
                               << "%, current " << scale_result.current_percent << "%.";
-            } else {
+            } else if (scale_result.target_found || report_missing_target) {
               BOOST_LOG(warning) << "Virtual display scale: unable to apply "
                                  << scale_result.requested_percent << "% (status=" << scale_result.status
                                  << ", target_found=" << scale_result.target_found
                                  << ", queried=" << scale_result.queried << ").";
             }
+            return scale_result;
           };
 
           const bool has_virtual_target_identity =
@@ -7301,11 +7334,15 @@ namespace VDISPLAY_SUNSHINE {
                     worker_stop_token
                   );
                   if (path && !path->empty()) {
-                    apply_scale_to_path(*path);
-                    return;
+                    // A published monitor path can precede its active CCD
+                    // source. Keep waiting until APPLY makes it writable.
+                    const auto scale_result = apply_scale_to_path(*path, false);
+                    if (scale_result.applied || scale_result.target_found) {
+                      return;
+                    }
                   }
                   if (std::chrono::steady_clock::now() >= deadline) {
-                    BOOST_LOG(warning) << "Virtual display scale: monitor device path did not become available within "
+                    BOOST_LOG(warning) << "Virtual display scale: monitor target did not become active within "
                                        << std::chrono::duration_cast<std::chrono::seconds>(kActivationBudget).count()
                                        << "s; Windows scale was not applied.";
                     return;
@@ -7359,7 +7396,7 @@ namespace VDISPLAY_SUNSHINE {
         return std::nullopt;
       }
 
-      if (open_vdisplay_device_impl(stop_token, OpenRecoveryBehavior::transport_only) != DRIVER_STATUS::OK) {
+      if (open_vdisplay_device_with_status(stop_token, OpenRecoveryBehavior::transport_only) != DRIVER_STATUS::OK) {
         BOOST_LOG(warning) << "Failed to re-open Sunshine virtual display driver after recovery.";
         return std::nullopt;
       }
@@ -7383,7 +7420,7 @@ namespace VDISPLAY_SUNSHINE {
     uint32_t base_fps_millihz,
     bool framegen_refresh_active,
     int framegen_refresh_multiplier,
-    bool hdr_requested,
+    std::optional<bool> hdr_requested,
     bool allow_pending_enumeration,
     bool replace_existing,
     bool preserve_peer_displays
@@ -7517,7 +7554,7 @@ namespace VDISPLAY_SUNSHINE {
         closeVDisplayDevice();
       }
 
-      if (open_vdisplay_device_impl(reopen_stop_token, reopen_recovery_behavior) != DRIVER_STATUS::OK) {
+      if (open_vdisplay_device_with_status(reopen_stop_token, reopen_recovery_behavior) != DRIVER_STATUS::OK) {
         printf("[SunshineVirtualDisplay] Failed to open driver while removing virtual display.\n");
         return false;
       }
@@ -7613,7 +7650,7 @@ namespace VDISPLAY_SUNSHINE {
       printf("[SunshineVirtualDisplay] Driver transport became invalid while removing virtual display; retrying.\n");
       closeVDisplayDevice();
       if ((!cancel_recovery_monitor || !stop_token.stop_requested()) &&
-          open_vdisplay_device_impl(reopen_stop_token, reopen_recovery_behavior) == DRIVER_STATUS::OK) {
+          open_vdisplay_device_with_status(reopen_stop_token, reopen_recovery_behavior) == DRIVER_STATUS::OK) {
         opened_handle = true;
         transport = control_transport_snapshot();
         auto retry_result = perform_remove();

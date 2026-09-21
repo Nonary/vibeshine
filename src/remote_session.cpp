@@ -22,6 +22,13 @@ namespace remote_session {
     };
     std::mutex terminate_confirmation_mutex;
     std::unordered_map<std::string, terminate_confirmation_t> terminate_confirmations;
+    struct app_replacement_confirmation_t {
+      std::uint64_t generation {};
+      std::int32_t requested_app_id {};
+      std::chrono::steady_clock::time_point expires_at {};
+    };
+    std::mutex app_replacement_confirmation_mutex;
+    std::unordered_map<std::string, app_replacement_confirmation_t> app_replacement_confirmations;
     bool equal_folded(std::string_view left, std::string_view right) {
       if (left.size() != right.size()) return false;
       for (std::size_t i = 0; i < left.size(); ++i) {
@@ -32,26 +39,65 @@ namespace remote_session {
     bool contains(const std::vector<std::string> &values, std::string_view value) {
       return std::find(values.begin(), values.end(), value) != values.end();
     }
+
+    bool reserved_synthetic_id(const std::int32_t id) {
+      return (id >= resume_id && id <= running_game_id) ||
+             id == secondary_resume_id || id == secondary_terminate_id ||
+             id == secondary_monitor_id || id == secondary_input_id ||
+             (id >= 2147483601 && id <= 2147483606);
+    }
+
+    std::string ranked_title(const std::string_view rank, const std::string_view title) {
+      return std::string {rank} + std::string {title};
+    }
+    app_t prioritized_secondary_control(const control_e control) {
+      auto app = synthetic(control);
+      switch (control) {
+        case control_e::monitor: app.id = secondary_monitor_id; app.title = ranked_title("    ", app.title); break;
+        case control_e::input: app.id = secondary_input_id; app.title = ranked_title("   ", app.title); break;
+        case control_e::resume: app.id = secondary_resume_id; app.title = ranked_title("  ", app.title); break;
+        case control_e::terminate: app.id = secondary_terminate_id; app.title = ranked_title(" ", app.title); break;
+        default: break;
+      }
+      return app;
+    }
     bool owns_game(const caller_t &caller, const game_t &game) { return game.running && caller.paired && caller.uuid == game.owner_uuid; }
   }
 
   bool reserved_name(const std::string_view name) {
-    return equal_folded(name, "Remote Input") || equal_folded(name, "Remote Monitor") || equal_folded(name, "Terminate");
+    const auto first_visible = name.find_first_not_of(" \t\r\n");
+    const auto visible_name = first_visible == std::string_view::npos ? std::string_view {} : name.substr(first_visible);
+    return equal_folded(visible_name, "Remote Input") || equal_folded(visible_name, "Remote Monitor") || equal_folded(visible_name, "Terminate");
   }
 
   control_e identify(const std::int32_t id, const std::string_view uuid) {
+    if (id == secondary_resume_id) return control_e::resume;
+    if (id == secondary_terminate_id) return control_e::terminate;
+    if (id == secondary_monitor_id) return control_e::monitor;
+    if (id == secondary_input_id) return control_e::input;
     if (id == resume_id || id == 2147483601 || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000001") return control_e::resume;
     if (id == disconnect_monitor_id || id == 2147483602 || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000002") return control_e::disconnect_monitor;
     if (id == disconnect_input_id || id == 2147483603 || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000003") return control_e::disconnect_input;
     if (id == terminate_id || id == 2147483604 || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000004") return control_e::terminate;
     if (id == monitor_id || id == 2147483605 || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000005") return control_e::monitor;
     if (id == input_id || id == 2147483606 || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000006") return control_e::input;
+    if (id == running_game_id || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000007") return control_e::running_game;
     return control_e::none;
+  }
+
+  control_e identify(const std::int32_t id, const std::string_view uuid, const std::int32_t running_app_id) {
+    const auto control = identify(id, uuid);
+    if (control != control_e::none) {
+      return control;
+    }
+    return running_app_id > 0 && id == synthetic_running_game_id(running_app_id) ?
+             control_e::running_game :
+             control_e::none;
   }
 
   std::string synthetic_uuid(const control_e control) {
     const auto suffix = static_cast<unsigned>(control);
-    return suffix >= 1 && suffix <= 6 ? "9a1c5a25-58fe-40e0-b9aa-7d3f0000000" + std::to_string(suffix) : std::string {};
+    return suffix >= 1 && suffix <= 7 ? "9a1c5a25-58fe-40e0-b9aa-7d3f0000000" + std::to_string(suffix) : std::string {};
   }
 
   app_t synthetic(const control_e control) {
@@ -66,6 +112,34 @@ namespace remote_session {
     }
   }
 
+  std::int32_t synthetic_running_game_id(const std::int32_t app_id) {
+    // Toggle a high value bit so the resume-only identity remains stable for
+    // one app/art revision but changes with the configured app identity. Skip
+    // control IDs so the contextual running-game check cannot be shadowed by
+    // an ordinary synthetic-control lookup.
+    constexpr std::uint32_t positive_id_mask = 0x7fffffffU;
+    constexpr std::uint32_t identity_salt = 0x40000000U;
+    const auto source = static_cast<std::uint32_t>(app_id) & positive_id_mask;
+    auto candidate = (source ^ identity_salt) & positive_id_mask;
+    while (candidate == 0 || candidate == source || reserved_synthetic_id(static_cast<std::int32_t>(candidate))) {
+      candidate = candidate == positive_id_mask ? 1 : candidate + 1;
+    }
+    return static_cast<std::int32_t>(candidate);
+  }
+
+  app_t synthetic_running_game(const app_t &game) {
+    // Moonlight clients commonly alphabetize the received catalogue. Ranked
+    // leading spaces keep this resume-only duplicate first, followed by
+    // Remote Monitor, Remote Input, Resume, and Terminate, without changing
+    // visible labels.
+    return {
+      synthetic_running_game_id(game.id),
+      synthetic_uuid(control_e::running_game),
+      ranked_title("     ", game.title),
+      true,
+    };
+  }
+
   std::optional<std::string_view> synthetic_artwork_filename(const control_e control) {
     switch (control) {
       case control_e::resume: return "resume.png";
@@ -78,14 +152,37 @@ namespace remote_session {
     }
   }
 
-  projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured) {
+  bool exposes_active_game(
+    const caller_t &caller,
+    const game_t &game,
+    const owner_t &owner,
+    const bool remote_sessions_active,
+    const bool replacement_confirmation_active
+  ) {
+    if (!game.running) return false;
+    if (replacement_confirmation_active) return true;
+    return owner.role == role_e::none && owns_game(caller, game);
+  }
+
+  bool allows_normal_game_cancel(const caller_t &caller, const game_t &game, const bool remote_sessions_active) {
+    return game.running && caller.paired && caller.may_terminate && (!remote_sessions_active || owns_game(caller, game));
+  }
+
+  projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured, const bool remote_sessions_active) {
     projection_t result;
     std::vector<app_t> visible_configured;
     std::copy_if(configured.begin(), configured.end(), std::back_inserter(visible_configured), [](const app_t &app) {
-      return !reserved_name(app.title);
+      const auto control = identify(0, app.uuid);
+      return control != control_e::input && control != control_e::monitor && !reserved_name(app.title);
     });
     if (owner.role == role_e::monitor) {
       result.catalogue = {synthetic(control_e::resume), synthetic(control_e::disconnect_monitor)};
+      return result;
+    }
+    if (!game.running && !remote_sessions_active && owner.role == role_e::none) {
+      result.catalogue = std::move(visible_configured);
+      result.catalogue.push_back(synthetic(control_e::input));
+      result.catalogue.push_back(synthetic(control_e::monitor));
       return result;
     }
     if (owns_game(caller, game)) {
@@ -97,9 +194,18 @@ namespace remote_session {
       return result;
     }
     if (game.running) {
-      result.catalogue = {synthetic(control_e::resume), synthetic(control_e::terminate), game.app};
-      if (owner.role != role_e::input) result.catalogue.push_back(synthetic(control_e::input));
-      result.catalogue.push_back(synthetic(control_e::monitor));
+      // Secondary clients are told the host is free so they can choose any
+      // configured app. Keep that complete catalogue, but add a distinct,
+      // resume-only copy of the active game at the front. The configured copy
+      // remains available under its normal identity.
+      result.catalogue = {
+        synthetic_running_game(game.app),
+        prioritized_secondary_control(control_e::resume),
+        prioritized_secondary_control(control_e::terminate),
+      };
+      result.catalogue.insert(result.catalogue.end(), visible_configured.begin(), visible_configured.end());
+      if (owner.role != role_e::input) result.catalogue.push_back(prioritized_secondary_control(control_e::input));
+      result.catalogue.push_back(prioritized_secondary_control(control_e::monitor));
       return result;
     }
     result.catalogue = visible_configured;
@@ -154,8 +260,12 @@ namespace remote_session {
     return result;
   }
 
-  bool joins_existing_game_output(const role_e role, const bool stream_active) {
-    return role == role_e::game && stream_active;
+  bool joins_existing_game_output(
+    const role_e role,
+    const bool stream_active,
+    const bool retained_output_ready
+  ) {
+    return role == role_e::game && (stream_active || retained_output_ready);
   }
 
   std::string_view stream_start_response_key(const bool launched_from_applist) {
@@ -210,6 +320,52 @@ namespace remote_session {
   void clear_termination_confirmation(const std::string_view client_uuid) {
     std::lock_guard lock {terminate_confirmation_mutex};
     terminate_confirmations.erase(std::string {client_uuid});
+  }
+
+  app_replacement_confirmation_e arm_or_confirm_app_replacement(
+    const std::string_view client_uuid,
+    const std::uint64_t generation,
+    const std::int32_t requested_app_id,
+    const std::chrono::steady_clock::time_point now
+  ) {
+    std::lock_guard lock {app_replacement_confirmation_mutex};
+    const auto it = app_replacement_confirmations.find(std::string {client_uuid});
+    if (it != app_replacement_confirmations.end()) {
+      const auto pending = it->second;
+      app_replacement_confirmations.erase(it);
+      if (pending.generation == generation &&
+          pending.requested_app_id == requested_app_id &&
+          pending.expires_at > now) {
+        return app_replacement_confirmation_e::confirmed;
+      }
+    }
+    app_replacement_confirmations.insert_or_assign(
+      std::string {client_uuid},
+      app_replacement_confirmation_t {generation, requested_app_id, now + terminate_confirmation_window}
+    );
+    return app_replacement_confirmation_e::prompt;
+  }
+
+  bool app_replacement_confirmation_active(
+    const std::string_view client_uuid,
+    const std::uint64_t generation,
+    const std::chrono::steady_clock::time_point now
+  ) {
+    std::lock_guard lock {app_replacement_confirmation_mutex};
+    const auto it = app_replacement_confirmations.find(std::string {client_uuid});
+    if (it == app_replacement_confirmations.end()) return false;
+    if (it->second.generation == generation && it->second.expires_at > now) return true;
+    app_replacement_confirmations.erase(it);
+    return false;
+  }
+
+  std::string_view app_replacement_confirmation_message() {
+    return "An app is already running. Launch this app again within 60 seconds to confirm that you want to close it.";
+  }
+
+  void clear_app_replacement_confirmation(const std::string_view client_uuid) {
+    std::lock_guard lock {app_replacement_confirmation_mutex};
+    app_replacement_confirmations.erase(std::string {client_uuid});
   }
 
   bool input_uses_display_or_audio(const role_e role) { return role != role_e::input; }

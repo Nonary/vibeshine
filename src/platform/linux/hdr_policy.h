@@ -13,6 +13,30 @@
 
 namespace platf::linux_hdr {
 
+  /**
+   * KScreen can publish the requested HDR bit before KWin has committed the
+   * matching output color pipeline. Require several consecutive observations
+   * before treating an externally applied output state as capture-ready.
+   */
+  struct output_state_stabilizer_t {
+    static constexpr std::size_t required_observations = 3;
+
+    std::size_t matching_observations {};
+
+    [[nodiscard]] constexpr bool observe(const bool matches) noexcept {
+      matching_observations = matches ? matching_observations + 1 : 0;
+      return matching_observations >= required_observations;
+    }
+  };
+
+  /** A newly published connector may retain a stale true bit from its prior lease. */
+  [[nodiscard]] constexpr bool requires_hdr_rearm(
+    const std::optional<bool> command,
+    const bool newly_connected
+  ) noexcept {
+    return newly_connected && command.value_or(false);
+  }
+
   struct output_state_policy_t {
     // Empty means the display-device policy explicitly requested no HDR
     // change (dd_hdr_option=disabled). It must never be reinterpreted as the
@@ -20,6 +44,20 @@ namespace platf::linux_hdr {
     std::optional<bool> command;
     bool expected_enabled;
   };
+
+  /** Only HDR activation needs a separate transaction after the modeset. */
+  [[nodiscard]] constexpr bool requires_post_modeset_transaction(const std::optional<bool> command) noexcept {
+    return command.value_or(false);
+  }
+
+  /** Rearming may share the modeset, but both results must precede HDR activation. */
+  [[nodiscard]] constexpr bool ready_for_hdr_activation(
+    const bool mode_matches,
+    const bool rearm_required,
+    const bool hdr_enabled
+  ) noexcept {
+    return mode_matches && (!rearm_required || !hdr_enabled);
+  }
 
   /** Resolve a parsed display-device HDR action against connector capability. */
   [[nodiscard]] constexpr output_state_policy_t resolve_output_state(

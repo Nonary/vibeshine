@@ -13,7 +13,6 @@
 // platform includes
 #include <drm_fourcc.h>
 #include <linux/dma-buf.h>
-#include <sys/capability.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <xf86drm.h>
@@ -22,12 +21,17 @@
 #include <vibeshine_drm_uapi.h>
 
 // local includes
+#include "capture_status.h"
 #include "cuda.h"
 #include "graphics.h"
 #include "hdr_policy.h"
+#include "kms_capture_client.h"
+#include "kmsgrab_framebuffer.h"
 #include "kmsgrab_pacing.h"
 #include "kmsgrab_selection.h"
+#include "scoped_capability.h"
 #include "src/config.h"
+#include "src/drm_timing_trace.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/round_robin.h"
@@ -48,33 +52,39 @@ namespace platf {
   DRM_IOWR(DRM_COMMAND_BASE + DRM_VIBESHINE_WAIT_PRESENT, struct vibeshine_drm_wait_present)
 #define DRM_IOCTL_VIBESHINE_GET_FRAME \
   DRM_IOWR(DRM_COMMAND_BASE + DRM_VIBESHINE_GET_FRAME, struct vibeshine_drm_frame)
+#define DRM_IOCTL_VIBESHINE_GET_PRESENT_TRACE \
+  DRM_IOWR(DRM_COMMAND_BASE + DRM_VIBESHINE_GET_PRESENT_TRACE, struct vibeshine_drm_present_trace)
 
     static_assert(sizeof(vibeshine_drm_wait_present) == 48);
     static_assert(sizeof(vibeshine_drm_frame) == 152);
+    static_assert(sizeof(vibeshine_drm_present_trace) == 1088);
 
     constexpr auto PRESENT_WAIT_IDLE_TIMEOUT = std::chrono::milliseconds(16);
 
-    class cap_sys_admin {
-    public:
-      cap_sys_admin() {
-        caps = cap_get_proc();
+    template<typename Duration>
+    std::int64_t timing_trace_ns(Duration value) {
+      return std::chrono::duration_cast<std::chrono::nanoseconds>(value).count();
+    }
 
-        cap_value_t sys_admin = CAP_SYS_ADMIN;
-        if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &sys_admin, CAP_SET) || cap_set_proc(caps)) {
-          BOOST_LOG(error) << "Failed to gain CAP_SYS_ADMIN";
-        }
+    std::int64_t timing_trace_ns(std::chrono::steady_clock::time_point value) {
+      return timing_trace_ns(value.time_since_epoch());
+    }
+
+    void wait_until_capture_deadline(std::chrono::steady_clock::time_point deadline) {
+      constexpr auto sleep_guard = 250us;
+      constexpr auto yield_guard = 50us;
+
+      auto now = std::chrono::steady_clock::now();
+      if (deadline - now > sleep_guard) {
+        std::this_thread::sleep_until(deadline - sleep_guard);
       }
 
-      ~cap_sys_admin() {
-        cap_value_t sys_admin = CAP_SYS_ADMIN;
-        if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &sys_admin, CAP_CLEAR) || cap_set_proc(caps)) {
-          BOOST_LOG(error) << "Failed to drop CAP_SYS_ADMIN";
+      while ((now = std::chrono::steady_clock::now()) < deadline) {
+        if (deadline - now > yield_guard) {
+          std::this_thread::yield();
         }
-        cap_free(caps);
       }
-
-      cap_t caps;
-    };
+    }
 
     class wrapper_fb {
     public:
@@ -108,13 +118,11 @@ namespace platf {
       }
 
       ~wrapper_fb() {
-        std::ranges::for_each(handles, [&](auto &handle) {
-          if (handle) {
-            struct drm_gem_close close_args = {};
-            close_args.handle = handle;
+        close_framebuffer_handles(handles, [&](std::uint32_t handle) {
+          struct drm_gem_close close_args = {};
+          close_args.handle = handle;
 
-            drmIoctl(card_fd, DRM_IOCTL_GEM_CLOSE, &close_args);
-          }
+          drmIoctl(card_fd, DRM_IOCTL_GEM_CLOSE, &close_args);
         });
 
         if (fb) {
@@ -339,8 +347,13 @@ namespace platf {
       using connector_interal_t = util::safe_ptr<drmModeConnector, drmModeFreeConnector>;
 
       int init(const char *path) {
-        cap_sys_admin admin;
-        fd.el = open(path, O_RDWR);
+        vulkan_device_path = path;
+        linux_security::scoped_effective_capability admin {CAP_SYS_ADMIN};
+        if (!admin.active() && !admin.unavailable()) {
+          BOOST_LOG(error) << "Cannot safely raise the permitted KMS capability."sv;
+          return -1;
+        }
+        fd.el = open(path, O_RDWR | O_CLOEXEC);
 
         if (fd.el < 0) {
           BOOST_LOG(error) << "Couldn't open: "sv << path << ": "sv << strerror(errno);
@@ -357,24 +370,28 @@ namespace platf {
           return -1;
         }
         driver_name = std::move(*validated_driver_name);
-        BOOST_LOG(info) << path << " -> "sv << driver_name << " "sv
-                        << ver->version_major << '.' << ver->version_minor << '.' << ver->version_patchlevel;
-
-        // Open the render node for this card to share with libva.
-        // If it fails, we'll just share the primary node instead.
-        char *rendernode_path = drmGetRenderDeviceNameFromFd(fd.el);
-        if (rendernode_path) {
-          BOOST_LOG(debug) << "Opening render node: "sv << rendernode_path;
-          render_fd.el = open(rendernode_path, O_RDWR);
-          if (render_fd.el < 0) {
-            BOOST_LOG(warning) << "Couldn't open render node: "sv << rendernode_path << ": "sv << strerror(errno);
-            render_fd.el = dup(fd.el);
-          }
-          free(rendernode_path);
-        } else {
-          BOOST_LOG(warning) << "No render device name for: "sv << path;
-          render_fd.el = dup(fd.el);
+        // Opening any dormant primary node can make capture DRM master, even
+        // when we only opened a physical GPU to enumerate its outputs. Never
+        // retain that role: logind/KWin must be able to reclaim every GPU on
+        // resume. GETFB uses the narrowly raised capability, not DRM master.
+        if (drmIsMaster(fd.el) && drmDropMaster(fd.el) != 0) {
+          BOOST_LOG(error) << "Cannot release capture modesetting ownership on "sv << path;
+          return -1;
         }
+        if (!admin.active()) {
+          // The SteamOS host stays capability-free. Only the managed virtual
+          // driver can use the separately installed, restricted capture helper.
+          if (driver_name != "vibeshine_drm") {
+            return -1;
+          }
+          capture_helper = kms_capture::client_t::open(fd.el);
+          if (!capture_helper) {
+            BOOST_LOG(error) << "The private display capture helper is unavailable: "sv << strerror(errno);
+            return -1;
+          }
+        }
+        BOOST_LOG(info) << path << " -> "sv << driver_name << " "sv
+                         << ver->version_major << '.' << ver->version_minor << '.' << ver->version_patchlevel;
 
         if (drmSetClientCap(fd.el, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1)) {
           BOOST_LOG(error) << "GPU driver doesn't support universal planes: "sv << path;
@@ -404,19 +421,96 @@ namespace platf {
       }
 
       fb_t fb(plane_t::pointer plane) {
-        cap_sys_admin admin;
+        if (capture_helper) {
+          drmModeFB2 metadata {};
+          std::array<int, 4> buffers {-1, -1, -1, -1};
+          if (capture_helper->framebuffer(plane->plane_id, plane->crtc_id, plane->fb_id, metadata, buffers) != 0) {
+            return nullptr;
+          }
+          // Import into our own DRM file: GEM handles are file-local, while
+          // the helper transfers only real DMA-BUF descriptors over IPC.
+          auto *owned = static_cast<drmModeFB2 *>(std::calloc(1, sizeof(drmModeFB2)));
+          if (!owned) {
+            for (const auto buffer : buffers) {
+              if (buffer >= 0) close(buffer);
+            }
+            return nullptr;
+          }
+          *owned = metadata;
+          auto result = std::make_unique<wrapper_fb>(fd.el, owned);
+          bool success = true;
+          for (std::size_t i = 0; i < buffers.size(); ++i) {
+            if (buffers[i] >= 0) {
+              if (drmPrimeFDToHandle(fd.el, buffers[i], &result->handles[i]) != 0) {
+                success = false;
+              }
+              close(buffers[i]);
+            }
+          }
+          return success ? std::move(result) : nullptr;
+        }
+        drmModeFB2 *fb2 = nullptr;
+        drmModeFB *fb = nullptr;
+        {
+          linux_security::scoped_effective_capability admin {CAP_SYS_ADMIN};
+          if (!admin.active()) {
+            BOOST_LOG(error) << "Cannot inspect a KMS framebuffer because CAP_SYS_ADMIN "sv
+                             << (admin.unavailable() ? "is not permitted"sv : "could not be raised safely"sv);
+            return nullptr;
+          }
+          fb2 = drmModeGetFB2(fd.el, plane->fb_id);
+          if (!fb2) {
+            fb = drmModeGetFB(fd.el, plane->fb_id);
+          }
+        }
 
-        auto fb2 = drmModeGetFB2(fd.el, plane->fb_id);
         if (fb2) {
           return std::make_unique<wrapper_fb>(fd.el, fb2);
         }
-
-        auto fb = drmModeGetFB(fd.el, plane->fb_id);
         if (fb) {
           return std::make_unique<wrapper_fb>(fd.el, fb);
         }
 
         return nullptr;
+      }
+
+      int init_renderer(const char *path) {
+        // Display-only Vibeshine cards export the physical renderer's buffers;
+        // their own node cannot initialize an encoder. Keep the capture fd on
+        // the virtual card and use the selected GPU only for VAAPI/Vulkan.
+        const bool separate_renderer_required = selection::driver_requires_direct_import(driver_name);
+        const auto selected_render_node = separate_renderer_required ? resolve_render_device() : std::string {};
+        char *rendernode_path = drmGetRenderDeviceNameFromFd(fd.el);
+        const auto renderer_path = selection::render_device_path(
+          driver_name,
+          path,
+          rendernode_path ? rendernode_path : "",
+          selected_render_node
+        );
+        free(rendernode_path);
+        if (separate_renderer_required || renderer_path != path) {
+          BOOST_LOG(debug) << "Opening render node: "sv << renderer_path;
+          render_fd.el = open(renderer_path.c_str(), O_RDWR | O_CLOEXEC);
+          if (render_fd.el < 0) {
+            if (separate_renderer_required) {
+              BOOST_LOG(error) << "Cannot encode the private display using render node "sv
+                               << renderer_path << ": "sv << strerror(errno);
+              return -1;
+            }
+            BOOST_LOG(warning) << "Couldn't open render node: "sv << renderer_path << ": "sv << strerror(errno);
+            render_fd.el = dup(fd.el);
+          }
+          if (separate_renderer_required && drmGetNodeTypeFromFd(render_fd.el) != DRM_NODE_RENDER) {
+            BOOST_LOG(error) << "The private display requires a physical GPU render node; selected "sv << renderer_path;
+            return -1;
+          }
+          vulkan_device_path = renderer_path;
+        } else {
+          BOOST_LOG(warning) << "No render device name for: "sv << path;
+          render_fd.el = dup(fd.el);
+        }
+
+        return 0;
       }
 
       crtc_t crtc(std::uint32_t id) {
@@ -493,7 +587,10 @@ namespace platf {
       }
 
       connector_interal_t connector(std::uint32_t id) {
-        return drmModeGetConnector(fd.el, id);
+        // Observe the topology published by the compositor/DRM hotplug path.
+        // drmModeGetConnector forces a hardware reprobe when called by master;
+        // capture discovery must not modeset or wake a sleeping physical GPU.
+        return drmModeGetConnectorCurrent(fd.el, id);
       }
 
       std::vector<connector_t> monitors() {
@@ -601,9 +698,11 @@ namespace platf {
       }
 
       file_t fd;
+      std::unique_ptr<kms_capture::client_t> capture_helper;
       file_t render_fd;
       plane_res_t plane_res;
       std::string driver_name;
+      std::string vulkan_device_path;
     };
 
     std::map<std::uint32_t, monitor_t> map_crtc_to_monitor(const std::vector<connector_t> &connectors) {
@@ -685,9 +784,17 @@ namespace platf {
       }
 
       int init(const std::string &display_name, const ::video::config_t &config) {
-        delay = std::chrono::nanoseconds {1s} / config.framerate;
+        if (config.framerateX100 > 0) {
+          const auto frame_rate = ::video::framerateX100_to_rational(config.framerateX100);
+          delay = pacing::interval_from_frame_rate(frame_rate.num, frame_rate.den);
+        } else {
+          delay = pacing::interval_from_frame_rate(config.framerate, 1);
+        }
+        if (delay <= std::chrono::nanoseconds::zero()) {
+          BOOST_LOG(error) << "Invalid KMS capture frame interval."sv;
+          return -1;
+        }
         presentation_rate_limiter.set_interval(delay);
-        presentation_timestamp_grid.set_interval(delay);
 
         // Empty historically selected monitor 0. Explicit decimal names remain
         // legacy aliases, while every other value resolves through the stable
@@ -697,7 +804,7 @@ namespace platf {
         if (!numeric_alias) {
           selected_monitor = selection::resolve_named_monitor(display_name, named_monitors);
           if (!selected_monitor) {
-            BOOST_LOG(error) << "Couldn't resolve DRM connector ["sv << display_name << "]";
+            // The capture worker owns rate-limited retry diagnostics.
             return -1;
           }
 
@@ -728,7 +835,7 @@ namespace platf {
           // import path unless NVENC was explicitly selected by the user.
           if (mem_type == mem_type_e::cuda && !card.supports_cuda_import()) {
             BOOST_LOG(debug) << file << " does not support CUDA framebuffer import"sv;
-            if (config::video.encoder != "nvenc" && config::video.encoder != "nvenc_experimental") {
+            if (config::video.encoder != "nvenc" && config::video.encoder != "nvenc_legacy") {
               continue;
             }
           }
@@ -790,6 +897,12 @@ namespace platf {
             if (!crtc) {
               BOOST_LOG(error) << "Couldn't get CRTC info: "sv << strerror(errno);
               continue;
+            }
+
+            // Only an actual capture needs the renderer. Output discovery and
+            // resume readiness must not open a second GPU as a side effect.
+            if (card.init_renderer(entry.path().c_str())) {
+              return -1;
             }
 
             BOOST_LOG(info) << "Found monitor for DRM screencasting"sv;
@@ -879,7 +992,7 @@ namespace platf {
           }
         }
 
-        BOOST_LOG(error) << "Couldn't find monitor ["sv << display_name << ']';
+        // The capture worker owns rate-limited retry diagnostics.
         return -1;
 
       // Neatly break from nested for loop
@@ -916,12 +1029,16 @@ namespace platf {
         }
 
         initialize_presentation_events();
+        if (!presentation_mode.event_capture_enabled() && !presentation_mode.fixed_rate_allowed()) {
+          return -1;
+        }
 
         return 0;
       }
 
       capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override {
         if (presentation_mode.event_capture_enabled()) {
+          const linux_capture_status::managed_capture_scope observed_capture;
           if (auto result = capture_presentation_events(push_captured_image_cb, pull_free_image_cb, cursor)) {
             return *result;
           }
@@ -945,6 +1062,10 @@ namespace platf {
             presentation_pending = true;
           }
         }
+      }
+
+      [[nodiscard]] bool is_event_driven_capture() const override {
+        return presentation_mode.event_capture_enabled();
       }
 
       bool is_hdr() {
@@ -1200,7 +1321,8 @@ namespace platf {
         }
       }
 
-      inline capture_e refresh(file_t *file, egl::surface_descriptor_t *sd, std::optional<std::chrono::steady_clock::time_point> &frame_timestamp) {
+      inline capture_e refresh(egl::owned_surface_t &surface, std::optional<std::chrono::steady_clock::time_point> &frame_timestamp) {
+        auto *sd = &surface.sd;
         // Check for a change in HDR metadata
         if (connector_id) {
           auto connector_props = card.connector_props(*connector_id);
@@ -1217,8 +1339,7 @@ namespace platf {
 
           std::fill_n(sd->fds, VIBESHINE_DRM_FRAME_MAX_PLANES, -1);
           for (std::uint32_t plane = 0; plane < frame.plane_count; ++plane) {
-            file[plane] = std::move(exported.dma_buf_fds[plane]);
-            sd->fds[plane] = file[plane].el;
+            sd->fds[plane] = exported.dma_buf_fds[plane].release();
             sd->offsets[plane] = frame.offsets[plane];
             sd->pitches[plane] = frame.pitches[plane];
           }
@@ -1270,13 +1391,13 @@ namespace platf {
             continue;
           }
 
-          file[y] = card.handleFD(fb->handles[y]);
-          if (file[y].el < 0) {
+          auto fd = card.handleFD(fb->handles[y]);
+          if (fd.el < 0) {
             BOOST_LOG(error) << "Couldn't get primary file descriptor for Framebuffer ["sv << fb->fb_id << "]: "sv << strerror(errno);
             return capture_e::error;
           }
 
-          sd->fds[y] = file[y].el;
+          sd->fds[y] = fd.release();
           sd->offsets[y] = fb->offsets[y];
           sd->pitches[y] = fb->pitches[y];
         }
@@ -1339,9 +1460,24 @@ namespace platf {
         request.abi_version = VIBESHINE_DRM_FRAME_ABI_VERSION;
         request.crtc_id = static_cast<std::uint32_t>(crtc_id);
 
-        cap_sys_admin admin;
-        if (::ioctl(card.fd.el, DRM_IOCTL_VIBESHINE_GET_FRAME, &request) < 0) {
-          BOOST_LOG(error) << "Failed to export Vibeshine DRM presentation frame: "sv << strerror(errno);
+        int ioctl_error = 0;
+        if (card.capture_helper) {
+          if (card.capture_helper->frame(request) != 0) {
+            ioctl_error = errno;
+          }
+        } else {
+          linux_security::scoped_effective_capability admin {CAP_SYS_ADMIN};
+          if (!admin.active()) {
+            BOOST_LOG(error) << "Cannot export a KMS presentation frame because CAP_SYS_ADMIN "sv
+                             << (admin.unavailable() ? "is not permitted"sv : "could not be raised safely"sv);
+            return frame_export_e::unsupported;
+          }
+          if (::ioctl(card.fd.el, DRM_IOCTL_VIBESHINE_GET_FRAME, &request) < 0) {
+            ioctl_error = errno;
+          }
+        }
+        if (ioctl_error != 0) {
+          BOOST_LOG(error) << "Failed to export Vibeshine DRM presentation frame: "sv << strerror(ioctl_error);
           return frame_export_e::unsupported;
         }
 
@@ -1432,11 +1568,113 @@ namespace platf {
 
         presentation_mode.activate();
         presentation_rate_limiter.reset();
-        presentation_timestamp_grid.reset();
         last_source_presentation_timestamp.reset();
+        last_capture_delivery_timestamp.reset();
+        last_selected_presentation_sequence.reset();
+        sleep_overshoot_logger.reset();
         presentation_latch.request_capture();
         presentation_pending = presentation_latch.capture_ready();
+        presentation_trace_sequence = presentation_sequence;
+        presentation_trace_available = true;
         BOOST_LOG(info) << "Using event-driven KMS capture for Vibeshine DRM CRTC ["sv << crtc_id << "]."sv;
+        if (drm_timing_trace::writer().available()) {
+          BOOST_LOG(info) << "Always-on DRM timing trace is buffered in "sv << drm_timing_trace::TRACE_PATH
+                          << " and bounded to two 128 MiB tmpfs files."sv;
+        } else {
+          BOOST_LOG(error) << "Cannot open always-on DRM timing trace ["sv << drm_timing_trace::TRACE_PATH << "]."sv;
+        }
+        const auto trace_start_timestamp = std::chrono::steady_clock::now();
+        const auto trace_start_wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                           std::chrono::system_clock::now().time_since_epoch()
+        ).count();
+        drm_timing_trace::write([&](auto &trace) {
+          trace << "kind=trace_start crtc=" << crtc_id
+                << " seq=" << presentation_sequence
+                << " raw_ns=" << timing_trace_ns(*presentation_timestamp)
+                << " mono_ns=" << timing_trace_ns(trace_start_timestamp)
+                << " wall_ns=" << trace_start_wall_ns
+                << " target_interval_ns=" << timing_trace_ns(delay);
+        });
+      }
+
+      void drain_presentation_trace() {
+        if (!presentation_trace_available) {
+          return;
+        }
+
+        while (true) {
+          vibeshine_drm_present_trace request {};
+          request.abi_version = VIBESHINE_DRM_TRACE_ABI_VERSION;
+          request.crtc_id = static_cast<std::uint32_t>(crtc_id);
+          request.after_sequence = presentation_trace_sequence;
+
+          int ioctl_error = 0;
+          {
+            linux_security::scoped_effective_capability admin {CAP_SYS_ADMIN};
+            if (!admin.active()) {
+              ioctl_error = admin.unavailable() ? EACCES : EPERM;
+            } else if (::ioctl(card.fd.el, DRM_IOCTL_VIBESHINE_GET_PRESENT_TRACE, &request) < 0) {
+              ioctl_error = errno;
+            }
+          }
+          if (ioctl_error != 0) {
+            drm_timing_trace::write([&](auto &trace) {
+              trace << "kind=trace_error crtc=" << crtc_id
+                    << " after_seq=" << presentation_trace_sequence
+                    << " errno=" << ioctl_error;
+            });
+            presentation_trace_available = false;
+            return;
+          }
+
+          bool valid = request.abi_version == VIBESHINE_DRM_TRACE_ABI_VERSION &&
+                       request.crtc_id == static_cast<std::uint32_t>(crtc_id) &&
+                       request.after_sequence == presentation_trace_sequence &&
+                       request.count <= VIBESHINE_DRM_TRACE_MAX_EVENTS &&
+                       (request.flags & ~VIBESHINE_DRM_TRACE_OVERFLOW) == 0 &&
+                       request.reserved[0] == 0 && request.reserved[1] == 0 &&
+                       request.reserved[2] == 0 && request.reserved[3] == 0;
+          std::uint64_t previous_sequence = presentation_trace_sequence;
+          for (std::uint32_t index = 0; valid && index < request.count; ++index) {
+            valid = request.events[index].sequence > previous_sequence &&
+                    request.events[index].sequence <= request.newest_sequence &&
+                    request.events[index].timestamp_ns != 0;
+            previous_sequence = request.events[index].sequence;
+          }
+          if (!valid) {
+            drm_timing_trace::write([&](auto &trace) {
+              trace << "kind=trace_error crtc=" << crtc_id
+                    << " after_seq=" << presentation_trace_sequence
+                    << " error=invalid_response";
+            });
+            presentation_trace_available = false;
+            return;
+          }
+
+          const auto receipt_timestamp = std::chrono::steady_clock::now();
+          if ((request.flags & VIBESHINE_DRM_TRACE_OVERFLOW) != 0) {
+            drm_timing_trace::write([&](auto &trace) {
+              trace << "kind=trace_overflow crtc=" << crtc_id
+                    << " after_seq=" << presentation_trace_sequence
+                    << " first_seq=" << (request.count ? request.events[0].sequence : 0)
+                    << " newest_seq=" << request.newest_sequence
+                    << " receipt_ns=" << timing_trace_ns(receipt_timestamp);
+            });
+          }
+          for (std::uint32_t index = 0; index < request.count; ++index) {
+            const auto &event = request.events[index];
+            drm_timing_trace::write([&](auto &trace) {
+              trace << "kind=drm_event crtc=" << crtc_id
+                    << " seq=" << event.sequence
+                    << " raw_ns=" << event.timestamp_ns
+                    << " receipt_ns=" << timing_trace_ns(receipt_timestamp);
+            });
+            presentation_trace_sequence = event.sequence;
+          }
+          if (request.count == 0 || presentation_trace_sequence >= request.newest_sequence) {
+            return;
+          }
+        }
       }
 
       presentation_wait_e wait_for_presentation(std::chrono::milliseconds timeout) {
@@ -1468,8 +1706,25 @@ namespace platf {
           request.sequence = requested_sequence;
           request.timeout_ms = requested_timeout_ms;
 
-          if (::ioctl(card.fd.el, DRM_IOCTL_VIBESHINE_WAIT_PRESENT, &request) < 0) {
-            switch (pacing::classify_ioctl_error(errno, timeout > 0ms)) {
+          int ioctl_error = 0;
+          if (card.capture_helper) {
+            if (card.capture_helper->wait(request) != 0) {
+              ioctl_error = errno;
+            }
+          } else {
+            linux_security::scoped_effective_capability admin {CAP_SYS_ADMIN};
+            if (!admin.active()) {
+              BOOST_LOG(error) << "Cannot wait for KMS presentation because CAP_SYS_ADMIN "sv
+                               << (admin.unavailable() ? "is not permitted"sv : "could not be raised safely"sv);
+              presentation_mode.deactivate();
+              return presentation_wait_e::unsupported;
+            }
+            if (::ioctl(card.fd.el, DRM_IOCTL_VIBESHINE_WAIT_PRESENT, &request) < 0) {
+              ioctl_error = errno;
+            }
+          }
+          if (ioctl_error != 0) {
+            switch (pacing::classify_ioctl_error(ioctl_error, timeout > 0ms)) {
               case pacing::presentation_ioctl_error_e::retry:
                 {
                   ++retry_count;
@@ -1509,9 +1764,10 @@ namespace platf {
           )) {
             case pacing::presentation_response_e::changed:
               {
+                const auto receipt_timestamp = std::chrono::steady_clock::now();
                 auto timestamp = pacing::validate_timestamp(
                   request.timestamp_ns,
-                  std::chrono::steady_clock::now(),
+                  receipt_timestamp,
                   0ns,
                   last_presentation_timestamp
                 );
@@ -1519,21 +1775,27 @@ namespace platf {
                   presentation_mode.deactivate();
                   return presentation_wait_e::unsupported;
                 }
+                const auto missed = request.sequence > requested_sequence ?
+                                      request.sequence - requested_sequence - 1 :
+                                      0;
+                drm_timing_trace::write([&](auto &trace) {
+                  trace << "kind=wait_response crtc=" << crtc_id
+                        << " requested_seq=" << requested_sequence
+                        << " seq=" << request.sequence
+                        << " missed=" << missed
+                        << " raw_ns=" << request.timestamp_ns
+                        << " receipt_ns=" << timing_trace_ns(receipt_timestamp)
+                        << " pending=" << ((request.flags & VIBESHINE_DRM_PRESENT_PENDING) != 0 ? 1 : 0);
+                });
                 presentation_sequence = request.sequence;
                 presentation_timestamp = *timestamp;
                 last_presentation_timestamp = *timestamp;
+                drain_presentation_trace();
                 presentation_latch.observe_response(
                   pacing::presentation_response_e::changed,
                   (request.flags & VIBESHINE_DRM_PRESENT_PENDING) != 0,
                   std::chrono::steady_clock::now()
                 );
-                if (pacing::hold_pending_response_to_deadline(
-                      pacing::presentation_response_e::changed,
-                      (request.flags & VIBESHINE_DRM_PRESENT_PENDING) != 0,
-                      timeout > 0ms
-                    )) {
-                  std::this_thread::sleep_until(wait_deadline);
-                }
                 return presentation_wait_e::changed;
               }
             case pacing::presentation_response_e::timeout:
@@ -1563,11 +1825,15 @@ namespace platf {
       ) {
         while (presentation_mode.event_capture_enabled()) {
           if (presentation_pending) {
-            const auto delivery_deadline = presentation_rate_limiter.next_delivery(
-              std::chrono::steady_clock::now()
-            );
+            const auto decision_timestamp = std::chrono::steady_clock::now();
+            const auto limiter_before = presentation_rate_limiter.diagnostic_state(decision_timestamp);
+            const auto delivery_deadline = limiter_before.next_delivery;
+            const auto sequence_at_decision = presentation_sequence;
+            const bool waited_for_credit = delivery_deadline > decision_timestamp;
             if (const auto now = std::chrono::steady_clock::now(); delivery_deadline > now) {
-              std::this_thread::sleep_until(delivery_deadline);
+              wait_until_capture_deadline(delivery_deadline);
+              sleep_overshoot_logger.first_point(delivery_deadline);
+              sleep_overshoot_logger.second_point_now_and_log();
             }
 
             /*
@@ -1583,27 +1849,26 @@ namespace platf {
               if (presentation_latch.pending_timed_out(std::chrono::steady_clock::now(), pacing::PRESENT_PENDING_HANG_TIMEOUT)) {
                 return std::nullopt;
               }
-              presentation_pending = false;
-              if (!push_captured_image_cb({}, false)) {
-                return platf::capture_e::ok;
-              }
-              continue;
             }
 
-            if (!pending_exported_frame) {
-              switch (dequeue_presentation_frame()) {
-                case frame_export_e::ready:
-                  break;
-                case frame_export_e::empty:
-                  return platf::capture_e::reinit;
-                case frame_export_e::unsupported:
-                  return std::nullopt;
-              }
+            // Re-export at the delivery slot even when initialization cached a
+            // frame. GET_FRAME coalesces completed sequences and guarantees that
+            // the framebuffer, sequence, and timestamp all describe the newest
+            // coherent presentation.
+            switch (dequeue_presentation_frame()) {
+              case frame_export_e::ready:
+                break;
+              case frame_export_e::empty:
+                return platf::capture_e::reinit;
+              case frame_export_e::unsupported:
+                return std::nullopt;
             }
 
             const auto captured_timestamp = presentation_timestamp;
+            const auto captured_sequence = presentation_sequence;
             const auto captured_generation = presentation_latch.capture_generation();
             std::shared_ptr<platf::img_t> img_out;
+            std::optional<std::chrono::steady_clock::time_point> capture_delivery_timestamp;
             auto status = snapshot(pull_free_image_cb, img_out, 1000ms, *cursor);
             if (status == platf::capture_e::reinit ||
                 status == platf::capture_e::error ||
@@ -1624,14 +1889,8 @@ namespace platf {
               if (presentation_latch.pending_timed_out(std::chrono::steady_clock::now(), pacing::PRESENT_PENDING_HANG_TIMEOUT)) {
                 return std::nullopt;
               }
-              presentation_pending = false;
-              if (!push_captured_image_cb({}, false)) {
-                return platf::capture_e::ok;
-              }
-              continue;
             }
 
-            const bool newer_presentation = post_capture_presentation == presentation_wait_e::changed;
             if (status == platf::capture_e::ok && img_out && captured_timestamp) {
               if (last_source_presentation_timestamp) {
                 source_presentation_interval_logger.collect_and_log(
@@ -1642,14 +1901,31 @@ namespace platf {
               }
               last_source_presentation_timestamp = captured_timestamp;
 
-              const auto packet_timestamp = presentation_timestamp_grid.normalize(*captured_timestamp);
-              packet_timestamp_phase_logger.collect_and_log(
+              if (!img_out->host_processing_timestamp) {
+                BOOST_LOG(error) << "KMS snapshot is missing its host capture timestamp."sv;
+                return std::nullopt;
+              }
+
+              capture_delivery_timestamp = std::chrono::steady_clock::now();
+              if (last_capture_delivery_timestamp) {
+                capture_delivery_interval_logger.collect_and_log(
+                  std::chrono::duration<double, std::milli>(
+                    *capture_delivery_timestamp - *last_capture_delivery_timestamp
+                  ).count()
+                );
+              }
+              last_capture_delivery_timestamp = capture_delivery_timestamp;
+              presentation_to_capture_latency_logger.collect_and_log(
                 std::chrono::duration<double, std::milli>(
-                  packet_timestamp - *captured_timestamp
+                  *capture_delivery_timestamp - *captured_timestamp
                 ).count()
               );
-              img_out->frame_timestamp = packet_timestamp;
-              img_out->host_processing_timestamp = captured_timestamp;
+
+              // Presentation time remains source metadata. Actual pacing is
+              // controlled by capture delivery, because GameStream clients do
+              // not schedule frame display from this RTP timestamp.
+              img_out->frame_timestamp = captured_timestamp;
+              img_out->capture_pacing_timestamp = capture_delivery_timestamp;
             }
 
             switch (status) {
@@ -1659,20 +1935,55 @@ namespace platf {
                 }
                 break;
               case platf::capture_e::ok:
-                if (!captured_timestamp) {
-                  BOOST_LOG(error) << "Vibeshine DRM presentation is missing its validated timestamp."sv;
-                  return std::nullopt;
+                {
+                  if (!captured_timestamp) {
+                    BOOST_LOG(error) << "Vibeshine DRM presentation is missing its validated timestamp."sv;
+                    return std::nullopt;
+                  }
+                  if (!img_out || !img_out->host_processing_timestamp || !capture_delivery_timestamp) {
+                    BOOST_LOG(error) << "KMS capture is missing its actual delivery timestamp."sv;
+                    return std::nullopt;
+                  }
+                  presentation_rate_limiter.mark_delivered(*capture_delivery_timestamp);
+                  const auto limiter_after = presentation_rate_limiter.diagnostic_state(*capture_delivery_timestamp);
+                  const auto coalesced = last_selected_presentation_sequence &&
+                                             captured_sequence > *last_selected_presentation_sequence ?
+                                           captured_sequence - *last_selected_presentation_sequence - 1 :
+                                           0;
+                  const bool stall_reset = limiter_before.last_delivery &&
+                                           *capture_delivery_timestamp >= *limiter_before.last_delivery &&
+                                           *capture_delivery_timestamp - *limiter_before.last_delivery >=
+                                             limiter_before.interval + limiter_before.interval;
+                  drm_timing_trace::write([&](auto &trace) {
+                    trace << "kind=selection crtc=" << crtc_id
+                          << " decision_seq=" << sequence_at_decision
+                          << " selected_seq=" << captured_sequence
+                          << " coalesced=" << coalesced
+                          << " raw_ns=" << timing_trace_ns(*captured_timestamp)
+                          << " decision_ns=" << timing_trace_ns(decision_timestamp)
+                          << " target_interval_ns=" << timing_trace_ns(limiter_before.interval)
+                          << " stored_credit_before_ns=" << timing_trace_ns(limiter_before.stored_credit)
+                          << " available_credit_before_ns=" << timing_trace_ns(limiter_before.available_credit)
+                          << " deadline_ns=" << timing_trace_ns(delivery_deadline)
+                          << " delivery_ns=" << timing_trace_ns(*capture_delivery_timestamp)
+                          << " delivery_lateness_ns=" << timing_trace_ns(*capture_delivery_timestamp - delivery_deadline)
+                          << " stored_credit_after_ns=" << timing_trace_ns(limiter_after.stored_credit)
+                          << " available_credit_after_ns=" << timing_trace_ns(limiter_after.available_credit)
+                          << " waited=" << (waited_for_credit ? 1 : 0)
+                          << " stall_reset=" << (stall_reset ? 1 : 0)
+                          << " latch_generation=" << captured_generation;
+                  });
+                  last_selected_presentation_sequence = captured_sequence;
+                  presentation_latch.mark_delivered(captured_generation);
+                  presentation_pending = presentation_latch.capture_ready();
+                  if (!presentation_pending) {
+                    presentation_timestamp.reset();
+                  }
+                  if (!push_captured_image_cb(std::move(img_out), true)) {
+                    return platf::capture_e::ok;
+                  }
+                  break;
                 }
-                presentation_rate_limiter.mark_delivered(*captured_timestamp);
-                presentation_latch.mark_delivered(captured_generation);
-                presentation_pending = newer_presentation;
-                if (!newer_presentation) {
-                  presentation_timestamp.reset();
-                }
-                if (!push_captured_image_cb(std::move(img_out), true)) {
-                  return platf::capture_e::ok;
-                }
-                break;
               case platf::capture_e::reinit:
               case platf::capture_e::error:
               case platf::capture_e::interrupted:
@@ -1691,12 +2002,7 @@ namespace platf {
                   presentation_latch.pending_timed_out(std::chrono::steady_clock::now(), pacing::PRESENT_PENDING_HANG_TIMEOUT)) {
                 return std::nullopt;
               }
-              if (presentation_latch.state_pending()) {
-                presentation_pending = false;
-                if (!push_captured_image_cb({}, false)) {
-                  return platf::capture_e::ok;
-                }
-              } else if (presentation_latch.capture_ready()) {
+              if (presentation_latch.capture_ready()) {
                 presentation_pending = true;
               } else if (!presentation_pending && !push_captured_image_cb({}, false)) {
                 return platf::capture_e::ok;
@@ -1782,22 +2088,30 @@ namespace platf {
       bool direct_import_required {false};
       pacing::presentation_mode_t presentation_mode;
       pacing::presentation_rate_limiter_t presentation_rate_limiter;
-      pacing::presentation_timestamp_grid_t presentation_timestamp_grid;
       bool presentation_pending {false};
       pacing::presentation_latch_t presentation_latch;
       std::uint64_t presentation_sequence {};
       std::optional<std::chrono::steady_clock::time_point> presentation_timestamp;
       std::optional<std::chrono::steady_clock::time_point> last_presentation_timestamp;
       std::optional<std::chrono::steady_clock::time_point> last_source_presentation_timestamp;
+      std::optional<std::chrono::steady_clock::time_point> last_capture_delivery_timestamp;
+      std::optional<std::uint64_t> last_selected_presentation_sequence;
       std::optional<exported_frame_t> pending_exported_frame;
+      std::uint64_t presentation_trace_sequence {};
+      bool presentation_trace_available {false};
       logging::min_max_avg_periodic_logger<double> source_presentation_interval_logger {
         debug,
         "Vibeshine DRM source presentation interval",
         "ms"
       };
-      logging::min_max_avg_periodic_logger<double> packet_timestamp_phase_logger {
+      logging::min_max_avg_periodic_logger<double> capture_delivery_interval_logger {
         debug,
-        "Vibeshine DRM packet timestamp phase",
+        "Vibeshine DRM capture delivery interval",
+        "ms"
+      };
+      logging::min_max_avg_periodic_logger<double> presentation_to_capture_latency_logger {
+        debug,
+        "Vibeshine DRM presentation-to-capture latency",
         "ms"
       };
       std::uint64_t crtc_gamma_lut_blob_id {};
@@ -1912,20 +2226,18 @@ namespace platf {
 
       capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor) override {
         const auto host_processing_timestamp = std::chrono::steady_clock::now();
-        file_t fb_fd[4];
-
-        egl::surface_descriptor_t sd;
+        egl::owned_surface_t surface;
 
         std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
-        auto status = refresh(fb_fd, &sd, frame_timestamp);
+        auto status = refresh(surface, frame_timestamp);
         if (status != capture_e::ok) {
           return status;
         }
 
-        auto rgb_opt = egl::import_source(display.get(), sd);
+        auto rgb_opt = egl::import_source(display.get(), surface.sd);
 
         if (!rgb_opt) {
-          rgb_opt = egl::upload_source(display.get(), sd);
+          rgb_opt = egl::upload_source(display.get(), surface.sd);
           if (!rgb_opt) {
             return capture_e::error;
           }
@@ -1993,7 +2305,7 @@ namespace platf {
 
 #ifdef SUNSHINE_BUILD_VULKAN
         if (mem_type == mem_type_e::vulkan) {
-          return vk::make_avcodec_encode_device_vram(width, height, img_offset_x, img_offset_y);
+          return vk::make_avcodec_encode_device_vram(width, height, img_offset_x, img_offset_y, card.vulkan_device_path);
         }
 #endif
 
@@ -2038,7 +2350,7 @@ namespace platf {
 
       capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds /* timeout */, bool cursor) override {
         const auto host_processing_timestamp = std::chrono::steady_clock::now();
-        file_t fb_fd[4];
+        egl::owned_surface_t surface;
 
         if (!pull_free_image_cb(img_out)) {
           return platf::capture_e::interrupted;
@@ -2046,11 +2358,14 @@ namespace platf {
         auto img = (egl::img_descriptor_t *) img_out.get();
         img->reset();
 
-        auto status = refresh(fb_fd, &img->sd, img->frame_timestamp);
+        auto status = refresh(surface, img->frame_timestamp);
         if (status != capture_e::ok) {
           return status;
         }
 
+        // Transfer ownership before any later operation can throw. Failed
+        // refreshes leave the image empty and only the local surface cleans up.
+        img->sd = surface.release();
         update_crtc_gamma_lut(*img);
         img->host_processing_timestamp = host_processing_timestamp;
         img->sequence = ++sequence;
@@ -2075,9 +2390,6 @@ namespace platf {
           img->data = nullptr;
         }
 
-        for (auto x = 0; x < 4; ++x) {
-          fb_fd[x].release();
-        }
         return capture_e::ok;
       }
 
@@ -2246,7 +2558,7 @@ namespace platf {
       // import path unless NVENC was explicitly selected by the user.
       if (hwdevice_type == mem_type_e::cuda && !card.supports_cuda_import()) {
         BOOST_LOG(debug) << file << " does not support CUDA framebuffer import"sv;
-        if (config::video.encoder == "nvenc" || config::video.encoder == "nvenc_experimental") {
+        if (config::video.encoder == "nvenc" || config::video.encoder == "nvenc_legacy") {
           BOOST_LOG(warning) << "Using NVENC with your display connected to a different GPU may not work properly!"sv;
         } else {
           continue;

@@ -4,8 +4,10 @@
 #include "confighttp.h"
 #include "file_handler.h"
 #include "logging.h"
+#include "lutris_artwork.h"
 #include "lutris_integration.h"
 #include "lutris_sync_policy.h"
+#include "platform/common.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -49,6 +51,7 @@ namespace platf::lutris::autosync {
         std::uint64_t previous_fingerprint = 0;
         std::uint64_t observed_epoch = 0;
         bool have_fingerprint = false;
+        auto next_artwork_retry = std::chrono::steady_clock::time_point {};
         while (true) {
           settings_t settings;
           std::uint64_t epoch = 0;
@@ -62,11 +65,13 @@ namespace platf::lutris::autosync {
             observed_epoch = epoch;
             have_fingerprint = false;
           }
-          if (settings.enabled && settings.auto_sync) {
+          if (settings.enabled && settings.auto_sync && discovery_ready()) {
             try {
-              const auto games = discover();
+              auto games = discover();
               const auto fingerprint = source_fingerprint(games);
-              if (!have_fingerprint || fingerprint != previous_fingerprint) {
+              if (!have_fingerprint || fingerprint != previous_fingerprint ||
+                  std::chrono::steady_clock::now() >= next_artwork_retry) {
+                artwork::prepare(games, platf::appdata());
                 std::lock_guard apps_lock {confighttp::apps_file_mutex()};
                 const auto contents = file_handler::read_file(config::stream.file_apps.c_str());
                 if (!contents.empty()) {
@@ -78,6 +83,7 @@ namespace platf::lutris::autosync {
                   } else {
                     previous_fingerprint = fingerprint;
                     have_fingerprint = true;
+                    next_artwork_retry = std::chrono::steady_clock::now() + std::chrono::minutes {5};
                   }
                 }
               }

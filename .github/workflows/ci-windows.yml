@@ -30,7 +30,7 @@ on:
       build_tests:
         required: false
         type: boolean
-        default: true
+        default: false
       release_artifact_retention_days:
         required: false
         type: number
@@ -227,11 +227,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_COMMIT: ${{ inputs.release_commit }}
-          VHF_ARCHIVE_SHA256: 354c11239a91fd9fb2f52d45449de8409d96a4e4ed998f2794b5465eaec2434b
-          VHF_DRIVER_VER: 08/21/2026,0.1.0.30
+          VHF_ARCHIVE_SHA256: 7830a91ba281c44ae9d01e92e9086f72384a07ca1b35ee87150592f8f960361a
+          VHF_DRIVER_VER: 09/13/2026,0.1.0.34
           VHF_PROTOCOL_VERSION: '2'
-          VHF_SOURCE_REVISION: 52cbb8f27cbeb18baec53ca5d7b88081f0787a06
-          VHF_TAG: v0.1.0-beta.2
+          VHF_SOURCE_REVISION: 0b3970e1a8c839f14f20a7c8eaf48ff59b8c1986
+          VHF_TAG: v0.1.0-beta.4
         run: |
           $ErrorActionPreference = 'Stop'
           $gitlink = (git rev-parse "$($env:RELEASE_COMMIT):third-party/libvirtualgamepad").Trim()
@@ -273,6 +273,8 @@ jobs:
       versioninfo_artifact_id: ${{ steps.upload-windows-version-metadata.outputs.artifact-id }}
     env:
       NODE_VERSION: 22.22.2
+      # Leave memory for the other release runners sharing this host.
+      CMAKE_BUILD_PARALLEL_LEVEL: 6
       SIGNPATH_ENABLED: ${{ secrets.signpath_api_token != '' }}
       SIGNPATH_ORGANIZATION_ID: ${{ inputs.signpath_organization_id }}
       SIGNPATH_PROJECT_SLUG: ${{ inputs.signpath_project_slug }}
@@ -323,18 +325,22 @@ jobs:
           submodules: recursive
 
       - name: Test VHF publisher trust policy
+        if: inputs.build_tests
         shell: pwsh
         run: .\packaging\windows\virtual_gamepad_driver\tests\test_publisher_trust.ps1
 
       - name: Test VHF manifest channel contract
+        if: inputs.build_tests
         shell: pwsh
         run: .\packaging\windows\virtual_gamepad_driver\tests\test_manifest_channel_contract.ps1
 
       - name: Test VHF CMake release contract
+        if: inputs.build_tests
         shell: pwsh
         run: cmake -P .\packaging\windows\virtual_gamepad_driver\tests\test_release_contract.cmake
 
       - name: Test WiX sortable ProductCode contract
+        if: inputs.build_tests
         shell: pwsh
         run: cmake -P .\packaging\windows\wix\tests\test_sortable_product_guid_contract.cmake
 
@@ -347,11 +353,11 @@ jobs:
       - name: Revalidate VHF producer package for packaging
         shell: pwsh
         env:
-          VHF_ARCHIVE_SHA256: 354c11239a91fd9fb2f52d45449de8409d96a4e4ed998f2794b5465eaec2434b
-          VHF_DRIVER_VER: 08/21/2026,0.1.0.30
+          VHF_ARCHIVE_SHA256: 7830a91ba281c44ae9d01e92e9086f72384a07ca1b35ee87150592f8f960361a
+          VHF_DRIVER_VER: 09/13/2026,0.1.0.34
           VHF_PROTOCOL_VERSION: '2'
-          VHF_SOURCE_REVISION: 52cbb8f27cbeb18baec53ca5d7b88081f0787a06
-          VHF_TAG: v0.1.0-beta.2
+          VHF_SOURCE_REVISION: 0b3970e1a8c839f14f20a7c8eaf48ff59b8c1986
+          VHF_TAG: v0.1.0-beta.4
         run: |
           $ErrorActionPreference = 'Stop'
           $packageRoot = Join-Path $env:RUNNER_TEMP 'vhf-gamepad-producer-release'
@@ -409,6 +415,9 @@ jobs:
             mingw-w64-${{ matrix.toolchain }}-cppwinrt
             mingw-w64-${{ matrix.toolchain }}-curl-winssl
             mingw-w64-${{ matrix.toolchain }}-gcc
+            mingw-w64-${{ matrix.toolchain }}-libjpeg-turbo
+            mingw-w64-${{ matrix.toolchain }}-libpng
+            mingw-w64-${{ matrix.toolchain }}-libwebp
             mingw-w64-${{ matrix.toolchain }}-MinHook
             mingw-w64-${{ matrix.toolchain }}-miniupnpc
             mingw-w64-${{ matrix.toolchain }}-ninja
@@ -490,7 +499,11 @@ jobs:
           LIBVIRTUALDISPLAY_RELEASE_TAG: v1.6.3
         run: |
           $ErrorActionPreference = 'Stop'
-          $downloadDir = Join-Path $PWD 'libvirtualdisplay-release'
+          # The folder name carries the release version. refresh_driver_package.ps1
+          # reads it from a libvirtualdisplay-<version>-windows-x64 path and then
+          # never needs `git describe` in the (shallow, tagless) submodule checkout.
+          $releaseVersion = $env:LIBVIRTUALDISPLAY_RELEASE_TAG.TrimStart('v')
+          $downloadDir = Join-Path $PWD "libvirtualdisplay-$releaseVersion-windows-x64"
           .\scripts\download_libvirtualdisplay_release.ps1 `
             -Repository Nonary/libvirtualdisplay `
             -Tag $env:LIBVIRTUALDISPLAY_RELEASE_TAG `
@@ -565,13 +578,13 @@ jobs:
           vhf_gamepad_package_arg=(
             -DSUNSHINE_BUNDLE_VHF_GAMEPAD_DRIVER=ON
             -DSUNSHINE_LIBVIRTUALGAMEPAD_PREBUILT_DIR="$(cygpath -u "${VHF_PACKAGE_ROOT}")"
-            -DSUNSHINE_VHF_GAMEPAD_RELEASE_TAG=v0.1.0-beta.2
-            -DSUNSHINE_VHF_GAMEPAD_RELEASE_ASSET_SHA256=354c11239a91fd9fb2f52d45449de8409d96a4e4ed998f2794b5465eaec2434b
-            -DSUNSHINE_VHF_GAMEPAD_SOURCE_REVISION=52cbb8f27cbeb18baec53ca5d7b88081f0787a06
-            -DSUNSHINE_VHF_GAMEPAD_DRIVER_VER=08/21/2026,0.1.0.30
+            -DSUNSHINE_VHF_GAMEPAD_RELEASE_TAG=v0.1.0-beta.4
+            -DSUNSHINE_VHF_GAMEPAD_RELEASE_ASSET_SHA256=7830a91ba281c44ae9d01e92e9086f72384a07ca1b35ee87150592f8f960361a
+            -DSUNSHINE_VHF_GAMEPAD_SOURCE_REVISION=0b3970e1a8c839f14f20a7c8eaf48ff59b8c1986
+            -DSUNSHINE_VHF_GAMEPAD_DRIVER_VER=09/13/2026,0.1.0.34
             -DSUNSHINE_VHF_GAMEPAD_PROTOCOL_VERSION=2
           )
-          echo "Using verified VHF producer release v0.1.0-beta.2"
+          echo "Using verified VHF producer release v0.1.0-beta.4"
           truehdr_runtime_arg=()
           if [[ "${REQUIRE_TRUEHDR_RUNTIME}" == "true" ]]; then
             truehdr_runtime_arg=(
@@ -582,7 +595,7 @@ jobs:
           fi
 
           mkdir -p build
-          # Release tag builds omit test targets; ordinary reusable-workflow calls retain them.
+          # Test targets are opt-in for CI builds.
           cmake \
             -B build \
             -G Ninja \
@@ -595,6 +608,8 @@ jobs:
             -DBUILD_VIRTUALDISPLAY_VULKAN_LAYER=OFF \
             -DBUILD_DOCS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -g -gdwarf-4" \
+            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g -gdwarf-4" \
             -DSUNSHINE_ENABLE_WEBRTC=ON \
             -DWEBRTC_ROOT="$(cygpath -u "${WEBRTC_ROOT}")" \
             -DWEBRTC_INCLUDE_DIR="$(cygpath -u "${WEBRTC_ROOT}")/include" \
@@ -611,7 +626,7 @@ jobs:
             "${vhf_gamepad_package_arg[@]}" \
             "${truehdr_runtime_arg[@]}"
           echo "::add-matcher::.github/matchers/gcc.json"
-          cmake --build build --target all -j "$(nproc)"
+          cmake --build build --target all --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
           echo "::remove-matcher owner=gcc::"
 
       - name: Install cv2pdb
@@ -652,6 +667,13 @@ jobs:
           foreach ($exe in $executables) {
             if (Test-Path -LiteralPath $exe) {
               & cv2pdb64.exe $exe
+              if ($LASTEXITCODE -ne 0) {
+                throw "PDB conversion failed for $exe (exit code $LASTEXITCODE)."
+              }
+              $pdb = [System.IO.Path]::ChangeExtension($exe, '.pdb')
+              if (-not (Test-Path -LiteralPath $pdb)) {
+                throw "PDB conversion produced no symbols for $exe."
+              }
             }
           }
 
@@ -770,7 +792,7 @@ jobs:
           # Build only the MSI first. SignPath credentials stay out of this
           # step so the MSI is signed from a GitHub artifact with origin
           # verification, including nested files such as uninstall.exe.
-          cmake --build . --target package_msi -j "$(nproc)"
+          cmake --build . --target package_msi --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
 
           msi_path=$(ls -t ./cpack_artifacts/*.msi 2>/dev/null | head -n 1 || true)
           if [[ -z "${msi_path}" ]]; then
@@ -801,10 +823,10 @@ jobs:
             -ValidateOnly `
             -PrebuiltPackageDir $env:VHF_PACKAGE_ROOT `
             -PackageDir $packageDir `
-            -ReleaseTag v0.1.0-beta.2 `
-            -ExpectedReleaseAssetSha256 354c11239a91fd9fb2f52d45449de8409d96a4e4ed998f2794b5465eaec2434b `
-            -ExpectedSourceRevision 52cbb8f27cbeb18baec53ca5d7b88081f0787a06 `
-            -ExpectedDriverVer '08/21/2026,0.1.0.30' `
+            -ReleaseTag v0.1.0-beta.4 `
+            -ExpectedReleaseAssetSha256 7830a91ba281c44ae9d01e92e9086f72384a07ca1b35ee87150592f8f960361a `
+            -ExpectedSourceRevision 0b3970e1a8c839f14f20a7c8eaf48ff59b8c1986 `
+            -ExpectedDriverVer '09/13/2026,0.1.0.34' `
             -ExpectedProtocolVersion 2
           $expected = @(
             'cleanup.ps1',
@@ -1314,6 +1336,23 @@ jobs:
             return ($sig.Status -eq 'Valid')
           }
 
+          # signtool.exe is not on PATH on a bare windows-2022 runner. Prefer PATH, then fall
+          # back to the newest x64 signtool under the installed Windows SDK.
+          function Resolve-SignTool {
+            $command = Get-Command signtool.exe -ErrorAction SilentlyContinue
+            if ($null -ne $command) { return $command.Source }
+            $kitsRoot = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' -Name KitsRoot10 -ErrorAction SilentlyContinue).KitsRoot10
+            if (-not [string]::IsNullOrWhiteSpace($kitsRoot)) {
+              $candidate = Get-ChildItem -Path (Join-Path $kitsRoot 'bin') -Directory -Filter '10.*' -ErrorAction SilentlyContinue |
+                Sort-Object { [version] $_.Name } -Descending |
+                ForEach-Object { Join-Path $_.FullName 'x64\signtool.exe' } |
+                Where-Object { Test-Path -LiteralPath $_ } |
+                Select-Object -First 1
+              if ($candidate) { return $candidate }
+            }
+            throw 'signtool.exe was not found on PATH or under the Windows SDK KitsRoot10.'
+          }
+
           $failures = New-Object System.Collections.Generic.List[string]
 
           $installer = Join-Path (Join-Path $PWD 'artifacts') $env:INSTALLER_NAME
@@ -1358,7 +1397,7 @@ jobs:
               $failures.Add("virtual display catalog signer is not SignPath Foundation: $($catalogSignature.SignerCertificate.Subject)")
             }
             if (-not $allowUntrustedSignatures) {
-              $signtool = (Get-Command signtool.exe -ErrorAction Stop).Source
+              $signtool = Resolve-SignTool
               foreach ($catalogPayload in @($virtualDisplayInf, $virtualDisplayDll)) {
                 & $signtool verify '/v' '/pa' '/c' $virtualDisplayCatalog $catalogPayload
                 if ($LASTEXITCODE -ne 0) {
@@ -1467,8 +1506,8 @@ jobs:
                   'tools/VibeshineVhfGamepadDeviceSetup.exe'
                 )
                 if ($vhfManifest.schema_version -ne 1 -or
-                    $vhfManifest.source_revision -cne '52cbb8f27cbeb18baec53ca5d7b88081f0787a06' -or
-                    $vhfManifest.driver_ver -cne '08/21/2026,0.1.0.30' -or
+                    $vhfManifest.source_revision -cne '0b3970e1a8c839f14f20a7c8eaf48ff59b8c1986' -or
+                    $vhfManifest.driver_ver -cne '09/13/2026,0.1.0.34' -or
                     [uint16] $vhfManifest.protocol_version -ne 2 -or
                     $vhfManifest.platform -cne 'x64' -or
                     $vhfManifest.signing.channel -cne 'msi-request-signing') {
@@ -1534,7 +1573,7 @@ jobs:
                       $vhfToolSignature.SignerCertificate.Subject -ne $expectedSignPathFoundationSigner) {
                     throw "VHF catalog/setup signer is not SignPath Foundation: catalog='$($vhfCatalogSignature.SignerCertificate.Subject)'; setup='$($vhfToolSignature.SignerCertificate.Subject)'"
                   }
-                  $signTool = (Get-Command signtool.exe -ErrorAction Stop).Source
+                  $signTool = Resolve-SignTool
                   foreach ($payload in @(
                     (Join-Path $vhfPackageDir 'driver\VibeshineVhfGamepad.inf'),
                     (Join-Path $vhfPackageDir 'driver\VibeshineVhfGamepad.dll')
@@ -1551,9 +1590,9 @@ jobs:
                 $vhfManifestHash = (Get-FileHash -LiteralPath $vhfManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
                 if ($vhfReleaseLock.channel -cne 'production' -or
                     $vhfReleaseLock.repository -cne 'Nonary/libvirtualgamepad' -or
-                    $vhfReleaseLock.release_tag -cne 'v0.1.0-beta.2' -or
-                    $vhfReleaseLock.release_asset_name -cne 'libvirtualgamepad-0.1.0-beta.2-windows-x64.zip' -or
-                    $vhfReleaseLock.release_asset_sha256 -cne '354c11239a91fd9fb2f52d45449de8409d96a4e4ed998f2794b5465eaec2434b' -or
+                    $vhfReleaseLock.release_tag -cne 'v0.1.0-beta.4' -or
+                    $vhfReleaseLock.release_asset_name -cne 'libvirtualgamepad-0.1.0-beta.4-windows-x64.zip' -or
+                    $vhfReleaseLock.release_asset_sha256 -cne '7830a91ba281c44ae9d01e92e9086f72384a07ca1b35ee87150592f8f960361a' -or
                     $vhfReleaseLock.source_revision -cne $vhfManifest.source_revision -or
                     $vhfReleaseLock.driver_ver -cne $vhfManifest.driver_ver -or
                     [uint16] $vhfReleaseLock.protocol_version -ne [uint16] $vhfManifest.protocol_version -or

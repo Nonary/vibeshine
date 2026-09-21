@@ -20,6 +20,13 @@ namespace remote_session {
   inline constexpr std::int32_t terminate_id = 2147483504;
   inline constexpr std::int32_t monitor_id = 2147483505;
   inline constexpr std::int32_t input_id = 2147483506;
+  inline constexpr std::int32_t running_game_id = 2147483507;
+  // Prioritized display variants keep a separate ID so Moonlight replaces
+  // them instead of renaming an existing row across catalogue transitions.
+  inline constexpr std::int32_t secondary_resume_id = 2147483511;
+  inline constexpr std::int32_t secondary_terminate_id = 2147483514;
+  inline constexpr std::int32_t secondary_monitor_id = 2147483515;
+  inline constexpr std::int32_t secondary_input_id = 2147483516;
   inline constexpr std::size_t max_client_vdds = 4;
 
   enum class role_e : std::uint8_t { none, input, monitor, game };
@@ -78,6 +85,7 @@ namespace remote_session {
   };
 
   enum class terminate_confirmation_e : std::uint8_t { prompt, confirmed };
+  enum class app_replacement_confirmation_e : std::uint8_t { prompt, confirmed };
 
   [[nodiscard]] bool requires_termination_confirmation(bool terminate_on_first_request, bool caller_owns_active_game);
 
@@ -89,6 +97,20 @@ namespace remote_session {
   );
   [[nodiscard]] std::string_view termination_confirmation_message();
   void clear_termination_confirmation(std::string_view client_uuid);
+
+  [[nodiscard]] app_replacement_confirmation_e arm_or_confirm_app_replacement(
+    std::string_view client_uuid,
+    std::uint64_t generation,
+    std::int32_t requested_app_id,
+    std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()
+  );
+  [[nodiscard]] bool app_replacement_confirmation_active(
+    std::string_view client_uuid,
+    std::uint64_t generation,
+    std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()
+  );
+  [[nodiscard]] std::string_view app_replacement_confirmation_message();
+  void clear_app_replacement_confirmation(std::string_view client_uuid);
 
   struct pending_t {
     std::uint32_t launch_id {};
@@ -138,12 +160,28 @@ namespace remote_session {
 
   [[nodiscard]] bool reserved_name(std::string_view name);
   [[nodiscard]] control_e identify(std::int32_t id, std::string_view uuid = {});
+  [[nodiscard]] control_e identify(std::int32_t id, std::string_view uuid, std::int32_t running_app_id);
   [[nodiscard]] std::string synthetic_uuid(control_e control);
   [[nodiscard]] app_t synthetic(control_e control);
+  [[nodiscard]] std::int32_t synthetic_running_game_id(std::int32_t app_id);
+  [[nodiscard]] app_t synthetic_running_game(const app_t &game);
   [[nodiscard]] std::optional<std::string_view> synthetic_artwork_filename(control_e control);
-  [[nodiscard]] projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured);
+  [[nodiscard]] bool exposes_active_game(
+    const caller_t &caller,
+    const game_t &game,
+    const owner_t &owner,
+    bool remote_sessions_active,
+    bool replacement_confirmation_active = false
+  );
+  [[nodiscard]] bool allows_normal_game_cancel(const caller_t &caller, const game_t &game, bool remote_sessions_active);
+  [[nodiscard]] projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured, bool remote_sessions_active);
   [[nodiscard]] dispatch_t dispatch(const caller_t &caller, const game_t &game, const owner_t &owner, control_e control);
-  [[nodiscard]] bool joins_existing_game_output(role_e role, bool stream_active);
+  /** Join the running game's output while a peer owns it or a paused game retains a capture-ready output. */
+  [[nodiscard]] bool joins_existing_game_output(
+    role_e role,
+    bool stream_active,
+    bool retained_output_ready = false
+  );
   [[nodiscard]] std::string_view stream_start_response_key(bool launched_from_applist);
   [[nodiscard]] std::optional<control_completion_t> successful_control_completion(control_e control);
   [[nodiscard]] bool input_uses_display_or_audio(role_e role);

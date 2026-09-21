@@ -4,8 +4,10 @@
 #include "config_lutris.h"
 #include "confighttp.h"
 #include "file_handler.h"
+#include "lutris_artwork.h"
 #include "lutris_integration.h"
 #include "lutris_sync_policy.h"
+#include "platform/common.h"
 
 #include <algorithm>
 #include <cctype>
@@ -38,6 +40,8 @@ namespace confighttp {
         {"runner", game.runner}, {"platform", game.platform},
         {"directory", game.directory.generic_string()}, {"config_path", game.config_path},
         {"service", game.service}, {"service_id", game.service_id},
+        {"artwork_path", game.artwork_path.generic_string()},
+        {"icon_path", game.icon_path.generic_string()},
         {"image_path", game.image_path.generic_string()}, {"steam_backed", game.steam_backed()},
         {"last_played", game.last_played}, {"playtime_seconds", game.playtime_seconds},
         {"launch_uri", platf::lutris::launch_uri(game.id)}, {"excluded", is_excluded(game)},
@@ -50,7 +54,8 @@ namespace confighttp {
     if (!authenticate(response, request)) return;
     try {
       const auto database = platf::lutris::default_database_path();
-      const auto found = platf::lutris::discover(database);
+      const auto has_database = platf::lutris::database_available();
+      const auto found = platf::lutris::discover();
       const auto importable = platf::lutris::sync::policy::filter_games(found, {}, config::lutris.include_steam);
       const auto filtered = platf::lutris::sync::policy::filter_games(
         found, config::lutris.exclude_games_meta, config::lutris.include_steam);
@@ -60,8 +65,8 @@ namespace confighttp {
       }
       send_response(response, {
         {"status", true}, {"provider", "lutris"}, {"enabled", config::lutris.enabled},
-        {"available", !database.empty() && platf::lutris::executable_available()},
-        {"database_available", !database.empty()}, {"executable_available", platf::lutris::executable_available()},
+        {"available", has_database && platf::lutris::executable_available()},
+        {"database_available", has_database}, {"executable_available", platf::lutris::executable_available()},
         {"database_path", database.generic_string()}, {"game_count", found.size()},
         {"importable_game_count", filtered.size()}, {"steam_game_count", found.size() -
           platf::lutris::sync::policy::filter_games(found, {}, false).size()},
@@ -80,7 +85,9 @@ namespace confighttp {
     try {
       nlohmann::json out {{"status", true}, {"enabled", config::lutris.enabled},
                           {"games", nlohmann::json::array()}};
-      for (const auto &game : platf::lutris::discover()) out["games"].push_back(game_json(game));
+      auto games = platf::lutris::discover();
+      platf::lutris::artwork::prepare(games, platf::appdata());
+      for (const auto &game : games) out["games"].push_back(game_json(game));
       send_response(response, out);
     } catch (const std::exception &error) {
       bad_request(response, request, error.what());
@@ -94,12 +101,12 @@ namespace confighttp {
       return;
     }
     try {
-      const auto database = platf::lutris::default_database_path();
-      if (database.empty() || !platf::lutris::executable_available()) {
+      if (!platf::lutris::database_available() || !platf::lutris::executable_available()) {
         bad_request(response, request, "Lutris installation was not found");
         return;
       }
-      const auto found = platf::lutris::discover(database);
+      auto found = platf::lutris::discover();
+      platf::lutris::artwork::prepare(found, platf::appdata());
       std::lock_guard apps_lock {apps_file_mutex()};
       auto root = nlohmann::json::parse(file_handler::read_file(config::stream.file_apps.c_str()));
       const bool changed = platf::lutris::sync::policy::reconcile(

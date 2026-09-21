@@ -13,11 +13,11 @@
 #include "src/file_handler.h"
 #include "src/logging.h"
 #include "src/video.h"
+#if !defined(__FreeBSD__)
+  #include "scoped_capability.h"
+#endif
 
 // platform includes
-#if !defined(__FreeBSD__)
-  #include <sys/capability.h>
-#endif
 #include <linux/dma-buf.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -148,15 +148,20 @@ namespace gl {
   }
 
   std::string shader_t::err_str() {
-    int length;
+    GLint length = 0;
     ctx.GetShaderiv(handle(), GL_INFO_LOG_LENGTH, &length);
 
+    if (length <= 0) {
+      return {};
+    }
+
     std::string string;
-    string.resize(length);
+    string.resize(static_cast<std::size_t>(length));
 
-    ctx.GetShaderInfoLog(handle(), length, &length, string.data());
+    GLsizei written = 0;
+    ctx.GetShaderInfoLog(handle(), length, &written, string.data());
 
-    string.resize(length - 1);
+    string.resize(static_cast<std::size_t>(std::max<GLsizei>(written, 0)));
 
     return string;
   }
@@ -224,15 +229,20 @@ namespace gl {
   }
 
   std::string program_t::err_str() {
-    int length;
+    GLint length = 0;
     ctx.GetProgramiv(handle(), GL_INFO_LOG_LENGTH, &length);
 
+    if (length <= 0) {
+      return {};
+    }
+
     std::string string;
-    string.resize(length);
+    string.resize(static_cast<std::size_t>(length));
 
-    ctx.GetShaderInfoLog(handle(), length, &length, string.data());
+    GLsizei written = 0;
+    ctx.GetProgramInfoLog(handle(), length, &written, string.data());
 
-    string.resize(length - 1);
+    string.resize(static_cast<std::size_t>(std::max<GLsizei>(written, 0)));
 
     return string;
   }
@@ -487,16 +497,6 @@ namespace egl {
 
   std::optional<ctx_t> make_ctx(display_t::pointer display) {
     bool nice_warning = false;
-#if !defined(__FreeBSD__)
-    cap_t caps = cap_get_proc();
-
-    cap_value_t sys_nice = CAP_SYS_NICE;
-    if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &sys_nice, CAP_SET) || cap_set_proc(caps)) {
-      BOOST_LOG(debug) << "Failed to gain CAP_SYS_NICE"sv;
-      nice_warning = true;
-    }
-    cap_free(caps);
-#endif
 
     constexpr int conf_attr[] {
       EGL_RENDERABLE_TYPE,
@@ -504,10 +504,15 @@ namespace egl {
       EGL_NONE
     };
 
-    int count;
-    EGLConfig conf;
+    int count = 0;
+    EGLConfig conf = nullptr;
     if (!eglChooseConfig(display, conf_attr, &conf, 1, &count)) {
       BOOST_LOG(error) << "Couldn't set config attributes: ["sv << util::hex(eglGetError()).to_string_view() << ']';
+      return std::nullopt;
+    }
+
+    if (count == 0 || conf == nullptr) {
+      BOOST_LOG(error) << "No EGL configuration supports OpenGL on the selected display"sv;
       return std::nullopt;
     }
 
@@ -523,14 +528,41 @@ namespace egl {
     attr.push_back(3);
 
     // Only add the high priority attribute if the driver explicitly supports it
-    if (extension_st && std::string_view(extension_st).contains("EGL_IMG_context_priority"sv)) {
+    const bool high_priority_supported =
+      extension_st && std::string_view(extension_st).contains("EGL_IMG_context_priority"sv);
+    if (high_priority_supported) {
       BOOST_LOG(debug) << "EGL: High priority context supported"sv;
+    }
+
+    EGLContext raw_ctx = EGL_NO_CONTEXT;
+#if !defined(__FreeBSD__)
+    if (high_priority_supported) {
+      platf::linux_security::scoped_effective_capability nice {CAP_SYS_NICE};
+      if (nice.state() == platf::linux_security::scoped_effective_capability::state_e::failed) {
+        BOOST_LOG(error) << "Failed to safely raise CAP_SYS_NICE for EGL context creation"sv;
+        return std::nullopt;
+      }
+      if (nice.active()) {
+        attr.push_back(EGL_CONTEXT_PRIORITY_LEVEL_IMG);
+        attr.push_back(EGL_CONTEXT_PRIORITY_HIGH_IMG);
+      } else {
+        nice_warning = true;
+        BOOST_LOG(debug) << "CAP_SYS_NICE is not permitted; creating an EGL context at default priority"sv;
+      }
+      attr.push_back(EGL_NONE);
+      raw_ctx = eglCreateContext(display, conf, EGL_NO_CONTEXT, attr.data());
+    } else {
+      attr.push_back(EGL_NONE);
+      raw_ctx = eglCreateContext(display, conf, EGL_NO_CONTEXT, attr.data());
+    }
+#else
+    if (high_priority_supported) {
       attr.push_back(EGL_CONTEXT_PRIORITY_LEVEL_IMG);
       attr.push_back(EGL_CONTEXT_PRIORITY_HIGH_IMG);
     }
     attr.push_back(EGL_NONE);
-
-    EGLContext raw_ctx = eglCreateContext(display, conf, EGL_NO_CONTEXT, attr.data());
+    raw_ctx = eglCreateContext(display, conf, EGL_NO_CONTEXT, attr.data());
+#endif
     if (raw_ctx == EGL_NO_CONTEXT) {
       BOOST_LOG(error) << "Couldn't create EGL context: ["sv << util::hex(eglGetError()).to_string_view() << ']';
       return std::nullopt;
@@ -582,14 +614,6 @@ namespace egl {
     BOOST_LOG(debug) << "GL: shader: "sv << gl_shader;
 
     gl::ctx.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-#if !defined(__FreeBSD__)
-    caps = cap_get_proc();
-    if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &sys_nice, CAP_CLEAR) || cap_set_proc(caps)) {
-      BOOST_LOG(debug) << "Failed to drop CAP_SYS_NICE"sv;
-    }
-    cap_free(caps);
-#endif
 
     return ctx;
   }
@@ -1062,8 +1086,15 @@ namespace egl {
       bool error_flag = false;
       for (int x = 0; x < count; ++x) {
         auto &compiled_source = compiled_sources[x];
+        auto shader_source = file_handler::read_file(sources[x]);
 
-        compiled_source = gl::shader_t::compile(file_handler::read_file(sources[x]), shader_type[x % 2]);
+        if (shader_source.empty()) {
+          BOOST_LOG(error) << "OpenGL shader source is missing, unreadable, or empty: ["sv << sources[x] << ']';
+          error_flag = true;
+          continue;
+        }
+
+        compiled_source = gl::shader_t::compile(shader_source, shader_type[x % 2]);
         gl_drain_errors;
 
         if (compiled_source.has_right()) {

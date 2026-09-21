@@ -1,3 +1,4 @@
+#include "third-party/moonlight-common-c/src/ControllerHaptics.h"
 /**
  * @file src/stream.cpp
  * @brief Definitions for the streaming protocols.
@@ -22,6 +23,7 @@
 #include <system_error>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 
 // lib includes
 #include <boost/algorithm/string/predicate.hpp>
@@ -39,6 +41,7 @@ extern "C" {
 #include "config.h"
 #include "display_helper_integration.h"
 #include "globals.h"
+#include "host_stats.h"
 #include "input.h"
 #include "logging.h"
 #include "network.h"
@@ -65,7 +68,12 @@ extern "C" {
   #include "platform/windows/virtual_display.h"
   #include "platform/windows/virtual_display_cleanup.h"
 #elif defined(__linux__)
+  #include "platform/linux/frame_limiter.h"
+  #include "platform/linux/misc.h"
+  #include "drm_timing_trace.h"
   #include "platform/linux/private_display.h"
+  #include "platform/linux/wayland_hdr_compatibility.h"
+  #include "src/platform/linux/display_backend.h"
 #endif
 
 #define IDX_START_A 0
@@ -265,7 +273,7 @@ namespace stream {
           platf::virtual_display_cleanup::revert_order_t::remove_before_restore,
           true,
           virtual_display_guid_bytes,
-          platf::virtual_display_cleanup::recovery_monitor_policy_t::disengage_before_admission
+          platf::virtual_display_cleanup::idle_stream_cleanup_recovery_policy()
         );
         if (cleanup.helper_revert_dispatched) {
           display_helper_integration::stop_watchdog();
@@ -279,7 +287,7 @@ namespace stream {
 #ifdef _WIN32
     g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel);
 #elif defined(__linux__)
-    platf::linux_private_display::cancel_scheduled_revert();
+    platf::linux_display::backend().cancel_scheduled_revert();
 #endif
   }
 
@@ -495,9 +503,10 @@ namespace stream {
       _map_type_cb.emplace(type, std::move(cb));
     }
 
-    int send(const std::string_view &payload, net::peer_t peer) {
-      auto packet = enet_packet_create(payload.data(), payload.size(), ENET_PACKET_FLAG_RELIABLE);
-      if (enet_peer_send(peer, 0, packet)) {
+    int send(const std::string_view &payload, net::peer_t peer, bool haptics = false) {
+      auto packet = enet_packet_create(payload.data(), payload.size(), haptics ? 0 : ENET_PACKET_FLAG_RELIABLE);
+      if (!packet) return -1;
+      if (enet_peer_send(peer, haptics ? ML_HAPTICS_CHANNEL : 0, packet)) {
         enet_packet_destroy(packet);
 
         return -1;
@@ -546,6 +555,8 @@ namespace stream {
   };
 
   struct session_t {
+    std::shared_ptr<void> display_power_guard;
+    std::shared_ptr<void> normal_display_capture;
     config_t config;
     int stream_fps = 0;
     std::uint32_t client_display_refresh_millihz = 0;
@@ -654,7 +665,7 @@ namespace stream {
       std::chrono::steady_clock::time_point start_time {std::chrono::steady_clock::now()};
     } stats;
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
     struct {
       bool active = false;
       std::array<std::uint8_t, 16> guid_bytes {};
@@ -1204,7 +1215,21 @@ namespace stream {
     }
 
     std::string payload;
-    if (msg.type == platf::gamepad_feedback_e::rumble) {
+    if (msg.type == platf::gamepad_feedback_e::haptics_pcm) {
+      if (!(session->config.mlFeatureFlags & ML_FF_HAPTICS_PCM)) return 0;
+      std::array<std::uint8_t, sizeof(control_header_v2) + ML_HAPTICS_MAX_PAYLOAD> plaintext {};
+      auto *bytes = plaintext.data();
+      MlHapticsWrite16(bytes, ML_HAPTICS_PACKET_TYPE);
+      MlHapticsWrite16(bytes + 2, ML_HAPTICS_MAX_PAYLOAD);
+      bytes += sizeof(control_header_v2);
+      bytes[0] = bytes[1] = 1;
+      MlHapticsWrite16(bytes + 2, msg.id);
+      MlHapticsWrite32(bytes + 4, msg.data.haptics.sequence);
+      MlHapticsWrite16(bytes + 8, ML_HAPTICS_MAX_FRAMES);
+      std::memcpy(bytes + ML_HAPTICS_HEADER_SIZE, msg.data.haptics.samples.data(), msg.data.haptics.samples.size());
+      std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size> encrypted_payload;
+      payload = encode_control(session, std::string_view(reinterpret_cast<const char *>(plaintext.data()), plaintext.size()), encrypted_payload);
+    } else if (msg.type == platf::gamepad_feedback_e::rumble) {
       control_rumble_t plaintext;
       plaintext.header.type = packetTypes[IDX_RUMBLE_DATA];
       plaintext.header.payloadLength = sizeof(plaintext) - sizeof(control_header_v2);
@@ -1291,7 +1316,7 @@ namespace stream {
       return -1;
     }
 
-    if (session->broadcast_ref->control_server.send(payload, session->control.peer)) {
+    if (session->broadcast_ref->control_server.send(payload, session->control.peer, msg.type == platf::gamepad_feedback_e::haptics_pcm)) {
       TUPLE_2D(port, addr, platf::from_sockaddr_ex((sockaddr *) &session->control.peer->address.address));
       BOOST_LOG(warning) << "Couldn't send gamepad feedback to ["sv << addr << ':' << port << ']';
 
@@ -1610,6 +1635,7 @@ namespace stream {
       const bool launch_or_startup_pending = rtsp_stream::has_pending_launch_or_startup();
       const bool game_runtime_active = proc::proc.current_app_id() > 0 || launch_or_startup_pending;
       bool has_processless_live_session = false;
+      bool haptics_client = false;
       bool has_game_session_pending_or_draining = false;
 
       {
@@ -1629,6 +1655,7 @@ namespace stream {
           }
 
           auto session = *pos;
+          haptics_client |= (session->config.mlFeatureFlags & ML_FF_HAPTICS_PCM) != 0;
 
           if (now > session->pingTimeout) {
             auto address = session->control.peer ? platf::from_sockaddr((sockaddr *) &session->control.peer->address.address) : session->control.expected_peer_address;
@@ -1743,7 +1770,8 @@ namespace stream {
         break;
       }
 
-      server->iterate(150ms);
+      // Haptic samples must keep flowing even when the player is not moving.
+      server->iterate(haptics_client ? 5ms : 150ms);
     }
 
     // Let all remaining connections know the server is shutting down
@@ -1755,6 +1783,7 @@ namespace stream {
       // We may not have gotten far enough to have an ENet connection yet.
       send_termination(session);
 
+      input::reset(session->input);
       session->shutdown_event->raise(true);
       session->controlEnd.raise(true);
     }
@@ -1889,6 +1918,23 @@ namespace stream {
     auto ratecontrol_next_frame_start = std::chrono::steady_clock::now();
     std::optional<std::chrono::steady_clock::time_point> last_frame_timestamp;
 
+    struct wire_timeline_frame_t {
+      int64_t frame_index;
+      uint32_t rtp_timestamp;
+      std::chrono::steady_clock::time_point source_timestamp;
+      std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp;
+      std::chrono::steady_clock::time_point packet_enqueue_timestamp;
+      std::chrono::steady_clock::time_point packet_pop_timestamp;
+      std::chrono::steady_clock::time_point send_complete_timestamp;
+    };
+    struct wire_timeline_state_t {
+      std::optional<wire_timeline_frame_t> previous_frame;
+      std::chrono::steady_clock::time_point window_started;
+      unsigned lines = 0;
+      unsigned suppressed = 0;
+    };
+    std::unordered_map<session_t *, wire_timeline_state_t> wire_timeline_by_session;
+
     while (auto packet = packets->pop()) {
       if (shutdown_event->peek()) {
         break;
@@ -1901,6 +1947,19 @@ namespace stream {
         continue;
       }
       const auto packet_pop_timestamp = std::chrono::steady_clock::now();
+      auto wire_state_it = wire_timeline_by_session.find(session);
+      if (wire_state_it == wire_timeline_by_session.end()) {
+        // Bound diagnostic state even if many sessions are created during one
+        // long-lived broadcast-thread generation.
+        if (wire_timeline_by_session.size() >= 16) {
+          wire_timeline_by_session.erase(wire_timeline_by_session.begin());
+        }
+        wire_state_it = wire_timeline_by_session.emplace(
+          session,
+          wire_timeline_state_t {.window_started = packet_pop_timestamp}
+        ).first;
+      }
+      auto &wire_timeline_state = wire_state_it->second;
       packet_queue_latency_logger.collect_and_log(std::chrono::duration<double, std::milli>(packet_pop_timestamp - packet->packet_enqueue_timestamp).count());
       if (packet->frame_timestamp) {
         if (last_frame_timestamp) {
@@ -2038,6 +2097,18 @@ namespace stream {
         size_t ratecontrol_frame_packets_sent = 0;
         size_t ratecontrol_group_packets_sent = 0;
 
+        // RTP uses the source presentation timestamp, while the remaining
+        // timeline points below use actual host processing/send times. Keeping
+        // both lets a client trace distinguish a source gap from a frame held
+        // after capture.
+        bool frame_is_dupe = false;
+        if (!packet->frame_timestamp) {
+          packet->frame_timestamp = ratecontrol_next_frame_start;
+          frame_is_dupe = true;
+        }
+        using rtp_tick = std::chrono::duration<uint32_t, std::ratio<1, 90000>>;
+        const uint32_t timestamp = std::chrono::round<rtp_tick>(*packet->frame_timestamp - video_epoch).count();
+
         auto blockIndex = 0;
         std::for_each(fec_blocks_begin, fec_blocks_end, [&](std::string_view &current_payload) {
           auto packets = (current_payload.size() + (blocksize - 1)) / blocksize;
@@ -2081,16 +2152,6 @@ namespace stream {
           };
 
           size_t next_shard_to_send = 0;
-
-          // RTP video timestamps use a 90 KHz clock and the frame_timestamp from when the frame was captured
-          // When a timestamp isn't available (duplicate frames), the timestamp from rate control is used instead.
-          bool frame_is_dupe = false;
-          if (!packet->frame_timestamp) {
-            packet->frame_timestamp = ratecontrol_next_frame_start;
-            frame_is_dupe = true;
-          }
-          using rtp_tick = std::chrono::duration<uint32_t, std::ratio<1, 90000>>;
-          uint32_t timestamp = std::chrono::round<rtp_tick>(*packet->frame_timestamp - video_epoch).count();
 
           // set FEC info now that we know for sure what our percentage will be for this frame
           for (auto x = 0; x < shards.size(); ++x) {
@@ -2204,6 +2265,138 @@ namespace stream {
         });
 
         session->video.lowseq = lowseq;
+
+        const auto send_complete_timestamp = std::chrono::steady_clock::now();
+#ifdef __linux__
+        {
+          const auto timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      packet->frame_timestamp->time_since_epoch()
+          ).count();
+          const auto send_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 send_complete_timestamp.time_since_epoch()
+          ).count();
+          const auto wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::system_clock::now().time_since_epoch()
+          ).count();
+          if (frame_is_dupe) {
+            drm_timing_trace::write([&](auto &trace) {
+              trace << "kind=rtp frame=" << packet->frame_index()
+                    << " timestamp_source=synthetic"
+                    << " synthetic_ns=" << timestamp_ns
+                    << " rtp=" << timestamp
+                    << " send_ns=" << send_ns
+                    << " wall_ns=" << wall_ns;
+            });
+          } else if (wire_timeline_state.previous_frame) {
+            drm_timing_trace::write([&](auto &trace) {
+              trace << "kind=rtp frame=" << packet->frame_index()
+                    << " timestamp_source=drm"
+                    << " raw_ns=" << timestamp_ns
+                    << " rtp=" << timestamp
+                    << " previous_rtp=" << wire_timeline_state.previous_frame->rtp_timestamp
+                    << " delta=" << static_cast<std::uint32_t>(timestamp - wire_timeline_state.previous_frame->rtp_timestamp)
+                    << " send_ns=" << send_ns
+                    << " wall_ns=" << wall_ns;
+            });
+          } else {
+            drm_timing_trace::write([&](auto &trace) {
+              trace << "kind=rtp frame=" << packet->frame_index()
+                    << " timestamp_source=drm"
+                    << " raw_ns=" << timestamp_ns
+                    << " rtp=" << timestamp
+                    << " previous_rtp=none"
+                    << " delta=none"
+                    << " send_ns=" << send_ns
+                    << " wall_ns=" << wall_ns;
+            });
+          }
+        }
+#endif
+        if (!frame_is_dupe) {
+          const wire_timeline_frame_t current_wire_frame {
+            .frame_index = packet->frame_index(),
+            .rtp_timestamp = timestamp,
+            .source_timestamp = *packet->frame_timestamp,
+            .host_processing_timestamp = packet->host_processing_timestamp,
+            .packet_enqueue_timestamp = packet->packet_enqueue_timestamp,
+            .packet_pop_timestamp = packet_pop_timestamp,
+            .send_complete_timestamp = send_complete_timestamp,
+          };
+
+          // A reused session address or a restarted frame sequence must not be
+          // joined to stale state from an older stream.
+          if (wire_timeline_state.previous_frame &&
+              current_wire_frame.frame_index <= wire_timeline_state.previous_frame->frame_index) {
+            wire_timeline_state = wire_timeline_state_t {.window_started = send_complete_timestamp};
+          }
+
+          if (wire_timeline_state.previous_frame) {
+            const auto &previous_wire_frame = *wire_timeline_state.previous_frame;
+            const auto source_gap = current_wire_frame.source_timestamp - previous_wire_frame.source_timestamp;
+            if (source_gap >= 40ms) {
+              if (send_complete_timestamp - wire_timeline_state.window_started >= 10s) {
+                if (wire_timeline_state.suppressed != 0) {
+                  BOOST_LOG(debug) << "Host video gap timeline: suppressed="sv << wire_timeline_state.suppressed
+                                   << " events in the previous rate-limit window"sv;
+                }
+                wire_timeline_state.window_started = send_complete_timestamp;
+                wire_timeline_state.lines = 0;
+                wire_timeline_state.suppressed = 0;
+              }
+
+              if (wire_timeline_state.lines < 8) {
+                const auto elapsed_ms = [](auto end, auto start) {
+                  return std::chrono::duration<double, std::milli>(end - start).count();
+                };
+                const auto host_age_ms = [&](const wire_timeline_frame_t &frame) {
+                  return frame.host_processing_timestamp ?
+                           elapsed_ms(frame.packet_enqueue_timestamp, *frame.host_processing_timestamp) :
+                           -1.0;
+                };
+                BOOST_LOG(debug)
+                  << "Host video gap timeline: source_gap="sv << elapsed_ms(
+                       current_wire_frame.source_timestamp,
+                       previous_wire_frame.source_timestamp
+                     )
+                  << "ms prev={frame="sv << previous_wire_frame.frame_index
+                  << ",rtp="sv << previous_wire_frame.rtp_timestamp
+                  << ",source_to_enqueue="sv << elapsed_ms(
+                       previous_wire_frame.packet_enqueue_timestamp,
+                       previous_wire_frame.source_timestamp
+                     )
+                  << "ms,host_to_enqueue="sv << host_age_ms(previous_wire_frame)
+                  << "ms,queue="sv << elapsed_ms(
+                       previous_wire_frame.packet_pop_timestamp,
+                       previous_wire_frame.packet_enqueue_timestamp
+                     )
+                  << "ms,pop_to_send="sv << elapsed_ms(
+                       previous_wire_frame.send_complete_timestamp,
+                       previous_wire_frame.packet_pop_timestamp
+                     )
+                  << "ms} curr={frame="sv << current_wire_frame.frame_index
+                  << ",rtp="sv << current_wire_frame.rtp_timestamp
+                  << ",source_to_enqueue="sv << elapsed_ms(
+                       current_wire_frame.packet_enqueue_timestamp,
+                       current_wire_frame.source_timestamp
+                     )
+                  << "ms,host_to_enqueue="sv << host_age_ms(current_wire_frame)
+                  << "ms,queue="sv << elapsed_ms(
+                       current_wire_frame.packet_pop_timestamp,
+                       current_wire_frame.packet_enqueue_timestamp
+                     )
+                  << "ms,pop_to_send="sv << elapsed_ms(
+                       current_wire_frame.send_complete_timestamp,
+                       current_wire_frame.packet_pop_timestamp
+                     )
+                  << "ms}"sv;
+                ++wire_timeline_state.lines;
+              } else {
+                ++wire_timeline_state.suppressed;
+              }
+            }
+          }
+          wire_timeline_state.previous_frame = current_wire_frame;
+        }
 
         // Update per-session performance counters
         session->stats.frames_sent.fetch_add(1, std::memory_order_relaxed);
@@ -2607,7 +2800,7 @@ namespace stream {
       cleanup_reservations.fetch_sub(1, std::memory_order_acq_rel);
     }
 
-    bool has_shared_runtime_owner(const shared_runtime_finalize_context_t &context) {
+    bool has_capture_runtime_owner(const shared_runtime_finalize_context_t &context) {
       const auto rtsp_teardown_count = teardown_sessions.load(std::memory_order_acquire);
       const auto webrtc_teardown_count = webrtc_stream::teardown_session_count();
       const bool other_rtsp_teardown =
@@ -2621,7 +2814,11 @@ namespace stream {
              other_rtsp_teardown ||
              webrtc_stream::has_active_or_pending_sessions() ||
              webrtc_stream::has_capture_active() ||
-             other_webrtc_teardown ||
+             other_webrtc_teardown;
+    }
+
+    bool has_shared_runtime_owner(const shared_runtime_finalize_context_t &context) {
+      return has_capture_runtime_owner(context) ||
              remote_display_topology::instance().managed_client_identity_count() != 0;
     }
 
@@ -2685,6 +2882,7 @@ namespace stream {
       const std::string_view reason,
       const shared_runtime_finalize_context_t &context
     ) {
+      remote_display_topology::instance().release_drained_normal_game_identities();
       if (!shared_runtime_cleanup_armed) {
         return false;
       }
@@ -2726,6 +2924,18 @@ namespace stream {
         is_paused && !display_restore_requested && paused_timeout_secs == 0;
 
 #ifdef _WIN32
+      // This path only runs once no shared runtime owner remains, so the
+      // stream has ended or entered pause/suspend. Crash recovery must not
+      // recreate a virtual display for that idle session, even when the
+      // display itself is kept for restore or later resume. Cancellation
+      // does not remove the VDD or latch shutdown; a later launch or resume
+      // arms a fresh worker.
+      static_assert(platf::virtual_display_cleanup::idle_stream_disengages_recovery_monitor(true));
+      VDISPLAY::cancel_all_virtual_display_recovery_monitors();
+      BOOST_LOG(info) << "Virtual display recovery: disengaged after final "
+                      << (is_paused ? "paused" : "ended")
+                      << " stream (reason=" << reason << ").";
+
       if (delay_virtual_display_cleanup_due_to_pause) {
         BOOST_LOG(info) << "Display cleanup: shared stream runtime paused with revert-on-disconnect disabled; "
                         << "scheduling virtual display removal without display restore in " << paused_timeout_secs << "s.";
@@ -2739,11 +2949,6 @@ namespace stream {
         BOOST_LOG(debug) << "Display cleanup: shared stream runtime is paused; keeping virtual display alive "
                             "(config_revert_on_disconnect=false, paused timeout disabled).";
       } else if (display_restore_requested) {
-        // The final owner is gone, so no recovery worker may legitimately
-        // recreate or reapply this ended session while REVERT intentionally
-        // deactivates its retained virtual display. Cancellation does not
-        // remove the VDD or latch shutdown; a later session arms fresh workers.
-        VDISPLAY::cancel_all_virtual_display_recovery_monitors();
         BOOST_LOG(info) << "Display restore: final stream ended; dispatching restore while keeping virtual display alive.";
         if (!display_helper_integration::revert(true)) {
           BOOST_LOG(debug) << "Display helper: restore dispatch failed after final stream; virtual display remains active.";
@@ -2757,7 +2962,8 @@ namespace stream {
           false,
           platf::virtual_display_cleanup::revert_order_t::remove_before_restore,
           true,
-          shared_runtime_virtual_display_guid_bytes
+          shared_runtime_virtual_display_guid_bytes,
+          platf::virtual_display_cleanup::idle_stream_cleanup_recovery_policy()
         );
         if (is_paused) {
           BOOST_LOG(info) << "Display cleanup: shared stream runtime paused with revert-on-disconnect disabled; "
@@ -2771,7 +2977,7 @@ namespace stream {
       if (delay_virtual_display_cleanup_due_to_pause) {
         BOOST_LOG(info) << "Linux private display: stream paused; scheduling output restore in "
                         << paused_timeout_secs << "s.";
-        platf::linux_private_display::schedule_revert(
+        platf::linux_display::backend().schedule_revert(
           std::chrono::seconds(paused_timeout_secs),
           "paused-session timeout"
         );
@@ -2779,12 +2985,12 @@ namespace stream {
         BOOST_LOG(debug) << "Linux private display: keeping the private output active for resume.";
       } else {
         if (config::video.dd.config_revert_delay.count() > 0) {
-          platf::linux_private_display::schedule_revert(
+          platf::linux_display::backend().schedule_revert(
             config::video.dd.config_revert_delay,
             "stream-end delay"
           );
         } else {
-          (void) platf::linux_private_display::revert();
+          (void) platf::linux_display::backend().revert();
         }
       }
 #else
@@ -2843,6 +3049,7 @@ namespace stream {
         return;
       }
 
+      input::reset(session.input);
       session.shutdown_event->raise(true);
     }
 
@@ -2855,6 +3062,9 @@ namespace stream {
           teardown_reserved = false;
         }
       });
+
+      // Release input before any potentially hung capture joins.
+      input::reset(session.input);
 
       // Current Nvidia drivers have a bug where NVENC can deadlock the encoder thread with hardware-accelerated
       // GPU scheduling enabled. If this happens, we will terminate ourselves and the service can restart.
@@ -2884,10 +3094,6 @@ namespace stream {
       // WebRTC start holds it across a 15s apply-verification budget. Trapping on
       // that is a false positive that would kill every other live stream.
 
-      // Reset input on session stop to avoid stuck repeated keys
-      BOOST_LOG(debug) << "Resetting Input..."sv;
-      input::reset(session.input);
-
       // Serialize the ownership transition and shared cleanup. Normal session
       // reaping acquires the lifecycle gate only after the blocking joins
       // above. A synchronous NVHTTP disconnect already owns that gate, so it
@@ -2897,6 +3103,11 @@ namespace stream {
       if (!lifecycle_lock_held) {
         lifecycle_lock.lock();
       }
+
+      // The app may already have exited, but its output must survive until
+      // this capture has joined and released every encoder/conversion import.
+      session.normal_display_capture.reset();
+      remote_display_topology::instance().release_drained_normal_game_identities();
 
       if (session.remote_role == remote_session::role_e::monitor && !session.device_uuid.empty()) {
         const bool client_disconnected = session.client_disconnected.load(std::memory_order_acquire);
@@ -2925,6 +3136,7 @@ namespace stream {
       teardown_reservation.disable();
 
       const bool last_rtsp_session = --running_sessions == 0;
+      host_stats::rtsp_session_ended();
       bool finalized_shared_runtime = false;
       if (last_rtsp_session) {
         webrtc_stream::set_rtsp_sessions_active(false);
@@ -2949,6 +3161,9 @@ namespace stream {
           is_paused || shared_runtime_still_owned
         );
 #else
+#ifdef __linux__
+        platf::frame_limiter_streaming_stop(platf::frame_limiter_owner::rtsp);
+#endif
         const session::shared_runtime_finalize_context_t finalize_context {
           .ignore_current_rtsp_teardown = true,
           .apply_deferred_config = false,
@@ -2958,6 +3173,7 @@ namespace stream {
           session::finalize_shared_runtime_if_idle("rtsp_session_end", finalize_context);
       }
 
+      session.display_power_guard.reset();
       BOOST_LOG(info) << "Session ended"sv;
 
       // Record session end in persistent history (fires exactly once, after join)
@@ -3057,13 +3273,15 @@ namespace stream {
       }
 
       // If this is the first session, invoke the platform callbacks
-      if (++running_sessions == 1) {
+      const bool first_rtsp_session = ++running_sessions == 1;
+      host_stats::rtsp_session_started();
+      if (first_rtsp_session) {
         if (!webrtc_stream::has_active_or_pending_sessions()) {
           webrtc_stream::set_rtsp_capture_config(session.config.monitor, session.config.audio);
         }
         webrtc_stream::set_rtsp_sessions_active(true);
-#ifdef _WIN32
-        // Apply RTSS frame limit if enabled (Windows-only)
+#if defined(_WIN32) || defined(__linux__)
+        // Apply the stream-owned limiter independently of application launch.
         std::optional<int> lossless_rtss_limit;
         const bool using_lossless_provider = session.config.lossless_scaling_framegen &&
                                              boost::iequals(session.config.frame_generation_provider, "lossless-scaling");
@@ -3088,10 +3306,15 @@ namespace stream {
           .frame_generation_provider = session.config.frame_generation_provider,
           .uses_virtual_display = session.virtual_display.active,
           .capture_mode = config::video.capture,
+#ifdef _WIN32
           .auto_capture_uses_wgc = platf::dxgi::should_use_wgc_default(),
+#else
+          .auto_capture_uses_wgc = false,
+#endif
           .auto_virtual_framegen_limiter = config::frame_limiter.virtual_display_limiter_enabled(),
           .virtual_display_refresh_multiplier = config::frame_limiter.fixed_virtual_display_refresh_multiplier(),
         });
+#ifdef _WIN32
         const bool defer_stream_start = platf::is_running_as_system() && !user_session_ready();
         if (defer_stream_start) {
           deferred_stream_start_t deferred {.policy = policy};
@@ -3105,15 +3328,52 @@ namespace stream {
           session::start_shared_platform_if_needed();
         }
 #else
+        const auto color_mode = session.config.monitor.dynamicRange != 0 &&
+                                  !session.config.monitor.prefer_sdr_10bit &&
+                                  !session.config.monitor.force_sdr ?
+                                  platf::proton_color_mode::hdr :
+                                session.config.monitor.dynamicRange != 0 &&
+                                  session.config.monitor.prefer_sdr_10bit &&
+                                  !session.config.monitor.force_sdr ?
+                                  platf::proton_color_mode::sdr10 :
+                                  platf::proton_color_mode::sdr;
+        const auto wayland_hdr_compatibility = platf::wayland_hdr_compatibility::resolve(
+          config::video.dd.wayland_hdr_compatibility,
+          platf::wayland_hdr_compatibility::selected_session_is_wayland(
+            window_system == window_system_e::WAYLAND
+          ),
+          color_mode == platf::proton_color_mode::hdr
+        );
+        if (config::video.dd.wayland_hdr_compatibility && !wayland_hdr_compatibility.enabled) {
+          if (color_mode == platf::proton_color_mode::sdr10) {
+            BOOST_LOG(debug) << "Wayland HDR compatibility skipped: 10-bit SDR preferred.";
+          } else if (session.config.monitor.force_sdr) {
+            BOOST_LOG(debug) << "Wayland HDR compatibility skipped: HDR disabled by the final session/display policy.";
+          } else if (wayland_hdr_compatibility.suppression_reason ==
+                     platf::wayland_hdr_compatibility::suppression_reason_e::not_wayland) {
+            BOOST_LOG(debug) << "Wayland HDR compatibility skipped: the active session is not Wayland.";
+          } else {
+            BOOST_LOG(debug) << "Wayland HDR compatibility skipped: session resolved to SDR.";
+          }
+        }
+        platf::frame_limiter_streaming_start(
+          platf::frame_limiter_owner::rtsp,
+          policy,
+          {.color_mode = color_mode,
+           .wayland_hdr_compatibility = wayland_hdr_compatibility.enabled}
+        );
+        session::start_shared_platform_if_needed();
+#endif
+#else
         session::start_shared_platform_if_needed();
 #endif
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
         system_tray::update_tray_playing(proc::proc.get_last_run_app_name());
         update::on_stream_started();
   #if defined(_WIN32)
-        // If ViGEm is not installed, notify the user that gamepad input won't work
+        // Notify only when neither virtual-gamepad backend is installed and usable.
         try {
-          if (!platf::is_vigem_installed(nullptr)) {
+          if (!platf::is_vigem_installed(nullptr) && !platf::is_virtual_gamepad_driver_available()) {
             system_tray::update_tray_vigem_missing();
           }
         } catch (...) {
@@ -3133,6 +3393,7 @@ namespace stream {
 
       session->shutdown_event = mail->event<bool>(mail::shutdown);
       session->launch_session_id = launch_session.id;
+      session->display_power_guard = launch_session.display_power_guard;
       session->device_name = launch_session.device_name;
       session->device_uuid = !launch_session.client_uuid.empty() ? launch_session.client_uuid : launch_session.unique_id;
       // Fresh history identifier per stream so each start/stop cycle produces
@@ -3144,6 +3405,25 @@ namespace stream {
       session->client_display_refresh_millihz = launch_session.client_display_refresh_millihz;
       session->remote_role = launch_session.role;
       session->remote_role_generation = launch_session.role_generation;
+#ifdef __linux__
+      if (launch_session.role == remote_session::role_e::game) {
+        const auto app = proc::proc.active_session_guard();
+        const auto token = launch_session.normal_vdd_identity_token != 0 ?
+                             launch_session.normal_vdd_identity_token :
+                             app.normal_vdd_identity_token;
+        const auto owner = launch_session.normal_vdd_identity_token != 0 ?
+                             (launch_session.normal_vdd_owner_uuid.empty() ? session->device_uuid : launch_session.normal_vdd_owner_uuid) :
+                             app.client_uuid;
+        if (token != 0) {
+          session->normal_display_capture = remote_display_topology::instance().retain_normal_game_capture(owner, token);
+          if (!session->normal_display_capture) {
+            throw std::runtime_error("The app's display ownership ended before capture could start");
+          }
+        } else if (remote_display_topology::instance().normal_game_release_pending()) {
+          throw std::runtime_error("The previous app's display is still being released");
+        }
+      }
+#endif
       session->input_only = launch_session.role == remote_session::role_e::input;
       session->audio_disabled = !remote_session::uses_audio(
         launch_session.role,
@@ -3171,8 +3451,10 @@ namespace stream {
                       << " source=" << static_cast<int>(session->config.monitor.capture_source)
                       << " output='" << session->config.monitor.capture_output.value_or(std::string {}) << "'.";
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
       session->virtual_display.active = launch_session.virtual_display;
+#endif
+#ifdef _WIN32
       session->virtual_display.guid_bytes = launch_session.virtual_display_guid_bytes;
       if (session->virtual_display.active) {
         VDISPLAY::setWatchdogFeedingEnabled(true);

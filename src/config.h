@@ -153,6 +153,7 @@ namespace config {
     bool remote_monitor_disconnect_on_stream_end;  ///< Release a Remote Monitor when its RTSP stream ends.
     bool remote_monitor_disconnect_on_client_disconnect;  ///< Release a Remote Monitor when its paired client transport disconnects.
     bool remote_monitor_terminate_on_first_request;  ///< Let extra clients terminate the active game with one Terminate request.
+    bool remote_monitor_confirm_app_replacement;  ///< Require confirmation before an ungated launch replaces the active game.
 
     struct dd_t {
       struct workarounds_t {
@@ -234,6 +235,7 @@ namespace config {
       mode_remapping_t mode_remapping;
       workarounds_t wa;
       bool vulkan_hdr_layer;  ///< Register the Vulkan HDR implicit layer that exposes HDR surface formats on virtual displays. Disable to recover from Vulkan access violations in third-party apps.
+      bool wayland_hdr_compatibility;  ///< Opt in to native KDE/Wayland HDR launch environment compatibility for resolved HDR streams.
     } dd;
 
     int max_bitrate;  // Maximum bitrate, sets ceiling in kbps for bitrate requested from client
@@ -246,6 +248,7 @@ namespace config {
     std::string virtual_sink;
     bool stream;
     bool install_steam_drivers;
+    bool sink_capture_only;  ///< Capture the selected Windows audio sink without changing default outputs.
   };
 
   constexpr int ENCRYPTION_MODE_NEVER = 0;  // Never use video encryption, even if the client supports it
@@ -295,6 +298,8 @@ namespace config {
     // When forcing DS5 emulation via Inputtino, randomize the virtual controller MAC
     // to avoid client-side config mixing when controllers are swapped.
     bool ds5_inputtino_randomize_mac;
+    // Apply native Sony audio endpoint compatibility to streamed Proton launches.
+    bool proton_dualsense_compatibility;
 
     bool keyboard;
     bool mouse;
@@ -315,8 +320,10 @@ namespace config {
 
     bool enable {false};
 
-    // Provider selector. Linux uses MangoHUD; Windows uses RTSS or NVIDIA Control Panel.
-    // Supported values: "auto", "mangohud", "proton", "nvidia-control-panel", "rtss", "none".
+    // Provider selector. Linux defaults to Proton with a MangoHUD overlay;
+    // Windows defaults to RTSS or NVIDIA Control Panel.
+    // Supported values: "auto", "mangohud", "proton", "mangohud-proton",
+    // "nvidia-control-panel", "rtss", "none".
     std::string provider;
 
     // Optional FPS limit override in millihertz. 0 uses the stream's requested FPS.
@@ -326,6 +333,8 @@ namespace config {
     // configuration; 1-4 select MangoHUD's standard built-in presets.
     std::string mangohud_preset {"custom"};
     bool mangohud_always_show_graph {false};
+    // MangoHUD's own limiter timing. Early favors smooth pacing; late favors latency.
+    std::string mangohud_limiter_method {"late"};
 
     // When enabled, Sunshine forces the NVIDIA driver VSYNC setting to Off during streams when available.
     // When NVIDIA overrides are unavailable, the display helper falls back to the highest refresh rate instead.

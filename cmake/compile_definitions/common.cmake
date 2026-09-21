@@ -155,6 +155,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/steam_process_tracker.h"
         "${CMAKE_SOURCE_DIR}/src/lutris_integration.cpp"
         "${CMAKE_SOURCE_DIR}/src/lutris_integration.h"
+        "${CMAKE_SOURCE_DIR}/src/lutris_artwork.cpp"
+        "${CMAKE_SOURCE_DIR}/src/lutris_artwork.h"
         "${CMAKE_SOURCE_DIR}/src/lutris_sync_policy.cpp"
         "${CMAKE_SOURCE_DIR}/src/lutris_sync_policy.h"
         "${CMAKE_SOURCE_DIR}/src/lutris_auto_sync.cpp"
@@ -229,12 +231,34 @@ include_directories(BEFORE "${CMAKE_SOURCE_DIR}")
 set(SUNSHINE_FFMPEG_INCLUDE_DIRS ${FFMPEG_INCLUDE_DIRS})
 
 # Minimal FFmpeg bundles used by Vibeshine intentionally omit still-image
-# codecs. These system codecs are only a fallback for Steam artwork; the
-# normal path remains FFmpeg/libswscale. Keep the feature optional so targets
-# on platforms without these development libraries still build.
-find_package(PNG QUIET)
-find_package(JPEG QUIET)
-find_library(STEAM_ARTWORK_WEBP_LIBRARY NAMES webp)
+# codecs. Windows packages must include the image libraries so Steam covers
+# can always be converted to client-compatible PNGs.
+if(WIN32)
+    # The Windows executable is linked statically; do not select DLL import
+    # libraries whose runtime DLLs are not part of the installer payload.
+    set(_steam_artwork_library_suffixes "${CMAKE_FIND_LIBRARY_SUFFIXES}")
+    set(CMAKE_FIND_LIBRARY_SUFFIXES .a .lib)
+    # Existing build trees may still cache the DLL import libraries selected
+    # before static linking was required. find_package does not re-search them.
+    foreach(_artwork_library_cache IN ITEMS
+            PNG_LIBRARY_RELEASE PNG_LIBRARY_DEBUG
+            JPEG_LIBRARY_RELEASE JPEG_LIBRARY_DEBUG STEAM_ARTWORK_WEBP_LIBRARY)
+        if("${${_artwork_library_cache}}" MATCHES "\\.dll\\.a$")
+            unset(${_artwork_library_cache} CACHE)
+            unset(${_artwork_library_cache})
+        endif()
+    endforeach()
+    unset(_artwork_library_cache)
+    find_package(PNG REQUIRED)
+    find_package(JPEG REQUIRED)
+    find_library(STEAM_ARTWORK_WEBP_LIBRARY NAMES webp REQUIRED)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES "${_steam_artwork_library_suffixes}")
+    unset(_steam_artwork_library_suffixes)
+else()
+    find_package(PNG QUIET)
+    find_package(JPEG QUIET)
+    find_library(STEAM_ARTWORK_WEBP_LIBRARY NAMES webp)
+endif()
 if(PNG_FOUND AND JPEG_FOUND AND STEAM_ARTWORK_WEBP_LIBRARY)
     list(APPEND SUNSHINE_DEFINITIONS VIBESHINE_STEAM_ARTWORK_IMAGE_LIBS=1)
     list(APPEND SUNSHINE_EXTERNAL_LIBRARIES PNG::PNG JPEG::JPEG ${STEAM_ARTWORK_WEBP_LIBRARY})

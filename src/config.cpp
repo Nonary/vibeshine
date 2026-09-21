@@ -45,6 +45,7 @@
 #include "entry_handler.h"
 #include "file_handler.h"
 #include "globals.h"
+#include "host_stats.h"
 #include "httpcommon.h"
 #include "logging.h"
 #include "nvhttp.h"
@@ -57,6 +58,10 @@
 #include "utility.h"
 #include "version_compare.h"
 #include "webrtc_stream.h"
+
+#ifdef __linux__
+  #include "platform/linux/private_display.h"
+#endif
 
 #ifdef _WIN32
   #include "platform/windows/hotkey_manager.h"
@@ -915,6 +920,7 @@ namespace config {
     false,  // remote_monitor_disconnect_on_stream_end
     false,  // remote_monitor_disconnect_on_client_disconnect
     false,  // remote_monitor_terminate_on_first_request
+    true,  // remote_monitor_confirm_app_replacement
 
     {
       video_t::dd_t::config_option_e::verify_only,  // configuration_option
@@ -937,14 +943,15 @@ namespace config {
 #endif
       true,  // use_sunshine_virtual_display_driver
       false,  // activate_virtual_display
-      -1,  // virtual_display_scale_percent
+      0,  // virtual_display_scale_percent
       0,  // virtual_display_permanent_count
       false,  // virtual_display_permanent_count_configured
       {},  // virtual_display_outputs (Linux; empty auto-discovers Vibeshine VKMS connectors)
       {},  // snapshot_exclude_devices
       {},  // mode_remapping
       {false},  // wa
-      true  // vulkan_hdr_layer
+      true,  // vulkan_hdr_layer
+      false  // wayland_hdr_compatibility
     },  // display_device
 
     0,  // max_bitrate
@@ -957,6 +964,7 @@ namespace config {
     {},  // virtual_sink
     true,  // stream audio
     true,  // install_steam_drivers
+    false,  // audio_sink_capture_only
   };
 
   stream_t stream {
@@ -994,13 +1002,18 @@ namespace config {
     std::chrono::duration<double> {1 / 24.9},  // key_repeat_period
 
     {
+#ifdef SUNSHINE_BUILD_STEAMOS
+      "xone",
+#else
       platf::supported_gamepads(nullptr).front().name.data(),
       platf::supported_gamepads(nullptr).front().name.size(),
+#endif
     },  // Default gamepad
     true,  // back as touchpad click enabled (manual DS4 only)
     true,  // client gamepads with motion events are emulated as DS4
     true,  // client gamepads with touchpads are emulated as DS4
     true,  // ds5_inputtino_randomize_mac
+    true,  // proton_dualsense_compatibility
 
     true,  // keyboard enabled
     true,  // mouse enabled
@@ -1016,6 +1029,7 @@ namespace config {
     0,  // fps_limit
     "custom",  // mangohud_preset
     false,  // mangohud_always_show_graph
+    "late",  // mangohud_limiter_method
     false,  // disable_vsync
     frame_limiter_t::virtual_display_capture_mode_e::enabled
   };
@@ -1786,6 +1800,7 @@ namespace config {
     bool_f(vars, "wgc_pacing_smoothing", video.wgc_pacing_smoothing);
     string_f(vars, "encoder", video.encoder);
     const auto configured_encoder = video.encoder;
+    video.encoder = std::string(nvenc::canonical_encoder_name(video.encoder));
     video.encoder = std::string(amf::lifecycle::canonical_encoder_name(video.encoder));
     if (video.encoder != configured_encoder) {
       BOOST_LOG(info) << "config: encoder = " << configured_encoder
@@ -1826,6 +1841,7 @@ namespace config {
     bool_f(vars, "remote_monitor_disconnect_on_stream_end", video.remote_monitor_disconnect_on_stream_end);
     bool_f(vars, "remote_monitor_disconnect_on_client_disconnect", video.remote_monitor_disconnect_on_client_disconnect);
     bool_f(vars, "remote_monitor_terminate_on_first_request", video.remote_monitor_terminate_on_first_request);
+    bool_f(vars, "remote_monitor_confirm_app_replacement", video.remote_monitor_confirm_app_replacement);
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);
     generic_f(vars, "dd_resolution_option", video.dd.resolution_option, dd::resolution_option_from_view);
@@ -1862,6 +1878,7 @@ namespace config {
       }
     }
     bool_f(vars, "vulkan_hdr_layer", video.dd.vulkan_hdr_layer);
+    bool_f(vars, "wayland_hdr_compatibility", video.dd.wayland_hdr_compatibility);
     {
       auto it = vars.find("dd_virtual_display_permanent_count");
       if (it == std::end(vars)) {
@@ -1926,6 +1943,15 @@ namespace config {
       frame_limiter.mangohud_preset = "custom";
     }
     bool_f(vars, "mangohud_always_show_graph", frame_limiter.mangohud_always_show_graph);
+    string_f(vars, "mangohud_limiter_method", frame_limiter.mangohud_limiter_method);
+    boost::algorithm::to_lower(frame_limiter.mangohud_limiter_method);
+    boost::algorithm::trim(frame_limiter.mangohud_limiter_method);
+    if (frame_limiter.mangohud_limiter_method != "early" &&
+        frame_limiter.mangohud_limiter_method != "late") {
+      BOOST_LOG(warning) << "config: Unknown mangohud_limiter_method '"
+                         << frame_limiter.mangohud_limiter_method << "'; using late.";
+      frame_limiter.mangohud_limiter_method = "late";
+    }
     bool_f(vars, "frame_limiter_disable_vsync", frame_limiter.disable_vsync);
     bool_f(vars, "rtss_disable_vsync_ullm", frame_limiter.disable_vsync);
     {
@@ -1984,6 +2010,7 @@ namespace config {
     string_f(vars, "audio_sink", audio.sink);
     string_f(vars, "virtual_sink", audio.virtual_sink);
     bool_f(vars, "stream_audio", audio.stream);
+    bool_f(vars, "audio_sink_capture_only", audio.sink_capture_only);
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
 
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, {"pc"sv, "lan"sv, "wan"sv});
@@ -2079,6 +2106,7 @@ namespace config {
     string_restricted_f(vars, "gamepad"s, input.gamepad, get_supported_gamepad_options());
     bool_f(vars, "ds4_back_as_touchpad_click", input.ds4_back_as_touchpad_click);
     bool_f(vars, "motion_as_ds4", input.motion_as_ds4);
+    bool_f(vars, "proton_dualsense_compatibility", input.proton_dualsense_compatibility);
     bool_f(vars, "touchpad_as_ds4", input.touchpad_as_ds4);
 
     bool_f(vars, "mouse", input.mouse);
@@ -2520,9 +2548,11 @@ namespace config {
         "native_pen_touch",
         "keybindings",
         "ds5_inputtino_randomize_mac",
+        "proton_dualsense_compatibility",
 
         // Stream audio/video and display automation
         "audio_sink",
+        "audio_sink_capture_only",
         "virtual_sink",
         "stream_audio",
         "adapter_name",
@@ -2907,7 +2937,9 @@ namespace config {
       }
       base.insert_or_assign(
         name,
-        name == "encoder" ? std::string(amf::lifecycle::canonical_encoder_name(value)) : value
+        name == "encoder" ?
+          std::string(amf::lifecycle::canonical_encoder_name(nvenc::canonical_encoder_name(value))) :
+          value
       );
     }
 
@@ -3064,6 +3096,8 @@ namespace config {
       const auto prev_rtx_hdr_peak_brightness = video.rtx_hdr.peak_brightness;
 #endif
       const auto prev_session_history_enabled = sunshine.session_history_enabled;
+      const auto prev_realtime_stats_enabled = sunshine.realtime_stats_enabled;
+      const auto prev_realtime_stats_poll_interval_ms = sunshine.realtime_stats_poll_interval_ms;
 
       auto vars = parse_config(file_handler::read_file(sunshine.config_file.c_str()));
       merge_config_overrides(vars, command_line_overrides);
@@ -3082,6 +3116,10 @@ namespace config {
         BOOST_LOG(info) << "Hot-apply: deferring session history enablement change until active sessions end.";
         sunshine.session_history_enabled = prev_session_history_enabled;
         g_deferred_reload.store(true, std::memory_order_release);
+      }
+      if (sunshine.realtime_stats_enabled != prev_realtime_stats_enabled ||
+          sunshine.realtime_stats_poll_interval_ms != prev_realtime_stats_poll_interval_ms) {
+        host_stats::configuration_changed();
       }
       session_history::reload_settings();
 
@@ -3160,6 +3198,7 @@ namespace config {
         continue;
       }
       if (normalized_key == "encoder") {
+        v = std::string(nvenc::canonical_encoder_name(v));
         v = std::string(amf::lifecycle::canonical_encoder_name(v));
       }
       filtered.emplace(std::move(normalized_key), std::move(v));

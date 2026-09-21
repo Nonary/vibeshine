@@ -55,7 +55,7 @@ TEST(KmsgrabSelection, RetainsCaptureAcrossPendingCommitTransitions) {
 
   latch.observe_response(response_e::changed, true, start);
   EXPECT_TRUE(latch.state_pending());
-  EXPECT_FALSE(latch.capture_ready());
+  EXPECT_TRUE(latch.capture_ready());
   EXPECT_FALSE(latch.pending_timed_out(start + 99ms, 100ms));
   EXPECT_TRUE(latch.pending_timed_out(start + 100ms, 100ms));
 
@@ -67,7 +67,7 @@ TEST(KmsgrabSelection, RetainsCaptureAcrossPendingCommitTransitions) {
   EXPECT_FALSE(latch.capture_ready());
 }
 
-TEST(KmsgrabSelection, RepeatedPendingChangesKeepTheirOriginalFallbackDeadline) {
+TEST(KmsgrabSelection, CompletedPendingChangesRefreshTheirHangDeadline) {
   using namespace std::chrono_literals;
   using response_e = platf::kms::pacing::presentation_response_e;
   using clock_t = platf::kms::pacing::clock_t;
@@ -78,13 +78,8 @@ TEST(KmsgrabSelection, RepeatedPendingChangesKeepTheirOriginalFallbackDeadline) 
   for (int elapsed_ms = 0; elapsed_ms <= 96; elapsed_ms += 16) {
     latch.observe_response(response_e::changed, true, start + std::chrono::milliseconds {elapsed_ms});
   }
-  EXPECT_FALSE(latch.pending_timed_out(start + 99ms, 100ms));
-  EXPECT_TRUE(latch.pending_timed_out(start + 100ms, 100ms));
-
-  EXPECT_TRUE(platf::kms::pacing::hold_pending_response_to_deadline(response_e::changed, true, true));
-  EXPECT_FALSE(platf::kms::pacing::hold_pending_response_to_deadline(response_e::changed, true, false));
-  EXPECT_FALSE(platf::kms::pacing::hold_pending_response_to_deadline(response_e::changed, false, true));
-  EXPECT_FALSE(platf::kms::pacing::hold_pending_response_to_deadline(response_e::timeout, true, true));
+  EXPECT_FALSE(latch.pending_timed_out(start + 195ms, 100ms));
+  EXPECT_TRUE(latch.pending_timed_out(start + 196ms, 100ms));
 }
 
 TEST(KmsgrabSelection, PendingPresentationUsesAHangDeadlineInsteadOfTheOldFallbackWindow) {
@@ -118,7 +113,17 @@ TEST(KmsgrabSelection, RequiredPresentationModeNeverEnablesFixedRateFallback) {
   EXPECT_TRUE(ordinary_kms.fixed_rate_allowed());
 }
 
-TEST(KmsgrabSelection, EventDeliveryTracksSameRatePresentationsAndCoalescesOversupply) {
+TEST(KmsgrabSelection, UsesTheFractionalClientFrameInterval) {
+  using namespace std::chrono_literals;
+
+  EXPECT_EQ(platf::kms::pacing::interval_from_frame_rate(60'000, 1'001), 16'683'333ns);
+  EXPECT_EQ(platf::kms::pacing::interval_from_frame_rate(120'000, 1'001), 8'341'666ns);
+  EXPECT_EQ(platf::kms::pacing::interval_from_frame_rate(120, 1), 8'333'333ns);
+  EXPECT_EQ(platf::kms::pacing::interval_from_frame_rate(0, 1), 0ns);
+  EXPECT_EQ(platf::kms::pacing::interval_from_frame_rate(120, 0), 0ns);
+}
+
+TEST(KmsgrabSelection, UnevenVrrPresentationsSpendOneFrameOfPhaseCredit) {
   using namespace std::chrono_literals;
   using clock_t = platf::kms::pacing::clock_t;
 
@@ -127,83 +132,132 @@ TEST(KmsgrabSelection, EventDeliveryTracksSameRatePresentationsAndCoalescesOvers
 
   const auto first = clock_t::time_point {1s};
   EXPECT_EQ(limiter.next_delivery(first), first);
-
   limiter.mark_delivered(first);
-  EXPECT_EQ(limiter.next_delivery(first + 1ms), first + 10ms);
-  EXPECT_EQ(limiter.next_delivery(first + 9ms), first + 10ms);
+  // The short half can arrive first. The initial one-frame credit preserves it.
+  EXPECT_EQ(limiter.next_delivery(first + 4ms), first + 4ms);
+  limiter.mark_delivered(first + 4ms);
 
-  // A near-deadline source timestamp moves the cadence with the compositor.
-  const auto same_rate_presentation = first + 9500us;
-  limiter.mark_delivered(same_rate_presentation);
-  EXPECT_EQ(limiter.next_delivery(first + 10ms), first + 19500us);
+  // The following long half replenishes both its own token and enough phase
+  // credit for the next short half. Every source presentation remains immediate.
+  EXPECT_EQ(limiter.next_delivery(first + 20ms), first + 20ms);
+  limiter.mark_delivered(first + 20ms);
+  EXPECT_EQ(limiter.next_delivery(first + 24ms), first + 24ms);
+  limiter.mark_delivered(first + 24ms);
+  EXPECT_EQ(limiter.next_delivery(first + 40ms), first + 40ms);
 
-  // A materially early presentation retains the client-rate deadline.
-  const auto oversupplied_presentation = first + 15ms;
-  limiter.mark_delivered(oversupplied_presentation);
-  EXPECT_EQ(limiter.next_delivery(first + 20ms), first + 29500us);
-
-  // A late source frame rebases instead of producing a catch-up burst.
-  const auto stalled_delivery = first + 45ms;
-  limiter.mark_delivered(stalled_delivery);
-  EXPECT_EQ(limiter.next_delivery(stalled_delivery), stalled_delivery + 10ms);
-
+  // The reverse phase (long half first) is source-locked as well.
   limiter.reset();
-  EXPECT_EQ(limiter.next_delivery(stalled_delivery + 1ms), stalled_delivery + 1ms);
+  limiter.mark_delivered(first);
+  EXPECT_EQ(limiter.next_delivery(first + 16ms), first + 16ms);
+  limiter.mark_delivered(first + 16ms);
+  EXPECT_EQ(limiter.next_delivery(first + 20ms), first + 20ms);
 }
 
-TEST(KmsgrabSelection, NormalizesPresentationJitterOntoTheClientCadence) {
+TEST(KmsgrabSelection, StartupPhaseCreditIsBoundedToOneFrame) {
   using namespace std::chrono_literals;
   using clock_t = platf::kms::pacing::clock_t;
 
-  platf::kms::pacing::presentation_timestamp_grid_t grid;
-  grid.set_interval(10ms);
+  platf::kms::pacing::presentation_rate_limiter_t limiter;
+  limiter.set_interval(10ms);
 
   const auto first = clock_t::time_point {1s};
-  EXPECT_EQ(grid.normalize(first), first);
-
-  // The output removes most alternating VRR jitter without becoming rigid.
-  EXPECT_EQ(grid.normalize(first + 8ms), first + 9500us);
-  EXPECT_EQ(grid.normalize(first + 21ms), first + 19875us);
-  EXPECT_EQ(grid.normalize(first + 29ms), first + 29656250ns);
+  limiter.mark_delivered(first);
+  EXPECT_EQ(limiter.next_delivery(first), first);
+  limiter.mark_delivered(first);
+  EXPECT_EQ(limiter.next_delivery(first), first + 10ms);
 }
 
-TEST(KmsgrabSelection, PresentationTimestampGridRebasesAfterARealStall) {
+TEST(KmsgrabSelection, ReportsCreditAndDeadlineWithoutChangingLimiterState) {
   using namespace std::chrono_literals;
   using clock_t = platf::kms::pacing::clock_t;
 
-  platf::kms::pacing::presentation_timestamp_grid_t grid;
-  grid.set_interval(10ms);
+  platf::kms::pacing::presentation_rate_limiter_t limiter;
+  limiter.set_interval(10ms);
 
   const auto first = clock_t::time_point {1s};
-  EXPECT_EQ(grid.normalize(first), first);
-  EXPECT_EQ(grid.normalize(first + 10ms), first + 10ms);
+  limiter.mark_delivered(first);
+  limiter.mark_delivered(first + 4ms);
 
-  const auto stalled = first + 36ms;
-  EXPECT_EQ(grid.normalize(stalled), stalled);
-  EXPECT_EQ(grid.normalize(stalled + 9ms), stalled + 9750us);
-
-  grid.reset();
-  EXPECT_EQ(grid.normalize(stalled + 50ms), stalled + 50ms);
+  const auto state = limiter.diagnostic_state(first + 5ms);
+  EXPECT_EQ(state.interval, 10ms);
+  EXPECT_EQ(state.stored_credit, 4ms);
+  EXPECT_EQ(state.available_credit, 5ms);
+  ASSERT_TRUE(state.last_delivery);
+  EXPECT_EQ(*state.last_delivery, first + 4ms);
+  EXPECT_EQ(state.next_delivery, first + 10ms);
+  EXPECT_EQ(limiter.next_delivery(first + 5ms), state.next_delivery);
 }
 
-TEST(KmsgrabSelection, PresentationTimestampGridTracksFractionalSourceRate) {
+TEST(KmsgrabSelection, SustainedOversupplyStaysWithinTheOneFrameBurstAllowance) {
   using namespace std::chrono_literals;
   using clock_t = platf::kms::pacing::clock_t;
 
-  platf::kms::pacing::presentation_timestamp_grid_t grid;
-  grid.set_interval(10ms);
+  platf::kms::pacing::presentation_rate_limiter_t limiter;
+  limiter.set_interval(10ms);
 
   const auto first = clock_t::time_point {1s};
-  auto normalized = grid.normalize(first);
-  for (int frame = 1; frame <= 100; ++frame) {
-    normalized = grid.normalize(first + frame * 10100us);
+  auto delivered = first;
+  limiter.mark_delivered(delivered);
+
+  // The one-frame phase allowance can absorb finite jitter, but a source that
+  // remains 5% fast must spend it and converge to the physical 100 Hz ceiling.
+  for (int frame = 1; frame <= 200; ++frame) {
+    const auto source_arrival = first + frame * 9500us;
+    const auto capture_wake = std::max(source_arrival, delivered);
+    delivered = limiter.next_delivery(capture_wake);
+    limiter.mark_delivered(delivered);
+
+    // One saved frame is the complete burst allowance. Every later delivery
+    // must remain behind the corresponding long-run client-rate bound.
+    EXPECT_GE(delivered - first, (frame - 1) * 10ms);
   }
 
-  // A slightly slower source pulls the output frequency with it instead of
-  // allowing an exact nominal grid to advance indefinitely ahead of frames.
-  const auto source = first + 1010ms;
-  const auto phase_error = normalized > source ? normalized - source : source - normalized;
-  EXPECT_LT(phase_error, 1ms);
+  EXPECT_GE(delivered - first, 1990ms);
+  EXPECT_LE(delivered - first, 2000ms);
+}
+
+TEST(KmsgrabSelection, TwoIntervalsAreTheExplicitStallBoundary) {
+  using namespace std::chrono_literals;
+  using clock_t = platf::kms::pacing::clock_t;
+
+  const auto first = clock_t::time_point {1s};
+  platf::kms::pacing::presentation_rate_limiter_t limiter;
+  limiter.set_interval(10ms);
+
+  // Exhaust the startup credit, then arrive one microsecond before the stall
+  // threshold. The remainder still pays for the adjacent presentation.
+  limiter.mark_delivered(first);
+  limiter.mark_delivered(first);
+  limiter.mark_delivered(first + 19'999us);
+  EXPECT_EQ(limiter.next_delivery(first + 20ms), first + 20ms);
+
+  // At exactly two intervals the source is considered stalled. It resumes
+  // immediately but receives no credit for a same-time catch-up frame.
+  limiter.reset();
+  limiter.mark_delivered(first);
+  limiter.mark_delivered(first);
+  limiter.mark_delivered(first + 20ms);
+  EXPECT_EQ(limiter.next_delivery(first + 20ms), first + 30ms);
+}
+
+TEST(KmsgrabSelection, StallResumesImmediatelyWithoutCatchupCredit) {
+  using namespace std::chrono_literals;
+  using clock_t = platf::kms::pacing::clock_t;
+
+  platf::kms::pacing::presentation_rate_limiter_t limiter;
+  limiter.set_interval(10ms);
+
+  const auto first = clock_t::time_point {1s};
+  limiter.mark_delivered(first);
+  limiter.mark_delivered(first + 4ms);
+
+  const auto resumed = first + 50ms;
+  EXPECT_EQ(limiter.next_delivery(resumed), resumed);
+  limiter.mark_delivered(resumed);
+  EXPECT_EQ(limiter.next_delivery(resumed + 1ms), resumed + 10ms);
+
+  limiter.reset();
+  EXPECT_EQ(limiter.next_delivery(resumed + 1ms), resumed + 1ms);
 }
 
 TEST(KmsgrabSelection, OlderSnapshotCannotClearNewerPresentation) {
@@ -222,7 +276,7 @@ TEST(KmsgrabSelection, OlderSnapshotCannotClearNewerPresentation) {
   EXPECT_TRUE(latch.capture_ready());
 
   latch.observe_response(response_e::changed, true, start + 1ms);
-  EXPECT_FALSE(latch.capture_ready());
+  EXPECT_TRUE(latch.capture_ready());
   latch.observe_response(response_e::timeout, false, start + 2ms);
   EXPECT_TRUE(latch.capture_ready());
 
@@ -265,6 +319,17 @@ TEST(KmsgrabSelection, UsesStableVibeshinePresentationAbi) {
   EXPECT_EQ(offsetof(vibeshine_drm_frame, dma_buf_fds), 52u);
   EXPECT_EQ(offsetof(vibeshine_drm_frame, sync_file_fds), 100u);
   EXPECT_EQ(offsetof(vibeshine_drm_frame, reserved), 120u);
+
+  EXPECT_EQ(VIBESHINE_DRM_TRACE_ABI_VERSION, 1u);
+  EXPECT_EQ(VIBESHINE_DRM_TRACE_MAX_EVENTS, 64u);
+  EXPECT_EQ(DRM_VIBESHINE_GET_PRESENT_TRACE, 2u);
+  EXPECT_EQ(sizeof(vibeshine_drm_trace_event), 16u);
+  EXPECT_EQ(sizeof(vibeshine_drm_present_trace), 1088u);
+  EXPECT_EQ(offsetof(vibeshine_drm_present_trace, after_sequence), 8u);
+  EXPECT_EQ(offsetof(vibeshine_drm_present_trace, newest_sequence), 16u);
+  EXPECT_EQ(offsetof(vibeshine_drm_present_trace, count), 24u);
+  EXPECT_EQ(offsetof(vibeshine_drm_present_trace, events), 32u);
+  EXPECT_EQ(offsetof(vibeshine_drm_present_trace, reserved), 1056u);
 }
 
 TEST(KmsgrabSelection, RecognizesCudaImportableDisplayDrivers) {
@@ -295,6 +360,24 @@ TEST(KmsgrabSelection, RejectsMissingOrAmbiguousDriverIdentities) {
   EXPECT_FALSE(selection::normalize_driver_name(oversized.data(), oversized.size()));
 
   EXPECT_EQ(selection::normalize_driver_name("vibeshine_drm", 13), "vibeshine_drm");
+}
+
+TEST(KmsgrabSelection, PrivateDisplayEncodesOnTheSelectedPhysicalRenderer) {
+  EXPECT_EQ(selection::render_device_path("vibeshine_drm", "/dev/dri/card1", "", "/dev/dri/renderD128"), "/dev/dri/renderD128");
+  // A selected second GPU must survive enumeration of another renderer.
+  EXPECT_EQ(selection::render_device_path("vibeshine_drm", "/dev/dri/card2", "/dev/dri/renderD128", "/dev/dri/renderD129"), "/dev/dri/renderD129");
+  // An unresolved encoder never falls back to the display-only card.
+  EXPECT_TRUE(selection::render_device_path("vibeshine_drm", "/dev/dri/card1", "", "").empty());
+}
+
+TEST(KmsgrabSelection, OrdinaryCardsRetainTheirOwnRenderNodeAndPrimaryFallback) {
+  for (const auto driver : {"amdgpu", "i915", "nvidia-drm"}) {
+    EXPECT_EQ(selection::render_device_path(driver, "/dev/dri/card0", "/dev/dri/renderD128", "/dev/dri/renderD129"), "/dev/dri/renderD128");
+    EXPECT_EQ(selection::render_device_path(driver, "/dev/dri/card0", "", "/dev/dri/renderD129"), "/dev/dri/card0");
+  }
+  // An unrelated virtual driver cannot opt into the managed renderer route.
+  EXPECT_EQ(selection::render_device_path("vkms", "/dev/dri/card1", "", "/dev/dri/renderD128"), "/dev/dri/card1");
+  EXPECT_EQ(selection::render_device_path("vibeshine_drm-extra", "/dev/dri/card1", "", "/dev/dri/renderD128"), "/dev/dri/card1");
 }
 
 TEST(KmsgrabSelection, ParsesOnlyCompleteUnsignedNumericAliases) {

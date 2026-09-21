@@ -8,11 +8,33 @@
 #include <src/platform/linux/mangohud_state.h>
 
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <random>
+
+namespace {
+  class scoped_environment final {
+  public:
+    scoped_environment(const char *name, const std::string &value): name_ {name} {
+      if (const auto *current = std::getenv(name)) previous_ = current;
+      setenv(name, value.c_str(), 1);
+    }
+    ~scoped_environment() {
+      if (previous_) setenv(name_.c_str(), previous_->c_str(), 1);
+      else unsetenv(name_.c_str());
+    }
+
+  private:
+    std::string name_;
+    std::optional<std::string> previous_;
+  };
+}  // namespace
 
 namespace mangohud = platf::mangohud;
 
-TEST(MangoHudPolicy, SelectsMangoHudForLinuxAutoAndExplicitProviders) {
-  EXPECT_TRUE(mangohud::provider_selected("auto"));
+TEST(MangoHudPolicy, SelectsOnlyExplicitMangoHudProvider) {
+  EXPECT_FALSE(mangohud::provider_selected("auto"));
   EXPECT_TRUE(mangohud::provider_selected("MangoHUD"));
   EXPECT_TRUE(mangohud::provider_selected("mango-hud"));
   EXPECT_FALSE(mangohud::provider_selected("none"));
@@ -51,23 +73,26 @@ TEST(MangoHudPolicy, AddsAndRemovesOnlyItsOpenGlPreload) {
 }
 
 TEST(MangoHudPolicy, BuildsSteamCompatibleAuthoritativeLimitConfig) {
-  EXPECT_EQ(mangohud::config_override("120"), "read_cfg,fps_limit=120");
-  EXPECT_EQ(mangohud::config_override("59.94"), "read_cfg,fps_limit=59.94");
+  EXPECT_EQ(mangohud::config_override("120"), "read_cfg,fps_limit_method=late,fps_limit=120");
+  EXPECT_EQ(
+    mangohud::config_override("59.94", "custom", false, "early"),
+    "read_cfg,fps_limit_method=early,fps_limit=59.94"
+  );
   EXPECT_EQ(
     mangohud::config_override("120", "3", false),
-    "read_cfg,preset=3,no_display=0,fps_limit=120"
+    "read_cfg,preset=3,no_display=0,fps_limit_method=late,fps_limit=120"
   );
   EXPECT_EQ(
     mangohud::config_override("120", "custom", true),
-    "read_cfg,no_display=0,frame_timing=1,fps_limit=120"
+    "read_cfg,no_display=0,frame_timing=1,fps_limit_method=late,fps_limit=120"
   );
   EXPECT_EQ(
     mangohud::config_override("120", "4", true),
-    "read_cfg,preset=4,no_display=0,frame_timing=1,fps_limit=120"
+    "read_cfg,preset=4,no_display=0,frame_timing=1,fps_limit_method=late,fps_limit=120"
   );
   EXPECT_EQ(
     mangohud::config_override("position=top-right,fps_limit=30", "120", "custom", false),
-    "read_cfg,position=top-right,fps_limit=30,fps_limit=120"
+    "read_cfg,position=top-right,fps_limit=30,fps_limit_method=late,fps_limit=120"
   );
   EXPECT_EQ(
     mangohud::overlay_config_override("position=top-right,fps_limit=30", "custom", false),
@@ -94,11 +119,52 @@ TEST(MangoHudPolicy, ValidatesAndSerializesLastMileSteamState) {
     "59.94",
     "3",
     true,
+    "early",
     std::chrono::system_clock::time_point {std::chrono::seconds {12345}}
   );
-  EXPECT_NE(state.find("version=2\nprovider=proton\nlimit=59.94\npreset=3\nalways_show_graph=1\n"), std::string::npos);
+  EXPECT_NE(
+    state.find("version=2\nprovider=proton\nlimit=59.94\npreset=3\nalways_show_graph=1\nlimiter_method=early\n"),
+    std::string::npos
+  );
   EXPECT_NE(state.find("owner_pid="), std::string::npos);
   EXPECT_TRUE(state.ends_with("expires=12345\n"));
+}
+
+TEST(MangoHudPolicy, WritesRuntimeStateWithoutFollowingUserLinks) {
+  namespace fs = std::filesystem;
+  const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count() ^
+                     static_cast<long long>(std::random_device {}());
+  const auto runtime = fs::temp_directory_path() /
+                       ("vibeshine-mangohud-state-" + std::to_string(nonce));
+  const auto outside = fs::temp_directory_path() /
+                       ("vibeshine-mangohud-outside-" + std::to_string(nonce));
+  std::error_code ec;
+  fs::create_directories(runtime, ec);
+  fs::permissions(runtime, fs::perms::owner_all, fs::perm_options::replace, ec);
+  scoped_environment environment {"XDG_RUNTIME_DIR", runtime.string()};
+
+  const auto state = mangohud::write_runtime_state(
+    "480", "proton", "116", "custom", false
+  );
+  EXPECT_EQ(state, runtime / "vibeshine/mangohud/480.state");
+  struct stat attributes {};
+  ASSERT_EQ(lstat(state.c_str(), &attributes), 0);
+  EXPECT_TRUE(S_ISREG(attributes.st_mode));
+  EXPECT_EQ(attributes.st_uid, getuid());
+  EXPECT_EQ(attributes.st_mode & 0777, 0600);
+
+  fs::remove_all(runtime, ec);
+  fs::create_directories(runtime, ec);
+  fs::permissions(runtime, fs::perms::owner_all, fs::perm_options::replace, ec);
+  fs::create_directories(outside, ec);
+  fs::permissions(outside, fs::perms::owner_all, fs::perm_options::replace, ec);
+  fs::create_directory_symlink(outside, runtime / "vibeshine", ec);
+  EXPECT_TRUE(mangohud::write_runtime_state(
+    "480", "proton", "116", "custom", false
+  ).empty());
+  EXPECT_FALSE(fs::exists(outside / "mangohud/480.state"));
+  fs::remove_all(runtime, ec);
+  fs::remove_all(outside, ec);
 }
 
 TEST(MangoHudPolicy, SelectsProtonAsLinuxLimiterProvider) {
@@ -106,6 +172,8 @@ TEST(MangoHudPolicy, SelectsProtonAsLinuxLimiterProvider) {
   stream_policy.fps = 116;
   EXPECT_TRUE(mangohud::proton_provider_selected("Proton"));
   EXPECT_TRUE(mangohud::proton_provider_selected("MangoHUD + Proton"));
+  EXPECT_TRUE(mangohud::proton_provider_selected("auto"));
+  EXPECT_TRUE(mangohud::proton_overlay_provider_selected("auto"));
   EXPECT_TRUE(mangohud::proton_overlay_provider_selected("mangohud-proton"));
   EXPECT_FALSE(mangohud::proton_overlay_provider_selected("proton"));
   EXPECT_FALSE(mangohud::provider_selected("proton"));

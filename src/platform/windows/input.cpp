@@ -25,6 +25,7 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "vhf_gamepad.h"
+#include "vhf_gamepad_policy.h"
 
 namespace platf {
   using namespace std::literals;
@@ -216,10 +217,17 @@ namespace platf {
   }
 
   class vigem_t {
+  private:
+    bool driver_available {false};
+
   public:
     // Set before init() so the ViGEmBus diagnostics can tell "no gamepad support at all" from
     // "a different driver is providing it".
     bool vhf_gamepad_available {false};
+
+    [[nodiscard]] bool available() const noexcept {
+      return driver_available;
+    }
 
     int init() {
       // Probe ViGEm during startup to see if we can successfully attach gamepads. The web UI exposes a
@@ -231,11 +239,12 @@ namespace platf {
         // present, ViGEmBus is simply not in use, and warning about it sends people chasing a
         // dependency they no longer need.
         if (vhf_gamepad_available) {
-          BOOST_LOG(info) << "ViGEmBus is not installed; gamepad emulation will use the Vibeshine virtual gamepad driver."sv;
+          BOOST_LOG(info) << "ViGEmBus is not installed; the Vibeshine virtual gamepad driver is available."sv;
         } else {
           BOOST_LOG(warning) << "ViGEmBus is not installed or running; gamepad emulation will be unavailable until installed."sv;
         }
       } else {
+        driver_available = true;
         vigem_disconnect(client.get());
       }
 
@@ -528,9 +537,8 @@ namespace platf {
 
   /**
    * @brief Chooses which controller the VHF driver should present.
-   * @details An explicit `vhf_ds4`/`vhf_ds5` selection is honoured as-is. Plain `vhf` reuses the
-   *          same client-type and motion/touchpad rules that already drive DualShock 4 selection
-   *          on ViGEm, so a PlayStation client gets a PlayStation pad without extra configuration.
+   * @details Explicit profile selections are honoured as-is. Plain `vhf` matches PlayStation and
+   *          Nintendo client types before applying the motion/touchpad preferences to other pads.
    * @param metadata The client's reported gamepad capabilities.
    * @return The profile to request.
    */
@@ -553,6 +561,9 @@ namespace platf {
 
     if (metadata.type == LI_CTYPE_PS) {
       return vhf_profile_e::dualsense;
+    }
+    if (metadata.type == LI_CTYPE_NINTENDO) {
+      return vhf_profile_e::switch_pro;
     }
     if (config::input.motion_as_ds4 && (metadata.capabilities & (LI_CCAP_ACCEL | LI_CCAP_GYRO))) {
       return vhf_profile_e::dualsense;
@@ -649,10 +660,11 @@ namespace platf {
       // MOUSEEVENTF_VIRTUALDESK maps to the entirety of the desktop rather than the primary desktop
       MOUSEEVENTF_VIRTUALDESK;
 
-    // Note: x and y already include the display offset (offset_x/offset_y) from client_to_touchport(),
-    // so we must not add offset_x/offset_y again here to avoid double-offsetting on multi-monitor setups.
-    auto scaled_x = std::lround(x * ((float) target_touch_port.width / (float) touch_port.width));
-    auto scaled_y = std::lround(y * ((float) target_touch_port.height / (float) touch_port.height));
+    // Windows client_to_touchport() returns monitor-local coordinates. Add the
+    // capture offset, already relative to the virtual desktop origin, once before
+    // normalizing to the complete desktop used by MOUSEEVENTF_VIRTUALDESK.
+    auto scaled_x = std::lround((x + touch_port.offset_x) * ((float) target_touch_port.width / (float) touch_port.width));
+    auto scaled_y = std::lround((y + touch_port.offset_y) * ((float) target_touch_port.height / (float) touch_port.height));
 
     mi.dx = scaled_x;
     mi.dy = scaled_y;
@@ -1309,16 +1321,28 @@ namespace platf {
       return -1;
     }
 
-    if (vhf_gamepad_selected()) {
+    const bool vigem_available = raw->vigem != nullptr && raw->vigem->available();
+    const bool vhf_available = raw->vhf != nullptr && raw->vhf->available();
+    const bool automatic_vhf_fallback =
+      config::input.gamepad == "auto"sv &&
+      vhf_gamepad::select_automatic_backend(vigem_available, vhf_available) == vhf_gamepad::backend_e::vhf;
+
+    if (vhf_gamepad_selected() || automatic_vhf_fallback) {
       const auto desired = vhf_desired_profile(metadata);
 
-      if (raw->vhf) {
-        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will use the Vibeshine virtual gamepad driver"sv;
+      if (vhf_available) {
+        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will use the Vibeshine virtual gamepad driver"sv
+                        << (automatic_vhf_fallback ? " (automatic fallback)"sv : ""sv);
 
         if (raw->vhf->alloc(id, feedback_queue, desired) == 0) {
           raw->gamepad_backend[id.globalIndex] = gamepad_backend_e::vhf;
           return 0;
         }
+      }
+
+      if (automatic_vhf_fallback) {
+        BOOST_LOG(error) << "Gamepad " << id.globalIndex << " could not be created on the Vibeshine virtual gamepad driver"sv;
+        return -1;
       }
 
       // An explicit profile must not be replaced by an automatic/client-selected profile or by
@@ -1984,7 +2008,7 @@ namespace platf {
     }
 
     auto raw = (input_raw_t *) input;
-    auto enabled = raw->vigem != nullptr;
+    auto enabled = raw->vigem != nullptr && raw->vigem->available();
     auto reason = enabled ? "" : "gamepads.vigem-not-available";
 
     auto vhf_enabled = raw->vhf != nullptr && raw->vhf->available();
@@ -1992,7 +2016,7 @@ namespace platf {
 
     // ds4 == ps4
     static std::vector gps {
-      supported_gamepad_t {"auto", true, reason},
+      supported_gamepad_t {"auto", enabled || vhf_enabled, enabled || vhf_enabled ? "" : reason},
       supported_gamepad_t {"x360", enabled, reason},
       supported_gamepad_t {"ds4", enabled, reason},
       supported_gamepad_t {"vhf", vhf_enabled, vhf_reason},

@@ -14,6 +14,33 @@
 
 namespace platf::vhf_gamepad {
 
+  enum class backend_e {
+    unavailable,
+    vigem,
+    vhf
+  };
+
+  /**
+   * @brief Selects the backend used by the Automatic gamepad setting.
+   * @details ViGEm remains preferred when usable. Vibeshine's VHF driver is the fallback when
+   *          ViGEmBus is absent or cannot be opened.
+   * @param vigem_available Whether a connection to ViGEmBus succeeded.
+   * @param vhf_available Whether Vibeshine's VHF driver exposes a usable controller profile.
+   * @return The selected backend, or `unavailable` when neither backend can create controllers.
+   */
+  [[nodiscard]] constexpr backend_e select_automatic_backend(
+    const bool vigem_available,
+    const bool vhf_available
+  ) noexcept {
+    if (vigem_available) {
+      return backend_e::vigem;
+    }
+    if (vhf_available) {
+      return backend_e::vhf;
+    }
+    return backend_e::unavailable;
+  }
+
   /**
    * @brief Vibeshine's normalized controller state, copied field-for-field out of `gamepad_state_t`.
    * @details Keeping this struct free of platform headers lets the translation be tested on its own.
@@ -74,7 +101,11 @@ namespace platf::vhf_gamepad {
              has_rgb == other.has_rgb &&
              left_trigger == other.left_trigger &&
              right_trigger == other.right_trigger &&
-             has_triggers == other.has_triggers;
+             has_triggers == other.has_triggers &&
+             left_effect == other.left_effect &&
+             right_effect == other.right_effect &&
+             trigger_event_flags == other.trigger_event_flags &&
+             has_trigger_effects == other.has_trigger_effects;
     }
   };
 

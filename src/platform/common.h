@@ -104,6 +104,7 @@ namespace platf {
     set_motion_event_state,  ///< Set motion event state
     set_rgb_led,  ///< Set RGB LED
     set_adaptive_triggers,  ///< Set adaptive triggers
+    haptics_pcm,  ///< 5 ms of 48 kHz S16LE stereo actuator samples
   };
 
   struct gamepad_feedback_msg_t {
@@ -152,6 +153,10 @@ namespace platf {
     std::uint16_t id;
 
     union {
+      struct {
+        std::uint32_t sequence;
+        std::array<std::uint8_t, 960> samples;
+      } haptics;
       struct {
         std::uint16_t lowfreq;
         std::uint16_t highfreq;
@@ -638,6 +643,15 @@ namespace platf {
     virtual void request_refresh() {
     }
 
+    /**
+     * @brief Whether capture delivery is driven by source presentation events.
+     * @details Event-driven sources need explicit refresh requests when a new
+     *          consumer joins. Fixed-rate sources retain the normal queue flow.
+     */
+    [[nodiscard]] virtual bool is_event_driven_capture() const {
+      return false;
+    }
+
     virtual bool get_hdr_metadata(SS_HDR_METADATA &metadata) {
       std::memset(&metadata, 0, sizeof(metadata));
       return false;
@@ -687,6 +701,11 @@ namespace platf {
   class audio_control_t {
   public:
     virtual int set_sink(const std::string &sink) = 0;
+
+    // Select a loopback endpoint without changing system routing, when supported.
+    virtual int set_capture_sink([[maybe_unused]] const std::string &sink) {
+      return -1;
+    }
 
     virtual std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, bool continuous, bool host_audio_enabled) = 0;
 
@@ -751,8 +770,9 @@ namespace platf {
     const std::optional<adapter_id_t> &required_adapter = std::nullopt
   );
 
-  // A list of names of displays accepted as display_name with the mem_type_e
-  std::vector<std::string> display_names(mem_type_e hwdevice_type);
+  // A list of names accepted as display_name. Omitting the memory type asks
+  // the active platform capture backend for its unfiltered/default view.
+  std::vector<std::string> display_names(mem_type_e hwdevice_type = mem_type_e::unknown);
 
   /**
    * @brief Check if GPUs/drivers have changed since the last call to this function.
@@ -1052,6 +1072,6 @@ namespace platf {
 
   bool has_elevated_privileges(bool all_caps);
   [[nodiscard]] bool drop_effective_elevated_privileges(bool all_caps);
-  void drop_elevated_privileges(bool all_caps);
+  [[nodiscard]] bool drop_elevated_privileges(bool all_caps);
 
 }  // namespace platf

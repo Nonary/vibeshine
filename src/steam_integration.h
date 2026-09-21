@@ -10,7 +10,9 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace platf::steam {
@@ -28,6 +30,8 @@ namespace platf::steam {
 
   struct game_t {
     std::uint32_t app_id = 0;
+    // Opaque local-art revision supplied by the session-user scanner.
+    std::string session_artwork_revision;
     std::string stable_id;  // "steam:<appid>"
     std::string name;
     std::filesystem::path install_dir;
@@ -57,6 +61,9 @@ namespace platf::steam {
     std::string launch_arguments;
     std::string launch_options;
     std::string launch_os;
+    bool installed = false;
+    std::uint64_t last_played = 0;
+    std::uint64_t playtime_minutes = 0;
     std::uint32_t state_flags = 0;
     std::uint64_t last_updated = 0;
   };
@@ -66,11 +73,52 @@ namespace platf::steam {
   // are collapsed deterministically. If roots is empty, common OS locations
   // are searched.
   std::vector<game_t> discover(const std::vector<std::filesystem::path> &roots = {});
+  // Discover installed games plus games recorded in Steam's local user
+  // library/play-history metadata. This remains entirely local and does not
+  // require a Steam Web API key or a public profile.
+  std::vector<game_t> discover_catalog(const std::vector<std::filesystem::path> &roots = {});
   std::vector<std::filesystem::path> default_library_roots();
+  // On the Linux machine host this reports the active desktop session's
+  // scanner status without exposing that user's library paths to the host.
+  bool available();
 
   // Return a URI/argv-safe launch target after validating the app ID.
   std::string launch_uri(std::uint32_t app_id);
   std::string launch_command(std::uint32_t app_id);
+
+  // Re-resolve cached catalog commands for the active session. Gaming Mode
+  // requires Steam to own the launch; Desktop Mode retains the configured command.
+  std::string runtime_launch_command(std::string_view app_id, const std::string &configured_command, bool gamescope_session);
+
+  // An already-running Steam broker cannot inherit environment changes from
+  // a later `steam -applaunch` process. Features whose behavior is carried by
+  // environment variables must therefore resolve a direct game command.
+  inline bool requires_direct_environment_launch(bool frame_limiter_enabled, bool smooth_motion_enabled, bool hdr_enabled) {
+    return frame_limiter_enabled || smooth_motion_enabled || hdr_enabled;
+  }
+
+#ifdef __linux__
+  struct session_launch_policy_t {
+    std::string provider = "disabled";
+    std::uint32_t limit_millihz = 0;
+    std::string preset = "custom";
+    bool always_show_graph = false;
+    std::string limiter_method = "late";
+    bool smooth_motion = false;
+    bool smooth_motion_graphics_queue = false;
+    bool hdr = false;
+    bool wayland_hdr_compatibility = false;
+    bool proton_dualsense_compatibility = false;
+    bool playstation_controller_attached = false;
+  };
+
+  // Build and recognize the one canonical machine-host command that delegates
+  // Steam metadata parsing and direct launch to the selected desktop UID. The
+  // returned argv never contains a path or shell fragment from Steam metadata.
+  std::string session_launch_command(std::uint32_t app_id, const session_launch_policy_t &policy);
+  std::optional<std::vector<std::string>> session_launch_arguments(std::string_view command);
+#endif
+
   // Build a direct Linux launch that preserves Steam's user launch options
   // while placing Vibeshine's game-process wrapper at %command%. Falls back
   // to the Steam broker when local metadata is incomplete.

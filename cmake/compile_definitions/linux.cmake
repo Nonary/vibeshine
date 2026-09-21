@@ -7,12 +7,18 @@ else()
 endif()
 
 # AppImage
+if(SUNSHINE_BUILD_STEAMOS)
+    list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_BUILD_STEAMOS=1)
+endif()
 if(${SUNSHINE_BUILD_APPIMAGE})
     # use relative assets path for AppImage
     string(REPLACE "${CMAKE_INSTALL_PREFIX}" ".${CMAKE_INSTALL_PREFIX}" SUNSHINE_ASSETS_DIR_DEF ${SUNSHINE_ASSETS_DIR})
 endif()
 
 # cuda
+if(SUNSHINE_REQUIRE_CUDA_PASCAL AND NOT SUNSHINE_ENABLE_CUDA)
+    message(FATAL_ERROR "Pascal-compatible release packages require SUNSHINE_ENABLE_CUDA=ON.")
+endif()
 set(CUDA_FOUND OFF)
 if(${SUNSHINE_ENABLE_CUDA})
     include(CheckLanguage)
@@ -22,43 +28,8 @@ if(${SUNSHINE_ENABLE_CUDA})
         set(CUDA_FOUND ON)
         enable_language(CUDA)
 
-        message(STATUS "CUDA Compiler Version: ${CMAKE_CUDA_COMPILER_VERSION}")
-        set(CMAKE_CUDA_ARCHITECTURES "")
-
-        # https://docs.nvidia.com/cuda/archive/12.0.0/cuda-compiler-driver-nvcc/index.html
-        if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.0)
-            list(APPEND CMAKE_CUDA_ARCHITECTURES 75 80 86 87 89 90)
-        else()
-            message(FATAL_ERROR
-                    "Sunshine requires a minimum CUDA Compiler version of 12.0.
-                    Found version: ${CMAKE_CUDA_COMPILER_VERSION}"
-            )
-        endif()
-
-        # https://docs.nvidia.com/cuda/archive/12.8.0/cuda-compiler-driver-nvcc/index.html
-        if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8)
-            list(APPEND CMAKE_CUDA_ARCHITECTURES 100 101 120)
-        endif()
-
-        # https://docs.nvidia.com/cuda/archive/12.9.0/cuda-compiler-driver-nvcc/index.html
-        if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.9)
-            list(APPEND CMAKE_CUDA_ARCHITECTURES 103 121)
-        endif()
-
-        # https://docs.nvidia.com/cuda/archive/13.0.0/cuda-compiler-driver-nvcc/index.html
-        if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
-            list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 101)
-            list(APPEND CMAKE_CUDA_ARCHITECTURES 110)
-        else()
-            list(APPEND CMAKE_CUDA_ARCHITECTURES 50 52 53 60 61 62 70 72)
-        endif()
-
-        # sort the architectures
-        list(SORT CMAKE_CUDA_ARCHITECTURES COMPARE NATURAL)
-
-        # message(STATUS "CUDA NVCC Flags: ${CUDA_NVCC_FLAGS}")
-        message(STATUS "CUDA Architectures: ${CMAKE_CUDA_ARCHITECTURES}")
-    elseif(${CUDA_FAIL_ON_MISSING})
+        include("${CMAKE_CURRENT_LIST_DIR}/cuda_architectures.cmake")
+    elseif(CUDA_FAIL_ON_MISSING OR SUNSHINE_REQUIRE_CUDA_PASCAL)
         message(FATAL_ERROR
                 "CUDA not found.
                 If this is intentional, set '-DSUNSHINE_ENABLE_CUDA=OFF' or '-DCUDA_FAIL_ON_MISSING=OFF'"
@@ -87,18 +58,30 @@ if(LIBDRM_FOUND)
     list(APPEND PLATFORM_LIBRARIES ${LIBDRM_LIBRARIES})
 endif()
 
-# drm
-if(${SUNSHINE_ENABLE_DRM})
+# The Linux entry point always sanitizes its process capabilities before it
+# parses configuration or initializes logging.  Keep libcap available even in
+# portable/non-DRM Linux builds; only the KMS implementation itself is gated by
+# SUNSHINE_ENABLE_DRM.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR ${SUNSHINE_ENABLE_DRM})
     find_package(LIBCAP REQUIRED)
 else()
     set(LIBCAP_FOUND OFF)
 endif()
-if(LIBDRM_FOUND AND LIBCAP_FOUND)
-    add_compile_definitions(SUNSHINE_BUILD_DRM)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND LIBCAP_FOUND)
     include_directories(SYSTEM ${LIBCAP_INCLUDE_DIRS})
     list(APPEND PLATFORM_LIBRARIES ${LIBCAP_LIBRARIES})
+endif()
+
+# drm
+if(${SUNSHINE_ENABLE_DRM} AND LIBDRM_FOUND AND LIBCAP_FOUND)
+    add_compile_definitions(SUNSHINE_BUILD_DRM)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        include_directories(SYSTEM ${LIBCAP_INCLUDE_DIRS})
+        list(APPEND PLATFORM_LIBRARIES ${LIBCAP_LIBRARIES})
+    endif()
     list(APPEND PLATFORM_TARGET_FILES
-            "${CMAKE_SOURCE_DIR}/src/platform/linux/kmsgrab.cpp")
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/kmsgrab.cpp"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/kms_capture_client.cpp")
     list(APPEND SUNSHINE_DEFINITIONS EGL_NO_X11=1)
 endif()
 
@@ -249,7 +232,7 @@ if(GIO_FOUND)
 endif()
 
 # Pipewire
-if(${SUNSHINE_ENABLE_KWIN} OR ${SUNSHINE_ENABLE_PORTAL})
+if(${SUNSHINE_ENABLE_KWIN} OR ${SUNSHINE_ENABLE_PORTAL} OR SUNSHINE_ENABLE_GAMESCOPE)
     pkg_check_modules(PIPEWIRE libpipewire-0.3 REQUIRED)
 else()
     set(PIPEWIRE_FOUND OFF)
@@ -262,6 +245,19 @@ if(PIPEWIRE_FOUND)
 endif()
 
 # XDG portal
+if(SUNSHINE_ENABLE_GAMESCOPE)
+    if(NOT WAYLAND_FOUND OR NOT PIPEWIRE_FOUND)
+        message(FATAL_ERROR "Gamescope capture requires Wayland and PipeWire")
+    endif()
+    add_compile_definitions(SUNSHINE_BUILD_GAMESCOPE)
+    GEN_WAYLAND("${CMAKE_SOURCE_DIR}/src/platform/linux/protocols" "" gamescope-pipewire)
+    GEN_WAYLAND("${CMAKE_SOURCE_DIR}/src/platform/linux/protocols" "" vibeshine-capture-v1)
+    list(APPEND PLATFORM_TARGET_FILES
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescope_session.cpp"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescope_display_backend.cpp"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescopegrab.cpp")
+endif()
+
 set(PORTAL_FOUND OFF)
 if(PIPEWIRE_FOUND AND GIO_FOUND AND ${SUNSHINE_ENABLE_PORTAL})
     set(PORTAL_FOUND ON)
@@ -352,17 +348,27 @@ if (${SUNSHINE_BUILD_FLATPAK})
 endif ()
 
 list(APPEND PLATFORM_TARGET_FILES
+        "${CMAKE_SOURCE_DIR}/src/provider_scan_protocol.h"
+        "${CMAKE_SOURCE_DIR}/src/provider_scan_protocol.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/publish.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/graphics.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/graphics.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/misc.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/misc.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/mangohud_policy.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/secure_open.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/secure_open.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/host_stats.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/audio.cpp")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(APPEND PLATFORM_TARGET_FILES
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/display_power.cpp"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/frame_limiter.cpp"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/private_display.h"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/display_backend.cpp"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/private_display_mode_client.h"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/private_display_mode_client.cpp"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/private_display_restore_policy.h"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/private_display.cpp")
 endif()
 

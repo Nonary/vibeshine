@@ -34,6 +34,10 @@ namespace rtsp_stream {
   constexpr auto RTSP_SETUP_PORT = 21;
 
   struct launch_session_t {
+    // Pending Linux launches must keep the display awake before capture and
+    // until the active capture has acquired its own reference. Deliberately
+    // omitted from retained app/display-recovery snapshots.
+    std::shared_ptr<void> display_power_guard;
     struct resolution_override_t {
       int width;
       int height;
@@ -63,6 +67,7 @@ namespace rtsp_stream {
     int height;
     int fps;
     int gcmap;
+    int playstation_gamepad_mask {};
     int appid;
 
     struct app_metadata_t {
@@ -103,6 +108,9 @@ namespace rtsp_stream {
     bool normal_vdd_capacity_rejected = false;
     bool normal_vdd_identity_newly_reserved = false;
     std::uint64_t normal_vdd_identity_token = 0;
+    // Linux resumes retain the running app's display owner across TLS clients.
+    // client_uuid remains the authenticated transport identity.
+    std::string normal_vdd_owner_uuid;
     // Host/display resolution derived from a launch-time client override. The RTSP
     // negotiated viewport remains in width/height.
     std::optional<resolution_override_t> resolution_override;

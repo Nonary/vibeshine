@@ -546,6 +546,7 @@ const commit = ref('');
 const installedIsPrerelease = ref(false);
 // ViGEm health
 const vigemInstalled = ref<boolean | null>(null);
+const vigemRequired = ref<boolean | null>(null);
 const vigemVersion = ref('');
 // Vulkan HDR layer health (Windows only)
 const vulkanHdrLayer = ref<{ installed: boolean; enabled: boolean } | null>(null);
@@ -753,15 +754,19 @@ async function runVersionChecks() {
         const r = await http.get('/api/health/vigem', { validateStatus: () => true });
         if (r.status === 200 && r.data) {
           vigemInstalled.value = !!r.data.installed;
+          vigemRequired.value = typeof r.data.required === 'boolean' ? r.data.required : null;
           vigemVersion.value = r.data.version || '';
         } else {
           vigemInstalled.value = null;
+          vigemRequired.value = null;
         }
       } else {
         vigemInstalled.value = null;
+        vigemRequired.value = null;
       }
     } catch (e) {
       vigemInstalled.value = null;
+      vigemRequired.value = null;
     }
     await refreshVulkanHdrLayerStatus(plat);
     await refreshCrashDumpStatus(plat);
@@ -1124,7 +1129,12 @@ const showCrashDumpBanner = computed(() => {
 const showVigemBanner = computed(() => {
   const plat = (configStore.metadata?.platform || '').toLowerCase();
   const controllerEnabled = (configStore.config as any)?.controller === 'enabled';
-  return plat === 'windows' && controllerEnabled && vigemInstalled.value === false;
+  return (
+    plat === 'windows' &&
+    controllerEnabled &&
+    vigemInstalled.value === false &&
+    vigemRequired.value !== false
+  );
 });
 
 const showVulkanHdrLayerBanner = computed(() => {

@@ -2,16 +2,40 @@
 
 #include <gtest/gtest.h>
 
+TEST(SteamConfig, DefaultsToOptInRecentSynchronizationOnBothPlatforms) {
+  std::unordered_map<std::string, std::string> vars;
+  const auto result = config::parse_steam(vars);
+#if defined(__linux__)
+  EXPECT_TRUE(result.enabled);
+#else
+  EXPECT_FALSE(result.enabled);
+#endif
+  EXPECT_FALSE(result.auto_sync);
+  EXPECT_FALSE(result.sync_all_installed);
+  EXPECT_EQ(result.recent_games, 10);
+  EXPECT_EQ(result.recent_max_age_days, 30);
+}
+
+TEST(SteamConfig, PreservesExplicitSyncOptIns) {
+  std::unordered_map<std::string, std::string> vars {
+    {"steam_auto_sync", "on"},
+    {"steam_sync_all_installed", "on"},
+  };
+  const auto result = config::parse_steam(vars);
+  EXPECT_TRUE(result.auto_sync);
+  EXPECT_TRUE(result.sync_all_installed);
+  EXPECT_TRUE(vars.empty());
+}
+
 TEST(SteamConfig, ParsesIndependentFlags) {
   std::unordered_map<std::string, std::string> vars {{"steam_enabled", "off"}, {"steam_auto_sync", "off"}};
   const auto result = config::parse_steam(vars);
 #if defined(__linux__)
   EXPECT_TRUE(result.enabled);
-  EXPECT_FALSE(result.auto_sync);
 #else
   EXPECT_FALSE(result.enabled);
-  EXPECT_FALSE(result.auto_sync);
 #endif
+  EXPECT_FALSE(result.auto_sync);
   EXPECT_TRUE(vars.empty());
 }
 
@@ -38,4 +62,20 @@ TEST(SteamConfig, ParsesExclusionsAndRemovalPolicy) {
   EXPECT_FALSE(result.autosync_remove_uninstalled);
   EXPECT_TRUE(result.include_tools);
   EXPECT_TRUE(vars.empty());
+}
+
+TEST(SteamConfig, ParsesRecentSynchronizationPolicy) {
+  std::unordered_map<std::string, std::string> vars {
+    {"steam_sync_all_installed", "off"},
+    {"steam_recent_games", "15"},
+    {"steam_recent_max_age_days", "45"},
+  };
+  const auto result = config::parse_steam(vars);
+  EXPECT_FALSE(result.sync_all_installed);
+  EXPECT_EQ(result.recent_games, 15);
+  EXPECT_EQ(result.recent_max_age_days, 45);
+  EXPECT_TRUE(vars.empty());
+
+  vars = {{"steam_recent_games", "-1"}};
+  EXPECT_EQ(config::parse_steam(vars).recent_games, 10);
 }

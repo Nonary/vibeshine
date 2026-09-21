@@ -1,5 +1,6 @@
 /** @file src/steam_artwork.cpp */
 #include "steam_artwork.h"
+#include "provider_scan_protocol.h"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +16,7 @@
 
 #ifdef SUNSHINE_STEAM_ARTWORK_NETWORK
   #include <curl/curl.h>
+  #include "httpcommon.h"
 #endif
 
 extern "C" {
@@ -584,6 +586,10 @@ namespace {
   std::optional<std::vector<std::uint8_t>> fetch_remote(const std::string &url) {
     CURL *curl = curl_easy_init();
     if (!curl) return std::nullopt;
+    if (!http::configure_curl_tls(curl)) {
+      curl_easy_cleanup(curl);
+      return std::nullopt;
+    }
     curl_buffer_t buffer;
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
@@ -657,6 +663,52 @@ namespace {
 }  // namespace
 
 namespace platf::steam::artwork {
+  std::optional<std::vector<std::uint8_t>> export_png(const fs::path &source) {
+    std::error_code ec;
+    if (!fs::is_regular_file(source, ec) || fs::file_size(source, ec) > max_remote_bytes || ec) return std::nullopt;
+    const auto png = convert_to_png(source);
+    if (!png || png->size() > max_remote_bytes) return std::nullopt;
+    return png;
+  }
+
+  bool import_png(const std::vector<std::uint8_t> &bytes, const fs::path &output) {
+    if (bytes.size() > max_remote_bytes || !valid_png_bytes(bytes)) return false;
+    const auto dimensions = png_dimensions(bytes);
+    if (!dimensions || dimensions->width > 4096 || dimensions->height > 4096) return false;
+    std::error_code ec;
+    fs::create_directories(output.parent_path(), ec);
+    return !ec && write_output(output, bytes);
+  }
+
+  fs::path session_cover(std::string_view provider, std::uint64_t id,
+                         const std::string &revision, const fs::path &output, session_fetcher_t fetcher) {
+#if defined(__linux__)
+    if (revision.empty() || id == 0 || (provider != "steam" && provider != "lutris")) return {};
+    const auto marker = output.string() + ".session-meta";
+    std::ifstream metadata(marker);
+    std::string previous;
+    std::getline(metadata, previous);
+    if (previous == revision && regular(output) && valid_png(output)) return output;
+    const auto request = "provider-" + std::string(provider) + "-artwork:" + std::to_string(id);
+    std::optional<std::vector<std::uint8_t>> bytes;
+    if (fetcher) {
+      bytes = fetcher(request);
+    } else {
+      const auto payload = provider_scan::detail::capture_command(
+        "/usr/libexec/vibeshine/vibeshine-session-exec", request,
+        {std::chrono::duration_cast<std::chrono::milliseconds>(provider_scan::command_timeout), max_remote_bytes});
+      if (payload) bytes.emplace(payload->begin(), payload->end());
+    }
+    if (bytes && import_png(*bytes, output)) {
+      write_output(marker, std::vector<std::uint8_t>(revision.begin(), revision.end()));
+      return output;
+    }
+    // A transient session transition must not discard the last usable cover.
+    if (regular(output) && valid_png(output)) return output;
+#endif
+    return {};
+  }
+
   std::string remote_portrait_url(std::uint32_t app_id) {
     return "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/" +
            std::to_string(app_id) + "/library_600x900_2x.jpg";
@@ -670,9 +722,8 @@ namespace platf::steam::artwork {
     return appdata / "covers" / ("steam_" + std::to_string(app_id) + ".png");
   }
 
-  sync_result_t sync(std::uint32_t app_id, const fs::path &source, const fs::path &appdata) {
+  sync_result_t sync_to(const fs::path &source, const fs::path &output) {
     sync_result_t result;
-    const auto output = cache_path(appdata, app_id);
     const auto fp = fingerprint(source);
     if (!fp) {
       std::error_code ec;
@@ -699,10 +750,18 @@ namespace platf::steam::artwork {
     return result;
   }
 
+  sync_result_t sync(std::uint32_t app_id, const fs::path &source, const fs::path &appdata) {
+    return sync_to(source, cache_path(appdata, app_id));
+  }
+
   void prepare(std::vector<game_t> &games, const fs::path &appdata, remote_fetcher_t fetcher) {
     for (auto &game : games) {
       game.artwork_client_path.clear();
-      const auto source = !game.artwork_path.empty() ? game.artwork_path : game.boxart_path;
+      auto source = !game.artwork_path.empty() ? game.artwork_path : game.boxart_path;
+      if (!game.session_artwork_revision.empty()) {
+        source = session_cover("steam", game.app_id, game.session_artwork_revision,
+                               appdata / "covers" / ("steam_" + std::to_string(game.app_id) + "_local.png"));
+      }
       // Steam's local library_600x900.jpg is commonly 300x450. Never upscale
       // it: use the official fixed-origin 600x900 CDN asset when available,
       // retaining the local image as an offline fallback.
@@ -711,7 +770,18 @@ namespace platf::steam::artwork {
         const auto remote = obtain_remote_portrait(game.app_id, appdata, fetcher);
         if (!remote.empty()) effective_source = remote;
       }
+      // Keep the last converted cover through transient Steam cache/CDN failures.
+      const auto cached = cache_path(appdata, game.app_id);
+      if (regular(cached) && valid_png_bytes(read_bytes(cached))) {
+        game.artwork_client_path = cached;
+      }
       if (effective_source.empty()) continue;
+      if (!game.session_artwork_revision.empty() && effective_source == source) {
+        // This PNG was already converted by the session worker. Do not run
+        // desktop-user image decoders again inside the machine host.
+        game.artwork_client_path = source;
+        continue;
+      }
       const auto result = sync(game.app_id, effective_source, appdata);
       if (!result.client_path.empty()) {
         game.artwork_client_path = result.client_path;

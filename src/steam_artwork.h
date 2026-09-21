@@ -14,6 +14,16 @@
 
 namespace platf::steam::artwork {
 
+  // Scanner-side conversion; only the dropped session UID opens the source.
+  std::optional<std::vector<std::uint8_t>> export_png(const std::filesystem::path &source);
+
+  // Import bounded PNG bytes into a caller-selected service cache path.
+  bool import_png(const std::vector<std::uint8_t> &bytes, const std::filesystem::path &output);
+  using session_fetcher_t = std::function<std::optional<std::vector<std::uint8_t>>(const std::string &request)>;
+  std::filesystem::path session_cover(std::string_view provider, std::uint64_t id,
+                                     const std::string &revision, const std::filesystem::path &output,
+                                     session_fetcher_t fetcher = {});
+
   struct source_fingerprint_t {
     std::string path;
     std::uintmax_t size = 0;
@@ -41,6 +51,12 @@ namespace platf::steam::artwork {
 
   // Return the stable managed path used for Steam's client-compatible cover.
   std::filesystem::path cache_path(const std::filesystem::path &appdata, std::uint32_t app_id);
+
+  // Convert a local provider image to a caller-owned managed PNG path. This
+  // exposes the format-safe cache primitive to other local integrations while
+  // keeping Steam-specific source selection and downloads in prepare().
+  sync_result_t sync_to(const std::filesystem::path &source,
+                        const std::filesystem::path &output);
 
   // Convert a Steam image to PNG in appdata/covers. This function never calls
   // an external command. A matching sidecar fingerprint reuses an existing

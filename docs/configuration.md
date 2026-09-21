@@ -27,9 +27,15 @@ location by modifying the configuration file.
 |---------|-------------------------------------------------|
 | Docker  | @code{}/config@endcode                          |
 | FreeBSD | @code{}~/.config/sunshine@endcode               |
-| Linux   | @code{}~/.config/vibeshine@endcode              |
+| Linux (native package) | @code{}/var/lib/vibeshine@endcode |
+| Linux (standalone) | @code{}~/.config/vibeshine@endcode (or `$XDG_CONFIG_HOME/vibeshine`) |
 | macOS   | @code{}~/.config/sunshine@endcode               |
 | Windows | @code{}%ProgramFiles%\\Sunshine\\config@endcode |
+
+Native Linux packages share one machine profile across the login screen and desktop.
+Edit settings through the Web UI; use `vibeshine paths` to locate files and
+`sudo vibeshine logs` for diagnostics. Package upgrades import the selected desktop
+user's legacy `~/.config/vibeshine` profile once and preserve existing machine settings.
 
 Although it is recommended to use the configuration UI, it is possible manually configure Sunshine by
 editing the `conf` file in a text editor. Use the examples as reference.
@@ -361,7 +367,8 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td rowspan="6">Choices</td>
         <td>ds4</td>
         <td>DualShock 4 controller (PS4)
-            @note{This option applies to Windows only.}</td>
+            @note{This option applies to Windows and Linux. On Linux it uses UHID and includes
+            rumble, the touchpad, motion sensors, battery reporting, and the lightbar.}</td>
     </tr>
     <tr>
         <td>ds5</td>
@@ -801,6 +808,35 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### proton_dualsense_compatibility
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Supply native DualSense audio compatibility defaults to Proton games launched during streaming,
+            including games started inside an already-running Steam client. Sets
+            <code>PROTON_KEEP_SONY_AUDIO_ENDPOINT_VISIBLE=1</code> and
+            <code>PROTON_SONY_WINDOWS_DEVICE_NAMES=1</code> unless the game explicitly overrides them.
+            Independent of HDR and frame limiting. Requires a Proton build implementing these options
+            and a game with native DualSense support. Reconnect the stream and relaunch the game after changing this option.
+            @hint{Only applies on Linux. Without an active stream, the Proton hook is inert.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            proton_dualsense_compatibility = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ## Audio/Video
 
 ### audio_sink
@@ -869,6 +905,37 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Example (Windows)</td>
         <td colspan="2">@code{}
             audio_sink = Speakers (High Definition Audio Device)
+            @endcode</td>
+    </tr>
+</table>
+
+### audio_sink_capture_only
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            On Windows, capture the explicitly selected [audio_sink](#audio_sink)
+            without changing any default output device. Route the desired application's
+            audio to that device in Windows before connecting. Capture stays on that
+            endpoint if the Windows default changes during the stream.
+            <br>
+            Requires a non-empty audio_sink. Virtual sink selection still takes precedence:
+            leave virtual_sink empty and enable host audio in the client if you have an
+            automatically detected virtual audio device. Other platforms ignore this option.
+            When disabled, selecting an Audio Sink retains the existing behavior of switching
+            Windows default outputs for the stream and restoring them afterward.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">disabled</td>
+    </tr>
+    <tr>
+        <td>Example (Windows)</td>
+        <td colspan="2">@code{}
+            audio_sink = Speakers (High Definition Audio Device)
+            audio_sink_capture_only = enabled
             @endcode</td>
     </tr>
 </table>
@@ -1216,7 +1283,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Linux setup</td>
         <td colspan="2">@code{}
-            sudo /usr/libexec/vibeshine/vibeshine-drm-install install
+            sudo vibeshine driver install
             sudo systemctl enable --now vibeshine-vkms.service
             @endcode
             Native packages and <code>vibeshine-drm-setup.service</code> attempt this installation
@@ -1226,7 +1293,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             Replacing the module file does not replace a module already loaded by the compositor.
             Compare <code>modinfo -F version vibeshine_drm</code> with
             <code>cat /sys/module/vibeshine_drm/version</code> and reboot before testing when they differ.
-            The module supports Linux 7.1 or newer and exposes four independent virtual connectors
+            The module supports Linux 6.16 or newer and exposes four independent virtual connectors
             with a deterministic HDR10 EDID, BT.2020/PQ metadata, 8-16 bits per component, and
             10-bit RGB plane formats. Vibeshine enables one only for a stream, applies the requested
             mode, layout, and HDR state through KScreen, captures that exact connector, and restores
@@ -1321,6 +1388,15 @@ disconnects. The default is `false`.
 Allow an additional paired client to terminate the active game with its first
 Terminate request. The original game client is unaffected. The default is
 `false`.
+
+### remote_monitor_confirm_app_replacement
+
+Protect a running app while Vibeshine advertises the host as available for
+warning-free Remote Input and Remote Monitor attachment. Selecting a different
+normal app is rejected once and temporarily advertises the running app as
+resumable to that paired client, allowing Moonlight to show its native close-app
+warning on the next attempt. The confirmation window is 60 seconds. Disable
+this option to replace the running app immediately. The default is `true`.
 
 ### dd_configuration_option
 
@@ -1496,7 +1572,7 @@ Terminate request. The original game client is unaffected. The default is
         <td>Description</td>
         <td colspan="2">
             Perform additional HDR configuration for the display device.
-            @note{On Linux 7.1 or newer, the managed <code>vibeshine_drm</code> output advertises HDR10 and 10-bit formats. Managed display creation fails if that driver is unavailable rather than using CPU-backed stock VKMS.}
+            @note{On Linux 6.16 or newer, the managed <code>vibeshine_drm</code> output advertises HDR10 and 10-bit formats. Managed display creation fails if that driver is unavailable rather than using CPU-backed stock VKMS.}
         </td>
     </tr>
     <tr>
@@ -2702,7 +2778,16 @@ Terminate request. The original game client is unaffected. The default is
             @endcode</td>
     </tr>
     <tr>
-        <td rowspan="9">Choices</td>
+        <td rowspan="10">Choices</td>
+        <td>gamescope</td>
+        <td>Capture the Gamescope compositor's main output through PipeWire in SDR.
+            Automatically preferred when Gamescope is available. Supports downscaling
+            within the physical output. HDR requires the version-matched Vibeshine Gamescope
+            capture patch and a working Main10 hardware encoder; stock Gamescope remains SDR.
+            Independent virtual modes are unavailable.
+            @note{Applies to Linux only.}</td>
+    </tr>
+    <tr>
         <td>nvfbc</td>
         <td>Use NVIDIA Frame Buffer Capture to capture direct to GPU memory. This is usually the fastest method for
             NVIDIA cards. NvFBC does not have native Wayland support and does not work with XWayland.
@@ -2807,16 +2892,15 @@ Terminate request. The original game client is unaffected. The default is
     <tr>
         <td rowspan="8">Choices</td>
         <td>nvenc</td>
-        <td>For NVIDIA graphics cards. On Linux this is the supported FFmpeg-based NVENC
-            implementation and the implementation used by automatic selection. On Windows it uses
-            Vibeshine's native NVENC implementation.</td>
+        <td>For NVIDIA graphics cards. Uses Vibeshine's native NVENC implementation on Windows and
+            on CUDA-enabled Linux builds. On Linux it is tried first during automatic selection.</td>
     </tr>
     <tr>
-        <td>nvenc_experimental</td>
-        <td>Experimental native NVIDIA NVENC encoder. It is not selected automatically, has limited
-            Linux driver and capture-path test coverage, and may not work with every capture method.
-            Explicit selection fails closed instead of silently changing encoder implementations.
-            @note{Applies to Linux only and requires a CUDA-enabled build.}</td>
+        <td>nvenc_legacy</td>
+        <td>Legacy FFmpeg-based NVIDIA NVENC encoder. Select this explicitly on Linux to roll back
+            from the native implementation. Existing @code{}nvenc_experimental@endcode settings
+            are accepted as a compatibility alias for @code{}nvenc@endcode.
+            @note{Applies to Linux only.}</td>
     </tr>
     <tr>
         <td>quicksync</td>
@@ -2855,7 +2939,7 @@ Terminate request. The original game client is unaffected. The default is
 
 ## Frame Limiter
 
-These options integrate with MangoHUD on Linux and RTSS or NVIDIA Control Panel on Windows to
+These options integrate with Proton and MangoHUD on Linux and RTSS or NVIDIA Control Panel on Windows to
 manage frame pacing and related behavior during a stream.
 They appear in the Frame Limiter section of the settings UI.
 
@@ -2900,13 +2984,21 @@ They appear in the Frame Limiter section of the settings UI.
             @endcode</td>
     </tr>
     <tr>
-        <td rowspan="5">Choices</td>
+        <td rowspan="7">Choices</td>
         <td>auto</td>
-        <td>Use MangoHUD on Linux. On Windows, prefer RTSS when available and otherwise fall back to NVIDIA Control Panel.</td>
+        <td>On Linux, use Proton's DXVK/VKD3D limiter and present the MangoHUD overlay. On Windows, prefer RTSS when available and otherwise fall back to NVIDIA Control Panel.</td>
     </tr>
     <tr>
         <td>mangohud</td>
         <td>Use MangoHUD on Linux. Vibeshine enables it for launched games and supplies the stream-derived FPS limit.</td>
+    </tr>
+    <tr>
+        <td>mangohud-proton</td>
+        <td>Use Proton's DXVK/VKD3D limiter for managed Steam games and external Proton launches and keep the MangoHUD overlay visible. This limiter supports frame-generated output.</td>
+    </tr>
+    <tr>
+        <td>proton</td>
+        <td>Use Proton's DXVK/VKD3D limiter for managed Steam games and external Proton launches without presenting MangoHUD. This limiter supports frame-generated output.</td>
     </tr>
     <tr>
         <td>rtss</td>
@@ -2921,6 +3013,21 @@ They appear in the Frame Limiter section of the settings UI.
         <td>Disable all frame limiter providers.</td>
     </tr>
 </table>
+
+On native Linux, an active stream also prepares launch hooks in writable Proton
+installations discovered through Steam. This applies the selected Proton or
+MangoHUD provider to games started from Steam or another launcher, even when the
+game is not a Vibeshine application. Existing `user_settings.py` code and file
+permissions are preserved. The hook is inert when no stream is active and after
+host shutdown; it does not persist an FPS limit in Proton's configuration.
+
+These are launch-time renderer settings: start the game after the stream connects.
+A game already running retains its previous settings until restarted, including
+when the stream ends. Read-only Proton installations, native Linux games launched
+outside Vibeshine, and containers with a separate network namespace are not
+covered by this Proton hook. Native games launched by Vibeshine retain the
+existing MangoHUD integration. Newly installed Proton versions in known libraries
+are detected during the stream. The host log reports hook readiness or failure.
 
 ### frame_limiter_fps_limit
 
@@ -2943,6 +3050,35 @@ They appear in the Frame Limiter section of the settings UI.
             frame_limiter_fps_limit = 59.94
             @endcode</td>
     </tr>
+</table>
+
+### mangohud_limiter_method
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Linux-only timing used when <code>frame_limiter_provider = mangohud</code>.
+            <code>early</code> waits before presentation for smoother pacing at the cost of
+            more latency. <code>late</code> waits after presentation for lower latency, but
+            cannot limit frame-generated output. The Proton limiter supports frame generation.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}late@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            mangohud_limiter_method = early
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="2">Choices</td>
+        <td>early</td><td>Smoother frame pacing with more latency.</td>
+    </tr>
+    <tr><td>late</td><td>Lower latency; does not limit frame-generated output.</td></tr>
 </table>
 
 ### mangohud_preset
@@ -3140,9 +3276,9 @@ They appear in the Frame Limiter section of the settings UI.
 
 ## NVIDIA NVENC Encoder
 
-The options in this section are shared by both NVENC implementations. On Linux, @code{nvenc} uses
-FFmpeg while @code{nvenc_experimental} talks directly to the NVIDIA Video Codec SDK. The native
-implementation is opt-in and never replaces the supported FFmpeg encoder during automatic probing.
+The options in this section are shared by both NVENC implementations. On Linux, @code{nvenc} talks
+directly to the NVIDIA Video Codec SDK and is preferred during automatic probing, while
+@code{nvenc_legacy} uses FFmpeg as a rollback path.
 
 ### nvenc_preset
 
@@ -3312,8 +3448,8 @@ implementation is opt-in and never replaces the supported FFmpeg encoder during 
             Set it to disabled to prevent split-frame encoding even when the driver would normally use it automatically.
             @note{Applies to NVENC HEVC or AV1 only. H.264 does not use split-frame encoding.}
             @note{Requires NVENC API 12.1 or newer.}
-            @note{On Linux, both the supported FFmpeg @code{nvenc} encoder and the native
-            @code{nvenc_experimental} encoder honor the configured auto, enabled, or disabled mode.}
+            @note{On Linux, both the legacy FFmpeg @code{nvenc_legacy} encoder and the native
+            @code{nvenc} encoder honor the configured auto, enabled, or disabled mode.}
         </td>
     </tr>
     <tr>
@@ -4325,24 +4461,50 @@ runtime version is written to the log on every AMD HDR HEVC attempt (search for
 
 ### steam_enabled
 
-Enables local Steam library discovery, synchronization, and launch support. This setting is always enabled on Linux. On other platforms it can be combined with `playnite_enabled` or used by itself.
+Enables local Steam library discovery, synchronization, and launch support. Disabled by default on all platforms; it can be combined with `playnite_enabled` or used by itself.
 
-Default: `true`
+Default: `false`
 
 ### steam_auto_sync
 
-Synchronizes installed Steam games into `apps.json` when configuration is
-applied and checks for manifest, library, metadata, and artwork changes every
-30 seconds while Vibeshine is running. Steam-managed entries use stable Steam
-IDs; manual and Playnite-managed entries are preserved.
+Synchronizes the games selected by the Steam policy into `apps.json` when
+configuration is applied and checks for manifest, local play-history, library,
+metadata, and artwork changes every 30 seconds while Vibeshine is running.
+Steam-managed entries use stable Steam IDs; manual and Playnite-managed entries
+are preserved.
 
-Default: `true`
+Default: `false`
+
+### steam_sync_all_installed
+
+Synchronizes every installed Steam game. Disable this to use the recent-game
+count and age policy instead.
+
+Default: `false`
+
+### steam_recent_games
+
+Maximum number of installed games to synchronize, ordered by Steam's local
+`LastPlayed` timestamp, when `steam_sync_all_installed` is disabled. Set to `0`
+to disable recent-game synchronization. Exclusions and tool filtering apply
+before the limit.
+
+Default: `10`
+
+### steam_recent_max_age_days
+
+Excludes games last played more than this many days ago from recent-game
+synchronization. Set to `0` for no age limit.
+
+Default: `30`
 
 ### steam_autosync_remove_uninstalled
 
 When enabled, Steam-managed entries whose installed manifest disappears are
 removed during synchronization. Manual and Playnite-managed entries are never
-removed by this provider.
+removed by this provider. Recent-only synchronization always removes managed
+games that leave the selected recent set so the configured limit remains
+effective.
 
 Default: `true`
 
@@ -4366,6 +4528,11 @@ or video. This is intended for users who deliberately want those records in
 their catalog.
 
 Default: `false`
+
+The manual application picker shows installed, importable Steam games by
+default, matching the Playnite picker. Vibeshine also reads Steam's local user
+play-history and `appinfo.vdf` caches to rank installed games for recent-game
+synchronization without requiring a Steam Web API key or a public profile.
 
 ## Lutris Integration
 
@@ -4531,7 +4698,7 @@ Sets how long a paused virtual display may remain ready before the display helpe
 
 ### dd_virtual_display_scale
 
-Sets the virtual-display scale override. Leave it unset or at the automatic setting to use the recommended scale for the requested display mode.
+Sets the virtual-display scale override. The default, `0` (Retain), keeps your chosen scale for future streams. On Windows, connect to the virtual display and choose **Scale** in **Settings > System > Display**; subsequent streams using that virtual display retain your choice. Choose an explicit percentage to change desktop scaling without changing the requested pixel resolution. On Windows, scaling is applied through the DPI setter without changing the virtual monitor's reported physical size. The optional `-1` setting chooses a scale based on resolution.
 
 ### dd_wa_hdr_toggle
 
@@ -4596,6 +4763,10 @@ Sets the maximum on-disk size, in MiB, of the session-history database before ol
 ### vulkan_hdr_layer
 
 Enables the Vulkan HDR layer used by the display stack when HDR Vulkan capture support is available.
+
+### wayland_hdr_compatibility
+
+Enables KDE Plasma Wayland HDR environment compatibility for games launched during a resolved HDR stream. This does not force HDR and does not override SDR stream outcomes.
 
 ### wgc_pacing_smoothing
 

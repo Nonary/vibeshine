@@ -9,6 +9,8 @@
 #endif
 
 // standard includes
+#include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -52,6 +54,7 @@
 // local includes
 #include "graphics.h"
 #include "misc.h"
+#include "render_device.h"
 #include "src/platform/common_services.h"
 #include "src/boost_process_shim.h"
 #include "src/config.h"
@@ -60,10 +63,21 @@
 #include "src/platform/common.h"
 #include "src/video.h"
 #ifdef __linux__
+  #include "src/platform/linux/display_backend.h"
   #include "src/platform/linux/private_display_capture_policy.h"
   #include "src/platform/linux/private_display.h"
+  #include "src/platform/linux/scoped_capability.h"
+  #include "src/steam_integration.h"
 #endif
 #include "vaapi.h"
+#ifdef SUNSHINE_BUILD_STEAMOS
+  #include "private_vaapi_environment.h"
+#endif
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+  #include "capture_fallback.h"
+  #include "gamescope_session.h"
+  #include "gamescopegrab.h"
+#endif
 
 #ifdef __GNUC__
   #define SUNSHINE_GNUC_EXTENSION __extension__
@@ -309,31 +323,54 @@ namespace platf {
     (void) interactive;
     ec.clear();
 
-    std::vector<std::string> parts;
-    try {
-      parts = boost::program_options::split_unix(cmd);
-    } catch (...) {
-    }
-
-    if (parts.empty()) {
-      ec = std::make_error_code(std::errc::invalid_argument);
-      return bp::child();
-    }
-
-    auto exe_path = v2::filesystem::path(parts.front());
-    // Only PATH-search when there's no directory component (e.g., "foo" not "./foo" or "../foo")
-    if (!exe_path.is_absolute() && exe_path.parent_path().empty()) {
-      exe_path = v2::environment::find_executable(exe_path);
-    }
-
-    if (exe_path.empty()) {
-      ec = std::make_error_code(std::errc::no_such_file_or_directory);
-      return bp::child();
-    }
-
     std::vector<std::string> args;
-    if (parts.size() > 1) {
-      args.assign(parts.begin() + 1, parts.end());
+    v2::filesystem::path exe_path;
+    const bool session_command = std::getenv("VIBESHINE_MACHINE_HOST") != nullptr;
+    if (session_command) {
+      if (cmd.empty()) {
+        ec = std::make_error_code(std::errc::invalid_argument);
+        return bp::child();
+      }
+      exe_path = v2::filesystem::path("/usr/libexec/vibeshine/vibeshine-session-exec");
+      if (const auto semantic_steam = platf::steam::session_launch_arguments(cmd)) {
+        // Direct Steam launch is deliberately semantic: the capability-free
+        // client sends only validated policy values, and the broker resolves
+        // all user-owned metadata after entering the selected desktop UID.
+        args = *semantic_steam;
+      } else {
+        // The capability-bearing helper resolves the administrator-authorized
+        // working directory. The network host supplies only the exact command
+        // to match, never a caller-selected filesystem location.
+        const auto environment_value = [&env](std::string_view name) {
+          const auto it = std::find_if(env.cbegin(), env.cend(), [name](const auto &entry) {
+            return entry.get_name() == name;
+          });
+          return it == env.cend() ? std::string {} : it->to_string();
+        };
+        const bool wayland_hdr_compatibility =
+          environment_value("SUNSHINE_CLIENT_HDR") == "true" &&
+          environment_value("ENABLE_HDR_WSI") == "1";
+        args = {wayland_hdr_compatibility ? "app-wayland-hdr" : "app", cmd};
+      }
+    } else {
+      std::vector<std::string> parts;
+      try {
+        parts = boost::program_options::split_unix(cmd);
+      } catch (...) {
+      }
+      if (parts.empty()) {
+        ec = std::make_error_code(std::errc::invalid_argument);
+        return bp::child();
+      }
+      exe_path = v2::filesystem::path(parts.front());
+      if (!exe_path.is_absolute() && exe_path.parent_path().empty()) {
+        exe_path = v2::environment::find_executable(exe_path);
+      }
+      if (exe_path.empty()) {
+        ec = std::make_error_code(std::errc::no_such_file_or_directory);
+        return bp::child();
+      }
+      if (parts.size() > 1) args.assign(parts.begin() + 1, parts.end());
     }
 
     v2::process_stdio stdio {};
@@ -346,13 +383,23 @@ namespace platf {
       stdio.err = nullptr;
     }
 
+#ifdef SUNSHINE_BUILD_STEAMOS
+    const auto child_env = linux_private_vaapi::child_environment(
+      env,
+      std::getenv("VIBESHINE_PRIVATE_VAAPI"),
+      std::getenv("LIBVA_DRIVERS_PATH"),
+      std::getenv("LIBVA_DRIVER_NAME")
+    );
+    auto env_init = child_env.to_process_environment();
+#else
     auto env_init = env.to_process_environment();
+#endif
     boost::asio::system_executor exec;
 
     try {
 #ifndef _WIN32
       if (group) {
-        if (!working_dir.empty()) {
+        if (!session_command && !working_dir.empty()) {
           auto start = v2::process_start_dir(v2::filesystem::path(working_dir.string()));
           auto proc = v2::process(exec, exe_path, args, start, stdio, env_init, bp::detail::posix_group_initer {group});
           return bp::child(std::move(proc));
@@ -361,7 +408,7 @@ namespace platf {
         return bp::child(std::move(proc));
       }
 #endif
-      if (!working_dir.empty()) {
+      if (!session_command && !working_dir.empty()) {
         auto start = v2::process_start_dir(v2::filesystem::path(working_dir.string()));
         auto proc = v2::process(exec, exe_path, args, start, stdio, env_init);
         return bp::child(std::move(proc));
@@ -454,6 +501,39 @@ namespace platf {
 
     if (!success) {
       // This will run on FreeBSD OR Linux if RTKit failed/was missing
+#if !defined(__FreeBSD__)
+      errno = 0;
+      const int current_nice = getpriority(PRIO_PROCESS, 0);
+      const int getpriority_error = errno;
+      const bool raises_priority =
+        getpriority_error == 0 ? linux_nice < current_nice : linux_nice < 0;
+
+      if (raises_priority) {
+        int setpriority_result = -1;
+        int setpriority_error = 0;
+        linux_security::scoped_effective_capability::state_e capability_state;
+        {
+          linux_security::scoped_effective_capability nice {CAP_SYS_NICE};
+          capability_state = nice.state();
+          if (nice.active()) {
+            setpriority_result = setpriority(PRIO_PROCESS, 0, linux_nice);
+            setpriority_error = errno;
+          }
+        }
+
+        if (capability_state != linux_security::scoped_effective_capability::state_e::active) {
+          BOOST_LOG(warning) << "Cannot raise thread priority to nice "sv << linux_nice
+                             << " because CAP_SYS_NICE "sv
+                             << (capability_state == linux_security::scoped_effective_capability::state_e::unavailable ?
+                                   "is not permitted"sv : "could not be raised safely"sv);
+        } else if (setpriority_result == -1) {
+          BOOST_LOG(warning) << "setpriority failed for nice "sv << linux_nice << ": "sv << strerror(setpriority_error);
+        } else {
+          BOOST_LOG(debug) << "setpriority success for nice "sv << linux_nice;
+        }
+        return;
+      }
+#endif
       if (setpriority(PRIO_PROCESS, 0, linux_nice) == -1) {
         BOOST_LOG(warning) << "setpriority failed for nice "sv << linux_nice << ": "sv << strerror(errno);
       } else {
@@ -471,11 +551,11 @@ namespace platf {
   }
 
   void streaming_will_start() {
-    // Nothing to do
+    // Display power is owned by pending/active capture, not retained topology.
   }
 
   void streaming_will_stop() {
-    // Nothing to do
+    // Display power is released with the last pending/active capture lease.
   }
 
   void restart_on_exit() {
@@ -501,6 +581,15 @@ namespace platf {
   }
 
   void restart() {
+    const char *machine_host = std::getenv("VIBESHINE_MACHINE_HOST");
+    if (machine_host && machine_host[0] == '1' && machine_host[1] == '\0') {
+      // The machine-service wrapper owns readiness and the controller owns
+      // restart authority. Re-execing this private child would bypass the
+      // wrapper's KMS/encoder gate and could leave a failed second startup
+      // reported as the already-ready systemd service.
+      lifetime::exit_sunshine(0, true);
+      return;
+    }
     // Gracefully clean up and restart ourselves instead of exiting
     atexit(restart_on_exit);
     lifetime::exit_sunshine(0, true);
@@ -1015,6 +1104,9 @@ namespace platf {
 
   namespace source {
     enum source_e : std::size_t {
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+      GAMESCOPE,  ///< Gamescope compositor-owned PipeWire stream
+#endif
 #ifdef SUNSHINE_BUILD_CUDA
       NVFBC,  ///< NvFBC
 #endif
@@ -1038,6 +1130,12 @@ namespace platf {
   }  // namespace source
 
   static std::bitset<source::MAX_FLAGS> sources;
+
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+  bool gamescope_capture_selected() {
+    return sources[source::GAMESCOPE];
+  }
+#endif
 
 #ifdef SUNSHINE_BUILD_CUDA
   std::vector<std::string> nvfbc_display_names();
@@ -1097,6 +1195,13 @@ namespace platf {
 #endif
 
   std::vector<std::string> display_names(mem_type_e hwdevice_type) {
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+    if (sources[source::GAMESCOPE]) {
+      // Preserve the session's logical target even if Gamescope discovery now
+      // fails, so capture creation can reach the regular-display fallback.
+      return {"gamescope"};
+    }
+#endif
 #ifdef SUNSHINE_BUILD_CUDA
     // display using NvFBC only supports mem_type_e::cuda
     if (sources[source::NVFBC] && hwdevice_type == mem_type_e::cuda) {
@@ -1140,67 +1245,143 @@ namespace platf {
     return true;
   }
 
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+  static std::shared_ptr<display_t> gamescope_capture_fallback(mem_type_e hwdevice_type, const video::config_t &config) {
+    // Keep the Gamescope session's existing-scene ownership. Falling back in
+    // capture must not activate a saved Desktop Mode virtual connector.
+    const auto eligible = [](const std::string &name) {
+      // KMS qualifies duplicate connector names with their DRM card path.
+      const auto separator = name.find_last_of(':');
+      const auto connector = separator == std::string::npos ? name : name.substr(separator + 1);
+      return !linux_private_display::is_private_output(connector) &&
+             !linux_private_display::is_kernel_output(connector);
+    };
+    const bool hdr_required = config.dynamicRange && !config.force_sdr;
+    const auto try_backend = [&](const char *backend_name, auto enumerate, auto create_display) {
+      const auto capture = [&](const std::string &name) {
+        return create_display(hwdevice_type, name, config);
+      };
+      auto result = linux_capture::try_outputs(enumerate, capture, eligible, hdr_required);
+      if (result) {
+        BOOST_LOG(warning) << "Gamescope capture failed; using " << backend_name << " capture for the existing display.";
+      }
+      return result;
+    };
+#ifdef SUNSHINE_BUILD_DRM
+    if (auto result = try_backend("KMS", [&] { return kms_display_names(hwdevice_type); }, kms_display)) {
+      return result;
+    }
+#endif
+#ifdef SUNSHINE_BUILD_X11
+    // Verified Gamescope discovery imports its Xwayland DISPLAY at startup.
+    // X11 supplies the ordinary SDR path on rootless SteamOS installations.
+    if (!hdr_required && std::getenv("DISPLAY")) {
+      if (auto result = try_backend("X11", x11_display_names, x11_display)) {
+        return result;
+      }
+    }
+#endif
+    BOOST_LOG(error) << "Gamescope and regular display capture are unavailable for the requested format.";
+    return nullptr;
+  }
+#endif
+
   std::shared_ptr<display_t> display(
     mem_type_e hwdevice_type,
-    const std::string &display_name,
+    const std::string &requested_display_name,
     const video::config_t &config,
     const std::optional<adapter_id_t> &required_adapter
   ) {
     (void) required_adapter;
+    auto display_name = requested_display_name;
+#ifdef __linux__
+    display_name = linux_display::backend().capture_target(requested_display_name);
+#endif
     // Keep KMS as first element to check before dropping CAP_SYS_ADMIN
 #ifdef SUNSHINE_BUILD_DRM
-    const bool prefer_private_hdr_kms =
+    // SteamOS KWin rounds PipeWire refresh rates and converts capture to SDR.
+    // Managed outputs use completed DRM frames for both exact pacing and HDR;
+    // their privileged operations run in the restricted capture helper.
+  #ifdef SUNSHINE_BUILD_STEAMOS
+    const bool require_managed_kms = linux_private_display::is_kernel_output(display_name);
+  #else
+    const bool require_managed_kms = false;
+  #endif
+    const bool prefer_private_kms =
       !sources[source::KMS] &&
-      platf::linux_private_display_capture::prefer_kms(
+      (require_managed_kms || platf::linux_private_display_capture::prefer_kms(
         config.dynamicRange,
         config.force_sdr,
         config.prefer_sdr_10bit,
         linux_private_display::is_private_output(display_name)
-      );
-    if (prefer_private_hdr_kms) {
-      BOOST_LOG(info) << "Linux private HDR display detected; preferring direct KMS capture over the configured compositor capture path."sv;
+      ));
+    if (prefer_private_kms) {
+      BOOST_LOG(info) << "Capturing the private display through completed DRM frames."sv;
 
       // KMS display initialization resolves stable connector names through the
       // state populated by enumeration. This must run while CAP_SYS_ADMIN is
       // still available, before the normal compositor path drops it below.
       const auto kms_outputs = kms_display_names(hwdevice_type);
       if (kms_outputs.empty()) {
-        BOOST_LOG(error) << "Direct KMS capture is unavailable for private HDR display ["sv
-                         << display_name << "]; refusing an HDR compositor fallback."sv;
+        BOOST_LOG(error) << "Direct KMS capture is unavailable for private display ["sv
+                         << display_name << "]; refusing a compositor fallback that loses the requested mode or HDR."sv;
         return nullptr;
       } else if (auto kms = kms_display(hwdevice_type, display_name, config)) {
-        BOOST_LOG(info) << "Screencasting private HDR display ["sv << display_name << "] with KMS"sv;
+        BOOST_LOG(info) << "Screencasting private display ["sv << display_name << "] with KMS"sv;
         return kms;
       } else {
-        BOOST_LOG(error) << "Direct KMS capture failed for private HDR display ["sv
-                         << display_name << "]; refusing an HDR compositor fallback."sv;
+        BOOST_LOG(error) << "Direct KMS capture failed for private display ["sv
+                         << display_name << "]; refusing a compositor fallback that loses the requested mode or HDR."sv;
         return nullptr;
       }
     }
 
     if (sources[source::KMS]) {
-      BOOST_LOG(info) << "Screencasting with KMS"sv;
-      return kms_display(hwdevice_type, display_name, config);
+      // A dormant private connector is activated immediately before encoder
+      // probing. Refresh its connector-to-CRTC map so pre-login capture does
+      // not reuse the physical-output enumeration recorded at startup.
+      if (linux_private_display::is_private_output(display_name)) {
+        (void) kms_display_names(hwdevice_type);
+      }
+      auto kms = kms_display(hwdevice_type, display_name, config);
+      if (kms) {
+        BOOST_LOG(info) << "Screencasting with KMS"sv;
+      }
+      return kms;
     }
 #endif
 
-    // KMS capture was passed. Preserve CAP_SYS_ADMIN in the permitted set when
-    // the managed HDR pool is available, because a later private HDR session
-    // must still be able to raise it temporarily for direct KMS capture.
+    // Keep a permitted KMS capability when private HDR capture or a Gamescope
+    // fallback may need it later. Compositor capture runs with it ineffective.
     if (has_elevated_privileges(false)) {
-      if (platf::linux_private_display_capture::retain_kms_capability(
-            linux_private_display::kernel_hdr_pool_available()
-          )) {
+      bool retain_kms_capability = platf::linux_private_display_capture::retain_kms_capability(
+        linux_private_display::kernel_hdr_pool_available()
+      );
+#if defined(SUNSHINE_BUILD_GAMESCOPE) && defined(SUNSHINE_BUILD_DRM)
+      retain_kms_capability = retain_kms_capability || sources[source::GAMESCOPE];
+#endif
+      if (retain_kms_capability) {
         if (!drop_effective_elevated_privileges(false)) {
-          BOOST_LOG(error) << "Failed to clear effective CAP_SYS_ADMIN while retaining it for managed private HDR capture."sv;
+          BOOST_LOG(error) << "Failed to clear effective CAP_SYS_ADMIN while retaining it for KMS capture."sv;
           return nullptr;
         }
-        BOOST_LOG(debug) << "Retaining permitted CAP_SYS_ADMIN for managed private HDR KMS capture."sv;
+        BOOST_LOG(debug) << "Retaining permitted CAP_SYS_ADMIN for private HDR or Gamescope fallback KMS capture."sv;
       } else {
-        drop_elevated_privileges(false);
+        if (!drop_elevated_privileges(false)) {
+          BOOST_LOG(error) << "Failed to permanently drop CAP_SYS_ADMIN before compositor capture."sv;
+          return nullptr;
+        }
       }
     }
 
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+    if (sources[source::GAMESCOPE]) {
+      if (auto result = gamescope_display(hwdevice_type, display_name, config)) {
+        return result;
+      }
+      return gamescope_capture_fallback(hwdevice_type, config);
+    }
+#endif
 #ifdef SUNSHINE_BUILD_CUDA
     if (sources[source::NVFBC] && hwdevice_type == mem_type_e::cuda) {
       BOOST_LOG(info) << "Screencasting with NvFBC"sv;
@@ -1236,6 +1417,7 @@ namespace platf {
   }
 
   std::unique_ptr<deinit_t> init() {
+    sources.reset();
     // enable low latency mode for AMD
     // https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/30039
     set_env("AMD_DEBUG", "lowlatencyenc");
@@ -1262,6 +1444,28 @@ namespace platf {
     }
 #endif
 
+#ifdef SUNSHINE_BUILD_GAMESCOPE
+    if ((config::video.capture.empty() || config::video.capture == "gamescope") && gamescope_available()) {
+      sources[source::GAMESCOPE] = true;
+      // SteamOS publishes DISPLAY in gamescope-environment rather than in
+      // the user manager. Import it only after verifying the compositor.
+      (void) gamescope_session::import_x11_display();
+      BOOST_LOG(info) << "Using Gamescope compositor capture for the current session."sv;
+    }
+    bool native_compositor_selected = sources[source::GAMESCOPE];
+#else
+    bool native_compositor_selected = false;
+#endif
+#if defined(SUNSHINE_BUILD_STEAMOS) && defined(SUNSHINE_BUILD_KWIN)
+    // Desktop Mode provides KWin's native screencast interface. Select it
+    // before portal enumeration, which can open an interactive consent dialog.
+    // Gaming Mode keeps the Gamescope backend selected above.
+    if (config::video.capture.empty() && sources.none() && verify_kwin()) {
+      sources[source::KWIN] = true;
+      native_compositor_selected = true;
+      BOOST_LOG(info) << "Using KWin compositor capture for SteamOS Desktop Mode."sv;
+    }
+#endif
 #ifdef SUNSHINE_BUILD_CUDA
     if (((config::video.capture.empty() && sources.none()) || config::video.capture == "nvfbc") && verify_nvfbc()) {
       sources[source::NVFBC] = true;
@@ -1286,19 +1490,27 @@ namespace platf {
     }
 #endif
 #ifdef SUNSHINE_BUILD_DRM
-    if (((config::video.capture.empty() && sources.none()) || config::video.capture == "kms") && verify_kms()) {
-      sources[source::KMS] = true;
+    if ((config::video.capture.empty() && sources.none()) || config::video.capture == "kms") {
+      const bool outputs_available = verify_kms();
+      sources[source::KMS] = linux_private_display_capture::enable_kms(config::video.capture == "kms", outputs_available);
+      if (sources[source::KMS] && !outputs_available) {
+        // A paused compositor or dormant virtual connector can have no active
+        // framebuffer at startup. Keep the explicit backend selected so each
+        // later enumeration retries KMS after scanout recovers. This does not
+        // declare an output ready; capture still requires a real framebuffer.
+        BOOST_LOG(warning) << "KMS has no active capture output yet; retaining the requested backend for recovery."sv;
+      }
     }
 #endif
 #ifdef SUNSHINE_BUILD_X11
     // We enumerate this capture backend regardless of other suitable sources,
     // since it may be needed as a NvFBC fallback for software encoding on X11.
-    if ((config::video.capture.empty() || config::video.capture == "x11") && verify_x11()) {
+    if (((config::video.capture.empty() && !native_compositor_selected) || config::video.capture == "x11") && verify_x11()) {
       sources[source::X11] = true;
     }
 #endif
 #ifdef SUNSHINE_BUILD_PORTAL
-    if ((config::video.capture.empty() || config::video.capture == "portal") && verify_portal()) {
+    if (((config::video.capture.empty() && !native_compositor_selected) || config::video.capture == "portal") && verify_portal()) {
       sources[source::PORTAL] = true;
     }
 #endif
@@ -1336,7 +1548,11 @@ namespace platf {
   }
 
   std::string find_render_node_with_display() {
-#ifdef SUNSHINE_BUILD_DRM
+#if defined(SUNSHINE_BUILD_DRM) && defined(__linux__)
+    // Renderer discovery is metadata-only. Opening a primary node and forcing
+    // drmModeGetConnector can enter a wedged GPU driver after system resume.
+    return drm_topology::find_render_node_with_display();
+#elif defined(SUNSHINE_BUILD_DRM)
     auto *dir = opendir("/dev/dri");
     if (!dir) {
       return {};
@@ -1480,33 +1696,51 @@ namespace platf {
     return true;
   }
 
-  void drop_elevated_privileges(bool all_caps) {
+  bool drop_elevated_privileges(bool all_caps) {
 #if !defined(__FreeBSD__)
-    bool failed = false;
     const auto caps_to_drop = all_caps ? ELEVATED_PRIVILEGES_FULL : ELEVATED_PRIVILEGES_ADMIN;
     const cap_t caps = cap_get_proc();
     if (!caps) {
       BOOST_LOG(error) << "[misc] drop_elevated_privileges failed to get process capabilities"sv;
-      return;
+      return false;
     }
 
-    cap_set_flag(caps, CAP_EFFECTIVE, caps_to_drop.size(), caps_to_drop.data(), CAP_CLEAR);
-    cap_set_flag(caps, CAP_PERMITTED, caps_to_drop.size(), caps_to_drop.data(), CAP_CLEAR);
+    const int capability_count = static_cast<int>(caps_to_drop.size());
+    if (cap_set_flag(caps, CAP_EFFECTIVE, capability_count, caps_to_drop.data(), CAP_CLEAR) != 0 ||
+        cap_set_flag(caps, CAP_PERMITTED, capability_count, caps_to_drop.data(), CAP_CLEAR) != 0) {
+      BOOST_LOG(error) << "[misc] drop_elevated_privileges failed to construct the pruned capability set: "sv << std::strerror(errno);
+      cap_free(caps);
+      return false;
+    }
 
     if (cap_set_proc(caps) != 0) {
       BOOST_LOG(error) << "[misc] drop_elevated_privileges failed to prune capabilities: "sv << std::strerror(errno);
-      failed = true;
+      cap_free(caps);
+      return false;
+    }
+
+    const cap_t verified_caps = cap_get_proc();
+    if (!verified_caps) {
+      BOOST_LOG(error) << "[misc] drop_elevated_privileges failed to read back process capabilities"sv;
+      cap_free(caps);
+      return false;
+    }
+    const int comparison = cap_compare(caps, verified_caps);
+    cap_free(verified_caps);
+    if (comparison != 0) {
+      BOOST_LOG(error) << "[misc] drop_elevated_privileges failed exact capability verification"sv;
+      cap_free(caps);
+      return false;
     }
     cap_free(caps);
 
     // Reset dumpable AFTER the caps have been pruned to ensure /proc/pid/root is accessible.
     if (prctl(PR_SET_DUMPABLE, 1) != 0) {
       BOOST_LOG(error) << "[misc] drop_elevated_privileges failed to set PR_SET_DUMPABLE: "sv << std::strerror(errno);
-      failed = true;
+      return false;
     }
-    if (!failed) {
-      BOOST_LOG(info) << "[misc] drop_elevated_privileges succeeded in dropping capabilities"sv;
-    }
+    BOOST_LOG(info) << "[misc] drop_elevated_privileges succeeded in dropping capabilities"sv;
 #endif
+    return true;
   }
 }  // namespace platf

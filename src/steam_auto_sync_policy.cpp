@@ -42,7 +42,7 @@ namespace {
       mix(value, "unstatable");
     }
   }
-}
+}  // namespace
 
 namespace platf::steam::autosync {
   std::uint64_t source_fingerprint(const std::vector<game_t> &games) {
@@ -61,10 +61,15 @@ namespace platf::steam::autosync {
       mix_path(result, game.portrait_path);
       mix_path(result, game.boxart_path);
       mix_path(result, game.artwork_path);
+      mix(result, game.session_artwork_revision);
+      mix(result, separator);
       mix(result, game.artwork_format);
       mix(result, separator);
       mix_number(result, game.state_flags);
       mix_number(result, game.last_updated);
+      mix_number(result, game.installed);
+      mix_number(result, game.last_played);
+      mix_number(result, game.playtime_minutes);
       mix(result, game.app_type);
       mix(result, separator);
     }

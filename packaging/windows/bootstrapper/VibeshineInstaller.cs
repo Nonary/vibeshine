@@ -190,12 +190,15 @@ namespace VibeshineInstaller {
 
       var displayVersion = GetTargetVersionText();
       Title = (BuildFlavor.IsUninstallOnly ? "Vibeshine Uninstaller v" : "Vibeshine Installer v") + displayVersion;
-      Width = 720;
-      Height = Math.Min(showInstallLocation ? 650 : showInstallOptions ? 520 : 420, SystemParameters.WorkArea.Height);
-      MinWidth = 690;
-      MinHeight = Math.Min(420, SystemParameters.WorkArea.Height);
+      // WorkArea and WPF window dimensions are both device-independent units.
+      // Keep the simplified layout on screen even with a large display scale.
+      var workArea = SystemParameters.WorkArea;
+      Width = Math.Min(720, workArea.Width);
+      Height = Math.Min(showInstallLocation ? 650 : showInstallOptions ? 520 : 420, workArea.Height);
+      MinWidth = Math.Min(480, workArea.Width);
+      MinHeight = Math.Min(320, workArea.Height);
       WindowStartupLocation = WindowStartupLocation.CenterScreen;
-      ResizeMode = ResizeMode.CanMinimize;
+      ResizeMode = ResizeMode.CanResizeWithGrip;
       WindowStyle = WindowStyle.None;
       AllowsTransparency = false;
       Background = CreateBackgroundBrush();
@@ -275,7 +278,7 @@ namespace VibeshineInstaller {
       titleGrid.Children.Add(_titleCloseButton);
 
       var card = new Border {
-        Margin = new Thickness(28, 20, 28, 24),
+        Margin = new Thickness(20, 12, 20, 16),
         Background = Brushes.Transparent,
         VerticalAlignment = VerticalAlignment.Stretch
       };
@@ -296,9 +299,10 @@ namespace VibeshineInstaller {
         Background = new SolidColorBrush(Color.FromRgb(10, 16, 32)),
         BorderBrush = new SolidColorBrush(Color.FromRgb(86, 102, 146)),
         BorderThickness = new Thickness(1.2),
-        HorizontalAlignment = HorizontalAlignment.Center,
+        HorizontalAlignment = HorizontalAlignment.Stretch,
         VerticalAlignment = VerticalAlignment.Center,
-        Width = 540,
+        Margin = new Thickness(16),
+        MaxWidth = 540,
         MaxHeight = 390
       };
       _overlayGrid.Children.Add(overlayCard);
@@ -422,17 +426,18 @@ namespace VibeshineInstaller {
       cardGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
       card.Child = cardGrid;
 
-      var contentStack = new StackPanel {
-        Orientation = Orientation.Vertical
-      };
+      // Only the body scrolls. The actions always receive their full height.
       var contentScroll = new ScrollViewer {
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-        Content = contentStack,
         Padding = new Thickness(0, 0, 8, 0)
       };
       Grid.SetRow(contentScroll, 0);
       cardGrid.Children.Add(contentScroll);
+      var contentStack = new StackPanel {
+        Orientation = Orientation.Vertical
+      };
+      contentScroll.Content = contentStack;
       contentStack.Children.Add(new TextBlock {
         Text = BuildFlavor.IsUninstallOnly ? "Uninstall Vibeshine" : "Set up Vibeshine",
         FontSize = 28,
@@ -671,30 +676,17 @@ namespace VibeshineInstaller {
       Grid.SetRow(_progressBar, 0);
       footerGrid.Children.Add(_progressBar);
 
-      var buttonRow = new Grid();
-      buttonRow.ColumnDefinitions.Add(new ColumnDefinition());
-      buttonRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-      buttonRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-      buttonRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-      buttonRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+      var buttonRow = new WrapPanel {
+        HorizontalAlignment = HorizontalAlignment.Right
+      };
       Grid.SetRow(buttonRow, 1);
       footerGrid.Children.Add(buttonRow);
-
-      var buttonHint = new TextBlock {
-        Text = "",
-        Foreground = new SolidColorBrush(Color.FromRgb(195, 209, 232)),
-        FontSize = 12,
-        TextWrapping = TextWrapping.Wrap,
-        Margin = new Thickness(0, 0, 8, 0),
-        VerticalAlignment = VerticalAlignment.Center
-      };
-      buttonRow.Children.Add(buttonHint);
 
       _continueButton = new Button {
         Content = "Next",
         Height = 40,
         MinWidth = 136,
-        Margin = new Thickness(10, 0, 0, 0),
+        Margin = new Thickness(8, 4, 0, 0),
         Padding = new Thickness(16, 0, 16, 0),
         FontWeight = FontWeights.SemiBold,
         Background = new SolidColorBrush(Color.FromRgb(99, 102, 241)),
@@ -708,14 +700,13 @@ namespace VibeshineInstaller {
       _continueButton.MouseLeave += ContinueButtonMouseLeave;
       _continueButton.Click += ContinueClicked;
       ApplyFlatButtonTemplate(_continueButton, 8);
-      Grid.SetColumn(_continueButton, 4);
       buttonRow.Children.Add(_continueButton);
 
       _uninstallButton = new Button {
         Content = "Uninstall",
         Height = 40,
         MinWidth = 90,
-        Margin = new Thickness(10, 0, 0, 0),
+        Margin = new Thickness(8, 4, 0, 0),
         Padding = new Thickness(16, 0, 16, 0),
         FontWeight = FontWeights.SemiBold,
         Background = new SolidColorBrush(Color.FromRgb(16, 24, 42)),
@@ -728,14 +719,13 @@ namespace VibeshineInstaller {
       _uninstallButton.MouseLeave += UninstallButtonMouseLeave;
       _uninstallButton.Click += UninstallNowClicked;
       ApplyFlatButtonTemplate(_uninstallButton, 8);
-      Grid.SetColumn(_uninstallButton, BuildFlavor.IsUninstallOnly ? 4 : 1);
       buttonRow.Children.Add(_uninstallButton);
 
       _licenseButton = new Button {
         Content = "_License",
         Height = 40,
         MinWidth = 102,
-        Margin = new Thickness(10, 0, 0, 0),
+        Margin = new Thickness(8, 4, 0, 0),
         Padding = new Thickness(16, 0, 16, 0),
         FontWeight = FontWeights.SemiBold,
         Background = new SolidColorBrush(Color.FromRgb(16, 24, 42)),
@@ -745,16 +735,13 @@ namespace VibeshineInstaller {
       };
       _licenseButton.Click += LicenseClicked;
       ApplyFlatButtonTemplate(_licenseButton, 8);
-      Grid.SetColumn(_licenseButton, 0);
-      _licenseButton.HorizontalAlignment = HorizontalAlignment.Left;
-      _licenseButton.Margin = new Thickness(0);
       buttonRow.Children.Add(_licenseButton);
 
       _closeButton = new Button {
         Content = "Cl_ose",
         Height = 40,
         MinWidth = 102,
-        Margin = new Thickness(10, 0, 0, 0),
+        Margin = new Thickness(8, 4, 0, 0),
         Padding = new Thickness(16, 0, 16, 0),
         FontWeight = FontWeights.SemiBold,
         Background = new SolidColorBrush(Color.FromRgb(16, 24, 42)),
@@ -765,7 +752,6 @@ namespace VibeshineInstaller {
       };
       _closeButton.Click += (sender, eventArgs) => Close();
       ApplyFlatButtonTemplate(_closeButton, 8);
-      Grid.SetColumn(_closeButton, 3);
       buttonRow.Children.Add(_closeButton);
 
       _continueButton.Content = BuildFlavor.IsUninstallOnly ? "Uninstall Vibeshine" : BuildInstallButtonLabel();
@@ -4984,7 +4970,56 @@ namespace VibeshineInstaller {
         return 1;
       }
 
+      if (product != null && !product.IsWindowsInstaller && IsNsisUninstaller(executablePath)
+          && arguments.IndexOf("_?=", StringComparison.Ordinal) < 0) {
+        // NSIS normally spawns a temporary copy and exits before removal is done.
+        // Waiting for that launcher races the old file/service cleanup with MSI.
+        // Run our own copy so the old uninstaller can delete its original file,
+        // without scheduling the replacement uninstall.exe for deletion at reboot.
+        var installDirectory = Path.GetDirectoryName(Path.GetFullPath(executablePath));
+        var temporaryDirectory = Path.Combine(Path.GetTempPath(), "vibeshine_legacy_uninstall_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temporaryDirectory);
+        var temporaryUninstaller = Path.Combine(temporaryDirectory, "uninstall.exe");
+        try {
+          File.Copy(executablePath, temporaryUninstaller);
+          // NSIS requires _?= last and unquoted, including paths with spaces.
+          return RunProcess(temporaryUninstaller, arguments + " _?=" + installDirectory, hiddenWindow, requestElevationIfNeeded);
+        } finally {
+          TryDeleteFile(temporaryUninstaller);
+          try {
+            Directory.Delete(temporaryDirectory);
+          } catch {
+          }
+        }
+      }
+
       return RunProcess(executablePath, arguments, hiddenWindow, requestElevationIfNeeded);
+    }
+
+    private static bool IsNsisUninstaller(string executablePath) {
+      // NSIS firstheader is aligned to 512 bytes; require the uninstall flag
+      // and all signature words so MSI, Inno, and other EXEs keep their commands.
+      // https://github.com/kichik/nsis/blob/master/Source/exehead/fileform.h
+      try {
+        using (var reader = new BinaryReader(File.OpenRead(executablePath))) {
+          for (long offset = 0; offset + 28 <= reader.BaseStream.Length; offset += 512) {
+            reader.BaseStream.Position = offset;
+            var flags = reader.ReadUInt32();
+            if ((flags & 1) != 0 && (flags & ~15u) == 0
+                && reader.ReadUInt32() == 0xDEADBEEF
+                && reader.ReadUInt32() == 0x6C6C754E
+                && reader.ReadUInt32() == 0x74666F73
+                && reader.ReadUInt32() == 0x74736E49) {
+              return true;
+            }
+          }
+        }
+      } catch (IOException) {
+      } catch (UnauthorizedAccessException) {
+      } catch (ArgumentException) {
+      } catch (NotSupportedException) {
+      }
+      return false;
     }
 
     private static string BuildSilentUninstallCommand(InstalledProductInfo product) {
@@ -6307,6 +6342,7 @@ namespace VibeshineInstaller {
           "sunshine.conf",
           "sunshine.log",
           "sunshine_state.json",
+          "sunshine_state.json.bak",
           "vibeshine_state.json",
           "virtual_display_cache.json",
           "nvprefs_undo.json",

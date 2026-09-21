@@ -34,7 +34,9 @@ namespace platf::steam::autosync {
           return;
         }
         stopping_ = false;
-        worker_ = std::thread {[this] { run(); }};
+        worker_ = std::thread {[this] {
+          run();
+        }};
       }
 
       void stop() {
@@ -53,6 +55,7 @@ namespace platf::steam::autosync {
         std::uint64_t previous_fingerprint = 0;
         std::uint64_t observed_epoch = 0;
         bool have_fingerprint = false;
+        auto next_artwork_retry = std::chrono::steady_clock::time_point {};
         while (true) {
           settings_t settings;
           std::uint64_t epoch;
@@ -74,23 +77,38 @@ namespace platf::steam::autosync {
 
           if (settings.enabled && settings.auto_sync) {
             try {
-              const auto roots = platf::steam::default_library_roots();
-              if (!roots.empty()) {
-                auto games = platf::steam::discover(roots);
-                const auto fingerprint = source_fingerprint(games);
-                if (!have_fingerprint || fingerprint != previous_fingerprint) {
+              if (platf::steam::available()) {
+                auto catalog = platf::steam::discover_catalog();
+                const auto fingerprint = source_fingerprint(catalog);
+                if (!have_fingerprint || fingerprint != previous_fingerprint ||
+                    std::chrono::steady_clock::now() >= next_artwork_retry) {
+                  auto games = platf::steam::sync::policy::select_games(
+                    catalog,
+                    settings.sync_all_installed,
+                    settings.recent_games,
+                    settings.recent_max_age_days,
+                    settings.exclusions,
+                    settings.include_tools
+                  );
                   platf::steam::artwork::prepare(games, platf::appdata());
                   std::lock_guard apps_lock {confighttp::apps_file_mutex()};
                   const auto text = file_handler::read_file(config::stream.file_apps.c_str());
                   if (!text.empty()) {
                     auto root = nlohmann::json::parse(text);
                     const auto changed = platf::steam::sync::policy::reconcile(
-                      root, games, settings.remove_uninstalled, settings.exclusions, settings.include_tools);
+                      root,
+                      games,
+                      !settings.sync_all_installed || settings.remove_uninstalled,
+                      settings.exclusions,
+                      settings.include_tools,
+                      settings.sync_all_installed ? "installed" : "recent"
+                    );
                     if (changed && !confighttp::refresh_client_apps_cache(root)) {
                       BOOST_LOG(warning) << "Steam auto-sync could not save applications";
                     } else {
                       previous_fingerprint = fingerprint;
                       have_fingerprint = true;
+                      next_artwork_retry = std::chrono::steady_clock::now() + std::chrono::minutes {5};
                     }
                   }
                 }
