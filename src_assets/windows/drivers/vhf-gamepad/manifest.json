@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "source_revision": "0b3970e1a8c839f14f20a7c8eaf48ff59b8c1986",
-  "driver_ver": "09/13/2026,0.1.0.34",
+  "source_revision": "4b56fb9da177f320fb2d7ddb1b6262e5d55d2750",
+  "driver_ver": "09/22/2026,0.1.0.39",
   "platform": "x64",
   "protocol_version": 2,
   "signing": {
@@ -19,28 +19,28 @@
       "basis": "fresh-inf2cat",
       "generator": "Inf2Cat",
       "files": {
-        "driver/VibeshineVhfGamepad.inf": "2725cf477661cbdac7e5ef85cc28c30d8056cc56fe6feaf07d07f5eec38a5785",
-        "driver/VibeshineVhfGamepad.dll": "2de266d01d9a31272ff29876a61f6b8b1a3f2eb9d79a071bd36a9848f9b8dd95",
-        "driver/VibeshineVhfGamepad.cat": "6a61a1e6f05a8ad2cc0e792f44007736f418141193e082cd3f336be6dec62334"
+        "driver/VibeshineVhfGamepad.inf": "9bf8344c51610fac0ccfc87e39e1a14bdffbcc9da40922b3b23fea1c4a37b724",
+        "driver/VibeshineVhfGamepad.dll": "ece5a3ececff18a29509d59458931b1c54fee2ccfdc9c89bb1bb972ee6fc1b05",
+        "driver/VibeshineVhfGamepad.cat": "bac35bde0fb9f7f9086feea285457178a5c9184c35820a98375324b08763329e"
       }
     }
   },
   "files": [
     {
       "path": "driver/VibeshineVhfGamepad.inf",
-      "sha256": "2725cf477661cbdac7e5ef85cc28c30d8056cc56fe6feaf07d07f5eec38a5785"
+      "sha256": "9bf8344c51610fac0ccfc87e39e1a14bdffbcc9da40922b3b23fea1c4a37b724"
     },
     {
       "path": "driver/VibeshineVhfGamepad.dll",
-      "sha256": "2de266d01d9a31272ff29876a61f6b8b1a3f2eb9d79a071bd36a9848f9b8dd95"
+      "sha256": "ece5a3ececff18a29509d59458931b1c54fee2ccfdc9c89bb1bb972ee6fc1b05"
     },
     {
       "path": "driver/VibeshineVhfGamepad.cat",
-      "sha256": "6a61a1e6f05a8ad2cc0e792f44007736f418141193e082cd3f336be6dec62334"
+      "sha256": "bac35bde0fb9f7f9086feea285457178a5c9184c35820a98375324b08763329e"
     },
     {
       "path": "tools/VibeshineVhfGamepadDeviceSetup.exe",
-      "sha256": "d58c2ad5943c9cdf96d122a5dc6e66689ef04dc9db054d803ec500b866b1e4fc"
+      "sha256": "695c37dece72082c7aea661256f91574f73a51fe27e08e1483b51b49ea080dc5"
     }
   ]
 }
