@@ -430,11 +430,10 @@ const displaySelection = computed<AppDisplaySelection>({
 });
 
 const physicalDisplayOutput = computed<string>({
-  get: () => form.displayOutput.trim() || form.output.trim(),
+  get: () => form.displayOutput.trim(),
   set: (value) => {
     const normalized = value.trim();
     form.displayOutput = normalized;
-    form.output = '';
     form.virtualScreen = false;
     form.virtualDisplayMode = 'disabled';
     form.virtualDisplayLayout = '';
@@ -2549,7 +2548,7 @@ function isVirtualDisplaySelection(value: string): boolean {
 }
 
 function effectiveAppOutput(): string {
-  return form.displayOutput.trim() || form.output.trim();
+  return form.displayOutput.trim();
 }
 
 function virtualDisplayModeUsesVirtual(mode: string): boolean | null {
@@ -2894,13 +2893,11 @@ function applyDisplaySelection(selection: AppDisplaySelection): void {
     form.virtualDisplayMode = 'disabled';
     form.virtualDisplayLayout = '';
     if (isVirtualDisplaySelection(output)) {
-      form.output = '';
       form.displayOutput = '';
     }
     return;
   }
 
-  form.output = '';
   form.displayOutput = '';
   form.virtualScreen = true;
   if (!['per_client', 'shared'].includes(form.virtualDisplayMode)) {
@@ -2911,7 +2908,6 @@ function applyDisplaySelection(selection: AppDisplaySelection): void {
 
 function enableVirtualDisplayForFrameGen(): void {
   if (effectiveAppOutput() && !isVirtualDisplaySelection(effectiveAppOutput())) {
-    form.output = '';
     form.displayOutput = '';
   }
   form.virtualScreen = true;
@@ -3009,7 +3005,6 @@ watch(
   () => [
     form.virtualScreen,
     form.virtualDisplayMode,
-    form.output,
     form.displayOutput,
     form.configOverridesJson,
   ],

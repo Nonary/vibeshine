@@ -550,6 +550,7 @@ function fresh(): AppForm {
     detached: [],
     virtualScreen: false,
     prefer10BitSdr: null,
+    commandOutput: '',
     output: '',
     frameGenerationProvider: 'game-provided',
     frameGenerationMode: 'off',
@@ -823,9 +824,7 @@ function fromServerApp(src?: ServerApp | null): AppForm {
       ? (frameGenerationModeFromConfig as FrameGenerationProvider)
       : normalizedProvider;
   const hasDisplayOutput = Object.prototype.hasOwnProperty.call(src, 'display-output');
-  const rawOutput = String(
-    hasDisplayOutput ? ((src as any)['display-output'] ?? '') : (src.output ?? ''),
-  );
+  const rawOutput = String(hasDisplayOutput ? ((src as any)['display-output'] ?? '') : '');
   const rawVirtualScreen = (src as any)?.['virtual-screen'];
   const virtualScreen =
     typeof rawVirtualScreen === 'boolean'
@@ -859,6 +858,7 @@ function fromServerApp(src?: ServerApp | null): AppForm {
     index: typeof src.index === 'number' ? src.index : -1,
     uuid: src.uuid || '',
     name: String(src.name ?? ''),
+    commandOutput: String(src.output ?? ''),
     output: sanitizedOutput,
     cmd: String(cmdStr ?? ''),
     workingDir: String(src['working-dir'] ?? ''),
@@ -912,6 +912,7 @@ function toServerPayload(f: AppForm): Record<string, any> {
     ...(f.uuid ? { uuid: f.uuid } : {}),
     ...(!f.uuid ? { index: typeof f.index === 'number' ? f.index : -1 } : {}),
     name: f.name,
+    ...(f.commandOutput ? { output: f.commandOutput } : {}),
     cmd: f.cmd,
     'working-dir': f.workingDir,
     'image-path': String(f.imagePath || '').replace(/\"/g, ''),
