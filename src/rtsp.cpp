@@ -1276,6 +1276,7 @@ namespace rtsp_stream {
     ) {
       std::vector<std::shared_ptr<stream::session_t>> to_cleanup;
       bool removed_pending = false;
+      std::optional<std::array<std::uint8_t, 16>> removed_pending_virtual_display_guid_bytes;
       [[maybe_unused]] bool vulkan_hdr_layer_active = false;
       {
         std::lock_guard lock {pending_launches_mutex};
@@ -1284,6 +1285,13 @@ namespace rtsp_stream {
           const bool all_clients = client_uuid.empty();
           if (pending_policy::disconnect_scope_matches(pending->role, role, pending->client_uuid == client_uuid, all_clients) &&
               (!generation || pending->role_generation == *generation)) {
+            if (std::any_of(
+                  pending->virtual_display_guid_bytes.begin(),
+                  pending->virtual_display_guid_bytes.end(),
+                  [](const std::uint8_t byte) { return byte != 0; }
+                )) {
+              removed_pending_virtual_display_guid_bytes = pending->virtual_display_guid_bytes;
+            }
             it = pending_launches.erase(it);
             removed_pending = true;
           } else {
@@ -1314,6 +1322,19 @@ namespace rtsp_stream {
       for (auto &session : to_cleanup) {
         stream::session::stop(*session);
         stream::session::join(*session, lifecycle_lock_held);
+      }
+      if (removed_pending) {
+        std::unique_lock<std::mutex> lifecycle_lock {nvhttp::stream_lifecycle_mutex(), std::defer_lock};
+        if (!lifecycle_lock_held) {
+          lifecycle_lock.lock();
+        }
+        const stream::session::shared_runtime_finalize_context_t finalize_context {
+          .virtual_display_guid_bytes = removed_pending_virtual_display_guid_bytes,
+        };
+        (void) stream::session::finalize_shared_runtime_if_idle(
+          "rtsp_remote_role_pending_disconnect",
+          finalize_context
+        );
       }
       return removed_pending || !to_cleanup.empty();
     }
