@@ -273,6 +273,7 @@ namespace webrtc_stream {
           .auto_capture_uses_wgc = platf::dxgi::should_use_wgc_default(),
           .auto_virtual_framegen_limiter = config::frame_limiter.virtual_display_limiter_enabled(),
           .virtual_display_refresh_multiplier = config::frame_limiter.fixed_virtual_display_refresh_multiplier(),
+          .virtual_display_fixed_refresh_millihz = config::frame_limiter.fixed_virtual_display_refresh_millihz(session->client_vrr_requested),
         });
       };
       const auto requested_display_framegen_policy = make_framegen_policy(request_virtual_display);
@@ -287,6 +288,7 @@ namespace webrtc_stream {
         session->framegen_refresh_rate = framegen_policy.framegen_refresh_rate;
         session->framegen_refresh_millihz = framegen_policy.framegen_refresh_millihz;
         session->framegen_refresh_multiplier = framegen_policy.refresh_multiplier;
+        session->framegen_fixed_refresh = framegen_policy.fixed_refresh;
       };
       BOOST_LOG(debug) << "Display helper: WebRTC session prep client='" << session->client_name
                        << "' allow_display_changes=" << allow_display_changes
@@ -354,6 +356,7 @@ namespace webrtc_stream {
         session->framegen_refresh_rate.reset();
         session->framegen_refresh_millihz.reset();
         session->framegen_refresh_multiplier = 1;
+        session->framegen_fixed_refresh = false;
         if (app_output_override) {
           publish_output_override(*app_output_override);
           BOOST_LOG(info) << "Display helper: pinning WebRTC capture to app output override: "
@@ -384,6 +387,7 @@ namespace webrtc_stream {
         session->framegen_refresh_rate.reset();
         session->framegen_refresh_millihz.reset();
         session->framegen_refresh_multiplier = 1;
+        session->framegen_fixed_refresh = false;
         return;
       }
       apply_framegen_refresh_policy(true);
@@ -501,11 +505,18 @@ namespace webrtc_stream {
           virtual_display_hdr_requested = source_hdr_requested;
         }
       }
-      const uint32_t base_vd_fps_millihz = session->client_display_refresh_millihz > 0 ?
-                                                 session->client_display_refresh_millihz :
-                                                 (session->fps > 0 ?
-                                                    framegen::saturating_refresh_millihz(static_cast<uint32_t>(session->fps), 1000) :
-                                                    0u);
+      // A fixed-refresh (VRR) virtual display is described at that rate so the driver
+      // advertises it; multiplier modes describe the client rate and add its multiples.
+      const bool fixed_vd_refresh = session->framegen_fixed_refresh &&
+                                    session->framegen_refresh_millihz &&
+                                    *session->framegen_refresh_millihz > 0;
+      const uint32_t base_vd_fps_millihz = fixed_vd_refresh ?
+                                             *session->framegen_refresh_millihz :
+                                           session->client_display_refresh_millihz > 0 ?
+                                             session->client_display_refresh_millihz :
+                                             (session->fps > 0 ?
+                                                framegen::saturating_refresh_millihz(static_cast<uint32_t>(session->fps), 1000) :
+                                                0u);
       uint32_t vd_fps = rtsp_stream::effective_display_refresh_millihz(*session);
       if (vd_fps == 0) {
         vd_fps = 60000u;
@@ -719,6 +730,7 @@ namespace webrtc_stream {
       session->framegen_refresh_rate.reset();
       session->framegen_refresh_millihz.reset();
       session->framegen_refresh_multiplier = 1;
+      session->framegen_fixed_refresh = false;
     }
 #endif
 
@@ -2902,6 +2914,7 @@ namespace webrtc_stream {
       launch_session->framegen_refresh_rate.reset();
       launch_session->framegen_refresh_millihz.reset();
       launch_session->framegen_refresh_multiplier = 1;
+      launch_session->framegen_fixed_refresh = false;
       launch_session->frame_generation_enabled = false;
       launch_session->lossless_scaling_framegen = false;
       launch_session->lossless_scaling_target_fps.reset();
@@ -3014,6 +3027,7 @@ namespace webrtc_stream {
 #endif
         .auto_virtual_framegen_limiter = config::frame_limiter.virtual_display_limiter_enabled(),
         .virtual_display_refresh_multiplier = config::frame_limiter.fixed_virtual_display_refresh_multiplier(),
+        .virtual_display_fixed_refresh_millihz = config::frame_limiter.fixed_virtual_display_refresh_millihz(),
       });
 #ifdef _WIN32
       platf::frame_limiter_streaming_start(platf::frame_limiter_owner::webrtc, policy);
