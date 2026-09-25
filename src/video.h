@@ -352,6 +352,9 @@ namespace video {
     std::vector<replace_t> *replacements = nullptr;
     void *channel_data = nullptr;
     bool after_ref_frame_invalidation = false;
+    /// PyroWave record framing: frame bytes through the coarsest wavelet level, whose
+    /// packets stream.cpp protects with parity and announces; 0 when unknown.
+    std::size_t pyrowave_critical_bytes = 0;
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
     std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp;
     std::chrono::steady_clock::time_point packet_enqueue_timestamp = std::chrono::steady_clock::now();
