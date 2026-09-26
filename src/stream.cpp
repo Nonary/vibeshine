@@ -577,6 +577,7 @@ namespace stream {
     config_t config;
     int stream_fps = 0;
     std::uint32_t client_display_refresh_millihz = 0;
+    bool secondary_game_client = false;
     remote_session::role_e remote_role {remote_session::role_e::game};
     std::uint64_t remote_role_generation {};
     bool input_only {};
@@ -852,7 +853,7 @@ namespace stream {
 
 #ifdef _WIN32
   struct deferred_stream_start_t {
-    framegen::stream_start_policy_t policy;
+    std::optional<framegen::stream_start_policy_t> policy;
   };
 
   std::mutex &deferred_stream_start_mutex() {
@@ -921,10 +922,12 @@ namespace stream {
     }
 
     BOOST_LOG(info) << "Stream-start actions applied after user session became available.";
-    platf::frame_limiter_streaming_start(
-      platf::frame_limiter_owner::rtsp,
-      deferred->policy
-    );
+    if (deferred->policy) {
+      platf::frame_limiter_streaming_start(
+        platf::frame_limiter_owner::rtsp,
+        *deferred->policy
+      );
+    }
     session::start_shared_platform_if_needed();
     return true;
   }
@@ -2879,6 +2882,7 @@ namespace stream {
 
   namespace session {
     std::atomic_uint running_sessions;
+    std::atomic_uint frame_limiter_sessions;
     std::atomic_uint teardown_sessions;
     std::atomic_uint cleanup_reservations;
     bool shared_platform_started;
@@ -3200,17 +3204,30 @@ namespace stream {
       });
       teardown_reservation.disable();
 
+      [[maybe_unused]] const bool last_frame_limiter_session =
+        !session.secondary_game_client && --frame_limiter_sessions == 0;
       const bool last_rtsp_session = --running_sessions == 0;
       host_stats::rtsp_session_ended();
       bool finalized_shared_runtime = false;
+#ifdef _WIN32
+      if (last_frame_limiter_session && !last_rtsp_session) {
+        // A deferred start must not apply a departed settings owner's policy
+        // while only secondary transports remain.
+        {
+          std::lock_guard lock(deferred_stream_start_mutex());
+          if (deferred_stream_start_state()) {
+            deferred_stream_start_state()->policy.reset();
+          }
+        }
+      }
+#endif
       if (last_rtsp_session) {
         webrtc_stream::set_rtsp_sessions_active(false);
-        const bool is_paused = proc::proc.current_app_id() > 0;
-        if (is_paused) {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+        if (proc::proc.current_app_id() > 0) {
           system_tray::update_tray_pausing(proc::proc.get_last_run_app_name());
-#endif
         }
+#endif
 
 #ifdef _WIN32
         clear_deferred_stream_start_actions();
@@ -3223,7 +3240,7 @@ namespace stream {
           session::has_shared_runtime_owner(finalize_context);
         platf::frame_limiter_streaming_stop(
           platf::frame_limiter_owner::rtsp,
-          is_paused || shared_runtime_still_owned
+          proc::proc.current_app_id() > 0 || shared_runtime_still_owned
         );
 #else
 #ifdef __linux__
@@ -3339,113 +3356,135 @@ namespace stream {
 
       // If this is the first session, invoke the platform callbacks
       const bool first_rtsp_session = ++running_sessions == 1;
+      const bool first_frame_limiter_session =
+        !session.secondary_game_client && ++frame_limiter_sessions == 1;
       host_stats::rtsp_session_started();
-      if (first_rtsp_session) {
-        if (!webrtc_stream::has_active_or_pending_sessions()) {
-          webrtc_stream::set_rtsp_capture_config(session.config.monitor, session.config.audio);
+      if (first_rtsp_session || first_frame_limiter_session) {
+        if (first_rtsp_session) {
+          if (!webrtc_stream::has_active_or_pending_sessions()) {
+            webrtc_stream::set_rtsp_capture_config(session.config.monitor, session.config.audio);
+          }
+          webrtc_stream::set_rtsp_sessions_active(true);
         }
-        webrtc_stream::set_rtsp_sessions_active(true);
 #if defined(_WIN32) || defined(__linux__)
-        // Apply the stream-owned limiter independently of application launch.
-        std::optional<int> lossless_rtss_limit;
-        const bool using_lossless_provider = session.config.lossless_scaling_framegen &&
-                                             boost::iequals(session.config.frame_generation_provider, "lossless-scaling");
-        if (using_lossless_provider) {
-          if (session.config.lossless_scaling_rtss_limit && *session.config.lossless_scaling_rtss_limit > 0) {
-            lossless_rtss_limit = session.config.lossless_scaling_rtss_limit;
-          } else if (session.config.lossless_scaling_target_fps && *session.config.lossless_scaling_target_fps > 0) {
-            int computed = (int) std::lround(*session.config.lossless_scaling_target_fps * 0.5);
-            if (computed > 0) {
-              lossless_rtss_limit = computed;
+        if (first_frame_limiter_session) {
+          // Apply the stream-owned limiter independently of application launch.
+          std::optional<int> lossless_rtss_limit;
+          const bool using_lossless_provider = session.config.lossless_scaling_framegen &&
+                                               boost::iequals(session.config.frame_generation_provider, "lossless-scaling");
+          if (using_lossless_provider) {
+            if (session.config.lossless_scaling_rtss_limit && *session.config.lossless_scaling_rtss_limit > 0) {
+              lossless_rtss_limit = session.config.lossless_scaling_rtss_limit;
+            } else if (session.config.lossless_scaling_target_fps && *session.config.lossless_scaling_target_fps > 0) {
+              int computed = (int) std::lround(*session.config.lossless_scaling_target_fps * 0.5);
+              if (computed > 0) {
+                lossless_rtss_limit = computed;
+              }
             }
           }
-        }
-        const auto policy = framegen::make_stream_start_policy({
-          .fps = session.config.monitor.framerate,
-          .display_refresh_millihz = session.client_display_refresh_millihz,
-          .frame_generation_enabled = session.config.frame_generation_enabled,
-          .gen1_framegen_fix = session.config.gen1_framegen_fix,
-          .gen2_framegen_fix = session.config.gen2_framegen_fix,
-          .lossless_scaling_framegen = session.config.lossless_scaling_framegen,
-          .lossless_rtss_limit = lossless_rtss_limit,
-          .frame_generation_provider = session.config.frame_generation_provider,
-          .uses_virtual_display = session.virtual_display.active,
-          .capture_mode = config::video.capture,
+          const auto policy = framegen::make_stream_start_policy({
+            .fps = session.config.monitor.framerate,
+            .display_refresh_millihz = session.client_display_refresh_millihz,
+            .frame_generation_enabled = session.config.frame_generation_enabled,
+            .gen1_framegen_fix = session.config.gen1_framegen_fix,
+            .gen2_framegen_fix = session.config.gen2_framegen_fix,
+            .lossless_scaling_framegen = session.config.lossless_scaling_framegen,
+            .lossless_rtss_limit = lossless_rtss_limit,
+            .frame_generation_provider = session.config.frame_generation_provider,
+            .uses_virtual_display = session.virtual_display.active,
+            .capture_mode = config::video.capture,
 #ifdef _WIN32
-          .auto_capture_uses_wgc = platf::dxgi::should_use_wgc_default(),
+            .auto_capture_uses_wgc = platf::dxgi::should_use_wgc_default(),
 #else
-          .auto_capture_uses_wgc = false,
+            .auto_capture_uses_wgc = false,
 #endif
-          .auto_virtual_framegen_limiter = config::frame_limiter.virtual_display_limiter_enabled(),
-          .virtual_display_refresh_multiplier = config::frame_limiter.fixed_virtual_display_refresh_multiplier(),
-          .virtual_display_fixed_refresh_millihz = config::frame_limiter.fixed_virtual_display_refresh_millihz(session.config.monitor.vrr_low_latency),
-        });
+            .auto_virtual_framegen_limiter = config::frame_limiter.virtual_display_limiter_enabled(),
+            .virtual_display_refresh_multiplier = config::frame_limiter.fixed_virtual_display_refresh_multiplier(),
+            .virtual_display_fixed_refresh_millihz = config::frame_limiter.fixed_virtual_display_refresh_millihz(session.config.monitor.vrr_low_latency),
+          });
 #ifdef _WIN32
-        const bool defer_stream_start = platf::is_running_as_system() && !user_session_ready();
-        if (defer_stream_start) {
-          deferred_stream_start_t deferred {.policy = policy};
-          defer_stream_start_actions(std::move(deferred));
-          BOOST_LOG(info) << "Stream-start actions deferred until user session is ready.";
-        } else {
+          const bool defer_stream_start = platf::is_running_as_system() && !user_session_ready();
+          if (defer_stream_start) {
+            deferred_stream_start_t deferred {.policy = policy};
+            defer_stream_start_actions(std::move(deferred));
+            BOOST_LOG(info) << "Stream-start actions deferred until user session is ready.";
+          } else {
+            clear_deferred_stream_start_actions();
+            platf::frame_limiter_streaming_start(
+              platf::frame_limiter_owner::rtsp,
+              policy
+            );
+            session::start_shared_platform_if_needed();
+          }
+#else
+          const auto color_mode = session.config.monitor.dynamicRange != 0 &&
+                                    !session.config.monitor.prefer_sdr_10bit &&
+                                    !session.config.monitor.force_sdr ?
+                                    platf::proton_color_mode::hdr :
+                                  session.config.monitor.dynamicRange != 0 &&
+                                    session.config.monitor.prefer_sdr_10bit &&
+                                    !session.config.monitor.force_sdr ?
+                                    platf::proton_color_mode::sdr10 :
+                                    platf::proton_color_mode::sdr;
+          const auto wayland_hdr_compatibility = platf::wayland_hdr_compatibility::resolve(
+            config::video.dd.wayland_hdr_compatibility,
+            platf::wayland_hdr_compatibility::selected_session_is_wayland(
+              window_system == window_system_e::WAYLAND
+            ),
+            color_mode == platf::proton_color_mode::hdr
+          );
+          if (config::video.dd.wayland_hdr_compatibility && !wayland_hdr_compatibility.enabled) {
+            if (color_mode == platf::proton_color_mode::sdr10) {
+              BOOST_LOG(debug) << "Wayland HDR compatibility skipped: 10-bit SDR preferred.";
+            } else if (session.config.monitor.force_sdr) {
+              BOOST_LOG(debug) << "Wayland HDR compatibility skipped: HDR disabled by the final session/display policy.";
+            } else if (wayland_hdr_compatibility.suppression_reason ==
+                       platf::wayland_hdr_compatibility::suppression_reason_e::not_wayland) {
+              BOOST_LOG(debug) << "Wayland HDR compatibility skipped: the active session is not Wayland.";
+            } else {
+              BOOST_LOG(debug) << "Wayland HDR compatibility skipped: session resolved to SDR.";
+            }
+          }
           platf::frame_limiter_streaming_start(
             platf::frame_limiter_owner::rtsp,
-            policy
+            policy,
+            {.color_mode = color_mode,
+             .wayland_hdr_compatibility = wayland_hdr_compatibility.enabled}
           );
           session::start_shared_platform_if_needed();
-        }
-#else
-        const auto color_mode = session.config.monitor.dynamicRange != 0 &&
-                                  !session.config.monitor.prefer_sdr_10bit &&
-                                  !session.config.monitor.force_sdr ?
-                                  platf::proton_color_mode::hdr :
-                                session.config.monitor.dynamicRange != 0 &&
-                                  session.config.monitor.prefer_sdr_10bit &&
-                                  !session.config.monitor.force_sdr ?
-                                  platf::proton_color_mode::sdr10 :
-                                  platf::proton_color_mode::sdr;
-        const auto wayland_hdr_compatibility = platf::wayland_hdr_compatibility::resolve(
-          config::video.dd.wayland_hdr_compatibility,
-          platf::wayland_hdr_compatibility::selected_session_is_wayland(
-            window_system == window_system_e::WAYLAND
-          ),
-          color_mode == platf::proton_color_mode::hdr
-        );
-        if (config::video.dd.wayland_hdr_compatibility && !wayland_hdr_compatibility.enabled) {
-          if (color_mode == platf::proton_color_mode::sdr10) {
-            BOOST_LOG(debug) << "Wayland HDR compatibility skipped: 10-bit SDR preferred.";
-          } else if (session.config.monitor.force_sdr) {
-            BOOST_LOG(debug) << "Wayland HDR compatibility skipped: HDR disabled by the final session/display policy.";
-          } else if (wayland_hdr_compatibility.suppression_reason ==
-                     platf::wayland_hdr_compatibility::suppression_reason_e::not_wayland) {
-            BOOST_LOG(debug) << "Wayland HDR compatibility skipped: the active session is not Wayland.";
-          } else {
-            BOOST_LOG(debug) << "Wayland HDR compatibility skipped: session resolved to SDR.";
-          }
-        }
-        platf::frame_limiter_streaming_start(
-          platf::frame_limiter_owner::rtsp,
-          policy,
-          {.color_mode = color_mode,
-           .wayland_hdr_compatibility = wayland_hdr_compatibility.enabled}
-        );
-        session::start_shared_platform_if_needed();
 #endif
+        }
+        if (first_rtsp_session && !first_frame_limiter_session) {
+#ifdef _WIN32
+          if (platf::is_running_as_system() && !user_session_ready()) {
+            defer_stream_start_actions({});
+          } else {
+            session::start_shared_platform_if_needed();
+          }
 #else
-        session::start_shared_platform_if_needed();
+          session::start_shared_platform_if_needed();
+#endif
+        }
+#else
+        if (first_rtsp_session) {
+          session::start_shared_platform_if_needed();
+        }
 #endif
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-        system_tray::update_tray_playing(proc::proc.get_last_run_app_name());
-        update::on_stream_started();
+        if (first_rtsp_session) {
+          system_tray::update_tray_playing(proc::proc.get_last_run_app_name());
+          update::on_stream_started();
   #if defined(_WIN32)
-        // Notify only when neither virtual-gamepad backend is installed and usable.
-        try {
-          if (!platf::is_vigem_installed(nullptr) && !platf::is_virtual_gamepad_driver_available()) {
-            system_tray::update_tray_vigem_missing();
+          // Notify only when neither virtual-gamepad backend is installed and usable.
+          try {
+            if (!platf::is_vigem_installed(nullptr) && !platf::is_virtual_gamepad_driver_available()) {
+              system_tray::update_tray_vigem_missing();
+            }
+          } catch (...) {
+            // best-effort: ignore any unexpected errors while checking
           }
-        } catch (...) {
-          // best-effort: ignore any unexpected errors while checking
-        }
   #endif
+        }
 #endif
       }
 
@@ -3469,6 +3508,7 @@ namespace stream {
       session->config = config;
       session->stream_fps = session->config.monitor.framerate;
       session->client_display_refresh_millihz = launch_session.client_display_refresh_millihz;
+      session->secondary_game_client = launch_session.secondary_game_client;
       session->remote_role = launch_session.role;
       session->remote_role_generation = launch_session.role_generation;
 #ifdef __linux__

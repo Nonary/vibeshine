@@ -102,6 +102,8 @@ namespace rtsp_stream {
     // in millihertz. fps remains the existing whole-number compatibility value.
     std::uint32_t client_display_refresh_millihz = 0;
     bool client_requests_virtual_display;
+    // A transport joining another client's running game cannot change host-wide stream settings.
+    bool secondary_game_client = false;
     // Present only when the client explicitly selected a virtual or physical display.
     std::optional<bool> client_virtual_display_override;
     bool virtual_display;
