@@ -355,6 +355,8 @@ namespace video {
     /// PyroWave record framing: frame bytes through the coarsest wavelet level, whose
     /// packets stream.cpp protects with parity and announces; 0 when unknown.
     std::size_t pyrowave_critical_bytes = 0;
+    int pyrowave_detail_fec_percentage = 0;
+    std::size_t pyrowave_frame_wire_budget = 0;
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
     std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp;
     std::chrono::steady_clock::time_point packet_enqueue_timestamp = std::chrono::steady_clock::now();
