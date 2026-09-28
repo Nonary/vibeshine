@@ -1501,6 +1501,10 @@ def configure_command(args, build, cache):
         raise DeployError('CUDA is enabled but nvcc was not found; pass --cuda-root or explicitly use --cuda off')
     command = ['cmake', '-S', str(REPO), '-B', str(build), '-G', 'Ninja',
                '-DCMAKE_BUILD_TYPE=RelWithDebInfo', '-DCMAKE_INSTALL_PREFIX=/usr',
+               # A build type alone does not repair empty or -O0 flags in an
+               # existing cache. Host framing also needs release optimization.
+               '-DCMAKE_C_FLAGS_RELWITHDEBINFO:STRING=-O2 -g -DNDEBUG',
+               '-DCMAKE_CXX_FLAGS_RELWITHDEBINFO:STRING=-O2 -g -DNDEBUG',
                f'-DBUILD_VERSION={args.version}', '-DBUILD_VIBESHINE_KWIN_GPU_BRIDGE=ON',
                '-DSUNSHINE_ASSETS_DIR=/usr/share/vibeshine', '-DSUNSHINE_EXECUTABLE_PATH=/usr/bin/vibeshine',
                f'-DSUNSHINE_ENABLE_CUDA={"ON" if cuda else "OFF"}', '-DSUNSHINE_ENABLE_PORTAL=ON',
@@ -1509,6 +1513,7 @@ def configure_command(args, build, cache):
         if value:
             command.append(f'-D{key}={value}')
     if cuda:
+        command.append('-DCMAKE_CUDA_FLAGS_RELWITHDEBINFO:STRING=-O2 -g -DNDEBUG')
         command.append(f'-DCUDA_TOOLKIT_ROOT_DIR={Path(root).resolve()}')
         command.append(f'-DCMAKE_CUDA_COMPILER={Path(root).resolve() / "bin/nvcc"}')
         host = args.cuda_host_compiler or cache.get('CMAKE_CUDA_HOST_COMPILER') or cxx
