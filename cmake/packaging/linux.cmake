@@ -142,6 +142,18 @@ else()
         target_link_libraries(vibeshine_provider_scan PRIVATE
                 nlohmann_json::nlohmann_json
                 "${SQLITE3_LIBRARIES}")
+        add_executable(vibeshine_app_focus
+                "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-app-focus.cpp"
+                "${CMAKE_SOURCE_DIR}/src/managed_app_focus.cpp"
+                "${CMAKE_SOURCE_DIR}/src/steam_process_tracker.cpp"
+                "${CMAKE_SOURCE_DIR}/src/provider_scan_protocol.cpp"
+                "${CMAKE_SOURCE_DIR}/src/steam_integration.cpp"
+                "${CMAKE_SOURCE_DIR}/src/lutris_integration.cpp")
+        set_target_properties(vibeshine_app_focus PROPERTIES OUTPUT_NAME "vibeshine-app-focus")
+        target_include_directories(vibeshine_app_focus PRIVATE
+                "${CMAKE_SOURCE_DIR}" ${GIO_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS})
+        target_link_libraries(vibeshine_app_focus PRIVATE
+                nlohmann_json::nlohmann_json ${GIO_LIBRARIES} ${SQLITE3_LIBRARIES})
         add_executable(vibeshine_steam_launch
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-steam-launch.cpp"
                 "${CMAKE_SOURCE_DIR}/src/steam_process_tracker.cpp"
@@ -168,7 +180,7 @@ else()
                 DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
         install(TARGETS vibeshine_session_exec vibeshine_app_supervisor
                 vibeshine_profile_import vibeshine_kwin_session_environment
-                vibeshine_provider_scan vibeshine_steam_launch vibeshine_display_power
+                vibeshine_provider_scan vibeshine_steam_launch vibeshine_display_power vibeshine_app_focus
                 RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
         install(TARGETS vibeshine_session_broker
                 RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}"
@@ -305,6 +317,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             "%attr(0700,root,root) %caps(cap_kill,cap_setgid,cap_setuid+p) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-session-broker"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-app-supervisor"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-steam-launch"
+            "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-app-focus"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-kwin-session-environment"
             "%attr(0750,root,vibeshine) %caps(cap_sys_admin,cap_sys_nice+p) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-host"
     )

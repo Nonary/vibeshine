@@ -49,6 +49,14 @@ function removeCmd(index: number) {
 
     <ConfigFieldRenderer v-model="config.min_log_level" setting-key="min_log_level" class="mb-6" />
 
+    <section class="mb-6 space-y-4" aria-labelledby="app-focus-heading">
+      <h3 id="app-focus-heading" class="text-lg font-semibold">{{ $t('config.app_focus_title') }}</h3>
+      <p class="text-sm opacity-70">{{ $t('config.app_focus_description') }}</p>
+      <ConfigFieldRenderer v-model="config.app_focus_attempts" setting-key="app_focus_attempts" />
+      <ConfigFieldRenderer v-model="config.app_focus_timeout_secs" setting-key="app_focus_timeout_secs" />
+      <ConfigFieldRenderer v-model="config.app_focus_exit_on_first" setting-key="app_focus_exit_on_first" />
+    </section>
+
     <div id="global_prep_cmd" class="mb-6 flex flex-col">
       <label class="block text-sm font-medium mb-1 text-dark dark:text-light">
         {{ $t('config.global_prep_cmd') }}

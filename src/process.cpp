@@ -991,6 +991,7 @@ namespace proc {
       _active_client_uuid(std::move(other._active_client_uuid)),
       _active_client_vdd_identity_token(other._active_client_vdd_identity_token),
       placebo(other.placebo),
+      _app_focus(std::move(other._app_focus)),
       _steam_tracker(std::move(other._steam_tracker)),
       _steam_process_controller(std::move(other._steam_process_controller)),
       _steam_tracking_active(other._steam_tracking_active),
@@ -1036,6 +1037,7 @@ namespace proc {
       _active_client_uuid = std::move(other._active_client_uuid);
       _active_client_vdd_identity_token = other._active_client_vdd_identity_token;
       placebo = other.placebo;
+      _app_focus = std::move(other._app_focus);
       _steam_tracker = std::move(other._steam_tracker);
       _steam_process_controller = std::move(other._steam_process_controller);
       _steam_tracking_active = other._steam_tracking_active;
@@ -2128,17 +2130,7 @@ namespace proc {
           }
         } catch (...) {}
         // Pass focus attempts from config so the helper can try to bring Playnite/game to foreground
-        try {
-          if (config::playnite.focus_attempts > 0) {
-            cmd += std::string(" --focus-attempts ") + std::to_string(config::playnite.focus_attempts);
-          }
-          if (config::playnite.focus_timeout_secs > 0) {
-            cmd += std::string(" --focus-timeout ") + std::to_string(config::playnite.focus_timeout_secs);
-          }
-          if (config::playnite.focus_exit_on_first) {
-            cmd += std::string(" --focus-exit-on-first");
-          }
-        } catch (...) {}
+        cmd += managed_app_focus::launcher_arguments(managed_app_focus::settings);
         std::error_code fec;
         boost::filesystem::path wd;  // empty wd
         _process = platf::run_command(false, true, cmd, wd, _env, _pipe.get(), fec, &_process_group);
@@ -2193,17 +2185,7 @@ namespace proc {
         std::filesystem::path launcher = exeDir / L"tools" / L"playnite-launcher.exe";
         std::string lpath = launcher.string();
         std::string cmd = std::string("\"") + lpath + "\" --fullscreen";
-        try {
-          if (config::playnite.focus_attempts > 0) {
-            cmd += std::string(" --focus-attempts ") + std::to_string(config::playnite.focus_attempts);
-          }
-          if (config::playnite.focus_timeout_secs > 0) {
-            cmd += std::string(" --focus-timeout ") + std::to_string(config::playnite.focus_timeout_secs);
-          }
-          if (config::playnite.focus_exit_on_first) {
-            cmd += std::string(" --focus-exit-on-first");
-          }
-        } catch (...) {}
+        cmd += managed_app_focus::launcher_arguments(managed_app_focus::settings);
         std::error_code fec;
         boost::filesystem::path wd;  // empty wd
         _process = platf::run_command(false, true, cmd, wd, _env, _pipe.get(), fec, &_process_group);
@@ -2304,6 +2286,13 @@ namespace proc {
       lossless_monitor_started = true;
     }
 #endif
+
+    if (_app.playnite_id.empty() && (!_app.steam_id.empty() || !_app.lutris_id.empty())) {
+      const bool steam = !_app.steam_id.empty();
+      _app_focus = managed_app_focus::start({steam ? "steam" : "lutris",
+        steam ? _app.steam_id : _app.lutris_id,
+        steam ? _app.steam_install_dir : _app.lutris_directory}, managed_app_focus::settings);
+    }
 
     _app_launch_time = std::chrono::steady_clock::now();
 
@@ -2572,6 +2561,9 @@ namespace proc {
       stream_lifecycle_lock =
         std::unique_lock<std::mutex> {nvhttp::stream_lifecycle_mutex()};
     }
+
+    // Stop launch-time focus work before tearing down the application.
+    _app_focus.reset();
 
     // Mark termination before process teardown so a concurrent final audio
     // owner restores directly instead of retaining state for the ended app.
