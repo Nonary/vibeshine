@@ -95,6 +95,9 @@ extern "C" {
   #include "platform/linux/wayland_hdr_compatibility.h"
   #include "src/platform/linux/display_backend.h"
 #endif
+#ifdef __APPLE__
+  #include "platform/macos/virtual_display.h"
+#endif
 
 #define IDX_START_A 0
 #define IDX_START_B 1
@@ -654,6 +657,10 @@ namespace stream {
 
     std::shared_ptr<input::input_t> input;
 
+
+#ifdef __APPLE__
+    std::shared_ptr<void> macos_virtual_display;  ///< Keeps this stream's virtual display alive.
+#endif
     std::thread audioThread;
     std::thread videoThread;
 
@@ -3852,6 +3859,11 @@ namespace stream {
       // WebRTC start holds it across a 15s apply-verification budget. Trapping on
       // that is a false positive that would kill every other live stream.
 
+#ifdef __APPLE__
+      // Capture and input have stopped, so the virtual display (and turned-off displays) can go back.
+      session.macos_virtual_display.reset();
+#endif
+
       // Serialize the ownership transition and shared cleanup. Normal session
       // reaping acquires the lifecycle gate only after the blocking joins
       // above. A synchronous NVHTTP disconnect already owns that gate, so it
@@ -3978,6 +3990,11 @@ namespace stream {
     }
 
     int start(session_t &session, const std::string &addr_string) {
+#ifdef __APPLE__
+      // Vibeshine's per-client virtual display, at the client's resolution and refresh rate. It
+      // must exist before input and capture pick their display. Released in join().
+      session.macos_virtual_display = platf::macos_virtual_display::acquire(session.config.monitor);
+#endif
       session.input = input::alloc(session.mail, session.config.guide_button, session.config.gcpersist);
 
       // Preserve each protocol's original startup bitrate choice. Runtime
