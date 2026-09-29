@@ -90,6 +90,10 @@
   #include "platform/linux/private_display_resume_policy.h"
 #endif
 
+#ifdef __APPLE__
+  #include "platform/macos/virtual_display.h"
+#endif
+
 #include "process.h"
 #include "rtsp.h"
 #include "rtsp_pending_policy.h"
@@ -273,6 +277,20 @@ namespace nvhttp {
 
   namespace fs = std::filesystem;
   namespace pt = boost::property_tree;
+
+#ifdef __APPLE__
+  namespace {
+    video::config_t requested_display_config(const rtsp_stream::launch_session_t &session) {
+      const auto millihz = framegen::normalize_refresh_millihz(session.fps);
+      video::config_t config {};
+      config.width = session.width;
+      config.height = session.height;
+      config.framerate = static_cast<int>(std::lround(millihz / 1000.0));
+      config.framerateX100 = static_cast<int>(std::lround(millihz / 10.0));
+      return config;
+    }
+  }
+#endif
 
   crypto::cert_chain_t cert_chain;
 
@@ -5130,6 +5148,11 @@ launch_session->exact_target_hold.reset();
 #endif
     request_audio_hold.attach(launch_session->audio_context_guard);
     std::optional<std::string> pending_output_override;
+#ifdef __APPLE__
+    auto launch_display_guard = util::fail_guard([]() {
+      platf::macos_virtual_display::end_launch_hold();
+    });
+#endif
     auto output_override_guard = util::fail_guard([&]() {
       if (pending_output_override) {
         config::set_runtime_output_name_override(std::nullopt);
@@ -5308,6 +5331,13 @@ launch_session->exact_target_hold.reset();
       }
 #endif
 
+#ifdef __APPLE__
+      // Bring the client's virtual display up before the encoder probe.
+      if (!launch_session->input_only) {
+        platf::macos_virtual_display::hold_for_launch(requested_display_config(*launch_session));
+      }
+#endif
+
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
       // due to hotplugging, driver crash, primary monitor change,
@@ -5430,6 +5460,9 @@ launch_session->exact_target_hold.reset();
 #endif
 #if defined(_WIN32) || defined(__linux__)
     normal_vdd_identity_guard.disable();
+#endif
+#ifdef __APPLE__
+    launch_display_guard.disable();
 #endif
     output_override_guard.disable();
     runtime_overrides_guard.disable();
@@ -5756,6 +5789,11 @@ launch_session->exact_target_hold.reset();
       BOOST_LOG(info) << "Joining the running game's active capture output without preparing a per-client display.";
     }
     std::optional<std::string> pending_output_override;
+#ifdef __APPLE__
+    auto launch_display_guard = util::fail_guard([]() {
+      platf::macos_virtual_display::end_launch_hold();
+    });
+#endif
     auto output_override_guard = util::fail_guard([&]() {
       if (pending_output_override) {
         config::set_runtime_output_name_override(std::nullopt);
@@ -5964,6 +6002,13 @@ launch_session->exact_target_hold.reset();
 #endif
       }
 
+#ifdef __APPLE__
+      // Bring the client's virtual display up before the encoder probe.
+      if (!launch_session->input_only) {
+        platf::macos_virtual_display::hold_for_launch(requested_display_config(*launch_session));
+      }
+#endif
+
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
       // due to hotplugging, driver crash, primary monitor change,
@@ -6070,6 +6115,9 @@ launch_session->exact_target_hold.reset();
 #endif
 #if defined(_WIN32) || defined(__linux__)
     normal_vdd_identity_guard.disable();
+#endif
+#ifdef __APPLE__
+    launch_display_guard.disable();
 #endif
     output_override_guard.disable();
     runtime_overrides_guard.disable();
