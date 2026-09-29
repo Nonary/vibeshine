@@ -4077,7 +4077,7 @@ namespace nvhttp {
     // Virtual-display limiting is independent of the manual limiter switch.
     // Report the configured default display path; app/client overrides and
     // per-game provider success are resolved later at launch.
-    const bool automatic_virtual_limiter =
+    [[maybe_unused]] const bool automatic_virtual_limiter =
       config::video.virtual_display_mode != config::video_t::virtual_display_mode_e::disabled &&
       config::frame_limiter.virtual_display_limiter_enabled();
 #ifdef _WIN32
@@ -5142,7 +5142,7 @@ launch_session->exact_target_hold.reset();
     request_audio_hold.before(disarm_startup_restore);
 #endif
 
-    const bool allow_display_changes = true;
+    [[maybe_unused]] const bool allow_display_changes = true;
     auto launch_session = make_launch_session(host_audio, args, request, allow_display_changes, &request_client_identity, true, dispatch::include_request_identity_log_fields(trace_id));
 #ifndef _WIN32
     if (launch_session->requested_resolution_only) {

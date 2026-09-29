@@ -123,6 +123,11 @@ namespace {
     }
   }
 }  // namespace
+#else
+namespace {
+  // The Vulkan HDR layer only exists on Windows.
+  void set_vulkan_hdr_layer_streaming_active(bool) {}
+}  // namespace
 #endif
 
 namespace rtsp_stream {
@@ -1226,9 +1231,7 @@ namespace rtsp_stream {
         _session_state->vulkan_hdr_layer_pending_stream = active;
         vulkan_hdr_layer_active = vulkan_hdr_layer_active_locked();
       }
-#ifdef _WIN32
       set_vulkan_hdr_layer_streaming_active(vulkan_hdr_layer_active);
-#endif
     }
 
     /**
@@ -1274,9 +1277,7 @@ namespace rtsp_stream {
         }
         vulkan_hdr_layer_active = vulkan_hdr_layer_active_locked();
       }
-#ifdef _WIN32
       set_vulkan_hdr_layer_streaming_active(vulkan_hdr_layer_active);
-#endif
 
       // Stop and join outside the lock
       for (auto &slot : to_cleanup) {
@@ -1298,9 +1299,7 @@ namespace rtsp_stream {
         _session_state->vulkan_hdr_layer_sessions.erase(session.get());
         vulkan_hdr_layer_active = vulkan_hdr_layer_active_locked();
       }
-#ifdef _WIN32
       set_vulkan_hdr_layer_streaming_active(vulkan_hdr_layer_active);
-#endif
     }
 
     /**
@@ -1326,9 +1325,7 @@ namespace rtsp_stream {
         _session_state->vulkan_hdr_layer_pending_stream = false;
         vulkan_hdr_layer_active = vulkan_hdr_layer_active_locked();
       }
-#ifdef _WIN32
       set_vulkan_hdr_layer_streaming_active(vulkan_hdr_layer_active);
-#endif
       if (has_uuid) {
         nvhttp::mark_client_last_seen(client_uuid);
       }
@@ -1401,9 +1398,7 @@ namespace rtsp_stream {
         }
         vulkan_hdr_layer_active = vulkan_hdr_layer_active_locked();
       }
-#ifdef _WIN32
       set_vulkan_hdr_layer_streaming_active(vulkan_hdr_layer_active);
-#endif
 
       for (auto &slot : to_cleanup) {
         stream::session::mark_client_disconnected(*slot);

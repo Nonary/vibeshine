@@ -125,7 +125,6 @@ namespace proc {
     constexpr const char *LOSSLESS_PROFILE_CUSTOM = "custom";
     constexpr int LOSSLESS_DEFAULT_FLOW_SCALE = 50;
     constexpr int LOSSLESS_DEFAULT_RESOLUTION_SCALE = 100;
-    constexpr bool LOSSLESS_DEFAULT_PERFORMANCE_MODE = true;
     constexpr int LOSSLESS_MIN_FLOW_SCALE = 0;
     constexpr int LOSSLESS_MAX_FLOW_SCALE = 100;
     constexpr int LOSSLESS_MIN_RESOLUTION_SCALE = 10;

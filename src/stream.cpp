@@ -3660,9 +3660,9 @@ namespace stream {
         deferred_app_revert ||
         (!is_paused && shared_runtime_force_display_revert_when_idle);
       const int paused_timeout_secs = std::max(0, config::video.dd.paused_virtual_display_timeout_secs);
-      const bool delay_virtual_display_cleanup_due_to_pause =
+      [[maybe_unused]] const bool delay_virtual_display_cleanup_due_to_pause =
         is_paused && !display_restore_requested && paused_timeout_secs > 0;
-      const bool keep_virtual_display_due_to_pause =
+      [[maybe_unused]] const bool keep_virtual_display_due_to_pause =
         is_paused && !display_restore_requested && paused_timeout_secs == 0;
 
 #ifdef _WIN32
