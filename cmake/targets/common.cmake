@@ -38,7 +38,9 @@ target_include_directories(sunshine SYSTEM BEFORE PRIVATE
 
 # Logging integration flags are provided via SUNSHINE_DEFINITIONS to avoid duplicates
 set_target_properties(sunshine PROPERTIES CXX_STANDARD 23)
-if(NOT SUNSHINE_BUILD_STEAMOS)
+# A versioned executable plus symlink is a Unix install convention. Inside a macOS .app the main
+# executable must be a regular file: codesign rejects the symlink, and install() copies both files.
+if(NOT SUNSHINE_BUILD_STEAMOS AND NOT (APPLE AND NOT SUNSHINE_BUILD_HOMEBREW))
     set_target_properties(sunshine PROPERTIES
             VERSION ${PROJECT_VERSION}
             SOVERSION ${PROJECT_VERSION_MAJOR})
