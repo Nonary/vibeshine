@@ -1662,7 +1662,7 @@ namespace stream {
       // mistaking lifecycle-gate contention for a terminal app exit.
       (void) proc::proc.running();
       const bool launch_or_startup_pending = rtsp_stream::has_pending_launch_or_startup();
-      const bool game_runtime_active = proc::proc.current_app_id() > 0 || launch_or_startup_pending;
+      const bool game_runtime_active = proc::proc.current_app_id() > 0;
       bool has_processless_live_session = false;
       bool haptics_client = false;
       bool has_game_session_pending_or_draining = false;
@@ -1791,7 +1791,7 @@ namespace stream {
       // process. Keep the shared control server alive across both the gap
       // before RTSP publishes the session and the complete live transport.
       if (!rtsp_stream::pending_policy::control_server_should_remain_alive(
-            game_runtime_active,
+            game_runtime_active || launch_or_startup_pending,
             has_processless_live_session,
             has_game_session_pending_or_draining
           )) {
@@ -3061,6 +3061,35 @@ namespace stream {
         shared_runtime_virtual_display_guid_bytes =
           virtual_display_guid_bytes;
       }
+    }
+
+    void release_terminated_game_displays() {
+      cleanup_reservation_t cleanup_reservation;
+      auto &topology = remote_display_topology::instance();
+      // Resume may reserve a normal identity that proc_t never received. End
+      // every game role, including paused owners, while retaining monitor roles.
+      topology.release_all_normal_game_identities();
+#ifdef _WIN32
+      // Shared-mode displays have no normal identity token. Their exact GUID
+      // belongs to the stream runtime, not proc_t's unused display fields.
+      // Remove only that target; generic cleanup would also remove peers.
+      if (shared_runtime_virtual_display_guid_bytes) {
+        GUID guid {};
+        std::memcpy(&guid, shared_runtime_virtual_display_guid_bytes->data(), sizeof(guid));
+        const auto monitors = topology.protected_remote_monitor_client_ids();
+        const bool monitor_owned = std::any_of(monitors.begin(), monitors.end(), [&](const auto &uuid) {
+          const auto monitor_uuid = VDISPLAY::virtualDisplayUuidFromStableId(uuid);
+          return std::memcmp(&guid, monitor_uuid.b8, sizeof(guid)) == 0;
+        });
+        if (!monitor_owned) {
+          if (VDISPLAY::removeVirtualDisplay(guid)) {
+            shared_runtime_virtual_display_guid_bytes.reset();
+          } else {
+            BOOST_LOG(warning) << "Failed to remove the terminated game's virtual display.";
+          }
+        }
+      }
+#endif
     }
 
     void start_shared_platform_if_needed() {

@@ -4001,6 +4001,7 @@ namespace nvhttp {
                           << (caller_owns_active_game ? " (active-game owner)." : " (configured first-request mode).");
         }
         const bool disconnected = rtsp_stream::disconnect_game_sessions(true);
+        stream::session::release_terminated_game_displays();
         // Role-scoped transport teardown deliberately preserves Remote Monitor
         // and Remote Input, but it does not end the configured application.
         // Complete the same process/session lifecycle as /cancel while
@@ -4081,7 +4082,8 @@ namespace nvhttp {
       }
 
       std::unique_lock normal_transition_lock {normal_http_app_transition_mutex};
-      const bool no_active_sessions = !has_stream_session_activity();
+      const bool no_active_sessions =
+        !has_stream_session_activity() && proc::proc.current_app_id() <= 0;
       const auto runtime_app = proc::proc.resolve_app(
         "0",
         remote_session::synthetic(
