@@ -64,8 +64,9 @@
 #include "src/video.h"
 #ifdef __linux__
   #include "src/platform/linux/display_backend.h"
-  #include "src/platform/linux/private_display_capture_policy.h"
   #include "src/platform/linux/private_display.h"
+  #include "src/platform/linux/private_display_capture_policy.h"
+  #include "src/platform/linux/process_group.h"
   #include "src/platform/linux/scoped_capability.h"
   #include "src/steam_integration.h"
 #endif
@@ -614,7 +615,11 @@ namespace platf {
   }
 
   bool process_group_running(std::uintptr_t native_handle) {
+#ifdef __linux__
+    return linux_process::group_running(static_cast<pid_t>(native_handle));
+#else
     return waitpid(-((pid_t) native_handle), nullptr, WNOHANG) >= 0;
+#endif
   }
 
   struct sockaddr_in to_sockaddr(boost::asio::ip::address_v4 address, uint16_t port) {

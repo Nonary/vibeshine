@@ -579,6 +579,7 @@ static bool display_argument_is_safe(const char *argument) {
     "rotation\\.(none|left|inverted|right|flipped|flipped90|flipped180|flipped270)|"
     "vrrpolicy\\.always|hdr\\.(enable|disable)|"
     "mode\\.[A-Za-z0-9_-]+|scale\\.[0-9]+(\\.[0-9]+)?|position\\.-?[0-9]+,-?[0-9]+|"
+    "rotation\\.(none|left|inverted|right|flipped|flipped90|flipped180|flipped270)|"
     "priority\\.[0-9]+|addCustomMode\\.[1-9][0-9]*\\.[1-9][0-9]*\\.[1-9][0-9]*\\.reduced)$";
   regex_t expression;
   if (!safe_text(argument, 512, false) || regcomp(&expression, pattern, REG_EXTENDED | REG_NOSUB)) return false;
@@ -1243,7 +1244,13 @@ static int execute_request(int argc, char **argv,
   else if (!strcmp(argv[1], "display-wake") && argc == 2) operation = DISPLAY_WAKE;
   else if (!strcmp(argv[1], "display-apply") && argc >= 3 && argc <= 66) {
     operation = DISPLAY_APPLY;
-    for (int index = 2; index < argc; ++index) if (!display_argument_is_safe(argv[index])) return 126;
+    for (int index = 2; index < argc; ++index) {
+      if (!display_argument_is_safe(argv[index])) {
+        // Avoid reflecting arbitrary control bytes from rejected input.
+        fprintf(stderr, "vibeshine-session-broker: rejected display argument %d\n", index - 1);
+        return 126;
+      }
+    }
   } else if (!strcmp(argv[1], "audio-get-default") && argc == 2) operation = AUDIO_GET_DEFAULT;
   else if (!strcmp(argv[1], "audio-list-sinks") && argc == 2) operation = AUDIO_LIST_SINKS;
   else if (!strcmp(argv[1], "audio-set-default") && argc == 3 && sink_name_is_safe(argv[2])) operation = AUDIO_SET_DEFAULT;
