@@ -24,6 +24,8 @@
     #define TRAY_ICON_PLAYING WEB_DIR "images/sunshine-playing.svg"
     #define TRAY_ICON_PAUSING WEB_DIR "images/sunshine-pausing.svg"
     #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked.svg"
+    #include "platform/macos/misc.h"
+
     #include <dispatch/dispatch.h>
   #endif
 
@@ -113,6 +115,10 @@ namespace system_tray {
     lifetime::exit_sunshine(0, true);
   }
 
+  #if defined(__APPLE__) || defined(__MACH__)
+  static void tray_open_at_login_cb(struct tray_menu *item);
+  #endif
+
   // Tray menu
   static struct tray tray = {
     .icon = TRAY_ICON,
@@ -126,6 +132,10 @@ namespace system_tray {
            BOOST_LOG(info) << "Manual update check requested from tray"sv;
            update::trigger_check(true);
          }},
+  #if defined(__APPLE__) || defined(__MACH__)
+        {.text = "Open at Login", .checkbox = 1, .cb = tray_open_at_login_cb},
+  #endif
+
         {.text = "Restart", .cb = tray_restart_cb},
         {.text = "Quit", .cb = tray_quit_cb},
         {.text = nullptr}
@@ -159,6 +169,16 @@ namespace system_tray {
     tray.notification_cb = notification_cb;
     tray_update(&tray);
   }
+  #if defined(__APPLE__) || defined(__MACH__)
+  static void tray_open_at_login_cb(struct tray_menu *item) {
+    bool enable = !item->checked;
+    BOOST_LOG(info) << (enable ? "Enabling"sv : "Disabling"sv) << " open at login from system tray"sv;
+    platf::set_opens_at_login(enable);
+    // Show what actually happened: the user may still need to approve it in System Settings.
+    item->checked = platf::opens_at_login();
+    tray_update(&tray);
+  }
+  #endif
 
 #ifdef _WIN32
   static void clear_pending_quit_messages() {
@@ -366,6 +386,13 @@ namespace system_tray {
 
   void run_tray() {
   #if defined(__APPLE__) || defined(__MACH__)
+    // The user can also change this in System Settings while Vibeshine isn't running.
+    for (auto *item = tray.menu; item->text != nullptr; ++item) {
+      if (item->cb == tray_open_at_login_cb) {
+        item->checked = platf::opens_at_login();
+      }
+    }
+
     // AppKit only runs the menu bar on the main thread, which is where main() calls this from.
     // main() then runs the AppKit event loop there once startup is done.
     // No retries: unlike Windows' shell, a status item that fails once won't recover.
