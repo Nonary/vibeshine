@@ -1872,6 +1872,10 @@ namespace video {
   std::shared_ptr<platf::display_t> make_black_display(const config_t &config) {
     return ::cuda::make_black_display(config);
   }
+#elif defined(__APPLE__)
+  std::shared_ptr<platf::display_t> make_black_display(const config_t &config) {
+    return platf::black_display(config);
+  }
 #else
   std::shared_ptr<platf::display_t> make_black_display(const config_t &) {
     return {};
