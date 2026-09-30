@@ -53,6 +53,7 @@
 #include "globals.h"
 #include "http_auth.h"
 #include "httpcommon.h"
+#include "jthread.h"
 #include "https_listener_diagnostics.h"
 #include "platform/common.h"
 #ifdef _WIN32
@@ -6049,7 +6050,7 @@ namespace confighttp {
     std::thread tcp {accept_and_run, &server};
 
     // Start a background task to clean up expired session tokens every hour
-    std::jthread cleanup_thread([shutdown_event]() {
+    util::jthread cleanup_thread([shutdown_event]() {
       while (!shutdown_event->view(std::chrono::hours(1))) {
         if (session_token_manager.cleanup_expired_session_tokens()) {
           session_token_manager.save_session_tokens();
@@ -6068,7 +6069,7 @@ namespace confighttp {
     blocking_route_pool.join();
     metadata_route_pool.join();
     webrtc_stream::shutdown_all_sessions();
-    // std::jthread (cleanup_thread) auto-joins on destruction, no need for joinable/join
+    // util::jthread (cleanup_thread) auto-joins on destruction, no need for joinable/join
   }
 
   TokenScope scope_from_string(std::string_view scope) {

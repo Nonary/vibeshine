@@ -25,6 +25,7 @@
 #include "globals.h"
 #include "host_stats.h"
 #include "httpcommon.h"
+#include "jthread.h"
 #include "logging.h"
 #include "main.h"
 #include "nvhttp.h"
@@ -108,7 +109,7 @@ namespace {
       // request was already made when the signal arrived, so a forced exit
       // after the deadline loses nothing that a graceful exit would keep.
       try {
-        worker_ = std::jthread([this](std::stop_token) {
+        worker_ = util::jthread([this](util::stop_token) {
           run();
         });
       } catch (const std::system_error &e) {
@@ -203,7 +204,7 @@ namespace {
     std::atomic_bool *signal_requested_ = nullptr;
     bool supervised_machine_host_ = false;
     shutdown_phase::tracker_t &shutdown_phase_;
-    std::jthread worker_;
+    util::jthread worker_;
   };
 }  // namespace
 

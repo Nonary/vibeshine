@@ -58,6 +58,7 @@
 #include "http_pairing_policy.h"
 #include "tls_client_identity.h"
 #include "hdr_request_policy.h"
+#include "jthread.h"
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
@@ -1184,7 +1185,7 @@ namespace nvhttp {
       recovery_params.should_abort = [recovery_guid]() {
         return !VDISPLAY::is_virtual_display_guid_tracked(recovery_guid);
       };
-      recovery_params.on_recovery_success = [recovery_session = std::move(recovery_session), include_request_detail_log_fields](const VDISPLAY::VirtualDisplayCreationResult &result, std::stop_token stop_token) -> std::function<void()> {
+      recovery_params.on_recovery_success = [recovery_session = std::move(recovery_session), include_request_detail_log_fields](const VDISPLAY::VirtualDisplayCreationResult &result, util::stop_token stop_token) -> std::function<void()> {
           const auto cancelled = [&] {
             return stop_token.stop_requested();
           };
@@ -6782,7 +6783,7 @@ launch_session->exact_target_hold.reset();
 #endif
     std::thread ssl {accept_and_run, &https_server};
     std::thread tcp {accept_and_run, &http_server};
-    std::jthread pairing_expiry_worker([](std::stop_token stop_token) {
+    util::jthread pairing_expiry_worker([](util::stop_token stop_token) {
       platf::set_thread_name("pair_expiry");
       while (!stop_token.stop_requested()) {
         for (int interval = 0; interval < 10 && !stop_token.stop_requested(); ++interval) {
