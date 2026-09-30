@@ -1,11 +1,53 @@
 #define _GNU_SOURCE
 
 #include <stdio.h>
+#include <unistd.h>
+
+static int broker_fixture_execv(const char *path, char *const arguments[]);
 
 int vibeshine_session_broker_entrypoint(int argc, char **argv);
 #define main vibeshine_session_broker_entrypoint
+#define execv broker_fixture_execv
 #include "../../../../packaging/linux/vibeshine-session-broker.c"
+#undef execv
 #undef main
+
+static bool user_service_fixture = false;
+
+// Exercise the real exec_user_service()/supervise_user_service() argv path
+// without contacting the host's user manager. The manager fixture applies
+// --setenv literally and executes the requested shell command. Cleanup is an
+// isolated not-found unit fixture; no real application unit is modified.
+static int broker_fixture_execv(const char *path, char *const arguments[]) {
+  if (!user_service_fixture) return execv(path, arguments);
+  if (!strcmp(path, "/usr/bin/systemctl")) {
+    if (arguments[3] && !strcmp(arguments[3], "show")) {
+      static const char state[] = "LoadState=not-found\nMainPID=0\nControlGroup=\n";
+      if (write(STDOUT_FILENO, state, sizeof(state) - 1) != (ssize_t) sizeof(state) - 1) _exit(126);
+    }
+    _exit(0);
+  }
+  if (strcmp(path, "/usr/bin/systemd-run")) return execv(path, arguments);
+  size_t index = 1;
+  for (; arguments[index] && strcmp(arguments[index], "--"); ++index) {
+    if (!strcmp(arguments[index], "--setenv")) {
+      const char *assignment = arguments[++index];
+      const char *separator = assignment ? strchr(assignment, '=') : NULL;
+      if (!separator) _exit(126);
+      char *name = strndup(assignment, (size_t) (separator - assignment));
+      if (!name || setenv(name, separator + 1, 1)) _exit(126);
+      free(name);
+    } else if (!strcmp(arguments[index], "--unit") ||
+               !strcmp(arguments[index], "--working-directory")) {
+      if (!arguments[++index]) _exit(126);
+    }
+  }
+  if (!arguments[index] || !arguments[index + 1] ||
+      strcmp(arguments[index + 1], application_supervisor_path) ||
+      !arguments[index + 2] || strcmp(arguments[index + 2], "--") ||
+      !arguments[index + 3]) _exit(126);
+  return execv(arguments[index + 3], &arguments[index + 3]);
+}
 
 #include "test_session_display_request.h"
 
@@ -170,6 +212,87 @@ int main(void) {
   CHECK(!touch_map_arguments_are_safe("event27", ""));
   CHECK(!touch_map_arguments_are_safe("event27", "Virtual-1;rm"));
   CHECK(!touch_map_arguments_are_safe("event27", "../Virtual-1"));
+
+  char *stream_environment[] = {
+    "SUNSHINE_APP_ID=42", "SUNSHINE_APP_NAME=Literal $HOME; $(false) name=ok",
+    "SUNSHINE_CLIENT_WIDTH=3840", "SUNSHINE_CLIENT_HEIGHT=2160",
+    "SUNSHINE_CLIENT_FPS=59.940", "SUNSHINE_CLIENT_HDR=true",
+    "SUNSHINE_CLIENT_GCMAP=65535", "SUNSHINE_CLIENT_HOST_AUDIO=false",
+    "SUNSHINE_CLIENT_ENABLE_SOPS=true", "SUNSHINE_CLIENT_AUDIO_CONFIGURATION=7.1",
+    "SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS=85301234567",
+    "PROTON_KEEP_SONY_AUDIO_ENDPOINT_VISIBLE=1", "PROTON_SONY_WINDOWS_DEVICE_NAMES=0"
+  };
+  CHECK(sizeof(stream_environment) / sizeof(stream_environment[0]) == VIBESHINE_STREAM_ENVIRONMENT_FIELD_COUNT);
+  CHECK(vibeshine_stream_environment_is_safe(VIBESHINE_STREAM_ENVIRONMENT_FIELD_COUNT, stream_environment));
+  CHECK(vibeshine_stream_environment_is_safe(0, NULL));
+  CHECK(!vibeshine_stream_environment_is_safe(1, NULL));
+  CHECK(!vibeshine_stream_environment_is_safe(VIBESHINE_STREAM_ENVIRONMENT_MAX_ENTRIES + 1, NULL));
+  CHECK(vibeshine_stream_environment_entry_is_safe("SUNSHINE_CLIENT_FPS=60.000000", NULL));
+  CHECK(vibeshine_stream_environment_entry_is_safe("SUNSHINE_CLIENT_FPS=1000.000", NULL));
+  CHECK(!vibeshine_stream_environment_entry_is_safe("APOLLO_APP_ID=42", NULL));
+  const char *invalid_environment[] = {"PATH=/tmp", "HOME=/tmp", "LD_PRELOAD=/tmp/a.so", "ENABLE_HDR_WSI=1",
+    "SUNSHINE_CLIENT_HDR=1", "SUNSHINE_CLIENT_WIDTH=-1", "SUNSHINE_CLIENT_WIDTH=4294967296",
+    "SUNSHINE_CLIENT_GCMAP=2147483648", "SUNSHINE_CLIENT_FPS=NaN", "SUNSHINE_CLIENT_FPS=0.000",
+    "SUNSHINE_CLIENT_FPS=60.0000000", "SUNSHINE_CLIENT_AUDIO_CONFIGURATION=9.1", "SUNSHINE_APP_NAME=bad\nname"};
+  for (size_t i=0;i<sizeof(invalid_environment)/sizeof(invalid_environment[0]);++i)
+    CHECK(!vibeshine_stream_environment_entry_is_safe(invalid_environment[i], NULL));
+  char *duplicate_environment[] = {"SUNSHINE_CLIENT_WIDTH=1920", "SUNSHINE_CLIENT_WIDTH=3840"};
+  CHECK(!vibeshine_stream_environment_is_safe(2, duplicate_environment));
+  char name[sizeof("SUNSHINE_APP_NAME=") + 4097];
+  strcpy(name, "SUNSHINE_APP_NAME=");
+  const size_t prefix = strlen(name);
+  memset(name + prefix, 'x', 4096); name[prefix + 4096] = 0;
+  CHECK(vibeshine_stream_environment_entry_is_safe(name, NULL));
+  name[prefix + 4096] = 'x'; name[prefix + 4097] = 0;
+  CHECK(!vibeshine_stream_environment_entry_is_safe(name, NULL));
+  char *metadata_app[] = {"broker", "app", "/opt/Game Folder", "/bin/true", "SUNSHINE_CLIENT_WIDTH=1920", NULL};
+  CHECK(application_request_is_safe(5, metadata_app));
+  metadata_app[1] = "app-wayland-hdr";
+  CHECK(application_request_is_safe(5, metadata_app));
+  metadata_app[1] = "app-elevated";
+  CHECK(!application_request_is_safe(5, metadata_app));
+  CHECK(application_request_is_safe(4, metadata_app));
+  struct session_identity metadata_identity = {0};
+  strcpy(metadata_identity.role, "desktop");
+  char *invalid_metadata_request[] = {"broker", "app", "", "setsid steam steam://open/bigpicture", "LD_PRELOAD=/tmp/untrusted.so", NULL};
+  CHECK(execute_request(5, invalid_metadata_request, &metadata_identity, getgid()) == 126);
+  invalid_metadata_request[1] = "app-wayland-hdr";
+  CHECK(execute_request(5, invalid_metadata_request, &metadata_identity, getgid()) == 126);
+  char *duplicate_metadata_request[] = {"broker", "app", "", "setsid steam steam://open/bigpicture",
+    "SUNSHINE_CLIENT_FPS=59940", "SUNSHINE_CLIENT_FPS=60000", NULL};
+  CHECK(execute_request(6, duplicate_metadata_request, &metadata_identity, getgid()) == 126);
+  char *unexpected_metadata_request[] = {"broker", "audio-get-default", "SUNSHINE_CLIENT_FPS=59940", NULL};
+  CHECK(execute_request(3, unexpected_metadata_request, &metadata_identity, getgid()) == 126);
+  char *unauthorized_metadata_request[] = {"broker", "app-elevated", "", "/bin/true --unapproved-stream-fixture",
+    "SUNSHINE_CLIENT_FPS=59940", NULL};
+  CHECK(execute_request(5, unauthorized_metadata_request, &metadata_identity, getgid()) == 126);
+
+  // Match the broker's cleared session baseline, then exercise actual argv
+  // construction, fork, --setenv delivery and shell execution for prep/undo.
+  strcpy(metadata_identity.home, "/tmp/vibeshine-metadata-fixture-home");
+  strcpy(metadata_identity.user, "metadata-fixture");
+  strcpy(metadata_identity.runtime, "/tmp/vibeshine-metadata-fixture-runtime");
+  strcpy(metadata_identity.wayland_display, "wayland-0");
+  metadata_identity.generation = 7;
+  CHECK(!setenv("LD_PRELOAD", "/tmp/untrusted.so", 1));
+  CHECK(!setenv("SUNSHINE_CLIENT_FPS", "poisoned-host-value", 1));
+  CHECK(install_session_environment(&metadata_identity));
+  CHECK(!getenv("LD_PRELOAD") && !getenv("SUNSHINE_CLIENT_FPS"));
+  char *shell_fixture[] = {"/bin/sh", "-c",
+    "test \"$SUNSHINE_CLIENT_WIDTH/$SUNSHINE_CLIENT_HEIGHT/$SUNSHINE_CLIENT_FPS\" = 3840/2160/59.940 && "
+    "test \"$SUNSHINE_APP_NAME\" = 'Literal $HOME; $(false) name=ok' && "
+    "test \"$SUNSHINE_CLIENT_AUDIO_CONFIGURATION/$SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS\" = 7.1/85301234567 && "
+    "test \"$PROTON_KEEP_SONY_AUDIO_ENDPOINT_VISIBLE/$PROTON_SONY_WINDOWS_DEVICE_NAMES\" = 1/0 && "
+    "test -z \"${LD_PRELOAD+x}\" && test \"${ENABLE_HDR_WSI-}\" = \"$1\"",
+    "--", "", NULL};
+  user_service_fixture = true;
+  CHECK(exec_user_service(&metadata_identity, NULL, shell_fixture, false, false,
+                          VIBESHINE_STREAM_ENVIRONMENT_FIELD_COUNT, stream_environment) == 0);
+  shell_fixture[4] = "1";
+  CHECK(exec_user_service(&metadata_identity, NULL, shell_fixture, false, true,
+                          VIBESHINE_STREAM_ENVIRONMENT_FIELD_COUNT, stream_environment) == 0);
+  CHECK(!getenv("SUNSHINE_CLIENT_FPS") && !getenv("ENABLE_HDR_WSI"));
+  user_service_fixture = false;
 
   CHECK(!strcmp(steam_big_picture_uri("setsid steam steam://open/bigpicture"), "steam://open/bigpicture"));
   CHECK(!strcmp(steam_big_picture_uri("setsid steam steam://close/bigpicture"), "steam://close/bigpicture"));

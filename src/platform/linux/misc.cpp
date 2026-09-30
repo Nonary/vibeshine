@@ -62,6 +62,7 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/video.h"
+#include "packaging/linux/vibeshine-session-stream-environment.h"
 #ifdef __linux__
   #include "src/platform/linux/display_backend.h"
   #include "src/platform/linux/display_restore_capture.h"
@@ -360,6 +361,30 @@ namespace platf {
         args = *semantic_lutris;
       } else {
         args = {wayland_hdr_compatibility ? "app-wayland-hdr" : "app", directory, cmd};
+        // The broker clears the network host's environment. Send only the
+        // supported stream metadata as literal assignments; user/session and
+        // loader settings remain broker-owned. Keep the configured command
+        // and working-directory arguments separate from these assignments.
+        size_t stream_environment_bytes = 0;
+        for (const auto &field : vibeshine_stream_environment_fields) {
+          const auto it = std::find_if(env.cbegin(), env.cend(), [&field](const auto &entry) {
+            return entry.get_name() == field.name;
+          });
+          if (it == env.cend()) continue;
+          const auto value = it->to_string();
+          // Empty optional toggles/numeric settings must not turn a bootstrap
+          // request into a failed launch. Text fields preserve empty values.
+          if (value.empty() && field.type != VIBESHINE_STREAM_TEXT) continue;
+          auto assignment = std::string {field.name} + '=' + value;
+          if (!vibeshine_stream_environment_entry_is_safe(assignment.c_str(), nullptr) ||
+              assignment.size() + 1 > VIBESHINE_STREAM_ENVIRONMENT_MAX_BYTES - stream_environment_bytes) {
+            BOOST_LOG(error) << "Invalid session launch metadata: " << field.name;
+            ec = std::make_error_code(std::errc::invalid_argument);
+            return bp::child();
+          }
+          stream_environment_bytes += assignment.size() + 1;
+          args.emplace_back(std::move(assignment));
+        }
       }
     } else {
       if (elevated && geteuid() != 0) {
