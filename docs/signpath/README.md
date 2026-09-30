@@ -152,19 +152,18 @@ invalidates the catalog hash and **breaks driver installation**. These must be
 **excluded** from the `msi-file` deep-sign:
 
 - `drivers/sudovda/SudoVDA.dll`, `drivers/sudovda/nefconc.exe` (CN=sudovda / Nefarius)
-- `drivers/sunshine/SunshineVirtualDisplayDriver.dll` (+ `.cat`),
-  `drivers/sunshine/virtualdisplay_probe.exe`,
-  `drivers/sunshine/nefconc.exe`,
-  `drivers/sunshine/vulkan-layer/VkLayer_sunshine_hdr.dll`
-  (libvirtualdisplay release, origin-signed upstream)
+- `drivers/sunshine/SunshineVirtualDisplayDriver.dll` is catalog-bound and
+  remains byte-for-byte unchanged; `drivers/sunshine/nefconc.exe` is vendor-signed.
 - `drivers/vhf-gamepad/driver/VibeshineVhfGamepad.dll` is catalog-bound and
   remains byte-for-byte unchanged. The VHF CAT and setup tool are deliberate
   exceptions: both arrive unsigned from the producer and are signed by this
   repository's MSI request.
 - `nvngx_truehdr.dll` (NVIDIA RTX Video SDK runtime, downloaded from the pinned TrueHDR runtime release)
 
-The recommended config signs the Sunshine catalog and explicitly excludes the
-catalog-bound DLL and third-party binaries above.
+The recommended config signs the Sunshine catalog, probe, and both Vulkan layer
+DLLs, and excludes the catalog-bound DLL and third-party binaries above. The x64
+Sunshine driver/layer payload comes from the pinned libvirtualdisplay release;
+package refresh builds the separate x86 layer from pinned source.
 
 ## VHF gamepad release boundary
 
@@ -210,6 +209,7 @@ stripped in CI and never signed on the runner). The `msi-file` config is the
 | `sunshine_display_helper.exe` | `Sunshine\tools\` |
 | `virtualdisplay_probe.exe` | `Sunshine\drivers\sunshine\` |
 | `VkLayer_sunshine_hdr.dll` | `Sunshine\drivers\sunshine\vulkan-layer\` |
+| `VkLayer_sunshine_hdr_x86.dll` | `Sunshine\drivers\sunshine\vulkan-layer\` |
 
 > The paths in the artifact-configuration XML must match the MSI's logical
 > directory layout. Confirm the exact in-MSI paths against a built MSI's File

@@ -91,6 +91,10 @@
              min-matches="1" max-matches="1">
       <authenticode-sign/>
     </pe-file>
+    <pe-file path="Sunshine/drivers/sunshine/vulkan-layer/VkLayer_sunshine_hdr_x86.dll"
+             min-matches="1" max-matches="1">
+      <authenticode-sign/>
+    </pe-file>
 
     <!--
       Vibeshine VHF gamepad driver. Present only when the installer is built
