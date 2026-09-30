@@ -353,6 +353,7 @@ namespace nvhttp {
           std::memcpy(&guid, stable_uuid.b8, sizeof(guid));
           return VDISPLAY::removeVirtualDisplay(guid);
         },
+        .client_identity_capacity = [] { return static_cast<std::size_t>(config::video.virtual_display_max_clients); },
       });
       remote_display_topology::instance().set_plaintext_rtsp_warning_provider([](const std::string &) {
         return rtsp_stream::plaintext_route_warning();
@@ -606,6 +607,9 @@ namespace nvhttp {
         .apply_composed_topology = platf::linux_private_display::remote_apply_composed_topology,
         .exact_target_has_current_mode_and_dxgi = platf::linux_private_display::remote_exact_capture_output,
         .remove_owned_display = platf::linux_private_display::remote_remove_owned_display,
+        .client_identity_capacity = [] {
+          return std::min(static_cast<std::size_t>(config::video.virtual_display_max_clients), platf::linux_private_display::client_output_capacity());
+        },
       });
       remote_display_topology::instance().set_plaintext_rtsp_warning_provider([](const std::string &) {
         return rtsp_stream::plaintext_route_warning();
@@ -1074,7 +1078,7 @@ namespace nvhttp {
           launch_session->normal_vdd_capacity_rejected = true;
           launch_session->virtual_display_failed = true;
           BOOST_LOG(warning) << "Rejecting per-client virtual display for client '" << launch_session->client_uuid
-                             << "' because all four client identities are already reserved.";
+                             << "' because the virtual display client limit has been reached.";
           return false;
         }
         launch_session->normal_vdd_identity_token = reservation.token;
@@ -4459,7 +4463,7 @@ namespace nvhttp {
     );
     if (launch_session->normal_vdd_capacity_rejected) {
       tree.put("root.<xmlattr>.status_code", 409);
-      tree.put("root.<xmlattr>.status_message", "Remote display capacity is four paired-client identities");
+      tree.put("root.<xmlattr>.status_message", "Virtual display client limit reached");
       tree.put("root.gamesession", 0);
       return;
     }
@@ -4491,7 +4495,7 @@ namespace nvhttp {
     const auto normal_identity = reserve_linux_normal_display_identity(launch_session);
     if (normal_identity == linux_normal_identity_result_e::capacity_rejected) {
       tree.put("root.<xmlattr>.status_code", 409);
-      tree.put("root.<xmlattr>.status_message", "Remote display capacity is four paired-client identities");
+      tree.put("root.<xmlattr>.status_message", "Virtual display client limit reached");
       tree.put("root.gamesession", 0);
       return;
     }
@@ -4968,7 +4972,7 @@ namespace nvhttp {
     if (launch_session->normal_vdd_capacity_rejected) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 409);
-      tree.put("root.<xmlattr>.status_message", "Remote display capacity is four paired-client identities");
+      tree.put("root.<xmlattr>.status_message", "Virtual display client limit reached");
       return;
     }
 #elif defined(__linux__)
@@ -5000,7 +5004,7 @@ namespace nvhttp {
     if (normal_identity == linux_normal_identity_result_e::capacity_rejected) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 409);
-      tree.put("root.<xmlattr>.status_message", "Remote display capacity is four paired-client identities");
+      tree.put("root.<xmlattr>.status_message", "Virtual display client limit reached");
       return;
     }
     if (normal_identity == linux_normal_identity_result_e::topology_failed) {
