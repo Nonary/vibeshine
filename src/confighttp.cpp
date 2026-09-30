@@ -5860,7 +5860,8 @@ namespace confighttp {
       };
       record_token_route(normalize_route_pattern(pattern), method);
     };
-    auto register_blocking_api_route = [&](const char *pattern, const char *method, const auto &handler, thread_pool_util::ThreadPool *route_pool = nullptr, bool stream_start = false) {
+    // By value: Apple Clang cannot capture function references in nested lambdas.
+    auto register_blocking_api_route = [&](const char *pattern, const char *method, auto handler, thread_pool_util::ThreadPool *route_pool = nullptr, bool stream_start = false) {
       auto *worker_pool = route_pool ? route_pool : &blocking_route_pool;
       register_api_route(pattern, method, [worker_pool, handler, stream_start](resp_https_t response, req_https_t request, host_stream_control::ticket_t ticket) {
         if (!authenticate(response, request)) {
