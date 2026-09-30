@@ -93,13 +93,13 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >"incoming/${package_name}"
 
           package_info="$(bsdtar -xOf "incoming/${package_name}" .PKGINFO)"
-          grep -qx 'pkgname = vibeshine' <<<"${package_info}"
+          grep -Fqx 'pkgname = vibeshine' <<<"${package_info}"
           # Keep this aligned with special_package_configuration.cmake: Arch
           # pkgver strips SemVer's prerelease separator.
           arch_package_version=${release_version//-/}
           arch_package_version=${arch_package_version//+/.}
-          grep -qx "pkgver = ${arch_package_version}-1" <<<"${package_info}"
-          grep -qx 'arch = x86_64' <<<"${package_info}"
+          grep -Fqx "pkgver = ${arch_package_version}-1" <<<"${package_info}"
+          grep -Fqx 'arch = x86_64' <<<"${package_info}"
 
           echo "package_name=${package_name}" >>"${GITHUB_OUTPUT}"
           echo "release_version=${release_version}" >>"${GITHUB_OUTPUT}"
@@ -179,9 +179,13 @@ jobs:
             "${publication_dir}/x86_64/"
 
           cd "${publication_dir}/x86_64"
-          rm -f vibeshine.db vibeshine.db.sig vibeshine.db.tar.gz.sig \
-            vibeshine.files vibeshine.files.sig vibeshine.files.tar.gz.sig
-          repo-add --remove vibeshine.db.tar.gz ./*.pkg.tar.zst
+          # This repository publishes exactly the verified release package.
+          # Rebuild both indexes so stale entries cannot survive publication.
+          rm -f vibeshine.db vibeshine.db.sig vibeshine.db.tar.gz \
+            vibeshine.db.tar.gz.sig vibeshine.db.tar.gz.old vibeshine.db.tar.gz.old.sig \
+            vibeshine.files vibeshine.files.sig vibeshine.files.tar.gz \
+            vibeshine.files.tar.gz.sig vibeshine.files.tar.gz.old vibeshine.files.tar.gz.old.sig
+          repo-add vibeshine.db.tar.gz "${PACKAGE_NAME}"
           printf '%s' "${SIGNING_PASSPHRASE}" | gpg \
             --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
             --local-user "${FINGERPRINT}" --detach-sign vibeshine.db.tar.gz
@@ -194,6 +198,14 @@ jobs:
           cp vibeshine.db.tar.gz.sig vibeshine.db.sig
           cp vibeshine.files.tar.gz vibeshine.files
           cp vibeshine.files.tar.gz.sig vibeshine.files.sig
+
+          # Prune older payloads only after the new indexes have been signed.
+          shopt -s nullglob
+          for old_package in vibeshine-*.pkg.tar.zst vibeshine-*.pkg.tar.zst.sig; do
+            if [[ "${old_package}" != "${PACKAGE_NAME}" && "${old_package}" != "${PACKAGE_NAME}.sig" ]]; then
+              rm -f -- "${old_package}"
+            fi
+          done
 
       - name: Commit published repository
         shell: bash
