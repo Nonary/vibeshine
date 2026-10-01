@@ -63,6 +63,8 @@
     <pe-file path="Sunshine/tools/sunshinesvc.exe"><authenticode-sign/></pe-file>
     <pe-file path="Sunshine/tools/dxgi-info.exe"><authenticode-sign/></pe-file>
     <pe-file path="Sunshine/tools/audio-info.exe"><authenticode-sign/></pe-file>
+    <pe-file path="Sunshine/tools/vibeshine_dualsense_haptics.exe"><authenticode-sign/></pe-file>
+    <pe-file path="Sunshine/tools/vibeshine_dualsense_audio.dll"><authenticode-sign/></pe-file>
     <pe-file path="Sunshine/tools/playnite-launcher.exe"><authenticode-sign/></pe-file>
     <pe-file path="Sunshine/tools/sunshine_wgc_capture.exe"><authenticode-sign/></pe-file>
     <pe-file path="Sunshine/tools/sunshine_display_helper.exe"><authenticode-sign/></pe-file>

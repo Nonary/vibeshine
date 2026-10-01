@@ -202,6 +202,8 @@ stripped in CI and never signed on the runner). The `msi-file` config is the
 | `sunshinesvc.exe` | `Sunshine\tools\` (bound via the `wix_payload` binder) |
 | `dxgi-info.exe` | `Sunshine\tools\` |
 | `audio-info.exe` | `Sunshine\tools\` |
+| `vibeshine_dualsense_haptics.exe` | `Sunshine\tools\` |
+| `vibeshine_dualsense_audio.dll` | `Sunshine\tools\` |
 | `playnite-launcher.exe` | `Sunshine\tools\` |
 | `sunshine_wgc_capture.exe` | `Sunshine\tools\` |
 | `sunshine_display_helper.exe` | `Sunshine\tools\` |

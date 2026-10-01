@@ -1001,6 +1001,7 @@ namespace proc {
       _process(std::move(other._process)),
       _process_group(std::move(other._process_group)),
 #ifdef _WIN32
+      _dualsense_audio(std::move(other._dualsense_audio)),
       _virtual_display_guid(other._virtual_display_guid),
       _virtual_display_active(other._virtual_display_active),
 #endif
@@ -1050,6 +1051,7 @@ namespace proc {
       _app_prep_it = other._app_prep_it;
       _app_prep_begin = other._app_prep_begin;
 #ifdef _WIN32
+      _dualsense_audio = std::move(other._dualsense_audio);
       _lossless_thread = std::move(other._lossless_thread);
       _lossless_stop_requested.store(other._lossless_stop_requested.load(std::memory_order_acquire), std::memory_order_release);
       _lossless_profile_applied = other._lossless_profile_applied;
@@ -1314,6 +1316,8 @@ namespace proc {
     std::string resolved_lossless_exe_utf8;
     _virtual_display_active = false;
     _virtual_display_guid = GUID {};
+    _dualsense_audio.reset();
+    _env["VIBESHINE_DUALSENSE_HAPTICS_MAPPING"] = "";
     _deferred_launch = false;
     _lossless_should_start_support = false;
     _lossless_metadata = {};
@@ -1984,6 +1988,19 @@ namespace proc {
     });
 
 #ifdef _WIN32
+    if (_app.dualsense_haptics) {
+      if (_app.cmd.empty() || !_app.playnite_id.empty() || _app.playnite_fullscreen ||
+          !_app.steam_id.empty() || !_app.detached.empty()) {
+        BOOST_LOG(error) << "DualSense waveform haptics requires a direct game executable launch.";
+        return -1;
+      }
+      _dualsense_audio = platf::dualsense_audio::start();
+      if (!_dualsense_audio) {
+        BOOST_LOG(error) << "Could not prepare DualSense waveform IPC before game launch.";
+        return -1;
+      }
+      _env["VIBESHINE_DUALSENSE_HAPTICS_MAPPING"] = _dualsense_audio->mapping_name;
+    }
     std::unordered_set<DWORD> lossless_baseline_pids;
     bool lossless_monitor_started = false;
     std::string lossless_install_dir_hint;
@@ -2256,7 +2273,17 @@ namespace proc {
         }
       }
       BOOST_LOG(info) << "Executing: ["sv << _app.cmd << "] in ["sv << working_dir << ']';
-      _process = platf::run_command(_app.elevated, true, _app.cmd, working_dir, _env, _pipe.get(), ec, &_process_group);
+      std::string launch_command = _app.cmd;
+#ifdef _WIN32
+      if (_app.dualsense_haptics) {
+        launch_command = platf::dualsense_audio::wrap_command(_app.cmd);
+        if (launch_command.empty()) {
+          BOOST_LOG(error) << "DualSense waveform helper is missing or the command is not a direct executable.";
+          return -1;
+        }
+      }
+#endif
+      _process = platf::run_command(_app.elevated, true, launch_command, working_dir, _env, _pipe.get(), ec, &_process_group);
       if (ec) {
         BOOST_LOG(warning) << "Couldn't run ["sv << _app.cmd << "]: System: "sv << ec.message();
         return -1;
@@ -2584,6 +2611,8 @@ namespace proc {
     placebo = false;
     std::chrono::seconds remaining_timeout = _app.exit_timeout;
 #ifdef _WIN32
+    _dualsense_audio.reset();
+    _env["VIBESHINE_DUALSENSE_HAPTICS_MAPPING"] = "";
     _deferred_launch = false;
     _lossless_should_start_support = false;
     stop_lossless_scaling_support();
@@ -3568,6 +3597,7 @@ namespace proc {
           // ignore overrides parse errors; continue without them
         }
 
+        ctx.dualsense_haptics = app_node.get<bool>("dualsense-haptics", false);
         ctx.lossless_scaling_enabled = lossless_scaling_enabled.value_or(false);
         ctx.lossless_scaling_framegen = lossless_scaling_framegen.value_or(false);
         if (!lossless_scaling_enabled) {

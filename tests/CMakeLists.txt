@@ -898,6 +898,8 @@ if(APPLE)
         PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/macos/av_audio_policy.cpp")
 endif()
 
+sunshine_register_component(NAME test_component_dualsense_audio_pcm TEST_SOURCE unit/test_dualsense_audio_pcm.cpp)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET libinputtino)
     add_executable(test_ds5_haptics unit/platform/linux/test_ds5_haptics.cpp)
     target_include_directories(test_ds5_haptics PRIVATE

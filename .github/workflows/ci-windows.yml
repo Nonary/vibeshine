@@ -658,6 +658,8 @@ jobs:
             '.\build\sunshine.exe',
             '.\build\tools\audio-info.exe',
             '.\build\tools\dxgi-info.exe',
+            '.\build\tools\vibeshine_dualsense_haptics.exe',
+            '.\build\tools\vibeshine_dualsense_audio.dll',
             '.\build\tools\playnite-launcher.exe',
             '.\build\tools\sunshine_display_helper.exe',
             '.\build\tools\sunshine_wgc_capture.exe',
@@ -1415,6 +1417,7 @@ jobs:
             'sunshine.exe','uninstall.exe','libwebrtc.dll','zlib1.dll',
             'sunshinesvc.exe','dxgi-info.exe','audio-info.exe',
             'playnite-launcher.exe','sunshine_wgc_capture.exe','sunshine_display_helper.exe',
+            'vibeshine_dualsense_haptics.exe','vibeshine_dualsense_audio.dll',
             'virtualdisplay_probe.exe','VkLayer_sunshine_hdr.dll'
           )
           $optionalFirstParty = @('vibeshine_truehdr.dll')

@@ -25,6 +25,7 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "vhf_gamepad.h"
+#include "dualsense_haptics.h"
 #include "vhf_gamepad_policy.h"
 
 namespace platf {
@@ -1327,8 +1328,9 @@ namespace platf {
       config::input.gamepad == "auto"sv &&
       vhf_gamepad::select_automatic_backend(vigem_available, vhf_available) == vhf_gamepad::backend_e::vhf;
 
-    if (vhf_gamepad_selected() || automatic_vhf_fallback) {
-      const auto desired = vhf_desired_profile(metadata);
+    const bool waveform_haptics = dualsense_audio::enabled();
+    if (vhf_gamepad_selected() || automatic_vhf_fallback || waveform_haptics) {
+      const auto desired = waveform_haptics ? vhf_profile_e::dualsense : vhf_desired_profile(metadata);
 
       if (vhf_available) {
         BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will use the Vibeshine virtual gamepad driver"sv

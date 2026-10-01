@@ -32,6 +32,7 @@
 
 #ifdef _WIN32
   #include "tools/playnite_launcher/lossless_scaling.h"
+  #include "platform/windows/dualsense_haptics.h"
 
 namespace VDISPLAY {
   enum class DRIVER_STATUS;
@@ -150,6 +151,7 @@ namespace proc {
     bool playnite_fullscreen;
     bool frame_gen_limiter_fix;
     bool elevated;
+    bool dualsense_haptics {false};
     bool virtual_screen {false};
     // Unset inherits the device preference; false allows normal client HDR requests.
     std::optional<bool> prefer_10bit_sdr;
@@ -279,6 +281,7 @@ namespace proc {
     bp::group _process_group;
 
 #ifdef _WIN32
+    std::shared_ptr<platf::dualsense_audio::session> _dualsense_audio;
     GUID _virtual_display_guid {};
     bool _virtual_display_active {false};
 #endif

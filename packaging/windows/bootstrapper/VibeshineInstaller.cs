@@ -2323,7 +2323,8 @@ namespace VibeshineInstaller {
       "sunshine_wgc_capture",
       "playnite-launcher",
       "playnite_launcher",
-      "sunshine_display_helper"
+      "sunshine_display_helper",
+      "vibeshine_dualsense_haptics"
     };
 
     internal sealed class InstalledProductInfo {
