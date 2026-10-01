@@ -3619,7 +3619,7 @@ namespace nvhttp {
     // pyrowave_mode is 2 only when the probe passed and the pyrowave option is enabled.
     if (advertised_video.pyrowave_mode >= 2) {
       codec_mode_flags |= pyrowave::protocol::SCM_MASK_PYROWAVE;
-      tree.put("root.PyroWaveHybridVersion", pyrowave::protocol::HYBRID_VERSION);
+      tree.put("root.PyroWaveCompressionVersion", pyrowave::protocol::COMPRESSION_VERSION);
     }
     tree.put("root.ServerCodecModeSupport", codec_mode_flags);
 
