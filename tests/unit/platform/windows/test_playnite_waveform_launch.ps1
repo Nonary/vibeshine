@@ -1,4 +1,4 @@
-param([switch]$CompileBridge)
+param([switch]$CompileBridge, [string]$NativeHelperDirectory)
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../../..'))
 $module = Join-Path $repo 'plugins/playnite/SunshinePlaynite/SunshinePlaynite.psm1'
@@ -15,6 +15,19 @@ if ($CompileBridge) {
   Invoke-Expression (Read-Function 'Initialize-WaveformLaunchBridge')
   Initialize-WaveformLaunchBridge
   if ([SunshineWaveformLaunchBridgeV1]::Prepare('', 'mapping', $repo, $false)) { throw 'Empty library path accepted' }
+  if ($NativeHelperDirectory) {
+    # A missing mapping must fail inside the 64-bit helper. In a 32-bit host,
+    # loading the DLL locally would instead fail with ERROR_BAD_EXE_FORMAT.
+    $missingMapping = 'Local\Vibeshine.Missing.Mapping.' + [Guid]::NewGuid().ToString('N')
+    $dll = Join-Path $NativeHelperDirectory 'vibeshine_dualsense_audio.dll'
+    $failure = $null
+    try { [void][SunshineWaveformLaunchBridgeV1]::Prepare($dll, $missingMapping, $repo, $true) }
+    catch { $failure = $_.Exception.ToString() }
+    if (-not $failure -or $failure -notmatch 'Steam hook preparation failed') {
+      throw "Storefront setup did not reach the native helper: $failure"
+    }
+    "Native helper reached from $([IntPtr]::Size * 8)-bit connector host"
+  }
   'Native Playnite bridge compiles and rejects missing libraries'
   exit
 }

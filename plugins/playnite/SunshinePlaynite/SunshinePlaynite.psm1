@@ -2357,6 +2357,7 @@ function Initialize-WaveformLaunchBridge {
   Add-Type -TypeDefinition @"
 using System;
 using System.IO;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 public static class SunshineWaveformLaunchBridgeV1
 {
@@ -2377,10 +2378,30 @@ public static class SunshineWaveformLaunchBridgeV1
         lock (Gate)
         {
             path = Path.GetFullPath(path);
+            if (steam)
+            {
+                var helper = Path.Combine(Path.GetDirectoryName(path), "vibeshine_dualsense_haptics.exe");
+                var start = new ProcessStartInfo(helper, "--prepare-steam");
+                start.UseShellExecute = false;
+                start.CreateNoWindow = true;
+                start.RedirectStandardError = true;
+                start.EnvironmentVariables["VIBESHINE_DUALSENSE_HAPTICS_MAPPING"] = mapping;
+                start.EnvironmentVariables["VIBESHINE_DUALSENSE_HAPTICS_DIRECTORY"] = directory;
+                using (var process = Process.Start(start))
+                {
+                    if (!process.WaitForExit(25000))
+                        throw new InvalidOperationException("Steam waveform preparation timed out.");
+                    var error = process.StandardError.ReadToEnd().Trim();
+                    if (process.ExitCode != 0)
+                        throw new InvalidOperationException(string.IsNullOrEmpty(error) ? "Steam waveform preparation failed." : error);
+                    return true;
+                }
+            }
             if (prepare == null)
             {
                 var library = LoadLibraryExW(path, IntPtr.Zero, 8);
-                if (library == IntPtr.Zero) return false;
+                if (library == IntPtr.Zero)
+                    throw new InvalidOperationException("Could not load waveform audio hook (Windows error " + Marshal.GetLastWin32Error() + ").");
                 var entry = GetProcAddress(library, "VibeshineHapticsPreparePlaynite");
                 if (entry == IntPtr.Zero) return false;
                 prepare = (PrepareLaunch)Marshal.GetDelegateForFunctionPointer(entry, typeof(PrepareLaunch));
