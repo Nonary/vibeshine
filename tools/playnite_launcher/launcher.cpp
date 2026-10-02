@@ -18,13 +18,13 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <windows.h>
 #include <ShlObj.h>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
-#include <windows.h>
 
 using namespace std::chrono_literals;
 
