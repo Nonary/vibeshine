@@ -195,7 +195,9 @@ namespace proc {
         _apps(std::move(apps)) {
     }
 
-    int execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session);
+    // Callers holding config::acquire_apply_read_gate() must pass true so
+    // replacement/failure cleanup defers its configuration write.
+    int execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session, bool config_read_gate_held = false);
 
     /**
      * @return `_app_id` if a process is running, otherwise returns `0`
@@ -224,9 +226,11 @@ namespace proc {
     running_app_state_t running_app_state() const;
     bool running_app_contains_pid(uint32_t pid);
 #endif
+    // Configuration reload must wait until the caller releases its read gate.
     void terminate(
       bool skip_display_revert = false,
-      bool stream_lifecycle_lock_held = false
+      bool stream_lifecycle_lock_held = false,
+      bool config_read_gate_held = false
     );
 
     // Hot-update app list and environment without disrupting a running app
@@ -244,7 +248,7 @@ namespace proc {
     bp::environment release_env();
 
   private:
-    int launch_app_commands(bool stream_lifecycle_lock_held);
+    int launch_app_commands(bool stream_lifecycle_lock_held, bool config_read_gate_held = false);
 
     std::atomic<int> _app_id;
 

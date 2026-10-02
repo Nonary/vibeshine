@@ -4652,7 +4652,7 @@ namespace nvhttp {
 #ifdef _WIN32
       rtsp_stream::set_vulkan_hdr_layer_pending_stream(rtsp_stream::effective_hdr_requested(*launch_session));
 #endif
-      auto err = proc::proc.execute((int) appid, launch_session);
+      auto err = proc::proc.execute((int) appid, launch_session, true);
       if (err) {
         tree.put("root.<xmlattr>.status_code", err);
         tree.put("root.<xmlattr>.status_message", "Failed to start the specified application");
@@ -4690,7 +4690,7 @@ namespace nvhttp {
     );
     if (!paired_client_uuid_enabled(launch_session->client_uuid)) {
       if (appid > 0) {
-        proc::proc.terminate(false, true);
+        proc::proc.terminate(false, true, true);
       }
       tree.put("root.<xmlattr>.status_code", 403);
       tree.put("root.<xmlattr>.status_message", "Paired client authorization was revoked before stream admission");
@@ -4699,7 +4699,7 @@ namespace nvhttp {
     }
     if (!rtsp_stream::launch_session_raise(launch_session)) {
       if (appid > 0) {
-        proc::proc.terminate(false, true);
+        proc::proc.terminate(false, true, true);
       }
       tree.put("root.<xmlattr>.status_code", 409);
       tree.put("root.<xmlattr>.status_message", "RTSP pending session admission was rejected");

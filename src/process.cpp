@@ -1297,10 +1297,10 @@ namespace proc {
     return cmd_path.parent_path();
   }
 
-  int proc_t::execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session) {
+  int proc_t::execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session, bool config_read_gate_held) {
     // Ensure starting from a clean slate
     const bool skip_display_revert = launch_session && launch_session->display_config_preapplied;
-    terminate(skip_display_revert, true);
+    terminate(skip_display_revert, true, config_read_gate_held);
 
 #ifdef __linux__
     // proc_t retains its parsed environment across launches. Remove only the
@@ -1318,6 +1318,7 @@ namespace proc {
     _virtual_display_guid = GUID {};
     _dualsense_audio.reset();
     _env["VIBESHINE_DUALSENSE_HAPTICS_MAPPING"] = "";
+    _env["VIBESHINE_DUALSENSE_HAPTICS_DLL"] = "";
     _deferred_launch = false;
     _lossless_should_start_support = false;
     _lossless_metadata = {};
@@ -1977,21 +1978,22 @@ namespace proc {
     }
 #endif
 
-    return launch_app_commands(true);
+    return launch_app_commands(true, config_read_gate_held);
   }
 
-  int proc_t::launch_app_commands(bool stream_lifecycle_lock_held) {
+  int proc_t::launch_app_commands(bool stream_lifecycle_lock_held, bool config_read_gate_held) {
     std::error_code ec;
     // Executed when returning from function
     auto fg = util::fail_guard([&]() {
-      terminate(false, stream_lifecycle_lock_held);
+      terminate(false, stream_lifecycle_lock_held, config_read_gate_held);
     });
 
 #ifdef _WIN32
     if (_app.dualsense_haptics) {
-      if (_app.cmd.empty() || !_app.playnite_id.empty() || _app.playnite_fullscreen ||
+      const bool playnite_launch = _app.cmd.empty() && (!_app.playnite_id.empty() || _app.playnite_fullscreen);
+      if ((!playnite_launch && (_app.cmd.empty() || !_app.playnite_id.empty() || _app.playnite_fullscreen)) ||
           !_app.steam_id.empty() || !_app.detached.empty()) {
-        BOOST_LOG(error) << "DualSense waveform haptics requires a direct game executable launch.";
+        BOOST_LOG(error) << "DualSense waveform haptics requires a direct executable or Playnite launch.";
         return -1;
       }
       _dualsense_audio = platf::dualsense_audio::start();
@@ -2000,6 +2002,14 @@ namespace proc {
         return -1;
       }
       _env["VIBESHINE_DUALSENSE_HAPTICS_MAPPING"] = _dualsense_audio->mapping_name;
+      if (playnite_launch) {
+        const auto dll = platf::dualsense_audio::hook_library_path();
+        if (dll.empty()) {
+          BOOST_LOG(error) << "DualSense waveform audio hook library is missing.";
+          return -1;
+        }
+        _env["VIBESHINE_DUALSENSE_HAPTICS_DLL"] = dll;
+      }
     }
     std::unordered_set<DWORD> lossless_baseline_pids;
     bool lossless_monitor_started = false;
@@ -2149,6 +2159,13 @@ namespace proc {
         } catch (...) {}
         // Pass focus attempts from config so the helper can try to bring Playnite/game to foreground
         cmd += managed_app_focus::launcher_arguments(managed_app_focus::settings);
+        if (_app.dualsense_haptics) {
+          cmd = platf::dualsense_audio::wrap_command(cmd, true);
+          if (cmd.empty()) {
+            BOOST_LOG(error) << "DualSense waveform Playnite launch helper is missing.";
+            return -1;
+          }
+        }
         std::error_code fec;
         boost::filesystem::path wd;  // empty wd
         _process = platf::run_command(false, true, cmd, wd, _env, _pipe.get(), fec, &_process_group);
@@ -2169,6 +2186,10 @@ namespace proc {
         launched = false;
       }
       if (!launched) {
+        if (_app.dualsense_haptics) {
+          BOOST_LOG(error) << "Could not start the Playnite waveform launch helper.";
+          return -1;
+        }
         // Best-effort fallback using Playnite URI protocol
         std::string uri = std::string("playnite://playnite/start/") + _app.playnite_id;
         std::error_code fec;
@@ -2205,6 +2226,13 @@ namespace proc {
         std::string lpath = launcher.string();
         std::string cmd = std::string("\"") + lpath + "\" --fullscreen";
         cmd += managed_app_focus::launcher_arguments(managed_app_focus::settings);
+        if (_app.dualsense_haptics) {
+          cmd = platf::dualsense_audio::wrap_command(cmd, true);
+          if (cmd.empty()) {
+            BOOST_LOG(error) << "DualSense waveform Playnite fullscreen helper is missing.";
+            return -1;
+          }
+        }
         std::error_code fec;
         boost::filesystem::path wd;  // empty wd
         _process = platf::run_command(false, true, cmd, wd, _env, _pipe.get(), fec, &_process_group);
@@ -2578,7 +2606,8 @@ namespace proc {
 
   void proc_t::terminate(
     bool skip_display_revert,
-    bool stream_lifecycle_lock_held
+    bool stream_lifecycle_lock_held,
+    bool config_read_gate_held
   ) {
 #ifdef __linux__
     // This owner represents a running-Steam handoff. Dropping it when the
@@ -2615,6 +2644,7 @@ namespace proc {
 #ifdef _WIN32
     _dualsense_audio.reset();
     _env["VIBESHINE_DUALSENSE_HAPTICS_MAPPING"] = "";
+    _env["VIBESHINE_DUALSENSE_HAPTICS_DLL"] = "";
     _deferred_launch = false;
     _lossless_should_start_support = false;
     stop_lossless_scaling_support();
@@ -2818,7 +2848,12 @@ namespace proc {
     // If we can safely hot-apply immediately, restore global config now; otherwise defer.
     if (has_run) {
       config::clear_runtime_config_overrides();
-      if (!other_streaming_session_active) {
+      // A failed launch can reach this tail while its caller still holds the
+      // configuration read gate. Applying here would deadlock on the write
+      // gate and retain the lifecycle mutex, blocking every subsequent launch.
+      // The caller restores config after releasing its read gate on failure;
+      // otherwise the deferred reload waits for the next idle transition.
+      if (!other_streaming_session_active && !config_read_gate_held) {
         config::apply_config_now();
       } else {
         config::mark_deferred_reload();

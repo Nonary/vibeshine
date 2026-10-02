@@ -1159,6 +1159,8 @@ function Initialize-LauncherConnection {
     }
     $connInfo.Pump = New-Object PerConnPump($connInfo.Writer, $connInfo.Outbox)
     $connInfo.Pump.Start()
+    $ready = @{ type = 'status'; status = @{ name = 'waveformConnectorReady' } } | ConvertTo-Json -Compress
+    $null = $connInfo.Outbox.Add($ready)
   } catch {
     Write-Log "PipeServer: failed to start launcher outbox pump: $($_.Exception.Message)"
   }
@@ -1395,6 +1397,8 @@ function Start-LauncherConnReader {
           # the UI dispatch that used to perform this update later.
           [SunshinePlayniteUIBridgeV2]::SetPersistentEnvironment($Guid, $launchEnvironment)
           Write-Log "LauncherConn[$Guid]: fullscreen environment applied ($($launchEnvironment.Count) variables)"
+          $ready = @{ type = 'status'; status = @{ name = 'waveformEnvironmentReady' } } | ConvertTo-Json -Compress
+          $null = $Conn.Outbox.Add($ready)
         }
         elseif ($obj.type -and $obj.command) {
           Write-DebugLog ("LauncherConn[{0}]: unhandled command type={1} cmd={2}" -f $Guid, [string]$obj.type, [string]$obj.command)
@@ -2345,6 +2349,70 @@ function Test-LauncherConnectionForGame {
   } catch {
     Write-Log "LaunchTrack: connection probe failed: $($_.Exception.Message)"
     return $false
+  }
+}
+
+function Initialize-WaveformLaunchBridge {
+  if (([System.Management.Automation.PSTypeName]'SunshineWaveformLaunchBridgeV1').Type) { return }
+  Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+public static class SunshineWaveformLaunchBridgeV1
+{
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr LoadLibraryExW(string path, IntPtr file, uint flags);
+    [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true)]
+    private static extern IntPtr GetProcAddress(IntPtr module, string name);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+    private delegate uint PrepareLaunch([MarshalAs(UnmanagedType.LPWStr)] string mapping,
+        [MarshalAs(UnmanagedType.LPWStr)] string directory, [MarshalAs(UnmanagedType.Bool)] bool steam);
+    private static readonly object Gate = new object();
+    private static string loadedPath;
+    private static PrepareLaunch prepare;
+    public static bool Prepare(string path, string mapping, string directory, bool steam)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path) ||
+            string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return false;
+        lock (Gate)
+        {
+            path = Path.GetFullPath(path);
+            if (prepare == null)
+            {
+                var library = LoadLibraryExW(path, IntPtr.Zero, 8);
+                if (library == IntPtr.Zero) return false;
+                var entry = GetProcAddress(library, "VibeshineHapticsPreparePlaynite");
+                if (entry == IntPtr.Zero) return false;
+                prepare = (PrepareLaunch)Marshal.GetDelegateForFunctionPointer(entry, typeof(PrepareLaunch));
+                loadedPath = path;
+            }
+            // A running Playnite keeps its native hook loaded. Changing host
+            // installations requires restarting it rather than mixing DLLs.
+            if (!string.Equals(path, loadedPath, StringComparison.OrdinalIgnoreCase)) return false;
+            return prepare(mapping, directory, steam) != 0;
+        }
+    }
+}
+"@
+}
+
+function OnGameStarting() {
+  param($evnArgs)
+  $mapping = [Environment]::GetEnvironmentVariable('VIBESHINE_DUALSENSE_HAPTICS_MAPPING')
+  if ([string]::IsNullOrWhiteSpace($mapping)) { return }
+  try {
+    Initialize-WaveformLaunchBridge
+    $game = $evnArgs.Game
+    $dll = [Environment]::GetEnvironmentVariable('VIBESHINE_DUALSENSE_HAPTICS_DLL')
+    $steam = ([string]$game.PluginId -eq 'cb91dfc9-b977-43bf-8e70-55f46e410fab')
+    if (-not [SunshineWaveformLaunchBridgeV1]::Prepare($dll, $mapping, [string]$game.InstallDirectory, $steam)) {
+      throw 'Could not prepare waveform haptics before the game starts.'
+    }
+    Write-Log "Waveform haptics prepared for $($game.Name)"
+  } catch {
+    $evnArgs.CancelStartup = $true
+    Write-Log "Waveform game launch cancelled: $($_.Exception.Message)"
+    Send-StatusMessage -Name 'waveformSetupFailed' -Game $evnArgs.Game
   }
 }
 
