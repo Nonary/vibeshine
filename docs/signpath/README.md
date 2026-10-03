@@ -205,6 +205,7 @@ stripped in CI and never signed on the runner). The `msi-file` config is the
 | `vibeshine_dualsense_haptics.exe` | `Sunshine\tools\` |
 | `vibeshine_dualsense_audio.dll` | `Sunshine\tools\` |
 | `playnite-launcher.exe` | `Sunshine\tools\` |
+| `VibeshinePlaynite.dll` | `Sunshine\plugins\playnite\SunshinePlaynite\` |
 | `sunshine_wgc_capture.exe` | `Sunshine\tools\` |
 | `sunshine_display_helper.exe` | `Sunshine\tools\` |
 | `virtualdisplay_probe.exe` | `Sunshine\drivers\sunshine\` |

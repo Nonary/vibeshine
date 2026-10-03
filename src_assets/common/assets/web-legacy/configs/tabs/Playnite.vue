@@ -167,12 +167,12 @@
               :strong="true"
               :restart="true"
               :label="
-                status.installed
-                  ? pluginOutdated
-                    ? ($t('playnite.upgrade_button') as any)
-                    : ($t('playnite.reinstall_button') as any) ||
+                status.legacy_plugin || pluginOutdated
+                  ? ($t('playnite.upgrade_button') as any)
+                  : status.installed
+                    ? ($t('playnite.reinstall_button') as any) ||
                       ($t('playnite.repair_button') as any)
-                  : ($t('playnite.install_button') as any)
+                    : ($t('playnite.install_button') as any)
               "
               @done="onReinstallDone"
             />
@@ -794,6 +794,7 @@ function formatGamesCacheTime(value: string | number | Date): string {
 const status = reactive<{
   installed: boolean | null;
   installed_unknown?: boolean;
+  legacy_plugin?: boolean;
   active: boolean;
   enabled?: boolean;
   playnite_running?: boolean;
@@ -945,6 +946,7 @@ async function refreshStatus() {
     if (r.status === 200 && r.data) {
       const d = r.data as any;
       status.installed = typeof d.installed === 'boolean' ? d.installed : null;
+      status.legacy_plugin = d.legacy_plugin === true;
       status.active = !!d.active;
       // 'enabled' is no longer a config; presence is indicated by 'installed'
       if (typeof d.playnite_running === 'boolean') status.playnite_running = !!d.playnite_running;
@@ -1291,9 +1293,10 @@ onUnmounted(() => {
   // nothing to unbind
 });
 
-const statusKind = computed<'active' | 'waiting' | 'uninstalled' | 'unknown'>(() => {
+const statusKind = computed<'active' | 'waiting' | 'upgrade' | 'uninstalled' | 'unknown'>(() => {
   if (status.active) return 'active';
   if (!status.extensions_dir) return 'unknown';
+  if (status.legacy_plugin) return 'upgrade';
   if (status.installed === false) return 'uninstalled';
   if (status.installed === true) return 'waiting';
   return 'unknown';
@@ -1303,6 +1306,7 @@ const statusType = computed<'success' | 'warning' | 'error' | 'default'>(() => {
     case 'active':
       return 'success';
     case 'waiting':
+    case 'upgrade':
       return 'warning';
     case 'uninstalled':
       return 'error';
@@ -1318,6 +1322,8 @@ const statusText = computed<string>(() => {
       return t('playnite.status_connected');
     case 'waiting':
       return t('playnite.status_waiting');
+    case 'upgrade':
+      return t('playnite.upgrade_button');
     case 'uninstalled':
       return t('playnite.status_uninstalled');
     case 'unknown':
@@ -1348,7 +1354,7 @@ function cmpSemver(a?: string, b?: string): number {
 }
 
 const pluginOutdated = computed(() => {
-  if (status.installed !== true) return false;
+  if (status.installed !== true && !status.legacy_plugin) return false;
   if (!status.plugin_version || !status.plugin_latest) return false;
   return cmpSemver(status.plugin_version, status.plugin_latest) < 0;
 });

@@ -259,13 +259,10 @@ enable_testing()
 if(WIN32)
     find_program(SUNSHINE_TEST_POWERSHELL_EXECUTABLE NAMES pwsh powershell)
     if(SUNSHINE_TEST_POWERSHELL_EXECUTABLE)
-        add_test(NAME test_script_playnite_waveform_launch
-            COMMAND "${SUNSHINE_TEST_POWERSHELL_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass
-                -File "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_waveform_launch.ps1")
         add_test(NAME test_script_playnite_waveform_bridge
             COMMAND "${SUNSHINE_TEST_POWERSHELL_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass
                 -File "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_waveform_launch.ps1" -CompileBridge)
-        set_tests_properties(test_script_playnite_waveform_launch test_script_playnite_waveform_bridge PROPERTIES LABELS "component;script")
+        set_tests_properties(test_script_playnite_waveform_bridge PROPERTIES LABELS "component;script")
         if(TARGET vibeshine_dualsense_haptics)
             add_test(NAME test_script_playnite_waveform_helper
                 COMMAND "${SUNSHINE_TEST_POWERSHELL_EXECUTABLE}" -NoLogo -NoProfile -ExecutionPolicy Bypass
@@ -928,6 +925,24 @@ if(APPLE)
         PROPERTIES LANGUAGE CXX)
     sunshine_register_component(NAME test_component_av_audio_policy TEST_SOURCE unit/platform/macos/test_av_audio.mm
         PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/macos/av_audio_policy.cpp")
+endif()
+
+# Compile production connector classes and Windows lifecycle policies on the host.
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    find_program(SUNSHINE_TEST_DOTNET NAMES dotnet dotnet.exe)
+    add_test(NAME regression_playnite_connector_lifecycle
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/playnite_connector/test_lifecycle.py"
+            --dotnet "${SUNSHINE_TEST_DOTNET}")
+    set_tests_properties(regression_playnite_connector_lifecycle PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME regression_playnite_close_grace
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_close_grace.py")
+    add_test(NAME regression_playnite_plugin_upgrade
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_plugin_upgrade.py")
+    set_tests_properties(regression_playnite_close_grace regression_playnite_plugin_upgrade
+        PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 sunshine_register_component(NAME test_component_dualsense_audio_pcm TEST_SOURCE unit/test_dualsense_audio_pcm.cpp)
