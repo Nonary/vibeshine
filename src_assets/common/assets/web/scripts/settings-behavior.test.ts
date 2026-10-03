@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { hostReadiness, linuxCaptureState } from '../utils/hostReadiness.ts';
-import { acknowledgeSettings, configBoolean, settingError } from '../utils/settings.ts';
+import {
+  acknowledgeSettings,
+  configBoolean,
+  linuxVirtualCaptureWarning,
+  settingError,
+} from '../utils/settings.ts';
 import { settingsFields } from '../configs/settingsSchema.ts';
 import {
   NETWORK_PORT_MAX,
@@ -143,4 +148,18 @@ test('legacy global configuration is covered by v2 fields or a dedicated integra
       key,
     );
   }
+});
+
+// The warning also covers virtual screens selected per client or application,
+// even when the global display mode is physical.
+test('Linux explicit non-KMS capture warns without rejecting the selection', () => {
+  for (const capture of ['kwin', 'wlr', 'portal', 'gamescope', 'x11', 'nvfbc']) {
+    assert.equal(linuxVirtualCaptureWarning('linux', capture), true);
+    assert.equal(settingError(settingsFields.get('capture'), capture), undefined);
+  }
+  for (const capture of ['', 'kms', undefined]) {
+    assert.equal(linuxVirtualCaptureWarning('linux', capture), false);
+  }
+  assert.equal(linuxVirtualCaptureWarning('windows', 'wgc'), false);
+  assert.equal(linuxVirtualCaptureWarning('macos', 'avfoundation'), false);
 });
