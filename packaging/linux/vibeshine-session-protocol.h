@@ -6,7 +6,11 @@
 #define VIBESHINE_SESSION_BROKER_SOCKET "/run/vibeshine/session-broker.sock"
 #define VIBESHINE_SESSION_PROTOCOL_MAGIC UINT32_C(0x56534252)
 #define VIBESHINE_SESSION_PROTOCOL_VERSION UINT16_C(1)
-#define VIBESHINE_SESSION_PROTOCOL_MAX_ARGUMENTS UINT32_C(65)
+/* Complete activation/restore transactions need up to seven properties for
+ * each output in the bounded 64-output topology, plus the operation verb.
+ * The independent message byte limit still applies to every request. */
+#define VIBESHINE_SESSION_PROTOCOL_MAX_DISPLAY_PROPERTIES (UINT32_C(64) * UINT32_C(7))
+#define VIBESHINE_SESSION_PROTOCOL_MAX_ARGUMENTS (VIBESHINE_SESSION_PROTOCOL_MAX_DISPLAY_PROPERTIES + UINT32_C(1))
 #define VIBESHINE_SESSION_PROTOCOL_MAX_MESSAGE UINT32_C(131072)
 #define VIBESHINE_SESSION_PROTOCOL_OUTPUT_CHUNK UINT32_C(16384)
 /* No terminal broker acknowledgement was received; mutation completion is unknown. */
