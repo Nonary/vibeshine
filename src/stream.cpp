@@ -39,6 +39,7 @@ extern "C" {
 
 // local includes
 #include "config.h"
+#include "deferred_stream_start_policy.h"
 #include "display_helper_integration.h"
 #include "globals.h"
 #include "host_stats.h"
@@ -912,31 +913,35 @@ namespace stream {
       return false;
     }
 
-    std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
-    std::optional<deferred_stream_start_t> deferred;
-    {
-      std::lock_guard<std::mutex> lock(deferred_stream_start_mutex());
-      if (!deferred_stream_start_state()) {
-        return false;
+    return deferred_start::try_apply_with_lifecycle_gate(
+      nvhttp::stream_lifecycle_mutex(),
+      [&]() {
+        std::optional<deferred_stream_start_t> deferred;
+        {
+          std::lock_guard<std::mutex> lock(deferred_stream_start_mutex());
+          if (!deferred_stream_start_state()) {
+            return false;
+          }
+          deferred = std::move(deferred_stream_start_state());
+          deferred_stream_start_state().reset();
+        }
+
+        if (!rtsp_stream_start_actions_still_needed()) {
+          BOOST_LOG(debug) << "Stream-start actions skipped because no active RTSP stream remains.";
+          return false;
+        }
+
+        BOOST_LOG(info) << "Stream-start actions applied after user session became available.";
+        if (deferred->policy) {
+          platf::frame_limiter_streaming_start(
+            platf::frame_limiter_owner::rtsp,
+            *deferred->policy
+          );
+        }
+        session::start_shared_platform_if_needed();
+        return true;
       }
-      deferred = std::move(deferred_stream_start_state());
-      deferred_stream_start_state().reset();
-    }
-
-    if (!rtsp_stream_start_actions_still_needed()) {
-      BOOST_LOG(debug) << "Stream-start actions skipped because no active RTSP stream remains.";
-      return false;
-    }
-
-    BOOST_LOG(info) << "Stream-start actions applied after user session became available.";
-    if (deferred->policy) {
-      platf::frame_limiter_streaming_start(
-        platf::frame_limiter_owner::rtsp,
-        *deferred->policy
-      );
-    }
-    session::start_shared_platform_if_needed();
-    return true;
+    );
   }
 #endif
 
@@ -3081,6 +3086,12 @@ namespace stream {
       // every game role, including paused owners, while retaining monitor roles.
       topology.release_all_normal_game_identities();
 #ifdef _WIN32
+      // RTSP termination can leave WebRTC capture active on this exact GUID.
+      // Keep it for final idle cleanup until every capture owner has drained.
+      if (has_capture_runtime_owner()) {
+        return;
+      }
+
       // Shared-mode displays have no normal identity token. Their exact GUID
       // belongs to the stream runtime, not proc_t's unused display fields.
       // Remove only that target; generic cleanup would also remove peers.
@@ -3117,14 +3128,16 @@ namespace stream {
       const std::string_view reason,
       const shared_runtime_finalize_context_t &context
     ) {
+      auto &topology = remote_display_topology::instance();
 #ifdef __linux__
-      remote_display_topology::instance().release_idle_normal_game_identities(
+      topology.release_idle_normal_game_identities(
         proc::proc.current_app_id() > 0,
         has_capture_runtime_owner(context)
       );
 #else
-      remote_display_topology::instance().release_drained_normal_game_identities();
+      topology.release_drained_normal_game_identities();
 #endif
+      nvhttp::reconcile_remote_monitor_owners();
       if (!shared_runtime_cleanup_armed) {
         return false;
       }
@@ -3134,7 +3147,30 @@ namespace stream {
         shared_runtime_force_display_revert_when_idle ||
         context.force_display_revert_when_idle;
 
-      if (has_shared_runtime_owner(context)) {
+      const bool capture_runtime_owned = has_capture_runtime_owner(context);
+#ifdef _WIN32
+      // A paused app intentionally keeps its normal identity for Resume, but
+      // crash recovery has authority only while capture is live. Retire each
+      // drained normal-only worker at the final capture boundary. A Remote
+      // Monitor sharing that stable identity retains its worker, and any live
+      // or starting peer defers this boundary for every display.
+      const auto retiring_recovery_clients =
+        topology.idle_normal_game_recovery_client_ids(capture_runtime_owned);
+      for (const auto &client_uuid : retiring_recovery_clients) {
+        const auto recovery_uuid = VDISPLAY::virtualDisplayUuidFromStableId(client_uuid);
+        GUID recovery_guid {};
+        static_assert(sizeof(recovery_guid) == sizeof(recovery_uuid.b8));
+        std::memcpy(&recovery_guid, recovery_uuid.b8, sizeof(recovery_guid));
+        VDISPLAY::cancel_virtual_display_recovery_monitor(recovery_guid);
+      }
+      if (!retiring_recovery_clients.empty()) {
+        BOOST_LOG(info) << "Virtual display recovery: disengaged "
+                        << retiring_recovery_clients.size()
+                        << " paused normal-game monitor(s) at the final capture boundary.";
+      }
+#endif
+
+      if (capture_runtime_owned || topology.managed_client_identity_count() != 0) {
         return false;
       }
 
@@ -3350,6 +3386,7 @@ namespace stream {
       // this capture has joined and released every encoder/conversion import.
       session.normal_display_capture.reset();
       remote_display_topology::instance().release_drained_normal_game_identities();
+      nvhttp::reconcile_remote_monitor_owners();
 
       if (session.remote_role == remote_session::role_e::monitor && !session.device_uuid.empty()) {
         const bool client_disconnected = session.client_disconnected.load(std::memory_order_acquire);
@@ -3358,8 +3395,9 @@ namespace stream {
               config::video.remote_monitor_disconnect_on_client_disconnect,
               client_disconnected)) {
           const auto reason = client_disconnected ? "Remote Monitor client disconnected" : "Remote Monitor stream ended";
-          remote_session::release_monitor(session.device_uuid, session.remote_role_generation, reason);
-          nvhttp::notify_remote_monitor_released(session.device_uuid, session.remote_role_generation);
+          if (remote_session::release_monitor(session.device_uuid, session.remote_role_generation, reason)) {
+            nvhttp::notify_remote_monitor_released(session.device_uuid, session.remote_role_generation);
+          }
         } else {
           // Retain the exact display and desired mode so this paired client can
           // resume the Remote Monitor without changing any peer's topology.
@@ -3684,7 +3722,7 @@ namespace stream {
       session->secondary_game_client = launch_session.secondary_game_client;
       session->remote_role = launch_session.role;
       session->remote_role_generation = launch_session.role_generation;
-#ifdef __linux__
+#if defined(_WIN32) || defined(__linux__)
       if (launch_session.role == remote_session::role_e::game) {
         const auto app = proc::proc.active_session_guard();
         const auto token = launch_session.normal_vdd_identity_token != 0 ?
