@@ -95,6 +95,7 @@ namespace nvhttp {
     struct remote_role_owner_t {
       remote_session::role_e role {remote_session::role_e::none};
       std::uint64_t generation {};
+      std::string client_uuid;
     };
 
     std::mutex remote_role_owners_mutex;
@@ -147,7 +148,7 @@ namespace nvhttp {
 
     void remember_remote_owner(std::string_view uuid, remote_session::role_e role, std::uint64_t generation) {
       std::lock_guard lock {remote_role_owners_mutex};
-      remote_role_owners.insert_or_assign(remote_role_owner_key(uuid, role), remote_role_owner_t {role, generation});
+      remote_role_owners.insert_or_assign(remote_role_owner_key(uuid, role), remote_role_owner_t {role, generation, std::string {uuid}});
     }
 
     std::optional<std::uint64_t> remote_owner_generation(std::string_view uuid, remote_session::role_e role) {
@@ -198,6 +199,21 @@ namespace nvhttp {
 
   void notify_remote_monitor_released(const std::string_view client_uuid, const std::uint64_t generation) {
     forget_remote_owner(client_uuid, remote_session::role_e::monitor, generation);
+  }
+
+  void reconcile_remote_monitor_owners() {
+    std::vector<remote_role_owner_t> monitors;
+    {
+      std::lock_guard lock {remote_role_owners_mutex};
+      for (const auto &[_, owner] : remote_role_owners) {
+        if (owner.role == remote_session::role_e::monitor) monitors.push_back(owner);
+      }
+    }
+    for (const auto &owner : monitors) {
+      if (!remote_session::monitor_runtime_snapshot(owner.client_uuid, owner.generation).accepted) {
+        forget_remote_owner(owner.client_uuid, owner.role, owner.generation);
+      }
+    }
   }
 
   namespace fs = std::filesystem;
@@ -372,7 +388,7 @@ namespace nvhttp {
           return remote_session::monitor_runtime_state_t {.accepted = state.accepted, .ready = state.ready, .retryable = state.retryable, .output = state.output, .error = state.error};
         },
         .explicit_release = [](std::string_view uuid, std::uint64_t generation, std::string_view reason) {
-          remote_display_topology::instance().explicit_release(std::string {uuid}, generation, std::string {reason});
+          return remote_display_topology::instance().explicit_release(std::string {uuid}, generation, std::string {reason});
         },
         .transport_lost = [](std::string_view uuid, std::uint64_t generation) {
           remote_display_topology::instance().transport_lost(std::string {uuid}, generation);
@@ -630,7 +646,7 @@ namespace nvhttp {
           return remote_session::monitor_runtime_state_t {.accepted = state.accepted, .ready = state.ready, .retryable = state.retryable, .output = state.output, .error = state.error, .hdr_enabled = state.hdr_enabled};
         },
         .explicit_release = [](std::string_view uuid, std::uint64_t generation, std::string_view reason) {
-          remote_display_topology::instance().explicit_release(std::string {uuid}, generation, std::string {reason});
+          return remote_display_topology::instance().explicit_release(std::string {uuid}, generation, std::string {reason});
         },
         .transport_lost = [](std::string_view uuid, std::uint64_t generation) {
           remote_display_topology::instance().transport_lost(std::string {uuid}, generation);
@@ -921,6 +937,8 @@ namespace nvhttp {
 
     void cleanup_virtual_display_if_idle_locked() {
       try {
+        remote_display_topology::instance().release_drained_normal_game_identities();
+        reconcile_remote_monitor_owners();
         if (has_stream_session_activity_or_display_cleanup()) {
           BOOST_LOG(info) << "Skipping virtual display cleanup because a streaming session is active or stopping.";
           return;
@@ -1802,6 +1820,8 @@ namespace nvhttp {
   namespace {
     void cleanup_virtual_display_if_idle_locked() {
       try {
+        remote_display_topology::instance().release_drained_normal_game_identities();
+        reconcile_remote_monitor_owners();
         if (has_stream_session_activity()) {
           BOOST_LOG(info) << "Skipping Linux private-display cleanup because a streaming session is active or stopping.";
           return;
@@ -4145,7 +4165,13 @@ namespace nvhttp {
           // Stop exact-output capture before removing its owned VDD. The join
           // publishes transport loss first; this explicit generation-matched
           // release then removes only the caller's display.
-          remote_session::release_monitor(identity.uuid, *generation, "Disconnect Monitor");
+          if (!remote_session::release_monitor(identity.uuid, *generation, "Disconnect Monitor")) {
+            tree.put("root.resume", 0);
+            tree.put("root.gamesession", 0);
+            tree.put("root.<xmlattr>.status_code", 503);
+            tree.put("root.<xmlattr>.status_message", "Remote Monitor display release is retained for retry");
+            return;
+          }
         }
         forget_remote_owner(identity.uuid, role, *generation);
 #if defined(_WIN32) || defined(__linux__)
@@ -4299,8 +4325,9 @@ namespace nvhttp {
       stream::session::arm_shared_runtime_cleanup(launch_session->virtual_display_guid_bytes);
       if (!paired_client_uuid_enabled(launch_session->client_uuid)) {
         if (launch_session->role == remote_session::role_e::monitor) {
-          remote_session::release_monitor(identity.uuid, launch_session->role_generation, "Paired client authorization revoked");
-          forget_remote_owner(identity.uuid, launch_session->role, launch_session->role_generation);
+          if (remote_session::release_monitor(identity.uuid, launch_session->role_generation, "Paired client authorization revoked")) {
+            forget_remote_owner(identity.uuid, launch_session->role, launch_session->role_generation);
+          }
 #if defined(_WIN32) || defined(__linux__)
           cleanup_virtual_display_if_idle_locked();
 #endif
@@ -4312,8 +4339,9 @@ namespace nvhttp {
       }
       if (!rtsp_stream::launch_session_raise(launch_session)) {
         if (launch_session->role == remote_session::role_e::monitor) {
-          remote_session::release_monitor(identity.uuid, launch_session->role_generation, "RTSP admission rejected");
-          forget_remote_owner(identity.uuid, launch_session->role, launch_session->role_generation);
+          if (remote_session::release_monitor(identity.uuid, launch_session->role_generation, "RTSP admission rejected")) {
+            forget_remote_owner(identity.uuid, launch_session->role, launch_session->role_generation);
+          }
 #if defined(_WIN32) || defined(__linux__)
           cleanup_virtual_display_if_idle_locked();
 #endif
@@ -5938,6 +5966,7 @@ namespace nvhttp {
     blocking_route_pool.join();
     discovery_route_pool.stop();
     discovery_route_pool.join();
+    webrtc_stream::shutdown_all_sessions();
     rtsp_stream::terminate_sessions(false);
     remote_session::notify_monitor_shutdown();
 #if defined(_WIN32) || defined(__linux__)
@@ -6184,12 +6213,14 @@ namespace nvhttp {
       if (remote_owner_generation(uuid, remote_session::role_e::monitor) != monitor_generation) {
         return disconnect.disconnected;
       }
-      remote_session::release_monitor(uuid, *monitor_generation, "Paired client disconnected");
-      forget_remote_owner(uuid, remote_session::role_e::monitor, *monitor_generation);
+      const bool released = remote_session::release_monitor(uuid, *monitor_generation, "Paired client disconnected");
+      if (released) {
+        forget_remote_owner(uuid, remote_session::role_e::monitor, *monitor_generation);
+      }
 #if defined(_WIN32) || defined(__linux__)
       cleanup_virtual_display_if_idle_locked();
 #endif
-      monitor_disconnected = true;
+      monitor_disconnected = released;
     }
     return disconnect.disconnected || monitor_disconnected;
   }
