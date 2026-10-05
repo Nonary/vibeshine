@@ -191,8 +191,12 @@ unit disconnects any client that is streaming.
 | Moonlight sees the host but the stream fails | Open the UDP ports (see above). |
 | `could not start the Vibeshine session controller safely` at install | Reboot, then check `systemctl status vibeshine-session-controller.service`. Report the journal output if it still fails. |
 
-Keep `capture = kms` in `/var/lib/vibeshine/vibeshine.conf`. The `wlr` and portal capture paths are
-not used by the machine host and a portal probe can block unattended startup.
+KMS is recommended for managed virtual screens for maximum compatibility and
+Vibeshine's low-latency capture. Automatic capture selects KMS for these screens.
+Explicit capture selections in `/var/lib/vibeshine/vibeshine.conf` are honored
+for both physical and virtual screens. Other methods may not work properly with
+virtual screens and do not use the low-latency KMS path. Portal capture can open
+a consent dialog and block unattended startup.
 
 Two things on the host machine will silently stop streaming:
 

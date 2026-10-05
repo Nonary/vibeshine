@@ -40,6 +40,7 @@ readonly MIN_KERNEL_MINOR=16
 readonly DRM_INSTALL='/usr/libexec/vibeshine/vibeshine-drm-install'
 readonly DS5_INSTALL='/usr/libexec/vibeshine/vibeshine-ds5-install'
 readonly MACHINE_HOST='/usr/libexec/vibeshine/vibeshine-machine-host'
+readonly PRIVATE_HOST='/usr/libexec/vibeshine/vibeshine-host'
 
 requested_version=''
 local_package=''
@@ -632,6 +633,15 @@ print_summary() {
   fi
 }
 
+check_private_host_security() {
+  local expected='cap_sys_admin,cap_sys_nice=p' actual
+  [[ -e "$PRIVATE_HOST" ]] || return 0
+  actual=$(getcap -n "$PRIVATE_HOST" 2>/dev/null || true)
+  [[ "$actual" == "$PRIVATE_HOST $expected" ]] ||
+    die 'installed private host executable has incorrect capabilities'
+  ok 'Private host executable capabilities verified.'
+}
+
 main() {
   parse_args "$@"
   require_root
@@ -640,6 +650,7 @@ main() {
   install_kernel_headers
   check_session_restart
   install_vibeshine
+  check_private_host_security
   install_virtual_driver
   install_dualsense_driver
   open_firewall
