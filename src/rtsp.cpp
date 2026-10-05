@@ -232,9 +232,6 @@ namespace rtsp_stream {
     snapshot->frame_generation_provider = source.frame_generation_provider;
     snapshot->lossless_scaling_target_fps = source.lossless_scaling_target_fps;
     snapshot->lossless_scaling_rtss_limit = source.lossless_scaling_rtss_limit;
-#ifdef _WIN32
-    snapshot->display_helper_gate = source.display_helper_gate;
-#endif
 
     return snapshot;
   }
