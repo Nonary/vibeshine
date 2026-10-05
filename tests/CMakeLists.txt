@@ -1035,6 +1035,10 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(regression_playnite_connector_lifecycle PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME regression_display_policy_adapter
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_policy_adapter.py")
+    add_test(NAME regression_virtual_display_refresh
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_virtual_display_refresh.py")
     add_test(NAME regression_playnite_close_grace
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_close_grace.py")
     add_test(NAME regression_playnite_plugin_upgrade
