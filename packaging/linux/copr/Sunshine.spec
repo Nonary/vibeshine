@@ -340,6 +340,7 @@ cd %{_builddir}/Sunshine/build
 %make_install
 
 %pre
+export LC_ALL=C
 vibeshine_controller=%{_prefix}/libexec/vibeshine/vibeshine-session-controller
 vibeshine_legacy_host=%{_prefix}/libexec/vibeshine/vibeshine-machine-host
 vibeshine_legacy_handoff=%{_prefix}/libexec/vibeshine/vibeshine-session-handoff
@@ -1010,6 +1011,7 @@ if ! vibeshine_quiesce_machine_host; then
 fi
 
 %post
+export LC_ALL=C
 # Note: this is copied from the postinst script
 
 vibeshine_controller=%{_prefix}/libexec/vibeshine/vibeshine-session-controller
@@ -1426,6 +1428,7 @@ else
 fi
 
 %preun
+export LC_ALL=C
 vibeshine_controller=%{_prefix}/libexec/vibeshine/vibeshine-session-controller
 vibeshine_machine_host=%{_prefix}/libexec/vibeshine/vibeshine-machine-host
 vibeshine_session_record=/run/vibeshine/session.env

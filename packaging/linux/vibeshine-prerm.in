@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# Security checks parse stat's file-type names during package removal.
+export LC_ALL=C
+
 vibeshine_controller="@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-session-controller"
 vibeshine_machine_host="@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-machine-host"
 vibeshine_session_record=/run/vibeshine/session.env
