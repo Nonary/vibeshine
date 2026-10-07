@@ -1341,6 +1341,7 @@ namespace proc {
     _app_id = (int) util::from_view(_app.id);
     audio::app_started();
 #ifdef _WIN32
+    platf::dualsense_usbip_gamepad::set_application_active(true);
     // A replacement app now owns the streaming display configuration. Any
     // deferred revert from the previous app must not fire when this session ends.
     clear_deferred_display_revert();
@@ -2846,6 +2847,9 @@ namespace proc {
     _active_client_vdd_identity_token = 0;
     _app_launch_time = {};
     _app_id = -1;
+#ifdef _WIN32
+    platf::dualsense_usbip_gamepad::set_application_active(false);
+#endif
 
     // Clear any per-app runtime config overrides now that the app is terminating.
     // If we can safely hot-apply immediately, restore global config now; otherwise defer.

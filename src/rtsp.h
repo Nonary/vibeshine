@@ -67,6 +67,7 @@ namespace rtsp_stream {
     int height;
     int fps;
     int gcmap;
+    bool gcpersist = false;
     int playstation_gamepad_mask {};
     int appid;
 

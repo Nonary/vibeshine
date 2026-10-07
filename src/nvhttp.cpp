@@ -3068,6 +3068,7 @@ namespace nvhttp {
     launch_session->surround_params = (get_arg(args, "surroundParams", ""));
     launch_session->continuous_audio = util::from_view(get_arg(args, "continuousAudio", "0"));
     launch_session->gcmap = (int) util::from_view(get_arg(args, "gcmap", "0"));
+    launch_session->gcpersist = util::from_view(get_arg(args, "gcpersist", "0")) != 0;
     const auto playstation_gamepad_mask =
       (int) util::from_view(get_arg(args, "psmap", "0"));
     launch_session->playstation_gamepad_mask =
