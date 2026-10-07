@@ -1236,6 +1236,22 @@ namespace nvhttp {
       });
     }
 
+    std::function<void()> make_stream_start_restore_disarm(
+      std::function<bool()> cancelled,
+      const std::chrono::steady_clock::time_point deadline
+    ) {
+      // Preflight, VDD admission and pre-APPLY share one attempt. A failed
+      // preflight must neither fall through to legacy helper termination nor
+      // gain a fresh reconnect budget at the next display boundary.
+      return [cancelled = std::move(cancelled), deadline, attempted = false]() mutable {
+        if (attempted) {
+          return;
+        }
+        attempted = true;
+        (void) display_helper_integration::disarm_pending_restore(cancelled, deadline, true);
+      };
+    }
+
     void prepare_virtual_display_for_session(
       const std::shared_ptr<rtsp_stream::launch_session_t> &launch_session,
       audio::display_change_hold_t &request_audio_hold,
@@ -1244,6 +1260,7 @@ namespace nvhttp {
       std::optional<std::string> &pending_output_override,
       std::optional<video::encoder_probe_adapter_hint_lease_t> &pending_adapter_hint,
       VDISPLAY::policy::retained_resume_recovery_rearm_t *retained_resume_recovery_rearm,
+      const std::function<void()> &disarm_startup_restore,
       const std::function<bool()> &display_startup_cancelled,
       const std::chrono::steady_clock::time_point display_startup_deadline
     ) {
@@ -1771,17 +1788,16 @@ namespace nvhttp {
         // intended to prevent.
         const bool virtual_display_mutation_allowed =
           display_helper_integration::request_policy::supersede_restore_for_virtual_display(
+            disarm_startup_restore,
             [&] {
-              (void) display_helper_integration::disarm_pending_restore(
+              const bool restoring = display_helper_integration::restore_in_progress(
                 display_startup_cancelled,
                 display_startup_deadline
               );
-            },
-            [&] {
-              return display_helper_integration::restore_in_progress(
-                display_startup_cancelled,
-                display_startup_deadline
-              );
+              // Recheck after the liveness probe before admitting mutation.
+              return display_startup_cancelled() ||
+                     std::chrono::steady_clock::now() >= display_startup_deadline ||
+                     restoring;
             }
           );
         if (!virtual_display_mutation_allowed) {
@@ -4485,16 +4501,16 @@ namespace nvhttp {
       std::chrono::steady_clock::now() +
       display_helper_integration::kStreamStartApplyVerificationTimeout;
     const auto display_startup_cancelled = [display_startup_deadline] {
-      return std::chrono::steady_clock::now() >= display_startup_deadline;
+      const auto shutdown_event = mail::man ? mail::man->event<bool>(mail::shutdown) : nullptr;
+      return (shutdown_event && shutdown_event->peek()) ||
+             std::chrono::steady_clock::now() >= display_startup_deadline;
     };
-    // First step on stream start: stop any in-flight helper restore loop immediately.
-    // This must happen before any other display helper work to prevent restore/crash loops on virtual displays.
-    request_audio_hold.before([&] {
-      (void) display_helper_integration::disarm_pending_restore(
-        display_startup_cancelled,
-        display_startup_deadline
-      );
-    });
+    const auto disarm_startup_restore = make_stream_start_restore_disarm(
+      display_startup_cancelled,
+      display_startup_deadline
+    );
+    // Recover stale restore IPC before any other session display work.
+    request_audio_hold.before(disarm_startup_restore);
 #endif
 
     const bool allow_display_changes = true;
@@ -4555,6 +4571,7 @@ namespace nvhttp {
       pending_output_override,
       pending_adapter_hint,
       nullptr,
+      disarm_startup_restore,
       display_startup_cancelled,
       display_startup_deadline
     );
@@ -4613,10 +4630,7 @@ namespace nvhttp {
       revert_display_configuration = true;
 
 #ifdef _WIN32
-      (void) display_helper_integration::disarm_pending_restore(
-        display_startup_cancelled,
-        display_startup_deadline
-      );
+      disarm_startup_restore();
       auto request = display_helper_integration::helpers::build_request_from_session(config::video, *launch_session);
       launch_session->display_config_preapply_attempted = true;
       if (!request) {
@@ -4970,16 +4984,17 @@ namespace nvhttp {
       std::chrono::steady_clock::now() +
       display_helper_integration::kStreamStartApplyVerificationTimeout;
     const auto display_startup_cancelled = [display_startup_deadline] {
-      return std::chrono::steady_clock::now() >= display_startup_deadline;
+      const auto shutdown_event = mail::man ? mail::man->event<bool>(mail::shutdown) : nullptr;
+      return (shutdown_event && shutdown_event->peek()) ||
+             std::chrono::steady_clock::now() >= display_startup_deadline;
     };
+    const auto disarm_startup_restore = make_stream_start_restore_disarm(
+      display_startup_cancelled,
+      display_startup_deadline
+    );
     if (allow_session_display_changes) {
-      // Stop any in-flight helper restore loop before resuming display changes.
-      request_audio_hold.before([&] {
-        (void) display_helper_integration::disarm_pending_restore(
-          display_startup_cancelled,
-          display_startup_deadline
-        );
-      });
+      // The admission path also uses this attempt for on-demand recreation.
+      request_audio_hold.before(disarm_startup_restore);
     }
 #endif
     const auto launch_session = make_launch_session(host_audio, args, request, allow_session_display_changes, &request_client_identity);
@@ -5102,6 +5117,7 @@ namespace nvhttp {
         pending_output_override,
         pending_adapter_hint,
         retained_resume_owner_eligible ? &retained_resume_recovery_rearm : nullptr,
+        disarm_startup_restore,
         display_startup_cancelled,
         display_startup_deadline
       );
@@ -5183,10 +5199,7 @@ namespace nvhttp {
         revert_display_configuration = allow_session_display_changes || launch_session->virtual_display_failed;
 
 #ifdef _WIN32
-        (void) display_helper_integration::disarm_pending_restore(
-          display_startup_cancelled,
-          display_startup_deadline
-        );
+        disarm_startup_restore();
         auto request = display_helper_integration::helpers::build_request_from_session(config::video, *launch_session);
         if (!request) {
           BOOST_LOG(warning) << "Display helper: no display configuration request; using the existing display.";
