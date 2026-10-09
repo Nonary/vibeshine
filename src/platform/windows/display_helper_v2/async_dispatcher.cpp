@@ -76,7 +76,7 @@ namespace display_helper::v2 {
         virtual_reset_outcome.durable_recovery_attempted = true;
         virtual_reset_outcome.durable_recovery_armed =
           apply_operation_.arm_durable_recovery_boundary();
-        if (token.is_cancelled()) {
+        if (!virtual_reset_outcome.durable_recovery_armed || token.is_cancelled()) {
           virtual_reset_outcome.status = ApplyStatus::Fatal;
           completion(virtual_reset_outcome);
           return;
@@ -252,16 +252,19 @@ namespace display_helper::v2 {
 
   void AsyncDispatcher::dispatch_recovery_validation(
     const Snapshot &snapshot,
+    const std::optional<codec::layout_rotation_map_t> &layout_rotations,
     const CancellationToken &token,
     std::function<void(bool)> completion) {
-    enqueue_task([
+    const auto report_failure = completion;
+    enqueue_operation([
       this,
       snapshot,
+      layout_rotations,
       token,
       completion = std::move(completion)
     ]() mutable {
-      completion(recovery_validation_operation_.run(snapshot, token));
-    });
+      completion(recovery_validation_operation_.run(snapshot, token, layout_rotations));
+    }, [completion = report_failure] { completion(false); });
   }
 
   void AsyncDispatcher::dispatch_refresh_rate(

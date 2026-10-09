@@ -7,7 +7,9 @@ revision. Windows display enumeration and the monotonic clock are boundaries;
 the readiness decision, timeout, state reset, and index selection are unmodified.
 """
 from pathlib import Path
+import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -18,9 +20,13 @@ match = re.search(r"^    bool ensure_virtual_display_ready\([\s\S]*?^    }", sou
 if not match:
     raise RuntimeError("Missing production readiness function")
 function = match.group().replace("std::chrono::steady_clock", "TestClock")
+# Select the production Windows branch without making the native standard
+# library believe it is being compiled for Windows (notably Apple's libc++).
+function = function.replace("#ifdef _WIN32", "#ifdef TEST_WINDOWS")
 shutdown_match = re.search(
     r"    std::size_t display_retry_failures = 0;\n"
-    r"    while \(encode_session_ctx_queue.running\(\)\) \{\n([\s\S]*?)^#ifdef _WIN32",
+    r"    while \(encode_session_ctx_queue.running\(\)\) \{\n([\s\S]*?)"
+    r"(?=^      // Refresh display names|^#ifdef _WIN32)",
     source.read_text(), re.M,
 )
 # Old revisions have no readiness-loop shutdown handling: tests still exercise
@@ -96,7 +102,7 @@ void reset() {
 int main() {
   int index = 0;
   std::vector<std::string> names{"physical"};
-#ifdef _WIN32
+#ifdef TEST_WINDOWS
   reset();
   check(!ensure_virtual_display_ready(names, index), "missing named output waits");
   for (int pass = 0; pass < 4; ++pass) {
@@ -193,8 +199,9 @@ int main() {
 with tempfile.TemporaryDirectory(prefix="virtual-capture-readiness-") as temporary:
     cpp = Path(temporary) / "test.cpp"
     cpp.write_text(harness)
-    for platform, flags in [("Windows", ["-D_WIN32"]), ("non-Windows", [])]:
+    compiler = shlex.split(os.environ.get("CXX", "c++"))
+    for platform, flags in [("Windows", ["-DTEST_WINDOWS"]), ("non-Windows", [])]:
         exe = Path(temporary) / platform
-        subprocess.run(["g++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter", *flags, str(cpp), "-o", str(exe)], check=True)
+        subprocess.run([*compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter", *flags, str(cpp), "-o", str(exe)], check=True)
         subprocess.run([str(exe)], check=True)
         print(f"{platform} production virtual capture readiness regressions passed")

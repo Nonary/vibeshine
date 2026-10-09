@@ -1197,8 +1197,8 @@ TEST(DisplayHelperV2FileSnapshotStorage, SaveLoadRoundTrip) {
 
   display_device::DisplaySettingsSnapshot snapshot;
   snapshot.m_topology = {{"A", "B"}};
-  snapshot.m_modes["A"] = display_device::DisplayMode {};
-  snapshot.m_modes["B"] = display_device::DisplayMode {};
+  snapshot.m_modes["A"] = display_device::DisplayMode {{1920, 1080}, {60, 1}};
+  snapshot.m_modes["B"] = display_device::DisplayMode {{1920, 1080}, {60, 1}};
   snapshot.m_hdr_states["A"] = display_device::HdrState::Enabled;
   snapshot.m_hdr_states["B"] = std::nullopt;
   snapshot.m_primary_device = "A";
@@ -1226,6 +1226,166 @@ TEST(DisplayHelperV2FileSnapshotStorage, ReportsMissingDevices) {
 
   ASSERT_EQ(missing.size(), 1u);
   EXPECT_EQ(missing.front(), "B");
+}
+
+namespace {
+  class AdoptionTextStorage final : public display_helper::v2::ITextStorage {
+  public:
+    std::optional<std::string> read(const std::string &key) override {
+      if (on_read) {
+        on_read(key);
+      }
+      return contents.read(key);
+    }
+
+    bool write_atomically(const std::string &key, const std::string &text) override {
+      ++write_calls;
+      return !fail_write && contents.write_atomically(key, text);
+    }
+
+    bool remove(const std::string &key) override {
+      ++remove_calls;
+      return contents.remove(key);
+    }
+
+    bool exists(const std::string &key) override {
+      return unreadable_existing.contains(key) || contents.exists(key);
+    }
+
+    display_helper::v2::InMemoryTextStorage contents;
+    std::set<std::string> unreadable_existing;
+    std::function<void(const std::string &)> on_read;
+    bool fail_write = false;
+    int write_calls = 0;
+    int remove_calls = 0;
+  };
+
+  std::string adoption_snapshot_text() {
+    display_helper::v2::Snapshot snapshot;
+    snapshot.m_topology = {{"PHYSICAL"}};
+    snapshot.m_modes["PHYSICAL"] = display_device::DisplayMode {{1920, 1080}, {60, 1}};
+    snapshot.m_primary_device = "PHYSICAL";
+    return display_helper::v2::codec::serialize_snapshot(snapshot, {});
+  }
+}  // namespace
+
+TEST(DisplayHelperV2SnapshotAdoption, ExistingInvalidOrUnreadableRecordCannotBeReplaced) {
+  for (const bool unreadable : {false, true}) {
+    SCOPED_TRACE(unreadable);
+    AdoptionTextStorage storage;
+    storage.contents.write_atomically("source", adoption_snapshot_text());
+    if (unreadable) {
+      storage.unreadable_existing.insert("active");
+    } else {
+      storage.contents.write_atomically("active", "damaged original recovery record");
+    }
+
+    EXPECT_EQ(display_helper::v2::adopt_snapshot_if_missing(storage, "active", {"source"}),
+              display_helper::v2::SnapshotAdoptionResult::DestinationPresent);
+    EXPECT_EQ(storage.write_calls, 0);
+    EXPECT_EQ(storage.remove_calls, 0);
+    if (!unreadable) {
+      EXPECT_EQ(storage.contents.read("active"), "damaged original recovery record");
+    }
+    EXPECT_TRUE(storage.contents.exists("source"));
+  }
+}
+
+TEST(DisplayHelperV2SnapshotAdoption, FailedDurableWriteRetainsSourceAndCanRetry) {
+  AdoptionTextStorage storage;
+  const auto original = adoption_snapshot_text();
+  storage.contents.write_atomically("source", original);
+  storage.fail_write = true;
+
+  EXPECT_EQ(display_helper::v2::adopt_snapshot_if_missing(storage, "active", {"source"}),
+            display_helper::v2::SnapshotAdoptionResult::WriteFailed);
+  EXPECT_FALSE(storage.contents.exists("active"));
+  EXPECT_EQ(storage.contents.read("source"), original);
+  EXPECT_EQ(storage.remove_calls, 0);
+
+  storage.fail_write = false;
+  EXPECT_EQ(display_helper::v2::adopt_snapshot_if_missing(storage, "active", {"source"}),
+            display_helper::v2::SnapshotAdoptionResult::Adopted);
+  EXPECT_EQ(storage.contents.read("active"), original);
+  EXPECT_EQ(storage.contents.read("source"), original);
+  EXPECT_EQ(storage.write_calls, 2);
+  EXPECT_EQ(storage.remove_calls, 0);
+}
+
+TEST(DisplayHelperV2SnapshotAdoption, InvalidSourceCannotBecomeActiveBaseline) {
+  AdoptionTextStorage storage;
+  storage.contents.write_atomically("empty", "{\"topology\":[],\"modes\":{}}");
+  storage.contents.write_atomically("corrupt", "{broken");
+  EXPECT_EQ(display_helper::v2::adopt_snapshot_if_missing(storage, "active", {"missing", "empty", "corrupt"}),
+            display_helper::v2::SnapshotAdoptionResult::NoValidSource);
+  EXPECT_FALSE(storage.contents.exists("active"));
+  EXPECT_EQ(storage.write_calls, 0);
+  EXPECT_EQ(storage.remove_calls, 0);
+}
+
+TEST(DisplayHelperV2SnapshotAdoption, NewlyPresentDestinationWinsAfterSourceRead) {
+  AdoptionTextStorage storage;
+  storage.contents.write_atomically("source", adoption_snapshot_text());
+  storage.on_read = [&](const auto &) {
+    storage.contents.write_atomically("active", "newly present recovery record");
+  };
+  EXPECT_EQ(display_helper::v2::adopt_snapshot_if_missing(storage, "active", {"source"}),
+            display_helper::v2::SnapshotAdoptionResult::DestinationPresent);
+  EXPECT_EQ(storage.contents.read("active"), "newly present recovery record");
+  EXPECT_EQ(storage.write_calls, 0);
+  EXPECT_EQ(storage.remove_calls, 0);
+}
+
+
+TEST(DisplayHelperV2ApplyOperation, FailedDurableGuardBlocksEveryMutationAndLaterRequestCanRetry) {
+  for (const bool repair : {false, true}) {
+    SCOPED_TRACE(repair);
+    FakeClock clock;
+    FakeDisplaySettings display;
+    bool ready = false;
+    int attempts = 0;
+    display_helper::v2::ApplyOperation operation(display, clock, [&] {
+      ++attempts;
+      return ready;
+    });
+    display_helper::v2::ApplyRequest request;
+    request.configuration = display_device::SingleDisplayConfiguration {};
+    request.configuration->m_device_id = "TARGET";
+    request.configuration->m_device_prep = display_device::SingleDisplayConfiguration::DevicePreparation::EnsureOnlyDisplay;
+    request.topology = display_device::ActiveTopology {{"TARGET"}};
+    request.settings_only_repair = repair;
+    display_helper::v2::CancellationSource source;
+
+    auto outcome = operation.run(request, source.token());
+    EXPECT_EQ(outcome.status, display_helper::v2::ApplyStatus::Fatal);
+    EXPECT_TRUE(outcome.durable_recovery_attempted);
+    EXPECT_FALSE(outcome.durable_recovery_armed);
+    EXPECT_FALSE(outcome.display_may_have_changed);
+    EXPECT_FALSE(outcome.staged_state_prepared);
+    EXPECT_EQ(display.apply_topology_calls, 0);
+    EXPECT_EQ(display.apply_calls, 0);
+
+    ready = true;
+    outcome = operation.run(request, source.token());
+    EXPECT_EQ(outcome.status, display_helper::v2::ApplyStatus::Ok);
+    EXPECT_TRUE(outcome.durable_recovery_armed);
+    EXPECT_EQ(attempts, 2);
+    EXPECT_EQ(display.apply_calls, 1);
+  }
+}
+
+
+TEST(DisplayHelperV2ApplyOperation, ExplicitTopologyMutationGuardFailureStopsBeforeWindowsCall) {
+  FakeClock clock;
+  FakeDisplaySettings display;
+  display_helper::v2::TopologyTransition operation(display, clock);
+  display_helper::v2::CancellationSource source;
+  const auto outcome = operation.run({{"TARGET"}}, source.token(), [] { return false; });
+  EXPECT_EQ(outcome.status, display_helper::v2::ApplyStatus::Fatal);
+  EXPECT_FALSE(outcome.durable_recovery_armed);
+  EXPECT_FALSE(outcome.display_may_have_changed);
+  EXPECT_EQ(display.apply_topology_calls, 0);
+  EXPECT_EQ(display.recovery_calls, 0);
 }
 
 #endif  // _WIN32

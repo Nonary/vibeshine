@@ -34,6 +34,7 @@
 
 #ifdef _WIN32
   #include <winsock2.h>
+  #include <display_device/windows/win_api_recovery.h>
   #include "platform/windows/display.h"
 #endif
 
@@ -193,13 +194,15 @@ namespace webrtc_stream {
     };
 
 #ifdef _WIN32
-    void prepare_virtual_display_for_webrtc_session(
+    bool prepare_virtual_display_for_webrtc_session(
       const std::shared_ptr<rtsp_stream::launch_session_t> &session,
       bool allow_display_changes,
+      bool &capture_only_display,
       std::optional<config::runtime_output_override_lease_t> &output_override_lease
     ) {
+      capture_only_display = false;
       if (!session) {
-        return;
+        return false;
       }
 
       auto publish_output_override = [&](std::string output_name) {
@@ -308,6 +311,72 @@ namespace webrtc_stream {
         }
       }
 
+      const bool physical_output_override = [&] {
+        display_device::DisplayRecoveryBehaviorGuard read_only(display_device::DisplayRecoveryBehavior::Skip);
+        return app_output_override &&
+               (app_output_override->empty() || !VDISPLAY::is_virtual_display_output(*app_output_override));
+      }();
+      const bool physical_capture_only =
+        display_helper_integration::request_policy::capture_only_physical_request({
+          .configuration_option =
+            session->dd_config_option_override.value_or(config::video.dd.configuration_option) ==
+                config::video_t::dd_t::config_option_e::disabled ?
+              display_helper_integration::request_policy::ConfigurationOption::Disabled :
+              display_helper_integration::request_policy::ConfigurationOption::EnsureActive,
+          .virtual_display = request_virtual_display,
+          .physical_output_override = physical_output_override,
+          .hdr_profile_selected = session->hdr_profile && !session->hdr_profile->empty(),
+        });
+      if ((!allow_display_changes && !request_virtual_display) || physical_capture_only) {
+        display_device::DisplayRecoveryBehaviorGuard read_only(display_device::DisplayRecoveryBehavior::Skip);
+        if (app_output_override) publish_output_override(*app_output_override);
+        session->virtual_display = false;
+        session->virtual_display_failed = false;
+        apply_framegen_refresh_policy(false);
+        capture_only_display = true;
+        session->display_config_preapplied = true;
+        BOOST_LOG(debug) << "Display helper: preserving the WebRTC physical capture target without display changes.";
+        return true;
+      }
+
+      const auto display_startup_deadline =
+        std::chrono::steady_clock::now() +
+        display_helper_integration::kStreamStartApplyVerificationTimeout;
+      const auto display_startup_cancelled = [display_startup_deadline] {
+        return std::chrono::steady_clock::now() >= display_startup_deadline;
+      };
+      // Confirm the durable physical baseline (or proven headless result)
+      // before driver initialization, topology enumeration, or VD creation.
+      const bool baseline_prepared =
+        display_helper_integration::request_policy::prepare_virtual_display_baseline(
+          [&] {
+            (void) display_helper_integration::disarm_pending_restore(
+              display_startup_cancelled, display_startup_deadline);
+          },
+          [&] {
+            return display_helper_integration::restore_in_progress(
+              display_startup_cancelled, display_startup_deadline);
+          },
+          [&] {
+            return display_helper_integration::snapshot_current_display_state(
+              display_startup_cancelled, display_startup_deadline);
+          }
+        );
+      if (!baseline_prepared) {
+        BOOST_LOG(error) << "Display helper: WebRTC display preparation failed because a recoverable display baseline could not be confirmed.";
+        session->virtual_display = false;
+        session->virtual_display_failed = request_virtual_display;
+        session->virtual_display_guid_bytes.fill(0);
+        session->virtual_display_device_id.clear();
+        session->virtual_display_ready_since.reset();
+        session->virtual_display_hdr_enabled.reset();
+        session->framegen_refresh_rate.reset();
+        session->framegen_refresh_millihz.reset();
+        session->framegen_refresh_multiplier = 1;
+        session->framegen_fixed_refresh = false;
+        return false;
+      }
+
       if (!allow_display_changes) {
         if (request_virtual_display) {
           if (auto existing_device =
@@ -340,7 +409,7 @@ namespace webrtc_stream {
               session->virtual_display_hdr_enabled.reset();
               BOOST_LOG(error) << "Existing WebRTC virtual display does not match the configured capture adapter; refusing shared-session reuse.";
             }
-            return;
+            return true;
           }
 
           BOOST_LOG(info) << "Display helper: WebRTC resume requested virtual display capture but no active virtual display was found;"
@@ -351,7 +420,7 @@ namespace webrtc_stream {
           apply_framegen_refresh_policy(false);
           BOOST_LOG(info) << "Display helper: preserving output override for WebRTC resume: "
                           << (app_output_override->empty() ? "primary display" : *app_output_override);
-          return;
+          return true;
         }
       }
 
@@ -365,34 +434,9 @@ namespace webrtc_stream {
           BOOST_LOG(info) << "Display helper: pinning WebRTC capture to app output override: "
                           << (app_output_override->empty() ? "primary display" : *app_output_override);
         }
-        return;
+        return true;
       }
 
-      // Match the normal stream path: a new virtual-display session supersedes
-      // the prior restore before checking whether driver mutation is safe.
-      const bool virtual_display_mutation_allowed =
-        display_helper_integration::request_policy::supersede_restore_for_virtual_display(
-          [] {
-            (void) display_helper_integration::disarm_pending_restore();
-          },
-          [] {
-            return display_helper_integration::restore_in_progress();
-          }
-        );
-      if (!virtual_display_mutation_allowed) {
-        BOOST_LOG(warning) << "Display helper: WebRTC virtual display creation deferred because physical display restoration is still in progress; using physical fallback for this session.";
-        session->virtual_display = false;
-        session->virtual_display_failed = true;
-        session->virtual_display_guid_bytes.fill(0);
-        session->virtual_display_device_id.clear();
-        session->virtual_display_ready_since.reset();
-        session->virtual_display_hdr_enabled.reset();
-        session->framegen_refresh_rate.reset();
-        session->framegen_refresh_millihz.reset();
-        session->framegen_refresh_multiplier = 1;
-        session->framegen_fixed_refresh = false;
-        return;
-      }
       apply_framegen_refresh_policy(true);
 
       if (proc::vDisplayDriverStatus.load(std::memory_order_acquire) != VDISPLAY::DRIVER_STATUS::OK) {
@@ -721,7 +765,7 @@ namespace webrtc_stream {
         };
 
         VDISPLAY::schedule_virtual_display_recovery_monitor(recovery_params);
-        return;
+        return true;
       }
 
       session->virtual_display = false;
@@ -734,6 +778,7 @@ namespace webrtc_stream {
       session->framegen_refresh_millihz.reset();
       session->framegen_refresh_multiplier = 1;
       session->framegen_fixed_refresh = false;
+      return true;
     }
 #endif
 
@@ -3254,18 +3299,12 @@ namespace webrtc_stream {
 #endif
 
       const bool allow_display_changes = !rtsp_active && !resume_only;
+#ifndef _WIN32
       if (allow_display_changes && launch_session->output_name_override) {
-#ifdef _WIN32
-        if (launch_session->output_name_override->empty() ||
-            !VDISPLAY::is_virtual_display_selection(*launch_session->output_name_override)) {
-          pending_output_override_lease =
-            config::set_runtime_output_name_override_with_lease(*launch_session->output_name_override);
-        }
-#else
         pending_output_override_lease =
           config::set_runtime_output_name_override_with_lease(*launch_session->output_name_override);
-#endif
       }
+#endif
 
       desired_key = build_capture_config_key(effective_app_id, video_config, options);
 
@@ -3281,11 +3320,14 @@ namespace webrtc_stream {
         }
 
 #ifdef _WIN32
-        prepare_virtual_display_for_webrtc_session(
-          launch_session,
-          allow_display_changes,
-          pending_output_override_lease
-        );
+        bool capture_only_display = false;
+        if (!prepare_virtual_display_for_webrtc_session(
+              launch_session,
+              allow_display_changes,
+              capture_only_display,
+              pending_output_override_lease)) {
+          return std::string {"Display setup could not secure a recovery baseline. Retry after display recovery finishes."};
+        }
         if (webrtc_capture.stream_start_params) {
           webrtc_capture.stream_start_params->uses_virtual_display = launch_session->virtual_display;
         }
@@ -3293,9 +3335,9 @@ namespace webrtc_stream {
           video_config.dynamicRange = 0;
           video_config.force_sdr = true;
         }
-        if (allow_display_changes ||
+        if (!capture_only_display && (allow_display_changes ||
             launch_session->virtual_display_recreated_on_demand ||
-            launch_session->virtual_display_needs_resume_apply) {
+            launch_session->virtual_display_needs_resume_apply)) {
           BOOST_LOG(debug) << "Display helper: applying WebRTC display request on "
                            << (allow_display_changes ? "normal start" :
                                                          (launch_session->virtual_display_recreated_on_demand ?

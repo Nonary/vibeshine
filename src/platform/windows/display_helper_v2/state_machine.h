@@ -79,6 +79,10 @@ namespace display_helper::v2 {
       return task_manager_.create_restore_task(L"");
     }
 
+    bool restore_task_present() {
+      return task_manager_.has_pending_restore_task();
+    }
+
     void delete_restore_task() {
       (void) task_manager_.delete_restore_task();
     }
@@ -219,17 +223,22 @@ namespace display_helper::v2 {
           completed.staged_state_reset_attempted = outcome.staged_state_reset_attempted;
           completed.staged_state_reset_succeeded = outcome.staged_state_reset_succeeded;
           completed.generation = generation;
+          completed.restored_tier = outcome.restored_tier;
+          completed.layout_rotations = outcome.layout_rotations;
           enqueue(completed);
         });
       return generation;
     }
 
-    std::uint64_t dispatch_recovery_validation(const Snapshot &snapshot) {
+    std::uint64_t dispatch_recovery_validation(
+      const Snapshot &snapshot,
+      const std::optional<codec::layout_rotation_map_t> &layout_rotations) {
       const auto token = system_.token();
       const auto generation = token.generation();
 
       dispatcher_.dispatch_recovery_validation(
         snapshot,
+        layout_rotations,
         token,
         [enqueue = enqueue_, generation](bool success) {
           RecoveryValidationCompleted completed;
@@ -273,6 +282,9 @@ namespace display_helper::v2 {
       return persistence_.storage().exists(tier);
     }
 
+    /// Retire session history only after the final asynchronous confirmation.
+    bool finalize_recovery(SnapshotTier tier);
+
     /**
      * @brief Build the live topology plus physical baseline devices that have
      *        become active but are not yet members of the active topology.
@@ -305,6 +317,16 @@ namespace display_helper::v2 {
      *        good, so a failed capture never destroys the existing baseline.
      */
     bool refresh_current_preserving_previous(const std::vector<std::string> &exclusions);
+
+    /// Require a loadable physical baseline with settings for every retained
+    /// output. A file's existence alone is never recovery readiness.
+    bool has_usable_recovery_baseline(
+      const std::vector<std::string> &exclusions,
+      bool golden_first = false,
+      bool prefer_golden_if_current_missing = true);
+    /// Headless requires a successful native hardware query proving that no
+    /// physical output is connected, plus no retained physical baseline.
+    bool is_headless_without_baseline();
 
   private:
     std::optional<std::pair<Snapshot, codec::layout_rotation_map_t>> capture_filtered(const std::vector<std::string> &exclusions, const char *reason);
@@ -477,8 +499,7 @@ namespace display_helper::v2 {
     bool recovery_armed_ = false;
     bool display_changes_pending_recovery_ = false;
     // An explicit client REVERT must survive later autonomous disconnect
-    // policy decisions. This is separate from restore_on_disconnect, which
-    // controls only whether a disconnected live session begins a recovery.
+    // decisions and cannot be cancelled by a mere reconnect liveness ping.
     bool explicit_recovery_required_ = false;
     bool virtual_hdr_fallback_attempted_ = false;
     bool baseline_topology_repair_available_ = false;
@@ -502,12 +523,15 @@ namespace display_helper::v2 {
     bool transient_disconnect_repair_in_flight_ = false;
     std::size_t next_transient_disconnect_check_ = 0;
     std::optional<std::chrono::steady_clock::time_point> last_apply_started_;
+    std::optional<std::chrono::steady_clock::time_point> host_disconnect_deadline_;
+    bool host_disconnect_recovery_ = false;
     ApplyRequest current_request_ {};
     std::optional<ResolvedConfigurationTarget> resolved_target_;
     // Candidate physical-return topology. It remains separate from the
     // authoritative current request until the exact topology verifies.
     std::optional<ActiveTopology> expected_topology_;
     std::optional<Snapshot> recovery_snapshot_;
+    std::optional<SnapshotTier> recovery_tier_;
     std::optional<std::chrono::steady_clock::time_point> recovery_event_feedback_quiet_until_;
     // One post-settlement read can reconcile a return notification delivered
     // during recovery/feedback suppression without making feedback a retry.

@@ -62,6 +62,7 @@
 #include "single_flight.h"
 #include "state_storage_policy.h"
 #ifdef _WIN32
+  #include <display_device/windows/win_api_recovery.h>
   #include "platform/windows/display.h"
   #include "platform/windows/display_helper_request_policy.h"
   #include "platform/windows/display_helper_request_helpers.h"
@@ -243,9 +244,25 @@ namespace nvhttp {
       return 0;
     }
 
-    void refresh_remote_monitor_baseline(const bool extend_active_stream) {
+    bool prepare_remote_monitor_recovery_baseline() {
+      const auto deadline = std::chrono::steady_clock::now() +
+                            display_helper_integration::kStreamStartApplyVerificationTimeout;
+      const auto cancelled = [deadline] {
+        return std::chrono::steady_clock::now() >= deadline;
+      };
+      return display_helper_integration::request_policy::prepare_virtual_display_baseline(
+        [&] { (void) display_helper_integration::disarm_pending_restore(cancelled, deadline); },
+        [&] { return display_helper_integration::restore_in_progress(cancelled, deadline); },
+        [&] { return display_helper_integration::snapshot_current_display_state(cancelled, deadline); }
+      );
+    }
+
+    bool refresh_remote_monitor_baseline(const bool extend_active_stream) {
+      // Enumeration can activate dormant physical targets. Secure recovery
+      // before even constructing the layout to extend with this monitor.
+      if (!prepare_remote_monitor_recovery_baseline()) return false;
       const auto devices = display_helper_integration::enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
-      if (!devices) return;
+      if (!devices) return false;
       const auto active_stream_output = extend_active_stream ? config::get_active_output_name() : std::string {};
       const bool active_stream_uses_virtual =
         !active_stream_output.empty() && VDISPLAY::is_virtual_display_output(active_stream_output);
@@ -300,6 +317,7 @@ namespace nvhttp {
         baseline.push_back(std::move(node));
       }
       remote_display_topology::instance().set_physical_baseline(std::move(baseline));
+      return true;
     }
 
     bool apply_remote_monitor_composition(const std::vector<remote_display_topology::node_t> &nodes) {
@@ -355,6 +373,12 @@ namespace nvhttp {
     void register_remote_monitor_runtime() {
       remote_display_topology::instance().set_runtime_callbacks({
         .create_or_reclaim = [](const std::string &client_uuid, const std::string &client_label, const remote_display_topology::mode_t &mode) {
+          // Retry/reclaim can enter directly through the coordinator. The
+          // helper must acknowledge its retained baseline for those paths too.
+          if (!prepare_remote_monitor_recovery_baseline()) {
+            BOOST_LOG(error) << "Remote Monitor: creation rejected because a recoverable display baseline could not be confirmed.";
+            return false;
+          }
           if (!VDISPLAY::ensure_driver_is_ready()) return false;
           const auto stable_uuid = VDISPLAY::virtualDisplayUuidFromStableId(client_uuid);
           GUID guid {};
@@ -399,7 +423,12 @@ namespace nvhttp {
               mode.width <= 0 || mode.height <= 0 || mode.refresh_hz <= 0) {
             return remote_session::monitor_runtime_state_t {.retryable = true, .error = "Remote Monitor requested an invalid display mode."};
           }
-          refresh_remote_monitor_baseline(has_stream_session_activity());
+          if (!refresh_remote_monitor_baseline(has_stream_session_activity())) {
+            return remote_session::monitor_runtime_state_t {
+              .retryable = true,
+              .error = "Remote Monitor could not secure a recovery baseline. Retry after display recovery finishes."
+            };
+          }
           const auto state = remote_display_topology::instance().activate_or_resume(std::string {uuid}, std::string {label}, mode, generation);
           return {.accepted = state.accepted, .ready = state.ready, .retryable = state.retryable, .output = state.output, .error = state.error};
         },
@@ -1310,16 +1339,18 @@ namespace nvhttp {
       });
     }
 
-    void prepare_virtual_display_for_session(
+    bool prepare_virtual_display_for_session(
       const std::shared_ptr<rtsp_stream::launch_session_t> &launch_session,
       bool no_active_sessions,
       bool allow_display_changes,
+      bool &capture_only_display,
       std::optional<std::string> &pending_output_override,
       std::optional<video::encoder_probe_adapter_hint_lease_t> &pending_adapter_hint,
       VDISPLAY::policy::retained_resume_recovery_rearm_t *retained_resume_recovery_rearm,
       const std::function<bool()> &display_startup_cancelled,
       const std::chrono::steady_clock::time_point display_startup_deadline
     ) {
+      capture_only_display = false;
       std::optional<std::string> app_output_override;
       auto app_display_override = proc::display_policy::app_override_e::inherit;
       if (launch_session->output_name_override) {
@@ -1429,6 +1460,9 @@ namespace nvhttp {
                        << "'.";
 
       if (!VDISPLAY::policy::should_prepare_display_for_new_session(no_active_sessions)) {
+        display_device::DisplayRecoveryBehaviorGuard read_only(display_device::DisplayRecoveryBehavior::Skip);
+        capture_only_display = true;
+        launch_session->display_config_preapplied = true;
         const auto previous_virtual_display_device_id = launch_session->virtual_display_device_id;
         launch_session->virtual_display = false;
         launch_session->virtual_display_failed = request_virtual_display;
@@ -1439,7 +1473,7 @@ namespace nvhttp {
         launch_session->virtual_display_recreated_on_demand = false;
         launch_session->virtual_display_needs_resume_apply = false;
         if (request_virtual_display) {
-          if (!reserve_normal_vdd_identity()) return;
+          if (!reserve_normal_vdd_identity()) return true;
           const auto existing_device =
             VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(
               virtual_display_stable_id,
@@ -1469,7 +1503,7 @@ namespace nvhttp {
           apply_framegen_refresh_policy(false);
           BOOST_LOG(info) << "Display helper: another session is active; joining its existing capture target without display changes.";
         }
-        return;
+        return true;
       }
 
       if (has_app_output_override && !client_requests_virtual && !framegen_requires_virtual_display) {
@@ -1479,9 +1513,72 @@ namespace nvhttp {
         }
       }
 
+      const bool physical_output_override = [&] {
+        display_device::DisplayRecoveryBehaviorGuard read_only(display_device::DisplayRecoveryBehavior::Skip);
+        return app_output_override &&
+               (app_output_override->empty() || !VDISPLAY::is_virtual_display_output(*app_output_override));
+      }();
+      const bool physical_capture_only =
+        display_helper_integration::request_policy::capture_only_physical_request({
+          .configuration_option =
+            launch_session->dd_config_option_override.value_or(config::video.dd.configuration_option) ==
+                config::video_t::dd_t::config_option_e::disabled ?
+              display_helper_integration::request_policy::ConfigurationOption::Disabled :
+              display_helper_integration::request_policy::ConfigurationOption::EnsureActive,
+          .virtual_display = request_virtual_display,
+          .physical_output_override = physical_output_override,
+          .hdr_profile_selected = launch_session->hdr_profile && !launch_session->hdr_profile->empty(),
+        });
+      if ((!allow_display_changes && !request_virtual_display) || physical_capture_only) {
+        // Capture-only selection must not activate an inactive desktop target.
+        display_device::DisplayRecoveryBehaviorGuard read_only(display_device::DisplayRecoveryBehavior::Skip);
+        if (app_output_override) {
+          config::set_runtime_output_name_override(*app_output_override);
+          pending_output_override = *app_output_override;
+        }
+        launch_session->virtual_display = false;
+        launch_session->virtual_display_failed = false;
+        apply_framegen_refresh_policy(false);
+        capture_only_display = true;
+        launch_session->display_config_preapplied = true;
+        BOOST_LOG(debug) << "Display helper: preserving the physical capture target without display changes.";
+        return true;
+      }
+
+      // Supersede an old restore before requesting the durable baseline. The
+      // helper preserves the original baseline when a paused/peer owner exists.
+      // Snapshot before enumeration that may repair the display topology.
+      // queryDisplayConfig(QueryType::All) in output_exists() and other calls can activate
+      // external dummy plugs, which would pollute the snapshot used for session restore.
+      const bool baseline_prepared =
+        display_helper_integration::request_policy::prepare_virtual_display_baseline(
+          [&] {
+            (void) display_helper_integration::disarm_pending_restore(
+              display_startup_cancelled, display_startup_deadline);
+          },
+          [&] {
+            return display_helper_integration::restore_in_progress(
+              display_startup_cancelled, display_startup_deadline);
+          },
+          [&] {
+            return display_helper_integration::snapshot_current_display_state(
+              display_startup_cancelled, display_startup_deadline);
+          }
+        );
+      if (!baseline_prepared) {
+        launch_session->virtual_display = false;
+        launch_session->virtual_display_failed = request_virtual_display;
+        launch_session->virtual_display_guid_bytes.fill(0);
+        launch_session->virtual_display_device_id.clear();
+        launch_session->virtual_display_ready_since.reset();
+        launch_session->virtual_display_hdr_enabled.reset();
+        BOOST_LOG(error) << "Display helper: session display preparation failed because a recoverable display baseline could not be confirmed.";
+        return false;
+      }
+
       if (!allow_display_changes) {
         if (request_virtual_display) {
-          if (!reserve_normal_vdd_identity()) return;
+          if (!reserve_normal_vdd_identity()) return true;
           if (auto existing_device =
                 VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(
                   virtual_display_stable_id,
@@ -1515,7 +1612,7 @@ namespace nvhttp {
               BOOST_LOG(info) << "Display helper: preserving virtual display capture target for resume (device_id="
                               << *existing_device << ").";
               BOOST_LOG(debug) << "Display helper: preserving capture target and refreshing display state for resume.";
-              return;
+              return true;
             }
 
             launch_session->virtual_display = false;
@@ -1539,18 +1636,7 @@ namespace nvhttp {
           } else {
             BOOST_LOG(debug) << "Display helper: skipping virtual display changes for resume.";
           }
-          return;
-        }
-      }
-
-      // Snapshot current display state BEFORE any display enumeration.
-      // queryDisplayConfig(QueryType::All) in output_exists() and other calls can activate
-      // external dummy plugs, which would pollute the snapshot used for session restore.
-      if (no_active_sessions) {
-        if (!display_helper_integration::snapshot_current_display_state(
-              display_startup_cancelled,
-              display_startup_deadline)) {
-          BOOST_LOG(warning) << "Display helper snapshot before session start was not accepted.";
+          return true;
         }
       }
 
@@ -1815,40 +1901,8 @@ namespace nvhttp {
 
       apply_framegen_refresh_policy(request_virtual_display);
 
-      if (request_virtual_display) {
-        // A new virtual-display session supersedes the prior session's restore.
-        // Disarm it before any driver mutation; checking first used to return
-        // early and made the DISARM below unreachable in the exact race it was
-        // intended to prevent.
-        const bool virtual_display_mutation_allowed =
-          display_helper_integration::request_policy::supersede_restore_for_virtual_display(
-            [&] {
-              (void) display_helper_integration::disarm_pending_restore(
-                display_startup_cancelled,
-                display_startup_deadline
-              );
-            },
-            [&] {
-              return display_helper_integration::restore_in_progress(
-                display_startup_cancelled,
-                display_startup_deadline
-              );
-            }
-          );
-        if (!virtual_display_mutation_allowed) {
-          BOOST_LOG(warning) << "Display helper: virtual display creation deferred because physical display restoration is still in progress; using physical fallback for this session.";
-          launch_session->virtual_display = false;
-          launch_session->virtual_display_failed = true;
-          launch_session->virtual_display_guid_bytes.fill(0);
-          launch_session->virtual_display_device_id.clear();
-          launch_session->virtual_display_ready_since.reset();
-          launch_session->virtual_display_hdr_enabled.reset();
-          apply_framegen_refresh_policy(false);
-          return;
-        }
-      }
-
       apply_virtual_display_request(request_virtual_display);
+      return true;
     }
   }  // namespace
 #endif
@@ -4552,12 +4606,6 @@ namespace nvhttp {
     const auto display_startup_cancelled = [display_startup_deadline] {
       return std::chrono::steady_clock::now() >= display_startup_deadline;
     };
-    // First step on stream start: stop any in-flight helper restore loop immediately.
-    // This must happen before any other display helper work to prevent restore/crash loops on virtual displays.
-    (void) display_helper_integration::disarm_pending_restore(
-      display_startup_cancelled,
-      display_startup_deadline
-    );
 #endif
 
     const bool allow_display_changes = true;
@@ -4609,10 +4657,12 @@ namespace nvhttp {
         );
       }
     });
-    prepare_virtual_display_for_session(
+    bool capture_only_display = false;
+    const bool display_prepared = prepare_virtual_display_for_session(
       launch_session,
       no_active_sessions,
       allow_display_changes,
+      capture_only_display,
       pending_output_override,
       pending_adapter_hint,
       nullptr,
@@ -4622,6 +4672,12 @@ namespace nvhttp {
     if (launch_session->normal_vdd_capacity_rejected) {
       tree.put("root.<xmlattr>.status_code", 409);
       tree.put("root.<xmlattr>.status_message", "Virtual display client limit reached");
+      tree.put("root.gamesession", 0);
+      return;
+    }
+    if (!display_prepared) {
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "Display setup could not secure a recovery baseline. Retry after display recovery finishes.");
       tree.put("root.gamesession", 0);
       return;
     }
@@ -4674,51 +4730,55 @@ namespace nvhttp {
       revert_display_configuration = true;
 
 #ifdef _WIN32
-      (void) display_helper_integration::disarm_pending_restore(
-        display_startup_cancelled,
-        display_startup_deadline
-      );
-      auto request = display_helper_integration::helpers::build_request_from_session(config::video, *launch_session);
-      if (!request) {
-        if (launch_session->virtual_display) {
-          tree.put("root.<xmlattr>.status_code", 503);
-          tree.put("root.<xmlattr>.status_message", "The virtual display is not ready for stream startup.");
-          tree.put("root.gamesession", 0);
-          return;
-        }
-        BOOST_LOG(warning) << "Display helper: no display configuration request; using the existing display.";
-      }
-
-      if (request) {
-        // Complete display setup before encoder probing and RTSP admission.
-        const bool applied = display_helper_integration::apply(
-          *request,
-          nullptr,
+      if (!capture_only_display) {
+        (void) display_helper_integration::disarm_pending_restore(
           display_startup_cancelled,
-          display_helper_integration::ApplyRetryPolicy::StreamStart,
-          display_startup_deadline);
-        launch_session->display_config_preapplied = applied;
-        if (!applied) {
-          tree.put("root.<xmlattr>.status_code", 503);
-          tree.put("root.<xmlattr>.status_message", "Display setup did not complete before stream startup.");
-          tree.put("root.gamesession", 0);
-          return;
-        }
-      }
-
-      // Apply a per-client HDR profile to physical displays (virtual displays are handled at creation time).
-      const auto physical_hdr_profile_policy = display_helper_integration::request_policy::evaluate({
-        .virtual_display = launch_session->virtual_display,
-        .virtual_display_failed = launch_session->virtual_display_failed,
-        .hdr_profile_selected = launch_session->hdr_profile && !launch_session->hdr_profile->empty(),
-      });
-      if (physical_hdr_profile_policy.apply_hdr_profile_to_physical) {
-        const auto active_output = config::get_active_output_name();
-        VDISPLAY::applyHdrProfileToOutput(
-          launch_session->client_name.c_str(),
-          launch_session->hdr_profile ? launch_session->hdr_profile->c_str() : nullptr,
-          active_output.empty() ? nullptr : active_output.c_str()
+          display_startup_deadline
         );
+        auto request = display_helper_integration::helpers::build_request_from_session(config::video, *launch_session);
+        if (!request) {
+          if (launch_session->virtual_display) {
+            tree.put("root.<xmlattr>.status_code", 503);
+            tree.put("root.<xmlattr>.status_message", "The virtual display is not ready for stream startup.");
+            tree.put("root.gamesession", 0);
+            return;
+          }
+          BOOST_LOG(warning) << "Display helper: no display configuration request; using the existing display.";
+        }
+
+        if (request) {
+          // Complete display setup before encoder probing and RTSP admission.
+          const bool applied = display_helper_integration::apply(
+            *request,
+            nullptr,
+            display_startup_cancelled,
+            display_helper_integration::ApplyRetryPolicy::StreamStart,
+            display_startup_deadline);
+          launch_session->display_config_preapplied = applied;
+          if (!applied) {
+            tree.put("root.<xmlattr>.status_code", 503);
+            tree.put("root.<xmlattr>.status_message", "Display setup did not complete before stream startup.");
+            tree.put("root.gamesession", 0);
+            return;
+          }
+        }
+
+        // Apply a per-client HDR profile to physical displays (virtual displays are handled at creation time).
+        const auto physical_hdr_profile_policy = display_helper_integration::request_policy::evaluate({
+          .virtual_display = launch_session->virtual_display,
+          .virtual_display_failed = launch_session->virtual_display_failed,
+          .hdr_profile_selected = launch_session->hdr_profile && !launch_session->hdr_profile->empty(),
+        });
+        if (physical_hdr_profile_policy.apply_hdr_profile_to_physical) {
+          const auto active_output = config::get_active_output_name();
+          VDISPLAY::applyHdrProfileToOutput(
+            launch_session->client_name.c_str(),
+            launch_session->hdr_profile ? launch_session->hdr_profile->c_str() : nullptr,
+            active_output.empty() ? nullptr : active_output.c_str()
+          );
+        }
+      } else {
+        revert_display_configuration = false;
       }
 #else
       display_helper_integration::DisplayApplyBuilder noop_builder;
@@ -5036,13 +5096,6 @@ namespace nvhttp {
     const auto display_startup_cancelled = [display_startup_deadline] {
       return std::chrono::steady_clock::now() >= display_startup_deadline;
     };
-    if (allow_session_display_changes) {
-      // Stop any in-flight helper restore loop before resuming display changes.
-      (void) display_helper_integration::disarm_pending_restore(
-        display_startup_cancelled,
-        display_startup_deadline
-      );
-    }
 #endif
     const auto launch_session = make_launch_session(host_audio, args, request, allow_session_display_changes, &request_client_identity);
     launch_session->secondary_game_client = secondary_game_client;
@@ -5057,6 +5110,24 @@ namespace nvhttp {
           active_game.normal_vdd_identity_token,
           active_game.client_uuid
         )) {
+      if (!display_helper_integration::request_policy::prepare_virtual_display_baseline(
+            [&] {
+              (void) display_helper_integration::disarm_pending_restore(
+                display_startup_cancelled, display_startup_deadline);
+            },
+            [&] {
+              return display_helper_integration::restore_in_progress(
+                display_startup_cancelled, display_startup_deadline);
+            },
+            [&] {
+              return display_helper_integration::snapshot_current_display_state(
+                display_startup_cancelled, display_startup_deadline);
+            })) {
+        tree.put("root.resume", 0);
+        tree.put("root.<xmlattr>.status_code", 503);
+        tree.put("root.<xmlattr>.status_message", "Display setup could not secure a recovery baseline. Retry after display recovery finishes.");
+        return;
+      }
       const auto retained_virtual_display_uuid =
         VDISPLAY::virtualDisplayUuidFromStableId(active_game.client_uuid);
       GUID retained_virtual_display_guid {};
@@ -5153,11 +5224,14 @@ namespace nvhttp {
         );
       }
     });
+    bool capture_only_display = joining_existing_game_output;
+    bool display_prepared = true;
     if (!joining_existing_game_output) {
-      prepare_virtual_display_for_session(
+      display_prepared = prepare_virtual_display_for_session(
         launch_session,
         no_active_sessions,
         allow_session_display_changes,
+        capture_only_display,
         pending_output_override,
         pending_adapter_hint,
         retained_resume_owner_eligible ? &retained_resume_recovery_rearm : nullptr,
@@ -5169,6 +5243,12 @@ namespace nvhttp {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 409);
       tree.put("root.<xmlattr>.status_message", "Virtual display client limit reached");
+      return;
+    }
+    if (!display_prepared) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "Display setup could not secure a recovery baseline. Retry after display recovery finishes.");
       return;
     }
 #elif defined(__linux__)
@@ -5227,6 +5307,11 @@ namespace nvhttp {
           launch_session->normal_vdd_identity_newly_reserved,
           launch_session->virtual_display_recreated_on_demand || launch_session->virtual_display_needs_resume_apply
         );
+#elif defined(_WIN32)
+        !capture_only_display &&
+        (allow_session_display_changes ||
+         launch_session->virtual_display_recreated_on_demand ||
+         launch_session->virtual_display_needs_resume_apply);
 #else
         allow_session_display_changes ||
         launch_session->virtual_display_recreated_on_demand ||

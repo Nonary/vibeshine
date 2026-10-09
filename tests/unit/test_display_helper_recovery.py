@@ -120,7 +120,7 @@ program = r'''
 using namespace std::chrono_literals;
 struct NullLog { template<class T> NullLog &operator<<(const T &) { return *this; } };
 #define BOOST_LOG(level) NullLog {}
-constexpr int info = 0, warning = 1, debug = 2;
+[[maybe_unused]] constexpr int info = 0, warning = 1, debug = 2;
 
 namespace integration_fake {
   int ownership_checks = 0, cancels = 0, verification_invalidations = 0;
@@ -286,6 +286,8 @@ struct ServiceState {
   std::optional<int> last_cfg;
   std::atomic<bool> exit_after_revert {false}, direct_revert_bypass_grace {false};
   std::atomic<bool> restore_requested {false}, restore_on_disconnect {true};
+  std::atomic<bool> host_loss_recovery {false}, session_saved {false};
+  std::atomic<std::uint64_t> host_loss_connection_epoch {0};
   std::atomic<bool> retry_apply_on_topology {true};
   std::atomic<long long> last_apply_ms {0};
   std::atomic<std::uint64_t> restore_origin_epoch {0};
@@ -343,7 +345,7 @@ struct ServiceState {
 ''' + settlement_wait + r'''
 ''' + preserve_settlement + r'''
 };
-constexpr std::chrono::milliseconds kApplyDisconnectGrace {5000};
+[[maybe_unused]] constexpr std::chrono::milliseconds kApplyDisconnectGrace {5000};
 namespace {
   std::atomic<bool> running {true};
 }
@@ -361,12 +363,28 @@ static void test_legacy_stale_epoch_and_no_mutation_paths() {
   assert(empty.exit_graces == 1 && empty.grace_arms == 0 && empty.polling_starts == 0);
 }
 
-static void test_legacy_false_policy_disarms_without_changing_preference() {
-  ServiceState state; state.last_cfg = 1; state.restore_on_disconnect.store(false);
-  attempt_revert_after_disconnect(state, running, 7);
-  assert(state.disarms == 1 && state.exit_graces == 1);
-  assert(!state.preference_after_disarm && !state.restore_on_disconnect.load());
-  assert(state.grace_arms == 0 && state.polling_starts == 0);
+static void test_legacy_host_loss_ignores_client_pause_policy() {
+  for (const bool pause_policy : {false, true}) {
+    ServiceState state; state.last_cfg = 1; state.restore_on_disconnect.store(pause_policy);
+    // Long-running sessions get the same transient reconnect protection.
+    state.last_apply_ms.store(now_ms() - 60000);
+    ServiceState::fake_now_ms = 1000;
+    attempt_revert_after_disconnect(state, running, 7);
+    assert(state.disarms == 0 && state.exit_graces == 0);
+    assert(state.restore_on_disconnect.load() == pause_policy);
+    assert(state.host_loss_recovery.load() && state.restore_requested.load());
+    assert(state.disconnect_settlement_pending.load() && state.polling_starts == 0);
+    ServiceState::fake_now_ms = 31000;
+    assert(state.poll_disconnect_settlement());
+    assert(state.polling_starts == 1 && state.restore_requested.load());
+  }
+  // A crash after precreation snapshot acknowledgment, before APPLY, still
+  // leaves a recovery obligation even though last_cfg was never assigned.
+  ServiceState prepared; prepared.session_saved.store(true);
+  ServiceState::fake_now_ms = 1000;
+  attempt_revert_after_disconnect(prepared, running, 7);
+  assert(prepared.host_loss_recovery.load() && prepared.restore_requested.load());
+  assert(prepared.disconnect_settlement_pending.load() && prepared.exit_graces == 0);
 }
 
 static void test_legacy_explicit_restore_bypasses_policy_and_recent_apply_grace() {
@@ -473,6 +491,7 @@ static void test_repeated_disconnect_preserves_original_settlement_deadline() {
   assert(later.disconnect_settlement_pending.load());
   assert(later.disconnect_settlement_deadline_ms.load() == first_deadline);
   assert(later.restore_origin_epoch.load() == 7 && later.polling_starts == 0);
+  assert(later.host_loss_connection_epoch.load() == 8);
   ServiceState::fake_now_ms = first_deadline;
   assert(later.poll_disconnect_settlement());
   assert(later.polling_starts == 1 && later.restore_requested.load());
@@ -543,7 +562,7 @@ int main() {
   test_incident_captures_targets_before_dispatch_and_rejects_failed_or_override_dispatch();
 #endif
   test_legacy_stale_epoch_and_no_mutation_paths();
-  test_legacy_false_policy_disarms_without_changing_preference();
+  test_legacy_host_loss_ignores_client_pause_policy();
   test_legacy_explicit_restore_bypasses_policy_and_recent_apply_grace();
   test_recent_apply_uses_bounded_disconnect_settlement();
   test_explicit_restore_and_stop_cannot_be_cleared_by_owner_ping();

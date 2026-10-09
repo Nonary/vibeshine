@@ -470,8 +470,22 @@ namespace remote_display_topology {
     }
   }
 
-  void coordinator_t::release_idle_normal_game_identities(const bool app_running, const bool capture_runtime_owned) {
+  void coordinator_t::release_idle_normal_game_identities(const bool app_running, const bool capture_runtime_owned, const bool defer_last_display_cleanup) {
     if (!app_running && !capture_runtime_owned) {
+      if (defer_last_display_cleanup) {
+        std::lock_guard lock(mutex_);
+        // No app owns these processless normal roles, and the caller proved
+        // that all transports (including pending/startup/teardown) drained.
+        // Keep explicit capture references and retained Monitor peers fenced.
+        // The caller's armed idle finalizer now owns restoration and removal;
+        // an exclusive/headless desktop need not apply an empty composition.
+        if (!shutdown_pending_ && std::none_of(clients_.begin(), clients_.end(), [](const auto &entry) {
+              return entry.second.remote_monitor || !entry.second.normal_capture_references.empty();
+            })) {
+          std::erase_if(clients_, [](const auto &entry) { return entry.second.normal_game; });
+          return;
+        }
+      }
       release_all_normal_game_identities();
     } else {
       release_drained_normal_game_identities();

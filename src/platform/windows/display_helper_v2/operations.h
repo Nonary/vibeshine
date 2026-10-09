@@ -70,12 +70,12 @@ namespace display_helper::v2 {
     /// A topology/display-stack operation or later settings stage may have
     /// changed the desktop, so recovery remains required on failure.
     bool display_may_have_changed = false;
-    /// Durable recovery was armed synchronously at the first mutation
-    /// boundary, before SettingsManager/mode/HDR work can continue.
+    /// Recovery preconditions were accepted at the mutation boundary before
+    /// settings work: a usable baseline and durable task, or the explicit
+    /// task opt-out / positively established headless exemption.
     bool durable_recovery_armed = false;
-    /// The worker already attempted the durable boundary. A failed attempt is
-    /// not retried synchronously by the state machine or a settings-only
-    /// repair, matching v1's single best-effort task registration.
+    /// The worker attempted the durable boundary. A failure rejects this
+    /// transaction before mutation; a later request can retry registration.
     bool durable_recovery_attempted = false;
     /// True once SettingsManager may have retained transaction state. Recovery
     /// or an explicit RESET must discard it before an unrelated later session.
@@ -85,6 +85,10 @@ namespace display_helper::v2 {
   struct RecoveryOutcome {
     bool success = false;
     std::optional<Snapshot> snapshot;
+    /// A connected physical output was observed after a bounded additive
+    /// rescue. This does not confirm the exact baseline or release recovery
+    /// evidence; success remains false until exact restoration is confirmed.
+    bool physical_visibility_available = false;
     /// True after recovery left its cancellable grace period and began a
     /// restore transaction. A cancelled transaction must be treated as having
     /// possibly changed the desktop even if it has not confirmed a snapshot.
@@ -94,6 +98,12 @@ namespace display_helper::v2 {
     /// never treats a failed backend reset as a clean session.
     bool staged_state_reset_attempted = false;
     bool staged_state_reset_succeeded = false;
+    /// Tier confirmed by the worker. Snapshot housekeeping and recovery
+    /// completion wait for the state machine's final fenced validation.
+    std::optional<SnapshotTier> restored_tier;
+    /// The authoritative layout must survive through the final delayed gate.
+    /// A missing value preserves compatibility with pre-layout snapshots.
+    std::optional<codec::layout_rotation_map_t> layout_rotations;
   };
 
   /**
@@ -196,11 +206,10 @@ namespace display_helper::v2 {
   };
 
   /**
-   * @brief One restore attempt over the snapshot chain, ported from the legacy
-   *        helper's try_restore_once_if_valid: golden-first strategy with usable
-   *        session fallbacks, prefer-golden-when-current-missing, stable-read +
-   *        quiet-period confirmation, and current->previous promotion on success.
-   *        Returns success only when the restore was CONFIRMED on screen.
+   * @brief Select one authoritative snapshot by configured tier order and
+   *        confirm its complete restoration with stable reads and a quiet
+   *        period. Failure permits only additive physical visibility rescue;
+   *        recovery evidence stays pending until the authority is confirmed.
    */
   class RecoveryOperation {
   public:
@@ -214,16 +223,13 @@ namespace display_helper::v2 {
     RecoveryOutcome run(const CancellationToken &token);
 
   private:
-    std::optional<codec::ParsedSnapshot> load_filtered(SnapshotTier tier, const char *label);
     bool read_stable_snapshot(Snapshot &out, std::chrono::milliseconds deadline, std::chrono::milliseconds interval, const CancellationToken &token);
     bool quiet_period(std::chrono::milliseconds duration, std::chrono::milliseconds interval, const CancellationToken &token);
     bool wait_with_cancel(std::chrono::milliseconds duration, const CancellationToken &token);
     bool confirm_matches(const codec::ParsedSnapshot &loaded, const char *label, const CancellationToken &token);
     bool apply_and_confirm(const codec::ParsedSnapshot &loaded, const char *label, const CancellationToken &token);
     bool should_skip_golden(const Snapshot &golden);
-    bool golden_restore_is_pending();
     std::set<std::string> known_present_devices();
-    void clear_session_snapshots_after_golden();
     long long steady_now_ms() const;
 
     IDisplaySettings &display_;
@@ -238,7 +244,10 @@ namespace display_helper::v2 {
   public:
     RecoveryValidationOperation(SnapshotService &snapshot_service, IClock &clock);
 
-    bool run(const Snapshot &snapshot, const CancellationToken &token);
+    bool run(
+      const Snapshot &snapshot,
+      const CancellationToken &token,
+      const std::optional<codec::layout_rotation_map_t> &layout_rotations);
 
   private:
     SnapshotService &snapshot_service_;

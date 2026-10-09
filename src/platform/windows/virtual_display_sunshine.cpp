@@ -1,6 +1,9 @@
 #include "virtual_display.h"
 #include "src/platform/windows/virtual_display_refresh_policy.h"
 #include "virtual_display_recovery_registry.h"
+#include "display_recovery_safety.h"
+
+#include <display_device/windows/win_api_layer.h>
 
 #include <virtual_display/driver/control_client.h>
 #include <virtual_display/driver/windows_control_client.h>
@@ -4414,12 +4417,7 @@ namespace VDISPLAY_SUNSHINE {
       return true;
     }
 
-    enum class MonitorTargetPresence {
-      missing,
-      present_inactive,
-      present_active,
-      unknown,
-    };
+    using MonitorTargetPresence = display_recovery_safety::DisplayTargetPresence;
 
     MonitorTargetPresence monitor_target_presence(RecoveryMonitorState &state) {
       auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
@@ -4427,11 +4425,11 @@ namespace VDISPLAY_SUNSHINE {
         // Enumeration failed, so the target's presence cannot be determined yet.
         return MonitorTargetPresence::unknown;
       }
-      if (devices->empty()) {
-        // A successful empty enumeration is definitive on a headless system. Let the
-        // normal missing-target grace period recreate the virtual display.
-        return MonitorTargetPresence::missing;
-      }
+      const auto probe_target_presence = [&]() {
+        display_device::WinApiLayer api;
+        return display_recovery_safety::probe_display_target_presence(
+          api, state.current_device_id.value_or(""), state.normalized_monitor_device_path.value_or(""));
+      };
 
       const bool has_stable_identity =
         (state.current_device_id && !state.current_device_id->empty()) ||
@@ -4465,6 +4463,14 @@ namespace VDISPLAY_SUNSHINE {
         if (strong_match) {
           const bool is_active = !device.m_display_name.empty();
           if (is_active) {
+            // Retained RTSP owners can start with only the device ID. Learn
+            // the stable monitor path while that ID is readable so a later
+            // fallback hash cannot make this same connected target disappear.
+            if (state.current_device_id && equals_ci(device.m_device_id, *state.current_device_id) &&
+                !device.m_monitor_device_path.empty()) {
+              state.current_monitor_device_path = platf::from_utf8(device.m_monitor_device_path);
+              state.normalized_monitor_device_path = normalize_display_name(device.m_monitor_device_path);
+            }
             return MonitorTargetPresence::present_active;
           }
           matched_strong_inactive = true;
@@ -4492,7 +4498,7 @@ namespace VDISPLAY_SUNSHINE {
       }
 
       if (matched_strong_inactive) {
-        return MonitorTargetPresence::present_inactive;
+        return probe_target_presence();
       }
 
       if (!weak_candidate_conflict && unique_weak_candidate) {
@@ -4516,10 +4522,13 @@ namespace VDISPLAY_SUNSHINE {
                          << state.params.client_name << "': " << before << " -> " << state.describe_target();
         return !device.m_display_name.empty() ?
                  MonitorTargetPresence::present_active :
-                 MonitorTargetPresence::present_inactive;
+                 probe_target_presence();
       }
 
-      return MonitorTargetPresence::missing;
+      // A nonempty enumeration can also have skipped this target on an
+      // identity or display-name error. Prove absence from raw paths in every
+      // negative case, including when other physical displays enumerated.
+      return probe_target_presence();
     }
 
     bool attempt_virtual_display_recovery(RecoveryMonitorState &state, std::stop_token stop_token) {
@@ -4698,6 +4707,10 @@ namespace VDISPLAY_SUNSHINE {
         const auto presence = monitor_target_presence(state);
 
         if (presence == MonitorTargetPresence::unknown) {
+          // An unreadable sample cannot extend evidence of continuous loss.
+          missing_since.reset();
+          inactive_since.reset();
+          active_since.reset();
           if (wait_for_monitor_stop(stop_token, RECOVERY_CHECK_INTERVAL)) {
             return;
           }

@@ -2,6 +2,9 @@
 #include "src/platform/windows/virtual_display_refresh_policy.h"
 
 #include "virtual_display_recovery_registry.h"
+#include "display_recovery_safety.h"
+
+#include <display_device/windows/win_api_layer.h>
 
 #include "src/config.h"
 #include "src/logging.h"
@@ -2499,7 +2502,10 @@ namespace VDISPLAY_SUDOVDA {
     constexpr auto RECOVERY_CHECK_INTERVAL = std::chrono::milliseconds(150);
     constexpr auto RECOVERY_RETRY_DELAY = std::chrono::milliseconds(350);
     constexpr auto RECOVERY_MISSING_GRACE = std::chrono::milliseconds(500);
-    constexpr auto RECOVERY_INACTIVE_GRACE = std::chrono::seconds(1);
+    // Fullscreen mode switches and HDR toggles can temporarily deactivate a
+    // connected target. Match Sunshine's settle window before recreating it;
+    // a genuinely missing target retains the shorter missing grace above.
+    constexpr auto RECOVERY_INACTIVE_GRACE = std::chrono::seconds(12);
     constexpr auto RECOVERY_NO_ACTIVE_GRACE = std::chrono::seconds(10);
     constexpr auto RECOVERY_POST_SUCCESS_GRACE = std::chrono::seconds(3);
     constexpr auto RECOVERY_MAX_ATTEMPTS_BACKOFF = std::chrono::seconds(5);
@@ -2629,12 +2635,7 @@ namespace VDISPLAY_SUDOVDA {
       return true;
     }
 
-    enum class MonitorTargetPresence {
-      missing,
-      present_inactive,
-      present_active,
-      unknown,
-    };
+    using MonitorTargetPresence = display_recovery_safety::DisplayTargetPresence;
 
     const char *monitor_target_presence_name(const MonitorTargetPresence presence) {
       switch (presence) {
@@ -2652,14 +2653,9 @@ namespace VDISPLAY_SUDOVDA {
 
     MonitorTargetPresence monitor_target_presence(RecoveryMonitorState &state) {
       auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
-      if (!devices || devices->empty()) {
-        // Either enumeration failed outright (nullopt) or the CCD subsystem returned no valid
-        // paths (empty vector, e.g. during transient topology churn).  Treat both as "unknown"
-        // rather than letting an empty list fall through to "missing".
+      if (!devices) {
         return MonitorTargetPresence::unknown;
       }
-
-      bool matched_inactive = false;
       for (const auto &device : *devices) {
         if (!is_virtual_display_device(device)) {
           continue;
@@ -2719,12 +2715,20 @@ namespace VDISPLAY_SUDOVDA {
 
         const bool is_active = !device.m_display_name.empty();
         if (is_active) {
+          if (state.current_device_id && equals_ci(device.m_device_id, *state.current_device_id) &&
+              !device.m_monitor_device_path.empty()) {
+            state.current_monitor_device_path = platf::from_utf8(device.m_monitor_device_path);
+            state.normalized_monitor_device_path = normalize_display_name(device.m_monitor_device_path);
+          }
           return MonitorTargetPresence::present_active;
         }
-        matched_inactive = true;
       }
 
-      return matched_inactive ? MonitorTargetPresence::present_inactive : MonitorTargetPresence::missing;
+      // Missing display names and partial lists can hide an active virtual
+      // target. Only raw CCD identity/presence evidence permits recovery.
+      display_device::WinApiLayer api;
+      return display_recovery_safety::probe_display_target_presence(
+        api, state.current_device_id.value_or(""), state.normalized_monitor_device_path.value_or(""));
     }
 
     bool attempt_virtual_display_recovery(RecoveryMonitorState &state, std::stop_token stop_token) {
@@ -2873,6 +2877,10 @@ namespace VDISPLAY_SUDOVDA {
         const auto presence = monitor_target_presence(state);
 
         if (presence == MonitorTargetPresence::unknown) {
+          // An unreadable sample cannot extend evidence of continuous loss.
+          missing_since.reset();
+          inactive_since.reset();
+          active_since.reset();
           if (wait_for_monitor_stop(stop_token, RECOVERY_CHECK_INTERVAL)) {
             return;
           }

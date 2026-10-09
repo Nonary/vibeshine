@@ -66,6 +66,7 @@ namespace display_helper::v2 {
 
     virtual void dispatch_recovery_validation(
       const Snapshot &snapshot,
+      const std::optional<codec::layout_rotation_map_t> &layout_rotations,
       const CancellationToken &token,
       std::function<void(bool)> completion) = 0;
   };
@@ -121,6 +122,7 @@ namespace display_helper::v2 {
 
     void dispatch_recovery_validation(
       const Snapshot &snapshot,
+      const std::optional<codec::layout_rotation_map_t> &layout_rotations,
       const CancellationToken &token,
       std::function<void(bool)> completion) override;
 

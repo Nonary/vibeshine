@@ -1,0 +1,477 @@
+Windows virtual screen behavior and recovery audit
+Apollo compared with Vibeshine and Vibepollo
+9 October 2026
+
+Historical baseline audit: the subsequent implementation and its validation
+limits are documented in virtual-screen-recovery-fix.txt. Code descriptions and
+test limitations below refer to the state examined before that implementation.
+
+The recovery design has several code-confirmed weaknesses that can combine to
+leave the local desktop unavailable. The most relevant are session-time writes
+to Windows' saved display configuration, using a client-disconnect preference
+to suppress recovery after host failure, and permitting exclusive display
+changes without a successfully captured baseline or durable recovery task.
+These are credible explanations for the longstanding complaints. No affected
+machine logs were supplied, so they cannot establish one cause for every report.
+
+The appropriate fix is to separate permanent user preferences, temporary stream
+changes, and crash recovery. A larger collection of retries or an unconditional
+golden-snapshot restore does not establish those boundaries.
+
+Scope and source identity
+
+Vibeshine: 668d2c9dfccbcfd7a0dbb4f317fe5bca46ea4612, branch vibe-test.
+Vibepollo local checkout: 4bf0f94bdd230d9b9f2956d857602aa2f59432ee,
+1.18.0-beta.4. This is an older snapshot, not a claim about current Vibepollo.
+Apollo public master downloaded for comparison:
+adc5c5a0bd80831ce495434bb16aee2cd4175fb8, commit dated 21 May 2026.
+Historical Vibeshine tags examined include 1.15.5 and 1.16.0.
+
+At the start of the audit, libdisplaydevice was at 18bdadbac2b21f35fe166aa1177db5c4e75829ae
+with existing uncommitted changes. libvirtualdisplay was checked out at
+3083d210b55fba4b886e5c634e6abee0942201d4, differing from the parent's recorded
+1b8524e20ebef1db5d5c063a130a1ebb49aafab0. Both were preserved. Assertions about
+committed display setters below refer to the committed submodule, not its dirty
+working tree. Driver implementation assertions refer to the checked-out driver
+revision unless stated otherwise. No production code was changed by this audit.
+
+Parallel investigation and independent review agents used Luna at high
+reasoning. Candidate findings were cross-checked; several
+initial hypotheses were narrowed or rejected. Windows hardware, Task Scheduler,
+and real reboot behavior were not exercised on this macOS host.
+
+Behavior comparison
+
+Virtual display selection:
+  Apollo creates one for a client/app request, headless mode, or lack of a usable
+  presentation display. It uses SudoVDA. Current Vibeshine and the examined
+  Vibepollo beta default to per-client virtual displays on Windows 11 when the
+  setting is unspecified, using the bundled driver. Windows 10 defaults are
+  gated differently. Historical Vibeshine 1.15.5/1.16.0 defaulted virtual mode
+  to disabled, so those versions' virtual-screen complaints concern configured
+  or otherwise requested virtual displays, not a universal fresh-install switch.
+
+Identity:
+  Apollo uses stable client identities, with optional app/per-client variants.
+  Vibeshine also has stable client-derived identities, plus shared displays,
+  ownership tokens, capture references, and Remote Monitor composition. Random
+  monitor identity on every normal session is not the established mistake.
+
+Layout:
+  Apollo generally lets Windows remember the connected-client layout. Its
+  advanced display configuration defaults disabled; its optional isolation mode
+  moves monitor positions. Vibeshine/Vibepollo default virtual layout is
+  exclusive. That means physical displays can be disabled for streaming.
+  Current exclusive-session preparation can promote verify-only, and even a
+  nominally disabled display-configuration option, to EnsureOnlyDisplay.
+
+Disconnect:
+  Apollo and the two examined forks default revert-on-disconnect to false.
+  Ending the transport is different from ending the app. A positive-ID app,
+  including a configured commandless Desktop app, can remain paused and retain
+  the virtual display. Current Vibeshine has a two-hour paused-display timeout;
+  the examined Vibepollo beta has zero, meaning indefinite retention. A retained
+  display while the app is paused is therefore not by itself an orphan bug.
+
+App termination:
+  Apollo removes the virtual GUID when its driver handle/status is healthy and
+  resets its display-settings persistence for that virtual session. Physical
+  recovery primarily relies on removal and Windows' remembered arrangement.
+  Vibeshine adds coordinated ownership release, helper REVERT, snapshots,
+  verification, and cleanup ordering. A sent REVERT is not confirmed restoration.
+
+Crash and reboot:
+  Apollo has a SudoVDA heartbeat but no comparable physical-baseline task/helper
+  in the reviewed path. Its watchdog can close the handle, after which app
+  termination skips direct virtual removal; vendor driver cleanup is outside
+  the Apollo source. Vibeshine adds a durable recovery task and a custom driver
+  lease/journal. The task runs at user LOGON, not boot. The custom driver's
+  temporary leases normally expire after feeding stops; that alone does not
+  restore Windows' saved physical layout.
+
+Recovery while a session still owns the output:
+  Vibeshine has per-display repair/recreation monitors. Manually disabling or
+  removing a virtual screen while its session still owns it can cause it to be
+  recreated. The terminal recovery control cancels those monitors and overrides
+  owner admission. Simply deleting a monitor in Windows is not the same operation.
+
+Sources: Apollo src/process.cpp:236,258,291,337,759; src/config.cpp:500;
+src/stream.cpp:2069; src/platform/windows/virtual_display.cpp:552,588.
+Vibeshine src/config.cpp:918-951,1822-1832;
+src/platform/windows/display_helper_request_helpers.cpp:497-501,585-589;
+src/stream.cpp:3130-3205. Vibepollo src/config.cpp:831-860 and
+src/stream.cpp:2748-2797.
+
+Finding 1  Temporary stream settings can overwrite the Windows recovery baseline
+
+Confirmed code behavior, conditional user-visible consequence.
+
+The committed libdisplaydevice SettingsManager can first restrict the active
+topology temporarily, then apply a changed mode or primary setting through a
+setter that uses SDC_SAVE_TO_DATABASE. That flag saves the resulting complete
+topology and source/target modes; it does not save just the changed refresh rate
+or primary designation. A write made while the active desktop is virtual-only
+can therefore save the virtual-only arrangement.
+
+The cached-state recovery fallback invokes SDC_USE_DATABASE_CURRENT. If the
+database was overwritten during the stream, this fallback is not an independent
+physical recovery baseline. It can reload the saved streaming arrangement.
+
+Important conditions: EnsureOnlyDisplay does not normally need a separate
+primary change. A mode setter is skipped if the driver already activated the
+requested mode. Thus exclusive mode alone does not prove a database write on
+every launch. The reproducible condition is a real changed mode, placement,
+primary operation, or relevant fallback while the temporary layout is active.
+Real reboot outcome also depends on the connected monitor set and Windows/
+driver behavior. Successful normal restoration may mask the bad saved state.
+
+This path exists in the historical dependencies: 1.15.5 uses libdisplaydevice
+0444992d6fbd1ac9b8233838fa54ec06a7f3d0e1; 1.16.0 uses
+346bd915fabf4bf52c0f7a2130338ed903581e8e. Both SettingsManager versions call
+persistent primary/mode setters. The mechanism does not require a 24H2-specific
+API regression, although OS/driver timing can affect how it becomes visible.
+
+Apollo also deliberately persists virtual mode/layout changes in its own
+virtual_display.cpp. It must not be described as never writing the database.
+The important differences are its remembered connected-client layout, optional
+advanced configuration, and removal-based lifecycle versus default exclusive
+layout plus an additional authoritative snapshot/recovery system.
+
+Existing local changes address SettingsManager primary/mode writes and some
+rollback persistence. They are incomplete: helper placement still uses persistent
+origin setters, some in-process composed-primary calls are persistent, and
+explicit helper refresh override paths use persistent mode setters. Those
+refresh paths are conditional; the current WGC adaptive callback changes stream
+FPS admission rather than using the display RefreshRate IPC fallback. They are
+not proof that every current adaptive session saves the database.
+
+The preexisting patch also adds pure temporary primary/origin methods without
+forwarding them in ImpersonatingDisplayDevice. That wrapper becomes abstract
+until updated, so the patch should not be described as a validated release fix.
+
+Evidence:
+  libdisplaydevice committed src/windows/settings_manager_apply.cpp:159,237,314;
+  win_display_device_modes.cpp:95,284,293;
+  win_display_device_primary.cpp:40,97;
+  win_display_device_general.cpp:178,192;
+  settings_manager_revert.cpp:41-65.
+  Host working-tree tools/display_settings_helper.cpp:496,565;
+  src/platform/windows/display_helper_v2/win_display_settings.cpp:405,522,593;
+  src/platform/windows/display_helper_integration.cpp:564,574,611.
+  Apollo src/platform/windows/virtual_display.cpp:176-190,218-245.
+  Microsoft SetDisplayConfig:
+  https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setdisplayconfig
+
+Finding 2  Client pause policy is conflated with loss of the host
+
+Confirmed code behavior and existing test expectation. Physical failure remains
+conditional on what Windows and the driver leave active.
+
+This conflation is intentional in the present implementation and covered by
+tests. Treating host failure independently is the proposed recovery contract,
+consistent with the user's need to regain the physical desktop and README's
+crash/reboot recovery claim; it is not an accidental false boolean branch.
+
+The host sends sunshine_restore_on_disconnect from dd_config_revert_on_disconnect
+in helper APPLY. This preference is intended to allow a paused app to keep its
+streaming display after the client leaves. The helper also applies it when its
+pipe to Sunshine breaks or its heartbeat times out, including a host crash/hang.
+
+In current v2, a disconnect-originated REVERT with false policy and no pending
+explicit recovery calls clear_recovery_state(true). It skips restoration and
+deletes the scheduled recovery task. Heartbeat loss can do the same. An existing
+unit test explicitly expects no recovery dispatch and task deletion. Recent
+settling logic does not rescue this false-policy branch: its defer predicate
+returns false when restore-on-disconnect is false.
+
+The same policy was added to the legacy helper on 2 June 2026 in 3b7a52c4a,
+shortly before 1.16. Its false-policy branch disarms requests, deletes the task,
+and exits. This mechanism should not be backdated indiscriminately to all 1.15
+builds. Earlier versions have the other persistence/capture/restore risks.
+
+Current startup cleanup further passes the same client preference as its
+enforce_db_restore argument. With false policy it can remove an orphan output
+without dispatching a physical restore. It is gated on active virtual enumeration,
+so a failed physical layout with no active virtual screen need not trigger it.
+
+Graceful shutdown is different: proc::init installs a deinitialization guard
+that calls proc.terminate(), which can send an explicit REVERT regardless of
+disconnect policy. It would be wrong to say graceful shutdown never restores.
+That attempt is late/best-effort and not equivalent to verified completion before
+OS termination. An abrupt host loss bypasses this destructor and exposes the
+confirmed opt-out branch directly.
+
+Evidence:
+  src/platform/windows/display_helper_integration.cpp:2089;
+  tools/display_settings_helper_v2.cpp:1187-1202;
+  src/platform/windows/display_helper_v2/state_machine.cpp:368-390,
+  833-845,1125-1137,2247-2257;
+  tests/unit/test_display_helper_v2_state_machine.cpp:3267-3297;
+  src/main.cpp:873-892; src/process.cpp:1217-1218,2818-2824.
+  Historical 1.16.0 tools/display_settings_helper.cpp:3636,5180-5210.
+
+Finding 3  Exclusive mutation can proceed without a proven recovery route
+
+Confirmed warning-only failure paths; requires a capture/task failure to expose.
+
+Current v2 attempts a fallback baseline capture when Current is missing, but a
+failed capture only logs that REVERT may have nothing to restore. APPLY still
+runs. At the mutation boundary it attempts the durable recovery task; failure
+also logs and continues. Failed registration is marked attempted and is not
+automatically retried as a successful apply completes.
+
+The legacy helper also treats task registration failure as nonfatal, including
+the examined 1.16 implementation. A lost early baseline request is particularly
+dangerous there: its save-side guard refuses a capture when any active virtual
+screen exists, so the late APPLY capture may already be too late.
+
+In current v2, REVERT with no Current, Previous, or Golden snapshot clears
+recovery state, deletes the task, and exits successfully without a recovery
+worker. A no-snapshot exit cannot mean that the physical display was recovered.
+The existing test confirms these exact mechanics. This is a durability gap,
+not proof that every affected PC had registration or capture failures.
+
+The task's trigger is TASK_TRIGGER_LOGON with --restore. It cannot promise
+pre-login physical recovery by itself. Adding a SYSTEM boot task alone is not
+a sufficient solution: Windows display APIs require console/session access.
+
+Evidence:
+  src/platform/windows/display_helper_v2/state_machine.cpp:1024-1037,
+  1140-1151,1463;
+  src/platform/windows/display_helper_v2/operations.cpp:345-376;
+  src/platform/windows/display_helper_v2/win_scheduled_task_manager.cpp:327,346;
+  tools/display_settings_helper.cpp:973-984,5727-5738,5756-5761;
+  tests/unit/test_display_helper_v2_state_machine.cpp:2397-2405;
+  tests/unit/test_display_helper_v2_async_dispatcher.cpp:
+  FailedVirtualResetRecoveryBoundaryIsAttemptedOnlyOnce.
+
+Finding 4  Exact baseline restoration and a usable local screen are coupled
+
+Confirmed restore policy; visible failure depends on available snapshots/devices.
+
+A saved complete topology is rejected if any required, non-excluded physical
+device is unavailable. This preserves the intended baseline but can prevent
+restoring even the physical output that is still connected. Recovery tries
+other available snapshot tiers; it is not guaranteed to remain virtual in every
+missing-device case. In v2 its bounded window eventually pauses retries until
+a later display/power/device event opens another opportunity.
+
+Snapshot capture describes the active topology, not all desired physical devices.
+V2 can filter an active virtual output out of a partial physical capture and save
+the physical remainder. With golden-first disabled, a valid partial Current can
+restore successfully while a previously expected secondary stays disabled.
+Legacy instead rejects the whole capture if any virtual output is active. Current
+golden-first defaults reduce some session-chain problems but cannot supply an
+absent/unexported baseline or make an unavailable device become available.
+
+This distinction matters during reboot, monitor power/input changes, driver
+reinstallation/identity churn, and unplugging a dock. A safe visible fallback
+should not be treated as proof of exact baseline restoration or overwrite the
+complete baseline. It needs a separate outcome and retained recovery evidence.
+
+Evidence:
+  src/platform/windows/display_helper_v2/snapshot_codec.cpp:648-699,793-810;
+  operations.cpp:63,180,740,942-1082;
+  state_machine.cpp:2302; runtime_support.h:309;
+  tools/display_settings_helper.cpp:973-984.
+  Historical 796810147, 19 May 2026, fixed acceptance of stale previous-session
+  recovery when Current was missing, preferring Golden before Previous.
+
+Additional narrower issues and limits
+
+1. The current terminal recovery control cancels virtual repair, overrides owner
+   gates, removes displays, stops watchdogs, and can activate an enumerated
+   physical monitor. The emergency physical attempt is gated on successful
+   virtual removal. A failed/unreadable journal can return removal failure even
+   when tracked removals succeeded, suppressing that attempt. Ordinary cleanup
+   has no equivalent guaranteed visible-physical fallback. This is a rescue gap
+   to evaluate, with care around live capture/unknown outputs.
+   Source: virtual_display_cleanup.cpp:243-306.
+
+2. The dashboard response distinguishes removal, helper dispatch, database
+   restore, and physical recovery in current Vibeshine. The examined older
+   Vibepollo cleanup marks database_restore_applied on REVERT dispatch, which
+   overstates completion. Current Settings persistence reset still returns send
+   status and can show success before helper execution completes. Resetting
+   saved state is not the same operation as restoring the physical desktop.
+   Sources: confighttp.cpp:4452-4512; display_helper_integration.cpp:2764-2774;
+   web/views/SettingsView.vue:896-909; web/utils/displayRecovery.ts:33-44;
+   Vibepollo virtual_display_cleanup.cpp:117-125.
+
+3. Direct authenticated appid=0 launches can reserve a normal-game identity
+   without transferring it to a process owner. Pending expiry also lacks the
+   same idle-finalization transition used by explicit pending cancellation.
+   Remote Monitor expiry handles Remote Input notifications but does not retire
+   Monitor ownership in that path. These are current ownership issues to test.
+   They are not established explanations for normal configured Moonlight
+   Desktop launches or for the historical 1.15/1.16 reports: normal Desktop has
+   a catalogue ID and enters proc.execute even when it launches no executable.
+   Sources: nvhttp.cpp:1396,1604,4795-4857; stream.cpp:3088,3130,3342;
+   rtsp.cpp:888-907,974-997; remote_display_topology.cpp:392;
+   process.cpp:1347-1348,2772-2780. Moonlight session.cpp:1843-1845.
+
+4. Custom-driver journal corruption is not by itself a permanent orphan. With
+   feeding stopped, temporary leases expire and the checked-out driver reaper
+   retries departure. Permanent configured displays are intentionally outside
+   temporary cleanup. Driver acceptance of remove can precede Windows monitor
+   disappearance; a successful control response is not final enumeration proof.
+   Sources: virtual_display_sunshine.cpp:194,5453-5504,7410-7459,7583-7645;
+   virtual_display_sudovda.cpp:4698-4750;
+   libvirtualdisplay lease_store.cpp:545-559, driver_controller.cpp:601-658.
+
+5. Ordinary Web UI driver switching is deferred during active streams, so a
+   simple live backend-switch orphan claim was rejected. The facade still routes
+   generic cleanup using current backend selection; retained outputs after failed
+   cleanup or paused ownership require separate cross-backend tests.
+   Sources: confighttp.cpp:358-393,2959-2967,3048-3075;
+   config.cpp:3188-3203; stream.cpp:3435-3447;
+   virtual_display.cpp:772-835,980-1008.
+
+Rejected explanations
+
+Normal snapshot IDs are brace UUIDs generated from EDID/instance/path data.
+They are not raw DISPLAY backslash strings. The initial malformed-JSON theory
+based on raw Windows instance IDs does not explain normal production snapshots.
+
+A builder REVERT lacks host restore-ticket tracking, but the later force-restart
+path first reuses a helper when a fast ping send succeeds. An unconditional
+helper-killed-mid-restore claim is unsupported; interruption remains conditional.
+
+No source/history evidence established that a fullscreen app literally erases
+the physical baseline files. Fullscreen mode changes and display notifications
+can trigger races/reapplication, but attributing all complaints to that would
+skip the documented persistence and ownership failures. Likewise, 24H2 is not
+required by the Windows save-flag mechanism, and Apollo is not failure-proof.
+
+Recommended implementation sequence
+
+First corrective release:
+  1. Finish and compile the existing temporary-setter work. Audit every session
+     mode, primary, position, and rollback writer in BOTH helper engines and
+     in-process paths. Persist only explicit user preferences or a fully verified
+     intended physical baseline. Keep valid per-client preferences separate.
+  2. Make loss of the host a recovery condition independent of client pause
+     preference. A short, generation-fenced reconnect grace can preserve a
+     verified live owner. It must not erase the crash lease merely because the
+     client-disconnect preference is false. Retain the scheduled task/journal
+     until confirmed restoration or an explicit user abandonment/reset action.
+  3. Before creating a VDD that can perturb the desktop, capture/acknowledge
+     active and saved topology plus device identities. Before disabling the
+     last physical output, require a usable baseline and a durable recovery
+     route. When unavailable, use a safe extended layout or
+     fail the exclusive transition. Do not claim recovery readiness from a
+     warning-only registration attempt or an unacknowledged snapshot send.
+     Distinguish intentional headless operation with a valid empty physical
+     baseline from capture failure or temporarily missing monitors. Headless
+     streaming remains valid and cleans only its owned temporary output.
+  4. Give ordinary idle/startup recovery a bounded visible-physical fallback,
+     with fresh physical-device verification and owner fencing. Preserve the
+     full baseline and retry exact restoration later if an output is missing.
+  5. Correct expiry ownership and dispatch-only UI outcomes in separate focused
+     changes, with generation/token checks and integration coverage.
+
+Longer-term simpler design:
+  A. Windows' permanent local desktop preferences remain authoritative for
+     explicit local user configuration. A game changing a live mode should not
+     silently redefine that permanent physical baseline.
+  B. Save client virtual-display intent under stable identities: requested mode,
+     rotation, placement, HDR policy, and user-selected layout. Apply stream
+     overrides temporarily. Preserve intentional per-client Windows settings
+     where they do not destroy the independent physical baseline.
+  C. Use a serialized display transaction coordinator with user/session ID, owner PID and
+     process generation, exact GUID/backend/capability, baseline checksum,
+     mutation generation, and phase: prepared, applied, recovering, restored.
+     Atomically establish it before a destructive topology transition. A service
+     supervisor restores stale transactions only in a usable console context;
+     user-logon recovery remains a fallback, not the only path to a login screen.
+     Journal resources by generation and track all app, RTSP, WebRTC, pending,
+     Remote Monitor, and capture-drain owners. A second client must not replace
+     the baseline or clear another owner's transaction. A live paused app keeps
+     its configured retention policy; transport loss is not owner process death.
+  D. Recovery first establishes a usable connected physical output, then restores
+     exact saved settings when possible, then releases owned temporary outputs.
+     Coordinate this with capture drain and a sole generation-fenced mutation
+     owner so a reconnect cannot fight the recovery worker. Do not enter a
+     zero-output interval merely to make cleanup ordering convenient.
+     The helper, virtual repair, terminal cleanup, and teardown paths must claim
+     the same mutation fence. Retire/quiesce relevant live or paused ownership
+     before destructive recovery; never apply a stale generation to a newer
+     session. Preserve intentionally disabled physical outputs and permanent
+     virtual outputs unless the explicit emergency action selects otherwise.
+  E. Expose separate outcomes: virtual output removed, local physical output
+     usable, exact baseline restored, and full restore pending. Delete evidence
+     only for the outcome that actually satisfies the recovery contract.
+
+Verification already performed
+
+Passed on this macOS host:
+  - 10 portable GoogleTests covering retained-display cleanup policy, exact mode
+    equality, and ordered snapshot restoration/failure stopping.
+  - Production-extracted helper recovery tests. Apple Clang required suppressing
+    only unused-constant warnings in a temporary compiler wrapper; production
+    sources and test assertions were unchanged.
+  - Display capture admission and color-monitor reinitialization scenarios.
+  - Scheduled restore-task policy script.
+  - 10 adapter refresh cases.
+  - Virtual refresh policy cases for Windows build values 19045, 22631, 26100.
+
+Not represented by those passes: real CCD/database behavior, Task Scheduler
+registration under actual credentials, virtual driver departure timing, reboot,
+logoff, and physical screen visibility. Windows helper state-machine/component
+tests require a Windows build environment. The virtual-capture-readiness script
+failed on this host with both platform macro/header errors and stale fake members
+relative to current production code; it is not counted as passing.
+
+Required acceptance matrix before shipping
+
+Exercise both helpers and both virtual drivers, Windows 10 explicit opt-in and
+Windows 11 (including 24H2), a laptop internal screen, one/two external screens,
+a dock, headless mode, and deliberately configured permanent virtual outputs.
+
+For each relevant configuration, cover:
+  - Positive-ID Desktop and game launch, stop stream, quit app, resume/reconnect.
+  - Client disconnect preference true/false and finite/infinite pause retention.
+  - Host service stop, forced host kill, helper kill, heartbeat stall, restart,
+    reboot, shutdown, sign-out/logon, sleep/resume, and hibernate/resume.
+  - A mode that already matches versus an actual changed resolution/refresh;
+    exclusive versus extended/isolated layout and changed primary/position.
+  - Fullscreen mode changes followed by crash at each transaction phase.
+  - Lost baseline acknowledgement, failed capture, failed task registration,
+    explicitly user-disabled restore task, missing/stale/corrupt Current and
+    Golden, and mixed SYSTEM/user snapshot roots.
+  - Physical monitor input switched away, dock unplugged, one baseline monitor
+    missing, physical monitor returning after retry-window expiry, EDID/path
+    identity churn, and delayed driver removal enumeration.
+  - Pending RTSP launch expiry, Remote Monitor that never attaches, authenticated
+    appid=0, multiple transports draining, and new reconnect during recovery.
+  - Two overlapping clients while one stops or reconnects, intentionally headless
+    hosts distinguished from failed enumeration, and SYSTEM-only startup with
+    no usable interactive console. Preserve explicit user-disabled restore tasks.
+
+Record active AND database topology before apply, at each mutation, after teardown,
+and after login. Instrument save flags and their reason, session/generation,
+selected backend, baseline identity/checksum, task registration/deletion reason,
+recovery tier, rejection reason, and actual physical output activation/readback.
+QDC_DATABASE_CURRENT distinguishes saved configuration from live temporary modes:
+https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-querydisplayconfig
+
+Acceptance conditions: no unintended session write replaces the permanent
+physical baseline; no destructive exclusive transition lacks recovery; client
+pause does not disable host-crash recovery; recovery evidence survives partial
+failure; one missing monitor does not prevent a safe connected physical screen;
+no orphan/pending owner blocks idle restoration; and success UI reflects observed
+completion. A driver remove acknowledgement alone is insufficient.
+
+Assert that saved local display preferences and client-scoped preferences remain
+semantically unchanged by temporary streams, that positive-ID paused apps retain
+outputs for their configured period while the host is alive, and that permanent
+virtual outputs are not removed as temporary orphans. Pair unit/integration
+failure injection with the hardware matrix; neither replaces the other.
+
+Practical conclusion
+
+Fix the persistence boundary and host-failure policy first, then enforce durable
+preconditions and separate safe visibility from exact layout restoration. Keep
+the existing stable client identities. Preserve the evidence needed to identify
+which failure an affected PC actually hit. The code findings support this focused
+correction; they do not yet justify claiming every historical complaint is fixed.

@@ -547,4 +547,11 @@ namespace display_helper::v2 {
     return state == display_helper::restore_task_state_e::enabled ||
            state == display_helper::restore_task_state_e::disabled;
   }
+
+  bool WinScheduledTaskManager::has_pending_restore_task() {
+    const auto state = restore_task_state();
+    // Query errors cannot establish that an earlier crash lease was cleared.
+    return state == display_helper::restore_task_state_e::enabled ||
+           state == display_helper::restore_task_state_e::unavailable;
+  }
 }  // namespace display_helper::v2

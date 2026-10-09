@@ -62,17 +62,23 @@ namespace {
       return hdr_succeeds;
     }
 
-    bool setAsPrimary(const std::string &device_id) {
+    bool setAsPrimaryTemporary(const std::string &device_id) {
       calls.emplace_back("primary");
       requested_primary = device_id;
       return primary_succeeds;
     }
 
-    bool setDisplayOrigin(const std::string &device_id, const Origin &origin) {
+    bool setDisplayOriginTemporary(const std::string &device_id, const Origin &origin) {
       calls.emplace_back("origin:" + device_id);
       requested_origins[device_id] = origin;
       return failing_origin.empty() || failing_origin != device_id;
     }
+
+    // A restore must never use the persistent setters, even if a later stage
+    // fails. Delete them so an accidental regression also fails compilation.
+    bool setDisplayModes(const ModeMap &) = delete;
+    bool setAsPrimary(const std::string &) = delete;
+    bool setDisplayOrigin(const std::string &, const Origin &) = delete;
 
     std::vector<std::string> calls;
     ModeMap readback_modes;

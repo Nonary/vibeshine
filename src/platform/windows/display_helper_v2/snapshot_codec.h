@@ -49,6 +49,10 @@ namespace display_helper::v2::codec {
   // (and endlessly re-applied) just because the OS enumerates paths in a new order.
   bool equal_snapshots_strict(const Snapshot &a, const Snapshot &b);
 
+  /// Match observed state to required baseline fields. Legacy baselines may
+  /// omit origins; a baseline containing origins requires complete readback.
+  bool snapshot_matches_baseline(const Snapshot &actual, const Snapshot &baseline);
+
   // Stable textual representation for change detection/logging (canonical topology order).
   std::string signature(const Snapshot &snap);
 

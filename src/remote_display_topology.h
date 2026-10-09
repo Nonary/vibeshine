@@ -143,7 +143,10 @@ namespace remote_display_topology {
     void release_all_normal_game_identities();
     // Caller holds the stream lifecycle gate. A desktop launch without an app
     // ends only after every active, pending and tearing-down transport drains.
-    void release_idle_normal_game_identities(bool app_running, bool capture_runtime_owned);
+    // Windows' armed shared-runtime finalizer can restore/remove the last
+    // outputs itself. Retire only their bookkeeping at that boundary rather
+    // than requiring an empty composed topology to succeed first.
+    void release_idle_normal_game_identities(bool app_running, bool capture_runtime_owned, bool defer_last_display_cleanup = false);
     // Call only after guarded physical restoration succeeds, under the stream
     // lifecycle gate and outside the platform display lock. No callbacks run;
     // incomplete cleanup remains pending until that success is established.

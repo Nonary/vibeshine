@@ -15,6 +15,22 @@ namespace display_helper::v2 {
     std::string golden;
   };
 
+  enum class SnapshotAdoptionResult {
+    DestinationPresent,
+    NoValidSource,
+    Adopted,
+    WriteFailed,
+  };
+
+  /// Import validated history only when its destination is absent. An
+  /// unreadable destination remains authoritative, and the source is retained.
+  /// Do not use for Current: that pending-recovery marker must stay at its
+  /// original path so confirmed retirement cannot leave a second copy behind.
+  SnapshotAdoptionResult adopt_snapshot_if_missing(
+    ITextStorage &storage,
+    const std::string &destination,
+    const std::vector<std::string> &sources);
+
   /// Snapshot serialization/persistence policy.  Text I/O is injected so the
   /// recovery core remains deterministic and portable.
   class TextSnapshotStorage final : public ISnapshotStorage {
@@ -59,8 +75,10 @@ namespace display_helper::v2 {
     ApplyStatus apply(const Snapshot &snapshot, const CancellationToken &token) const;
     bool validate(const Snapshot &snapshot) const;
     bool matches_current(const Snapshot &snapshot) const;
+    bool matches_layouts(const codec::layout_rotation_map_t &layout_rotations) const;
 
     EnumeratedDeviceList enumerate() const;
+    display_recovery_safety::PhysicalDisplayState physical_display_state() const;
     codec::layout_rotation_map_t capture_layouts(const std::set<std::string> &device_ids) const;
     bool topology_is_valid(const ActiveTopology &topology) const;
 

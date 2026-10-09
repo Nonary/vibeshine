@@ -35,6 +35,5 @@ namespace rtsp_stream::pending_policy {
   bool game_session_requires_shutdown(bool game_runtime_active, remote_session::role_e role);
   bool control_server_should_remain_alive(bool game_runtime_active, bool has_processless_live_session, bool has_game_session_pending_or_draining);
   bool disconnect_scope_matches(remote_session::role_e candidate_role, remote_session::role_e requested_role, bool client_matches, bool all_clients);
-  std::vector<pending_owner_t> expired_remote_input_owners(const std::vector<pending_owner_t> &expired);
   std::vector<pending_owner_t> disconnect_input_owners_to_forget(const std::vector<pending_owner_t> &removed);
 }  // namespace rtsp_stream::pending_policy

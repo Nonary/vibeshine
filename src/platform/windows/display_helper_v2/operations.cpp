@@ -1,4 +1,5 @@
 #include "src/platform/windows/display_helper_v2/operations.h"
+#include "src/platform/windows/physical_display_recovery.h"
 #include "src/platform/windows/display_helper_v2/topology_policy.h"
 
 #include <algorithm>
@@ -185,7 +186,7 @@ namespace display_helper::v2 {
 
       BOOST_LOG(info) << "Display helper v2: topology activation stage attempt #" << attempt << ".";
       arm_mutation_boundary();
-      if (token.is_cancelled()) {
+      if ((mutation_boundary && !outcome.durable_recovery_armed) || token.is_cancelled()) {
         outcome.status = ApplyStatus::Fatal;
         return outcome;
       }
@@ -303,8 +304,15 @@ namespace display_helper::v2 {
           .duplicate_device_ids = {request.configuration->m_device_id},
         };
       }
+      if (mutation_boundary_) {
+        outcome.durable_recovery_armed = ensure_durable_recovery();
+        outcome.durable_recovery_attempted = durable_recovery_attempted;
+        if (!outcome.durable_recovery_armed || token.is_cancelled()) {
+          outcome.status = ApplyStatus::Fatal;
+          return outcome;
+        }
+      }
       outcome.display_may_have_changed = true;
-      outcome.durable_recovery_attempted = true;
       outcome.staged_state_prepared = true;
       outcome.status = display_.apply(*request.configuration);
       if ((token.is_cancelled() || clock_.now() >= request.deadline)) {
@@ -348,7 +356,9 @@ namespace display_helper::v2 {
       outcome.durable_recovery_armed = ensure_durable_recovery();
       outcome.durable_recovery_attempted = durable_recovery_attempted;
       if (!outcome.durable_recovery_armed) {
-        BOOST_LOG(warning) << "Display helper v2: could not arm durable recovery at APPLY mutation boundary.";
+        BOOST_LOG(error) << "Display helper v2: refusing APPLY without a usable baseline and durable recovery route.";
+        outcome.status = ApplyStatus::Fatal;
+        return outcome;
       }
     }
 
@@ -627,15 +637,6 @@ namespace display_helper::v2 {
       .count();
   }
 
-  std::optional<codec::ParsedSnapshot> RecoveryOperation::load_filtered(SnapshotTier tier, const char *label) {
-    auto loaded = storage_.load_with_metadata(tier);
-    if (!loaded) {
-      return std::nullopt;
-    }
-    const auto devices = display_.enumerate(display_device::DeviceEnumerationDetail::Minimal);
-    return codec::filter_loaded_snapshot(std::move(*loaded), devices, state_.exclusions(), label ? label : tier_to_string(tier));
-  }
-
   bool RecoveryOperation::read_stable_snapshot(
     Snapshot &out,
     std::chrono::milliseconds deadline,
@@ -714,7 +715,7 @@ namespace display_helper::v2 {
     if (token.is_cancelled()) {
       return false;
     }
-    const bool state_ok = got_stable && codec::equal_snapshots_strict(cur, loaded.snapshot) &&
+    const bool state_ok = got_stable && codec::snapshot_matches_baseline(cur, loaded.snapshot) &&
                           quiet_period(std::chrono::milliseconds(750), std::chrono::milliseconds(150), token);
     // Rotation is not part of the snapshot, so the quiet period cannot observe
     // rotation drift; the layout must be checked after it, not before.
@@ -777,7 +778,7 @@ namespace display_helper::v2 {
       if (token.is_cancelled()) {
         return false;
       }
-      const bool state_ok = got_stable && codec::equal_snapshots_strict(cur, base) &&
+      const bool state_ok = got_stable && codec::snapshot_matches_baseline(cur, base) &&
                             quiet_period(std::chrono::milliseconds(750), std::chrono::milliseconds(150), token);
       // Same ordering as confirm_matches: rotation drift is invisible to the
       // quiet period, so the layout check must come after it.
@@ -901,216 +902,130 @@ namespace display_helper::v2 {
     return false;
   }
 
-  bool RecoveryOperation::golden_restore_is_pending() {
-    auto loaded = storage_.load_with_metadata(SnapshotTier::Golden);
-    if (!loaded) {
-      return false;
-    }
-
-    const auto devices = display_.enumerate(display_device::DeviceEnumerationDetail::Minimal);
-    if (codec::filter_loaded_snapshot(
-          *loaded,
-          devices,
-          state_.exclusions(),
-          "golden-pending-check")) {
-      return true;
-    }
-
-    // A filtered load can fail because a required monitor is temporarily
-    // absent. Keep the restore pending in that case, matching the legacy
-    // helper's raw golden-file pending check. Explicit exclusions remain an
-    // intentional exception and must not keep recovery armed forever.
-    const auto available = known_present_devices();
-    const auto snapshot_devices = codec::snapshot_device_set(loaded->snapshot);
-    const auto exclusions = state_.exclusions();
-    return std::any_of(snapshot_devices.begin(), snapshot_devices.end(), [&](const auto &device_id) {
-      const auto normalized = codec::normalize_device_id(device_id);
-      const bool excluded = std::any_of(exclusions.begin(), exclusions.end(), [&](const auto &excluded_id) {
-        return codec::normalize_device_id(excluded_id) == normalized;
-      });
-      return !excluded && !available.contains(normalized);
-    });
-  }
-
-  void RecoveryOperation::clear_session_snapshots_after_golden() {
-    const bool removed_current = storage_.remove(SnapshotTier::Current);
-    const bool removed_previous = storage_.remove(SnapshotTier::Previous);
-    BOOST_LOG(info) << "Golden restore cleanup: removed current=" << (removed_current ? "true" : "false")
-                    << ", previous=" << (removed_previous ? "true" : "false");
-  }
-
   RecoveryOutcome RecoveryOperation::run(const CancellationToken &token) {
     RecoveryOutcome outcome;
     if (token.is_cancelled()) {
       return outcome;
     }
 
-    // AsyncDispatcher handles the cancellable grace period before entering
-    // this operation. Once recovery begins, preserve its restore guard on a
-    // later cancellation: topology/settings work may start on any branch.
+    // AsyncDispatcher owns the grace period and mutation serialization. Once
+    // a recovery attempt starts, a later cancellation must retain its evidence.
     outcome.display_may_have_changed = true;
     state_.restore_attempted_unconfirmed.store(true, std::memory_order_release);
+    state_.golden_pending_session_fallbacks.store(0, std::memory_order_release);
 
     const bool golden_first = state_.always_restore_from_golden.load(std::memory_order_acquire);
-    if (!golden_first) {
-      state_.golden_pending_session_fallbacks.store(0, std::memory_order_release);
+    const bool prefer_golden_if_current_missing = state_.prefer_golden_if_current_missing.load(std::memory_order_acquire);
+    const auto tiers = snapshot_recovery_order(golden_first, prefer_golden_if_current_missing);
+
+    // Presence determines authority. An unreadable/corrupt existing tier is an
+    // unresolved recovery obligation, not permission to replace it with an
+    // older exact layout. An older valid tier can only supply rescue candidates.
+    std::optional<SnapshotTier> authoritative_tier;
+    std::optional<codec::ParsedSnapshot> authoritative_baseline;
+    std::optional<codec::ParsedSnapshot> visibility_baseline;
+    for (const auto tier : tiers) {
+      if (token.is_cancelled()) {
+        return outcome;
+      }
+      auto loaded = storage_.load_with_metadata(tier);
+      if (!authoritative_tier && (loaded || storage_.exists(tier))) {
+        authoritative_tier = tier;
+        authoritative_baseline = loaded;
+      }
+      if (loaded && display_.topology_is_valid(loaded->snapshot.m_topology)) {
+        visibility_baseline = std::move(loaded);
+        break;
+      }
     }
 
-    std::optional<Snapshot> restored;
+    const auto finish_pending = [&]() {
+      outcome.success = false;
+      outcome.snapshot.reset();
+      if (visibility_baseline && !token.is_cancelled()) {
+        const auto visibility = physical_recovery::ensure_visible(
+          visibility_baseline->snapshot.m_topology,
+          state_.exclusions(),
+          [&]() { return display_.enumerate_physical_recovery_devices(); },
+          [&]() { return display_.capture_topology(); },
+          [&](const ActiveTopology &topology) { return display_.apply_topology(topology) == ApplyStatus::Ok; },
+          [&]() { return token.is_cancelled(); },
+          [&](std::chrono::milliseconds duration) { return wait_with_cancel(duration, token); });
+        outcome.physical_visibility_available = visibility.physical_available;
+        outcome.display_may_have_changed |= visibility.mutation_attempted;
+        if (visibility.physical_available) {
+          BOOST_LOG(info) << "Restore: physical output is usable; exact baseline remains pending and recovery evidence is retained.";
+        }
+      }
+      return outcome;
+    };
 
-    auto try_golden = [&]() -> bool {
-      if (token.is_cancelled()) {
-        return false;
-      }
-      auto golden = load_filtered(SnapshotTier::Golden, "golden");
-      if (!golden) {
-        return false;
-      }
-      if (should_skip_golden(golden->snapshot)) {
-        return false;
-      }
-      if (!display_.validate_topology(golden->snapshot.m_topology)) {
+    if (!authoritative_tier || !authoritative_baseline ||
+        !display_.topology_is_valid(authoritative_baseline->snapshot.m_topology) || token.is_cancelled()) {
+      return finish_pending();
+    }
+
+    auto required = physical_recovery::device_ids(authoritative_baseline->snapshot.m_topology);
+    for (const auto &id : state_.exclusions()) {
+      required.erase(codec::normalize_device_id(id));
+    }
+    for (const auto &device : display_.enumerate_physical_recovery_devices()) {
+      required.erase(codec::normalize_device_id(device.id));
+    }
+    if (!required.empty() || token.is_cancelled()) {
+      return finish_pending();
+    }
+
+    // Missing monitors and failed exact settings restoration both use only the
+    // additive rescue lane. No alternate exact tier may enable deliberately
+    // disabled outputs or remove a currently active permanent virtual output.
+    const auto loaded = codec::filter_loaded_snapshot(
+      *authoritative_baseline,
+      display_.enumerate(display_device::DeviceEnumerationDetail::Minimal),
+      state_.exclusions(),
+      "authoritative-restore");
+    if (!loaded || token.is_cancelled()) {
+      return finish_pending();
+    }
+
+    const bool restoring_golden = *authoritative_tier == SnapshotTier::Golden;
+    const char *label = tier_to_string(*authoritative_tier);
+    if (restoring_golden && should_skip_golden(loaded->snapshot)) {
+      return finish_pending();
+    }
+    if (!display_.validate_topology(loaded->snapshot.m_topology)) {
+      if (restoring_golden) {
         golden_health_.note_issue("invalid_topology");
-        return false;
       }
-      if (apply_and_confirm(*golden, "golden", token)) {
-        if (token.is_cancelled()) {
-          return false;
-        }
-        BOOST_LOG(info) << "Golden restore confirmed; clearing session restore snapshots.";
-        outcome.staged_state_reset_attempted = true;
-        outcome.staged_state_reset_succeeded = display_.reset_staged_apply_state();
-        if (!outcome.staged_state_reset_succeeded) {
-          BOOST_LOG(warning) << "Display helper v2: failed to clear staged APPLY state after confirmed golden restore.";
-        }
-        // The staged reset is uninterruptible; re-check before destroying the
-        // session tiers so a supersession that arrived during it keeps them.
-        if (token.is_cancelled()) {
-          return false;
-        }
-        clear_session_snapshots_after_golden();
-        golden_health_.clear_status("restore confirmed");
-        restored = golden->snapshot;
-        return true;
-      }
-      if (!token.is_cancelled()) {
+      return finish_pending();
+    }
+    if (!apply_and_confirm(*loaded, label, token) || token.is_cancelled()) {
+      if (restoring_golden && !token.is_cancelled()) {
         golden_health_.note_issue("restore_not_confirmed");
       }
-      return false;
-    };
-
-    auto try_session = [&](SnapshotTier tier, const char *label, bool &attempted) -> bool {
-      attempted = false;
-      auto loaded = load_filtered(tier, label);
-      if (!loaded) {
-        BOOST_LOG(info) << label << " snapshot not available.";
-        return false;
-      }
-      attempted = true;
-      if (!display_.topology_is_valid(loaded->snapshot.m_topology)) {
-        BOOST_LOG(info) << label << " snapshot rejected due to invalid topology.";
-        return false;
-      }
-      if (apply_and_confirm(*loaded, label, token)) {
-        if (token.is_cancelled()) {
-          return false;
-        }
-        outcome.staged_state_reset_attempted = true;
-        outcome.staged_state_reset_succeeded = display_.reset_staged_apply_state();
-        if (!outcome.staged_state_reset_succeeded) {
-          BOOST_LOG(warning) << "Display helper v2: failed to clear staged APPLY state after confirmed session restore.";
-        }
-        state_.last_session_restore_success_ms.store(steady_now_ms(), std::memory_order_release);
-        restored = loaded->snapshot;
-        return true;
-      }
-      return false;
-    };
-
-    bool tried_golden_before_previous = false;
-    auto try_session_snapshots = [&]() -> bool {
-      bool attempted_current = false;
-      if (try_session(SnapshotTier::Current, "current", attempted_current)) {
-        // Confirmed on screen; skip only the tier housekeeping when a
-        // supersession arrived after try_session's own cancellation check.
-        if (!token.is_cancelled()) {
-          (void) storage_.promote_current_to_previous();
-        }
-        return true;
-      }
-
-      const bool current_snapshot_unavailable = !attempted_current;
-      const bool prefer_golden_before_previous =
-        state_.prefer_golden_if_current_missing.load(std::memory_order_acquire) && current_snapshot_unavailable;
-      if (prefer_golden_before_previous &&
-          storage_.exists(SnapshotTier::Previous) && storage_.exists(SnapshotTier::Golden)) {
-        tried_golden_before_previous = true;
-        BOOST_LOG(info) << "Restore: current snapshot unavailable; preferring golden snapshot over previous session snapshot.";
-        if (try_golden()) {
-          return true;
-        }
-      }
-
-      bool attempted_previous = false;
-      if (try_session(SnapshotTier::Previous, "previous", attempted_previous)) {
-        if (attempted_current && !token.is_cancelled()) {
-          BOOST_LOG(warning) << "Restore: previous snapshot recovered the desktop; retaining the unconfirmed current baseline for a later restore.";
-        }
-        return true;
-      }
-      (void) attempted_previous;
-      return false;
-    };
-
-    if (golden_first) {
-      // Prefer golden snapshot, fallback to session snapshots
-      BOOST_LOG(info) << "Restore: using golden-first strategy (always_restore_from_golden=true)";
-      if (try_golden()) {
-        state_.golden_pending_session_fallbacks.store(0, std::memory_order_release);
-        outcome.success = true;
-        outcome.snapshot = restored;
-        return outcome;
-      }
-      // Golden failed. Session snapshots can keep the machine usable, but they
-      // cannot complete a request whose configured authoritative baseline is
-      // still pending.
-      if (!try_session_snapshots()) {
-        state_.golden_pending_session_fallbacks.store(0, std::memory_order_release);
-        return outcome;
-      }
-
-      if (golden_restore_is_pending()) {
-        const auto fallback_count = state_.golden_pending_session_fallbacks.fetch_add(1, std::memory_order_acq_rel) + 1;
-        BOOST_LOG(info) << "Restore: session fallback applied while golden snapshot remains pending; continuing polling (attempt "
-                        << fallback_count << ").";
-        return outcome;
-      }
-
-      golden_health_.register_unresolved("session fallback accepted");
-      state_.golden_pending_session_fallbacks.store(0, std::memory_order_release);
-      outcome.success = true;
-      outcome.snapshot = restored;
-      return outcome;
+      return finish_pending();
     }
 
-    // Default: prefer session snapshots, fallback to golden
-    if (try_session_snapshots()) {
-      if (tried_golden_before_previous) {
-        golden_health_.register_unresolved("session fallback accepted");
-      }
-      state_.golden_pending_session_fallbacks.store(0, std::memory_order_release);
-      outcome.success = true;
-      outcome.snapshot = restored;
-      return outcome;
+    outcome.staged_state_reset_attempted = true;
+    outcome.staged_state_reset_succeeded = display_.reset_staged_apply_state();
+    if (!outcome.staged_state_reset_succeeded) {
+      BOOST_LOG(warning) << "Display helper v2: failed to clear staged APPLY state after confirmed authoritative restore.";
     }
-    if (tried_golden_before_previous) {
-      state_.golden_pending_session_fallbacks.store(0, std::memory_order_release);
-      return outcome;
+    // Reset is uninterruptible. A superseding session retains the tiers and
+    // durable task even if cancellation arrived during that backend call.
+    if (token.is_cancelled()) {
+      return finish_pending();
     }
-    const bool restored_golden = try_golden();
-    state_.golden_pending_session_fallbacks.store(0, std::memory_order_release);
-    outcome.success = restored_golden;
-    outcome.snapshot = restored;
+
+    // Keep authority and every saved tier intact through the state machine's
+    // delayed validation. Promoting Current here would let a failed final
+    // readback select a different Golden/Previous authority on the next retry.
+    outcome.success = true;
+    outcome.snapshot = loaded->snapshot;
+    outcome.restored_tier = authoritative_tier;
+    if (loaded->has_layout_data) {
+      outcome.layout_rotations = loaded->layout_rotations;
+    }
     return outcome;
   }
 
@@ -1120,7 +1035,10 @@ namespace display_helper::v2 {
     : snapshot_service_(snapshot_service),
       clock_(clock) {}
 
-  bool RecoveryValidationOperation::run(const Snapshot &snapshot, const CancellationToken &token) {
+  bool RecoveryValidationOperation::run(
+    const Snapshot &snapshot,
+    const CancellationToken &token,
+    const std::optional<codec::layout_rotation_map_t> &layout_rotations) {
     if (token.is_cancelled()) {
       return false;
     }
@@ -1131,6 +1049,12 @@ namespace display_helper::v2 {
       return false;
     }
 
-    return snapshot_service_.matches_current(snapshot);
+    // 0 and 180 degrees have identical topology, mode and origin fields.
+    // Read the original authoritative rotations after the delayed snapshot
+    // check, and reject cancellation even when it arrives during readback.
+    return snapshot_service_.matches_current(snapshot) &&
+           !token.is_cancelled() &&
+           (!layout_rotations || snapshot_service_.matches_layouts(*layout_rotations)) &&
+           !token.is_cancelled();
   }
 }  // namespace display_helper::v2

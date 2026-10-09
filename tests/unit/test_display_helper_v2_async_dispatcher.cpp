@@ -14,6 +14,7 @@
 #include <future>
 #include <mutex>
 #include <numeric>
+#include <stdexcept>
 
 namespace {
   class FakeClock final : public display_helper::v2::IClock {
@@ -79,6 +80,11 @@ namespace {
       return true;
     }
 
+    bool current_layout_matches(const display_helper::v2::codec::layout_rotation_map_t &expected) override {
+      observed_layout_expectation = expected;
+      return layout_match_behavior ? layout_match_behavior() : true;
+    }
+
     bool configuration_matches(const display_device::SingleDisplayConfiguration &) override {
       return true;
     }
@@ -95,6 +101,8 @@ namespace {
     display_device::ActiveTopology topology {{"A"}};
     display_device::EnumeratedDeviceList devices;
     int apply_calls = 0;
+    display_helper::v2::codec::layout_rotation_map_t observed_layout_expectation;
+    std::function<bool()> layout_match_behavior;
   };
 
   class FakeVirtualDisplayDriver final : public display_helper::v2::IVirtualDisplayDriver {
@@ -188,7 +196,7 @@ TEST(DisplayHelperV2AsyncDispatcher, AppliesAfterVirtualDisplayResetSequence) {
   EXPECT_EQ(total_sleep, std::chrono::milliseconds(1600));
 }
 
-TEST(DisplayHelperV2AsyncDispatcher, FailedVirtualResetRecoveryBoundaryIsAttemptedOnlyOnce) {
+TEST(DisplayHelperV2AsyncDispatcher, FailedRecoveryBoundaryPreventsVirtualResetAndApply) {
   FakeClock clock;
   FakeDisplaySettings display;
   display_helper::v2::SnapshotService snapshot_service(display);
@@ -233,11 +241,14 @@ TEST(DisplayHelperV2AsyncDispatcher, FailedVirtualResetRecoveryBoundaryIsAttempt
   ASSERT_EQ(future.wait_for(std::chrono::milliseconds(500)), std::future_status::ready);
   const auto outcome = future.get();
 
-  EXPECT_EQ(outcome.status, display_helper::v2::ApplyStatus::Ok);
+  EXPECT_EQ(outcome.status, display_helper::v2::ApplyStatus::Fatal);
   EXPECT_TRUE(outcome.durable_recovery_attempted);
   EXPECT_FALSE(outcome.durable_recovery_armed);
   EXPECT_EQ(recovery_boundary_calls, 1);
-  EXPECT_EQ(display.apply_calls, 1);
+  EXPECT_EQ(display.apply_calls, 0);
+  EXPECT_EQ(virtual_display.disable_calls, 0);
+  EXPECT_EQ(virtual_display.enable_calls, 0);
+  EXPECT_FALSE(outcome.display_may_have_changed);
 }
 
 TEST(DisplayHelperV2AsyncDispatcher, FailsWhenVirtualDisplayDisableFails) {
@@ -299,6 +310,47 @@ TEST(DisplayHelperV2AsyncDispatcher, FailsWhenVirtualDisplayDisableFails) {
   EXPECT_EQ(recovery_boundary_calls, 1);
   ASSERT_EQ(clock.sleeps.size(), 1u);
   EXPECT_EQ(clock.sleeps[0], std::chrono::milliseconds(50));
+}
+
+TEST(DisplayHelperV2AsyncDispatcher, FinalRotationReadbackFailureOrCancellationReportsUnconfirmed) {
+  for (const int failure : {0, 1, 2}) {
+    SCOPED_TRACE(failure);
+    FakeClock clock;
+    FakeDisplaySettings display;
+    display_helper::v2::SnapshotService snapshot_service(display);
+    display_helper::v2::InMemorySnapshotStorage storage;
+    display_helper::v2::InMemoryTextStorage golden_status_storage;
+    display_helper::v2::GoldenHealth golden_health(golden_status_storage, {});
+    display_helper::v2::RestoreState restore_state;
+    display_helper::v2::ApplyOperation apply_op(display, clock);
+    display_helper::v2::VerificationOperation verify_op(display, clock);
+    display_helper::v2::RecoveryOperation recovery_op(display, storage, golden_health, restore_state, clock);
+    display_helper::v2::RecoveryValidationOperation recovery_validate(snapshot_service, clock);
+    FakeVirtualDisplayDriver virtual_display;
+    display_helper::v2::AsyncDispatcher dispatcher(
+      apply_op, verify_op, recovery_op, recovery_validate, virtual_display, clock);
+    display_helper::v2::CancellationSource cancel;
+    display.layout_match_behavior = [&] {
+      if (failure == 1) {
+        throw std::runtime_error("rotation readback unavailable");
+      }
+      if (failure == 2) {
+        cancel.cancel();
+        return true;
+      }
+      return false;
+    };
+
+    const display_helper::v2::codec::layout_rotation_map_t expected {{"A", 180}};
+    std::promise<bool> completion;
+    dispatcher.dispatch_recovery_validation({}, expected, cancel.token(), [&](bool matched) {
+      completion.set_value(matched);
+    });
+    auto result = completion.get_future();
+    ASSERT_EQ(result.wait_for(std::chrono::milliseconds(500)), std::future_status::ready);
+    EXPECT_FALSE(result.get());
+    EXPECT_EQ(display.observed_layout_expectation, expected);
+  }
 }
 
 #endif  // _WIN32

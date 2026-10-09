@@ -20,6 +20,13 @@
 #include <windows.h>
 
 namespace display_helper::v2 {
+  display_recovery_safety::PhysicalDisplayState WinDisplaySettings::physical_display_state() {
+    if (!ensure_initialized()) {
+      return display_recovery_safety::PhysicalDisplayState::unknown;
+    }
+    return display_recovery_safety::probe_physical_displays(*win_api_);
+  }
+
   namespace {
     template <typename MapType>
     std::string format_map_keys(const MapType &map) {
@@ -156,6 +163,13 @@ namespace display_helper::v2 {
     }
   }
 
+  std::vector<physical_recovery::Device> WinDisplaySettings::enumerate_physical_recovery_devices() {
+    if (!ensure_initialized()) {
+      return {};
+    }
+    return physical_recovery::enumerate_devices(*win_api_);
+  }
+
   bool WinDisplaySettings::validate_topology(const ActiveTopology &topology) {
     if (!ensure_initialized()) {
       return false;
@@ -185,6 +199,9 @@ namespace display_helper::v2 {
       return snapshot;
     }
 
+    // SnapshotCurrent runs before its durable task is acknowledged. A failed
+    // read must not trigger an implicit display-stack recovery at this point.
+    display_device::DisplayRecoveryBehaviorGuard recovery_guard(display_device::DisplayRecoveryBehavior::Skip);
     try {
       snapshot.m_topology = display_device_->getCurrentTopology();
 
@@ -233,7 +250,7 @@ namespace display_helper::v2 {
       // primary first can make Windows reject a saved mode on a waking or
       // duplicate display, leaving recovery half-applied.
       if (!display_helper::restore_snapshot_settings(*display_device_, snapshot)) {
-        BOOST_LOG(warning) << "apply_snapshot_settings: failed to restore settings; skipping remaining layout saves";
+        BOOST_LOG(warning) << "apply_snapshot_settings: failed to restore settings; skipping remaining layout changes";
         return false;
       }
       return true;
@@ -295,7 +312,7 @@ namespace display_helper::v2 {
       // Order-insensitive comparison: Windows enumerates topology groups in an
       // arbitrary order, and treating that as a mismatch caused endless restore
       // re-applies that scrambled MPO planes (fd98755b).
-      return codec::equal_snapshots_strict(capture_snapshot(), snapshot);
+      return codec::snapshot_matches_baseline(capture_snapshot(), snapshot);
     } catch (...) {
       return false;
     }
@@ -396,13 +413,13 @@ namespace display_helper::v2 {
     display_device::DisplayRecoveryBehaviorGuard recovery_guard(display_device::DisplayRecoveryBehavior::Skip);
     try {
       // Preserved positions are frequently already correct. Avoid another CCD
-      // APPLY/database write (and its display notification) for a no-op.
+      // APPLY (and its display notification) for a no-op.
       for (const auto &device : display_device_->enumAvailableDevices(display_device::DeviceEnumerationDetail::Minimal)) {
         if (boost::iequals(device.m_device_id, device_id) && device.m_info && device.m_info->m_origin_point.m_x == origin.m_x && device.m_info->m_origin_point.m_y == origin.m_y) {
           return true;
         }
       }
-      return display_device_->setDisplayOrigin(device_id, origin);
+      return display_device_->setDisplayOriginTemporary(device_id, origin);
     } catch (...) {
       return false;
     }
@@ -504,7 +521,7 @@ namespace display_helper::v2 {
   }
 
   bool WinDisplaySettings::set_device_refresh_rate(const std::string &device_id, unsigned int num, unsigned int den) {
-    if (device_id.empty() || !ensure_initialized()) {
+    if (device_id.empty() || num == 0 || den == 0 || !ensure_initialized()) {
       return false;
     }
     display_device::DisplayRecoveryBehaviorGuard recovery_guard(display_device::DisplayRecoveryBehavior::Skip);
@@ -519,7 +536,7 @@ namespace display_helper::v2 {
           return true;
         }
         current_modes[device_id].m_refresh_rate = display_device::Rational {num, den};
-        return display_device_->setDisplayModes(current_modes);
+        return display_device_->setDisplayModesTemporary(current_modes);
       }
     } catch (...) {
     }
@@ -590,7 +607,7 @@ namespace display_helper::v2 {
       if (changed.empty()) {
         return applied;
       }
-      if (display_device_->setDisplayModes(current_modes)) {
+      if (display_device_->setDisplayModesTemporary(current_modes)) {
         applied.insert(changed.begin(), changed.end());
       }
     } catch (...) {
@@ -936,6 +953,7 @@ namespace display_helper::v2 {
       return out;
     }
 
+    display_device::DisplayRecoveryBehaviorGuard recovery_guard(display_device::DisplayRecoveryBehavior::Skip);
     // Enumerate devices directly rather than iterating the name map: that map
     // also holds lowercase alias keys for lookup, and iterating it persisted
     // duplicate rotation entries per display.
@@ -1010,45 +1028,18 @@ namespace display_helper::v2 {
       return all_ok;  // All displays already at correct rotation
     }
 
-    // Fast path: single display doesn't need batching
-    if (pending.size() == 1) {
-      auto *request = reinterpret_cast<DEVMODEW *>(pending[0].devmode_buffer.data());
-      LONG result = ChangeDisplaySettingsExW(pending[0].display_name.c_str(), request, nullptr, CDS_UPDATEREGISTRY, nullptr);
-      if (result != DISP_CHANGE_SUCCESSFUL) {
-        result = ChangeDisplaySettingsExW(pending[0].display_name.c_str(), request, nullptr, 0, nullptr);
-      }
-      if (result != DISP_CHANGE_SUCCESSFUL) {
-        BOOST_LOG(warning) << "Layout restore: ChangeDisplaySettingsEx failed for display "
-                           << std::string(pending[0].display_name.begin(), pending[0].display_name.end())
-                           << " (error=" << result << ")";
-        all_ok = false;
-      }
-      return all_ok;
-    }
-
-    // --- Phase 2: Batch all changes to registry with CDS_NORESET ---
-    // Each call writes to the registry but does NOT trigger a mode change.
-    // This prevents the OS from validating intermediate topological states.
+    // GDI's CDS_NORESET batching requires registry writes before the final
+    // apply. Keep recovery temporary even if a later monitor fails: a partial
+    // restore must not become the configuration Windows loads on next logon.
     for (auto &prep : pending) {
       auto *request = reinterpret_cast<DEVMODEW *>(prep.devmode_buffer.data());
-      LONG result = ChangeDisplaySettingsExW(
-        prep.display_name.c_str(), request, nullptr,
-        CDS_UPDATEREGISTRY | CDS_NORESET, nullptr
-      );
+      const LONG result = ChangeDisplaySettingsExW(prep.display_name.c_str(), request, nullptr, 0, nullptr);
       if (result != DISP_CHANGE_SUCCESSFUL) {
-        BOOST_LOG(warning) << "Layout restore: CDS_NORESET batch failed for display "
+        BOOST_LOG(warning) << "Layout restore: temporary rotation failed for display "
                            << std::string(prep.display_name.begin(), prep.display_name.end())
                            << " (error=" << result << ")";
         all_ok = false;
       }
-    }
-
-    // --- Phase 3: Atomic commit — apply all batched registry changes at once ---
-    // A single null-call triggers one WM_DISPLAYCHANGE and one topology validation.
-    LONG commit_result = ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
-    if (commit_result != DISP_CHANGE_SUCCESSFUL) {
-      BOOST_LOG(warning) << "Layout restore: atomic commit of batched rotations failed (error=" << commit_result << ")";
-      all_ok = false;
     }
 
     return all_ok;
@@ -1091,7 +1082,7 @@ namespace display_helper::v2 {
       // CDS_RESET forces the mode-set through to the driver even though every
       // requested value equals the current value; without it Windows dedupes
       // the call and a stale driver-side pointer transform is never rebuilt.
-      const LONG result = ChangeDisplaySettingsExW(it->second.c_str(), mode, nullptr, CDS_UPDATEREGISTRY | CDS_RESET, nullptr);
+      const LONG result = ChangeDisplaySettingsExW(it->second.c_str(), mode, nullptr, CDS_RESET, nullptr);
       if (result != DISP_CHANGE_SUCCESSFUL) {
         BOOST_LOG(warning) << "Rotation reassert: ChangeDisplaySettingsEx failed for display "
                            << std::string(it->second.begin(), it->second.end())

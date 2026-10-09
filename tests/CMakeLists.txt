@@ -374,9 +374,11 @@ sunshine_add_test_target(
     TEST_SOURCES
         "${CMAKE_CURRENT_LIST_DIR}/tests_main.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_snapshot_restore.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/unit/test_physical_display_recovery.cpp"
     PRODUCT_SOURCES
     INCLUDE_DIRECTORIES
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/common/include"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/windows/include"
     LINK_LIBRARIES GTest::gtest
     DEPENDENCIES
 )
@@ -452,6 +454,8 @@ sunshine_register_component(NAME test_component_hdr_request_policy TEST_SOURCE u
 sunshine_register_component(NAME test_component_single_flight TEST_SOURCE unit/test_single_flight.cpp)
 sunshine_register_component(NAME test_component_display_helper_request_policy TEST_SOURCE unit/test_display_helper_request_policy.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_request_policy.cpp")
+sunshine_register_component(NAME test_component_display_recovery_safety TEST_SOURCE unit/test_display_recovery_safety.cpp
+    LINK_LIBRARIES sunshine_test_displaydevice_headers)
 sunshine_register_component(NAME test_component_remote_display_topology TEST_SOURCE unit/test_remote_display_topology.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/remote_display_topology.cpp"
     LINK_LIBRARIES nlohmann_json::nlohmann_json)
@@ -1071,6 +1075,37 @@ endif()
 
 # Compile production connector classes and Windows lifecycle policies on the host.
 find_package(Python3 COMPONENTS Interpreter)
+if(SUNSHINE_TEST_ENABLE_COMPONENT AND Python3_Interpreter_FOUND AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    foreach(_display_recovery_case IN ITEMS display_recovery_safety_probe display_snapshot_path_binding rtsp_pending_lifecycle
+            terminal_display_recovery display_helper_live_mode virtual_display_live_mode)
+        add_test(NAME "test_component_${_display_recovery_case}"
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_${_display_recovery_case}.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties("test_component_${_display_recovery_case}" PROPERTIES LABELS "component" TIMEOUT 90)
+    endforeach()
+    if(UNIX)
+        add_test(NAME test_component_display_helper_v2_file_storage
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_helper_v2_file_storage.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_display_helper_v2_file_storage PROPERTIES LABELS "component" TIMEOUT 90)
+    endif()
+    add_test(NAME test_component_display_helper_legacy_safety
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_helper_legacy_safety.py"
+            "${CMAKE_CXX_COMPILER}")
+    set_tests_properties(test_component_display_helper_legacy_safety PROPERTIES LABELS "component" TIMEOUT 90)
+    foreach(_display_recovery_case IN ITEMS display_snapshot_ipc shared_runtime_idle_ownership)
+        add_test(NAME "test_component_${_display_recovery_case}"
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_${_display_recovery_case}.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}"
+                "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+            COMMAND_EXPAND_LISTS)
+        set_tests_properties("test_component_${_display_recovery_case}" PROPERTIES LABELS "component" TIMEOUT 90)
+    endforeach()
+endif()
 if(Python3_Interpreter_FOUND)
     find_program(SUNSHINE_TEST_DOTNET NAMES dotnet dotnet.exe)
     add_test(NAME regression_playnite_connector_lifecycle

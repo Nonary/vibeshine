@@ -52,9 +52,11 @@
   #include "src/remote_display_topology.h"
   #include "src/state_storage.h"
   #include "src/stream.h"
+  #include "src/utility.h"
   #include "src/webrtc_stream.h"
   #include "src/nvhttp.h"
   #include "src/platform/windows/wake_recovery_cleanup_policy.h"
+  #include "tools/display_helper_paths.h"
 
   #include <display_device/noop_audio_context.h>
   #include <display_device/noop_settings_persistence.h>
@@ -199,21 +201,6 @@ namespace {
     BOOST_LOG(info) << "Display helper: deferring resolution apply for session " << pending_apply_state()->session_id << ".";
   }
 
-  void maybe_queue_deferred_resolution_apply_on_api_unavailable(
-    const display_helper_integration::DisplayApplyRequest &request
-  ) {
-    if (!request.session) {
-      return;
-    }
-    if (!request_includes_resolution(request)) {
-      return;
-    }
-    const auto session_id = request.session->id;
-    queue_deferred_resolution_apply(request);
-    BOOST_LOG(info) << "Display helper: API unavailable; queued deferred resolution apply for session "
-                    << session_id << ".";
-  }
-
   bool should_defer_resolution_apply(const display_helper_integration::DisplayApplyRequest &request) {
     if (!request.session) {
       return false;
@@ -256,7 +243,6 @@ namespace {
     return true;
   }
 
-  constexpr std::chrono::seconds kTopologyWaitTimeout {6};
   constexpr std::chrono::milliseconds kHelperIpcReadyTimeout {5000};
   constexpr std::chrono::milliseconds kHelperIpcReadyPoll {100};
 
@@ -396,27 +382,6 @@ namespace {
     return boost::iequals(lhs, rhs);
   }
 
-  bool device_is_active(const std::string &device_id) {
-    if (device_id.empty()) {
-      return false;
-    }
-
-    auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
-    if (!devices) {
-      return false;
-    }
-
-    for (const auto &device : *devices) {
-      if (device.m_device_id.empty() || !device.m_info) {
-        continue;
-      }
-      if (device_id_equals_ci(device.m_device_id, device_id)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   // User-configured exclusions plus every Sunshine-managed virtual display device id we have
   // seen. Virtual displays must never end up in restore baselines: a baseline captured while
   // one was active "restores" the physical monitors away (vibeshine#223).
@@ -440,85 +405,6 @@ namespace {
     } catch (...) {
       return std::string {};
     }
-  }
-
-  bool wait_for_device_activation(const std::string &device_id, std::chrono::steady_clock::duration timeout) {
-    if (device_id.empty()) {
-      return false;
-    }
-
-    auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-      if (device_is_active(device_id)) {
-        return true;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    return false;
-  }
-
-  bool any_virtual_display_active() {
-    auto virtual_displays = VDISPLAY::enumerateVirtualDisplays();
-    return std::any_of(
-      virtual_displays.begin(),
-      virtual_displays.end(),
-      [](const VDISPLAY::VirtualDisplayInfo &info) {
-        return info.is_active;
-      }
-    );
-  }
-
-  bool wait_for_virtual_display_activation(std::chrono::steady_clock::duration timeout) {
-    auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-      if (any_virtual_display_active()) {
-        return true;
-      }
-
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    return false;
-  }
-
-  bool verify_helper_topology(
-    const rtsp_stream::launch_session_t &session,
-    const std::string &device_id
-  ) {
-    if (!device_id.empty()) {
-      const bool has_activation_hint = session.virtual_display &&
-                                       session.virtual_display_ready_since.has_value() &&
-                                       !session.virtual_display_device_id.empty() &&
-                                       device_id_equals_ci(device_id, session.virtual_display_device_id);
-      if (has_activation_hint && device_is_active(device_id)) {
-        BOOST_LOG(debug) << "Display helper: device_id " << device_id
-                         << " already active; skipping activation wait.";
-        return true;
-      }
-
-      if (!wait_for_device_activation(device_id, kTopologyWaitTimeout)) {
-        BOOST_LOG(error) << "Display helper: device_id " << device_id << " did not become active after APPLY.";
-        return false;
-      }
-      return true;
-    }
-
-    if (session.virtual_display) {
-      // The hint records a past observation, so confirm the display is still active
-      // before skipping the wait. Mirrors the device_id branch above.
-      const bool hint_ready = session.virtual_display_ready_since.has_value();
-      if (hint_ready && any_virtual_display_active()) {
-        BOOST_LOG(debug) << "Display helper: virtual display ready hint satisfied. Skipping activation wait.";
-        return true;
-      }
-      if (!wait_for_virtual_display_activation(kTopologyWaitTimeout)) {
-        BOOST_LOG(error) << "Display helper: virtual display topology did not become active after APPLY.";
-        return false;
-      }
-    }
-
-    return true;
   }
 
   bool apply_topology_definition(
@@ -561,7 +447,7 @@ namespace {
     for (const auto &[device_id, point] : topology.monitor_positions) {
       BOOST_LOG(debug) << "Display helper: setting origin for " << device_id
                        << " to (" << point.m_x << "," << point.m_y << ") after " << label << ".";
-      if (!ctx->display->setDisplayOrigin(device_id, point)) {
+      if (!ctx->display->setDisplayOriginTemporary(device_id, point)) {
         BOOST_LOG(warning) << "Display helper: failed to set origin for " << device_id << " (" << label << ").";
         // Do not continue applying later origins after one move fails. A
         // second move can occupy the failed device's still-current origin and
@@ -571,47 +457,13 @@ namespace {
     }
 
     if (topology.primary_device && !topology.primary_device->empty() &&
-        !ctx->display->setAsPrimary(*topology.primary_device)) {
+        !ctx->display->setAsPrimaryTemporary(*topology.primary_device)) {
       BOOST_LOG(warning) << "Display helper: failed to set remote composed primary "
                          << *topology.primary_device << " (" << label << ").";
       topology_ok = false;
     }
 
     return topology_ok;
-  }
-
-  display_device::SettingsManagerInterface::ApplyResult apply_in_process(
-    const display_helper_integration::DisplayApplyRequest &request
-  ) {
-    if (!request.configuration) {
-      BOOST_LOG(error) << "Display helper (in-process): no configuration provided for APPLY request.";
-      return display_device::SettingsManagerInterface::ApplyResult::DevicePrepFailed;
-    }
-
-    auto ctx = make_settings_manager();
-    if (!ctx) {
-      return display_device::SettingsManagerInterface::ApplyResult::DevicePrepFailed;
-    }
-
-    const auto result = ctx->settings_mgr->applySettings(*request.configuration);
-    const bool ok = (result == display_device::SettingsManagerInterface::ApplyResult::Ok);
-    BOOST_LOG(info) << "Display helper (in-process): APPLY result=" << (ok ? "Ok" : "Failed");
-    if (!ok) {
-      return result;
-    }
-
-    // Apply optional topology/placement tweaks when provided.
-    if (!request.topology.topology.empty()) {
-      BOOST_LOG(debug) << "Display helper (in-process): applying topology override.";
-      (void) ctx->display->setTopology(request.topology.topology);
-    }
-    for (const auto &[device_id, point] : request.topology.monitor_positions) {
-      BOOST_LOG(debug) << "Display helper (in-process): setting origin for " << device_id
-                       << " to (" << point.m_x << "," << point.m_y << ").";
-      (void) ctx->display->setDisplayOrigin(device_id, point);
-    }
-
-    return display_device::SettingsManagerInterface::ApplyResult::Ok;
   }
 
   constexpr DWORD kHelperForceKillWaitMs = 2000;
@@ -1013,9 +865,9 @@ namespace {
       if (!dd.setTopology(snapshot.settings.m_topology)) return false;
       if (!dd.setDisplayModesTemporary(snapshot.settings.m_modes)) return false;
       for (const auto &[device_id, origin] : snapshot.settings.m_origins) {
-        if (!dd.setDisplayOrigin(device_id, origin)) return false;
+        if (!dd.setDisplayOriginTemporary(device_id, origin)) return false;
       }
-      if (!dd.setAsPrimary(snapshot.settings.m_primary_device)) return false;
+      if (!dd.setAsPrimaryTemporary(snapshot.settings.m_primary_device)) return false;
       if (!snapshot.settings.m_hdr_states.empty() && !dd.setHdrStates(snapshot.settings.m_hdr_states)) return false;
       const auto verified = capture_physical_settings_snapshot();
       return verified && physical_settings_match(snapshot, *verified);
@@ -1771,7 +1623,7 @@ namespace {
         DWORD exit_code = 0;
         GetExitCodeProcess(h, &exit_code);
         if (exit_code == 3) {
-          BOOST_LOG(warning) << "Display helper exited immediately with code 3 (singleton conflict). "
+          BOOST_LOG(warning) << "Display helper exited immediately with code 3 (exclusive ownership unavailable). "
                              << "Retrying after extended cleanup delay...";
           if (!sleep_with_cancellation(
                 std::chrono::milliseconds(1000),
@@ -2420,43 +2272,12 @@ namespace display_helper_integration {
         return false;
       }
 
-      BOOST_LOG(warning) << "Display helper: helper unavailable; falling back to in-process APPLY.";
-
-      if (!request.session) {
-        BOOST_LOG(error) << "Display helper: missing session context for in-process APPLY.";
-        return false;
-      }
-
-      const auto apply_result = apply_in_process(request);
-      if (apply_result != display_device::SettingsManagerInterface::ApplyResult::Ok) {
-        if (apply_result == display_device::SettingsManagerInterface::ApplyResult::ApiTemporarilyUnavailable) {
-          maybe_queue_deferred_resolution_apply_on_api_unavailable(request);
-        }
-        BOOST_LOG(warning) << "Display helper: in-process APPLY failed.";
-        return false;
-      }
-
-      const auto device_id = request.configuration ? request.configuration->m_device_id : std::string {};
-      if (!verify_helper_topology(*request.session, device_id)) {
-        BOOST_LOG(warning) << "Display helper: topology verification failed after in-process APPLY.";
-      }
-      (void) apply_topology_definition(request.topology, "in-process");
-
-      note_successful_apply();
-      set_active_session(
-        *request.session,
-        request.session_overrides.device_id_override,
-        request.session_overrides.fps_override,
-        request.session_overrides.width_override,
-        request.session_overrides.height_override,
-        request.session_overrides.virtual_display_override,
-        request.session_overrides.framegen_refresh_override
-      );
-      if (request.enable_virtual_display_watchdog) {
-        platf::display_helper::Coordinator::instance().set_virtual_display_watchdog_enabled(true);
-      }
+      // A synchronous fallback cannot own the helper's durable recovery lease.
+      // It must not bypass a failed baseline/task precondition by applying the
+      // same destructive display request in the host process.
+      BOOST_LOG(error) << "Display helper: cannot safely apply display changes without a recovery helper.";
       maybe_queue_deferred_resolution_apply(request, allow_resolution_deferral);
-      return true;
+      return false;
     }
   }  // namespace
 
@@ -2704,6 +2525,50 @@ namespace display_helper_integration {
       g_restore_expected.store(false, std::memory_order_relaxed);
       platf::display_helper_client::reset_connection();
     }
+    // A logon task may own a helper outside this process handle. Acquire the
+    // same singleton names before native mutation: this proves no such helper
+    // is alive and prevents another one starting during the fallback. Merely
+    // observing our child exit is not sufficient when it lost a singleton race.
+    const auto claim_singleton = [](const wchar_t *name) -> HANDLE {
+      SetLastError(ERROR_SUCCESS);
+      HANDLE singleton = display_helper_paths::make_named_mutex(name);
+      if (!singleton) return nullptr;
+      if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(singleton);
+        return nullptr;
+      }
+      return singleton;
+    };
+    HANDLE global_singleton = claim_singleton(L"Global\\SunshineDisplayHelper");
+    if (!global_singleton) {
+      BOOST_LOG(warning) << "Display recovery: cannot prove the global helper is quiescent.";
+      return false;
+    }
+    auto close_global = util::fail_guard([&] { CloseHandle(global_singleton); });
+    HANDLE local_singleton = claim_singleton(L"Local\\SunshineDisplayHelper");
+    if (!local_singleton) {
+      BOOST_LOG(warning) << "Display recovery: cannot prove the local helper is quiescent.";
+      return false;
+    }
+    auto close_local = util::fail_guard([&] { CloseHandle(local_singleton); });
+    // Older helper binaries could fall back to another session's Local
+    // namespace. Refuse native fallback if one is still running, even though
+    // neither singleton in this session exposed it. Do not terminate an
+    // unowned process merely to make this check succeed.
+    HANDLE processes = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (processes == INVALID_HANDLE_VALUE) return false;
+    auto close_processes = util::fail_guard([&] { CloseHandle(processes); });
+    PROCESSENTRY32W process {};
+    process.dwSize = sizeof(process);
+    if (Process32FirstW(processes, &process)) {
+      do {
+        if (_wcsicmp(process.szExeFile, L"sunshine_display_helper.exe") == 0) {
+          BOOST_LOG(warning) << "Display recovery: an external helper is still running; preserving recovery evidence.";
+          return false;
+        }
+      } while (Process32NextW(processes, &process));
+    }
+    if (GetLastError() != ERROR_NO_MORE_FILES) return false;
     return recover();
   }
 
@@ -2743,6 +2608,20 @@ namespace display_helper_integration {
 
   bool maintenance_available() {
     return dd_feature_enabled();
+  }
+
+  bool has_pending_recovery_snapshot() {
+    // Current is retired only after the intended desktop has been confirmed.
+    // Previous/Golden are preferences/history, so their presence alone must
+    // never restore an otherwise healthy desktop on every host startup.
+    for (const auto &root : display_helper_paths::snapshot_search_roots()) {
+      std::error_code error;
+      const auto path = display_helper_paths::make_snapshot_paths(root).session_current;
+      if (std::filesystem::exists(path, error) || error) {
+        return true;
+      }
+    }
+    return false;
   }
 
   bool legacy_helper_engine_selected() {
@@ -2794,7 +2673,7 @@ namespace display_helper_integration {
 
     if (!ensure_helper_started(
           false,
-          false,
+          true,
           cancellation_predicate,
           operation_deadline)) {
       BOOST_LOG(info) << "Display helper unavailable; cannot snapshot current display state.";
@@ -2802,28 +2681,14 @@ namespace display_helper_integration {
     }
     BOOST_LOG(info) << "Display helper: sending SNAPSHOT_CURRENT request.";
     const auto payload = build_snapshot_exclude_payload();
-    // Wire behavior is selected from the helper that actually answered APPLY,
-    // not from a configuration value that may have changed while a helper was
-    // being reused. An unknown connection dispatches in pipe order; APPLY has
-    // its own pre-apply baseline fallback if that snapshot is not yet saved.
-    const bool bounded =
-      operation_deadline != std::chrono::steady_clock::time_point::max();
-    const bool v2_helper =
-      !bounded &&
-      platf::display_helper_client::uses_v2_response_protocol();
-    const bool ok =
-      bounded ?
-        platf::display_helper_client::send_snapshot_current_within(
-          payload,
-          operation_deadline,
-          cancellation_predicate
-        ) :
-        (v2_helper ?
-           platf::display_helper_client::send_snapshot_current_and_wait(payload) :
-           platf::display_helper_client::send_snapshot_current(payload));
-    BOOST_LOG(info) << "Display helper: SNAPSHOT_CURRENT "
-                    << (bounded ? "bounded operation" : (v2_helper ? "completion" : "dispatch"))
-                    << " result=" << (ok ? "true" : "false");
+    // Both helper engines acknowledge a correlated snapshot only after the
+    // baseline and recovery boundary are ready. In particular, the first
+    // connection has not negotiated APPLY yet: dispatch alone is never proof
+    // that creating a virtual display is recoverable.
+    const bool ok = platf::display_helper_client::send_snapshot_current_within(
+      payload, operation_deadline, cancellation_predicate);
+    BOOST_LOG(info) << "Display helper: SNAPSHOT_CURRENT completion result="
+                    << (ok ? "true" : "false");
     return ok;
   }
 

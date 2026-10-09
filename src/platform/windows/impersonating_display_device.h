@@ -114,6 +114,13 @@ namespace display_device {
                        /*mutating=*/true);
     }
 
+    [[nodiscard]] bool setAsPrimaryTemporary(const std::string &device_id) override {
+      return run<bool>([&] {
+        return m_inner->setAsPrimaryTemporary(device_id);
+      },
+                       /*mutating=*/true);
+    }
+
     [[nodiscard]] HdrStateMap getCurrentHdrStates(const std::set<std::string> &device_ids) const override {
       return run<HdrStateMap>([&] {
         return m_inner->getCurrentHdrStates(device_ids);
@@ -138,6 +145,13 @@ namespace display_device {
     [[nodiscard]] bool setDisplayOrigin(const std::string &device_id, const Point &origin) override {
       return run<bool>([&] {
         return m_inner->setDisplayOrigin(device_id, origin);
+      },
+                       /*mutating=*/true);
+    }
+
+    [[nodiscard]] bool setDisplayOriginTemporary(const std::string &device_id, const Point &origin) override {
+      return run<bool>([&] {
+        return m_inner->setDisplayOriginTemporary(device_id, origin);
       },
                        /*mutating=*/true);
     }

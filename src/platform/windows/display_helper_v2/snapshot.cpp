@@ -38,6 +38,30 @@ namespace display_helper::v2 {
       return oss.str();
     }
   }  // namespace
+
+  SnapshotAdoptionResult adopt_snapshot_if_missing(
+    ITextStorage &storage,
+    const std::string &destination,
+    const std::vector<std::string> &sources) {
+    if (storage.exists(destination)) {
+      return SnapshotAdoptionResult::DestinationPresent;
+    }
+    for (const auto &source : sources) {
+      const auto text = storage.read(source);
+      if (!text || !codec::snapshot_text_has_restore_payload(*text)) {
+        continue;
+      }
+      // Bootstrap runs before command workers start. Still recheck after
+      // reading another context's file so a newly present record wins.
+      if (storage.exists(destination)) {
+        return SnapshotAdoptionResult::DestinationPresent;
+      }
+      return storage.write_atomically(destination, *text) ?
+               SnapshotAdoptionResult::Adopted : SnapshotAdoptionResult::WriteFailed;
+    }
+    return SnapshotAdoptionResult::NoValidSource;
+  }
+
   TextSnapshotStorage::TextSnapshotStorage(SnapshotStorageKeys keys, ITextStorage &text_storage)
     : keys_(std::move(keys)),
       text_storage_(text_storage) {}
@@ -193,8 +217,16 @@ namespace display_helper::v2 {
     return display_.snapshot_matches_current(snapshot);
   }
 
+  bool SnapshotService::matches_layouts(const codec::layout_rotation_map_t &layout_rotations) const {
+    return display_.current_layout_matches(layout_rotations);
+  }
+
   EnumeratedDeviceList SnapshotService::enumerate() const {
     return display_.enumerate(display_device::DeviceEnumerationDetail::Minimal);
+  }
+
+  display_recovery_safety::PhysicalDisplayState SnapshotService::physical_display_state() const {
+    return display_.physical_display_state();
   }
 
   codec::layout_rotation_map_t SnapshotService::capture_layouts(const std::set<std::string> &device_ids) const {

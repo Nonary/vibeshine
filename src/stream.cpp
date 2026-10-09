@@ -3091,6 +3091,16 @@ namespace stream {
         proc::proc.current_app_id() > 0,
         has_capture_runtime_owner(context)
       );
+#elif defined(_WIN32)
+      if (shared_runtime_cleanup_armed) {
+        topology.release_idle_normal_game_identities(
+          proc::proc.current_app_id() > 0,
+          has_capture_runtime_owner(context),
+          true
+        );
+      } else {
+        topology.release_drained_normal_game_identities();
+      }
 #else
       topology.release_drained_normal_game_identities();
 #endif

@@ -57,8 +57,8 @@ namespace display_helper_integration {
   // failure or timeout must abort startup before probing or capture.
   // Other policies return true if the helper accepted the command.
   // A cancellation predicate interrupts helper IPC waits and disables the
-  // potentially blocking in-process fallback for that caller. Stream starts
-  // also supply one, so shutdown-class callers (owned recovery/teardown
+  // helper work for that caller. Stream starts also supply one, so
+  // shutdown-class callers (owned recovery/teardown
   // workers that must give up in well under a second) say so explicitly.
   bool apply(
     const DisplayApplyRequest &request,
@@ -127,12 +127,17 @@ namespace display_helper_integration {
 
   // Report the same effective gate as helper startup without starting it.
   bool maintenance_available();
+  // Current recovery evidence remains relevant after the driver has already
+  // removed a temporary output, including after an interrupted host process.
+  bool has_pending_recovery_snapshot();
   bool legacy_helper_engine_selected();
 
   // Request the helper to reset its persistence/state.
   bool reset_persistence();
 
-  // Ask the helper to capture the current display snapshot without applying changes.
+  // Prepare and acknowledge the recovery baseline before creating a virtual
+  // display. Both engines confirm snapshot durability (or proven headless
+  // operation); a successful IPC send alone never satisfies this gate.
   bool snapshot_current_display_state(
     std::function<bool()> cancellation_predicate = {},
     std::chrono::steady_clock::time_point operation_deadline =
@@ -217,8 +222,9 @@ namespace display_helper_integration {
   // reserved for process shutdown or an explicit user-requested restore.
   void stop_watchdog(bool force = false);
 
-  // Explicit killswitch fallback: stop and verify the owned helper, then run
-  // native physical recovery while APPLY/REVERT dispatch remains fenced.
+  // Stop and verify the owned helper and exclude other helper instances before
+  // native fallback. Used by terminal physical rescue and by ordinary cleanup
+  // when REVERT cannot be dispatched; APPLY/REVERT stay fenced throughout.
   bool run_terminal_physical_recovery(const std::function<bool()> &recover);
 
 }  // namespace display_helper_integration

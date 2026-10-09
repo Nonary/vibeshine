@@ -908,17 +908,7 @@ namespace rtsp_stream {
       stream::session::cleanup_reservation_t cleanup_reservation;
       std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
       const auto discarded = take_all_pending_launches();
-      for (const auto &launch_session : discarded) {
-        abandoned_startup_virtual_display_guid_bytes = launch_session->virtual_display_guid_bytes;
-        const stream::session::shared_runtime_finalize_context_t finalize_context {
-          .virtual_display_guid_bytes = launch_session->virtual_display_guid_bytes,
-        };
-        (void) stream::session::finalize_shared_runtime_if_idle(reason, finalize_context);
-      }
-      set_pending_vulkan_hdr_layer_stream(false);
-      if (startup_count() == 0) {
-        abandoned_startup_virtual_display_guid_bytes.reset();
-      }
+      finalize_abandoned_pending(discarded, reason);
     }
 
     /**
@@ -982,18 +972,53 @@ namespace rtsp_stream {
       }
     }
 
-    void notify_expired_pending(const std::vector<std::shared_ptr<launch_session_t>> &expired) {
-      std::vector<pending_policy::pending_owner_t> owners;
-      owners.reserve(expired.size());
-      for (const auto &launch_session : expired) {
+    // Caller owns the stream lifecycle gate. Both timeout and cancellation
+    // have to finish the same ownership transition as transport teardown.
+    void finalize_abandoned_pending(const std::vector<std::shared_ptr<launch_session_t>> &abandoned, std::string_view reason) {
+      for (const auto &launch_session : abandoned) {
         if (!launch_session) continue;
-        BOOST_LOG(warning) << "RTSP pending launch expired: " << launch_session->id << " client=" << launch_session->client_uuid;
-        owners.push_back({.role = launch_session->role, .client_uuid = launch_session->client_uuid, .generation = launch_session->role_generation});
+        if (!launch_session->ownership_transferred_to_stream) {
+          if (launch_session->role == remote_session::role_e::monitor) {
+            if (remote_session::disconnect_monitor_after_stream(
+                  config::video.remote_monitor_disconnect_on_stream_end,
+                  config::video.remote_monitor_disconnect_on_client_disconnect,
+                  false)) {
+              if (remote_session::release_monitor(launch_session->client_uuid, launch_session->role_generation, reason)) {
+                nvhttp::notify_remote_monitor_released(launch_session->client_uuid, launch_session->role_generation);
+              }
+            } else {
+              remote_session::notify_monitor_transport_lost(launch_session->client_uuid, launch_session->role_generation);
+            }
+          } else if (launch_session->role == remote_session::role_e::input) {
+            nvhttp::notify_remote_input_transport_lost(launch_session->client_uuid, launch_session->role_generation);
+          }
+        }
+        abandoned_startup_virtual_display_guid_bytes = launch_session->virtual_display_guid_bytes;
+        const stream::session::shared_runtime_finalize_context_t finalize_context {
+          .virtual_display_guid_bytes = launch_session->virtual_display_guid_bytes,
+        };
+        (void) stream::session::finalize_shared_runtime_if_idle(reason, finalize_context);
       }
-      for (const auto &owner : pending_policy::expired_remote_input_owners(owners)) {
-        nvhttp::notify_remote_input_transport_lost(owner.client_uuid, owner.generation);
+      set_pending_vulkan_hdr_layer_stream(pending_hdr_active());
+      if (startup_count() == 0) {
+        abandoned_startup_virtual_display_guid_bytes.reset();
       }
-      if (!expired.empty()) set_pending_vulkan_hdr_layer_stream(pending_hdr_active());
+    }
+
+    void notify_expired_pending(const std::vector<std::shared_ptr<launch_session_t>> &expired) {
+      if (expired.empty()) return;
+      for (const auto &launch_session : expired) {
+        if (launch_session) BOOST_LOG(warning) << "RTSP pending launch expired: " << launch_session->id << " client=" << launch_session->client_uuid;
+      }
+      // Registry reads can expire rows while the caller holds the lifecycle
+      // gate or config's apply gate. Defer ALL owner/config callbacks to avoid
+      // recursively acquiring either gate. Reserve cleanup immediately so a
+      // probe cannot slip into the interval before the posted work runs.
+      post([this, expired, cleanup_reservation = std::make_shared<stream::session::cleanup_reservation_t>()] {
+        (void) cleanup_reservation;
+        std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
+        finalize_abandoned_pending(expired, "rtsp_pending_launch_expired");
+      });
     }
 
     void expire_pending() {
@@ -2183,6 +2208,7 @@ namespace rtsp_stream {
           // Cancellation can then find and synchronously join every started
           // session instead of racing the posted RTSP response callback.
           server->insert(stream_session, client_uuid, stream_session && stream_hdr_enabled);
+          pending_launch->ownership_transferred_to_stream = true;
         }
         server->post([server, socket = std::move(socket), session = std::move(session), sequence_number, startup_failed, startup_error = std::move(startup_error)]() mutable {
           auto fg = util::fail_guard([server]() {

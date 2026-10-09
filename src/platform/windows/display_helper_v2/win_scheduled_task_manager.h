@@ -10,6 +10,7 @@ namespace display_helper::v2 {
     bool delete_restore_task() override;
     display_helper::restore_task_state_e restore_task_state();
     bool is_task_present() override;
+    bool has_pending_restore_task() override;
 
   private:
     static std::wstring resolve_username(const std::wstring &username_hint);
