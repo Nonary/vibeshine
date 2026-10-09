@@ -495,6 +495,44 @@ eventSource.onerror = () => { eventSource?.close(); startPolling(); };
 
 On the server, `getWebRTCIceStream()` (`src/confighttp.cpp`) continuously emits `event: candidate` messages and keepalives every ~2 seconds.
 
+### Windows and Linux source timing (2026-10-08 correction)
+
+Classic video RTP preserves the timestamp attached to the encoded image through
+`src/video_rtp_timing.h`. WGC's `Direct3D11CaptureFrame::SystemRelativeTime`
+reports the QPC time when the compositor rendered that image. The helper converts
+its 100 ns units to QPC ticks, queues it with the corresponding scratch texture,
+and publishes texture plus frame metadata while holding the shared keyed mutex.
+The consumer snapshots that image and timestamp together. A fixed clock correlation
+per capture session maps QPC into the host steady clock; any correlation offset
+is constant and cancels from intervals. A later capture read,
+encoder completion or send call does not replace the source event time. The
+capture-loop pacing timestamp and host-processing timestamp remain separate.
+
+The retired `present_timing` tracker listened to foreground DXGI Present-start
+calls and rewrote RTP using estimated latency, composition-grid clamping and
+fallback stamps. It did not identify which completed game presentation supplied
+the captured texture. That estimate is removed, including its ETW session and
+global active stamper. Source intervals, including irregular intervals and real
+stalls, pass through unchanged apart from 90 kHz RTP rounding. Constant clock
+offsets do not affect intervals. Compositor scheduling granularity describes when
+source output occurred; it is not uncertainty in the timestamp of that event.
+WGC does not claim to timestamp an earlier game simulation or GPU-completion event.
+
+Linux's custom DRM export similarly pairs the framebuffer, presentation sequence
+and presentation timestamp. Its capture-delivery pacing and source timestamp
+remain distinct. This correction does not fit a regular cadence or alter the
+Linux capture policy. Packets without source metadata retain the existing
+synthetic duplicate slot, selected locally without mutating packet metadata.
+
+Eight native deterministic regressions pass for irregular source gaps/stalls,
+packetization delay/order, duplicate fallback, clock-offset invariance, RTP
+wrap/rounding, WGC clock units, fixed clock correlation under delayed reads,
+and rejection of invalid source timestamps. The cached MinGW build environment is
+incomplete (missing runtime DLLs and compiler headers), so the full Windows host
+application has not been rebuilt or deployed by this correction. The focused
+regressions were built and run with the installed MSVC toolchain. Live validation
+requires a separately built and deployed Windows host, followed by a fresh stream.
+
 ### 5.7 Media: capture -> encode -> WebRTC sender pipeline
 
 Once the peer is connected, Sunshine must continuously deliver audio/video into libwebrtc. This is done by *bridging*:

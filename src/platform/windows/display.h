@@ -27,6 +27,7 @@
 #include "src/platform/common.h"
 #include "src/platform/windows/ipc/pipes.h"
 #include "src/platform/windows/ipc/process_handler.h"
+#include "src/platform/windows/wgc_source_clock.h"
 #include "src/utility.h"
 #include "src/video.h"
 
@@ -35,10 +36,6 @@ namespace platf::game_activity {
 }
 
 namespace platf::dxgi {
-  namespace present_timing {
-    class capture_stamper_t;
-  }
-
   extern const char *format_str[];
 
   // Add D3D11_CREATE_DEVICE_DEBUG here to enable the D3D11 debug runtime.
@@ -547,10 +544,10 @@ namespace platf::dxgi {
     std::string _display_name;
     bool _session_initialized_logged = false;
     bool _frame_locked = false;
+    std::optional<wgc_policy::source_clock_t> _source_clock;
     std::shared_ptr<platf::img_t> _last_cached_frame;
     std::chrono::steady_clock::time_point _wgc_stall_start {};  ///< Start of the current frame-wait stall (zero when frames are flowing).
     std::chrono::steady_clock::time_point _last_secure_desktop_probe {};  ///< Last secure-desktop probe performed during a stall.
-    std::shared_ptr<present_timing::capture_stamper_t> _present_stamper;  ///< Refines composition-quantized RTP timestamps at send time.
   };
 
   class display_wgc_ipc_ram_t: public display_ram_t {
@@ -655,10 +652,8 @@ namespace platf::dxgi {
      */
     std::chrono::steady_clock::time_point _last_secure_desktop_probe {};
 
-    /**
-     * @brief Refines composition-quantized RTP timestamps at send time.
-     */
-    std::shared_ptr<present_timing::capture_stamper_t> _present_stamper;
+    std::optional<wgc_policy::source_clock_t> _source_clock;
+
   };
 
   /**

@@ -63,13 +63,13 @@ extern "C" {
 #include "update.h"
 #include "utility.h"
 #include "uuid.h"
+#include "video_rtp_timing.h"
 #include "webrtc_stream.h"
 #ifdef _WIN32
   #include "platform/windows/frame_limiter.h"
   #include "platform/windows/display.h"
   #include "platform/windows/ipc/misc_utils.h"
   #include "platform/windows/misc.h"
-  #include "platform/windows/present_timing.h"
   #include "platform/windows/virtual_display.h"
   #include "platform/windows/virtual_display_cleanup.h"
 #elif defined(__linux__)
@@ -2277,21 +2277,11 @@ namespace stream {
         // timeline points below use actual host processing/send times. Keeping
         // both lets a client trace distinguish a source gap from a frame held
         // after capture.
-        bool frame_is_dupe = false;
-        if (!packet->frame_timestamp) {
-          packet->frame_timestamp = ratecontrol_next_frame_start;
-          frame_is_dupe = true;
-        }
-#ifdef _WIN32
-        else {
-          // WGC composition times sit on the virtual display's refresh grid.
-          // Place the frame by the game's present cadence now that ETW has
-          // had the encode time to deliver those presents.
-          packet->frame_timestamp = platf::dxgi::present_timing::refine_send_timestamp(*packet->frame_timestamp);
-        }
-#endif
-        using rtp_tick = std::chrono::duration<uint32_t, std::ratio<1, 90000>>;
-        const uint32_t timestamp = std::chrono::round<rtp_tick>(*packet->frame_timestamp - video_epoch).count();
+        const auto frame_time = video::rtp_timing::stamp(
+          packet->frame_timestamp, ratecontrol_next_frame_start, video_epoch
+        );
+        const bool frame_is_dupe = frame_time.synthetic;
+        const uint32_t timestamp = frame_time.rtp_timestamp;
 
         // PyroWave record framing: flag the shards that start with a record, where a
         // client that lost a record header resumes parsing.
@@ -2505,7 +2495,7 @@ namespace stream {
 #ifdef __linux__
         {
           const auto timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      packet->frame_timestamp->time_since_epoch()
+                                      frame_time.source_timestamp.time_since_epoch()
           ).count();
           const auto send_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                  send_complete_timestamp.time_since_epoch()
@@ -2551,7 +2541,7 @@ namespace stream {
           const wire_timeline_frame_t current_wire_frame {
             .frame_index = packet->frame_index(),
             .rtp_timestamp = timestamp,
-            .source_timestamp = *packet->frame_timestamp,
+            .source_timestamp = frame_time.source_timestamp,
             .host_processing_timestamp = packet->host_processing_timestamp,
             .packet_enqueue_timestamp = packet->packet_enqueue_timestamp,
             .packet_pop_timestamp = packet_pop_timestamp,
