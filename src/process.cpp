@@ -92,6 +92,9 @@
   #include <unistd.h>
 #endif
 #include "process.h"
+#ifdef __APPLE__
+  #include "platform/macos/virtual_display.h"
+#endif
 // Header-only policy used by shared launch code; safe on every platform.
 #include "tools/playnite_launcher/lossless_scaling_policy.h"
 #include "remote_monitor_profile_policy.h"
@@ -2807,6 +2810,14 @@ namespace proc {
       }
       std::memset(&_virtual_display_guid, 0, sizeof(_virtual_display_guid));
       _virtual_display_active = false;
+    }
+#elif defined(__APPLE__)
+    // As on Windows: a paused game's display goes with the game, unless another stream still owns
+    // the runtime, in which case the final stream's cleanup releases it.
+    if (!other_streaming_session_active) {
+      platf::macos_virtual_display::end_pause_hold();
+    } else {
+      BOOST_LOG(info) << "Deferring virtual display removal after app termination because shared stream runtime is still owned.";
     }
 #endif
 
