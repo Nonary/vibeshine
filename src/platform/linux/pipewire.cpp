@@ -18,6 +18,7 @@
 #include "cuda.h"
 #include "graphics.h"
 #include "hdr_policy.h"
+#include "pipewire_capture_format.h"
 #include "pipewire_cuda_policy.h"
 #include "pipewire_format.h"
 #include "private_display.h"
@@ -65,13 +66,7 @@ namespace pipewire {
   }};
 
   struct shared_state_t {
-    std::atomic<int> negotiated_width {0};
-    std::atomic<int> negotiated_height {0};
-    std::atomic<int> color_primaries {0};
-    std::atomic<int> transfer_function {0};
-    std::atomic<int> pixel_format {0};
-    std::atomic<int> color_range {0};
-    std::atomic<int> color_matrix {0};
+    capture_format_state_t negotiated_format;
     std::atomic<bool> stream_dead {false};
     std::atomic<bool> initializing {true};
     pw_stream_state previous_state = PW_STREAM_STATE_UNCONNECTED;
@@ -241,7 +236,7 @@ namespace pipewire {
       }
     }
 
-    int ensure_stream(const platf::mem_type_e mem_type, const uint32_t width, const uint32_t height, const uint32_t refresh_rate, const struct dmabuf_format_info_t *dmabuf_infos, const int n_dmabuf_infos, const bool display_is_nvidia) {
+    int ensure_stream(const platf::mem_type_e mem_type, const uint32_t width, const uint32_t height, const struct dmabuf_format_info_t *dmabuf_infos, const int n_dmabuf_infos, const bool display_is_nvidia) {
       pw_thread_loop_lock(loop);
       if (!stream_data.stream) {
         if (!core) {
@@ -283,9 +278,11 @@ namespace pipewire {
                 (force_hdr10_formats_ && dmabuf_infos[i].format != SPA_VIDEO_FORMAT_xBGR_210LE)) {
               continue;
             }
-            auto format_param = build_format_parameter(&pod_builder, width, height, refresh_rate, dmabuf_infos[i].format, dmabuf_infos[i].modifiers, dmabuf_infos[i].n_modifiers);
-            params[n_params] = format_param;
-            n_params++;
+            if (auto *format_param = build_capture_format_parameter(&pod_builder, width, height,
+                                                                   dmabuf_infos[i].format, dmabuf_infos[i].modifiers, dmabuf_infos[i].n_modifiers,
+                                                                   {negotiate_maxframerate_, gamescope_requested_size_, force_hdr10_formats_})) {
+              params[n_params++] = format_param;
+            }
           }
         }
 
@@ -300,9 +297,10 @@ namespace pipewire {
               (force_hdr10_formats_ && fmt.pw_format != SPA_VIDEO_FORMAT_xBGR_210LE)) {
             continue;
           }
-          auto format_param = build_format_parameter(&pod_builder, width, height, refresh_rate, fmt.pw_format, nullptr, 0);
-          params[n_params] = format_param;
-          n_params++;
+          if (auto *format_param = build_capture_format_parameter(&pod_builder, width, height, fmt.pw_format, nullptr, 0,
+                                                                 {negotiate_maxframerate_, gamescope_requested_size_, force_hdr10_formats_})) {
+            params[n_params++] = format_param;
+          }
         }
         BOOST_LOG(debug) << "[pipewire] Connect PW stream - fd: "sv << fd << " node: "sv << node << " object serial: "sv << object_serial;
         if (n_params == 0 || std::any_of(params.begin(), params.begin() + n_params, [](const auto *param) {
@@ -411,7 +409,7 @@ namespace pipewire {
 
   private:
     static bool is_sdr_format(int32_t format) {
-      return format == SPA_VIDEO_FORMAT_BGRA || format == SPA_VIDEO_FORMAT_BGRx;
+      return memory_format_supported(format);
     }
     struct pw_thread_loop *loop;
     struct pw_context *context = nullptr;
@@ -425,53 +423,6 @@ namespace pipewire {
     bool gamescope_requested_size_ = false;
     bool force_sdr_formats_ = false;
     bool force_hdr10_formats_ = false;
-
-    struct spa_pod *build_format_parameter(struct spa_pod_builder *b, uint32_t width, uint32_t height, uint32_t refresh_rate, int32_t format, uint64_t *modifiers, int n_modifiers) {
-      struct spa_pod_frame object_frame;
-      struct spa_pod_frame modifier_frame;
-      std::array<struct spa_rectangle, 3> sizes;
-
-      sizes[0] = SPA_RECTANGLE(width, height);  // Preferred
-      sizes[1] = SPA_RECTANGLE(1, 1);
-      sizes[2] = SPA_RECTANGLE(8192, 4096);
-
-      spa_pod_builder_push_object(b, &object_frame, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat);
-      spa_pod_builder_add(b, SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video), 0);
-      spa_pod_builder_add(b, SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw), 0);
-      spa_pod_builder_add(b, SPA_FORMAT_VIDEO_format, SPA_POD_Id(format), 0);
-      spa_pod_builder_add(b, SPA_FORMAT_VIDEO_size, SPA_POD_CHOICE_RANGE_Rectangle(&sizes[0], &sizes[1], &sizes[2]), 0);
-      if (gamescope_requested_size_) {
-        // Valve's private SPA_FORMAT_VIDEO_requested_size property:
-        // gamescope/src/pipewire_gamescope.hpp. The ordinary size property
-        // still accepts the native aspect ratio chosen by the compositor.
-        spa_pod_builder_add(b, 0x70000, SPA_POD_Rectangle(&sizes[0]), 0);
-      }
-      add_framerate_parameters(b, negotiate_maxframerate_);
-
-      if (format == SPA_VIDEO_FORMAT_xBGR_210LE) {
-        spa_pod_builder_add(b, SPA_FORMAT_VIDEO_colorPrimaries, SPA_POD_Id(SPA_VIDEO_COLOR_PRIMARIES_BT2020), 0);
-        spa_pod_builder_add(b, SPA_FORMAT_VIDEO_transferFunction, SPA_POD_Id(SPA_VIDEO_TRANSFER_SMPTE2084), 0);
-        if (force_hdr10_formats_) {
-          spa_pod_builder_add(b, SPA_FORMAT_VIDEO_colorMatrix, SPA_POD_Id(SPA_VIDEO_COLOR_MATRIX_RGB), 0);
-          spa_pod_builder_add(b, SPA_FORMAT_VIDEO_colorRange, SPA_POD_Id(SPA_VIDEO_COLOR_RANGE_0_255), 0);
-        }
-      }
-
-      if (n_modifiers) {
-        spa_pod_builder_prop(b, SPA_FORMAT_VIDEO_modifier, SPA_POD_PROP_FLAG_MANDATORY | SPA_POD_PROP_FLAG_DONT_FIXATE);
-        spa_pod_builder_push_choice(b, &modifier_frame, SPA_CHOICE_Enum, 0);
-
-        // Preferred value, we pick the first modifier be the preferred one
-        spa_pod_builder_long(b, modifiers[0]);
-        for (uint32_t i = 0; i < n_modifiers; i++) {
-          spa_pod_builder_long(b, modifiers[i]);
-        }
-
-        spa_pod_builder_pop(b, &modifier_frame);
-      }
-
-      return static_cast<struct spa_pod *>(spa_pod_builder_pop(b, &object_frame));
-    }
 
     static void on_core_info_cb([[maybe_unused]] void *user_data, const struct pw_core_info *pw_info) {
       BOOST_LOG(info) << "[pipewire] Connected to pipewire version "sv << pw_info->version;
@@ -627,27 +578,17 @@ namespace pipewire {
         BOOST_LOG(info) << "[pipewire] Framerate (from compositor, max): "sv << d->format.info.raw.max_framerate.num << "/"sv << d->format.info.raw.max_framerate.denom;
       }
 
-      int physical_w = d->format.info.raw.size.width;
-      int physical_h = d->format.info.raw.size.height;
-
       if (d->shared) {
-        d->shared->pixel_format.store(d->format.info.raw.format);
-        d->shared->color_range.store(d->format.info.raw.color_range);
-        d->shared->color_matrix.store(d->format.info.raw.color_matrix);
-        int old_w = d->shared->negotiated_width.load();
-        int old_h = d->shared->negotiated_height.load();
-        int old_color_primaries = d->shared->color_primaries.load();
-        int old_transfer_function = d->shared->transfer_function.load();
-
-        if (physical_w != old_w || physical_h != old_h) {
-          d->shared->negotiated_width.store(physical_w);
-          d->shared->negotiated_height.store(physical_h);
-        }
-
-        if (d->format.info.raw.color_primaries != old_color_primaries || d->format.info.raw.transfer_function != old_transfer_function) {
-          d->shared->color_primaries.store(d->format.info.raw.color_primaries);
-          d->shared->transfer_function.store(d->format.info.raw.transfer_function);
-        }
+        const auto &format = d->format.info.raw;
+        d->shared->negotiated_format.publish({
+          .width = static_cast<int>(format.size.width),
+          .height = static_cast<int>(format.size.height),
+          .pixel_format = static_cast<int>(format.format),
+          .color_primaries = static_cast<int>(format.color_primaries),
+          .transfer_function = static_cast<int>(format.transfer_function),
+          .color_range = static_cast<int>(format.color_range),
+          .color_matrix = static_cast<int>(format.color_matrix),
+        });
       }
 
       uint64_t drm_format = 0;
@@ -808,10 +749,7 @@ namespace pipewire {
       } else {
         shared_state->initializing.store(true);
         shared_state->stream_dead.store(false);
-        shared_state->negotiated_width.store(0);
-        shared_state->negotiated_height.store(0);
-        shared_state->color_primaries.store(0);
-        shared_state->transfer_function.store(0);
+        shared_state->negotiated_format.publish({});
       }
 
       if (pipewire.init(pipewire_fd, pipewire_node, pipewire_object_serial, shared_state) < 0) {
@@ -820,7 +758,7 @@ namespace pipewire {
       }
 
       // Start PipeWire now so format negotiation can proceed before capture start
-      if (pipewire.ensure_stream(mem_type, width, height, framerate, dmabuf_infos.data(), n_dmabuf_infos, display_is_nvidia) < 0) {
+      if (pipewire.ensure_stream(mem_type, width, height, dmabuf_infos.data(), n_dmabuf_infos, display_is_nvidia) < 0) {
         BOOST_LOG(error) << "[pipewire] Failed to ensure pipewire stream. pipewire_t::init() failed.";
         return -1;
       }
@@ -830,13 +768,14 @@ namespace pipewire {
       auto stable_since = std::chrono::steady_clock::now();
       int negotiated_w = 0;
       int negotiated_h = 0;
+      capture_format_snapshot_t negotiated_format;
       bool negotiated = false;
       while (std::chrono::steady_clock::now() < deadline && !shared_state->stream_dead.load()) {
-        const int new_w = shared_state->negotiated_width.load();
-        const int new_h = shared_state->negotiated_height.load();
-        if (new_w != negotiated_w || new_h != negotiated_h) {
-          negotiated_w = new_w;
-          negotiated_h = new_h;
+        const auto current = shared_state->negotiated_format.snapshot();
+        if (current.generation != negotiated_format.generation) {
+          negotiated_format = current;
+          negotiated_w = current.format.width;
+          negotiated_h = current.format.height;
           stable_since = std::chrono::steady_clock::now();
         }
         if (negotiated_w > 0 && negotiated_h > 0 && negotiated_size_ready(negotiated_w, negotiated_h) &&
@@ -872,6 +811,9 @@ namespace pipewire {
         verify_and_update_display_parameters();
       }
 
+      // Encoder color selection and frame acceptance must use the same format.
+      // Later callbacks can publish a new format without a PAUSED state event.
+      capture_format_ = negotiated_format;
       shared_state->initializing.store(false);
       return 0;
     }
@@ -898,10 +840,10 @@ namespace pipewire {
         img_egl->pw_flags.reset();
         pipewire.fill_img(img_egl);
 
-        // A dock change or compositor downscale can renegotiate while capture
-        // is running. Recreate encoder surfaces before consuming that size.
-        if (!capture_format_valid() || shared_state->negotiated_width.load() != width ||
-            shared_state->negotiated_height.load() != height) {
+        // Renegotiation can change colors or pixel packing at the same size.
+        // Rebuild encoder surfaces and metadata before consuming the new frame.
+        if (!capture_format_valid() ||
+            shared_state->negotiated_format.snapshot().generation != capture_format_.generation) {
           return platf::capture_e::reinit;
         }
 
@@ -941,7 +883,7 @@ namespace pipewire {
     platf::capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override {
       auto next_frame = std::chrono::steady_clock::now();
 
-      if (pipewire.ensure_stream(mem_type, width, height, framerate, dmabuf_infos.data(), n_dmabuf_infos, display_is_nvidia) < 0) {
+      if (pipewire.ensure_stream(mem_type, width, height, dmabuf_infos.data(), n_dmabuf_infos, display_is_nvidia) < 0) {
         BOOST_LOG(error) << "[pipewire] Failed to ensure pipewire stream. capture() failed with error.";
         return platf::capture_e::error;
       }
@@ -1046,8 +988,8 @@ namespace pipewire {
     }
 
     bool is_hdr() override {
-      int color_primaries = shared_state->color_primaries.load();
-      int transfer_function = shared_state->transfer_function.load();
+      int color_primaries = capture_format_.format.color_primaries;
+      int transfer_function = capture_format_.format.transfer_function;
 
       if (color_primaries == SPA_VIDEO_COLOR_PRIMARIES_BT2020 && transfer_function == SPA_VIDEO_TRANSFER_SMPTE2084) {
         return true;
@@ -1057,8 +999,8 @@ namespace pipewire {
     }
 
     bool get_hdr_metadata(SS_HDR_METADATA &metadata) override {
-      int color_primaries = shared_state->color_primaries.load();
-      int transfer_function = shared_state->transfer_function.load();
+      int color_primaries = capture_format_.format.color_primaries;
+      int transfer_function = capture_format_.format.transfer_function;
 
       if (color_primaries == SPA_VIDEO_COLOR_PRIMARIES_BT2020 && transfer_function == SPA_VIDEO_TRANSFER_SMPTE2084) {
         const auto &source = platf::linux_hdr::pipewire_mastering_metadata(source_is_private_display);
@@ -1207,6 +1149,8 @@ namespace pipewire {
     uint32_t framerate;
 
   protected:
+    capture_format_snapshot_t capture_format_;
+
     virtual bool capture_format_valid() {
       return true;
     }

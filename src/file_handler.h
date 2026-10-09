@@ -86,6 +86,11 @@ namespace file_handler {
    * @param path The path of the file.
    * @param contents The contents to write.
    * @return ``0`` on success, ``-1`` on failure.
+   * Linux success includes flushing contents and directory entries bottom-up
+   * through the containing filesystem's root, including new parent directories.
+   * Unreadable ancestors use a checked filesystem flush instead.
+   * A failure after replacement may leave the new contents visible;
+   * callers must not treat a failed write as durable or assume it was undone.
    * @examples
    * int write_status = write_file("path/to/file", "file contents");
    * @examples_end

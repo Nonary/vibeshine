@@ -111,7 +111,16 @@ namespace webrtc_stream {
   void submit_video_frame(const std::shared_ptr<platf::img_t> &frame);
   void submit_audio_frame(const std::vector<float> &samples, int sample_rate, int channels, int frames);
   void set_rtsp_sessions_active(bool active);
-  void set_rtsp_capture_config(const video::config_t &video_config, const audio::config_t &audio_config);
+  void set_rtsp_capture_config(
+    const video::config_t &video_config,
+    const audio::config_t &audio_config,
+    std::string normal_display_owner = {},
+    std::uint64_t normal_display_token = 0
+  );
+  // Publish the exact source even when an active browser keeps its own
+  // configuration. Source metadata itself never holds a display lease.
+  void set_rtsp_capture_owner(std::string normal_display_owner, std::uint64_t normal_display_token);
+  void clear_rtsp_capture_source();
 
   bool set_remote_offer(std::string_view id, const std::string &sdp, const std::string &type);
   bool add_ice_candidate(std::string_view id, std::string mid, int mline_index, std::string candidate);

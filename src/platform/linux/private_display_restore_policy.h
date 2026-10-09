@@ -5,6 +5,7 @@
 #pragma once
 
 #include "private_display_mode_policy.h"
+#include "private_display_vrr_policy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -97,6 +98,19 @@ namespace platf::linux_private_display::restore_policy {
     return std::nullopt;
   }
 
+  /** A partial authority must not disable a live physical fallback on its way to failure. */
+  template <typename Configuration>
+  bool enabled_baseline_available(const Configuration &snapshot, const Configuration &current) {
+    return std::ranges::all_of(snapshot["outputs"], [&](const auto &saved) {
+      if (!saved.value("enabled", false)) return true;
+      const auto present = std::ranges::find_if(current["outputs"], [&](const auto &output) {
+        return output.value("name", std::string {}) == saved.value("name", std::string {});
+      });
+      return present != current["outputs"].end() && present->value("connected", false) &&
+             select_restore_mode(saved, &*present).has_value();
+    });
+  }
+
   /** Only a desired output published by both KScreen and capture can survive retirement. */
   template <typename Configuration>
   std::optional<std::string> select_capture_ready_guard(
@@ -150,7 +164,9 @@ namespace platf::linux_private_display::restore_policy {
       const bool active = output != current["outputs"].end() &&
                           output->value("connected", false) && output->value("enabled", false);
       if (!saved.value("enabled", false)) {
-        return !final || !active;
+        return !final || (!active &&
+                         (!saved.contains("vrrPolicy") ||
+                          (output != current["outputs"].end() && vrr_policy::matches(saved, *output))));
       }
       if (!active) {
         return false;
@@ -173,6 +189,7 @@ namespace platf::linux_private_display::restore_policy {
              saved.value("pos", Configuration::object()) == output->value("pos", Configuration::object()) &&
              saved.value("rotation", 1) == output->value("rotation", 1) &&
              (!final || saved.value("priority", 0) == output->value("priority", 0)) &&
+             vrr_policy::matches(saved, *output) &&
              (!saved.contains("hdr") || saved.value("hdr", false) == output->value("hdr", false));
     });
   }

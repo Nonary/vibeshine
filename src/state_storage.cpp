@@ -1,5 +1,6 @@
 #include "state_storage.h"
 #include "state_storage_policy.h"
+#include "linux_display_snapshot_storage.h"
 
 #include "config.h"
 #include "crypto.h"
@@ -1233,7 +1234,7 @@ namespace statefile {
     return std::nullopt;
   }
 
-  bool save_linux_display_snapshot(const std::optional<std::string> &snapshot) {
+  bool save_linux_display_snapshot(const std::string &owner, const std::optional<std::string> &snapshot) {
     if (snapshot && (snapshot->empty() || snapshot->size() > 1024 * 1024)) {
       return false;
     }
@@ -1244,15 +1245,9 @@ namespace statefile {
     }
     std::lock_guard guard {state_mutex()};
     pt::ptree tree;
-    if (load_tree_for_update(fs::path {path}, tree) == policy::load_result_e::failed) {
-      return false;
-    }
-    auto &root = ensure_root(tree);
-    if (snapshot) {
-      root.put("linux_display_topology", *snapshot);
-    } else {
-      root.erase("linux_display_topology");
-    }
+    const auto loaded = load_tree_for_read(fs::path {path}, tree);
+    if (loaded != policy::load_result_e::loaded && loaded != policy::load_result_e::missing) return false;
+    if (!linux_display_snapshot_storage::update(tree, owner, snapshot)) return false;
     try {
       write_tree(fs::path {path}, tree);
       return true;
@@ -1262,21 +1257,18 @@ namespace statefile {
     }
   }
 
-  std::optional<std::string> load_linux_display_snapshot() {
+  linux_display_snapshot_read_result_t read_linux_display_snapshot(const std::string &owner) {
     migrate_recent_state_keys();
     const auto &path = vibeshine_state_path();
-    if (path.empty()) {
-      return std::nullopt;
-    }
+    if (path.empty()) return {};
     std::lock_guard guard {state_mutex()};
     pt::ptree tree;
-    if (!load_tree_if_exists(fs::path {path}, tree)) {
-      return std::nullopt;
+    const auto loaded = load_tree_for_read(fs::path {path}, tree);
+    if (loaded == policy::load_result_e::missing) {
+      return {linux_display_snapshot_status_e::missing, {}};
     }
-    const auto snapshot = tree.get_optional<std::string>("root.linux_display_topology");
-    return snapshot && !snapshot->empty() && snapshot->size() <= 1024 * 1024 ?
-             std::make_optional(*snapshot) :
-             std::nullopt;
+    if (loaded != policy::load_result_e::loaded) return {};
+    return linux_display_snapshot_storage::read(tree, owner);
   }
 
   void clear_virtual_display_scales() {

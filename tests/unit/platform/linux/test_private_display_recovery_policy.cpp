@@ -139,7 +139,7 @@ TEST(LinuxPrivateDisplayRecoveryPolicy, AutomaticPartialFailureDoesNotRetryAgain
   EXPECT_EQ(attempts, 1u);
   EXPECT_EQ(first_target, policy::target_e::saved_baseline);
   EXPECT_EQ(policy::select_target(policy::target_policy_e::automatic_recovery, guard_a_enabled),
-            policy::target_e::live_physical_layout);
+            policy::target_e::saved_baseline);
   EXPECT_EQ(durable_baseline, (std::vector<std::string> {"A", "B"}));
 }
 
@@ -250,9 +250,9 @@ TEST(LinuxPrivateDisplayRecoveryPolicy, MonitorRunnerContainsMalformedCompositor
   EXPECT_EQ(detail, "malformed KScreen output");
 }
 
-TEST(LinuxPrivateDisplayRecoveryPolicy, AutomaticTargetPreservesFreshEnabledLayoutAndHandlesDisabledReturn) {
+TEST(LinuxPrivateDisplayRecoveryPolicy, AutomaticTargetRetainsOriginalDespitePartialPhysicalVisibility) {
   EXPECT_EQ(policy::select_target(policy::target_policy_e::automatic_recovery, true),
-            policy::target_e::live_physical_layout);
+            policy::target_e::saved_baseline);
   EXPECT_EQ(policy::select_target(policy::target_policy_e::automatic_recovery, false),
             policy::target_e::saved_baseline);
   EXPECT_EQ(policy::select_target(policy::target_policy_e::saved_baseline, true),

@@ -1,0 +1,460 @@
+Linux virtual-screen recovery audit and correction
+9 October 2026
+
+The source investigation used fa5511ccf27ac4fbe3ca03ea79e63ab474caca9f as
+the frozen pre-fix Linux baseline. This report describes the ensuing Linux
+changes. The preceding Windows/Apollo comparison and Windows correction are
+documented in virtual-screen-recovery-audit.txt and
+virtual-screen-recovery-fix.txt. Their OS-specific guarantees do not transfer
+automatically to Linux.
+
+Validated revision: the Linux follow-up commit containing this report, based on
+fa5511ccf27ac4fbe3ca03ea79e63ab474caca9f.
+Final native CMake run: 35/35 selected registrations passed, comprising 388
+GoogleTest cases and 13 C/Python registrations. These include 192 production
+PipeWire offer/SPA assertions and the production startup/recovery regressions.
+The 945-file source/dependency/test/build manifest matched before and after:
+SHA-256 6f52d4bfac938b6be1a5d1dc35d5691233514d9c64b22b841a9636892f60f40a.
+A separate native ASan+UBSan run passed 288/288 cases (197 recovery/policy
+cases and 91 coordinator/live-profile cases), with leak detection, no sanitizer
+diagnostics and no source drift. The final workspace also passed 235/235 portable
+Windows V2 cases and the Windows shared-runtime ownership regression after the
+shared code changes.
+
+The confirmed findings below are reachable source/component defects, reproduced
+with production code and controlled external boundaries. They are not a claim
+that every reported black screen had one of these causes. No affected-machine
+logs or actual KDE/GPU recovery trace established that broader conclusion.
+The work includes real Linux-kernel tests in an isolated container, but does
+not constitute completed KDE display-hardware acceptance.
+
+1. What "temporary" can mean on Linux
+
+The useful Apollo/Windows distinction is whether stream-time changes are written
+to the OS display database. The Windows correction uses operations without the
+persistence flags for its temporary mode/layout path. HDR and other Windows
+facilities have their own semantics; even that comparison is not universal.
+
+Vibeshine's KDE desktop backend instead uses plain kscreen-doctor through its
+generation-bound session broker. The inspected doctor/Wayland configuration
+path and KDE output-management apply request expose no temporary/no-save
+argument. The inspected KWin Workspace apply path calls storeConfig after a
+successful output application. A successful command is therefore not evidence
+that the compositor has kept the change temporary. Sources: [S1], [S2], [S3].
+
+There is an important qualification. KWin stores enabled state, position and
+priority for a connected-output setup, while mode, scale, transform, HDR and
+VRR are among its per-output preferences. Reconstructing a setup combines both
+sets. Adding a managed virtual connector can select a different setup from the
+physical-only one. Unconditional saving alone does not prove that every virtual
+session overwrites the physical-only enable/layout arrangement. Per-output
+preferences can nevertheless carry across setups. A configured physical or
+dummy capture target may keep the connected set unchanged, so its layout
+changes can also update the same setup. This is a source-backed distinction,
+not a hardware claim about which configuration every driver will select. [S4]
+
+The resulting Linux contract is to preserve a durable baseline before hotplug
+or desktop mutation, keep it bound to its desktop owner, and restore and verify
+it afterward. It does not add a compositor no-save flag or a boot-time display
+repair service. If power is lost while streaming, saved compositor settings may
+already reflect the session. Retained recovery evidence enables a later retry;
+it cannot promise that the original desktop appears before the corresponding
+KDE session and recovery worker become available.
+
+2. Confirmed defects and resulting behavior
+
+R1: A new session could replace unfinished recovery intent.
+
+After a host failure, startup could load a pending full physical baseline and
+schedule recovery. A new session legitimately cancelled obsolete cleanup, then
+captured a partial current desktop because no private connector or reservation
+remained. The capture policy treated this as idle and overwrote the original
+baseline. Cancellation transferred execution ownership; it did not establish
+that the original desktop had been restored or deliberately superseded.
+
+Pending intent now survives new preparation and connector retirement. Only an
+absent pending obligation permits a new baseline. New capture also requires the
+active physical mode evidence needed for recovery, and persistence must succeed
+before mutation. Explicit idle records and the documented legacy compatibility
+rules remain distinct from current pending records.
+
+R2: A visible fallback could erase the exact recovery obligation.
+
+The saved-baseline no-guard path could persist a live substitute before its
+first configuration succeeded. Separately, automatic recovery could select the
+currently visible subset and clear the original baseline after verifying that
+substitute. A saved DP-1 plus DP-2 desktop could therefore be declared recovered
+while DP-2 remained disabled or unavailable. A DPMS wake or one visible screen
+does not prove that the user abandoned the rest of the saved desktop.
+
+Automatic recovery keeps the saved baseline authoritative. A connected saved
+guard or an already-visible desktop fallback can support safe retirement of
+owned private connectors, but the fallback does not overwrite retained intent.
+Missing baseline outputs keep the full obligation pending. Final completion,
+including the secondary retirement-retry path, verifies the original baseline
+and successfully retires its durable record before clearing in-memory evidence.
+Explicit preserve-live behavior does not turn a mismatching old obligation into
+exact success. Existing generation, owner, capture-publication and cancellation
+checks continue to constrain these operations.
+
+O1: Retained normal identities bypassed configured pause cleanup.
+
+A positive-ID paused app could retain its logical display identity after its
+last capture drained. The Linux idle finalizer counted that identity and
+returned before evaluating revert-on-disconnect, revert delay or a positive
+paused-display timeout. The configured restoration/timeout was never scheduled.
+This finding excludes intentional indefinite retention when revert is disabled
+and the timeout is zero.
+
+O2: Failed final role composition could prevent recovery admission.
+
+When the last normal role ended, a failed composed-topology query could leave a
+drained release-pending record. Counting that dead record blocked dispatch of
+the authoritative recovery path. This is narrower than all release failures:
+the empty-composition path already dispatched restoration.
+
+The idle gate now distinguishes live capture and retained Remote Monitor owners
+from drained or paused normal bookkeeping. Configured pause cleanup can proceed
+without terminating the application, and a drained failed-release record cannot
+block recovery admission. Verified restore can suspend the retained app's
+display role while keeping its identity available for a later resume. Peer
+composition must not recreate a suspended app display incidentally. Live
+capture, pending work, retained monitors and stale-generation fences remain
+protected; failed cleanup does not authorize indiscriminate role deletion.
+
+H1: Fresh WebRTC capture lacked the normal display ownership used by RTSP.
+
+With a retained same-client Remote Monitor and another monitor surviving, a new
+WebRTC desktop could reuse the first output without a normal capture identity.
+Releasing that client's Monitor role could then remove the output beneath the
+still-running WebRTC capture. The second monitor defeated the last-visible-
+output safeguard; no simultaneous race was required.
+
+H2: WebRTC resume could prepare one output while retaining another owner.
+
+A request resuming a running app without its original client UUID could allocate
+a fresh per-client connector, while later capture retention referenced the
+app's original identity. A full pool could reject the same resume despite the
+original output already being available.
+
+WebRTC now uses the normal Linux display reservation/admission path, maps resume
+to the running app's retained owner before preparation, and retains the exact
+capture identity it uses. When sharing RTSP capture, it carries RTSP's actual
+display lease, including appid=0 cases with no process record. The sharing path
+distinguishes a real RTSP game capture from unrelated Monitor/Input sessions
+and requires a live capture of the exact recorded owner and token. A surviving
+same-owner game capture can keep that source usable after its original settings
+publisher ends; an unrelated remaining transport cannot do so. Expired shared
+sources cannot authorize capture startup. Browser-first handoff also publishes
+the RTSP source identity while preserving the active browser's video settings;
+a returning browser can retain that exact source after its original capture
+ends. The last RTSP game capture clears its cached source and settings even if
+an unrelated Monitor transport remains. Failure rollback remains scoped to the
+new preparation, and the ordinary configured cleanup policy protects surviving
+owners. A profile already applied by successful composition is not immediately
+replayed by a second session-apply call.
+
+L1: A peer operation replayed an unaffected client's launch profile.
+
+Adding, resuming or removing Remote Monitor B recomposed all owned clients.
+The Linux adapter reissued A's retained launch resolution, refresh, scale and
+HDR even when A's healthy fullscreen app or user had changed its live profile.
+The defect concerned owned client outputs; ordinary physical and preexisting
+anchor nodes were already excluded from explicit profile commands.
+
+Composition now observes healthy retained outputs and uses their live footprint
+for placement. Explicitly changed/new requests and recreated or unusable outputs
+still receive a requested profile. An unaffected live peer is not reset merely
+because another owner joins or leaves. Failed observation or missing capture
+readiness remains a retry condition. Ownership, exact output selection and
+layout changes are still verified; accepting a live profile does not permit
+capturing an unrelated monitor.
+
+V1: Physical/dummy capture targets lost their saved VRR preference.
+
+Normal application requested vrrpolicy.always, but restore omitted saved
+vrrPolicy and its readback comparator ignored the field. The broker admitted
+only always, so simply adding other restore strings would not have worked.
+The confirmed scope is an explicitly configured VRR-capable physical/dummy
+capture output. It is not a claim that every dummy supports VRR or that every
+unowned physical output was modified.
+
+Saved integer policies now map exactly to never, always and automatic. Snapshot
+validation rejects malformed, fractional, boolean, out-of-range or coerced
+values. Restoration applies the saved policy to active outputs and to an
+originally disabled target during its final disable phase. Known saved values
+require exact typed readback before completion; legacy absent fields introduce
+no guessed preference. The broker's anchored semantic allowlist admits exactly
+the three supported spellings. KScreen's serializer exposes vrrPolicy only for
+capable outputs, including disabled output objects. Sources: [S5], [S6], [S7].
+
+3. Capture format boundaries
+
+P1 is conditional defensive hardening.
+
+The PipeWire format callback previously updated pixel/color metadata without
+its own capture-generation invalidation. If an accepted same-size format or
+transfer change reached subsequent frames without another reinitialization
+signal, an encoder built for the old format could remain in use. A production-
+callback fixture proves that local conditional gap.
+
+The broader user-visible HDR claim was not established. The existing
+STREAMING-to-PAUSED path already requests reinitialization; Gamescope has
+additional format restrictions. Reviewed PipeWire graph state transitions may
+produce that PAUSED event, and reviewed upstream KWin screencast code does not
+establish that a physical HDR toggle produces the assumed same-size color
+callback. No supported live-backend trace showed the complete harmful sequence.
+The paired review therefore classified P1 as conditional, not a demonstrated
+general Linux HDR regression. Sources: [S8], [S9].
+
+The defensive change publishes a coherent format snapshot with a generation,
+pins the encoder's format/HDR view, and rejects a frame when its format changed
+during acquisition. A change away and back still changes generation. Duplicate
+or pacing-only callbacks do not force unnecessary reinitialization. Tests cover
+Gamescope's virtual format-validity dispatch and KMS HDR predicates. This does
+not claim to add missing generic 10-bit CPU conversion support or prove actual
+HDR appearance, compositor event timing or GPU import behavior.
+
+A separate CPU10 capability defect has a source-backed producer route and does
+not depend on P1's unproven unpaused renegotiation sequence. Hyprland v0.49.0
+can expose a successfully configured 10-bit output as packed 10-bit shared
+memory, and xdg-desktop-portal-hyprland maps it to a PipeWire packed-10 format.
+Generic portal capture with the software encoder previously advertised that
+memory format, but its converter interpreted the captured bytes as BGR0. A
+packed-10 pixel is not byte-packed 8-bit BGR, so that interpretation can change
+channels and values rather than merely reduce precision. The producer and
+application paths and a byte-layout counterexample were checked; no actual
+Hyprland stream or libswscale image-conversion run is claimed. [S11], [S12], [S13]
+
+The bounded correction restricts every memory/no-modifier offer to BGRA or BGRx,
+including a nominal DMA-BUF catalog entry with zero modifiers. Importable
+10-bit DMA-BUF offers with modifiers remain available; their mandatory modifier
+property keeps them separate from ordinary shared-memory negotiation. This is
+capability admission, not a new CPU RGB10/HDR converter. An older Hyprland
+producer offering only packed-10 shared memory can now fail negotiation instead
+of producing incorrectly interpreted frames. Supporting that combination still
+requires a correct converter or a compatible producer format. Real producer
+negotiation, GPU import and image/color correctness remain hardware acceptance
+items. This finding does not strengthen P1's separate live-event claim.
+
+4. Recovery storage and durability
+
+Saved Linux intent is now selected and updated per desktop owner, including
+session UID and role. A greeter or another desktop must not overwrite or clear
+the previous desktop's pending baseline in the shared machine state. Legacy
+single-owner records migrate conservatively; contradictory or malformed records
+do not silently become disposable. Missing, failed and corrupt reads are
+distinct. An unreadable baseline cannot authorize replacing it with current
+state, and a failed read remains retryable.
+
+The native writer already staged a complete private file, synced the inode and
+renamed it atomically. Linux requires syncing the containing directory as well
+to acknowledge persistence of the renamed entry. Atomic lookup replacement is
+not a power-loss guarantee. The replacement path now checks directory open,
+sync and close, retries an interrupted directory sync, and reports failure after
+a post-rename sync error even if the complete new file is already visible. The
+display admission path propagates that failure instead of treating readback as
+a durable save acknowledgement. Source: [S10].
+
+The first paired storage review found that newly created directory ancestors
+needed their own durability handling. The follow-up walks actual directory
+descriptors upward, syncing the containing directory and its ancestors through
+the filesystem root. It stops at an established mount boundary, checks ancestor
+open/stat/sync/close failures, and repeats the walk on retry even if the names
+already exist. This avoids mistaking a failed first write's visible directory
+for a durable one. Host POSIX and native Linux tests cover nested/relative paths,
+real symlink and parent traversal, failure/retry and mount boundaries; deliberate
+regressions fail their assertions. The native storage run used an unprivileged
+UID/GID with no network and a read-only repository.
+
+Readable ancestors are not a new requirement. When a directory read fails with
+EACCES or EPERM, a checked Linux syncfs fallback commits the containing
+filesystem using an already-open descriptor. An unreadable writable/searchable
+leaf uses the private staging-file descriptor opened before rename; an
+execute-only ancestor uses the current directory descriptor. Native unprivileged
+tests include real 0300 leaf and 0111 ancestor permissions. Interrupted syncfs
+calls retry, and sync/close failure refuses acknowledgement. Other open errors
+remain failures. Independent paired review closed the ancestry and permission
+defects. [S10]
+
+Ordinary saves incur directory opens/stats/syncs proportional to ancestry depth.
+The rare permission fallback flushes the whole containing filesystem, so it can
+cost more I/O and surface write-back errors from unrelated files. None of these
+tests physically interrupted storage power.
+
+No software flush sequence can substitute for testing the actual filesystem,
+storage device and failure mode. An error after rename may leave a complete new
+file visible; the caller receives failure and must retry rather than assume
+the old bytes were restored. This report does not claim that unrelated settings
+or pairing/password callers gained transactional rollback semantics.
+
+5. Evidence and validation boundaries
+
+Independent confirm/deny reviewers examined frozen original sources before
+exchanging reports, reproduced counterexamples, and reviewed the changed paths.
+The labels R/O/H/L/V1 refer to the scoped findings above. P1 has the deliberately
+weaker conditional status. Final integration totals and hashes belong in the
+record at the top of this file, not in an inferred aggregate of partial runs.
+
+Portable checks on macOS compiled production policies, the coordinator,
+dispatcher and restore transaction, plus extracted production functions with
+controlled compositor/helper boundaries. They cover missing outputs, failure,
+cancellation, ownership, paused settings, profile replay, VRR command/readback,
+broker validation and filesystem error propagation. Selected baseline and
+deliberately regressed variants fail the same checks, establishing that the
+tests exercise the corrected guards. Portable callbacks and simulated KScreen
+JSON do not execute a real compositor, modeset or capture pipeline.
+
+Additional tests executed on a real Linux kernel in a disposable Ubuntu 24.04
+arm64 container with GCC 13.3 and Linux 6.12.76-linuxkit. The source/root filesystem
+was read-only, networking disabled, capabilities dropped, and no host display
+devices or privileged access were provided. These checks exercised SO_PEERCRED,
+private Wayland sockets/protocol peers and deadlines, GIO subprocess lifecycle,
+own-process /proc and KWin environment validation, private D-Bus power protocol
+fixtures, bounded child commands, driver-helper credential boundaries, and
+observer callbacks/parser/pipeline. Selected production Linux translation units
+also compiled without substituted product bodies.
+
+Thirteen production translation units compiled with GCC 13, the production
+warning options and -Werror: private_display.cpp, display_power.cpp,
+private_display_mode_client.cpp, gamescope_session.cpp, gamescopegrab.cpp,
+pipewire.cpp, nvhttp.cpp, stream.cpp, webrtc_stream.cpp, state_storage.cpp,
+file_handler.cpp, remote_display_topology.cpp and libvirtualdisplay's
+linux_control_client.cpp. WebRTC feature support was disabled for this object
+build; startup/control-flow code still compiled. This is not a linked host or
+a build of the enabled WebRTC media engine.
+
+There is a preexisting dependency reproducibility blocker. The parent gitlink
+names libvirtualdisplay 1b8524e20ebef1db5d5c063a130a1ebb49aafab0, which could not
+be retrieved from origin by exact fetch; the GitHub commit API returned 422.
+The available workspace checkout is the older
+3083d210b55fba4b886e5c634e6abee0942201d4. Native tests and object builds used
+that available working tree, not the unavailable pinned dependency. The pin
+was not changed to hide the discrepancy. Obtaining the intended dependency
+commit and repeating the affected build/tests is required for reproducibility.
+
+CI run 37989705297 reported success for ReleaseCandidate, while Windows and
+Arch jobs were skipped. That result is not evidence of a Windows/Arch build
+or of native display acceptance.
+
+Those native tests used private protocol peers and fake display commands. They
+did not run the user's session services, an actual KDE compositor, a GPU/DRM
+display device, real hotplug, an installed virtual-display driver, CUDA capture,
+or a complete rendered stream. Object compilation is not a full executable
+link. No real desktop service restart, reboot, power cut or release deployment
+forms part of this evidence.
+
+6. Required real-hardware acceptance
+
+Use a dedicated test host and record exact KWin, KScreen, PipeWire, kernel,
+driver, GPU and filesystem versions. Include managed virtual connectors and an
+explicit physical/dummy capture target, laptop and dock, multiple monitors,
+headless/disabled-output arrangements, SDR/HDR and VRR-capable outputs. For each
+case retain the owner-specific baseline, KScreen output JSON, compositor saved
+configuration and stream/recovery logs before, during, after and after login.
+
+Reboot and shutdown:
+  Test normal host/service exit, orderly reboot, host crash and compositor loss
+  while streaming and at each recovery phase. Record which screen is usable at
+  the greeter and after desktop login. Require the right owner's original
+  obligation to survive incomplete recovery; do not infer pre-login recovery
+  from a successful post-login restore.
+
+Power loss and storage failure:
+  On the dedicated host, interrupt before/after staged-file sync, rename,
+  directory sync, hotplug, profile application and final record retirement.
+  Include fresh directory paths if supported, disk full/read-only state, corrupt
+  records and injected read/write failures. Require failed persistence to block
+  new display mutation and unfinished valid evidence to remain recoverable.
+
+Greeter and desktop ownership:
+  Leave a desktop baseline pending, transition through greeter and another user,
+  then return. Each session may update only its own record. Test legacy migration,
+  conflicting records and unreadable state. A foreign session's success must
+  not discharge the original desktop's obligation.
+
+Paused settings and transport handoff:
+  Exercise revert enabled with zero and finite delay; revert disabled with a
+  positive pause timeout; and disabled revert with zero timeout for intentional
+  retention. Cover normal Desktop/game and appid=0, RTSP, WebRTC, sharing capture,
+  final drain, pending startup, app exit and resume before a scheduled timeout.
+  Retained Remote Monitor/capture owners must prevent inappropriate cleanup.
+  Resume must reuse the correct app identity without a new UUID changing target.
+  Include browser-first capture followed by RTSP joining, browser reconnect,
+  app exit and final RTSP drain, with another Monitor transport kept alive. The
+  returning browser must retain the original display until its own capture ends,
+  without inheriting stale settings from an earlier RTSP game.
+
+Peers, fullscreen and HDR:
+  Change A's live size, refresh, scale and HDR in both directions, then add,
+  resume and remove B. Repeat with normal-game and Remote Monitor A, explicit
+  profile changes, role transitions, and capture publication failure. Unaffected
+  A must retain its live profile; a genuinely new/recreated target still needs
+  admission and its requested profile. Check real frame formats, reinitialization
+  and encoder color metadata, including same-size changes and PAUSED transitions.
+  Exercise generic portal/software and hybrid memory capture against a producer
+  with 8-bit memory formats and the older Hyprland packed-10-only case. Verify
+  compatible memory negotiation or explicit failure, and separately verify that
+  importable 10-bit DMA-BUF capture remains usable with correct color conversion.
+
+VRR and intentionally disabled targets:
+  Start with Never, Automatic and Always. Stream through a configured capable
+  physical/dummy output, then restore, restart and log in again. Verify the saved
+  policy as well as displayed usability. Repeat with that target originally
+  disabled and another desktop output active. It must finish disabled with its
+  original policy. Missing/invalid known readback must leave recovery pending.
+
+Monitor loss and return:
+  Save A+B, disconnect B, and exercise ordinary cleanup and automatic recovery
+  while A or another valid guard remains visible. Retire only owned private
+  outputs after the guard is actually capture-ready; retain A+B intent. Return
+  B and require full verification before clearing it. Include delayed enumeration,
+  unavailable modes, docking, DPMS and cancellation by a legitimate new owner.
+
+Every case must distinguish a usable screen, confirmed connector retirement,
+and exact baseline completion. An accepted helper command, queued restore or
+successful hotplug acknowledgement alone proves none of the other two.
+
+Primary source references inspected for this report
+
+[S1] KScreen doctor configuration application and VRR parser, Plasma/6.5:
+https://raw.githubusercontent.com/KDE/libkscreen/Plasma/6.5/src/doctor/doctor.cpp
+[S2] KScreen WaylandConfig::applyConfig:
+https://raw.githubusercontent.com/KDE/libkscreen/master/backends/kwayland/waylandconfig.cpp
+[S3] KDE output-management apply protocol and KWin workspace application:
+https://raw.githubusercontent.com/KDE/plasma-wayland-protocols/master/src/protocols/kde-output-management-v2.xml
+https://raw.githubusercontent.com/KDE/kwin/Plasma/6.4/src/workspace.cpp
+[S4] KWin OutputConfigurationStore::storeConfig, setupToConfig and save:
+https://raw.githubusercontent.com/KDE/kwin/master/src/outputconfigurationstore.cpp
+[S5] KScreen ConfigSerializer::serializeOutput, Plasma/6.5:
+https://raw.githubusercontent.com/KDE/libkscreen/Plasma/6.5/src/configserializer.cpp
+[S6] KScreen Output::VrrPolicy:
+https://raw.githubusercontent.com/KDE/libkscreen/master/src/output.h
+[S7] KScreen doctor VRR command spelling and disabled output setter:
+https://raw.githubusercontent.com/KDE/libkscreen/master/src/doctor/doctor.cpp
+[S8] PipeWire stream negotiation and graph state implementation:
+https://docs.pipewire.org/page_streams.html
+https://raw.githubusercontent.com/PipeWire/pipewire/master/src/pipewire/stream.c
+https://raw.githubusercontent.com/PipeWire/pipewire/master/src/pipewire/impl-link.c
+https://raw.githubusercontent.com/PipeWire/pipewire/1.2.7/src/pipewire/context.c
+[S9] Upstream KWin screencast format/size path:
+https://raw.githubusercontent.com/KDE/kwin/master/src/plugins/screencast/screencaststream.cpp
+[S10] Linux fsync, rename and close contracts:
+https://man7.org/linux/man-pages/man2/fsync.2.html
+https://man7.org/linux/man-pages/man2/rename.2.html
+https://man7.org/linux/man-pages/man2/close.2.html
+https://man7.org/linux/man-pages/man2/syncfs.2.html
+[S11] Released Hyprland 10-bit output and shared-memory screencopy path:
+https://raw.githubusercontent.com/hyprwm/Hyprland/v0.49.0/src/helpers/Monitor.cpp
+https://raw.githubusercontent.com/hyprwm/Hyprland/v0.49.0/src/render/OpenGL.cpp
+https://raw.githubusercontent.com/hyprwm/Hyprland/v0.49.0/src/protocols/Screencopy.cpp
+[S12] Portal Hyprland packed format mapping and memory offers:
+https://raw.githubusercontent.com/hyprwm/xdg-desktop-portal-hyprland/master/src/shared/ScreencopyShared.cpp
+https://raw.githubusercontent.com/hyprwm/xdg-desktop-portal-hyprland/master/src/portals/Screencopy.cpp
+[S13] FFmpeg BGR0 layout and PipeWire SPA property filtering:
+https://raw.githubusercontent.com/FFmpeg/FFmpeg/n7.1/libavutil/pixfmt.h
+https://raw.githubusercontent.com/PipeWire/pipewire/master/spa/include/spa/pod/filter.h
+
+These upstream branches may change. Findings concern the inspected source and
+the frozen application baseline; hardware acceptance must record the deployed
+versions and final application revision.

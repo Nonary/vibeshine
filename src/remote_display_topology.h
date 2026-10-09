@@ -25,6 +25,8 @@ namespace remote_display_topology {
     int height = 1080;
     int refresh_hz = 60;
     bool hdr = false;
+
+    bool operator==(const mode_t &) const = default;
   };
 
   struct node_t {
@@ -48,6 +50,9 @@ namespace remote_display_topology {
     // 1920x1080). Keep mode reporting native while composing in desktop units.
     std::optional<int> layout_width;
     std::optional<int> layout_height;
+    // A peer/layout change may move an existing output without resetting an
+    // application-selected mode. New leases and explicit profile changes opt in.
+    bool apply_requested_mode = true;
   };
 
   struct runtime_callbacks_t {
@@ -69,6 +74,9 @@ namespace remote_display_topology {
     // A false result retains ownership for retry; shared normal-game outputs
     // and captures still prevent removal.
     std::function<bool(const std::string &client_uuid)> terminate_owned_display;
+    // Optional platform observation before placement. Healthy unchanged peers
+    // contribute their current native mode and logical desktop footprint.
+    std::function<void(std::vector<node_t> &nodes)> observe_live_nodes;
   };
 
   struct activation_result_t {
@@ -114,6 +122,9 @@ namespace remote_display_topology {
     // Drained normal roles awaiting a failed restore are recovery state, not
     // live owners. Paused games, captures and retained monitors still own it.
     bool has_live_managed_client_identity() const;
+    // Paused normal apps retain their identity for Resume, but do not veto
+    // their configured idle display restore. Captures and retained Monitors do.
+    bool has_idle_display_cleanup_owner() const;
     bool normal_game_release_pending() const;
     std::vector<std::string> managed_client_identity_ids() const;
     std::vector<std::string> protected_remote_monitor_client_ids() const;
@@ -130,7 +141,7 @@ namespace remote_display_topology {
     activation_result_t activate_remote_monitor(const std::string &client_uuid, const std::string &label, mode_t mode);
     activation_result_t resume_remote_monitor(const std::string &client_uuid);
     normal_game_reservation_t reserve_normal_game_identity(const std::string &client_uuid, const std::string &label, mode_t mode);
-    bool reapply_composed_topology();
+    bool reapply_composed_topology(const std::string &apply_client_profile = {});
     // True only when the caller may retire the platform output. Capture or
     // Remote Monitor ownership, and stale tokens, must preserve it.
     bool rollback_normal_game_identity(const std::string &client_uuid, std::uint64_t token);
@@ -138,7 +149,9 @@ namespace remote_display_topology {
     // Capture references outlive the app and retain its output through GPU
     // teardown. Drop them after joining capture; finalize under the stream
     // lifecycle gate so their destructors never perform topology mutations.
-    std::shared_ptr<void> retain_normal_game_capture(const std::string &client_uuid, std::uint64_t token);
+    // Borrowing another transport's output additionally requires an existing
+    // live reference for this exact owner token, checked under the same lock.
+    std::shared_ptr<void> retain_normal_game_capture(const std::string &client_uuid, std::uint64_t token, bool require_live_capture = false);
     void release_drained_normal_game_identities();
     void release_all_normal_game_identities();
     // Caller holds the stream lifecycle gate. A desktop launch without an app
@@ -150,7 +163,9 @@ namespace remote_display_topology {
     // Call only after guarded physical restoration succeeds, under the stream
     // lifecycle gate and outside the platform display lock. No callbacks run;
     // incomplete cleanup remains pending until that success is established.
-    void complete_restored_normal_game_cleanup();
+    // Linux may suspend retained paused roles after retiring their connector;
+    // their next reservation reactivates the same token before capture.
+    void complete_restored_normal_game_cleanup(bool suspend_retained_normal = false);
     void note_lease_lost(const std::string &client_uuid);
     void disconnect_monitor(const std::string &client_uuid);
     void unpair_client(const std::string &client_uuid);
@@ -167,7 +182,11 @@ namespace remote_display_topology {
       // intact so a transient capability miss can recover and ending a Remote
       // Monitor restores the normal game's mode.
       mode_t effective_mode;
+      bool profile_pending = false;
       bool normal_game = false;
+      // Verified idle restoration removed this paused app's platform output.
+      // Keep the token for Resume without composing a nonexistent connector.
+      bool normal_display_suspended = false;
       std::uint64_t normal_game_token = 0;
       bool normal_release_pending = false;
       std::unordered_map<std::uint64_t, std::size_t> normal_capture_references;
@@ -194,7 +213,8 @@ namespace remote_display_topology {
     void release_locked(const std::string &client_uuid, client_state_t &state, const std::string &reason);
     static mode_t desired_mode(const client_state_t &state);
     void resolve_effective_mode_locked(const std::string &client_uuid, client_state_t &state);
-    std::vector<node_t> compose_locked(std::vector<std::string> &warnings) const;
+    std::vector<node_t> compose_locked(std::vector<std::string> &warnings, bool observe_live = true) const;
+    bool apply_composed_locked(const std::vector<node_t> &nodes);
     static mode_t effective_mode(const node_t &node);
     static void place_relative(node_t &node, const node_t &anchor, const nlohmann::json &placement);
     static int layout_width(const node_t &node);

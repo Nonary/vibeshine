@@ -143,10 +143,16 @@ namespace statefile {
   std::optional<double> load_virtual_display_scale(const std::string &identity);
 
   /** Persist/clear a bounded Linux desktop baseline through the atomic state writer. */
-  bool save_linux_display_snapshot(const std::optional<std::string> &snapshot);
+  bool save_linux_display_snapshot(const std::string &owner, const std::optional<std::string> &snapshot);
 
-  /** Read the Linux baseline; topology/schema/session validation belongs to its consumer. */
-  std::optional<std::string> load_linux_display_snapshot();
+  enum class linux_display_snapshot_status_e { missing, loaded, failed };
+  struct linux_display_snapshot_read_result_t {
+    linux_display_snapshot_status_e status {linux_display_snapshot_status_e::failed};
+    std::string contents;
+  };
+
+  /** Distinguish absent intent from unreadable state; callers must not replace unknown intent. */
+  linux_display_snapshot_read_result_t read_linux_display_snapshot(const std::string &owner);
 
   /** Clear retained virtual-display scales when display state is reset. */
   void clear_virtual_display_scales();

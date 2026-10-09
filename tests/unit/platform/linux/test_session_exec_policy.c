@@ -467,6 +467,8 @@ int main(void) {
     "output.DP-1.rotation.flipped270",
     "output.Virtual-2.mode.123",
     "output.Virtual-2.vrrpolicy.always",
+    "output.DP-1.vrrpolicy.never",
+    "output.HDMI-A-1.vrrpolicy.automatic",
     "output.Virtual-2.hdr.enable",
     "output.Virtual-2.hdr.disable",
     "output.DP-3.rotation.none",
@@ -495,6 +497,12 @@ int main(void) {
   }
 
   const char *invalid_display_arguments[] = {
+    "output.DP-1.vrrpolicy.auto",
+    "output.DP-1.vrrpolicy.0",
+    "output.DP-1.vrrpolicy.Never",
+    "output.DP-1.vrrpolicy.never.extra",
+    "output.DP-1.vrrpolicy.automatic;touch /tmp/x",
+    "output.DP-1.vrrpolicy.never\noutput.eDP-1.enable",
     "output.Virtual-1.enable;touch /tmp/x",
     "output.Virtual-1.scale.-1",
     "output.DP-1.rotation.foo",

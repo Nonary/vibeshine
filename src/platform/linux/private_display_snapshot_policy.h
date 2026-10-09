@@ -5,6 +5,7 @@
 #pragma once
 
 #include "private_display_mode_policy.h"
+#include "private_display_vrr_policy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -37,6 +38,9 @@ namespace platf::linux_private_display::snapshot_policy {
           return false;
         }
         if (output.contains("hdr") && !output["hdr"].is_boolean()) {
+          return false;
+        }
+        if (!vrr_policy::valid(output)) {
           return false;
         }
         const auto scale = output.value("scale", 1.0);
@@ -128,7 +132,9 @@ namespace platf::linux_private_display::snapshot_policy {
     }
     try {
       const auto saved = Json::parse(contents);
-      if (saved.value("version", 0) != 1 || saved.value("owner", std::string {}) != owner || !saved.contains("topology") || !valid(saved["topology"])) {
+      if (!saved.is_object() || !saved.contains("version") || !saved["version"].is_number_integer() || saved["version"] != 1 ||
+          !saved.contains("owner") || !saved["owner"].is_string() || saved["owner"] != owner ||
+          !saved.contains("topology") || !valid(saved["topology"])) {
         return std::nullopt;
       }
       // Older records preceded the intent flag and may describe an orphan
@@ -149,6 +155,25 @@ namespace platf::linux_private_display::snapshot_policy {
     }
   }
 
+  /** New intent must contain the active physical modes needed for later recovery. */
+  template<typename Json>
+  bool capture_ready(const Json &configuration) {
+    if (!valid(configuration)) return false;
+    for (const auto &output : configuration["outputs"]) {
+      if (!output.value("connected", false) || !output.value("enabled", false) ||
+          mode_policy::managed_connector_name(output.value("name", std::string {}))) continue;
+      const auto id = output.value("currentModeId", std::string {});
+      const auto modes = output.value("modes", Json::array());
+      if (id.empty() || std::ranges::none_of(modes, [&](const auto &mode) {
+            const auto size = mode.value("size", Json::object());
+            return mode.value("id", std::string {}) == id &&
+                   size.value("width", 0) > 0 && size.value("height", 0) > 0 &&
+                   mode.value("refreshRate", 0.0) > 0.0;
+          })) return false;
+    }
+    return true;
+  }
+
   template<typename Json>
   bool idle(const Json &configuration, const std::set<std::string> &private_names, const bool reserved) {
     return !reserved && std::ranges::none_of(configuration["outputs"], [&](const auto &output) {
@@ -156,13 +181,13 @@ namespace platf::linux_private_display::snapshot_policy {
     });
   }
 
-  /** Refresh before snapshot gating; an old failed restore must not freeze idle preferences. */
+  /** Pending intent survives connector retirement; only a completed transaction may refresh it. */
   template<typename Json, typename Persist>
-  bool capture(std::optional<Json> &snapshot, const Json &current, const std::set<std::string> &private_names, const bool reserved, Persist persist) {
-    if (snapshot && !idle(current, private_names, reserved)) {
+  bool capture(std::optional<Json> &snapshot, const Json &current, const std::set<std::string> &, const bool, Persist persist) {
+    if (snapshot) {
       return true;
     }
-    if (!valid(current)) {
+    if (!capture_ready(current)) {
       return false;
     }
     auto replacement = baseline(current);
@@ -225,7 +250,7 @@ namespace platf::linux_private_display::snapshot_policy {
     });
   }
 
-  /** Missing/unusable snapshots may use live enabled monitors, never guess disabled intent. */
+  /** A live visibility guard never supersedes a pending recovery baseline. */
   template<typename Json>
   std::optional<Json> live_fallback(const Json &current, const std::set<std::string> &) {
     if (!valid(current) || std::ranges::none_of(current["outputs"], [&](const auto &output) {
