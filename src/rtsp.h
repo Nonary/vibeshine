@@ -46,6 +46,10 @@ namespace rtsp_stream {
     uint32_t id;
     remote_session::role_e role {remote_session::role_e::game};
     std::uint64_t role_generation {};
+    // Accessed under the stream lifecycle gate on the canonical pending
+    // launch. Expiry may remove the registry row during startup, but a stream
+    // that successfully starts owns role cleanup through its capture drain.
+    bool ownership_transferred_to_stream = false;
     // The exact topology-owned capture target for Remote Monitor. Empty means
     // no target was verified and must never fall back to a physical display.
     std::optional<std::string> remote_capture_output;

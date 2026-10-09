@@ -55,8 +55,8 @@ namespace platf::display_helper_client {
     std::uint64_t expected_connection_generation = 0
   );
 
-  // True only after this live pipe has acknowledged a tagged v2 APPLY. An
-  // unknown/legacy connection must use dispatch-only snapshot semantics.
+  // True only after this live pipe has acknowledged a tagged v2 APPLY.
+  // Snapshot recovery readiness requires its own versioned acknowledgement.
   bool uses_v2_response_protocol();
 
   // Change only one display's refresh rate. This does not alter session snapshots,
@@ -104,16 +104,18 @@ namespace platf::display_helper_client {
     std::chrono::steady_clock::time_point operation_deadline =
       std::chrono::steady_clock::time_point::max());
 
-  // Save the current OS display state to session_current (rotate current->previous) without applying config.
+  // Dispatch-only snapshot request. True confirms the write to the pipe and
+  // never authorizes display mutation; use a completion-wait API for that.
   bool send_snapshot_current(const std::string &json_payload = {});
 
-  // Save the current OS display state and wait for the v2 helper's result.
-  // Legacy helpers do not implement this acknowledgement.
+  // Prepare recovery and await a correlated SnapshotResult with recovery
+  // version 1. Both engines support this contract; older snapshot-only success
+  // replies are rejected even if their APPLY protocol was identified as v2.
   bool send_snapshot_current_and_wait(const std::string &json_payload = {}, int timeout_ms = 3000);
 
-  // Bounded stream-start snapshot. Connection, write, and any v2 completion
-  // wait all share operation_deadline; legacy/unknown helpers remain
-  // dispatch-only.
+  // Bounded stream-start recovery preparation. Connection, write, and the
+  // versioned correlated completion all share operation_deadline, including on
+  // the first helper connection. A snapshot-only reply cannot authorize startup.
   bool send_snapshot_current_within(
     const std::string &json_payload,
     std::chrono::steady_clock::time_point operation_deadline,

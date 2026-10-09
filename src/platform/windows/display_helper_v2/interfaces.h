@@ -2,6 +2,8 @@
 
 #include "src/platform/windows/display_helper_v2/snapshot_codec.h"
 #include "src/platform/windows/display_helper_v2/types.h"
+#include "src/platform/windows/physical_display_recovery.h"
+#include "src/platform/windows/display_recovery_safety.h"
 
 #include <chrono>
 #include <functional>
@@ -26,6 +28,18 @@ namespace display_helper::v2 {
     }
     virtual ApplyStatus apply_topology(const ActiveTopology &topology) = 0;
     virtual EnumeratedDeviceList enumerate(display_device::DeviceEnumerationDetail detail) = 0;
+    /// Windows overrides this with connected CCD targets, including connector
+    /// evidence to exclude virtual outputs from other vendors as rescue targets.
+    virtual std::vector<physical_recovery::Device> enumerate_physical_recovery_devices() {
+      std::vector<physical_recovery::Device> devices;
+      for (const auto &device : enumerate(display_device::DeviceEnumerationDetail::Minimal)) {
+        devices.push_back({device.m_device_id, !codec::is_virtual_display_device(device), codec::is_active_display_device(device)});
+      }
+      return devices;
+    }
+    virtual display_recovery_safety::PhysicalDisplayState physical_display_state() {
+      return display_recovery_safety::PhysicalDisplayState::unknown;
+    }
     virtual ActiveTopology capture_topology() = 0;
     /// Validate a topology stored in a restore snapshot. Structurally invalid
     /// snapshots must be rejected; transient OS validation failures should be
@@ -216,8 +230,7 @@ namespace display_helper::v2 {
       if (!save(SnapshotTier::Previous, current->snapshot, current->layout_rotations)) {
         return false;
       }
-      (void) remove(SnapshotTier::Current);
-      return true;
+      return remove(SnapshotTier::Current);
     }
   };
 
@@ -246,6 +259,11 @@ namespace display_helper::v2 {
     virtual bool create_restore_task(const std::wstring &username) = 0;
     virtual bool delete_restore_task() = 0;
     virtual bool is_task_present() = 0;
+    /// A disabled task is a persistent user preference, not evidence that a
+    /// previous session still owns the recovery baseline.
+    virtual bool has_pending_restore_task() {
+      return is_task_present();
+    }
   };
 
   class IPlatformWorkarounds {

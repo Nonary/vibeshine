@@ -410,6 +410,11 @@ namespace display_helper::v2::codec {
     return true;
   }
 
+  bool snapshot_matches_baseline(const Snapshot &actual, const Snapshot &baseline) {
+    return equal_snapshots_strict(actual, baseline) &&
+           (baseline.m_origins.empty() || topology::equal_origins(actual.m_origins, baseline.m_origins));
+  }
+
   std::string signature(const Snapshot &snap) {
     // Build a stable textual representation
     std::string s;

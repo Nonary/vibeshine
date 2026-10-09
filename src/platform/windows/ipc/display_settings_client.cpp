@@ -24,6 +24,7 @@
 
   // local
   #include "display_settings_client.h"
+  #include "display_settings_protocol.h"
   #include "src/globals.h"
   #include "src/logging.h"
   #include "src/platform/windows/display_helper_v2/timing.h"
@@ -95,7 +96,7 @@ namespace platf::display_helper_client {
     RefreshRateResult = 11,  ///< Helper acknowledgement for RefreshRate (payload: [u8 success]).
     RecoveryStatus = 15,
     RecoveryStatusResult = 16,
-    SnapshotResult = 12,  ///< Helper acknowledgement for SnapshotCurrent (payload: [u8 success]).
+    SnapshotResult = 12,  ///< Recovery preparation acknowledgement: [u8 success][u64 request ID][u8 recovery version].
     Ping = 0xFE,  ///< Health check message; expects a response.
     Stop = 0xFF  ///< Request helper process to terminate gracefully.
   };
@@ -581,7 +582,8 @@ namespace platf::display_helper_client {
       const auto deadline = steady_clock::now() + milliseconds(timeout_ms);
       std::array<uint8_t, 65536> buffer {};
       while (steady_clock::now() < deadline) {
-        if (cancellation_predicate && cancellation_predicate()) {
+        if (steady_clock::now() >= deadline ||
+            (cancellation_predicate && cancellation_predicate())) {
           return std::nullopt;
         }
         if (auto buffered = take_buffered_response(
@@ -591,10 +593,15 @@ namespace platf::display_helper_client {
                 const auto response_id = response_request_id(bytes);
                 return bytes.size() >= 2 && response_id && *response_id == expected_request_id;
               })) {
-          if (cancellation_predicate && cancellation_predicate()) {
+          if (steady_clock::now() >= deadline ||
+            (cancellation_predicate && cancellation_predicate())) {
             return std::nullopt;
           }
-          return (*buffered)[1] != 0;
+          // The version attests recovery preparation, not just the snapshot
+          // write acknowledged by an older v2 helper. Both engines must send
+          // the fixed [type, success, request-id, recovery-version] frame.
+          return buffered->size() == 11 && (*buffered)[1] == 1u &&
+                 (*buffered)[10] == display_helper_protocol::kSnapshotRecoveryVersion;
         }
         const auto now = steady_clock::now();
         auto remaining = duration_cast<milliseconds>(deadline - now);
@@ -610,7 +617,8 @@ namespace platf::display_helper_client {
         if (result == platf::dxgi::PipeResult::Timeout) {
           continue;
         }
-        if (cancellation_predicate && cancellation_predicate()) {
+        if (steady_clock::now() >= deadline ||
+            (cancellation_predicate && cancellation_predicate())) {
           return std::nullopt;
         }
         if (result != platf::dxgi::PipeResult::Success || bytes_read == 0) {
@@ -623,7 +631,8 @@ namespace platf::display_helper_client {
           const std::span<const uint8_t> frame(buffer.data(), bytes_read);
           const auto response_id = response_request_id(frame);
           if (bytes_read >= 2 && response_id && *response_id == expected_request_id) {
-            return buffer[1] != 0;
+            return bytes_read == 11 && buffer[1] == 1u &&
+                   buffer[10] == display_helper_protocol::kSnapshotRecoveryVersion;
           }
           if (response_id) {
             buffer_response(session, frame);
@@ -1872,8 +1881,8 @@ namespace platf::display_helper_client {
     }
     const auto wait_generation = apply_wait_generation().load(std::memory_order_acquire);
     const auto session = connected_session();
-    if (!session || current_apply_response_protocol(session) != ApplyResponseProtocol::V2) {
-      BOOST_LOG(warning) << "Display helper IPC: SNAPSHOT_CURRENT completion wait requires a confirmed v2 helper.";
+    if (!session) {
+      BOOST_LOG(warning) << "Display helper IPC: SNAPSHOT_CURRENT completion wait requires a connected helper.";
       return false;
     }
     const auto request_id = next_auxiliary_request_id().fetch_add(1, std::memory_order_relaxed);
@@ -1892,7 +1901,7 @@ namespace platf::display_helper_client {
       auto snapshot_json = nlohmann::json::parse(json_payload.empty() ? "{}" : json_payload, nullptr, false);
       if (snapshot_json.is_array()) {
         // The long-standing snapshot API accepts a bare exclusion array. Keep
-        // that wire shape at the public boundary while adding the v2 token in
+        // that wire shape at the public boundary while adding the request token in
         // an object the helper can distinguish from metadata-only requests.
         snapshot_json = nlohmann::json {
           {"exclude_devices", std::move(snapshot_json)},
@@ -1960,7 +1969,6 @@ namespace platf::display_helper_client {
       BOOST_LOG(warning) << "Display helper IPC: bounded SNAPSHOT_CURRENT aborted - no connection";
       return false;
     }
-    const auto protocol = current_apply_response_protocol(session);
     const auto cancelled = [session, wait_generation, operation_cancelled] {
       return operation_cancelled() ||
              !session_is_current(session) ||
@@ -1968,9 +1976,8 @@ namespace platf::display_helper_client {
     };
 
     std::vector<uint8_t> payload;
-    std::optional<std::uint64_t> request_id;
-    if (protocol == ApplyResponseProtocol::V2) {
-      request_id = next_auxiliary_request_id().fetch_add(1, std::memory_order_relaxed);
+    const auto request_id = next_auxiliary_request_id().fetch_add(1, std::memory_order_relaxed);
+    {
       try {
         auto snapshot_json = nlohmann::json::parse(
           json_payload.empty() ? "{}" : json_payload,
@@ -1986,20 +1993,17 @@ namespace platf::display_helper_client {
           BOOST_LOG(error) << "Display helper IPC: SNAPSHOT_CURRENT payload must be a JSON object or exclusion array.";
           return false;
         }
-        snapshot_json["sunshine_snapshot_id"] = *request_id;
+        snapshot_json["sunshine_snapshot_id"] = request_id;
         const auto serialized = snapshot_json.dump();
         payload.assign(serialized.begin(), serialized.end());
       } catch (...) {
         BOOST_LOG(error) << "Display helper IPC: failed to add bounded SNAPSHOT_CURRENT request token.";
         return false;
       }
-    } else {
-      payload.assign(json_payload.begin(), json_payload.end());
     }
 
     std::unique_lock<std::timed_mutex> response_lock;
-    if (request_id &&
-        !lock_response_reader_until(
+    if (!lock_response_reader_until(
           session,
           response_lock,
           stage_deadline,
@@ -2018,16 +2022,12 @@ namespace platf::display_helper_client {
           cancelled)) {
       return false;
     }
-    if (!request_id) {
-      return true;
-    }
-
     const int remaining = remaining_timeout_ms(stage_deadline);
     if (remaining > 0) {
       if (auto result = wait_for_snapshot_result_locked(
             session,
             remaining,
-            *request_id,
+            request_id,
             cancelled
           )) {
         return *result;

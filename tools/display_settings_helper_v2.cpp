@@ -49,6 +49,7 @@
   #include "src/platform/windows/display_helper_v2/win_scheduled_task_manager.h"
   #include "src/platform/windows/display_helper_v2/win_virtual_display_driver.h"
   #include "src/platform/windows/ipc/pipes.h"
+  #include "src/platform/windows/ipc/display_settings_protocol.h"
   #include "tools/display_helper_paths.h"
 
   #include <display_device/json.h>
@@ -552,8 +553,7 @@ namespace {
     }
   };
 
-  /// Validate a snapshot file found in a search root; remove it when it has no
-  /// usable restore payload (legacy validate_session_snapshot).
+  /// Validate a snapshot file without discarding unreadable recovery evidence.
   bool validate_snapshot_file(const std::filesystem::path &path, const char *label) {
     display_helper::v2::AtomicFileTextStorage files;
     const auto text = files.read(path.string());
@@ -564,48 +564,31 @@ namespace {
       return true;
     }
 
-    BOOST_LOG(warning) << "Existing " << label << " snapshot is missing restore topology/mode data; removing path=" << path.string();
-    std::error_code ec_rm;
-    std::filesystem::remove(path, ec_rm);
+    BOOST_LOG(warning) << "Existing " << label << " snapshot is missing restore topology/mode data; preserving recovery evidence at path=" << path.string();
     return false;
   }
 
-  /// Copy validated snapshots from any search root into the active snapshot dir
-  /// so SYSTEM/user contexts and old install layouts share one restore chain.
-  void adopt_snapshots_from_search_roots(
+  /// Previous is history, so it may be copied into a new context. Current is
+  /// bound directly to its retained path and must never be duplicated here.
+  void adopt_previous_snapshot_from_search_roots(
     const std::vector<std::filesystem::path> &search_roots,
-    const std::filesystem::path &active_current,
     const std::filesystem::path &active_previous) {
+    std::vector<std::string> previous_sources;
     for (const auto &root : search_roots) {
       const auto paths = display_helper_paths::make_snapshot_paths(root);
-      std::error_code ec_cur;
-      if (std::filesystem::exists(paths.session_current, ec_cur) && !ec_cur) {
-        if (validate_snapshot_file(paths.session_current, "session")) {
-          BOOST_LOG(info) << "Existing current session snapshot detected; will preserve until confirmed restore: "
-                          << paths.session_current.string();
-          if (paths.session_current != active_current) {
-            std::error_code ec_copy;
-            std::filesystem::create_directories(active_current.parent_path(), ec_copy);
-            std::filesystem::copy_file(paths.session_current, active_current, std::filesystem::copy_options::overwrite_existing, ec_copy);
-          }
-          break;
-        }
-      }
+      previous_sources.push_back(paths.session_previous.string());
     }
-    for (const auto &root : search_roots) {
-      const auto paths = display_helper_paths::make_snapshot_paths(root);
-      std::error_code ec_prev;
-      if (std::filesystem::exists(paths.session_previous, ec_prev) && !ec_prev) {
-        if (validate_snapshot_file(paths.session_previous, "session")) {
-          if (paths.session_previous != active_previous) {
-            std::error_code ec_copy;
-            std::filesystem::create_directories(active_previous.parent_path(), ec_copy);
-            std::filesystem::copy_file(paths.session_previous, active_previous, std::filesystem::copy_options::overwrite_existing, ec_copy);
-          }
-          break;
-        }
+    display_helper::v2::AtomicFileTextStorage files;
+    const auto adopt = [&](const std::filesystem::path &destination, const std::vector<std::string> &sources) {
+      using display_helper::v2::SnapshotAdoptionResult;
+      const auto result = display_helper::v2::adopt_snapshot_if_missing(files, destination.string(), sources);
+      if (result == SnapshotAdoptionResult::WriteFailed) {
+        BOOST_LOG(error) << "Could not durably adopt session snapshot; retaining source recovery evidence: " << destination.string();
+      } else if (result == SnapshotAdoptionResult::Adopted || result == SnapshotAdoptionResult::DestinationPresent) {
+        BOOST_LOG(info) << "Preserving active session snapshot until confirmed restore: " << destination.string();
       }
-    }
+    };
+    adopt(active_previous, previous_sources);
   }
 }  // namespace
 
@@ -644,7 +627,8 @@ int run_v2_helper(int argc, char *argv[]) {
 
   HANDLE singleton = nullptr;
   if (!display_helper_paths::ensure_single_instance(singleton)) {
-    BOOST_LOG(warning) << "Display helper: another instance is already running (singleton conflict). Exiting with code 3.";
+    BOOST_LOG(warning) << "Display helper: cannot establish exclusive ownership (Win32 error "
+                       << GetLastError() << "). Exiting with code 3.";
     logging::log_flush();
     return 3;
   }
@@ -663,12 +647,13 @@ int run_v2_helper(int argc, char *argv[]) {
   display_helper::v2::SnapshotService snapshot_service(display_settings);
 
   display_helper::v2::SnapshotPaths paths {
-    .current = active_snapshots.session_current,
+    .current = display_helper_paths::select_current_snapshot_path(active_snapshots.session_current, search_roots),
     .previous = active_snapshots.session_previous,
     .golden = active_snapshots.golden,
   };
   display_helper::v2::FileSnapshotStorage storage(paths);
   display_helper::v2::SnapshotPersistence persistence(storage);
+  display_helper::v2::SnapshotLedger snapshot_ledger(snapshot_service, persistence, clock);
   display_helper::v2::AtomicFileTextStorage golden_status_storage;
   display_helper::v2::GoldenHealth golden_health(golden_status_storage, active_snapshots.golden_status.string());
   display_helper::v2::RestoreState restore_state;
@@ -682,7 +667,18 @@ int run_v2_helper(int argc, char *argv[]) {
   display_helper::v2::ApplyOperation apply_operation(
     display_settings,
     clock,
-    [&task_manager]() {
+    [&task_manager, &snapshot_ledger, &restore_state]() {
+      if (snapshot_ledger.is_headless_without_baseline()) {
+        return true;
+      }
+      if (!snapshot_ledger.has_usable_recovery_baseline(
+            restore_state.exclusions(),
+            restore_state.always_restore_from_golden.load(std::memory_order_acquire),
+            restore_state.prefer_golden_if_current_missing.load(std::memory_order_acquire))) {
+        return false;
+      }
+      // An explicitly user-disabled task is an intentional opt-out accepted
+      // by the task manager. Registration/query errors still reject mutation.
       return task_manager.create_restore_task(L"");
     });
   display_helper::v2::VerificationOperation verification_operation(display_settings, clock);
@@ -705,12 +701,12 @@ int run_v2_helper(int argc, char *argv[]) {
 
   std::atomic<bool> running {true};
 
-  // Adopt snapshots written by other contexts (SYSTEM vs user) or the legacy engine.
-  adopt_snapshots_from_search_roots(search_roots, paths.current, paths.previous);
+  // Import history only. Current remains at its original path until confirmed
+  // retirement, including when the helper switches user/SYSTEM contexts.
+  adopt_previous_snapshot_from_search_roots(search_roots, paths.previous);
 
-  // A payload-less golden file (e.g. a crash-truncated overwrite) makes the
-  // restore strategy see an existing-but-unloadable golden tier; drop it so
-  // tier existence stays consistent with loadability.
+  // Validate a payload-less golden file without erasing evidence of a prior
+  // physical baseline. Loadability, never existence, gates destructive APPLY.
   {
     std::error_code ec_golden;
     if (std::filesystem::exists(paths.golden, ec_golden) && !ec_golden) {
@@ -740,7 +736,6 @@ int run_v2_helper(int argc, char *argv[]) {
   };
   display_helper::v2::ApplyPipeline apply_pipeline(dispatcher, apply_policy, system_ports, enqueue_message);
   display_helper::v2::RecoveryPipeline recovery_pipeline(dispatcher, system_ports, enqueue_message);
-  display_helper::v2::SnapshotLedger snapshot_ledger(snapshot_service, persistence, clock);
 
   display_helper::v2::StateMachine state_machine(
     apply_pipeline,
@@ -806,6 +801,7 @@ int run_v2_helper(int argc, char *argv[]) {
     std::vector<std::uint8_t> payload;
     payload.push_back(success ? 1u : 0u);
     append_u64_le(payload, request_id);
+    payload.push_back(platf::display_helper_protocol::kSnapshotRecoveryVersion);
     response_pipe.send_for_epoch(origin_epoch, MsgType::SnapshotResult, payload);
   });
   state_machine.set_refresh_rate_result_callback([&response_pipe](bool success, std::uint64_t origin_epoch, std::uint64_t request_id) {
@@ -1104,6 +1100,10 @@ int run_v2_helper(int argc, char *argv[]) {
           // FSM queue cannot turn an already received ping into a false
           // recovery. HeartbeatMonitor serializes this with the timer loop.
           heartbeat.record_ping();
+          queue.push(display_helper::v2::PingCommand {
+            .generation = cancellation.current_generation(),
+            .connection_epoch = epoch,
+          });
           response_pipe.send_for_epoch(epoch, MsgType::Ping);
           break;
         case MsgType::LogLevel:
@@ -1185,7 +1185,7 @@ int run_v2_helper(int argc, char *argv[]) {
                            << " queued command(s) from retired IPC epoch=" << epoch << ".";
         }
         // Sunshine disconnected or crashed. Arm the autonomous restore now (the
-        // FSM applies a 5s grace and the restore-on-disconnect policy; a fast
+        // FSM applies a 5s grace independently of client pause policy; a fast
         // reconnect supersedes it via DISARM/APPLY like the legacy engine), but
         // only when this helper actually changed something or a restore is
         // already being worked on.

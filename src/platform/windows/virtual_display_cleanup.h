@@ -94,7 +94,8 @@ namespace platf::virtual_display_cleanup {
     bool prefer_golden_if_current_missing = true,
     std::optional<std::array<std::uint8_t, 16>> virtual_display_guid_bytes = std::nullopt,
     recovery_monitor_policy_t recovery_monitor_policy = recovery_monitor_policy_t::preserve_if_deferred,
-    cleanup_admission_policy_t cleanup_admission_policy = cleanup_admission_policy_t::respect_managed_owners
+    cleanup_admission_policy_t cleanup_admission_policy = cleanup_admission_policy_t::respect_managed_owners,
+    bool allow_disabled_recovery = false
   );
 
   // Execute the complete user-requested kill-switch contract. Unlike ordinary

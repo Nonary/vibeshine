@@ -172,6 +172,79 @@ namespace display_helper::v2 {
     return replaced;
   }
 
+  bool SnapshotLedger::finalize_recovery(SnapshotTier tier) {
+    auto &storage = persistence_.storage();
+    if (tier == SnapshotTier::Current) {
+      if (!storage.promote_current_to_previous()) {
+        BOOST_LOG(warning) << "Display helper: physical restore confirmed but current snapshot retirement failed; recovery remains pending.";
+        return false;
+      }
+    } else if (tier == SnapshotTier::Golden) {
+      const bool removed_previous = !storage.exists(SnapshotTier::Previous) || storage.remove(SnapshotTier::Previous);
+      // Current is also the startup pending marker. Keep it until all older
+      // session history is retired, even though Golden owns this restore.
+      const bool removed_current = removed_previous &&
+                                   (!storage.exists(SnapshotTier::Current) || storage.remove(SnapshotTier::Current));
+      BOOST_LOG(info) << "Confirmed golden recovery cleanup: removed current=" << (removed_current ? "true" : "false")
+                      << ", previous=" << (removed_previous ? "true" : "false");
+      return removed_current && removed_previous;
+    }
+    return true;
+  }
+
+  bool SnapshotLedger::has_usable_recovery_baseline(
+    const std::vector<std::string> &exclusions,
+    bool golden_first,
+    bool prefer_golden_if_current_missing) {
+    try {
+      const auto devices = service_.enumerate();
+      for (const auto tier : snapshot_recovery_order(golden_first, prefer_golden_if_current_missing)) {
+        auto loaded = persistence_.storage().load_with_metadata(tier);
+        if (!loaded) {
+          if (persistence_.storage().exists(tier)) {
+            return false;
+          }
+          continue;
+        }
+        auto filtered = codec::filter_loaded_snapshot(std::move(*loaded), devices, exclusions, "APPLY recovery guard");
+        if (!filtered || !service_.topology_is_valid(filtered->snapshot.m_topology)) {
+          return false;
+        }
+        const auto &snapshot = filtered->snapshot;
+        const auto ids = codec::flatten_topology_device_ids(snapshot.m_topology);
+        const bool complete_modes = !ids.empty() && std::all_of(ids.begin(), ids.end(), [&](const auto &id) {
+          const auto mode = snapshot.m_modes.find(id);
+          return mode != snapshot.m_modes.end() && mode->second.m_resolution.m_width > 0 &&
+                 mode->second.m_resolution.m_height > 0 && mode->second.m_refresh_rate.m_numerator > 0 &&
+                 mode->second.m_refresh_rate.m_denominator > 0;
+        });
+        // The restore worker uses this same first existing tier as authority.
+        // An older usable file cannot justify mutation if exact recovery would
+        // still be blocked on this unusable baseline.
+        return complete_modes;
+      }
+    } catch (const std::exception &error) {
+      BOOST_LOG(warning) << "Display helper: recovery baseline validation failed: " << error.what();
+    }
+    return false;
+  }
+
+  bool SnapshotLedger::is_headless_without_baseline() {
+    try {
+      // Even an unreadable retained file is evidence of a prior physical
+      // desktop; never reinterpret corruption or an unplugged dock as headless.
+      for (const auto tier : {SnapshotTier::Current, SnapshotTier::Golden, SnapshotTier::Previous}) {
+        if (persistence_.storage().exists(tier)) {
+          return false;
+        }
+      }
+      return service_.physical_display_state() == display_recovery_safety::PhysicalDisplayState::none_connected;
+    } catch (const std::exception &error) {
+      BOOST_LOG(warning) << "Display helper: headless check failed: " << error.what();
+      return false;
+    }
+  }
+
   std::optional<ActiveTopology> SnapshotLedger::topology_with_returned_active_baseline_devices(
     const std::string &virtual_device_id,
     const std::vector<std::string> &exclusions) {
@@ -262,7 +335,7 @@ namespace display_helper::v2 {
       return std::nullopt;
     }
 
-    BOOST_LOG(info) << "Display helper: an active physical baseline device is missing from the live topology; admitting one bounded topology repair.";
+    BOOST_LOG(debug) << "Display helper: an active physical baseline device is absent from the live topology observation.";
     return candidate;
   }
 
@@ -349,6 +422,7 @@ namespace display_helper::v2 {
     // queued work must not toggle the topology recovery is about to own.
     system_.clear_pending_hdr_blank();
     recovery_staged_state_reset_succeeded_.reset();
+    recovery_tier_.reset();
     deferred_recovery_display_event_.reset();
     recovery_baseline_present_devices_ = snapshots_.present_physical_restore_baseline_devices(
       restore_state_.always_restore_from_golden.load(std::memory_order_acquire),
@@ -372,10 +446,13 @@ namespace display_helper::v2 {
     recovery_armed_ = false;
     display_changes_pending_recovery_ = false;
     explicit_recovery_required_ = false;
+    host_disconnect_deadline_.reset();
+    host_disconnect_recovery_ = false;
     last_apply_started_.reset();
     reset_transient_disconnect_settlement();
     system_.disarm_heartbeat();
     recovery_snapshot_.reset();
+    recovery_tier_.reset();
     recovery_event_feedback_quiet_until_.reset();
     deferred_recovery_display_event_.reset();
     recovery_baseline_present_devices_.reset();
@@ -391,8 +468,8 @@ namespace display_helper::v2 {
   }
 
   void StateMachine::activate_recovery_lease() {
-    // A verified APPLY or a partial mutation must remain recoverable until an
-    // explicit DISARM/RESET or a confirmed restore clears it. In particular, a
+    // A verified APPLY or a partial mutation must remain recoverable until a
+    // confirmed restore clears it. In particular, a
     // failed replacement APPLY must not drop the lease established by the
     // previous live session.
     recovery_armed_ = true;
@@ -832,13 +909,9 @@ namespace display_helper::v2 {
 
   bool StateMachine::should_defer_disconnect_recovery() const {
     static constexpr auto kApplyDisconnectGrace = std::chrono::seconds(5);
-    // The grace is only v1's post-APPLY startup churn accommodation.  An
-    // explicit restore has its own durable intent, and a session that opted
-    // out of restore-on-disconnect must disarm normally instead of issuing
-    // additional display mutations after its control connection disappears.
-    if (explicit_recovery_required_ ||
-        !restore_state_.restore_on_disconnect.load(std::memory_order_acquire) ||
-        !last_apply_started_) {
+    // Host liveness is independent of the client's pause/retention preference.
+    // An explicit restore has its own durable intent and cannot be deferred.
+    if (explicit_recovery_required_ || !last_apply_started_) {
       return false;
     }
     const auto elapsed = system_.now() - *last_apply_started_;
@@ -848,6 +921,15 @@ namespace display_helper::v2 {
   bool StateMachine::begin_transient_disconnect_settlement() {
     if (!should_defer_disconnect_recovery() || !current_request_.configuration) {
       return false;
+    }
+    if (!host_disconnect_deadline_) {
+      host_disconnect_deadline_ = system_.now() + std::chrono::seconds(5);
+    }
+    if (session_was_verified_) {
+      // A running fullscreen application may legitimately have changed mode
+      // or HDR since launch. Host loss is a liveness grace, not permission to
+      // replay the launch profile onto that already admitted session.
+      return true;
     }
     if (transient_disconnect_settlement_requested_) {
       return true;
@@ -949,6 +1031,8 @@ namespace display_helper::v2 {
     // behind a worker.  Clear older autonomous/explicit recovery intent at
     // ingress so a heartbeat cannot replace this deferred session start.
     explicit_recovery_required_ = false;
+    host_disconnect_deadline_.reset();
+    host_disconnect_recovery_ = false;
     reset_transient_disconnect_settlement();
     if (mutation_worker_active()) {
       // Keep the active transaction authoritative until it reports whether it
@@ -1021,15 +1105,13 @@ namespace display_helper::v2 {
     // modeset the desktop again after WGC had started.
     verification_reapply_available_ = true;
 
-    // The session baseline is normally captured earlier via SnapshotCurrent. That
-    // request is fire-and-forget and can be lost (helper restart races), which
-    // used to leave REVERT with nothing to restore and strand the user on the
-    // session-only display layout (f3841ad8). Capture the pre-apply state here as
-    // a fallback whenever no baseline exists yet.
+    // The host normally receives a durable SnapshotCurrent acknowledgement
+    // before creating a virtual output. Retain this fallback for older hosts;
+    // the worker still rejects mutation if no usable recovery route exists.
     if (!snapshots_.tier_exists(SnapshotTier::Current)) {
       BOOST_LOG(warning) << "Display helper: no session baseline present at APPLY; capturing pre-apply baseline now.";
       if (!snapshots_.capture_filtered_and_save(SnapshotTier::Current, exclusions_vector(), "pre-apply baseline")) {
-        BOOST_LOG(warning) << "Display helper: pre-apply baseline capture failed; REVERT may have nothing to restore.";
+        BOOST_LOG(warning) << "Display helper: pre-apply capture failed; the mutation guard will require another usable baseline or proven headlessness.";
       }
     }
 
@@ -1103,6 +1185,8 @@ namespace display_helper::v2 {
       explicit_recovery_required_ = true;
       reset_transient_disconnect_settlement();
     }
+    host_disconnect_deadline_.reset();
+    host_disconnect_recovery_ = command.from_disconnect && !explicit_recovery_required_;
     if (command.from_disconnect && recovery_worker_in_progress()) {
       // A broken/reconnected pipe may report the same disconnect more than
       // once. Preserve the live recovery worker rather than cancelling it
@@ -1122,33 +1206,13 @@ namespace display_helper::v2 {
     baseline_topology_repair_available_ = false;
     baseline_topology_repair_in_flight_ = false;
     expected_topology_.reset();
-    // Disconnect-triggered reverts honor the restore-on-disconnect policy: a
-    // paused stream with revert_on_disconnect=false must preserve its display
-    // state (3b7a52c4 / 0add1f80). Explicit client REVERTs always run.
-    if (command.from_disconnect &&
-        !explicit_recovery_required_ &&
-        !restore_state_.restore_on_disconnect.load(std::memory_order_acquire) &&
-        !recovery_worker_in_progress()) {
-      BOOST_LOG(info) << "Display helper: disconnect with restore-on-disconnect disabled; not restoring.";
-      system_.cancel_operations();
-      clear_recovery_state(true);
-      reset_apply_verification_state();
-      transition(State::Waiting, ApplyAction::Disarm);
-      return;
-    }
-
-    // If there is nothing to restore from, exit rather than spinning (legacy
-    // restore_poll_proc early-exit; keeps --restore boot tasks from hanging).
+    // Missing evidence is an unresolved recovery, never successful restoration.
+    // The bounded scheduler will pause until a later device event; retain the
+    // task and lease so a later logon or recovered snapshot can still repair it.
     if (!snapshots_.tier_exists(SnapshotTier::Current) &&
         !snapshots_.tier_exists(SnapshotTier::Previous) &&
         !snapshots_.tier_exists(SnapshotTier::Golden)) {
-      BOOST_LOG(info) << "Restore: no session/previous or golden snapshot present; nothing to restore.";
-      system_.cancel_operations();
-      clear_recovery_state(true);
-      if (exit_callback_) {
-        exit_callback_(0);
-      }
-      return;
+      BOOST_LOG(warning) << "Restore: no baseline snapshot available; preserving unresolved recovery.";
     }
 
     BOOST_LOG(info) << "Display helper: received Revert command, initiating recovery"
@@ -1198,6 +1262,8 @@ namespace display_helper::v2 {
     // Like APPLY, a later DISARM supersedes a previously requested explicit
     // recovery even if the command must wait behind an active mutation.
     explicit_recovery_required_ = false;
+    host_disconnect_deadline_.reset();
+    host_disconnect_recovery_ = false;
     reset_transient_disconnect_settlement();
     if (staged_state_reset_pending_) {
       enqueue_deferred_mutation_command(command, "DISARM");
@@ -1217,22 +1283,35 @@ namespace display_helper::v2 {
     BOOST_LOG(info) << "Display helper: received Disarm command, resetting state";
 
     system_.cancel_operations();
-    if (unconfirmed_cancelled_mutation_) {
-      BOOST_LOG(warning) << "Display helper: keeping recovery guard after DISARM because a cancelled APPLY may have changed the desktop.";
+    const bool retain_guard = unconfirmed_cancelled_mutation_ || recovery_armed_ || display_changes_pending_recovery_ ||
+                              restore_task_created_ || system_.restore_task_present() || snapshots_.tier_exists(SnapshotTier::Current);
+    if (retain_guard) {
+      BOOST_LOG(info) << "Display helper: DISARM transfers live ownership while preserving the recovery guard.";
+      scheduler_.disarm();
+      recovery_armed_ = true;
+      system_.arm_heartbeat();
     } else {
-      clear_recovery_state(true);
+      // A new helper cannot prove that a task left by its predecessor is
+      // disposable. DISARM is an ownership handoff, not user abandonment.
+      clear_recovery_state(false);
     }
-    apply_result_sent_ = false;
-    verification_result_sent_ = false;
-    session_was_verified_ = false;
-    last_apply_started_.reset();
-    if (!unconfirmed_cancelled_mutation_) {
+    if (!command.preserve_session) {
+      apply_result_sent_ = false;
+      verification_result_sent_ = false;
+      session_was_verified_ = false;
+      last_apply_started_.reset();
+      resolved_target_.reset();
+    }
+    if (!retain_guard) {
       restore_task_created_ = false;
     }
-    resolved_target_.reset();
     reset_apply_verification_state();
 
-    transition(State::Waiting, ApplyAction::Disarm);
+    if (command.preserve_session && session_was_verified_) {
+      enter_steady_state();
+    } else {
+      transition(State::Waiting, ApplyAction::Disarm);
+    }
   }
 
   void StateMachine::handle_export_golden(const ExportGoldenCommand &command) {
@@ -1273,8 +1352,26 @@ namespace display_helper::v2 {
       update_blacklist(command.payload.exclude_devices);
     }
 
-    const bool saved = snapshots_.refresh_current_preserving_previous(exclusions_vector());
-    send_snapshot_result(saved, command.connection_epoch, command.request_id);
+    // A retained session must not rotate its streaming layout over the original
+    // physical baseline during a reconnect/start probe.
+    const bool headless = snapshots_.is_headless_without_baseline();
+    const auto usable_baseline = [&] {
+      return snapshots_.has_usable_recovery_baseline(
+        exclusions_vector(),
+        restore_state_.always_restore_from_golden.load(std::memory_order_acquire),
+        restore_state_.prefer_golden_if_current_missing.load(std::memory_order_acquire));
+    };
+    const bool saved = headless || ((recovery_armed_ || display_changes_pending_recovery_ || system_.restore_task_present()) ?
+                                     usable_baseline() :
+                                     snapshots_.refresh_current_preserving_previous(exclusions_vector()));
+    const bool usable = saved && (headless || usable_baseline());
+    const bool ready = usable && (headless || system_.create_restore_task());
+    if (ready && !headless) {
+      restore_task_created_ = true;
+      recovery_armed_ = true;
+      system_.arm_heartbeat();
+    }
+    send_snapshot_result(ready, command.connection_epoch, command.request_id);
   }
 
   void StateMachine::handle_refresh_rate_command(const RefreshRateCommand &command) {
@@ -1298,6 +1395,30 @@ namespace display_helper::v2 {
       send_refresh_rate_result(false, command.connection_epoch, command.request_id);
       return;
     }
+    const bool owned_recovery_ready = session_was_verified_ && recovery_armed_ && restore_task_created_;
+    if (!owned_recovery_ready) {
+      const bool headless = snapshots_.is_headless_without_baseline();
+      const bool ready = headless || (snapshots_.has_usable_recovery_baseline(
+                                       exclusions_vector(),
+                                       restore_state_.always_restore_from_golden.load(std::memory_order_acquire),
+                                       restore_state_.prefer_golden_if_current_missing.load(std::memory_order_acquire)) &&
+                                     system_.create_restore_task());
+      if (!ready) {
+        BOOST_LOG(warning) << "Display helper: rejecting independent refresh-rate mutation without recovery readiness.";
+        send_refresh_rate_result(false, command.connection_epoch, command.request_id);
+        return;
+      }
+      restore_task_created_ = !headless;
+      recovery_armed_ = true;
+      system_.arm_heartbeat();
+    }
+    if (is_stale_connection(command.connection_epoch)) {
+      send_refresh_rate_result(false, command.connection_epoch, command.request_id);
+      return;
+    }
+    // A failed mode-set can partially alter Windows. Retain the lease through
+    // either completion, including cancellation behind a replacement APPLY.
+    display_changes_pending_recovery_ = true;
     // Refresh-rate changes are a display mutation in their own right.  Give
     // them the same ownership fence as APPLY/REVERT so a replacement session
     // cannot begin while Windows is still committing the rate change.
@@ -1334,6 +1455,25 @@ namespace display_helper::v2 {
       return;
     }
     system_.record_ping();
+    if (host_disconnect_deadline_) {
+      host_disconnect_deadline_.reset();
+      reset_transient_disconnect_settlement();
+      system_.arm_heartbeat();
+      if (!mutation_worker_active() && session_was_verified_) {
+        // Cancel a read-only settling probe without invalidating an APPLY
+        // still owned by its worker or the original verified target scope.
+        system_.cancel_operations();
+        enter_steady_state();
+      }
+    } else if (host_disconnect_recovery_ && !restore_state_.restore_attempted_unconfirmed.load(std::memory_order_acquire)) {
+      // Only the current pipe epoch can reclaim its live/paused session. A
+      // successful display verification by itself is not owner liveness.
+      handle_disarm_command(DisarmCommand {
+        .generation = system_.current_generation(),
+        .connection_epoch = command.connection_epoch,
+        .preserve_session = true,
+      });
+    }
   }
 
   void StateMachine::handle_stop_command(const StopCommand &command) {
@@ -1471,6 +1611,18 @@ namespace display_helper::v2 {
       if (!restore_task_created_) {
         BOOST_LOG(warning) << "Display helper v2: could not arm a durable restore task after display mutation.";
       }
+    }
+
+    if (completed.status == ApplyStatus::Ok && !restore_task_created_) {
+      // Alternate dispatchers must obey the same admission contract as the
+      // production mutation boundary. Preserve any partial mutation's lease,
+      // but never publish capture readiness after failed task registration.
+      BOOST_LOG(error) << "Display helper: refusing successful APPLY admission without durable recovery readiness.";
+      send_apply_result(ApplyStatus::Fatal);
+      send_verification_result(false);
+      transition(State::Waiting, ApplyAction::Apply, ApplyStatus::Fatal);
+      drain_deferred_mutation_commands();
+      return;
     }
 
     if (has_deferred_apply_intent()) {
@@ -1655,9 +1807,10 @@ namespace display_helper::v2 {
       }
 
       if (transient_disconnect_settlement_requested_) {
-        if (dispatch_next_transient_disconnect_verification()) {
-          return;
-        }
+        // The strict initial gate has now succeeded. Keep only the bounded
+        // owner grace; further launch-profile checks could undo a game's own
+        // fullscreen resolution or HDR transition.
+        reset_transient_disconnect_settlement();
       }
       // A repair Apply has already emitted the client gate result, but it must
       // still return to the same steady state as the initial transaction.
@@ -1836,8 +1989,9 @@ namespace display_helper::v2 {
         recovery_staged_state_reset_succeeded_ = completed.staged_state_reset_succeeded;
       }
       recovery_snapshot_ = completed.snapshot;
+      recovery_tier_ = completed.restored_tier;
       transition(State::RecoveryValidation, ApplyAction::Revert);
-      active_mutation_worker_->generation = recovery_.dispatch_recovery_validation(*recovery_snapshot_);
+      active_mutation_worker_->generation = recovery_.dispatch_recovery_validation(*recovery_snapshot_, completed.layout_rotations);
       return;
     }
 
@@ -1873,7 +2027,25 @@ namespace display_helper::v2 {
 
     active_mutation_worker_.reset();
 
-    if (completed.success) {
+    bool transaction_confirmed = completed.success;
+    if (transaction_confirmed && recovery_tier_) {
+      // The worker's stable read is followed by another asynchronous gate.
+      // Keeping Current in place until here prevents a failed final gate
+      // from changing the next attempt's authority to Golden or Previous.
+      transaction_confirmed = snapshots_.finalize_recovery(*recovery_tier_);
+      if (transaction_confirmed && *recovery_tier_ == SnapshotTier::Golden) {
+        golden_health_.clear_status("restore confirmed");
+      } else if (transaction_confirmed) {
+        const auto confirmed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    system_.now().time_since_epoch())
+                                    .count();
+        restore_state_.last_session_restore_success_ms.store(confirmed_ms, std::memory_order_release);
+      }
+      if (transaction_confirmed) {
+        recovery_tier_.reset();
+      }
+    }
+    if (transaction_confirmed) {
       (void) recovery_status_policy_.publish(
         recovery_status::status::restored,
         recovery_status_policy_.ticket(),
@@ -1941,7 +2113,7 @@ namespace display_helper::v2 {
       return;
     }
 
-    BOOST_LOG(warning) << "Display helper: recovery validation failed, entering event loop for retry.";
+    BOOST_LOG(warning) << "Display helper: recovery validation or snapshot retirement failed, entering event loop for retry.";
     (void) recovery_status_policy_.publish(
       recovery_status::status::failed,
       recovery_status_policy_.ticket(),
@@ -1990,21 +2162,13 @@ namespace display_helper::v2 {
       if (auto repaired_topology = snapshots_.topology_with_returned_active_baseline_devices(
             current_request_.configuration->m_device_id,
             exclusions_vector())) {
-        // The exact virtual configuration remains the capture target. Only the
-        // live topology contract is extended, and one admission per explicit
-        // APPLY prevents the resulting Windows notifications from looping.
+        // A returned physical path is already reported active. Reapplying the
+        // session here can overwrite a game's live resolution/HDR selection;
+        // even topology-only SetDisplayConfig may load old database modes.
+        // Observe once without changing a healthy live session. Explicit APPLY
+        // and a concrete virtual-device replacement still own configuration.
         baseline_topology_repair_available_ = false;
-        (void) recovery_status_policy_.observe_event();
-        expected_topology_ = std::move(repaired_topology);
-        verification_reapply_available_ = false;
-        transition(State::Verification, ApplyAction::Apply);
-        apply_.dispatch_verification(
-          verification_request(),
-          expected_topology_,
-          resolved_target_,
-          std::chrono::milliseconds(0),
-          VerificationPurpose::BaselineTopologyReturn);
-        return;
+        BOOST_LOG(debug) << "Display helper: observing a returned active physical display without reapplying the live session.";
       }
     }
 
@@ -2014,9 +2178,8 @@ namespace display_helper::v2 {
         current_request_.virtual_layout &&
         !device_identity_event) {
       // WM_DISPLAYCHANGE and power notifications are generated by healthy
-      // Apply/shell activity and carry no device identity. A bounded topology
-      // comparison above may admit a proven physical return; otherwise do not
-      // turn them into identity repair or an unconditional re-apply.
+      // Apply/shell activity and carry no device identity. A returned physical
+      // path must not turn them into identity repair or a settings re-apply.
       BOOST_LOG(debug) << "Display helper: ignoring generic virtual-session display event without identity evidence.";
       return;
     }
@@ -2206,7 +2369,7 @@ namespace display_helper::v2 {
     BOOST_LOG(warning) << "Display helper: heartbeat timeout detected in state " << state_to_string(state_)
                        << ", recovery_armed=" << (recovery_armed_ ? "true" : "false");
 
-    if (!recovery_armed_) {
+    if (!requires_disconnect_recovery()) {
       return;
     }
 
@@ -2225,51 +2388,36 @@ namespace display_helper::v2 {
         BOOST_LOG(debug) << "Display helper: heartbeat deferring to queued APPLY intent.";
         return;
       }
-      if (!explicit_recovery_required_ &&
-          !restore_state_.restore_on_disconnect.load(std::memory_order_acquire)) {
-        queue_after_active_mutation(
-          DisarmCommand {
-            .connection_epoch = event.connection_epoch,
-          },
-          "heartbeat DISARM");
-      } else {
-        queue_after_active_mutation(
-          RevertCommand {
-            .connection_epoch = event.connection_epoch,
-            .immediate = true,
-            .from_disconnect = true,
-          },
-          "heartbeat REVERT");
-      }
-      return;
-    }
-
-    // Heartbeat loss means Sunshine crashed/hung: honor the restore-on-disconnect
-    // policy the same way a broken pipe would (3b7a52c4).
-    if (!explicit_recovery_required_ &&
-        !restore_state_.restore_on_disconnect.load(std::memory_order_acquire) &&
-        !recovery_worker_in_progress()) {
-      BOOST_LOG(info) << "Display helper: heartbeat lost with restore-on-disconnect disabled; not restoring.";
-      system_.cancel_operations();
-      clear_recovery_state(true);
-      reset_apply_verification_state();
-      transition(State::Waiting, ApplyAction::Disarm);
+      queue_after_active_mutation(
+        RevertCommand {
+          .connection_epoch = event.connection_epoch,
+          .from_disconnect = true,
+        },
+        "heartbeat REVERT");
       return;
     }
 
     BOOST_LOG(info) << "Display helper: initiating recovery due to heartbeat timeout";
-    system_.cancel_operations();
-    system_.disarm_heartbeat();
-    reset_apply_verification_state();
-    baseline_topology_repair_available_ = false;
-    baseline_topology_repair_in_flight_ = false;
-    expected_topology_.reset();
-    golden_health_.reset_request_tracking();
-    scheduler_.arm_primary(system_.now(), std::chrono::milliseconds(5000));
-    start_recovery(std::chrono::milliseconds(5000), ApplyAction::Revert);
+    handle_revert_command(RevertCommand {
+      .generation = system_.current_generation(),
+      .connection_epoch = event.connection_epoch,
+      .from_disconnect = true,
+    });
   }
 
   void StateMachine::handle_tick() {
+    if (host_disconnect_deadline_ && system_.now() >= *host_disconnect_deadline_) {
+      host_disconnect_deadline_.reset();
+      reset_transient_disconnect_settlement();
+      if (!has_deferred_apply_intent()) {
+        handle_revert_command(RevertCommand {
+          .generation = system_.current_generation(),
+          .immediate = true,
+          .from_disconnect = true,
+        });
+        return;
+      }
+    }
     if (state_ != State::EventLoop || !recovery_armed_ || recovery_status_policy_.parked()) {
       return;
     }

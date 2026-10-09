@@ -38,6 +38,7 @@
   #include "src/logging.h"
   #include "src/utility.h"
   #include "src/platform/windows/ipc/pipes.h"
+  #include "src/platform/windows/ipc/display_settings_protocol.h"
   #include "src/platform/windows/display_snapshot_restore.h"
 
   #include <display_device/json.h>
@@ -60,13 +61,17 @@
   #endif
 
   #include "src/platform/windows/display_restore_task.h"
+  #include "src/platform/windows/display_recovery_safety.h"
+  #include "src/platform/windows/physical_display_recovery.h"
   #include "src/platform/windows/legacy_restore_event_policy.h"
   #include "src/platform/windows/recovery_status.h"
+  #include "tools/display_helper_paths.h"
 
   #include <comdef.h>
   #include <dbt.h>
   #include <devguid.h>
   #include <lmcons.h>
+  #include <io.h>
   #include <powrprof.h>
   #include <secext.h>
   #include <shlobj.h>
@@ -183,6 +188,7 @@ namespace {
     RecoveryStatusResult = 16,  // response: [u64 restore ticket][u8 status][u64 event revision][u8 parked]
     RefreshRate = 10,  // payload: [u32 numerator][u32 denominator][UTF-8 device id]
     RefreshRateResult = 11,  // payload: [u8 success]
+    SnapshotResult = 12,  // payload: [u8 success][u64 request id][u8 recovery version]
     Ping = 0xFE,  // no payload, reply with Pong
     Stop = 0xFF  // no payload, terminate process
   };
@@ -344,47 +350,18 @@ namespace {
         return all_ok;  // All displays already at correct rotation
       }
 
-      // Fast path: single display doesn't need batching
-      if (pending.size() == 1) {
-        auto *request = reinterpret_cast<DEVMODEW *>(pending[0].devmode_buffer.data());
-        LONG result = ChangeDisplaySettingsExW(pending[0].display_name.c_str(), request, nullptr, CDS_UPDATEREGISTRY, nullptr);
-        if (result != DISP_CHANGE_SUCCESSFUL) {
-          result = ChangeDisplaySettingsExW(pending[0].display_name.c_str(), request, nullptr, 0, nullptr);
-        }
-        if (result != DISP_CHANGE_SUCCESSFUL) {
-          BOOST_LOG(warning) << "Layout restore: ChangeDisplaySettingsEx failed for display "
-                             << std::string(pending[0].display_name.begin(), pending[0].display_name.end())
-                             << " (error=" << result << ")";
-          all_ok = false;
-        }
-        return all_ok;
-      }
-
-      // --- Phase 2: Batch all changes to registry with CDS_NORESET ---
-      // Each call writes to the registry but does NOT trigger a mode change.
-      // This prevents the OS from validating intermediate topological states.
+      // Restore rotations without staging registry updates. Saving an
+      // intermediate layout here can overwrite Windows' physical baseline.
       for (auto &prep : pending) {
         auto *request = reinterpret_cast<DEVMODEW *>(prep.devmode_buffer.data());
-        LONG result = ChangeDisplaySettingsExW(
-          prep.display_name.c_str(), request, nullptr,
-          CDS_UPDATEREGISTRY | CDS_NORESET, nullptr
-        );
+        const LONG result = ChangeDisplaySettingsExW(prep.display_name.c_str(), request, nullptr, 0, nullptr);
         if (result != DISP_CHANGE_SUCCESSFUL) {
-          BOOST_LOG(warning) << "Layout restore: CDS_NORESET batch failed for display "
+          BOOST_LOG(warning) << "Layout restore: temporary rotation failed for display "
                              << std::string(prep.display_name.begin(), prep.display_name.end())
                              << " (error=" << result << ")";
           all_ok = false;
         }
       }
-
-      // --- Phase 3: Atomic commit — apply all batched registry changes at once ---
-      // A single null-call triggers one WM_DISPLAYCHANGE and one topology validation.
-      LONG commit_result = ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
-      if (commit_result != DISP_CHANGE_SUCCESSFUL) {
-        BOOST_LOG(warning) << "Layout restore: atomic commit of batched rotations failed (error=" << commit_result << ")";
-        all_ok = false;
-      }
-
       return all_ok;
     }
 
@@ -493,7 +470,7 @@ namespace {
             return true;
           }
         }
-        return m_dd->setDisplayOrigin(device_id, origin);
+        return m_dd->setDisplayOriginTemporary(device_id, origin);
       } catch (...) {
         return false;
       }
@@ -562,7 +539,7 @@ namespace {
             return true;
           }
           current_modes[device_id].m_refresh_rate = display_device::Rational {num, den};
-          return m_dd->setDisplayModes(current_modes);
+          return m_dd->setDisplayModesTemporary(current_modes);
         }
       } catch (...) {
       }
@@ -773,6 +750,40 @@ namespace {
       return compute_expected_topology(cfg, std::nullopt);
     }
 
+    display_recovery_safety::PhysicalDisplayState physical_display_state() const {
+      if (!ensure_initialized()) return display_recovery_safety::PhysicalDisplayState::unknown;
+      return display_recovery_safety::probe_physical_displays(*m_wapi);
+    }
+
+    // Raw topology is retained even if loading the complete snapshot is
+    // deferred because a physical monitor is absent.
+    display_helper::physical_recovery::Outcome enable_visible_physical_output(
+      const std::array<std::filesystem::path, 3> &paths,
+      const std::function<bool()> &cancelled
+    ) {
+      if (!ensure_initialized() || cancelled()) return {};
+      display_device::DisplayRecoveryBehaviorGuard recovery_guard(display_device::DisplayRecoveryBehavior::Skip);
+      display_device::ActiveTopology baseline;
+      for (const auto &path : paths) {
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec) && !ec) continue;
+        if (!snapshot_file_has_restore_payload(path)) continue;
+        (void) load_display_settings_snapshot_with_metadata(path, &baseline);
+        break;
+      }
+      return display_helper::physical_recovery::ensure_visible(
+        baseline, snapshot_exclusions_copy(),
+        [&] { return display_helper::physical_recovery::enumerate_devices(*m_wapi); },
+        [&] { return m_dd->getCurrentTopology(); },
+        [&](const auto &topology) { return !cancelled() && m_dd->isTopologyValid(topology) && m_dd->setTopology(topology); },
+        cancelled,
+        [&](std::chrono::milliseconds delay) {
+          const auto until = std::chrono::steady_clock::now() + delay;
+          while (!cancelled() && std::chrono::steady_clock::now() < until) std::this_thread::sleep_for(25ms);
+          return !cancelled();
+        });
+    }
+
     bool is_topology_the_same(const display_device::ActiveTopology &a, const display_device::ActiveTopology &b) const {
       if (!ensure_initialized()) {
         return false;
@@ -893,7 +904,7 @@ namespace {
         }
         auto guard = std::unique_ptr<FILE, int (*)(FILE *)>(f, fclose);
         const auto written = fwrite(out.data(), 1, out.size(), f);
-        if (written != out.size()) {
+        if (written != out.size() || fflush(f) != 0 || _commit(_fileno(f)) != 0) {
           guard.reset();
           std::error_code ec_rm_tmp;
           std::filesystem::remove(temp_path, ec_rm_tmp);
@@ -901,25 +912,9 @@ namespace {
         }
       }
 
-      std::error_code ec_exist;
-      const bool target_exists = std::filesystem::exists(path, ec_exist) && !ec_exist;
-      if (!target_exists) {
-        std::error_code ec_move;
-        std::filesystem::rename(temp_path, path, ec_move);
-        if (!ec_move) {
-          return true;
-        }
-      }
-
-      std::error_code ec_copy;
-      std::filesystem::copy_file(temp_path, path, std::filesystem::copy_options::overwrite_existing, ec_copy);
-      if (ec_copy) {
-        return false;
-      }
-
-      std::error_code ec_rm_tmp;
-      std::filesystem::remove(temp_path, ec_rm_tmp);
-      return true;
+      // Replacement must be atomic: an interrupted copy must not destroy the
+      // last complete baseline. Flush both the contents and the rename.
+      return MoveFileExW(temp_path.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
     }
 
     // Save snapshot to file as JSON-like format.
@@ -1312,6 +1307,16 @@ namespace {
         return std::nullopt;
       }
 
+      for (const auto &group : snap.m_topology) {
+        for (const auto &id : group) {
+          const auto normalized = normalize_device_id(id);
+          if (!exclusions_norm.contains(normalized) && !valid_devices_norm.contains(normalized)) {
+            BOOST_LOG(warning) << "Snapshot load deferred: required physical display is unavailable: " << id;
+            return std::nullopt;
+          }
+        }
+      }
+
       auto is_allowed = [&](const std::string &device_id) {
         const auto norm = normalize_device_id(device_id);
         if (!valid_devices_norm.count(norm)) {
@@ -1493,10 +1498,22 @@ namespace {
       fclose(f);
 
       try {
+        const auto json = nlohmann::json::parse(data, nullptr, false);
+        if (!json.is_object()) return false;
         display_device::DisplaySettingsSnapshot snap;
         parse_topology_field(find_str_section(data, "topology"), snap);
         parse_modes_field(find_str_section(data, "modes"), snap);
-        return !snap.m_topology.empty() && !snap.m_modes.empty();
+        if (snap.m_topology.empty() || snap.m_modes.empty()) return false;
+        for (const auto &group : snap.m_topology) {
+          if (group.empty()) return false;
+          for (const auto &id : group) {
+            const auto mode = snap.m_modes.find(id);
+            if (id.empty() || mode == snap.m_modes.end() ||
+                mode->second.m_resolution.m_width == 0 || mode->second.m_resolution.m_height == 0 ||
+                mode->second.m_refresh_rate.m_numerator == 0 || mode->second.m_refresh_rate.m_denominator == 0) return false;
+          }
+        }
+        return true;
       } catch (...) {
         return false;
       }
@@ -1871,12 +1888,7 @@ namespace {
         return false;
       }
 
-      LONG apply_result = ChangeDisplaySettingsExW(display_name.c_str(), request, nullptr, CDS_UPDATEREGISTRY, nullptr);
-      if (apply_result == DISP_CHANGE_SUCCESSFUL) {
-        return true;
-      }
-
-      apply_result = ChangeDisplaySettingsExW(display_name.c_str(), request, nullptr, 0, nullptr);
+      const LONG apply_result = ChangeDisplaySettingsExW(display_name.c_str(), request, nullptr, 0, nullptr);
       if (apply_result == DISP_CHANGE_SUCCESSFUL) {
         return true;
       }
@@ -2245,8 +2257,6 @@ namespace {
     }
   };
 
-  constexpr std::chrono::milliseconds kApplyDisconnectGrace {5000};
-
   class DisplayDeviceLogBridge {
   public:
     DisplayDeviceLogBridge() = default;
@@ -2549,9 +2559,12 @@ namespace {
     std::atomic<bool> always_restore_from_golden {false};
     // When true, prefer golden over previous only when current is unavailable.
     std::atomic<bool> prefer_golden_if_current_missing {true};
-    // Set by APPLY. When false, a broken Sunshine IPC connection should not
-    // autonomously restore because the stream is intentionally pause-retained.
+    // Compatibility metadata for the client's pause policy. Host loss always
+    // restores independently of this preference.
     std::atomic<bool> restore_on_disconnect {true};
+    std::atomic<bool> host_loss_recovery {false};
+    std::atomic<uint64_t> host_loss_connection_epoch {0};
+    std::atomic<bool> visible_fallback_attempted {false};
 
     // Polling-based restore loop state (replaces topology-change-triggered retries)
     std::jthread restore_poll_thread;
@@ -3038,41 +3051,30 @@ namespace {
       return false;
     }
 
-    // Move the current session snapshot to the previous slot (overwrite) so we keep
-    // one level of history for the restore chain.
+    // A missing file is already retired; an error or a surviving file is not.
+    // Recheck absence so success cannot leave a stale Current to replay later.
+    static bool retire_snapshot_file(const std::filesystem::path &path) {
+      std::error_code remove_error;
+      (void) std::filesystem::remove(path, remove_error);
+      if (remove_error) return false;
+      std::error_code exists_error;
+      const bool remains = std::filesystem::exists(path, exists_error);
+      return !exists_error && !remains;
+    }
+
+    // Keep a durable history copy before retiring the session's recovery marker.
     bool promote_current_snapshot_to_previous(const char *reason = nullptr) {
-      std::error_code ec_exist;
-      if (!std::filesystem::exists(session_current_path, ec_exist) || ec_exist) {
-        return false;
+      std::error_code exists_error;
+      const bool has_current = std::filesystem::exists(session_current_path, exists_error);
+      if (exists_error) return false;
+      if (!has_current) {
+        session_saved.store(false, std::memory_order_release);
+        return true;
       }
 
-      std::error_code ec_dir;
-      std::filesystem::create_directories(session_previous_path.parent_path(), ec_dir);
-      (void) ec_dir;
-
-      std::error_code ec_rm_prev;
-      std::filesystem::remove(session_previous_path, ec_rm_prev);
-      (void) ec_rm_prev;
-
-      std::error_code ec_move;
-      std::filesystem::rename(session_current_path, session_previous_path, ec_move);
-      bool ok = !ec_move;
-      if (ec_move) {
-        std::error_code ec_copy;
-        std::filesystem::copy_file(
-          session_current_path,
-          session_previous_path,
-          std::filesystem::copy_options::overwrite_existing,
-          ec_copy
-        );
-        ok = !ec_copy;
-        if (ok) {
-          std::error_code ec_rm_cur;
-          std::filesystem::remove(session_current_path, ec_rm_cur);
-          (void) ec_rm_cur;
-        }
-      }
-
+      const bool ok = copy_file_overwrite(session_current_path, session_previous_path) &&
+                      retire_snapshot_file(session_current_path);
+      if (ok) session_saved.store(false, std::memory_order_release);
       const char *why = reason ? reason : "rotation";
       BOOST_LOG(ok ? info : warning) << "Session snapshot promotion (" << why
                                      << ") current->previous result=" << (ok ? "true" : "false");
@@ -3084,13 +3086,89 @@ namespace {
       return std::filesystem::exists(path, ec) && !ec;
     }
 
+    static bool path_may_exist(const std::filesystem::path &path) {
+      std::error_code ec;
+      return std::filesystem::exists(path, ec) || ec;
+    }
+
     static bool copy_file_overwrite(const std::filesystem::path &from, const std::filesystem::path &to) {
       std::error_code ec_dir;
       std::filesystem::create_directories(to.parent_path(), ec_dir);
+      auto staged = to;
+      staged += L".replace";
+      if (!CopyFileW(from.c_str(), staged.c_str(), FALSE)) return false;
+      const auto handle = CreateFileW(staged.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (handle == INVALID_HANDLE_VALUE) return false;
+      const bool flushed = FlushFileBuffers(handle) != FALSE;
+      CloseHandle(handle);
+      return flushed && MoveFileExW(staged.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+    }
 
-      std::error_code ec_copy;
-      std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, ec_copy);
-      return !ec_copy;
+    bool has_recovery_evidence() const {
+      for (const auto &path : {session_current_path, session_previous_path, golden_path}) {
+        if (path_may_exist(path)) return true;
+      }
+      return false;
+    }
+
+    bool proven_headless_without_baseline() const {
+      return !has_recovery_evidence() &&
+             controller.physical_display_state() == display_recovery_safety::PhysicalDisplayState::none_connected;
+    }
+
+    bool recovery_baseline_ready() const {
+      return controller.snapshot_file_has_restore_payload(session_current_path) &&
+             controller.load_display_settings_snapshot(session_current_path).has_value();
+    }
+
+    std::array<std::filesystem::path, 3> authoritative_snapshot_paths() const {
+      if (always_restore_from_golden.load(std::memory_order_acquire)) {
+        return {golden_path, session_current_path, session_previous_path};
+      }
+      if (prefer_golden_if_current_missing.load(std::memory_order_acquire)) {
+        return {session_current_path, golden_path, session_previous_path};
+      }
+      return {session_current_path, session_previous_path, golden_path};
+    }
+
+    bool prepare_recovery_baseline(const char *reason) {
+      if (proven_headless_without_baseline()) return true;
+      // Preserve an interrupted session's full baseline. A capture from its
+      // partially restored layout cannot replace recovery evidence.
+      if (!controller.snapshot_file_has_restore_payload(session_current_path)) {
+        if (path_may_exist(session_current_path) || !capture_current_snapshot(reason)) return false;
+      }
+      const bool ready = recovery_baseline_ready();
+      if (ready) session_saved.store(true, std::memory_order_release);
+      return ready && create_restore_scheduled_task();
+    }
+
+    void try_visible_physical_fallback(std::stop_token st, uint64_t generation) {
+      std::lock_guard settlement_lock(disconnect_settlement_mutex);
+      auto cancelled = [&] {
+        return st.stop_requested() || restore_cancel_generation.load(std::memory_order_acquire) != generation ||
+               !restore_requested.load(std::memory_order_acquire) ||
+               !host_loss_recovery.load(std::memory_order_acquire) ||
+               heartbeat_monitor_active.load(std::memory_order_acquire) ||
+               disconnect_settlement_pending.load(std::memory_order_acquire) ||
+               host_loss_connection_epoch.load(std::memory_order_acquire) != current_connection_epoch();
+      };
+      if (cancelled() || visible_fallback_attempted.exchange(true, std::memory_order_acq_rel)) return;
+      const auto paths = authoritative_snapshot_paths();
+      bool visible = false;
+      try {
+        const auto outcome = controller.enable_visible_physical_output(paths, cancelled);
+        visible = outcome.physical_available;
+        // A disconnected dock has no candidate yet. Do not consume the one
+        // mutation allowance until a physical target actually becomes usable.
+        if (!outcome.mutation_attempted && !visible) {
+          visible_fallback_attempted.store(false, std::memory_order_release);
+        }
+      } catch (...) {
+      }
+      BOOST_LOG(visible ? warning : error)
+        << "Physical visibility fallback " << (visible ? "confirmed a usable output" : "could not enable an output")
+        << "; exact restoration remains pending and recovery evidence is retained.";
     }
 
     bool save_snapshot_with_retry(
@@ -3280,8 +3358,9 @@ namespace {
       if (!(display_device::equalDisplayModes(a.m_modes, b.m_modes) && a.m_hdr_states == b.m_hdr_states && a.m_primary_device == b.m_primary_device)) {
         return false;
       }
-      // Origins are optional for backward compatibility with older snapshots
-      if (!a.m_origins.empty() && !b.m_origins.empty()) {
+      // b is the saved baseline. Missing actual positions cannot confirm a
+      // baseline that records positions; origin-free legacy files remain valid.
+      if (!b.m_origins.empty()) {
         return a.m_origins == b.m_origins;
       }
       return true;
@@ -3515,24 +3594,16 @@ namespace {
       return false;
     }
 
-    void clear_session_restore_snapshots_after_golden() {
-      std::error_code ec_cur;
-      const bool removed_current = std::filesystem::remove(session_current_path, ec_cur);
-      std::error_code ec_prev;
-      const bool removed_previous = std::filesystem::remove(session_previous_path, ec_prev);
-      session_saved.store(false, std::memory_order_release);
-
-      BOOST_LOG(info) << "Golden restore cleanup: removed current=" << (removed_current && !ec_cur ? "true" : "false")
-                      << ", previous=" << (removed_previous && !ec_prev ? "true" : "false");
-
-      if (ec_cur) {
-        BOOST_LOG(warning) << "Golden restore cleanup: failed to remove current session snapshot '"
-                           << session_current_path.string() << "' (ec=" << ec_cur.value() << ")";
-      }
-      if (ec_prev) {
-        BOOST_LOG(warning) << "Golden restore cleanup: failed to remove previous session snapshot '"
-                           << session_previous_path.string() << "' (ec=" << ec_prev.value() << ")";
-      }
+    bool clear_session_restore_snapshots_after_golden() {
+      // Retain Current until all required housekeeping succeeds. A failed
+      // retirement must keep the task and pending recovery ownership alive.
+      const bool previous_retired = retire_snapshot_file(session_previous_path);
+      const bool current_retired = previous_retired && retire_snapshot_file(session_current_path);
+      if (current_retired) session_saved.store(false, std::memory_order_release);
+      BOOST_LOG(current_retired ? info : warning)
+        << "Golden restore cleanup: current retired=" << (current_retired ? "true" : "false")
+        << ", previous retired=" << (previous_retired ? "true" : "false");
+      return current_retired;
     }
 
     // Apply the golden snapshot (if available) and verify the system now matches it.
@@ -3587,8 +3658,8 @@ namespace {
         return false;
       }
       if (confirm_current_matches_golden()) {
-        BOOST_LOG(info) << "Golden restore confirmed without apply; clearing session restore snapshots.";
-        clear_session_restore_snapshots_after_golden();
+        BOOST_LOG(info) << "Golden baseline confirmed without apply.";
+        if (!clear_session_restore_snapshots_after_golden()) return false;
         clear_golden_restore_status("restore confirmed");
         return true;
       }
@@ -3611,8 +3682,8 @@ namespace {
                       << ", layout_match=" << (layout_ok_1 ? "true" : "false")
                       << ", match=" << (ok ? "true" : "false");
       if (ok) {
-        BOOST_LOG(info) << "Golden restore confirmed; clearing session restore snapshots.";
-        clear_session_restore_snapshots_after_golden();
+        BOOST_LOG(info) << "Golden baseline confirmed.";
+        if (!clear_session_restore_snapshots_after_golden()) return false;
         clear_golden_restore_status("restore confirmed");
         return true;
       }
@@ -3628,8 +3699,8 @@ namespace {
         return false;
       }
       if (confirm_current_matches_golden()) {
-        BOOST_LOG(info) << "Golden restore confirmed before retry apply; clearing session restore snapshots.";
-        clear_session_restore_snapshots_after_golden();
+        BOOST_LOG(info) << "Golden baseline confirmed before retry apply.";
+        if (!clear_session_restore_snapshots_after_golden()) return false;
         clear_golden_restore_status("restore confirmed");
         return true;
       }
@@ -3647,7 +3718,7 @@ namespace {
                       << ", match=" << (ok ? "true" : "false");
       if (ok) {
         BOOST_LOG(info) << "Golden restore confirmed (retry); clearing session restore snapshots.";
-        clear_session_restore_snapshots_after_golden();
+        if (!clear_session_restore_snapshots_after_golden()) return false;
         clear_golden_restore_status("restore confirmed");
       }
       return ok;
@@ -3789,161 +3860,41 @@ namespace {
       return ok;
     }
 
-    // Attempt a restore once if a valid topology is present. Returns true only
-    // when restore is fully complete, false otherwise.
-    // When always_restore_from_golden is true, golden snapshot is preferred. A
-    // session snapshot may be applied as a temporary fallback, but the helper
-    // keeps polling until golden restore succeeds or the restore window ends.
-    // Otherwise, prefers session baseline chain, then golden.
+    // Restore exactly one authoritative baseline. Alternate snapshots may
+    // identify a physical rescue target, but never replace the saved desktop
+    // after its exact restoration fails.
     bool try_restore_once_if_valid(std::stop_token st, uint64_t guard_generation) {
       const auto cancelled = [&]() {
-        if (restore_cancel_generation.load(std::memory_order_acquire) != guard_generation) {
-          return true;
-        }
-        if (!restore_requested.load(std::memory_order_acquire)) {
-          return true;
-        }
-        return st.stop_possible() && st.stop_requested();
+        return restore_cancel_generation.load(std::memory_order_acquire) != guard_generation ||
+               !restore_requested.load(std::memory_order_acquire) || st.stop_requested();
       };
-
-      if (cancelled()) {
-        return false;
-      }
-
+      if (cancelled()) return false;
       restore_attempted_unconfirmed.store(true, std::memory_order_release);
+      reset_pending_golden_session_fallbacks();
 
-      const bool golden_first = always_restore_from_golden.load(std::memory_order_acquire);
-      if (!golden_first) {
-        reset_pending_golden_session_fallbacks();
-      }
-
-      // Lambda to try golden restore
-      auto try_golden = [&]() -> bool {
-        if (cancelled()) {
-          return false;
-        }
-        if (auto golden = controller.load_display_settings_snapshot(golden_path)) {
-          if (cancelled()) {
-            return false;
-          }
-          if (auto missing = controller.missing_devices_for_topology(golden->m_topology); !missing.empty()) {
-            std::string joined;
-            for (size_t i = 0; i < missing.size(); ++i) {
-              if (i > 0) {
-                joined += ", ";
-              }
-              joined += missing[i];
-            }
-            BOOST_LOG(info) << "Golden snapshot skipped (missing devices): [" << joined << "]";
-            note_golden_restore_issue("missing_devices");
-            return false;
-          }
-          if (controller.validate_topology_with_os(golden->m_topology)) {
-            if (apply_golden_and_confirm(st, guard_generation)) {
-              return true;
-            }
-            if (!cancelled()) {
-              note_golden_restore_issue("restore_not_confirmed");
-            }
+      for (const auto &path : authoritative_snapshot_paths()) {
+        if (!path_may_exist(path)) continue;
+        bool restored = false;
+        if (controller.snapshot_file_has_restore_payload(path)) {
+          if (path == golden_path) {
+            restored = apply_golden_and_confirm(st, guard_generation);
+            if (!restored && !cancelled()) note_golden_restore_issue("restore_not_confirmed");
           } else {
-            note_golden_restore_issue("invalid_topology");
-          }
-        }
-        return false;
-      };
-
-      // Lambda to try session snapshots (current then previous)
-      bool tried_golden_before_previous = false;
-      auto try_session_snapshots = [&]() -> bool {
-        bool attempted_current = false;
-        const bool restored_current = apply_session_snapshot_from_path(
-          session_current_path,
-          "current",
-          st,
-          guard_generation,
-          attempted_current
-        );
-        if (restored_current) {
-          (void) promote_current_snapshot_to_previous("restore success");
-          return true;
-        }
-
-        const bool current_snapshot_unavailable = !attempted_current;
-        const bool prefer_golden_before_previous =
-          prefer_golden_if_current_missing.load(std::memory_order_acquire) && current_snapshot_unavailable;
-        if (prefer_golden_before_previous) {
-          std::error_code ec_prev, ec_golden;
-          const bool has_previous = std::filesystem::exists(session_previous_path, ec_prev) && !ec_prev;
-          const bool has_golden = std::filesystem::exists(golden_path, ec_golden) && !ec_golden;
-          if (has_previous && has_golden) {
-            tried_golden_before_previous = true;
-            BOOST_LOG(info) << "Restore: current snapshot unavailable; preferring golden snapshot over previous session snapshot.";
-            if (try_golden()) {
-              return true;
+            bool attempted = false;
+            restored = apply_session_snapshot_from_path(
+              path, path == session_current_path ? "current" : "previous", st, guard_generation, attempted);
+            if (restored && path == session_current_path && !cancelled()) {
+              restored = promote_current_snapshot_to_previous("restore success");
             }
           }
         }
-
-        bool attempted_previous = false;
-        const bool restored_previous = apply_session_snapshot_from_path(
-          session_previous_path,
-          "previous",
-          st,
-          guard_generation,
-          attempted_previous
-        );
-        if (restored_previous) {
-          if (attempted_current) {
-            BOOST_LOG(warning) << "Restore: previous snapshot recovered the desktop; retaining the unconfirmed current baseline for a later restore.";
-          }
-          return true;
-        }
-        (void) attempted_previous;
+        if (cancelled()) return false;
+        if (restored) return true;
+        BOOST_LOG(warning) << "Authoritative baseline remains unconfirmed; retaining " << path.string();
+        try_visible_physical_fallback(st, guard_generation);
         return false;
-      };
-
-      if (golden_first) {
-        // Prefer golden snapshot, fallback to session snapshots
-        BOOST_LOG(info) << "Restore: using golden-first strategy (always_restore_from_golden=true)";
-        if (try_golden()) {
-          reset_pending_golden_session_fallbacks();
-          return true;
-        }
-        // Golden failed. Session snapshots can keep the machine usable, but
-        // they cannot complete a request whose configured authoritative
-        // baseline is still pending.
-        if (!try_session_snapshots()) {
-          reset_pending_golden_session_fallbacks();
-          return false;
-        }
-
-        if (controller.load_display_settings_snapshot(golden_path)) {
-          const auto fallback_count = note_pending_golden_session_fallback();
-          BOOST_LOG(info) << "Restore: session fallback applied while golden snapshot remains pending; continuing polling (attempt "
-                          << fallback_count << ").";
-          return false;
-        }
-
-        register_unresolved_golden_restore_request("session fallback accepted");
-        reset_pending_golden_session_fallbacks();
-        return true;
-      } else {
-        // Default: prefer session snapshots, fallback to golden
-        if (try_session_snapshots()) {
-          if (tried_golden_before_previous) {
-            register_unresolved_golden_restore_request("session fallback accepted");
-          }
-          reset_pending_golden_session_fallbacks();
-          return true;
-        }
-        if (tried_golden_before_previous) {
-          reset_pending_golden_session_fallbacks();
-          return false;
-        }
-        const bool restored_golden = try_golden();
-        reset_pending_golden_session_fallbacks();
-        return restored_golden;
       }
+      return false;
     }
 
     // Start a background polling loop that checks every ~3s whether the
@@ -4008,10 +3959,12 @@ namespace {
     }
 
     void stop_restore_polling() {
-      std::lock_guard settlement_lock(disconnect_settlement_mutex);
-      disconnect_settlement_pending.store(false, std::memory_order_release);
-      disconnect_settlement_deadline_ms.store(0, std::memory_order_release);
-      disconnect_settlement_origin_epoch = 0;
+      {
+        std::lock_guard settlement_lock(disconnect_settlement_mutex);
+        disconnect_settlement_pending.store(false, std::memory_order_release);
+        disconnect_settlement_deadline_ms.store(0, std::memory_order_release);
+        disconnect_settlement_origin_epoch = 0;
+      }
       restore_poll_active.store(false, std::memory_order_release);
       request_restore_cancel();
       event_pump.stop();
@@ -4140,7 +4093,10 @@ namespace {
       stop_restore_polling();
       cancel_delayed_reapply();
       cancel_post_apply_tasks();
-      delete_restore_scheduled_task();
+      // DISARM transfers control back to a live host; it is not evidence that
+      // the physical desktop was restored. Keep the durable recovery task.
+      host_loss_recovery.store(false, std::memory_order_release);
+      visible_fallback_attempted.store(false, std::memory_order_release);
       direct_revert_bypass_grace.store(false, std::memory_order_release);
       exit_after_revert.store(false, std::memory_order_release);
       retry_apply_on_topology.store(false, std::memory_order_release);
@@ -4252,7 +4208,14 @@ namespace {
         }
       };
 
-      // If there is no session or golden snapshot, there is nothing to restore.
+      if (cancelled()) {
+        self->restore_stage_running.store(false, std::memory_order_release);
+        self->restore_poll_active.store(false, std::memory_order_release);
+        return;
+      }
+
+      // An absent baseline is an unresolved recovery failure, never proof that
+      // the physical desktop was restored.
       try {
         std::error_code ec1, ec2;
         const bool has_session = std::filesystem::exists(self->session_current_path, ec1);
@@ -4260,20 +4223,15 @@ namespace {
         const bool has_previous = std::filesystem::exists(self->session_previous_path, ec_prev);
         const bool has_golden = std::filesystem::exists(self->golden_path, ec2);
         if (!has_session && !has_previous && !has_golden) {
-          BOOST_LOG(info) << "Restore polling: no session/previous or golden snapshot present; exiting helper.";
-          if (!cancelled() && !ec1 && !ec_prev && !ec2) {
-            delete_restore_scheduled_task();
-          }
-          if (self->running_flag) {
-            self->running_flag->store(false, std::memory_order_release);
-          }
-          self->event_pump.stop();
-          self->event_pump_running.store(false, std::memory_order_release);
+          BOOST_LOG(error) << "Restore polling: no baseline is available; retaining the recovery task for a later attempt.";
+          self->restore_stage_running.store(false, std::memory_order_release);
           self->restore_poll_active.store(false, std::memory_order_release);
-          self->restore_requested.store(false, std::memory_order_release);
-          self->clear_restore_origin();
+          self->restore_attempted_unconfirmed.store(true, std::memory_order_release);
+          if (!self->host_loss_recovery.load(std::memory_order_acquire)) {
+            self->restore_requested.store(false, std::memory_order_release);
+          }
           self->publish_recovery_status(
-            display_helper::recovery_status::status::unknown,
+            display_helper::recovery_status::status::failed,
             self->current_recovery_ticket(),
             guard_generation,
             status_epoch);
@@ -4373,8 +4331,6 @@ namespace {
         bool window_expired = false;
         if (!active_window && active_until_ms != 0 && now_ms > active_until_ms) {
           window_expired = true;
-          self->restore_active_until_ms.store(0, std::memory_order_release);
-          self->restore_active_window.store(RestoreWindow::Event, std::memory_order_release);
         }
 
         const auto wait_timeout = active_window ? 500ms : kPoll;
@@ -4443,7 +4399,6 @@ namespace {
           continue;
         }
 
-        const auto window_deadline_ms = self->restore_active_until_ms.load(std::memory_order_acquire);
         last_attempt_ticket = self->current_recovery_ticket();
         self->begin_restore_stage_reconciliation(guard_generation);
         bool success = false;
@@ -4518,10 +4473,18 @@ namespace {
                                std::chrono::steady_clock::now().time_since_epoch()
         )
                                .count();
-        if (window_deadline_ms != 0 && post_ms > window_deadline_ms) {
-          self->restore_active_until_ms.store(0, std::memory_order_release);
-          self->restore_active_window.store(RestoreWindow::Event, std::memory_order_release);
+        const auto current_deadline_ms = self->restore_active_until_ms.load(std::memory_order_acquire);
+        if (current_deadline_ms != 0 && post_ms > current_deadline_ms) {
+          // A slow display call can cross the deadline. Do not erase that
+          // deadline and accidentally wait forever without reaching fallback.
+          // Read the live value: a physical-return event may have extended it.
+          exit_due_to_timeout = true;
+          break;
         }
+      }
+      if (exit_due_to_timeout && !cancelled()) {
+        self->restore_stage_running.store(true, std::memory_order_release);
+        self->try_visible_physical_fallback(st, guard_generation);
       }
       self->restore_stage_running.store(false, std::memory_order_release);
       self->restore_poll_active.store(false, std::memory_order_release);
@@ -4536,8 +4499,11 @@ namespace {
           self->event_pump.stop();
           self->event_pump_running.store(false, std::memory_order_release);
         }
-        self->restore_requested.store(false, std::memory_order_release);
-        self->clear_restore_origin();
+        if (!self->host_loss_recovery.load(std::memory_order_acquire)) {
+          self->restore_requested.store(false, std::memory_order_release);
+        }
+        // Keep the origin and unconfirmed marker until a verified recovery or
+        // an admitted APPLY; DISARM/SNAPSHOT probes must not erase this failure.
         self->publish_recovery_status(
           restore_attempt_completed ? display_helper::recovery_status::status::failed
                                     : display_helper::recovery_status::status::unknown,
@@ -4555,8 +4521,9 @@ namespace {
         self->event_pump.stop();
         self->event_pump_running.store(false, std::memory_order_release);
       }
-      self->restore_requested.store(false, std::memory_order_release);
-      self->clear_restore_origin();
+      if (!self->host_loss_recovery.load(std::memory_order_acquire)) {
+        self->restore_requested.store(false, std::memory_order_release);
+      }
       self->publish_recovery_status(
         restore_attempt_completed ? display_helper::recovery_status::status::failed
                                   : display_helper::recovery_status::status::unknown,
@@ -4917,27 +4884,6 @@ namespace {
 
 // Utilities to reduce main() complexity
 namespace {
-  HANDLE make_named_mutex(const wchar_t *name) {
-    SECURITY_ATTRIBUTES sa {};
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = FALSE;
-    return CreateMutexW(&sa, FALSE, name);
-  }
-
-  bool ensure_single_instance(HANDLE &out_handle) {
-    out_handle = make_named_mutex(L"Global\\SunshineDisplayHelper");
-    if (!out_handle && GetLastError() == ERROR_ACCESS_DENIED) {
-      out_handle = make_named_mutex(L"Local\\SunshineDisplayHelper");
-    }
-    if (!out_handle) {
-      return true;  // continue; best-effort singleton failed
-    }
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-      return false;  // another instance running
-    }
-    return true;
-  }
-
   std::filesystem::path compute_log_dir() {
     // Try roaming AppData first
     std::wstring appdataW;
@@ -5426,13 +5372,8 @@ namespace {
       return true;
     }
 
-    BOOST_LOG(warning) << "Existing session snapshot is missing restore topology/mode data; removing path=" << path.string();
+    BOOST_LOG(warning) << "Existing session snapshot is unreadable or incomplete; preserving recovery evidence at " << path.string();
 
-    {
-      std::error_code ec_rm;
-      std::filesystem::remove(path, ec_rm);
-      (void) ec_rm;
-    }
     return false;
   }
 
@@ -5477,6 +5418,11 @@ namespace {
       }
       auto j = nlohmann::json::parse(raw, nullptr, false);
       if (j.is_discarded()) {
+        return std::nullopt;
+      }
+      // Correlation metadata alone must not erase persisted physical/virtual
+      // exclusions when a host requests an acknowledged baseline.
+      if (j.is_object() && !j.contains("exclude_devices") && !j.contains("devices")) {
         return std::nullopt;
       }
       return parse_snapshot_exclude_json_node(j);
@@ -5591,14 +5537,6 @@ namespace {
   }
 
   bool handle_apply(ServiceState &state, std::span<const uint8_t> payload, std::string &error_msg) {
-    // Cancel any ongoing restore activity since a new APPLY supersedes it
-    state.stop_restore_polling();
-    state.supersede_recovery_status();
-    state.cancel_delayed_reapply();
-    state.cancel_post_apply_tasks();
-    state.refresh_rate_override.store(0, std::memory_order_release);
-    state.exit_after_revert.store(false, std::memory_order_release);
-
     std::string json(reinterpret_cast<const char *>(payload.data()), payload.size());
     auto apply_deadline = std::chrono::steady_clock::time_point::max();
     bool wa_hdr_toggle = false;
@@ -5716,47 +5654,47 @@ namespace {
       error_msg = "Invalid display configuration payload";
       return false;
     }
-    state.last_apply_ms.store(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()
-      )
-        .count(),
-      std::memory_order_release
-    );
-    state.last_cfg = cfg;
-    // The session baseline is normally captured earlier via SnapshotCurrent, before any
-    // display enumeration that might activate external dummy plugs. That request is
-    // fire-and-forget and can be lost (helper hard-restart races, helper not yet running),
-    // which used to leave REVERT with nothing to restore and strand the user on the
-    // session-only display layout (vibeshine#223). Capture the pre-apply state here as a
-    // fallback whenever no baseline exists yet; the snapshot exclusions set above keep
-    // virtual displays out of it.
-    if (!ServiceState::path_exists(state.session_current_path)) {
-      BOOST_LOG(warning) << "Display helper: no session baseline present at APPLY; capturing pre-apply baseline now.";
-      if (!state.capture_current_snapshot("pre-apply baseline")) {
-        BOOST_LOG(warning) << "Display helper: pre-apply baseline capture failed; REVERT may have nothing to restore.";
-      }
+    // Modes, HDR and layout changes need the same recovery contract as
+    // exclusive topology changes, including direct helper clients.
+    const bool recovery_ready = state.prepare_recovery_baseline("pre-apply baseline");
+    if (!recovery_ready) {
+      error_msg = "Cannot change display settings without a complete saved baseline and recovery task";
+      BOOST_LOG(error) << error_msg;
+      return false;
     }
-    state.retry_revert_on_topology.store(false, std::memory_order_release);
-    state.exit_after_revert.store(false, std::memory_order_release);
 
     if (std::chrono::steady_clock::now() >= apply_deadline) {
       error_msg = "Display initialization exceeded its budget";
       return false;
     }
-    bool validated = state.controller.soft_test_display_settings(cfg, sunshine_topology);
-    if (!validated) {
-      BOOST_LOG(warning) << "Display helper: configuration failed SDC_VALIDATE soft-test; attempting display stack recovery and retrying once.";
-      if (state.controller.recover_display_stack()) {
-        std::this_thread::sleep_for(500ms);
-        validated = state.controller.soft_test_display_settings(cfg, sunshine_topology);
-      }
-    }
-
+    const bool validated = state.controller.soft_test_display_settings(cfg, sunshine_topology);
     if (validated) {
-      BOOST_LOG(info) << "Display configuration validated, creating scheduled task before applying settings";
-      const bool task_created = create_restore_scheduled_task();
-      BOOST_LOG(info) << "Scheduled task creation result: " << (task_created ? "SUCCESS" : "FAILED");
+      // Only an admitted APPLY supersedes pending recovery. Rejecting a new
+      // request must leave the previous failure and its baseline protected.
+      state.stop_restore_polling();
+      state.supersede_recovery_status();
+      state.cancel_delayed_reapply();
+      state.cancel_post_apply_tasks();
+      state.refresh_rate_override.store(0, std::memory_order_release);
+      state.host_loss_recovery.store(false, std::memory_order_release);
+      state.visible_fallback_attempted.store(false, std::memory_order_release);
+      state.direct_revert_bypass_grace.store(false, std::memory_order_release);
+      state.exit_after_revert.store(false, std::memory_order_release);
+      state.retry_revert_on_topology.store(false, std::memory_order_release);
+      state.last_apply_ms.store(ServiceState::steady_now_ms(), std::memory_order_release);
+      state.last_cfg = cfg;
+
+      // A restore worker may have completed and retired its task during the
+      // read-only preflight. Recheck after joining it, at the mutation boundary.
+      if (!state.prepare_recovery_baseline("apply mutation boundary")) {
+        error_msg = "Physical display recovery protection became unavailable before APPLY";
+        state.direct_revert_bypass_grace.store(true, std::memory_order_release);
+        state.exit_after_revert.store(true, std::memory_order_release);
+        state.restore_requested.store(true, std::memory_order_release);
+        state.restore_origin_epoch.store(state.current_connection_epoch(), std::memory_order_release);
+        state.ensure_restore_polling(ServiceState::RestoreWindow::Primary);
+        return false;
+      }
 
       if (!state.controller.apply(cfg, sunshine_topology)) {
         error_msg = "Helper failed to apply requested display configuration";
@@ -5927,21 +5865,32 @@ namespace {
       state.retry_apply_on_topology.store(false, std::memory_order_release);
       state.retry_revert_on_topology.store(false, std::memory_order_release);
     } else if (type == MsgType::Disarm) {
-      state.supersede_recovery_status();
       const bool force = !payload.empty() && payload.front() != 0;
-      if (!force &&
-          state.restore_requested.load(std::memory_order_acquire) &&
-          state.restore_attempted_unconfirmed.load(std::memory_order_acquire)) {
+      if (!force && state.restore_attempted_unconfirmed.load(std::memory_order_acquire)) {
         BOOST_LOG(info) << "DISARM command ignored because an unconfirmed restore attempt is still pending.";
         return;
       }
+      state.supersede_recovery_status();
       state.disarm_restore_requests("DISARM command received");
     } else if (type == MsgType::SnapshotCurrent) {
-      if (state.restore_requested.load(std::memory_order_acquire)) {
-        BOOST_LOG(info) << "Skipping current session snapshot refresh while restore is pending.";
-        return;
+      std::uint64_t request_id = 0;
+      try {
+        const auto request = nlohmann::json::parse(payload.begin(), payload.end(), nullptr, false);
+        if (request.is_object() && request.contains("sunshine_snapshot_id") && request["sunshine_snapshot_id"].is_number_unsigned()) {
+          request_id = request["sunshine_snapshot_id"].get<std::uint64_t>();
+        }
+      } catch (...) {
       }
-      (void) state.refresh_current_snapshot_preserving_previous("snapshot-only");
+      const bool saved = !state.restore_requested.load(std::memory_order_acquire) &&
+                         !state.restore_attempted_unconfirmed.load(std::memory_order_acquire) &&
+                         state.prepare_recovery_baseline("snapshot-only");
+      if (!saved) BOOST_LOG(warning) << "Current session baseline could not be prepared; keeping recovery evidence.";
+      if (request_id != 0) {
+        std::vector<std::uint8_t> result {static_cast<std::uint8_t>(saved ? 1u : 0u)};
+        append_u64_le(result, request_id);
+        result.push_back(platf::display_helper_protocol::kSnapshotRecoveryVersion);
+        send_framed_content(async_pipe, MsgType::SnapshotResult, result);
+      }
     } else if (type == MsgType::RefreshRate) {
       const auto numerator = read_u32_le(payload, 0);
       const auto denominator = read_u32_le(payload, 4);
@@ -5963,17 +5912,16 @@ namespace {
         state.refresh_rate_override.store(packed_rate, std::memory_order_release);
         state.cancel_delayed_reapply();
       }
-      const bool success = valid && state.controller.set_device_refresh_rate(device_id, *numerator, *denominator);
+      const bool recovery_ready = valid && state.prepare_recovery_baseline("refresh-only");
+      const bool success = recovery_ready && state.controller.set_device_refresh_rate(device_id, *numerator, *denominator);
       if (overrides_configured_rate && !success) {
         state.refresh_rate_override.store(0, std::memory_order_release);
       }
-      if (overrides_configured_rate) {
-        std::vector<std::chrono::milliseconds> reapply_delays {750ms};
-        if (state.last_cfg && state.last_cfg->m_hdr_state) {
-          reapply_delays = {750ms, 2500ms, 5500ms};
-        }
-        state.schedule_delayed_reapply(std::move(reapply_delays));
-      }
+      // A refresh-only update belongs to an already running session. Replaying
+      // last_cfg afterward would also restore the launch resolution and HDR
+      // state, overriding a game's fullscreen mode or a live HDR toggle.
+      // The synchronous refresh setter already reports whether this update
+      // succeeded; subsequent output loss is handled by the recovery monitor.
       BOOST_LOG(success ? info : warning)
         << "Display helper: refresh-only request device=" << (device_id.empty() ? "(missing)" : device_id)
         << " rate=" << (numerator ? std::to_string(*numerator) : "invalid")
@@ -6031,6 +5979,8 @@ namespace {
     state.retry_apply_on_topology.store(false, std::memory_order_release);
     state.cancel_delayed_reapply();
     const bool potentially_modified = state.last_cfg.has_value() ||
+                                      state.session_saved.load(std::memory_order_acquire) ||
+                                      state.restore_attempted_unconfirmed.load(std::memory_order_acquire) ||
                                       state.exit_after_revert.load(std::memory_order_acquire);
     if (!potentially_modified) {
       state.restore_requested.store(false, std::memory_order_release);
@@ -6038,16 +5988,10 @@ namespace {
       return;
     }
 
-    const bool explicit_restore_pending =
-      state.exit_after_revert.load(std::memory_order_acquire) ||
-      state.direct_revert_bypass_grace.load(std::memory_order_acquire) ||
-      state.restore_requested.load(std::memory_order_acquire);
-    if (!state.restore_on_disconnect.load(std::memory_order_acquire) && !explicit_restore_pending) {
-      BOOST_LOG(info) << "Client disconnected with restore-on-disconnect disabled; disarming restore state.";
-      state.disarm_restore_requests("Restore-on-disconnect disabled after client disconnect");
-      state.arm_reconnect_exit_grace("restore-on-disconnect disabled");
-      return;
-    }
+    // This pipe belongs to the host, not the streaming client. A paused
+    // client may retain its output only while the host still owns it.
+    state.host_loss_recovery.store(true, std::memory_order_release);
+    state.host_loss_connection_epoch.store(connection_epoch, std::memory_order_release);
 
     if (state.preserve_pending_disconnect_settlement(connection_epoch)) {
       BOOST_LOG(info) << "Client disconnected during the pending ownership-settlement lease; preserving its deadline.";
@@ -6055,21 +5999,9 @@ namespace {
     }
 
     if (!state.direct_revert_bypass_grace.load(std::memory_order_acquire)) {
-      const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::steady_clock::now().time_since_epoch()
-      )
-                            .count();
-      const auto last_apply = state.last_apply_ms.load(std::memory_order_acquire);
-      if (last_apply > 0 && now_ms >= last_apply) {
-        const auto delta_ms = now_ms - last_apply;
-        if (delta_ms <= kApplyDisconnectGrace.count()) {
-          BOOST_LOG(info)
-            << "Client disconnected " << delta_ms
-            << "ms after APPLY; beginning 30s disconnect ownership settlement.";
-          (void) state.begin_disconnect_settlement(connection_epoch);
-          return;
-        }
-      }
+      BOOST_LOG(info) << "Host connection lost; beginning 30s ownership settlement.";
+      (void) state.begin_disconnect_settlement(connection_epoch);
+      return;
     }
 
     if (!still_current()) {
@@ -6139,7 +6071,7 @@ int run_legacy_helper(int argc, char *argv[]) {
   }
 
   HANDLE singleton = nullptr;
-  if (!ensure_single_instance(singleton)) {
+  if (!display_helper_paths::ensure_single_instance(singleton)) {
     return 3;
   }
 
@@ -6148,15 +6080,18 @@ int run_legacy_helper(int argc, char *argv[]) {
   const auto logfile = (logdir / L"sunshine_display_helper.log");
   const auto active_snapshots = make_snapshot_paths(snapshot_dir);
   const auto search_roots = snapshot_search_roots();
+  const auto retained_current = display_helper_paths::select_current_snapshot_path(active_snapshots.session_current, search_roots);
   auto _log_guard = logging::init(2 /*info*/, logfile);
 
   if (restore_mode) {
     BOOST_LOG(info) << "Display helper started in restore mode (--restore flag)";
     dd_log_bridge().install();
     ServiceState state;
+    state.host_loss_recovery.store(true, std::memory_order_release);
     state.golden_path = active_snapshots.golden;
     state.golden_status_path = active_snapshots.golden_status;
-    state.session_current_path = active_snapshots.session_current;
+    state.session_current_path = retained_current;
+    state.session_saved.store(ServiceState::path_may_exist(retained_current), std::memory_order_release);
     state.session_previous_path = active_snapshots.session_previous;
     {
       // Load snapshot exclusions from vibeshine_state.json (source of truth from Sunshine).
@@ -6172,36 +6107,23 @@ int run_legacy_helper(int argc, char *argv[]) {
       }
     }
 
-    {
-      for (const auto &root : search_roots) {
-        auto paths = make_snapshot_paths(root);
-        std::error_code ec_cur;
-        const bool cur_exists = std::filesystem::exists(paths.session_current, ec_cur);
-        if (cur_exists && !ec_cur) {
-          if (validate_session_snapshot(state, paths.session_current)) {
-            state.session_saved.store(true, std::memory_order_release);
-            BOOST_LOG(info) << "Existing current session snapshot detected; will preserve until confirmed restore: "
-                            << paths.session_current.string();
-            if (paths.session_current != state.session_current_path) {
-              std::error_code ec_copy;
-              std::filesystem::create_directories(state.session_current_path.parent_path(), ec_copy);
-              std::filesystem::copy_file(paths.session_current, state.session_current_path, std::filesystem::copy_options::overwrite_existing, ec_copy);
-            }
-            break;
-          }
-        }
-      }
-    }
-    {
+    // Current stays at its retained source, so confirmed retirement cannot
+    // leave a copied marker to replay on the next host startup.
+    if (!ServiceState::path_may_exist(state.session_previous_path)) {
       for (const auto &root : search_roots) {
         auto paths = make_snapshot_paths(root);
         std::error_code ec_prev_check;
         if (std::filesystem::exists(paths.session_previous, ec_prev_check) && !ec_prev_check) {
-          if (validate_session_snapshot(state, paths.session_previous)) {
-            if (paths.session_previous != state.session_previous_path) {
-              std::error_code ec_copy;
-              std::filesystem::create_directories(state.session_previous_path.parent_path(), ec_copy);
-              std::filesystem::copy_file(paths.session_previous, state.session_previous_path, std::filesystem::copy_options::overwrite_existing, ec_copy);
+          if (!validate_session_snapshot(state, paths.session_previous)) {
+            // Keep the first retained baseline authoritative even when it
+            // cannot currently be read; older search roots must not replace it.
+            state.session_previous_path = paths.session_previous;
+            break;
+          }
+          {
+            if (paths.session_previous != state.session_previous_path &&
+                !ServiceState::copy_file_overwrite(paths.session_previous, state.session_previous_path)) {
+              state.session_previous_path = paths.session_previous;
             }
             break;
           }
@@ -6233,7 +6155,8 @@ int run_legacy_helper(int argc, char *argv[]) {
   // Suppression of startup restore is deprecated; REVERTs are always allowed.
   state.golden_path = active_snapshots.golden;
   state.golden_status_path = active_snapshots.golden_status;
-  state.session_current_path = active_snapshots.session_current;
+  state.session_current_path = retained_current;
+  state.session_saved.store(ServiceState::path_may_exist(retained_current), std::memory_order_release);
   state.session_previous_path = active_snapshots.session_previous;
   {
     // Load snapshot exclusions from vibeshine_state.json (source of truth from Sunshine).
@@ -6248,36 +6171,22 @@ int run_legacy_helper(int argc, char *argv[]) {
       }
     }
   }
-  {
-    for (const auto &root : search_roots) {
-      auto paths = make_snapshot_paths(root);
-      std::error_code ec_cur;
-      const bool cur_exists = std::filesystem::exists(paths.session_current, ec_cur);
-      if (cur_exists && !ec_cur) {
-        if (validate_session_snapshot(state, paths.session_current)) {
-          state.session_saved.store(true, std::memory_order_release);
-          BOOST_LOG(info) << "Existing current session snapshot detected; will preserve until confirmed restore: "
-                          << paths.session_current.string();
-          if (paths.session_current != state.session_current_path) {
-            std::error_code ec_copy;
-            std::filesystem::create_directories(state.session_current_path.parent_path(), ec_copy);
-            std::filesystem::copy_file(paths.session_current, state.session_current_path, std::filesystem::copy_options::overwrite_existing, ec_copy);
-          }
-          break;
-        }
-      }
-    }
-  }
-  {
+  // Previous is history; importing it must not overwrite an active record.
+  if (!ServiceState::path_may_exist(state.session_previous_path)) {
     for (const auto &root : search_roots) {
       auto paths = make_snapshot_paths(root);
       std::error_code ec_prev_check;
       if (std::filesystem::exists(paths.session_previous, ec_prev_check) && !ec_prev_check) {
-        if (validate_session_snapshot(state, paths.session_previous)) {
-          if (paths.session_previous != state.session_previous_path) {
-            std::error_code ec_copy;
-            std::filesystem::create_directories(state.session_previous_path.parent_path(), ec_copy);
-            std::filesystem::copy_file(paths.session_previous, state.session_previous_path, std::filesystem::copy_options::overwrite_existing, ec_copy);
+        if (!validate_session_snapshot(state, paths.session_previous)) {
+          // Keep the first retained baseline authoritative even when it
+          // cannot currently be read; older search roots must not replace it.
+          state.session_previous_path = paths.session_previous;
+          break;
+        }
+        {
+          if (paths.session_previous != state.session_previous_path &&
+              !ServiceState::copy_file_overwrite(paths.session_previous, state.session_previous_path)) {
+            state.session_previous_path = paths.session_previous;
           }
           break;
         }

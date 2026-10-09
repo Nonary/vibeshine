@@ -58,9 +58,19 @@ namespace display_helper_integration::request_policy {
   };
 
   [[nodiscard]] bool virtual_display_mutation_allowed(bool display_restore_in_progress);
+  // An explicit physical capture target with automation disabled does not own
+  // display recovery. HDR profile application still requires a baseline.
+  [[nodiscard]] bool capture_only_physical_request(const Input &input);
   [[nodiscard]] bool supersede_restore_for_virtual_display(
     const std::function<void()> &disarm_restore,
     const std::function<bool()> &restore_in_progress
+  );
+  // A snapshot acknowledgement is required before enumeration or creation can
+  // change the desktop. Supersede an older restore first, preserving its files.
+  [[nodiscard]] bool prepare_virtual_display_baseline(
+    const std::function<void()> &disarm_restore,
+    const std::function<bool()> &restore_in_progress,
+    const std::function<bool()> &snapshot_current
   );
   // Retain live peer outputs while restoring missing physical baseline members.
   [[nodiscard]] std::vector<std::vector<std::string>> merge_extended_topology(

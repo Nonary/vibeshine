@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -41,6 +43,15 @@ namespace display_helper::v2 {
     Previous,
     Golden,
   };
+
+  inline std::array<SnapshotTier, 3> snapshot_recovery_order(bool golden_first, bool prefer_golden_if_current_missing) {
+    if (golden_first) {
+      return {SnapshotTier::Golden, SnapshotTier::Current, SnapshotTier::Previous};
+    }
+    return prefer_golden_if_current_missing ?
+             std::array {SnapshotTier::Current, SnapshotTier::Golden, SnapshotTier::Previous} :
+             std::array {SnapshotTier::Current, SnapshotTier::Previous, SnapshotTier::Golden};
+  }
 
   enum class PolicyDecision {
     Proceed,
@@ -129,8 +140,8 @@ namespace display_helper::v2 {
     bool hdr_blank = false;
     std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max();
     bool prefer_golden_first = false;
-    /// When false, a broken Sunshine connection must not autonomously restore
-    /// (stream is intentionally pause-retained).
+    /// Client pause preference retained for wire compatibility. Loss of the
+    /// Sunshine host always requires recovery, independent of this preference.
     bool restore_on_disconnect = true;
     /// Legacy wire field retained while mixed v1/v2 clients are supported.
     /// The bounded v2 Apply transaction has no final delayed HDR reapply.
@@ -178,7 +189,7 @@ namespace display_helper::v2 {
     /// Skip the 5s grace window before the first restore attempt (--restore mode).
     bool immediate = false;
     /// True when triggered by a broken connection / heartbeat loss rather than an
-    /// explicit client REVERT; honors the restore-on-disconnect policy.
+    /// explicit client REVERT. Host loss is independent of client pause policy.
     bool from_disconnect = false;
     /// Host-issued monotonic recovery ticket carried by the restore request.
     std::uint64_t restore_ticket = 0;
@@ -205,6 +216,9 @@ namespace display_helper::v2 {
     /// restore. Non-forced DISARM remains available for speculative probes
     /// that must not strand a partially applied recovery.
     bool force = false;
+    /// Internal reconnect: resume the already verified session after cancelling
+    /// only the pending host-loss grace, retaining its target and monitoring.
+    bool preserve_session = false;
   };
 
   struct ExportGoldenCommand {
@@ -295,6 +309,9 @@ namespace display_helper::v2 {
     bool staged_state_reset_attempted = false;
     bool staged_state_reset_succeeded = false;
     std::uint64_t generation = 0;
+    std::optional<SnapshotTier> restored_tier;
+    /// Missing only for legacy snapshots without recorded rotation metadata.
+    std::optional<std::map<std::string, int>> layout_rotations;
   };
 
   struct RecoveryValidationCompleted {

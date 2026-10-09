@@ -26,12 +26,27 @@ namespace display_helper_integration::request_policy {
     return !display_restore_in_progress;
   }
 
+  bool capture_only_physical_request(const Input &input) {
+    return !input.virtual_display && input.physical_output_override &&
+           input.configuration_option == ConfigurationOption::Disabled &&
+           !input.hdr_profile_selected;
+  }
+
   bool supersede_restore_for_virtual_display(
     const std::function<void()> &disarm_restore,
     const std::function<bool()> &restore_in_progress
   ) {
     disarm_restore();
     return virtual_display_mutation_allowed(restore_in_progress());
+  }
+
+  bool prepare_virtual_display_baseline(
+    const std::function<void()> &disarm_restore,
+    const std::function<bool()> &restore_in_progress,
+    const std::function<bool()> &snapshot_current
+  ) {
+    return supersede_restore_for_virtual_display(disarm_restore, restore_in_progress) &&
+           snapshot_current();
   }
 
   std::vector<std::vector<std::string>> merge_extended_topology(

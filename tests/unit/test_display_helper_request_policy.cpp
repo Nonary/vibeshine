@@ -4,6 +4,85 @@
 
 namespace policy = display_helper_integration::request_policy;
 
+TEST(DisplayHelperRequestPolicy, ExplicitPhysicalTargetWithAutomationDisabledIsCaptureOnly) {
+  policy::Input input {
+    .configuration_option = policy::ConfigurationOption::Disabled,
+    .physical_output_override = true,
+  };
+  EXPECT_TRUE(policy::capture_only_physical_request(input));
+  EXPECT_FALSE(policy::evaluate(input).dispatch);
+
+  input.configuration_option = policy::ConfigurationOption::EnsureActive;
+  EXPECT_FALSE(policy::capture_only_physical_request(input));
+}
+
+TEST(DisplayHelperRequestPolicy, VirtualDisplayAndPhysicalHdrProfileStillRequirePreparation) {
+  policy::Input input {
+    .configuration_option = policy::ConfigurationOption::Disabled,
+    .physical_output_override = true,
+  };
+  input.virtual_display = true;
+  EXPECT_FALSE(policy::capture_only_physical_request(input));
+  input.virtual_display = false;
+  input.hdr_profile_selected = true;
+  EXPECT_FALSE(policy::capture_only_physical_request(input));
+}
+
+TEST(DisplayHelperRequestPolicy, DisabledAutomationWithoutExplicitTargetRetainsRevertPreparation) {
+  EXPECT_FALSE(policy::capture_only_physical_request({
+    .configuration_option = policy::ConfigurationOption::Disabled,
+  }));
+}
+
+TEST(DisplayHelperRequestPolicy, BaselinePreflightSupersedesRestoreBeforeSnapshot) {
+  bool restore_pending = true;
+  std::vector<std::string> operations;
+  const bool prepared = policy::prepare_virtual_display_baseline(
+    [&] {
+      operations.emplace_back("disarm");
+      restore_pending = false;
+    },
+    [&] {
+      operations.emplace_back("restore-status");
+      return restore_pending;
+    },
+    [&] {
+      operations.emplace_back("snapshot-acknowledged");
+      return true;
+    }
+  );
+  ASSERT_TRUE(prepared);
+  EXPECT_EQ(operations, (std::vector<std::string> {"disarm", "restore-status", "snapshot-acknowledged"}));
+}
+
+TEST(DisplayHelperRequestPolicy, BaselinePreflightDoesNotSnapshotWhileRestoreStillOwnsDesktop) {
+  int snapshot_requests = 0;
+  EXPECT_FALSE(policy::prepare_virtual_display_baseline(
+    [] {},
+    [] { return true; },
+    [&] {
+      ++snapshot_requests;
+      return true;
+    }
+  ));
+  EXPECT_EQ(snapshot_requests, 0);
+}
+
+TEST(DisplayHelperRequestPolicy, BaselinePreflightRequiresSnapshotAcknowledgementAfterDisarm) {
+  int snapshot_requests = 0;
+  EXPECT_FALSE(policy::prepare_virtual_display_baseline(
+    [] {},
+    [] { return false; },
+    [&] {
+      ++snapshot_requests;
+      // Covers unavailable helpers, failed persistence/task registration, and
+      // indeterminate physical enumeration: none authorizes VD creation.
+      return false;
+    }
+  ));
+  EXPECT_EQ(snapshot_requests, 1);
+}
+
 TEST(DisplayHelperRequestPolicy, VerifyOnlyExtendedTargetsNeverPrepareTopologyOrPrimary) {
   for (const auto layout : {policy::VirtualDisplayLayout::Extended, policy::VirtualDisplayLayout::ExtendedPrimary, policy::VirtualDisplayLayout::ExtendedIsolated, policy::VirtualDisplayLayout::ExtendedPrimaryIsolated}) {
     const auto result = policy::evaluate({

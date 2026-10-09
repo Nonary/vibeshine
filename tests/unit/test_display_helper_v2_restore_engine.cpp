@@ -99,6 +99,15 @@ TEST(DisplayHelperV2Codec, StrictSnapshotModeComparisonUsesExactRefreshFrequenci
   EXPECT_FALSE(codec::equal_snapshots_strict(baseline, invalid_rate));
 }
 
+TEST(DisplayHelperV2Codec, BaselineOriginRequirementsCannotBeSatisfiedByMissingReadback) {
+  const auto legacy = make_snapshot({{"A"}});
+  auto baseline = legacy;
+  baseline.m_origins["A"] = {1920, 0};
+  EXPECT_FALSE(codec::snapshot_matches_baseline(legacy, baseline));
+  EXPECT_TRUE(codec::snapshot_matches_baseline(baseline, legacy));
+  EXPECT_TRUE(codec::snapshot_matches_baseline(baseline, baseline));
+}
+
 TEST(DisplayHelperV2Codec, SignatureIsOrderIndependent) {
   auto a = make_snapshot({{"A"}, {"B", "C"}});
   auto b = make_snapshot({{"C", "B"}, {"A"}});
@@ -411,6 +420,9 @@ namespace {
     ApplyStatus apply_topology(const display_device::ActiveTopology &topology) override {
       ++topology_calls;
       transition_order.push_back("topology:" + first_id(topology));
+      if (topology_result != ApplyStatus::Ok) {
+        return topology_result;
+      }
       current.m_topology = topology;
       if (on_topology_applied) {
         on_topology_applied();
@@ -454,7 +466,7 @@ namespace {
     }
 
     bool snapshot_matches_current(const display_device::DisplaySettingsSnapshot &snapshot) override {
-      return codec::equal_snapshots_strict(current, snapshot);
+      return codec::snapshot_matches_baseline(current, snapshot);
     }
 
     bool configuration_matches(const display_device::SingleDisplayConfiguration &) override {
@@ -517,6 +529,7 @@ namespace {
     bool apply_layout_rotations_result = true;
     bool layout_matches_result = true;
     bool reassert_result = true;
+    ApplyStatus topology_result = ApplyStatus::Ok;
     std::function<void()> on_topology_applied;
     std::function<void()> on_enumerate;
     std::function<void()> on_current_layout_matches;
@@ -538,6 +551,9 @@ namespace {
     }
 
     std::optional<codec::ParsedSnapshot> load_with_metadata(display_helper::v2::SnapshotTier tier) override {
+      if (unreadable_tiers.contains(tier)) {
+        return std::nullopt;
+      }
       auto loaded = display_helper::v2::ISnapshotStorage::load_with_metadata(tier);
       if (!loaded) {
         return std::nullopt;
@@ -549,6 +565,12 @@ namespace {
       }
       return loaded;
     }
+
+    bool exists(display_helper::v2::SnapshotTier tier) override {
+      return unreadable_tiers.contains(tier) || display_helper::v2::InMemorySnapshotStorage::exists(tier);
+    }
+
+    std::set<display_helper::v2::SnapshotTier> unreadable_tiers;
 
   private:
     std::map<display_helper::v2::SnapshotTier, codec::layout_rotation_map_t> layouts_;
@@ -567,8 +589,147 @@ namespace {
     void add_device(const std::string &id) {
       display.devices.push_back(make_device(id, "\\\\.\\DISPLAY_" + id, true));
     }
+
+    void prepare_missing_monitor_rescue() {
+      display.current = make_snapshot({{"permanent-virtual"}, {"session-virtual"}});
+      display.devices = {
+        make_device("A", "", false),
+        make_device("permanent-virtual", "\\\\.\\DISPLAY_PV", true, "SDD"),
+        make_device("session-virtual", "\\\\.\\DISPLAY_SV", true, "SDD"),
+      };
+      display.on_topology_applied = [&]() {
+        const auto active = codec::topology_device_set(display.current.m_topology);
+        for (auto &device : display.devices) {
+          if (active.contains(device.m_device_id)) {
+            device.m_info = display_device::EnumeratedDevice::Info {};
+            device.m_display_name = "\\\\.\\DISPLAY_" + device.m_device_id;
+          }
+        }
+      };
+      (void) storage.save(display_helper::v2::SnapshotTier::Current, make_snapshot({{"A"}, {"B"}}));
+    }
   };
 }  // namespace
+
+TEST(DisplayHelperV2RecoveryEngine, MissingBaselineMonitorRescuesConnectedPhysicalWithoutCompletingExactRestore) {
+  RecoveryHarness harness;
+  harness.prepare_missing_monitor_rescue();
+  const auto baseline = harness.storage.load(display_helper::v2::SnapshotTier::Current);
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_FALSE(outcome.snapshot.has_value());
+  EXPECT_TRUE(outcome.physical_visibility_available);
+  EXPECT_TRUE(harness.state.restore_attempted_unconfirmed.load());
+  EXPECT_EQ(harness.display.current.m_topology,
+            (display_device::ActiveTopology {{"permanent-virtual"}, {"session-virtual"}, {"A"}}));
+  EXPECT_EQ(harness.display.topology_calls, 1);
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
+  ASSERT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_TRUE(codec::equal_snapshots_strict(*harness.storage.load(display_helper::v2::SnapshotTier::Current), *baseline));
+  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
+}
+
+TEST(DisplayHelperV2RecoveryEngine, FailedPhysicalRescueRetainsCompleteBaselineAndActiveDesktop) {
+  RecoveryHarness harness;
+  harness.prepare_missing_monitor_rescue();
+  const auto before = harness.display.current;
+  harness.display.topology_result = display_helper::v2::ApplyStatus::VerificationFailed;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_FALSE(outcome.physical_visibility_available);
+  EXPECT_TRUE(codec::equal_snapshots_strict(before, harness.display.current));
+  ASSERT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_EQ(harness.storage.load(display_helper::v2::SnapshotTier::Current)->m_topology,
+            (display_device::ActiveTopology {{"A"}, {"B"}}));
+  EXPECT_TRUE(harness.state.restore_attempted_unconfirmed.load());
+}
+
+TEST(DisplayHelperV2RecoveryEngine, CancellationDuringPhysicalRescueKeepsEvidenceAndDoesNotReportVisibility) {
+  RecoveryHarness harness;
+  harness.prepare_missing_monitor_rescue();
+  harness.display.on_topology_applied = [&]() { harness.cancellation.cancel(); };
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_FALSE(outcome.physical_visibility_available);
+  EXPECT_EQ(harness.display.topology_calls, 1);
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+}
+
+TEST(DisplayHelperV2RecoveryEngine, AlternateGoldenCannotClearMissingCompleteCurrentBaseline) {
+  RecoveryHarness harness;
+  harness.prepare_missing_monitor_rescue();
+  (void) harness.storage.save(display_helper::v2::SnapshotTier::Golden, make_snapshot({{"A"}}));
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_TRUE(outcome.physical_visibility_available);
+  EXPECT_EQ(harness.display.current.m_topology,
+            (display_device::ActiveTopology {{"permanent-virtual"}, {"session-virtual"}, {"A"}}));
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  ASSERT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_EQ(harness.storage.load(display_helper::v2::SnapshotTier::Current)->m_topology,
+            (display_device::ActiveTopology {{"A"}, {"B"}}));
+}
+
+TEST(DisplayHelperV2RecoveryEngine, ExplicitCompleteGoldenTakesPrecedenceOverMissingCurrentDevice) {
+  RecoveryHarness harness;
+  harness.prepare_missing_monitor_rescue();
+  harness.state.always_restore_from_golden.store(true);
+  const auto golden = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, golden));
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_TRUE(codec::equal_snapshots_strict(harness.display.current, golden));
+  EXPECT_EQ(outcome.restored_tier, display_helper::v2::SnapshotTier::Golden);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+}
+
+TEST(DisplayHelperV2RecoveryEngine, MissingGoldenDeviceUsesGoldenCandidatesAndPreservesPermanentVirtuals) {
+  RecoveryHarness harness;
+  harness.prepare_missing_monitor_rescue();
+  harness.state.always_restore_from_golden.store(true);
+  const auto golden = make_snapshot({{"A"}, {"B"}});
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, golden));
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, make_snapshot({{"C"}})));
+  harness.display.devices.push_back(make_device("C", "", false));
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_TRUE(outcome.physical_visibility_available);
+  EXPECT_EQ(harness.display.current.m_topology,
+            (display_device::ActiveTopology {{"permanent-virtual"}, {"session-virtual"}, {"A"}}));
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_TRUE(codec::equal_snapshots_strict(*harness.storage.load(display_helper::v2::SnapshotTier::Golden), golden));
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+}
+
+TEST(DisplayHelperV2RecoveryEngine, ReturningMissingMonitorCompletesExactRestoreAfterVisibilityRescue) {
+  RecoveryHarness harness;
+  harness.prepare_missing_monitor_rescue();
+  EXPECT_FALSE(harness.recovery.run(harness.cancellation.token()).success);
+
+  harness.display.devices.push_back(make_device("B", "", false));
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_TRUE(outcome.success);
+  EXPECT_EQ(harness.display.current.m_topology, (display_device::ActiveTopology {{"A"}, {"B"}}));
+  EXPECT_EQ(outcome.restored_tier, display_helper::v2::SnapshotTier::Current);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
+  EXPECT_EQ(harness.state.last_session_restore_success_ms.load(), 0);
+}
 
 // fd98755b: once the current state matches the baseline (order-independently),
 // the restore must confirm WITHOUT touching the display stack again.
@@ -601,7 +762,7 @@ TEST(DisplayHelperV2RecoveryEngine, StopsBeforeSettingsWhenTopologyStageIsCancel
   ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, baseline));
   harness.display.current = make_snapshot({{"B"}});
   harness.display.on_enumerate = [&] {
-    if (harness.display.enumerate_calls >= 2) {
+    if (harness.display.topology_calls > 0) {
       harness.cancellation.cancel();
     }
   };
@@ -650,11 +811,12 @@ TEST(DisplayHelperV2RecoveryEngine, PrefersGoldenWhenCurrentMissing) {
   ASSERT_GE(harness.display.transition_order.size(), 2u);
   EXPECT_EQ(harness.display.transition_order[0], "topology:G");
   EXPECT_EQ(harness.display.transition_order[1], "settings:G");
-  // Confirmed golden restore clears the session snapshot chain.
-  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
+  // Worker confirmation retains the chain for final fenced validation.
+  EXPECT_EQ(outcome.restored_tier, display_helper::v2::SnapshotTier::Golden);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
 }
 
-TEST(DisplayHelperV2RecoveryEngine, PreviousSuccessRetainsUnconfirmedCurrentSnapshot) {
+TEST(DisplayHelperV2RecoveryEngine, FailedCurrentNeverAppliesPreviousExactTier) {
   RecoveryHarness harness;
   harness.add_device("CURRENT");
   harness.add_device("PREVIOUS");
@@ -668,9 +830,12 @@ TEST(DisplayHelperV2RecoveryEngine, PreviousSuccessRetainsUnconfirmedCurrentSnap
 
   const auto outcome = harness.recovery.run(harness.cancellation.token());
 
-  EXPECT_TRUE(outcome.success);
-  ASSERT_TRUE(outcome.snapshot.has_value());
-  EXPECT_EQ(EngineDisplayFake::first_id(*outcome.snapshot), "PREVIOUS");
+  EXPECT_FALSE(outcome.success);
+  EXPECT_FALSE(outcome.snapshot.has_value());
+  EXPECT_TRUE(outcome.physical_visibility_available);
+  EXPECT_EQ(EngineDisplayFake::first_id(harness.display.current), "CURRENT");
+  EXPECT_EQ(std::count(harness.display.apply_order.begin(), harness.display.apply_order.end(), "PREVIOUS"), 0);
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
   EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
   EXPECT_TRUE(codec::equal_snapshots_strict(
     harness.storage.load(display_helper::v2::SnapshotTier::Current).value(), current));
@@ -679,28 +844,125 @@ TEST(DisplayHelperV2RecoveryEngine, PreviousSuccessRetainsUnconfirmedCurrentSnap
     harness.storage.load(display_helper::v2::SnapshotTier::Previous).value(), previous));
 }
 
-// A usable session fallback is only a bootstrap state. The configured golden
-// snapshot remains authoritative until every baseline device can be restored.
-TEST(DisplayHelperV2RecoveryEngine, GoldenFirstKeepsCompleteBaselinePendingAfterRepeatedFallbacks) {
+TEST(DisplayHelperV2RecoveryEngine, AlternateConnectedSnapshotCannotCompleteDifferentAuthoritativeSettings) {
+  using Tier = display_helper::v2::SnapshotTier;
+  const auto fallback = make_snapshot({{"A"}});
+  auto different_mode = fallback;
+  different_mode.m_modes.at("A").m_refresh_rate = {144, 1};
+  auto different_hdr = fallback;
+  different_hdr.m_hdr_states.at("A") = display_device::HdrState::Enabled;
+  auto different_origin = fallback;
+  different_origin.m_origins["A"] = {1920, 0};
+
+  for (const auto tier : {Tier::Previous, Tier::Golden}) {
+    for (const auto &authoritative : {different_mode, different_hdr, different_origin}) {
+      SCOPED_TRACE(std::to_string(static_cast<int>(tier)) + ":" + codec::signature(authoritative));
+      RecoveryHarness harness;
+      harness.add_device("A");
+      harness.display.current = fallback;
+      harness.display.ineffective_ids.insert("A");
+      ASSERT_TRUE(harness.storage.save(Tier::Current, authoritative));
+      ASSERT_TRUE(harness.storage.save(tier, fallback));
+
+      const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+      EXPECT_FALSE(outcome.success);
+      EXPECT_FALSE(outcome.snapshot.has_value());
+      EXPECT_TRUE(outcome.physical_visibility_available);
+      EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
+      EXPECT_EQ(harness.state.last_session_restore_success_ms.load(), 0);
+      ASSERT_TRUE(harness.storage.exists(Tier::Current));
+      EXPECT_TRUE(codec::equal_snapshots_strict(*harness.storage.load(Tier::Current), authoritative));
+      EXPECT_TRUE(harness.storage.exists(tier));
+      EXPECT_TRUE(harness.state.restore_attempted_unconfirmed.load());
+    }
+  }
+}
+
+TEST(DisplayHelperV2RecoveryEngine, CorruptCurrentRemainsAuthorityAndOlderBaselineOnlySuppliesAdditiveCandidates) {
+  RecoveryHarness harness;
+  harness.prepare_missing_monitor_rescue();
+  harness.storage.unreadable_tiers.insert(display_helper::v2::SnapshotTier::Current);
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, make_snapshot({{"A"}})));
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_TRUE(outcome.physical_visibility_available);
+  EXPECT_EQ(harness.display.current.m_topology,
+            (display_device::ActiveTopology {{"permanent-virtual"}, {"session-virtual"}, {"A"}}));
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Golden));
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
+}
+
+TEST(DisplayHelperV2RecoveryEngine, FailingCurrentDoesNotApplyAlternateTierContainingUserDisabledMonitor) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  harness.display.devices.push_back(make_device("B", "", false));
+  const auto before = make_snapshot({{"A"}});
+  auto baseline = before;
+  baseline.m_modes.at("A").m_refresh_rate = {144, 1};
+  harness.display.current = before;
+  harness.display.ineffective_ids.insert("A");
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, baseline));
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, make_snapshot({{"B"}})));
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_TRUE(outcome.physical_visibility_available);
+  EXPECT_EQ(harness.display.current.m_topology, before.m_topology);
+  EXPECT_EQ(std::count(harness.display.apply_order.begin(), harness.display.apply_order.end(), "B"), 0);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+}
+
+TEST(DisplayHelperV2RecoveryEngine, AlternateWithoutLayoutCannotCompleteUnconfirmedAuthoritativeRotation) {
+  RecoveryHarness harness;
+  harness.add_device("A");
+  const auto baseline = make_snapshot({{"A"}});
+  ASSERT_TRUE(harness.storage.save(
+    display_helper::v2::SnapshotTier::Current, baseline, codec::layout_rotation_map_t {{"A", 90}}));
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Previous, baseline));
+  harness.display.current = baseline;
+  harness.display.layout_matches_result = false;
+
+  const auto outcome = harness.recovery.run(harness.cancellation.token());
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_TRUE(outcome.physical_visibility_available);
+  EXPECT_FALSE(outcome.snapshot.has_value());
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_EQ(harness.storage.load_with_metadata(display_helper::v2::SnapshotTier::Current)->layout_rotations,
+            (codec::layout_rotation_map_t {{"A", 90}}));
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
+}
+
+// A failed configured golden attempt may only establish additive visibility;
+// the session's different exact topology must not replace its authority.
+TEST(DisplayHelperV2RecoveryEngine, GoldenFirstFailureNeverAppliesSessionExactTier) {
   RecoveryHarness harness;
   harness.add_device("G");
   harness.add_device("C");
 
   harness.state.always_restore_from_golden.store(true);
 
-  // Golden applies without effect (never confirms); session snapshots work.
+  // Golden applies without effect (never confirms); the session tier differs.
   harness.display.ineffective_ids.insert("G");
   ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, make_snapshot({{"G"}})));
   ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, make_snapshot({{"C"}})));
   harness.display.current = make_snapshot({{"X"}});
 
   auto first = harness.recovery.run(harness.cancellation.token());
-  EXPECT_FALSE(first.success);  // session fallback applied, golden still pending
-  EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), 1u);
+  EXPECT_FALSE(first.success);
+  EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), 0u);
 
-  // The session restore landed and current was promoted to previous.
-  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
-  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
+  // The failed authority leaves both saved baselines intact.
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
+  EXPECT_EQ(harness.state.last_session_restore_success_ms.load(), 0);
+  EXPECT_EQ(harness.display.reset_staged_apply_state_calls, 0);
 
   // Step past the 60 s session-restore cooldown so every run genuinely
   // attempts golden instead of being skipped by should_skip_golden.
@@ -708,56 +970,57 @@ TEST(DisplayHelperV2RecoveryEngine, GoldenFirstKeepsCompleteBaselinePendingAfter
   harness.display.current = make_snapshot({{"X"}});  // drift again before next attempt
   auto second = harness.recovery.run(harness.cancellation.token());
   EXPECT_FALSE(second.success);
-  EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), 2u);
+  EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), 0u);
 
   harness.clock.advance(std::chrono::seconds(61));
   harness.display.current = make_snapshot({{"X"}});
   auto third = harness.recovery.run(harness.cancellation.token());
   EXPECT_FALSE(third.success);
-  EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), 3u);
+  EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), 0u);
+  EXPECT_EQ(std::count(harness.display.apply_order.begin(), harness.display.apply_order.end(), "C"), 0);
 }
 
-// The golden file must remain pending when a required baseline device is
-// temporarily unavailable. A filtered load rejects that golden snapshot, but
-// the unfiltered snapshot is still present and must keep recovery unresolved.
+// An incomplete golden baseline authorizes an additive physical rescue, not
+// replacement of the live desktop with a different exact snapshot tier.
 TEST(DisplayHelperV2RecoveryEngine, KeepsGoldenPendingWhenBaselineDeviceIsMissing) {
   RecoveryHarness harness;
-  harness.add_device("A");
-
+  harness.prepare_missing_monitor_rescue();
   harness.state.always_restore_from_golden.store(true);
   ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, make_snapshot({{"A"}, {"B"}})));
   ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, make_snapshot({{"A"}})));
-  harness.display.current = make_snapshot({{"X"}});
 
   for (std::size_t attempt = 1; attempt <= 4; ++attempt) {
-    harness.display.current = make_snapshot({{"X"}});
     const auto outcome = harness.recovery.run(harness.cancellation.token());
     EXPECT_FALSE(outcome.success);
-    EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), attempt);
+    EXPECT_TRUE(outcome.physical_visibility_available);
+    EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), 0u);
   }
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_EQ(harness.display.topology_calls, 1);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
   EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Golden));
 }
 
-// Powered-off monitors can reappear while short recovery polls repeatedly
-// restore a usable primary-only session snapshot. That fallback must not renew
-// a cooldown that prevents the configured complete golden baseline from landing.
-TEST(DisplayHelperV2RecoveryEngine, GoldenFirstRestoresReturningMonitorDuringSessionCooldown) {
+// A visibility-only rescue must not renew a session cooldown that prevents the
+// configured complete golden baseline from landing when its monitor returns.
+TEST(DisplayHelperV2RecoveryEngine, GoldenFirstRestoresReturningMonitorAfterVisibilityRescue) {
   RecoveryHarness harness;
-  harness.add_device("A");
+  harness.prepare_missing_monitor_rescue();
   harness.state.always_restore_from_golden.store(true);
 
   auto golden = make_snapshot({{"A"}, {"B"}});
   golden.m_origins["B"] = display_device::Point {1920, 0};
   ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, golden));
   ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, make_snapshot({{"A"}})));
-  harness.display.current = make_snapshot({{"X"}});
 
   for (int attempt = 0; attempt < 4; ++attempt) {
     EXPECT_FALSE(harness.recovery.run(harness.cancellation.token()).success);
     ASSERT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Golden));
     harness.clock.advance(std::chrono::seconds(5));
   }
-  ASSERT_NE(harness.state.last_session_restore_success_ms.load(), 0);
+  ASSERT_EQ(harness.state.last_session_restore_success_ms.load(), 0);
+  EXPECT_EQ(harness.display.apply_calls, 0);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
 
   harness.add_device("B");
   const auto outcome = harness.recovery.run(harness.cancellation.token());
@@ -767,13 +1030,14 @@ TEST(DisplayHelperV2RecoveryEngine, GoldenFirstRestoresReturningMonitorDuringSes
   EXPECT_EQ(harness.display.current.m_origins.at("B").m_x, golden.m_origins.at("B").m_x);
   EXPECT_EQ(harness.display.current.m_origins.at("B").m_y, golden.m_origins.at("B").m_y);
   EXPECT_EQ(harness.state.golden_pending_session_fallbacks.load(), 0u);
-  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_EQ(outcome.restored_tier, display_helper::v2::SnapshotTier::Golden);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
   EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
 }
 
 // A pending golden-first request must retry the authoritative baseline as
 // soon as its missing monitor returns, even after a recent usable fallback.
-TEST(DisplayHelperV2RecoveryEngine, GoldenFirstRestoresReturnedBaselineAfterRecentSessionFallback) {
+TEST(DisplayHelperV2RecoveryEngine, GoldenFirstRestoresReturnedBaselineWhilePhysicalWasAlreadyVisible) {
   RecoveryHarness harness;
   harness.add_device("A");
   harness.state.always_restore_from_golden.store(true);
@@ -785,10 +1049,13 @@ TEST(DisplayHelperV2RecoveryEngine, GoldenFirstRestoresReturnedBaselineAfterRece
 
   const auto fallback = harness.recovery.run(harness.cancellation.token());
   ASSERT_FALSE(fallback.success);
-  ASSERT_EQ(harness.state.golden_pending_session_fallbacks.load(), 1u);
-  ASSERT_GT(harness.state.last_session_restore_success_ms.load(), 0);
+  ASSERT_EQ(harness.state.golden_pending_session_fallbacks.load(), 0u);
+  ASSERT_EQ(harness.state.last_session_restore_success_ms.load(), 0);
+  EXPECT_TRUE(fallback.physical_visibility_available);
+  EXPECT_EQ(harness.display.topology_calls, 0);
   EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(harness.display.current, session));
-  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
 
   harness.add_device("B");
   harness.clock.advance(std::chrono::milliseconds(1000));
@@ -799,7 +1066,8 @@ TEST(DisplayHelperV2RecoveryEngine, GoldenFirstRestoresReturnedBaselineAfterRece
   EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(*restored.snapshot, golden));
   EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(harness.display.current, golden));
   EXPECT_GT(harness.display.apply_calls, 0);
-  EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_EQ(restored.restored_tier, display_helper::v2::SnapshotTier::Golden);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
   EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
 }
 
@@ -807,10 +1075,12 @@ TEST(DisplayHelperV2RecoveryEngine, DefaultRestoreRetainsRecentSessionCooldownFo
   RecoveryHarness harness;
   harness.add_device("C");
   harness.add_device("G");
-  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, make_snapshot({{"C"}})));
+  // Model a previous session whose final validation already completed.
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Previous, make_snapshot({{"C"}})));
   ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, make_snapshot({{"G"}})));
   harness.display.current = make_snapshot({{"X"}});
-  ASSERT_TRUE(harness.recovery.run(harness.cancellation.token()).success);
+  harness.state.last_session_restore_success_ms.store(
+    std::chrono::duration_cast<std::chrono::milliseconds>(harness.clock.now().time_since_epoch()).count());
 
   harness.clock.advance(std::chrono::seconds(5));
   harness.display.ineffective_ids.insert("C");
@@ -826,19 +1096,20 @@ TEST(DisplayHelperV2RecoveryEngine, SessionFirstKeepsCooldownWhenGoldenDeviceRet
   harness.add_device("A");
   const auto session = make_snapshot({{"A"}});
   const auto golden = make_snapshot({{"A"}, {"B"}});
-  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, session));
+  // The prior session was finalized, so its authority is retained in Previous.
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Previous, session));
   ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Golden, golden));
   harness.display.current = session;
-  ASSERT_TRUE(harness.recovery.run(harness.cancellation.token()).success);
-  ASSERT_GT(harness.state.last_session_restore_success_ms.load(), 0);
+  harness.state.last_session_restore_success_ms.store(
+    std::chrono::duration_cast<std::chrono::milliseconds>(harness.clock.now().time_since_epoch()).count());
 
   harness.add_device("B");
   harness.clock.advance(std::chrono::milliseconds(1000));
   const auto restored = harness.recovery.run(harness.cancellation.token());
 
-  ASSERT_TRUE(restored.success);
-  ASSERT_TRUE(restored.snapshot);
-  EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(*restored.snapshot, session));
+  ASSERT_FALSE(restored.success);
+  ASSERT_FALSE(restored.snapshot);
+  EXPECT_TRUE(restored.physical_visibility_available);
   EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(harness.display.current, session));
   EXPECT_EQ(harness.display.apply_calls, 0);
   EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Golden));
@@ -1002,6 +1273,37 @@ TEST(DisplayHelperV2RecoveryEngine, RotationStageFailureFailsRestoreWhenLayoutNe
   EXPECT_EQ(harness.display.topology_calls, 2);
   EXPECT_EQ(harness.display.rotation_apply_calls.size(), 2u);
   EXPECT_TRUE(harness.display.reassert_calls.empty());
+}
+
+TEST(DisplayHelperV2RecoveryEngine, FinalValidationRejectsRotationDriftAfterWorkerConfirmation) {
+  for (const int rotation : {0, 180}) {
+    SCOPED_TRACE(rotation);
+    RecoveryHarness harness;
+    harness.add_device("A");
+    const auto baseline = make_snapshot({{"A"}});
+    const codec::layout_rotation_map_t layouts {{"A", rotation}};
+    ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, baseline, layouts));
+    harness.display.current = baseline;
+
+    const auto outcome = harness.recovery.run(harness.cancellation.token());
+    ASSERT_TRUE(outcome.success);
+    ASSERT_TRUE(outcome.snapshot);
+    ASSERT_TRUE(outcome.layout_rotations);
+    EXPECT_EQ(*outcome.layout_rotations, layouts);
+    display_helper::v2::SnapshotService snapshots {harness.display};
+    display_helper::v2::RecoveryValidationOperation validation {snapshots, harness.clock};
+
+    // A 180-degree orientation change leaves the core snapshot unchanged.
+    // The delayed gate must check the worker's saved rotation evidence too.
+    harness.display.layout_matches_result = false;
+    EXPECT_TRUE(codec::snapshot_matches_baseline(harness.display.current, baseline));
+    EXPECT_FALSE(validation.run(*outcome.snapshot, harness.cancellation.token(), outcome.layout_rotations));
+    EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+    EXPECT_FALSE(harness.storage.exists(display_helper::v2::SnapshotTier::Previous));
+
+    harness.display.layout_matches_result = true;
+    EXPECT_TRUE(validation.run(*outcome.snapshot, harness.cancellation.token(), outcome.layout_rotations));
+  }
 }
 
 // --- storage round trip in the legacy file format ---

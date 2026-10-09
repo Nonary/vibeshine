@@ -30,6 +30,7 @@
 #include "nvhttp.h"
 #include "process.h"
 #include "rtsp.h"
+#include "stream.h"
 #include "system_tray.h"
 #include "update.h"
 #include "upnp.h"
@@ -767,8 +768,13 @@ int main(int argc, char *argv[]) {
 #ifdef _WIN32
   const auto has_startup_stream_activity = [] {
     return rtsp_stream::has_pending_launch_or_startup() ||
-           rtsp_stream::session_count() != 0 ||
-           webrtc_stream::has_active_or_pending_sessions();
+           rtsp_stream::session_count_no_cleanup() != 0 ||
+           stream::session::running_sessions.load(std::memory_order_acquire) != 0 ||
+           stream::session::teardown_sessions.load(std::memory_order_acquire) != 0 ||
+           stream::session::has_capture_runtime_owner() ||
+           webrtc_stream::has_active_or_pending_sessions() ||
+           webrtc_stream::has_capture_active() ||
+           webrtc_stream::has_teardown_in_progress();
   };
 #endif
 
@@ -872,7 +878,12 @@ int main(int argc, char *argv[]) {
 
 #ifdef _WIN32
   auto startup_display_recovery = [&shutdown_event, &has_startup_stream_activity]() {
-    if (shutdown_event->peek() || has_startup_stream_activity() || VDISPLAY::has_retained_ensure_display()) {
+    // A launch owns this gate before it publishes pending transport state.
+    // The activity checks alone cannot see that preparation window.
+    std::unique_lock lifecycle_lock(nvhttp::stream_lifecycle_mutex(), std::try_to_lock);
+    if (!lifecycle_lock.owns_lock()) return;
+    if (shutdown_event->peek() || has_startup_stream_activity() || proc::proc.current_app_id() > 0 ||
+        nvhttp::has_remote_role_owner() || VDISPLAY::has_retained_ensure_display()) {
       return;
     }
     const auto virtual_displays = VDISPLAY::enumerateVirtualDisplays();
@@ -883,12 +894,22 @@ int main(int argc, char *argv[]) {
         return info.is_active;
       }
     );
-    if (!has_active_virtual_display || shutdown_event->peek() || has_startup_stream_activity() ||
+    const bool has_pending_recovery = display_helper_integration::has_pending_recovery_snapshot();
+    if ((!has_active_virtual_display && !has_pending_recovery) || shutdown_event->peek() || has_startup_stream_activity() ||
         VDISPLAY::has_retained_ensure_display()) {
       return;
     }
-    BOOST_LOG(warning) << "Startup detected active virtual display(s) with no active stream session; running cleanup.";
-    (void) platf::virtual_display_cleanup::run("startup_recovery", config::video.dd.config_revert_on_disconnect);
+    BOOST_LOG(warning) << "Startup detected unfinished display recovery with no active stream session; running cleanup.";
+    // The lifecycle gate and owner checks exclude a newly launched or paused
+    // app. The client-disconnect preference must not suppress recovery of a
+    // display left behind by a prior process.
+    (void) platf::virtual_display_cleanup::run(
+      "startup_recovery", true,
+      platf::virtual_display_cleanup::revert_order_t::remove_before_restore,
+      true, std::nullopt,
+      platf::virtual_display_cleanup::recovery_monitor_policy_t::disengage_before_admission,
+      platf::virtual_display_cleanup::cleanup_admission_policy_t::respect_managed_owners,
+      true);
   };
 #endif
 
@@ -996,7 +1017,7 @@ int main(int argc, char *argv[]) {
 #ifdef _WIN32
   // Stale-display cleanup is separate from encoder validation and therefore
   // runs only after the network listeners are available.
-  if (startup_probe_succeeded) {
+  if (startup_probe_succeeded || display_helper_integration::has_pending_recovery_snapshot()) {
     startup_display_recovery();
   } else {
     BOOST_LOG(warning) << "Startup stale-display cleanup skipped because encoder validation did not produce a successful cache.";

@@ -24,6 +24,8 @@ namespace display_helper::v2 {
     bool blank_hdr_states(std::chrono::milliseconds delay, const std::function<bool()> &cancelled) override;
     ApplyStatus apply_topology(const ActiveTopology &topology) override;
     EnumeratedDeviceList enumerate(display_device::DeviceEnumerationDetail detail) override;
+    std::vector<physical_recovery::Device> enumerate_physical_recovery_devices() override;
+    display_recovery_safety::PhysicalDisplayState physical_display_state() override;
     ActiveTopology capture_topology() override;
     bool validate_topology(const ActiveTopology &topology) override;
     Snapshot capture_snapshot() override;

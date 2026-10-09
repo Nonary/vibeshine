@@ -1200,6 +1200,85 @@ TEST(RemoteDisplayTopology, PausedGameRemainsLiveWithoutTransportOrCaptureRefere
   EXPECT_TRUE(coordinator.retain_normal_game_capture("paused", app.token));
 }
 
+TEST(RemoteDisplayTopology, ProcesslessExclusiveDisplayTransfersLastCleanupWithoutApplyingEmptyTopology) {
+  remote_display_topology::coordinator_t coordinator;
+  int applies = 0, removes = 0;
+  coordinator.set_runtime_callbacks({
+    .apply_composed_topology = [&](const auto &) { ++applies; return false; },
+    .remove_owned_display = [&](const auto &) { ++removes; return false; },
+  });
+  const auto desktop = coordinator.reserve_normal_game_identity("desktop", "Desktop", {});
+  ASSERT_TRUE(desktop.accepted);
+
+  // The armed Windows finalizer owns physical restoration and temporary VDD
+  // removal. A headless/exclusive desktop has no valid empty composition.
+  coordinator.release_idle_normal_game_identities(false, false, true);
+  EXPECT_EQ(applies, 0);
+  EXPECT_EQ(removes, 0);
+  EXPECT_TRUE(coordinator.generic_virtual_display_cleanup_allowed());
+  EXPECT_EQ(coordinator.managed_client_identity_count(), 0u);
+  EXPECT_FALSE(coordinator.retain_normal_game_capture("desktop", desktop.token));
+
+  const auto successor = coordinator.reserve_normal_game_identity("desktop", "Successor", {});
+  ASSERT_TRUE(successor.accepted);
+  EXPECT_NE(successor.token, desktop.token);
+  coordinator.release_normal_game_identity("desktop", desktop.token);
+  EXPECT_TRUE(coordinator.retain_normal_game_capture("desktop", successor.token));
+}
+
+TEST(RemoteDisplayTopology, LastDisplayCleanupTransferPreservesPausedAppsAndPendingPeers) {
+  for (const auto &[app_running, capture_runtime_owned] : {std::pair {true, false}, {false, true}, {true, true}}) {
+    remote_display_topology::coordinator_t coordinator;
+    int applies = 0;
+    coordinator.set_runtime_callbacks({
+      .apply_composed_topology = [&](const auto &) { ++applies; return true; },
+    });
+    const auto app = coordinator.reserve_normal_game_identity("desktop", "Commandless Desktop", {});
+    coordinator.release_idle_normal_game_identities(app_running, capture_runtime_owned, true);
+    EXPECT_EQ(applies, 0);
+    EXPECT_EQ(coordinator.managed_client_identity_count(), 1u);
+    EXPECT_FALSE(coordinator.normal_game_release_pending());
+    EXPECT_TRUE(coordinator.retain_normal_game_capture("desktop", app.token));
+  }
+}
+
+TEST(RemoteDisplayTopology, LastDisplayCleanupTransferStillChecksOutstandingCaptureReferences) {
+  remote_display_topology::coordinator_t coordinator;
+  int applies = 0;
+  coordinator.set_runtime_callbacks({
+    .apply_composed_topology = [&](const auto &) { ++applies; return true; },
+  });
+  const auto desktop = coordinator.reserve_normal_game_identity("desktop", "Desktop", {});
+  auto capture = coordinator.retain_normal_game_capture("desktop", desktop.token);
+  coordinator.release_idle_normal_game_identities(false, false, true);
+  EXPECT_EQ(applies, 0);
+  EXPECT_EQ(coordinator.managed_client_identity_count(), 1u);
+  EXPECT_TRUE(coordinator.normal_game_release_pending());
+  capture.reset();
+  coordinator.release_idle_normal_game_identities(false, false, true);
+  EXPECT_EQ(applies, 0);
+  EXPECT_EQ(coordinator.managed_client_identity_count(), 0u);
+}
+
+TEST(RemoteDisplayTopology, LastDisplayCleanupTransferKeepsRetainedMonitorAndRemovesOnlyNormalPeer) {
+  remote_display_topology::coordinator_t coordinator;
+  std::vector<std::string> removed;
+  coordinator.set_runtime_callbacks({
+    .create_or_reclaim = [](const auto &, const auto &, const auto &) { return true; },
+    .apply_composed_topology = [](const auto &) { return true; },
+    .exact_target_has_current_mode_and_dxgi = [](const auto &uuid, const auto &) { return std::optional<std::string> {uuid}; },
+    .remove_owned_display = [&](const auto &uuid) { removed.push_back(uuid); return true; },
+  });
+  ASSERT_TRUE(coordinator.activate_or_resume("monitor", "Monitor", {}, 7).ready);
+  ASSERT_TRUE(coordinator.reserve_normal_game_identity("desktop", "Desktop", {}).accepted);
+  ASSERT_TRUE(coordinator.reserve_normal_game_identity("monitor", "Shared", {}).accepted);
+  coordinator.release_idle_normal_game_identities(false, false, true);
+  EXPECT_EQ(removed, (std::vector<std::string> {"desktop"}));
+  EXPECT_TRUE(coordinator.is_ready("monitor", 7));
+  EXPECT_FALSE(coordinator.generic_virtual_display_cleanup_allowed());
+  EXPECT_EQ(coordinator.managed_client_identity_count(), 1u);
+}
+
 TEST(RemoteDisplayTopology, FailedDrainedNormalReleaseAllowsRestoreButRetainsStateUntilConfirmedSuccess) {
   remote_display_topology::coordinator_t coordinator;
   int applies = 0, removes = 0;

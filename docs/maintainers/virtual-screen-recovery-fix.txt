@@ -1,0 +1,239 @@
+Temporary Windows display profiles and recovery correction
+9 October 2026
+
+Status
+
+Implemented in the working tree based on Vibeshine 668d2c9dfccbcfd7a0dbb4f317fe5bca46ea4612.
+The investigation and historical Apollo/Vibepollo comparison are recorded in
+virtual-screen-recovery-audit.txt. That document describes the pre-fix behavior.
+This document describes the resulting implementation and its validation limits.
+
+This is not a completed Windows hardware acceptance report. The work was done
+on macOS, with portable builds of production C++ components, production-extracted
+boundary tests, failure injection, and independent source review. Native Windows
+compilation and actual reboot, shutdown, sleep, driver, fullscreen and HDR tests
+remain required before release. No affected-machine logs were available, so the
+confirmed code defects cannot be assigned as the cause of every historical report.
+
+Design and behavior
+
+1. Keep streaming display changes temporary.
+
+   Stream-time resolution, refresh, primary display, position and rotation changes
+   use temporary CCD/GDI operations. Recovery steps and partial-apply rollback also
+   omit persistence flags. The public library's explicitly persistent operations
+   remain available for callers that intentionally save user settings.
+
+   This preserves the saved physical display configuration that Windows can use
+   when a temporary virtual output leaves. It adopts Apollo's useful persistence
+   boundary while retaining Vibeshine's snapshots, helper, driver leases, capture
+   coordination and recovery verification. Apollo is not a guarantee against every
+   driver or OS failure; the comparison audit documents its own limits.
+
+   HDR, ICC and DPI use distinct Windows facilities. Do not infer that their
+   persistence semantics are identical to CCD's SAVE_TO_DATABASE flag. This patch
+   avoids replaying the launch HDR state during healthy game/user transitions and
+   retains baseline HDR restoration as part of exact recovery.
+
+2. Establish recovery before changing the desktop.
+
+   A helper acknowledgement now means that a usable baseline and recovery guard
+   are ready, including the durable restore task when enabled. A successful pipe
+   send or snapshot write alone cannot authorize virtual/exclusive preparation.
+   Both helper engines send a correlated, versioned response; older snapshot-only
+   acknowledgements are rejected. Cancellation, late replies, stale connections,
+   malformed frames and failed task registration cannot open the capture gate.
+
+   A genuinely headless machine may proceed without a physical baseline only
+   after a successful raw Windows query proves that no physical target is
+   connected and no retained baseline needs recovery. Failed or incomplete
+   enumeration is not proof of headlessness. Explicitly user-disabled restore
+   tasks remain an intentional opt-out.
+
+   RTSP, WebRTC, Remote Monitor creation/reclaim, independent refresh changes and
+   virtual-device repair obey this preparation boundary. Read-only capture joins
+   and physical requests that need no display changes retain their compatibility.
+   The unguarded in-process APPLY fallback has been removed.
+
+3. Separate a paused client from a failed host.
+
+   A positive-ID app can still keep its display while paused according to the
+   configured disconnect/retention policy. Losing the host pipe or heartbeat is
+   different: it starts bounded owner settlement and then recovery, even when
+   restore-on-client-disconnect is disabled. A current live owner can reclaim the
+   session through the existing generation/connection checks.
+
+   DISARM transfers ownership and cancels obsolete work without discarding the
+   original physical baseline or durable guard. Pending launch expiry, teardown,
+   capture drain, Remote Monitor ownership and normal appid=0 retirement are
+   checked so abandoned owners do not prevent idle cleanup and valid owners do
+   not lose their displays.
+
+4. Preserve the original recovery obligation through partial failure.
+
+   Recovery selects the first existing configured authoritative snapshot tier.
+   Corruption, a missing monitor or a failed exact restore does not silently make
+   an older snapshot the complete success target. Older valid evidence may help
+   activate a connected physical output without satisfying the full obligation.
+
+   Visibility rescue adds an eligible physical display to the live topology and
+   verifies the result. It preserves active permanent virtual outputs and respects
+   ordinary baseline/exclusion limits. A missing second monitor does not prevent
+   safe visibility on a connected baseline monitor. Visibility success and exact
+   restore success are distinct; partial rescue keeps the snapshots and task.
+
+   Exact recovery verifies modes, topology, primary/origins, HDR and recorded
+   rotations. Its delayed final check uses the same intended settings. Snapshot
+   promotion/deletion, success bookkeeping and task retirement occur only after
+   that check; cancellation or intervening changes preserve the same authority.
+   Failed snapshot retirement remains a pending transaction, even if the desktop
+   is already visible, so a surviving Current file is not left behind after a
+   falsely reported completed transaction.
+
+   Snapshot writes flush file contents and atomically replace the destination.
+   Write/read/metadata failures cannot masquerade as a durable saved baseline or
+   absent evidence. Startup binds Current recovery to its original selected file
+   instead of creating a second recovery marker in another folder. An existing
+   active Current, including unreadable evidence, wins over older search roots.
+   History adoption does not overwrite an existing active tier or discard its
+   source after failed persistence.
+
+5. Let a healthy game or user change resolution and HDR.
+
+   A healthy live session does not replay its original display configuration in
+   response to generic display notifications, a returning active physical screen,
+   or a refresh-only request. Capture can reinitialize for changed size/format/HDR.
+   Explicit new configuration and a proven replacement virtual identity still
+   have their normal configuration paths.
+
+   Both virtual-driver monitors confirm negative/inactive observations with raw
+   Windows target information. Partial high-level enumeration, temporary identity
+   errors and ID-only fallback changes are treated as unknown rather than proof
+   that the virtual screen disappeared. Healthy observations retain a stable
+   monitor path. Unknown observations reset continuous-loss timers. A genuinely
+   missing target remains recoverable; connected inactivity has a 12-second
+   allowance for transitions. Real Windows timing still needs hardware testing.
+
+6. Serialize startup and native fallback recovery.
+
+   Startup recovery holds the stream lifecycle gate and checks pending/running
+   transports, capture/drain owners, paused apps and Remote Monitor ownership.
+   Retained Current evidence can trigger recovery even if the virtual output has
+   already gone or initial encoder probing failed. Previous/Golden history alone
+   does not make a healthy desktop a startup recovery target.
+
+   Ordinary native database fallback and the explicit physical-screen rescue wait
+   for the owned helper to exit, exclude other helper instances and fence helper
+   dispatch. Both helper engines use the same global singleton and fail closed
+   if exclusive ownership cannot be established. Existing older helper processes
+   are checked before native fallback. No unowned process is killed to force it.
+
+   The explicit terminal rescue still tries to restore physical visibility when
+   aggregate virtual removal reports failure. It requires raw CCD evidence of a
+   connected active physical output; another vendor's indirect virtual target
+   cannot count as a recovered PC screen. SYSTEM execution uses the active user's
+   context. Missing context or uncertain ownership fails safely and leaves the
+   recovery evidence intact.
+
+Validation record
+
+The independent review used Astra at ultra reasoning, with separate confirm and
+deny reviewers for the temporary-write boundary, owner cleanup, recovery contract,
+host preparation, and live resolution/HDR handling. Concrete counterexamples were
+reproduced and converted into regression tests before re-review. Additional build
+integration review checked public signatures, derived interfaces and CMake wiring.
+A separate final paired review validated original-file Current binding and
+retirement. Root adjudication accepted the six reviewed implementation contracts
+at source/component scope after checking their decisive code and tests; actual
+Windows hardware acceptance remains unproven.
+
+Portable tests execute production implementations or extracted production bodies
+with deterministic OS/driver boundaries. They are meaningful logic and failure
+tests, but they do not execute Windows' display driver, scheduler or compositor.
+
+Passed categories include:
+  - All 235 cases in the five-file V2 production-core test set, including authoritative
+    tier selection, delayed validation, host-loss ownership, mutation admission,
+    cancellation, snapshot import and task failure cases.
+  - Forty production virtual-monitor scenarios, twenty target-presence cases,
+    and twenty-four raw recovery-probe cases. Both previously failing incomplete
+    enumeration/ID-only counterexamples were rerun independently.
+  - Ten temporary display setter API-boundary tests, snapshot restore ordering,
+    additive physical rescue, and impersonating wrapper forwarding.
+  - Seventy-nine topology coordinator cases, thirty-three RTSP/remote-session
+    policy cases, nine host request-policy cases, and production pending/idle
+    lifecycle tests with deliberate regression mutations.
+  - Snapshot IPC correlation/version/deadline tests, durable file-storage failure
+    injection, legacy helper safety, live refresh/HDR handling, capture admission,
+    scheduled-task policy, and terminal/startup ownership and fallback tests.
+  - Direct Current path binding and exact-file retirement against real temporary
+    files, including active/source precedence and injected filesystem errors.
+
+The final V2 source manifest matched all 41 recorded production/test/header files.
+The terminal/startup harness also rejected thirteen deliberate safeguard-removal
+mutations at runtime. Final root checks reran terminal/startup, snapshot IPC,
+atomic storage, legacy safety and Current path binding successfully. Whitespace
+checks, new Python test parsing and the edited workflow YAML check passed.
+
+The broader libdisplaydevice SettingsManager suite is NOT a clean pass: it has
+40 passing and 45 failing cases on both the baseline and changed production
+sources, with identical failing names after equivalent fixture compile repairs.
+There are no new failing names in that comparison. These baseline failures must
+not be counted as successful validation or hidden in an aggregate pass total.
+
+Tests are registered in tests/CMakeLists.txt. The Windows reusable CI workflow
+now discovers and runs the focused mock-based display suite when build_tests is
+enabled. The existing caller still opts out by default. The workflow was edited
+locally; it was not dispatched. No tests that manipulate a runner's real desktop
+are included in that focused CI filter.
+
+Required Windows acceptance before release
+
+Build the host and BOTH helper engines with the final libdisplaydevice changes.
+Run the focused CTest suite natively, then execute the hardware matrix from the
+comparison audit with both SudoVDA and the bundled driver. Include Windows 10
+explicit opt-in and supported Windows 11 versions; laptop, external display,
+multiple-monitor/dock, truly headless and permanent-virtual configurations.
+
+For each relevant configuration, record active and saved/database topology before
+streaming, during it, after cleanup and after login. Check:
+  - Exclusive and extended layouts; fullscreen resolution/refresh changes;
+    repeated HDR on/off in both directions and during capture reinitialization.
+  - Client disconnect/reconnect, app quit, overlapping clients, retained paused
+    apps, pending expiry, Remote Monitor, and teardown/capture drain overlap.
+  - Host/helper failure, stalled heartbeat, service restart, reboot, shutdown,
+    sign-out/logon, sleep and hibernate. Inject interruption before and after each
+    recovery acknowledgement, display mutation and final validation phase.
+  - Failed task registration, user-disabled task, blocked/corrupt/missing snapshot
+    files, interrupted writes, mixed SYSTEM/user roots and helper version mismatch.
+  - Monitor/dock loss and return, one missing baseline display, transient identity
+    errors, delayed virtual departure, and explicit emergency screen recovery.
+
+Require observable physical visibility, preserved saved physical configuration,
+no healthy-game launch-profile replay, no stale owner mutation, and durable
+evidence retained whenever exact recovery is incomplete. A successful API call,
+driver removal acknowledgement or asynchronous REVERT dispatch is insufficient.
+
+Known limits and integration notes
+
+- This does not rewrite an already polluted Windows display database on upgrade.
+  Valid retained snapshots can restore the live desktop; automatic persistent
+  migration needs separate evidence and tests rather than guessing a saved layout.
+- Older builds may already have left distinct or ambiguous Current files in
+  multiple folders. This change stops making new copies; it does not guess that
+  unrelated retained records are disposable or delete them automatically.
+- Recovery cannot light an unplugged monitor or prove visibility when Windows
+  cannot supply reliable connection/identity information. Such cases stay pending.
+- Sequential temporary rotation and actual fullscreen/HDR driver behavior require
+  native acceptance; portable results cannot establish those OS properties.
+- The singleton guarantee covers the updated helper engines. Existing older
+  processes are detected, but an incompatible old helper independently launched
+  after that inventory is outside this version's cross-process contract.
+- The existing recovery task runs at user logon, not before Windows presents its
+  login screen. Temporary profile preservation is the primary reboot protection;
+  do not claim a new boot-time recovery service was implemented.
+- The libdisplaydevice checkout already contained user changes when work began.
+  This patch builds on them. Its local submodule edits must be included when
+  integrating/releasing the host; a parent-only diff/commit cannot carry them.
+  The preexisting libvirtualdisplay revision difference was preserved.
+- Validation did not involve a release, driver installation or remote Windows change.

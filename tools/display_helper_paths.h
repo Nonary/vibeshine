@@ -36,14 +36,18 @@ namespace display_helper_paths {
   }
 
   inline bool ensure_single_instance(HANDLE &out_handle) {
+    // Display mutations must have one owner across service and interactive
+    // sessions. A Local fallback is a different object in each session and
+    // could bypass a host's global recovery fence.
+    SetLastError(ERROR_SUCCESS);
     out_handle = make_named_mutex(L"Global\\SunshineDisplayHelper");
-    if (!out_handle && GetLastError() == ERROR_ACCESS_DENIED) {
-      out_handle = make_named_mutex(L"Local\\SunshineDisplayHelper");
-    }
     if (!out_handle) {
-      return true;  // continue; best-effort singleton failed
+      return false;
     }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
+      CloseHandle(out_handle);
+      out_handle = nullptr;
+      SetLastError(ERROR_ALREADY_EXISTS);
       return false;  // another instance running
     }
     return true;
@@ -133,6 +137,33 @@ namespace display_helper_paths {
       .session_previous = root / L"display_session_previous.json",
       .vibeshine_state = root / L"vibeshine_state.json",
     };
+  }
+
+  /// Current is a pending-recovery marker, so bind to its original file.
+  /// Copying it would leave a second marker that a later startup replays after
+  /// the active copy has been successfully restored and retired.
+  inline std::filesystem::path select_current_snapshot_path(
+    const std::filesystem::path &active_current,
+    const std::vector<std::filesystem::path> &search_roots) {
+    const auto may_exist = [](const std::filesystem::path &path) {
+      std::error_code error;
+      return path.empty() || std::filesystem::exists(path, error) || error;
+    };
+    // An unreadable/corrupt active record stays authoritative; never select
+    // an older root based on which snapshot happens to parse successfully.
+    if (may_exist(active_current)) {
+      return active_current;
+    }
+    for (const auto &root : search_roots) {
+      if (root.empty()) {
+        continue;
+      }
+      const auto candidate = make_snapshot_paths(root).session_current;
+      if (may_exist(candidate)) {
+        return candidate;
+      }
+    }
+    return active_current;
   }
 
   inline std::vector<std::filesystem::path> executable_config_search_roots() {
