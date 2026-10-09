@@ -520,6 +520,11 @@ sunshine_register_component(NAME test_component_state_storage TEST_SOURCE unit/t
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/state_storage_policy.cpp"
     LINK_LIBRARIES Boost::property_tree)
 sunshine_register_component(NAME test_component_virtual_display_scale TEST_SOURCE unit/test_virtual_display_scale.cpp)
+sunshine_register_component(NAME test_component_color_profile_policy TEST_SOURCE unit/test_color_profile_policy.cpp)
+sunshine_register_component(NAME test_component_legacy_restore_event_policy TEST_SOURCE unit/test_legacy_restore_event_policy.cpp)
+sunshine_register_component(NAME test_component_recovery_status_policy TEST_SOURCE unit/test_recovery_status_policy.cpp)
+sunshine_register_component(NAME test_component_wake_recovery_cleanup_policy
+    TEST_SOURCE unit/platform/windows/test_wake_recovery_cleanup_policy.cpp)
 sunshine_register_component(NAME test_component_http_auth TEST_SOURCE unit/test_http_auth.cpp
     EXTRA_TEST_SOURCES "${CMAKE_CURRENT_LIST_DIR}/unit/test_confighttp.cpp"
     PRODUCT_SOURCES
@@ -592,7 +597,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     sunshine_register_component(NAME test_component_linux_kmsgrab_selection TEST_SOURCE unit/platform/linux/test_kmsgrab_selection.cpp
         LINK_LIBRARIES sunshine_libvirtualdisplay_uapi)
     sunshine_register_component(NAME test_component_linux_kmsgrab_framebuffer TEST_SOURCE unit/platform/linux/test_kmsgrab_framebuffer.cpp)
-    sunshine_register_component(NAME test_component_linux_private_display_cleanup_policy TEST_SOURCE unit/platform/linux/test_private_display_cleanup_policy.cpp)
+    sunshine_register_component(NAME test_component_linux_private_display_cleanup_policy TEST_SOURCE unit/platform/linux/test_private_display_cleanup_policy.cpp
+        LINK_LIBRARIES nlohmann_json::nlohmann_json)
+    sunshine_register_component(NAME test_component_linux_private_display_recovery_policy TEST_SOURCE unit/platform/linux/test_private_display_recovery_policy.cpp)
     sunshine_register_component(NAME test_component_linux_display_restore_dispatcher TEST_SOURCE unit/platform/linux/test_display_restore_dispatcher.cpp
         LINK_LIBRARIES Threads::Threads)
     sunshine_register_component(NAME test_component_linux_render_device TEST_SOURCE unit/platform/linux/test_render_device.cpp)
@@ -634,6 +641,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(test_component_linux_steamos_replace_sunshine PROPERTIES LABELS "component")
     find_program(SUNSHINE_TEST_PYTHON_EXECUTABLE NAMES python3)
     if(SUNSHINE_TEST_PYTHON_EXECUTABLE)
+        add_test(NAME test_component_display_capture_admission
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_capture_admission.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_display_capture_admission PROPERTIES LABELS "component")
         add_test(NAME test_component_display_restore_task
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_restore_task.py" "${CMAKE_CXX_COMPILER}")
@@ -643,6 +655,39 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_helper_recovery.py"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}" --compiler "${CMAKE_CXX_COMPILER}")
         set_tests_properties(test_component_display_helper_recovery PROPERTIES LABELS "component")
+        add_test(NAME test_component_recovery_status_integration
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_recovery_status_integration.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}")
+        set_tests_properties(test_component_recovery_status_integration PROPERTIES LABELS "component")
+        add_test(NAME test_component_recovery_status_liveness
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_recovery_status_liveness.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_recovery_status_liveness PROPERTIES LABELS "component")
+        add_test(NAME test_component_recovery_event_notifications
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_recovery_event_notifications.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_recovery_event_notifications PROPERTIES LABELS "component")
+        if(WAYLAND_FOUND)
+            add_test(NAME test_component_linux_display_event_observer
+                COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                    "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_display_event_observer.py"
+                    "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_BINARY_DIR}/generated-src"
+                    "${CMAKE_C_COMPILER}" "${CMAKE_CXX_COMPILER}")
+            set_tests_properties(test_component_linux_display_event_observer PROPERTIES LABELS "component")
+        endif()
+        add_test(NAME test_component_wake_recovery_observer
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_wake_recovery_observer.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_wake_recovery_observer PROPERTIES LABELS "component")
+        add_test(NAME test_component_recovery_status_ipc
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_recovery_status_ipc.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_recovery_status_ipc PROPERTIES LABELS "component")
         add_test(NAME test_component_linux_global_limiter
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_global_limiter.py")
@@ -707,7 +752,6 @@ sunshine_register_component(NAME test_component_video_colorspace TEST_SOURCE uni
     INCLUDE_DIRECTORIES ${FFMPEG_INCLUDE_DIRS}
     LINK_LIBRARIES Boost::log Boost::asio Boost::crc Boost::format Boost::process ZLIB::ZLIB ${FFMPEG_LIBRARIES}
                    ${SUNSHINE_TEST_FFMPEG_PLATFORM_LIBRARIES} ${SUNSHINE_TEST_SOCKET_LIBRARIES})
-sunshine_register_component(NAME test_component_capture_color_state TEST_SOURCE unit/test_capture_color_state.cpp)
 sunshine_register_component(NAME test_component_wgc_monitor_selection TEST_SOURCE unit/test_wgc_monitor_selection.cpp)
 if(SUNSHINE_TEST_ENABLE_COMPONENT AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     find_program(SUNSHINE_TEST_WGC_PYTHON_EXECUTABLE NAMES python3)
@@ -1035,6 +1079,12 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(regression_playnite_connector_lifecycle PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME regression_windows_color_profile
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_windows_color_profile.py")
+    add_test(NAME regression_display_policy_adapter
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_policy_adapter.py")
+    add_test(NAME regression_virtual_display_refresh
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_virtual_display_refresh.py")
     add_test(NAME regression_playnite_close_grace
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_close_grace.py")
     add_test(NAME regression_playnite_plugin_upgrade
@@ -1043,7 +1093,42 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+find_program(SUNSHINE_TEST_POWERSHELL NAMES pwsh powershell)
+if(SUNSHINE_TEST_POWERSHELL)
+    add_test(NAME regression_windows_usbip_package
+        COMMAND "${SUNSHINE_TEST_POWERSHELL}" -NoLogo -NonInteractive -NoProfile
+            -File "${SUNSHINE_TEST_REPOSITORY_ROOT}/packaging/windows/usbip_transport/tests/test_package_contract.ps1")
+    set_tests_properties(regression_windows_usbip_package PROPERTIES LABELS "component")
+endif()
+
 sunshine_register_component(NAME test_component_dualsense_audio_pcm TEST_SOURCE unit/test_dualsense_audio_pcm.cpp)
+sunshine_register_component(NAME test_component_dualsense_launch_policy TEST_SOURCE unit/test_dualsense_launch_policy.cpp)
+set(_dualsense_protocol_test_adapter "")
+if(NOT WIN32)
+    # Only the public GUID/IOCTL declarations are needed for the portable Sony
+    # encoder. The production Windows targets use real Windows SDK headers.
+    set(_dualsense_protocol_test_adapter "${CMAKE_CURRENT_LIST_DIR}/support/virtual_gamepad_protocol")
+endif()
+sunshine_register_component(NAME test_component_dualsense_usbip_gamepad_policy TEST_SOURCE unit/platform/windows/test_dualsense_usbip_gamepad_policy.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libvirtualgamepad/driver/src/dualsense.cpp"
+    INCLUDE_DIRECTORIES ${_dualsense_protocol_test_adapter}
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libvirtualgamepad/include")
+sunshine_register_component(NAME test_component_dualsense_usbip_gamepad TEST_SOURCE unit/platform/windows/test_dualsense_usbip_gamepad.cpp
+    PRODUCT_SOURCES
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/dualsense_usbip_gamepad.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/vhf_gamepad_policy.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libvirtualgamepad/driver/src/dualsense.cpp"
+    INCLUDE_DIRECTORIES ${_dualsense_protocol_test_adapter}
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libvirtualgamepad/include"
+    LINK_LIBRARIES Boost::log Boost::process sunshine_test_moonlight_headers Threads::Threads)
+if(TARGET test_component_dualsense_usbip_gamepad)
+    set_tests_properties(test_component_dualsense_usbip_gamepad PROPERTIES TIMEOUT 30)
+endif()
+unset(_dualsense_protocol_test_adapter)
+sunshine_add_test_target(NAME test_component_dualsense_usbip_protocol CATEGORY component
+    TEST_SOURCES "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_dualsense_usbip_protocol.cpp"
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/dualsense_usbip_protocol.cpp"
+    INCLUDE_DIRECTORIES "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libvirtualgamepad/include")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET libinputtino)
     add_executable(test_ds5_haptics unit/platform/linux/test_ds5_haptics.cpp)

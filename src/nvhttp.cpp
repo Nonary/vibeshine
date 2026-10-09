@@ -202,6 +202,11 @@ namespace nvhttp {
     forget_remote_owner(client_uuid, remote_session::role_e::monitor, generation);
   }
 
+  bool has_remote_role_owner() {
+    std::lock_guard lock {remote_role_owners_mutex};
+    return !remote_role_owners.empty();
+  }
+
   void reconcile_remote_monitor_owners() {
     std::vector<remote_role_owner_t> monitors;
     {
@@ -370,6 +375,19 @@ namespace nvhttp {
           return VDISPLAY::removeVirtualDisplay(guid);
         },
         .client_identity_capacity = [] { return static_cast<std::size_t>(config::video.virtual_display_max_clients); },
+        .terminate_owned_display = [](const std::string &client_uuid) {
+          const auto stable_uuid = VDISPLAY::virtualDisplayUuidFromStableId(client_uuid);
+          GUID guid {};
+          std::memcpy(&guid, stable_uuid.b8, sizeof(guid));
+          // This native removal cancels recovery for this exact screen. It
+          // neither depends on restoring the desktop nor removes peer screens.
+          const bool removed = VDISPLAY::removeVirtualDisplay(guid);
+          if (!removed) {
+            BOOST_LOG(error) << "Remote Monitor: terminal screen removal failed for client '" << client_uuid
+                             << "'; ownership retained for retry.";
+          }
+          return removed;
+        },
       });
       remote_display_topology::instance().set_plaintext_rtsp_warning_provider([](const std::string &) {
         return rtsp_stream::plaintext_route_warning();
@@ -390,7 +408,13 @@ namespace nvhttp {
           return remote_session::monitor_runtime_state_t {.accepted = state.accepted, .ready = state.ready, .retryable = state.retryable, .output = state.output, .error = state.error};
         },
         .explicit_release = [](std::string_view uuid, std::uint64_t generation, std::string_view reason) {
-          return remote_display_topology::instance().explicit_release(std::string {uuid}, generation, std::string {reason});
+          const bool released = remote_display_topology::instance().explicit_release(std::string {uuid}, generation, std::string {reason});
+          if (!released) {
+            BOOST_LOG(warning) << "Remote Monitor: release incomplete for client '" << uuid
+                               << "' (generation=" << generation << ", reason=" << reason
+                               << "); ownership retained for retry.";
+          }
+          return released;
         },
         .transport_lost = [](std::string_view uuid, std::uint64_t generation) {
           remote_display_topology::instance().transport_lost(std::string {uuid}, generation);
@@ -1031,6 +1055,9 @@ namespace nvhttp {
       launch_session.framegen_refresh_millihz = framegen_policy.framegen_refresh_millihz;
       launch_session.framegen_refresh_multiplier = framegen_policy.refresh_multiplier;
       launch_session.framegen_fixed_refresh = framegen_policy.fixed_refresh;
+      if (uses_virtual_display) {
+        display_helper_integration::helpers::resolve_virtual_display_refresh(config::video, launch_session);
+      }
     }
 
     VDISPLAY::VirtualDisplayRecoveryParams make_rtsp_virtual_display_recovery_params(
@@ -3104,15 +3131,6 @@ namespace nvhttp {
     auto prepend_iv_p = (uint8_t *) &prepend_iv;
     std::copy(prepend_iv_p, prepend_iv_p + sizeof(prepend_iv), std::begin(launch_session->iv));
 
-#ifdef _WIN32
-    {
-      // Default the capture gate to "proceed"; launch/resume replace it when an
-      // APPLY is dispatched so capture can wait for the helper's verification.
-      std::promise<rtsp_stream::launch_session_t::display_helper_gate_status_e> gate_promise;
-      gate_promise.set_value(rtsp_stream::launch_session_t::display_helper_gate_status_e::proceed);
-      launch_session->display_helper_gate = gate_promise.get_future().share();
-    }
-#endif
     return launch_session;
   }
 
@@ -4656,55 +4674,35 @@ namespace nvhttp {
       revert_display_configuration = true;
 
 #ifdef _WIN32
-      const bool helper_session_available = display_helper_session_available();
       (void) display_helper_integration::disarm_pending_restore(
         display_startup_cancelled,
         display_startup_deadline
       );
       auto request = display_helper_integration::helpers::build_request_from_session(config::video, *launch_session);
       if (!request) {
-        BOOST_LOG(warning) << "Display helper: failed to build display configuration request; continuing with existing display.";
+        if (launch_session->virtual_display) {
+          tree.put("root.<xmlattr>.status_code", 503);
+          tree.put("root.<xmlattr>.status_message", "The virtual display is not ready for stream startup.");
+          tree.put("root.gamesession", 0);
+          return;
+        }
+        BOOST_LOG(warning) << "Display helper: no display configuration request; using the existing display.";
       }
 
       if (request) {
-        display_helper_integration::ApplyVerificationTicket verification_ticket;
+        // Complete display setup before encoder probing and RTSP admission.
         const bool applied = display_helper_integration::apply(
           *request,
-          &verification_ticket,
+          nullptr,
           display_startup_cancelled,
           display_helper_integration::ApplyRetryPolicy::StreamStart,
           display_startup_deadline);
         launch_session->display_config_preapplied = applied;
         if (!applied) {
-          if (helper_session_available) {
-            BOOST_LOG(warning) << "Display helper: failed to apply display configuration; continuing with existing display.";
-          }
-        } else {
-          // Soft gate: capture start waits (bounded) for the helper's apply
-          // verification; failures/timeouts log and proceed.
-          auto gate_promise = std::make_shared<std::promise<rtsp_stream::launch_session_t::display_helper_gate_status_e>>();
-          launch_session->display_helper_gate = gate_promise->get_future().share();
-          BOOST_LOG(debug) << "Display helper: gating capture start on helper verification (non-blocking session start).";
-
-          std::thread([gate_promise, verification_ticket]() {
-            const auto status = display_helper_integration::wait_for_apply_verification(
-              verification_ticket,
-              display_helper_integration::kStreamStartApplyVerificationTimeout);
-            rtsp_stream::launch_session_t::display_helper_gate_status_e gate_status =
-              rtsp_stream::launch_session_t::display_helper_gate_status_e::proceed_gaveup;
-
-            if (status == display_helper_integration::ApplyVerificationStatus::Verified) {
-              gate_status = rtsp_stream::launch_session_t::display_helper_gate_status_e::proceed;
-            } else if (status == display_helper_integration::ApplyVerificationStatus::Failed) {
-              gate_status = rtsp_stream::launch_session_t::display_helper_gate_status_e::abort_failed;
-            }
-
-            try {
-              gate_promise->set_value(gate_status);
-            } catch (...) {
-              // best-effort: ignore double-satisfaction
-            }
-          }).detach();
+          tree.put("root.<xmlattr>.status_code", 503);
+          tree.put("root.<xmlattr>.status_message", "Display setup did not complete before stream startup.");
+          tree.put("root.gamesession", 0);
+          return;
         }
       }
 
@@ -5244,52 +5242,34 @@ namespace nvhttp {
         revert_display_configuration = allow_session_display_changes || launch_session->virtual_display_failed;
 
 #ifdef _WIN32
-        const bool helper_session_available = display_helper_session_available();
         (void) display_helper_integration::disarm_pending_restore(
           display_startup_cancelled,
           display_startup_deadline
         );
         auto request = display_helper_integration::helpers::build_request_from_session(config::video, *launch_session);
         if (!request) {
-          BOOST_LOG(warning) << "Display helper: failed to build display configuration request; continuing with existing display.";
+          if (launch_session->virtual_display) {
+            tree.put("root.<xmlattr>.status_code", 503);
+            tree.put("root.<xmlattr>.status_message", "The virtual display is not ready for stream startup.");
+            tree.put("root.resume", 0);
+            return;
+          }
+          BOOST_LOG(warning) << "Display helper: no display configuration request; using the existing display.";
         }
 
         if (request) {
-          display_helper_integration::ApplyVerificationTicket verification_ticket;
+          // Complete display setup before encoder probing and RTSP admission.
           const bool applied = display_helper_integration::apply(
             *request,
-            &verification_ticket,
+            nullptr,
             display_startup_cancelled,
             display_helper_integration::ApplyRetryPolicy::StreamStart,
             display_startup_deadline);
           if (!applied) {
-            if (helper_session_available) {
-              BOOST_LOG(warning) << "Display helper: failed to apply display configuration; continuing with existing display.";
-            }
-          } else {
-            auto gate_promise = std::make_shared<std::promise<rtsp_stream::launch_session_t::display_helper_gate_status_e>>();
-            launch_session->display_helper_gate = gate_promise->get_future().share();
-            BOOST_LOG(debug) << "Display helper: gating capture start on helper verification (non-blocking session resume).";
-
-            std::thread([gate_promise, verification_ticket]() {
-              const auto status = display_helper_integration::wait_for_apply_verification(
-                verification_ticket,
-                display_helper_integration::kStreamStartApplyVerificationTimeout);
-              rtsp_stream::launch_session_t::display_helper_gate_status_e gate_status =
-                rtsp_stream::launch_session_t::display_helper_gate_status_e::proceed_gaveup;
-
-              if (status == display_helper_integration::ApplyVerificationStatus::Verified) {
-                gate_status = rtsp_stream::launch_session_t::display_helper_gate_status_e::proceed;
-              } else if (status == display_helper_integration::ApplyVerificationStatus::Failed) {
-                gate_status = rtsp_stream::launch_session_t::display_helper_gate_status_e::abort_failed;
-              }
-
-              try {
-                gate_promise->set_value(gate_status);
-              } catch (...) {
-                // best-effort: ignore double-satisfaction
-              }
-            }).detach();
+            tree.put("root.<xmlattr>.status_code", 503);
+            tree.put("root.<xmlattr>.status_message", "Display setup did not complete before stream startup.");
+            tree.put("root.resume", 0);
+            return;
           }
         }
 

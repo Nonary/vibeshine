@@ -112,6 +112,16 @@ else()
         set_target_properties(vibeshine_display_power PROPERTIES OUTPUT_NAME "vibeshine-display-power")
         target_include_directories(vibeshine_display_power PRIVATE ${GIO_INCLUDE_DIRS})
         target_link_libraries(vibeshine_display_power PRIVATE ${GIO_LIBRARIES})
+        if(WAYLAND_FOUND)
+            add_executable(vibeshine_display_observer
+                    "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-display-observer.c"
+                    "${CMAKE_BINARY_DIR}/generated-src/dpms.c")
+            set_target_properties(vibeshine_display_observer PROPERTIES OUTPUT_NAME "vibeshine-display-observer")
+            target_include_directories(vibeshine_display_observer PRIVATE
+                    "${CMAKE_BINARY_DIR}/generated-src" ${WAYLAND_INCLUDE_DIRS})
+            target_link_libraries(vibeshine_display_observer PRIVATE ${WAYLAND_LIBRARIES})
+            target_compile_definitions(vibeshine_session_broker PRIVATE VIBESHINE_HAVE_WAYLAND_OBSERVER=1)
+        endif()
         add_executable(vibeshine_app_supervisor
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-app-supervisor.c")
         set_target_properties(vibeshine_app_supervisor PROPERTIES OUTPUT_NAME "vibeshine-app-supervisor")
@@ -182,6 +192,10 @@ else()
                 vibeshine_profile_import vibeshine_kwin_session_environment
                 vibeshine_provider_scan vibeshine_steam_launch vibeshine_display_power vibeshine_app_focus
                 RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
+        if(TARGET vibeshine_display_observer)
+            install(TARGETS vibeshine_display_observer
+                    RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
+        endif()
         install(TARGETS vibeshine_session_broker
                 RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}"
                 PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
@@ -321,6 +335,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-kwin-session-environment"
             "%attr(0750,root,vibeshine) %caps(cap_sys_admin,cap_sys_nice+p) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-host"
     )
+    if(TARGET vibeshine_display_observer)
+        list(APPEND CPACK_RPM_USER_FILELIST
+                "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-display-observer")
+    endif()
 endif()
 
 # FreeBSD post install/deinstall scripts

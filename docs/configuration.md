@@ -432,6 +432,19 @@ editing the `conf` file in a text editor. Use the examples as reference.
             lightbar, the player and microphone LEDs, and the adaptive triggers.}</td>
     </tr>
     <tr>
+        <td>usbip_ds5</td>
+        <td>Wired USB DualSense with a Windows controller audio endpoint for waveform haptics
+            @note{This option applies to Windows only and requires the optional
+            DualSense USB audio and haptics installer component. It uses the
+            Microsoft-signed usbip-win2 transport to expose a composite USB DualSense
+            with HID and audio interfaces. Compatible native games can send waveform
+            haptics through a Moonlight client implementing the waveform extension.
+            The physical client connection does not change this wired USB identity.
+            This selection reports an error when the transport
+            is unavailable. See [Windows DualSense waveform haptics](windows-dualsense-haptics.md)
+            for setup and validation.}</td>
+    </tr>
+    <tr>
         <td>x360</td>
         <td>Xbox 360 controller
             @note{This option applies to Windows only.}</td>
@@ -3246,7 +3259,7 @@ are detected during the stream. The host log reports hook readiness or failure.
         <td colspan="2">
             Controls how fast the virtual display refreshes, which decides how soon each game frame is captured. Windows only hands Vibeshine a new frame when it redraws the display, so on a display that refreshes at the stream rate a frame that finishes just after a redraw waits up to a whole refresh before capture, and frames reach the client unevenly. A faster virtual display captures each frame closer to when the game drew it. None of the modes change the stream FPS or bandwidth, and all but @code{}disabled@endcode cap games to the stream rate.
             <br>
-            @code{}vrr@endcode holds the virtual display at a fixed 1000 Hz whatever the stream rate, so every frame is captured within 1 ms of being drawn and its RTP timestamp carries accurate game timing for clients with VRR pacing. @code{}enabled@endcode keeps the display at 4x the stream rate (within ~2 ms at 120 FPS) and captures at most 2x the stream rate on the desktop. @code{}legacy@endcode uses a fixed 2x refresh, as older versions did. @code{}disabled@endcode leaves the display at the stream rate and turns off the matching game cap. Existing boolean values remain compatible: true maps to enabled and false maps to disabled.
+            @code{}vrr@endcode requests a fixed 1000 Hz virtual display whatever the stream rate, reducing the delay between game presentation and capture for clients with VRR pacing. On Windows 10 and Windows 11 before 24H2, refresh is capped at the maximum allowed by the OS's 1 MHz horizontal scan-frequency limit for the selected resolution (about 462.962 Hz at 3840x2160). Manual refresh settings and matching FPS-to-refresh mappings take precedence over the automatic capture policy, subject to this OS limit; mapping rules match the requested stream FPS. @code{}enabled@endcode keeps the display at 4x the stream rate and captures at most 2x the stream rate on the desktop. @code{}legacy@endcode uses a fixed 2x refresh, as older versions did. @code{}disabled@endcode leaves the display at the stream rate and turns off the matching game cap. Existing boolean values remain compatible: true maps to enabled and false maps to disabled.
         </td>
     </tr>
     <tr>

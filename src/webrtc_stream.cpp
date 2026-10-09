@@ -289,6 +289,9 @@ namespace webrtc_stream {
         session->framegen_refresh_millihz = framegen_policy.framegen_refresh_millihz;
         session->framegen_refresh_multiplier = framegen_policy.refresh_multiplier;
         session->framegen_fixed_refresh = framegen_policy.fixed_refresh;
+        if (uses_virtual_display) {
+          display_helper_integration::helpers::resolve_virtual_display_refresh(config::video, *session);
+        }
       };
       BOOST_LOG(debug) << "Display helper: WebRTC session prep client='" << session->client_name
                        << "' allow_display_changes=" << allow_display_changes
@@ -3301,25 +3304,14 @@ namespace webrtc_stream {
                            << " for client '" << launch_session->client_name << "'.";
           (void) display_helper_integration::disarm_pending_restore();
           auto request = display_helper_integration::helpers::build_request_from_session(config::video, *launch_session);
-          bool applied = false;
-          display_helper_integration::ApplyVerificationTicket verification_ticket;
           if (!request) {
-            BOOST_LOG(warning) << "Display helper: failed to build display configuration request; continuing with existing display.";
-          } else if (!(applied = display_helper_integration::apply(*request, &verification_ticket))) {
-            BOOST_LOG(warning) << "Display helper: failed to apply display configuration; continuing with existing display.";
-          }
-
-          if (applied) {
-            // Soft gate: wait (bounded) for the helper's apply verification before
-            // probing encoders so the first capture isn't grabbed mid-modeset.
-            const auto verification_status =
-              display_helper_integration::wait_for_apply_verification(
-                verification_ticket,
-                display_helper_integration::kApplyVerificationTimeout);
-            if (verification_status != display_helper_integration::ApplyVerificationStatus::Verified) {
-              BOOST_LOG(warning)
-                << "Display helper validation did not confirm the WebRTC target; continuing with GPU capability probing.";
+            if (launch_session->virtual_display) {
+              return std::string {"The virtual display is not ready for stream startup."};
             }
+            BOOST_LOG(warning) << "Display helper: no display configuration request; using the existing display.";
+          } else if (!display_helper_integration::apply(
+                       *request, nullptr, {}, display_helper_integration::ApplyRetryPolicy::StreamStart)) {
+            return std::string {"Display setup did not complete before stream startup."};
           }
         }
 #elif defined(__linux__)
