@@ -182,13 +182,15 @@ namespace platf::virtual_display_cleanup {
   cleanup_result_t run(
     std::string_view reason, bool enforce_db_restore, revert_order_t order,
     bool prefer_golden, std::optional<guid_bytes_t> guid,
-    recovery_monitor_policy_t recovery_policy, cleanup_admission_policy_t admission
+    recovery_monitor_policy_t recovery_policy, cleanup_admission_policy_t admission,
+    bool allow_disabled_recovery
   ) {
     assert(reason == "test_idle");
     assert(!enforce_db_restore && prefer_golden);
     assert(order == revert_order_t::remove_before_restore);
     assert(recovery_policy == recovery_monitor_policy_t::disengage_before_admission);
     assert(admission == cleanup_admission_policy_t::respect_managed_owners);
+    assert(!allow_disabled_recovery);
     assert(remote_display_topology::instance().managed_client_identity_count() == 0);
     assert(remote_display_topology::instance().generic_virtual_display_cleanup_allowed());
     assert(fake::cancelled_all == 1);

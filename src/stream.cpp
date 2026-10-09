@@ -582,6 +582,10 @@ namespace stream {
   struct session_t {
     std::shared_ptr<void> display_power_guard;
     std::shared_ptr<void> normal_display_capture;
+#ifdef __linux__
+    std::string normal_display_owner;
+    std::uint64_t normal_display_token {};
+#endif
     config_t config;
     int stream_fps = 0;
     std::uint32_t client_display_refresh_millihz = 0;
@@ -2977,6 +2981,9 @@ namespace stream {
 
   namespace session {
     std::atomic_uint running_sessions;
+#ifdef __linux__
+    std::atomic_uint running_game_sessions;
+#endif
     std::atomic_uint frame_limiter_sessions;
     std::atomic_uint teardown_sessions;
     std::atomic_uint cleanup_reservations;
@@ -3137,7 +3144,13 @@ namespace stream {
       }
 #endif
 
-      if (capture_runtime_owned || topology.managed_client_identity_count() != 0) {
+      if (capture_runtime_owned ||
+#ifdef __linux__
+          topology.has_idle_display_cleanup_owner()
+#else
+          topology.managed_client_identity_count() != 0
+#endif
+      ) {
         return false;
       }
 
@@ -3385,6 +3398,11 @@ namespace stream {
       [[maybe_unused]] const bool last_frame_limiter_session =
         !session.secondary_game_client && --frame_limiter_sessions == 0;
       const bool last_rtsp_session = --running_sessions == 0;
+#ifdef __linux__
+      if (session.remote_role == remote_session::role_e::game && --running_game_sessions == 0) {
+        webrtc_stream::clear_rtsp_capture_source();
+      }
+#endif
       host_stats::rtsp_session_ended();
       bool finalized_shared_runtime = false;
 #ifdef _WIN32
@@ -3534,14 +3552,29 @@ namespace stream {
 
       // If this is the first session, invoke the platform callbacks
       const bool first_rtsp_session = ++running_sessions == 1;
+#ifdef __linux__
+      const bool first_game_session = session.remote_role == remote_session::role_e::game && ++running_game_sessions == 1;
+      if (first_game_session) {
+        if (webrtc_stream::has_active_or_pending_sessions()) {
+          webrtc_stream::set_rtsp_capture_owner(session.normal_display_owner, session.normal_display_token);
+        } else {
+          webrtc_stream::set_rtsp_capture_config(
+            session.config.monitor, session.config.audio,
+            session.normal_display_owner, session.normal_display_token
+          );
+        }
+      }
+#endif
       const bool first_frame_limiter_session =
         !session.secondary_game_client && ++frame_limiter_sessions == 1;
       host_stats::rtsp_session_started();
       if (first_rtsp_session || first_frame_limiter_session) {
         if (first_rtsp_session) {
+#ifndef __linux__
           if (!webrtc_stream::has_active_or_pending_sessions()) {
             webrtc_stream::set_rtsp_capture_config(session.config.monitor, session.config.audio);
           }
+#endif
           webrtc_stream::set_rtsp_sessions_active(true);
         }
 #if defined(_WIN32) || defined(__linux__)
@@ -3692,9 +3725,17 @@ namespace stream {
 #if defined(_WIN32) || defined(__linux__)
       if (launch_session.role == remote_session::role_e::game) {
         const auto app = proc::proc.active_session_guard();
+        const bool uses_app_display =
+#ifdef __linux__
+          launch_session.virtual_display &&
+          launch_session.virtual_display_mode_override.value_or(config::video.virtual_display_mode) !=
+            config::video_t::virtual_display_mode_e::shared;
+#else
+          true;
+#endif
         const auto token = launch_session.normal_vdd_identity_token != 0 ?
                              launch_session.normal_vdd_identity_token :
-                             app.normal_vdd_identity_token;
+                             (uses_app_display ? app.normal_vdd_identity_token : 0);
         const auto owner = launch_session.normal_vdd_identity_token != 0 ?
                              (launch_session.normal_vdd_owner_uuid.empty() ? session->device_uuid : launch_session.normal_vdd_owner_uuid) :
                              app.client_uuid;
@@ -3703,6 +3744,10 @@ namespace stream {
           if (!session->normal_display_capture) {
             throw std::runtime_error("The app's display ownership ended before capture could start");
           }
+#ifdef __linux__
+          session->normal_display_owner = owner;
+          session->normal_display_token = token;
+#endif
         } else if (remote_display_topology::instance().normal_game_release_pending()) {
           throw std::runtime_error("The previous app's display is still being released");
         }

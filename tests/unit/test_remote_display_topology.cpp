@@ -5,9 +5,12 @@
 #include <atomic>
 #include <future>
 #include <mutex>
+#include <map>
+#include <set>
 
 #include "src/remote_display_topology.h"
 #include "src/platform/linux/private_display_resume_policy.h"
+#include "src/platform/linux/private_display_live_profile.h"
 #include "src/platform/linux/private_display_capacity.h"
 #include "src/platform/linux/private_display_cleanup_policy.h"
 
@@ -1192,11 +1195,14 @@ TEST(RemoteDisplayTopology, PausedGameRemainsLiveWithoutTransportOrCaptureRefere
   });
   const auto app = coordinator.reserve_normal_game_identity("paused", "Paused", {});
   coordinator.release_idle_normal_game_identities(true, false);
-  coordinator.complete_restored_normal_game_cleanup();
+  coordinator.complete_restored_normal_game_cleanup(true);
   EXPECT_EQ(applies, 0);
   EXPECT_EQ(coordinator.managed_client_identity_count(), 1u);
   EXPECT_TRUE(coordinator.has_live_managed_client_identity());
   EXPECT_FALSE(coordinator.normal_game_release_pending());
+  EXPECT_FALSE(coordinator.retain_normal_game_capture("paused", app.token));
+  const auto resumed = coordinator.reserve_normal_game_identity("paused", "Paused", {});
+  EXPECT_EQ(resumed.token, app.token);
   EXPECT_TRUE(coordinator.retain_normal_game_capture("paused", app.token));
 }
 
@@ -2137,4 +2143,228 @@ TEST(RemoteDisplayTopology, ExplicitManualRulePreservesIsolatedTargetWithoutAnAn
   EXPECT_EQ(placed->x, 554);
   EXPECT_EQ(placed->y, 2160);
   EXPECT_FALSE(placed->primary);
+}
+
+namespace {
+  class LinuxLiveProfile: public ::testing::Test {
+  protected:
+    remote_display_topology::coordinator_t coordinator;
+    std::map<std::string, nlohmann::json> live;
+    std::set<std::string> recreated;
+    std::vector<remote_display_topology::node_t> applied;
+    bool apply_succeeds = true;
+    bool capture_ready = true;
+
+    void set_live(const std::string &id, mode_t mode, double scale = 1.0) {
+      live[id] = {
+        {"connected", true}, {"enabled", true}, {"currentModeId", "current"},
+        {"size", {{"width", mode.width}, {"height", mode.height}}},
+        {"modes", {{{"id", "current"}, {"refreshRate", mode.refresh_hz}}}},
+        {"hdr", mode.hdr}, {"scale", scale},
+      };
+    }
+
+    void SetUp() override {
+      coordinator.set_runtime_callbacks({
+        .create_or_reclaim = [](const auto &, const auto &, const auto &) { return true; },
+        .apply_composed_topology = [&](const auto &nodes) {
+          applied = nodes;
+          if (!apply_succeeds) return false;
+          for (const auto &node : nodes) {
+            if (node.apply_requested_mode) set_live(node.id, node.configured_mode);
+          }
+          recreated.clear();
+          return true;
+        },
+        .exact_target_has_current_mode_and_dxgi = [&](const auto &id, const auto &mode) -> std::optional<std::string> {
+          if (!capture_ready || !live.contains(id)) return std::nullopt;
+          remote_display_topology::node_t observed {.apply_requested_mode = false};
+          platf::linux_private_display::live_profile::observe(observed, &live.at(id), false);
+          return observed.current_mode && *observed.current_mode == mode ? std::optional<std::string> {id} : std::nullopt;
+        },
+        .remove_owned_display = [&](const auto &id) { live.erase(id); return true; },
+        .observe_live_nodes = [&](auto &nodes) {
+          for (auto &node : nodes) {
+            const auto found = live.find(node.id);
+            platf::linux_private_display::live_profile::observe(
+              node, found == live.end() ? nullptr : &found->second, recreated.contains(node.id));
+          }
+        },
+      });
+    }
+
+    const remote_display_topology::node_t &node(const std::string &id) const {
+      return *std::find_if(applied.begin(), applied.end(), [&](const auto &value) { return value.id == id; });
+    }
+  };
+}
+
+TEST_F(LinuxLiveProfile, PeerAddAndRemovePreserveApplicationModeHdrAndScale) {
+  ASSERT_TRUE(coordinator.activate_or_resume("a", "A", {3840, 2160, 120, true}, 1).ready);
+  set_live("a", {2560, 1440, 60, false}, 2.0);
+  ASSERT_TRUE(coordinator.activate_or_resume("b", "B", {1920, 1080, 60, true}, 1).ready);
+  EXPECT_FALSE(node("a").apply_requested_mode);
+  ASSERT_TRUE(node("a").current_mode);
+  EXPECT_EQ(*node("a").current_mode, (remote_display_topology::mode_t {2560, 1440, 60, false}));
+  EXPECT_EQ(node("a").layout_width, 1280);
+  EXPECT_EQ(node("b").x, node("a").x + 1280);
+  EXPECT_TRUE(node("b").apply_requested_mode);
+  EXPECT_EQ(live.at("a")["scale"], 2.0);
+  ASSERT_TRUE(coordinator.explicit_release("b", 1, "closed"));
+  EXPECT_FALSE(node("a").apply_requested_mode);
+  EXPECT_EQ(live.at("a")["hdr"], false);
+  EXPECT_EQ(live.at("a")["size"]["width"], 2560);
+  EXPECT_EQ(live.at("a")["scale"], 2.0);
+}
+
+TEST_F(LinuxLiveProfile, FirstMonitorCompositionPreservesAlreadyRunningNormalGame) {
+  ASSERT_TRUE(coordinator.reserve_normal_game_identity("game", "Game", {3840, 2160, 120, true}).accepted);
+  set_live("game", {1920, 1080, 60, false});
+  ASSERT_TRUE(coordinator.activate_or_resume("monitor", "Monitor", {}, 1).ready);
+  EXPECT_FALSE(node("game").apply_requested_mode);
+  EXPECT_EQ(live.at("game")["size"]["width"], 1920);
+  EXPECT_EQ(live.at("game")["hdr"], false);
+}
+
+TEST_F(LinuxLiveProfile, SameProfileResumePreservesLiveModeAndVerifiesIt) {
+  const remote_display_topology::mode_t requested {3840, 2160, 120, true};
+  ASSERT_TRUE(coordinator.activate_or_resume("a", "A", requested, 1).ready);
+  set_live("a", {1920, 1080, 60, false});
+  coordinator.transport_lost("a", 1);
+  const auto resumed = coordinator.activate_or_resume("a", "A", requested, 2);
+  EXPECT_TRUE(resumed.ready);
+  EXPECT_FALSE(resumed.hdr_enabled);
+  EXPECT_FALSE(node("a").apply_requested_mode);
+  EXPECT_EQ(live.at("a")["size"]["width"], 1920);
+}
+
+TEST_F(LinuxLiveProfile, ExplicitChangedProfileAppliesWhilePeerKeepsLiveMode) {
+  ASSERT_TRUE(coordinator.activate_or_resume("a", "A", {}, 1).ready);
+  ASSERT_TRUE(coordinator.activate_or_resume("b", "B", {}, 1).ready);
+  set_live("b", {2560, 1440, 75, true}, 1.5);
+  ASSERT_TRUE(coordinator.activate_or_resume("a", "A", {3840, 2160, 120, true}, 2).ready);
+  EXPECT_TRUE(node("a").apply_requested_mode);
+  EXPECT_FALSE(node("b").apply_requested_mode);
+  EXPECT_EQ(live.at("a")["size"]["width"], 3840);
+  EXPECT_EQ(live.at("b")["size"]["width"], 2560);
+  EXPECT_EQ(live.at("b")["scale"], 1.5);
+}
+
+TEST_F(LinuxLiveProfile, FailedRequestedChangeRemainsPendingForSameProfileRetry) {
+  ASSERT_TRUE(coordinator.activate_or_resume("a", "A", {}, 1).ready);
+  apply_succeeds = false;
+  EXPECT_FALSE(coordinator.activate_or_resume("a", "A", {2560, 1440, 120, true}, 2).ready);
+  apply_succeeds = true;
+  ASSERT_TRUE(coordinator.activate_or_resume("a", "A", {2560, 1440, 120, true}, 3).ready);
+  EXPECT_TRUE(node("a").apply_requested_mode);
+  EXPECT_EQ(live.at("a")["hdr"], true);
+}
+
+TEST_F(LinuxLiveProfile, RecreatedOrDisabledOutputReceivesRequestedProfile) {
+  const remote_display_topology::mode_t requested {3840, 2160, 120, true};
+  ASSERT_TRUE(coordinator.activate_or_resume("a", "A", requested, 1).ready);
+  set_live("a", {});
+  recreated.insert("a");
+  ASSERT_TRUE(coordinator.resume_remote_monitor("a").capture_ready);
+  EXPECT_TRUE(node("a").apply_requested_mode);
+  EXPECT_EQ(live.at("a")["size"]["width"], 3840);
+  live.at("a")["enabled"] = false;
+  ASSERT_TRUE(coordinator.resume_remote_monitor("a").capture_ready);
+  EXPECT_TRUE(node("a").apply_requested_mode);
+}
+
+TEST_F(LinuxLiveProfile, NewNormalTargetRequestsOnlyItsOwnProfile) {
+  ASSERT_TRUE(coordinator.activate_or_resume("monitor", "Monitor", {}, 1).ready);
+  set_live("monitor", {2560, 1440, 75, true}, 1.5);
+  ASSERT_TRUE(coordinator.reserve_normal_game_identity("game", "Game", {3840, 2160, 120, true}).accepted);
+  set_live("game", {});
+  ASSERT_TRUE(coordinator.reapply_composed_topology("game"));
+  EXPECT_TRUE(node("game").apply_requested_mode);
+  EXPECT_FALSE(node("monitor").apply_requested_mode);
+  EXPECT_EQ(live.at("game")["size"]["width"], 3840);
+  EXPECT_EQ(live.at("monitor")["size"]["width"], 2560);
+}
+
+TEST_F(LinuxLiveProfile, MonitorReleaseRestoresSharedNormalRoleProfile) {
+  ASSERT_TRUE(coordinator.reserve_normal_game_identity("same", "Game", {2560, 1440, 120, true}).accepted);
+  set_live("same", {2560, 1440, 120, true});
+  ASSERT_TRUE(coordinator.activate_or_resume("same", "Monitor", {}, 1).ready);
+  ASSERT_TRUE(coordinator.explicit_release("same", 1, "closed"));
+  EXPECT_TRUE(node("same").apply_requested_mode);
+  EXPECT_EQ(live.at("same")["size"]["width"], 2560);
+  EXPECT_EQ(live.at("same")["hdr"], true);
+}
+
+TEST_F(LinuxLiveProfile, SuspendedNormalRoleDoesNotRecreateDuringPeerAddOrMonitorRelease) {
+  const auto game = coordinator.reserve_normal_game_identity("game", "Game", {});
+  ASSERT_TRUE(game.accepted);
+  coordinator.complete_restored_normal_game_cleanup(true);
+  ASSERT_TRUE(coordinator.activate_or_resume("peer", "Peer", {}, 1).ready);
+  EXPECT_EQ(applied.size(), 1u);
+  EXPECT_EQ(applied.front().id, "peer");
+  ASSERT_TRUE(coordinator.activate_or_resume("game", "Monitor", {}, 1).ready);
+  ASSERT_TRUE(coordinator.explicit_release("game", 1, "closed"));
+  EXPECT_EQ(applied.size(), 1u);
+  EXPECT_EQ(applied.front().id, "peer");
+  EXPECT_FALSE(live.contains("game"));
+  EXPECT_FALSE(coordinator.retain_normal_game_capture("game", game.token));
+  const auto resumed = coordinator.reserve_normal_game_identity("game", "Game", {});
+  EXPECT_EQ(resumed.token, game.token);
+  EXPECT_TRUE(coordinator.retain_normal_game_capture("game", game.token));
+}
+
+TEST_F(LinuxLiveProfile, RecreatedPeerUsesDesiredProfileAfterLiveResumeWasObserved) {
+  const remote_display_topology::mode_t requested {3840, 2160, 120, true};
+  ASSERT_TRUE(coordinator.activate_or_resume("a", "A", requested, 1).ready);
+  set_live("a", {1920, 1080, 60, false});
+  ASSERT_TRUE(coordinator.resume_remote_monitor("a").capture_ready);
+  set_live("a", {1920, 1080, 60, false});
+  recreated.insert("a");
+  ASSERT_TRUE(coordinator.activate_or_resume("b", "B", {}, 1).ready);
+  EXPECT_TRUE(node("a").apply_requested_mode);
+  EXPECT_EQ(node("a").configured_mode, requested);
+  EXPECT_EQ(live.at("a")["size"]["width"], 3840);
+  EXPECT_EQ(live.at("a")["hdr"], true);
+}
+
+TEST_F(LinuxLiveProfile, UnknownCaptureReadbackDoesNotResetHealthyPeerOnLaterActivation) {
+  const remote_display_topology::mode_t requested {3840, 2160, 120, true};
+  ASSERT_TRUE(coordinator.activate_or_resume("a", "A", requested, 1).ready);
+  set_live("a", {1920, 1080, 60, false}, 1.5);
+  capture_ready = false;
+  EXPECT_FALSE(coordinator.resume_remote_monitor("a").capture_ready);
+  EXPECT_FALSE(node("a").apply_requested_mode);
+  capture_ready = true;
+  ASSERT_TRUE(coordinator.activate_or_resume("b", "B", {}, 1).ready);
+  EXPECT_FALSE(node("a").apply_requested_mode);
+  EXPECT_EQ(live.at("a")["size"]["width"], 1920);
+  EXPECT_EQ(live.at("a")["scale"], 1.5);
+  EXPECT_FALSE(live.at("a")["hdr"]);
+  ASSERT_TRUE(coordinator.resume_remote_monitor("a").capture_ready);
+  EXPECT_FALSE(node("a").apply_requested_mode);
+}
+
+TEST(RemoteDisplayTopology, BorrowedCaptureRequiresExactLiveTokenButSurvivesOriginalTransport) {
+  remote_display_topology::coordinator_t coordinator;
+  const auto owner = coordinator.reserve_normal_game_identity("a", "A", {});
+  ASSERT_TRUE(owner.accepted);
+  EXPECT_FALSE(coordinator.retain_normal_game_capture("a", owner.token, true));
+  auto first = coordinator.retain_normal_game_capture("a", owner.token);
+  auto second = coordinator.retain_normal_game_capture("a", owner.token);
+  ASSERT_TRUE(first);
+  ASSERT_TRUE(second);
+  first.reset();
+  auto borrowed = coordinator.retain_normal_game_capture("a", owner.token, true);
+  ASSERT_TRUE(borrowed);
+  second.reset();
+  EXPECT_TRUE(coordinator.retain_normal_game_capture("a", owner.token, true));
+  borrowed.reset();
+  EXPECT_FALSE(coordinator.retain_normal_game_capture("a", owner.token, true));
+
+  const auto peer = coordinator.reserve_normal_game_identity("b", "B", {});
+  auto peer_capture = coordinator.retain_normal_game_capture("b", peer.token);
+  ASSERT_TRUE(peer_capture);
+  EXPECT_FALSE(coordinator.retain_normal_game_capture("a", owner.token, true));
+  EXPECT_FALSE(coordinator.retain_normal_game_capture("b", owner.token, true));
+  EXPECT_TRUE(coordinator.retain_normal_game_capture("b", peer.token, true));
 }

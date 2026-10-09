@@ -95,6 +95,8 @@
   #include "src/platform/linux/misc.h"
   #include "src/display_helper_integration.h"
   #include "src/platform/linux/private_display.h"
+  #include "src/platform/linux/private_display_cleanup_policy.h"
+  #include "src/platform/linux/private_display_resume_policy.h"
   #include "src/platform/linux/display_backend.h"
   #include "src/platform/linux/display_power.h"
   #include "src/platform/linux/wayland_hdr_compatibility.h"
@@ -1905,8 +1907,14 @@ namespace webrtc_stream {
       audio::config_t audio;
     };
 
+    struct RtspCaptureOwner {
+      std::string normal_display_owner;
+      std::uint64_t normal_display_token {};
+    };
+
     std::mutex rtsp_config_mutex;
     std::optional<RtspCaptureConfig> rtsp_capture_config;
+    std::optional<RtspCaptureOwner> rtsp_capture_owner;
     std::atomic_uint32_t webrtc_launch_session_id {0};
     WebRtcCaptureState webrtc_capture;
 
@@ -2230,9 +2238,15 @@ namespace webrtc_stream {
       return rtsp_capture_config;
     }
 
+    std::optional<RtspCaptureOwner> snapshot_rtsp_capture_owner() {
+      std::lock_guard<std::mutex> lock(rtsp_config_mutex);
+      return rtsp_capture_owner;
+    }
+
     void clear_rtsp_capture_config() {
       std::lock_guard<std::mutex> lock(rtsp_config_mutex);
       rtsp_capture_config.reset();
+      rtsp_capture_owner.reset();
     }
 
     void apply_rtsp_video_overrides(
@@ -3153,7 +3167,28 @@ namespace webrtc_stream {
 
       std::unique_lock<std::mutex> lock(webrtc_capture.mutex);
       const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
-      const auto rtsp_config = rtsp_active ? snapshot_rtsp_capture_config() : std::nullopt;
+#ifdef __linux__
+      const bool shares_rtsp_capture = rtsp_active &&
+                                       stream::session::running_game_sessions.load(std::memory_order_acquire) != 0;
+#else
+      const bool shares_rtsp_capture = rtsp_active;
+#endif
+      const auto rtsp_config = shares_rtsp_capture ? snapshot_rtsp_capture_config() : std::nullopt;
+#ifdef __linux__
+      std::shared_ptr<void> rtsp_normal_display_capture;
+      const auto rtsp_owner = shares_rtsp_capture ? snapshot_rtsp_capture_owner() : std::nullopt;
+      if (rtsp_owner && rtsp_owner->normal_display_token != 0) {
+        // Require a live capture of this exact source, not just a paused app
+        // or an unrelated RTSP Monitor. Another same-owner RTSP capture may
+        // survive the original settings publisher and still be shared safely.
+        rtsp_normal_display_capture = remote_display_topology::instance().retain_normal_game_capture(
+          rtsp_owner->normal_display_owner, rtsp_owner->normal_display_token, true
+        );
+        if (!rtsp_normal_display_capture) {
+          return std::string {"The RTSP display being shared has ended; disconnect its remaining sessions before starting browser capture"};
+        }
+      }
+#endif
 
       const int raw_requested_app_id = options.app_id.value_or(0);
       const auto requested_app_ctx = raw_requested_app_id > 0 ? proc::proc.resolve_app(raw_requested_app_id) : std::optional<proc::ctx_t> {};
@@ -3273,6 +3308,15 @@ namespace webrtc_stream {
       auto launch_session = build_launch_session(options, effective_app_id, audio_channels, prefer_10bit_sdr);
 
 #ifdef __linux__
+      // Resume the app's reservation even when this browser has a different
+      // (or generated) client UUID. Fresh launches retain their own identity.
+      const auto existing_app = proc::proc.active_session_guard();
+      launch_session->normal_vdd_owner_uuid =
+        platf::linux_private_display::resume_policy::reservation_owner(
+          launch_session->client_uuid,
+          effective_app_id == current_app_id ? existing_app.client_uuid : std::string {},
+          effective_app_id == current_app_id ? existing_app.normal_vdd_identity_token : 0
+        );
       // WebRTC can share capture with RTSP and then outlive it. Own a lease
       // even when that path skips private-display topology preparation.
       launch_session->display_power_guard = platf::display_power::acquire();
@@ -3292,9 +3336,21 @@ namespace webrtc_stream {
 #ifdef __linux__
       bool linux_private_display_prepared = false;
       auto linux_private_display_guard = util::fail_guard([&]() {
-        if (linux_private_display_prepared) {
-          (void) platf::linux_display::backend().revert();
+        if (linux_private_display_prepared &&
+            !remote_display_topology::instance().has_idle_display_cleanup_owner()) {
+          const auto delay = platf::linux_private_display::cleanup_policy::failed_preparation_restore_delay(
+            proc::proc.current_app_id() > 0,
+            config::video.dd.config_revert_on_disconnect,
+            config::video.dd.paused_virtual_display_timeout_secs,
+            config::video.dd.config_revert_delay
+          );
+          if (delay) {
+            platf::linux_display::backend().schedule_revert(*delay, "failed WebRTC startup");
+          }
         }
+      });
+      auto normal_vdd_identity_guard = util::fail_guard([&]() {
+        nvhttp::rollback_linux_normal_display_identity(launch_session);
       });
 #endif
 
@@ -3308,7 +3364,7 @@ namespace webrtc_stream {
 
       desired_key = build_capture_config_key(effective_app_id, video_config, options);
 
-      if (!rtsp_active) {
+      if (!shares_rtsp_capture) {
 #ifdef _WIN32
         stream::cancel_paused_display_cleanup();
 #endif
@@ -3359,7 +3415,7 @@ namespace webrtc_stream {
 #elif defined(__linux__)
         const auto prepared_display = platf::linux_display::backend().prepare_session(
           *launch_session,
-          !capture_already_active,
+          !rtsp_active && !capture_already_active,
           allow_display_changes
         );
         if (!prepared_display.output_name.empty()) {
@@ -3371,12 +3427,24 @@ namespace webrtc_stream {
         } else if (!prepared_display.error.empty()) {
           return prepared_display.error;
         }
+        const auto normal_identity = nvhttp::reserve_linux_normal_display_identity(launch_session);
+        if (normal_identity == nvhttp::linux_normal_identity_result_e::capacity_rejected) {
+          return std::string {"Virtual display client limit reached"};
+        }
+        if (normal_identity == nvhttp::linux_normal_identity_result_e::topology_failed) {
+          return std::string {"Failed to compose the Linux private streaming displays"};
+        }
         if (webrtc_capture.stream_start_params) {
           webrtc_capture.stream_start_params->uses_virtual_display = launch_session->virtual_display;
         }
         if (launch_session->virtual_display &&
-            (allow_display_changes || launch_session->virtual_display_recreated_on_demand ||
-             launch_session->virtual_display_needs_resume_apply) &&
+            normal_identity != nvhttp::linux_normal_identity_result_e::ready_composed &&
+            platf::linux_private_display::resume_policy::requires_session_apply(
+              launch_session->virtual_display,
+              allow_display_changes,
+              launch_session->normal_vdd_identity_newly_reserved,
+              launch_session->virtual_display_recreated_on_demand || launch_session->virtual_display_needs_resume_apply
+            ) &&
             !platf::linux_display::backend().apply_session(*launch_session)) {
           return std::string {"Failed to activate the Linux private streaming display."};
         }
@@ -3455,7 +3523,20 @@ namespace webrtc_stream {
       }
 
       std::shared_ptr<void> normal_display_capture;
-#if defined(_WIN32) || defined(__linux__)
+#ifdef __linux__
+      // Shared capture borrows RTSP's exact lease, including appid=0 sessions
+      // which have no process record from which to recover their owner.
+      normal_display_capture = std::move(rtsp_normal_display_capture);
+      if (!normal_display_capture && launch_session->normal_vdd_identity_token != 0) {
+        normal_display_capture = remote_display_topology::instance().retain_normal_game_capture(
+          launch_session->normal_vdd_owner_uuid,
+          launch_session->normal_vdd_identity_token
+        );
+        if (!normal_display_capture) {
+          return std::string {"The display ownership ended before capture could start"};
+        }
+      }
+#elif defined(_WIN32)
       const auto app = proc::proc.active_session_guard();
       if (app.normal_vdd_identity_token != 0) {
         normal_display_capture = remote_display_topology::instance().retain_normal_game_capture(
@@ -3482,6 +3563,7 @@ namespace webrtc_stream {
 #endif
 #ifdef __linux__
       linux_private_display_guard.disable();
+      normal_vdd_identity_guard.disable();
 #endif
       webrtc_capture.feedback_shutdown.store(false, std::memory_order_release);
       #ifdef SUNSHINE_ENABLE_WEBRTC
@@ -5639,7 +5721,11 @@ namespace webrtc_stream {
     // the same lifecycle critical section. On an early return this lock is
     // destroyed before reservation_guard invokes the cancellation path.
     std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
-    const auto rtsp_config = rtsp_sessions_active.load(std::memory_order_relaxed) ? snapshot_rtsp_capture_config() : std::nullopt;
+    const auto rtsp_config =
+#ifdef __linux__
+      stream::session::running_game_sessions.load(std::memory_order_acquire) != 0 &&
+#endif
+        rtsp_sessions_active.load(std::memory_order_relaxed) ? snapshot_rtsp_capture_config() : std::nullopt;
     Session session;
     session.state.id = uuid_util::uuid_t::generate().string();
 #ifdef SUNSHINE_ENABLE_WEBRTC
@@ -6154,9 +6240,24 @@ namespace webrtc_stream {
     }
   }
 
-  void set_rtsp_capture_config(const video::config_t &video_config, const audio::config_t &audio_config) {
+  void set_rtsp_capture_config(
+    const video::config_t &video_config,
+    const audio::config_t &audio_config,
+    std::string normal_display_owner,
+    std::uint64_t normal_display_token
+  ) {
     std::lock_guard<std::mutex> lock(rtsp_config_mutex);
     rtsp_capture_config = RtspCaptureConfig {video_config, audio_config};
+    rtsp_capture_owner = RtspCaptureOwner {std::move(normal_display_owner), normal_display_token};
+  }
+
+  void set_rtsp_capture_owner(std::string normal_display_owner, std::uint64_t normal_display_token) {
+    std::lock_guard<std::mutex> lock(rtsp_config_mutex);
+    rtsp_capture_owner = RtspCaptureOwner {std::move(normal_display_owner), normal_display_token};
+  }
+
+  void clear_rtsp_capture_source() {
+    clear_rtsp_capture_config();
   }
 
   bool set_remote_offer(std::string_view id, const std::string &sdp, const std::string &type) {

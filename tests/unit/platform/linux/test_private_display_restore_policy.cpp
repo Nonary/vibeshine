@@ -18,9 +18,11 @@ namespace {
 
   json external_desktop() {
     return {{"outputs", {
-      {{"name", "eDP-1"}, {"connected", true}, {"enabled", false}, {"rotation", 8}},
+      {{"name", "eDP-1"}, {"connected", true}, {"enabled", false}, {"rotation", 8},
+       {"currentModeId", "panel60"}, {"modes", {{{"id", "panel60"}, {"size", {{"width", 1920}, {"height", 1080}}}, {"refreshRate", 60.0}}}}},
       {{"name", "DP-1"}, {"connected", true}, {"enabled", true}, {"currentModeId", "25"},
        {"priority", 1}, {"scale", 1.5}, {"rotation", 1}, {"hdr", true},
+       {"modes", {{{"id", "25"}, {"size", {{"width", 2560}, {"height", 1440}}}, {"refreshRate", 60.0}}}},
        {"pos", {{"x", 0}, {"y", 0}}}, {"size", {{"width", 2560}, {"height", 1440}}}}
     }}};
   }
@@ -44,6 +46,75 @@ TEST(LinuxPrivateDisplayRestorePolicy, SavesDesktopBeforeHotplugCanEnablePanelAn
   ASSERT_TRUE(snapshot);
   EXPECT_EQ(*snapshot, original);
   EXPECT_NE(*snapshot, desktop);
+}
+
+TEST(LinuxPrivateDisplayRestorePolicy, KnownVrrPreferenceRequiresExactTypedReadback) {
+  for (const auto preference : {0, 1, 2}) {
+    SCOPED_TRACE(preference);
+    auto saved = external_desktop();
+    saved["outputs"][1]["vrrPolicy"] = preference;
+    auto current = saved;
+    EXPECT_TRUE(policy::snapshot_matches(saved, current));
+    EXPECT_TRUE(policy::snapshot_matches(saved, current, true));
+    for (const auto &drift : std::vector<json> {(preference + 1) % 3, nullptr, true, "automatic", 2.0, 4294967296ULL}) {
+      current["outputs"][1]["vrrPolicy"] = drift;
+      EXPECT_FALSE(policy::snapshot_matches(saved, current)) << drift;
+      EXPECT_FALSE(policy::snapshot_matches(saved, current, true)) << drift;
+    }
+    current["outputs"][1].erase("vrrPolicy");
+    EXPECT_FALSE(policy::snapshot_matches(saved, current));
+    EXPECT_FALSE(policy::snapshot_matches(saved, current, true));
+  }
+}
+
+TEST(LinuxPrivateDisplayRestorePolicy, LegacySnapshotDoesNotInventVrrPreference) {
+  const auto saved = external_desktop();
+  auto current = saved;
+  for (const auto preference : {0, 1, 2}) {
+    current["outputs"][1]["vrrPolicy"] = preference;
+    EXPECT_TRUE(policy::snapshot_matches(saved, current, true));
+  }
+  EXPECT_FALSE(platf::linux_private_display::vrr_policy::argument(saved["outputs"][1]));
+}
+
+TEST(LinuxPrivateDisplayRestorePolicy, DisabledBaselineVrrPreferenceIsVerifiedAfterDeactivation) {
+  auto saved = external_desktop();
+  saved["outputs"][0]["vrrPolicy"] = 2;
+  auto current = saved;
+  current["outputs"][0]["enabled"] = true;
+  current["outputs"][0]["vrrPolicy"] = 1;
+  EXPECT_TRUE(policy::snapshot_matches(saved, current));
+  EXPECT_FALSE(policy::snapshot_matches(saved, current, true));
+  current["outputs"][0]["enabled"] = false;
+  EXPECT_FALSE(policy::snapshot_matches(saved, current, true));
+  current["outputs"][0]["vrrPolicy"] = 2;
+  EXPECT_TRUE(policy::snapshot_matches(saved, current, true));
+  current["outputs"][0].erase("vrrPolicy");
+  EXPECT_FALSE(policy::snapshot_matches(saved, current, true));
+  current["outputs"].erase(current["outputs"].begin());
+  EXPECT_FALSE(policy::snapshot_matches(saved, current, true));
+}
+
+TEST(LinuxPrivateDisplaySnapshotPolicy, VrrPreferenceValidationMatchesKscreenIntegerEnum) {
+  namespace snapshot = platf::linux_private_display::snapshot_policy;
+  auto saved = external_desktop();
+  EXPECT_TRUE(snapshot::valid(saved));
+  const std::array<const char *, 3> spellings {"never", "always", "automatic"};
+  for (int preference = 0; preference < 3; ++preference) {
+    saved["outputs"][1]["vrrPolicy"] = preference;
+    EXPECT_TRUE(snapshot::valid(saved));
+    EXPECT_EQ(platf::linux_private_display::vrr_policy::argument(saved["outputs"][1]), spellings[preference]);
+    const json record {{"version", 1}, {"owner", "desktop"}, {"restore_pending", true}, {"topology", saved}};
+    auto decoded = snapshot::decode<json>(record.dump(), "desktop");
+    ASSERT_TRUE(decoded);
+    EXPECT_EQ((*decoded)["outputs"][1]["vrrPolicy"], preference);
+  }
+  for (const auto &invalid : std::vector<json> {-1, 3, 4294967296ULL, std::numeric_limits<uint64_t>::max(), nullptr, true, "never", 0.0, json::array(), json::object()}) {
+    saved["outputs"][1]["vrrPolicy"] = invalid;
+    EXPECT_FALSE(snapshot::valid(saved)) << invalid;
+    const json record {{"version", 1}, {"owner", "desktop"}, {"topology", saved}};
+    EXPECT_FALSE(snapshot::decode<json>(record.dump(), "desktop")) << invalid;
+  }
 }
 
 TEST(LinuxPrivateDisplayRestorePolicy, ReconnectAndSecondClientKeepFirstSnapshot) {
@@ -332,6 +403,7 @@ TEST(LinuxPrivateDisplayRestorePolicy, DifferentModeIdentifiersAcceptEquivalentK
 
 TEST(LinuxPrivateDisplayRestorePolicy, IncompleteSavedModeMetadataRequiresIdentifierAndAvailableConstraints) {
   auto snapshot = external_desktop();
+  snapshot["outputs"][1].erase("modes");
   auto current = snapshot;
   EXPECT_TRUE(policy::snapshot_matches(snapshot, current, true));
   current["outputs"][1]["currentModeId"] = "replacement";
@@ -781,19 +853,28 @@ TEST(LinuxPrivateDisplaySnapshot, RestartRestoresSavedIntentFromSerializedBaseli
   EXPECT_EQ(snapshot_policy::retiring_outputs(*restored, streamed, {"Virtual-1"}), (std::set<std::string> {"Virtual-1"}));
 }
 
-TEST(LinuxPrivateDisplaySnapshot, IdleRefreshRunsEvenWhenOldSnapshotAlreadyExists) {
-  auto old = external_desktop();
-  old["outputs"][0]["enabled"] = true;
-  std::optional<json> snapshot = old;
-  const auto current = external_desktop();
+TEST(LinuxPrivateDisplaySnapshot, PendingBaselineSurvivesNewPreparationAfterPrivateConnectorRetirement) {
+  auto original = external_desktop();
+  original["outputs"][0]["enabled"] = true;
+  const std::string record = json {{"version", 1}, {"owner", "desktop"}, {"restore_pending", true}, {"topology", original}}.dump();
+  auto snapshot = snapshot_policy::decode<json>(record, "desktop");
+  const auto interrupted = external_desktop();
+  auto disk = original;
   int saves = 0;
-  ASSERT_TRUE(snapshot_policy::capture(snapshot, current, {"Virtual-1"}, false, [&](const json &saved) {
+  ASSERT_EQ(snapshot_policy::prepare_startup(snapshot, interrupted, {"Virtual-1"}, [&](const json &) {
     ++saves;
-    EXPECT_EQ(saved, current);
+    return true;
+  }), snapshot_policy::startup_action_e::recover);
+  // A new stream may cancel the queued restore before hotplug. No remaining
+  // connector or process reservation is required to retain the original.
+  ASSERT_TRUE(snapshot_policy::capture(snapshot, interrupted, {"Virtual-1"}, false, [&](const json &saved) {
+    ++saves;
+    disk = saved;
     return true;
   }));
-  EXPECT_EQ(saves, 1);
-  EXPECT_EQ(*snapshot, current);
+  EXPECT_EQ(saves, 0);
+  EXPECT_EQ(*snapshot, original);
+  EXPECT_EQ(disk, original);
 }
 
 TEST(LinuxPrivateDisplaySnapshot, ConnectedPrivateOrRetainedOwnerPreservesCrashBaseline) {
@@ -816,22 +897,86 @@ TEST(LinuxPrivateDisplaySnapshot, ConnectedPrivateOrRetainedOwnerPreservesCrashB
   EXPECT_EQ(*snapshot, original);
 }
 
-TEST(LinuxPrivateDisplaySnapshot, FailedPersistencePreventsSnapshotReplacementAndHotplug) {
-  std::optional<json> snapshot = external_desktop();
-  const auto original = *snapshot;
-  auto current = original;
-  current["outputs"][1]["rotation"] = 8;
+TEST(LinuxPrivateDisplaySnapshot, FailedPersistencePreventsNewSnapshotAndHotplug) {
+  std::optional<json> snapshot;
+  auto current = external_desktop();
   bool hotplug = false;
   if (snapshot_policy::capture(snapshot, current, {"Virtual-1"}, false, [](const json &) {
         return false;
-      })) {
-    hotplug = true;
-  }
+      })) hotplug = true;
   EXPECT_FALSE(hotplug);
-  EXPECT_EQ(*snapshot, original);
+  EXPECT_FALSE(snapshot);
 }
 
-TEST(LinuxPrivateDisplaySnapshot, MissingOrInvalidBaselineUsesOnlyLiveEnabledPhysicalOutputs) {
+TEST(LinuxPrivateDisplaySnapshot, FreshCaptureRequiresRecoverableActivePhysicalModes) {
+  const auto original = external_desktop();
+  for (const auto &field : {"currentModeId", "modes"}) {
+    auto incomplete = original;
+    incomplete["outputs"][1].erase(field);
+    std::optional<json> snapshot;
+    unsigned writes = 0;
+    EXPECT_FALSE(snapshot_policy::capture(snapshot, incomplete, {"Virtual-1"}, false, [&](const json &) {
+      ++writes;
+      return true;
+    })) << field;
+    EXPECT_FALSE(snapshot);
+    EXPECT_EQ(writes, 0U);
+    // Legacy decoding remains available so incomplete existing intent is
+    // retained rather than discarded and replaced by a new stream.
+    EXPECT_TRUE(snapshot_policy::decode<json>(json {{"version", 1}, {"owner", "desktop"}, {"topology", incomplete}}.dump(), "desktop"));
+  }
+  auto headless = json {{"outputs", json::array()}};
+  EXPECT_TRUE(snapshot_policy::capture_ready(headless));
+  EXPECT_FALSE(snapshot_policy::capture_ready(json::object()));
+  EXPECT_FALSE(snapshot_policy::capture_ready(json {nullptr}));
+}
+
+TEST(LinuxPrivateDisplaySnapshot, InvalidFreshVrrMetadataCannotPersistOrAdmitHotplug) {
+  for (const auto &invalid : std::vector<json> {3, "automatic", 2.0}) {
+    auto current = external_desktop();
+    current["outputs"][1]["vrrPolicy"] = invalid;
+    std::optional<json> snapshot;
+    unsigned writes = 0;
+    EXPECT_FALSE(snapshot_policy::capture(snapshot, current, {}, false, [&](const json &) {
+      ++writes;
+      return true;
+    }));
+    EXPECT_FALSE(snapshot);
+    EXPECT_EQ(writes, 0U);
+  }
+}
+
+TEST(LinuxPrivateDisplaySnapshot, RecoveryRecordVersionAndOwnerRequireExactTypes) {
+  auto record = json {{"version", 1}, {"owner", "1000:desktop"}, {"topology", external_desktop()}};
+  ASSERT_TRUE(snapshot_policy::decode<json>(record.dump(), "1000:desktop"));
+  for (const auto &invalid : std::vector<json> {"1", 1.0, true, 4294967297ULL}) {
+    record["version"] = invalid;
+    EXPECT_FALSE(snapshot_policy::decode<json>(record.dump(), "1000:desktop"));
+  }
+  record["version"] = 1;
+  record["owner"] = 1000;
+  EXPECT_FALSE(snapshot_policy::decode<json>(record.dump(), "1000:desktop"));
+}
+
+TEST(LinuxPrivateDisplayRestorePolicy, MissingSavedMonitorNeverMakesPartialDesktopAvailableForExactCompletion) {
+  auto original = external_desktop();
+  original["outputs"][0]["enabled"] = true;
+  auto current = original;
+  current["outputs"][0]["connected"] = false;
+  current["outputs"][0]["enabled"] = false;
+  EXPECT_FALSE(policy::enabled_baseline_available(original, current));
+  const auto visible = snapshot_policy::live_fallback(current, {});
+  ASSERT_TRUE(visible);
+  EXPECT_TRUE(policy::snapshot_matches(*visible, current, true));
+  EXPECT_FALSE(policy::snapshot_matches(original, current, true));
+  // Return while still disabled restores access to the original target; an
+  // earlier partial guard must not make disabled the new saved preference.
+  current["outputs"][0]["connected"] = true;
+  EXPECT_TRUE(policy::enabled_baseline_available(original, current));
+  EXPECT_FALSE(policy::snapshot_matches(original, current, true));
+}
+
+TEST(LinuxPrivateDisplaySnapshot, LiveVisibilityFallbackUsesOnlyCurrentlyEnabledPhysicalOutputs) {
   auto current = external_desktop();
   current["outputs"].push_back({{"name", "Virtual-1"}, {"connected", true}, {"enabled", true}});
   const auto fallback = snapshot_policy::live_fallback(current, {"Virtual-1"});

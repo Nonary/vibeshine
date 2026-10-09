@@ -195,6 +195,12 @@ namespace remote_display_topology {
              (state.normal_game && (!state.normal_release_pending || !state.normal_capture_references.empty()));
     });
   }
+  bool coordinator_t::has_idle_display_cleanup_owner() const {
+    std::lock_guard lock(mutex_);
+    return std::any_of(clients_.begin(), clients_.end(), [](const auto &entry) {
+      return entry.second.remote_monitor || !entry.second.normal_capture_references.empty();
+    });
+  }
   std::vector<std::string> coordinator_t::managed_client_identity_ids() const {
     std::lock_guard lock(mutex_);
     std::vector<std::string> ids;
@@ -243,18 +249,20 @@ namespace remote_display_topology {
     auto &state = state_it->second;
     if (inserted) state.placement_order = ++next_placement_order_;
     if (state.normal_game && !state.normal_release_pending) {
+      state.normal_display_suspended = false;
       return {true, false, state.normal_game_token};
     }
     state.label = label;
     state.normal_requested_mode = mode;
     if (!state.remote_monitor) state.effective_mode = mode;
     state.normal_game = true;
+    state.normal_display_suspended = false;
     state.normal_release_pending = false;
     state.normal_game_token = ++next_normal_game_token_;
     return {true, true, state.normal_game_token};
   }
 
-  bool coordinator_t::reapply_composed_topology() {
+  bool coordinator_t::reapply_composed_topology(const std::string &apply_client_profile) {
     std::lock_guard lock(mutex_);
     if (display_mutation_deferred_locked()) {
       return false;
@@ -273,8 +281,23 @@ namespace remote_display_topology {
         if (state.normal_game || state.remote_monitor) state.effective_mode = desired_mode(state);
       }
     }
+    if (const auto target = clients_.find(apply_client_profile); target != clients_.end()) {
+      target->second.profile_pending = true;
+    }
     std::vector<std::string> ignored;
-    return callbacks_.apply_composed_topology(compose_locked(ignored));
+    return apply_composed_locked(compose_locked(ignored));
+  }
+
+  bool coordinator_t::apply_composed_locked(const std::vector<node_t> &nodes) {
+    if (!callbacks_.apply_composed_topology || !callbacks_.apply_composed_topology(nodes)) return false;
+    for (const auto &node : nodes) {
+      if (node.physical || node.preexisting) continue;
+      if (const auto client = clients_.find(node.id); client != clients_.end()) {
+        client->second.profile_pending = false;
+        client->second.effective_mode = effective_mode(node);
+      }
+    }
+    return true;
   }
 
   bool coordinator_t::rollback_normal_game_identity(const std::string &client_uuid, const std::uint64_t token) {
@@ -331,7 +354,7 @@ namespace remote_display_topology {
     clients_.clear();
     if (callbacks_.apply_composed_topology) {
       std::vector<std::string> ignored;
-      if (!callbacks_.apply_composed_topology(compose_locked(ignored))) {
+      if (!apply_composed_locked(compose_locked(ignored))) {
         clients_ = std::move(retained_clients);
         shutdown_pending_ = true;
         return;
@@ -377,11 +400,15 @@ namespace remote_display_topology {
     }
   };
 
-  std::shared_ptr<void> coordinator_t::retain_normal_game_capture(const std::string &client_uuid, const std::uint64_t token) {
+  std::shared_ptr<void> coordinator_t::retain_normal_game_capture(const std::string &client_uuid, const std::uint64_t token, const bool require_live_capture) {
     auto reference = std::make_shared<capture_reference_t>(*this, client_uuid, token);
     std::lock_guard lock(mutex_);
     const auto client = clients_.find(client_uuid);
-    if (client == clients_.end() || !client->second.normal_game || token == 0 || client->second.normal_game_token != token || client->second.normal_release_pending) {
+    if (client == clients_.end() || !client->second.normal_game || token == 0 || client->second.normal_game_token != token || client->second.normal_release_pending || client->second.normal_display_suspended) {
+      return {};
+    }
+    const auto existing = client->second.normal_capture_references.find(token);
+    if (require_live_capture && (existing == client->second.normal_capture_references.end() || existing->second == 0)) {
       return {};
     }
     ++client->second.normal_capture_references[token];
@@ -418,6 +445,11 @@ namespace remote_display_topology {
   }
 
   void coordinator_t::release_normal_game_identity_locked(const std::string &client_uuid, client_state_t &state) {
+    if (state.normal_display_suspended && !state.remote_monitor) {
+      // Its platform output was already retired by a verified idle restore.
+      clients_.erase(client_uuid);
+      return;
+    }
     const auto requested_mode = state.normal_requested_mode;
     const auto token = state.normal_game_token;
     state.normal_game = false;
@@ -433,7 +465,7 @@ namespace remote_display_topology {
     // compositor with zero outputs and force a physical-link retrain.
     if (callbacks_.apply_composed_topology) {
       std::vector<std::string> ignored;
-      if (!callbacks_.apply_composed_topology(compose_locked(ignored))) {
+      if (!apply_composed_locked(compose_locked(ignored))) {
         state.normal_game = true;
         state.normal_requested_mode = requested_mode;
         state.normal_game_token = token;
@@ -450,7 +482,7 @@ namespace remote_display_topology {
       state.normal_requested_mode = requested_mode;
       state.normal_game_token = token;
       std::vector<std::string> ignored;
-      (void) callbacks_.apply_composed_topology(compose_locked(ignored));
+      (void) apply_composed_locked(compose_locked(ignored));
       return;
     }
     clients_.erase(client_uuid);
@@ -492,13 +524,18 @@ namespace remote_display_topology {
     }
   }
 
-  void coordinator_t::complete_restored_normal_game_cleanup() {
+  void coordinator_t::complete_restored_normal_game_cleanup(const bool suspend_retained_normal) {
     std::lock_guard lock(mutex_);
     std::erase_if(clients_, [](const auto &entry) {
       const auto &state = entry.second;
       return state.normal_game && state.normal_release_pending &&
              state.normal_capture_references.empty() && !state.remote_monitor;
     });
+    for (auto &[_, state] : clients_) {
+      if (suspend_retained_normal && state.normal_game && state.normal_capture_references.empty() && !state.remote_monitor) {
+        state.normal_display_suspended = true;
+      }
+    }
   }
 
   activation_result_t coordinator_t::activate_remote_monitor(const std::string &client_uuid, const std::string &label, mode_t mode) {
@@ -550,6 +587,8 @@ namespace remote_display_topology {
     }
     state.generation = generation;
     state.label = label;
+    state.profile_pending = state.profile_pending || !state.remote_monitor ||
+                            !state.monitor_requested_mode || *state.monitor_requested_mode != mode;
     state.monitor_requested_mode = mode;
     state.effective_mode = mode;
     state.remote_monitor = true;
@@ -601,12 +640,13 @@ namespace remote_display_topology {
         return {true, false, state.warning};
       }
       state.lease_held = true;
+      state.profile_pending = true;
     }
     resolve_effective_mode_locked(client_uuid, state);
     state.lifecycle = lifecycle_e::applying;
     std::vector<std::string> warnings;
     const auto composed = compose_locked(warnings);
-    if (!callbacks_.apply_composed_topology(composed)) {
+    if (!apply_composed_locked(composed)) {
       state.lifecycle = lifecycle_e::retryable;
       state.warning = "The composed display topology did not apply; existing owners and their displays were retained.";
       return {true, false, state.warning};
@@ -688,16 +728,18 @@ namespace remote_display_topology {
     const auto previous_warning = state.warning;
     // A normal game and Remote Monitor for one paired client share the same
     // deterministic VDD. Ending either role cannot remove the other's display.
-    const bool remove_display = !state.normal_game;
+    const bool normal_display_owned = state.normal_game && !state.normal_display_suspended;
+    const bool remove_display = !normal_display_owned;
     state.remote_monitor = false;
     state.monitor_requested_mode.reset();
-    if (state.normal_game) {
+    if (normal_display_owned) {
+      state.profile_pending = true;
       resolve_effective_mode_locked(client_uuid, state);
     }
     // The normal-game role still owns the shared connector. Keep the lease
     // truthfully held so a later monitor resume cannot appear to reacquire or
     // disconnect it out from under the game.
-    state.lease_held = state.normal_game;
+    state.lease_held = normal_display_owned;
     state.lifecycle = lifecycle_e::released;
     state.warning = reason;
 
@@ -713,7 +755,7 @@ namespace remote_display_topology {
     // must not keep the caller's screen connected.
     if (callbacks_.apply_composed_topology) {
       std::vector<std::string> ignored;
-      if (!callbacks_.apply_composed_topology(compose_locked(ignored)) && !callbacks_.terminate_owned_display) {
+      if (!apply_composed_locked(compose_locked(ignored)) && !callbacks_.terminate_owned_display) {
         state.remote_monitor = true;
         state.monitor_requested_mode = monitor_mode;
         state.lease_held = previous_lease;
@@ -747,7 +789,7 @@ namespace remote_display_topology {
       resolve_effective_mode_locked(client_uuid, state);
       if (!callbacks_.terminate_owned_display && callbacks_.apply_composed_topology) {
         std::vector<std::string> ignored;
-        (void) callbacks_.apply_composed_topology(compose_locked(ignored));
+        (void) apply_composed_locked(compose_locked(ignored));
       }
       return;
     }
@@ -780,14 +822,14 @@ namespace remote_display_topology {
     if (callbacks_.resolve_mode) callbacks_.resolve_mode(client_uuid, state.effective_mode);
   }
 
-  std::vector<node_t> coordinator_t::compose_locked(std::vector<std::string> &warnings) const {
+  std::vector<node_t> coordinator_t::compose_locked(std::vector<std::string> &warnings, const bool observe_live) const {
     auto nodes = physical_baseline_;
     int rightmost = 0;
     for (const auto &node : nodes) rightmost = std::max(rightmost, node.x + layout_width(node));
 
     std::vector<std::string> active_ids;
     for (const auto &[uuid, state] : clients_) {
-      if (state.remote_monitor || state.normal_game) active_ids.push_back(uuid);
+      if (state.remote_monitor || (state.normal_game && !state.normal_display_suspended)) active_ids.push_back(uuid);
     }
     std::sort(active_ids.begin(), active_ids.end(), [&](const std::string &lhs, const std::string &rhs) {
       const auto lhs_order = clients_.at(lhs).placement_order;
@@ -795,20 +837,37 @@ namespace remote_display_topology {
       return lhs_order == rhs_order ? lhs < rhs : lhs_order < rhs_order;
     });
 
+    std::vector<node_t> client_nodes;
+    for (const auto &uuid : active_ids) {
+      const auto &state = clients_.at(uuid);
+      auto profile = state.effective_mode;
+      if (observe_live && callbacks_.observe_live_nodes) {
+        // Readback belongs to this activation, not to the saved request. A
+        // later recreated output must still recover its desired role profile.
+        profile = desired_mode(state);
+        if (callbacks_.resolve_mode) callbacks_.resolve_mode(uuid, profile);
+      }
+      client_nodes.push_back({
+        .id = uuid,
+        .label = state.label,
+        .active = true,
+        .configured_mode = profile,
+        .last_requested_mode = profile,
+        .apply_requested_mode = state.profile_pending,
+      });
+    }
+    if (observe_live && callbacks_.observe_live_nodes) callbacks_.observe_live_nodes(client_nodes);
+
     std::unordered_set<std::string> emitted;
     std::unordered_set<std::string> visiting;
     std::function<void(const std::string &)> emit = [&](const std::string &uuid) {
       if (emitted.contains(uuid)) return;
       const auto state_it = clients_.find(uuid);
-      if (state_it == clients_.end() || (!state_it->second.remote_monitor && !state_it->second.normal_game)) return;
-
-      node_t node {
-        .id = uuid,
-        .label = state_it->second.label,
-        .active = true,
-        .configured_mode = state_it->second.effective_mode,
-        .last_requested_mode = state_it->second.effective_mode,
-      };
+      if (state_it == clients_.end() || (!state_it->second.remote_monitor &&
+          (!state_it->second.normal_game || state_it->second.normal_display_suspended))) return;
+      const auto observed = std::find_if(client_nodes.begin(), client_nodes.end(), [&](const node_t &node) { return node.id == uuid; });
+      if (observed == client_nodes.end()) return;
+      node_t node = *observed;
       const auto append_right = [&](const std::string &warning) {
         node.x = rightmost;
         rightmost += layout_width(node);
@@ -861,7 +920,7 @@ namespace remote_display_topology {
   nlohmann::json coordinator_t::snapshot(const std::vector<nlohmann::json> &paired_clients) const {
     std::lock_guard lock(mutex_);
     std::vector<std::string> warnings;
-    const auto nodes = compose_locked(warnings);
+    const auto nodes = compose_locked(warnings, false);
     nlohmann::json result {{"status", true}, {"version", layout_version}, {"layout", layout_}, {"capacity", {{"max", client_identity_capacity_locked()}, {"used", clients_.size()}}}, {"warnings", warnings}, {"nodes", nlohmann::json::array()}, {"clients", paired_clients}};
     for (const auto &node : nodes) {
       const auto mode = effective_mode(node);

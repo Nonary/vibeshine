@@ -15,6 +15,8 @@
 namespace platf::linux_private_display::restore_transaction {
   enum class result_e {
     restored,
+    baseline_pending,
+    persistence_failed,
     cancelled,
     no_guard,
     guard_configuration_failed,
@@ -38,6 +40,8 @@ namespace platf::linux_private_display::restore_transaction {
   constexpr const char *result_name(result_e result) {
     switch (result) {
       case result_e::restored: return "restored";
+      case result_e::baseline_pending: return "physical visibility recovered; original topology remains pending";
+      case result_e::persistence_failed: return "restored topology could not be durably completed";
       case result_e::cancelled: return "cancelled";
       case result_e::no_guard: return "no connected saved restore guard";
       case result_e::guard_configuration_failed: return "guard configuration failed";

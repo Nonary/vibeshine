@@ -8,6 +8,7 @@
 // standard includes
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -22,6 +23,10 @@
 // local includes
 #include "crypto.h"
 #include "thread_safe.h"
+
+namespace rtsp_stream {
+  struct launch_session_t;
+}
 
 /**
  * @brief Contains all the functions and variables related to the nvhttp (GameStream) server.
@@ -74,6 +79,26 @@ namespace nvhttp {
   // under stream_lifecycle_mutex() so a fresh remote-role launch cannot enter
   // between this check and a guarded display mutation.
   bool has_remote_role_owner();
+
+#ifdef __linux__
+  // Shared by RTSP and WebRTC after private-display preparation. Call under
+  // stream_lifecycle_mutex(); a failed startup must roll back its new token.
+  enum class linux_normal_identity_result_e {
+    not_needed,
+    ready,
+    // The composed or retained topology has been verified; applying the
+    // normal session again could overwrite a same-identity Monitor profile.
+    ready_composed,
+    capacity_rejected,
+    topology_failed,
+  };
+  linux_normal_identity_result_e reserve_linux_normal_display_identity(
+    const std::shared_ptr<rtsp_stream::launch_session_t> &launch_session
+  );
+  void rollback_linux_normal_display_identity(
+    const std::shared_ptr<rtsp_stream::launch_session_t> &launch_session
+  );
+#endif
 
   class SunshineHTTPS: public SimpleWeb::HTTPS {
   public:

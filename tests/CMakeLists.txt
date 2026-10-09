@@ -706,11 +706,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         set_tests_properties(test_component_linux_steamos_pairing_migration PROPERTIES LABELS "component")
     endif()
     sunshine_register_component(NAME test_component_linux_pipewire_cuda_policy TEST_SOURCE unit/platform/linux/test_pipewire_cuda_policy.cpp)
+    if(SUNSHINE_TEST_PYTHON_EXECUTABLE)
+        add_test(NAME test_component_linux_capture_live_format
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_capture_live_format.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_linux_capture_live_format PROPERTIES LABELS "component")
+    endif()
     pkg_check_modules(TEST_PIPEWIRE QUIET IMPORTED_TARGET libpipewire-0.3)
     if(TEST_PIPEWIRE_FOUND)
         sunshine_register_component(NAME test_component_linux_pipewire_format
             TEST_SOURCE unit/platform/linux/test_pipewire_format.cpp
             LINK_LIBRARIES PkgConfig::TEST_PIPEWIRE)
+        if(SUNSHINE_TEST_PYTHON_EXECUTABLE)
+            add_test(NAME test_component_linux_pipewire_capture_offers
+                COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                    "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_pipewire_capture_offers.py"
+                    "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+            set_tests_properties(test_component_linux_pipewire_capture_offers PROPERTIES LABELS "component")
+        endif()
     endif()
     sunshine_register_component(NAME test_component_linux_cuda_interop TEST_SOURCE unit/platform/linux/test_cuda_interop.cpp)
     sunshine_register_component(NAME test_component_linux_cuda_render_device TEST_SOURCE unit/platform/linux/test_cuda_render_device.cpp)
@@ -723,6 +737,27 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     sunshine_register_component(NAME test_component_linux_private_display_capture_policy TEST_SOURCE unit/platform/linux/test_private_display_capture_policy.cpp)
     sunshine_register_component(NAME test_component_linux_private_display_restore_policy TEST_SOURCE unit/platform/linux/test_private_display_restore_policy.cpp
         LINK_LIBRARIES nlohmann_json::nlohmann_json)
+    if(SUNSHINE_TEST_PYTHON_EXECUTABLE)
+        add_test(NAME test_component_linux_private_display_vrr_restore
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_private_display_vrr_restore.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}"
+                "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>")
+        set_tests_properties(test_component_linux_private_display_vrr_restore PROPERTIES LABELS "component")
+        add_test(NAME test_component_linux_private_display_snapshot_storage
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_private_display_snapshot_storage.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}"
+                "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+                "${Boost_INCLUDE_DIRS}")
+        set_tests_properties(test_component_linux_private_display_snapshot_storage PROPERTIES LABELS "component")
+        add_test(NAME test_component_linux_private_display_recovery_authority
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_private_display_recovery_authority.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}"
+                "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>")
+        set_tests_properties(test_component_linux_private_display_recovery_authority PROPERTIES LABELS "component")
+    endif()
     sunshine_register_component(NAME test_component_linux_private_display_restore_transaction TEST_SOURCE unit/platform/linux/test_private_display_restore_transaction.cpp
         LINK_LIBRARIES nlohmann_json::nlohmann_json)
     sunshine_register_component(NAME test_component_linux_private_display_resume_policy TEST_SOURCE unit/platform/linux/test_private_display_resume_policy.cpp)
@@ -1085,6 +1120,11 @@ if(SUNSHINE_TEST_ENABLE_COMPONENT AND Python3_Interpreter_FOUND AND CMAKE_CXX_CO
         set_tests_properties("test_component_${_display_recovery_case}" PROPERTIES LABELS "component" TIMEOUT 90)
     endforeach()
     if(UNIX)
+        add_test(NAME test_component_file_handler_posix_storage
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_file_handler_posix_storage.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_file_handler_posix_storage PROPERTIES LABELS "component" TIMEOUT 90)
         add_test(NAME test_component_display_helper_v2_file_storage
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_helper_v2_file_storage.py"
@@ -1096,7 +1136,8 @@ if(SUNSHINE_TEST_ENABLE_COMPONENT AND Python3_Interpreter_FOUND AND CMAKE_CXX_CO
             "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_helper_legacy_safety.py"
             "${CMAKE_CXX_COMPILER}")
     set_tests_properties(test_component_display_helper_legacy_safety PROPERTIES LABELS "component" TIMEOUT 90)
-    foreach(_display_recovery_case IN ITEMS display_snapshot_ipc shared_runtime_idle_ownership)
+    foreach(_display_recovery_case IN ITEMS display_snapshot_ipc shared_runtime_idle_ownership
+            linux_shared_runtime_ownership linux_webrtc_display_ownership)
         add_test(NAME "test_component_${_display_recovery_case}"
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_${_display_recovery_case}.py"

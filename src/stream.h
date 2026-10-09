@@ -77,6 +77,11 @@ namespace stream {
 
   namespace session {
     extern std::atomic_uint running_sessions;
+#ifdef __linux__
+    // Normal game captures only; Monitor/Input transports are independent
+    // sources and must not make Resume attach to a missing app display.
+    extern std::atomic_uint running_game_sessions;
+#endif
     // Counts RTSP joins through their complete post-session cleanup tail.
     // Observers use this instead of entering blocking session cleanup.
     extern std::atomic_uint teardown_sessions;

@@ -59,6 +59,9 @@ namespace platf::linux_private_display {
     remote_display_topology::mode_t &mode
   );
 
+  /** Observe unchanged peers before composing their logical layout. */
+  void remote_observe_live_nodes(std::vector<remote_display_topology::node_t> &nodes);
+
   /** Atomically apply the coordinator's complete physical/client desktop graph. */
   bool remote_apply_composed_topology(
     const std::vector<remote_display_topology::node_t> &nodes

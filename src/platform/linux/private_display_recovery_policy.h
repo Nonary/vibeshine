@@ -131,8 +131,9 @@ namespace platf::linux_private_display::recovery_policy {
     const target_policy_e policy,
     const bool has_connected_enabled_physical_output
   ) {
-    return policy == target_policy_e::preserve_live_physical_layout ||
-                   (policy == target_policy_e::automatic_recovery && has_connected_enabled_physical_output)
+    // An enabled physical output may be the guard from an earlier failed
+    // restore, not evidence that the user abandoned the remaining baseline.
+    return policy == target_policy_e::preserve_live_physical_layout && has_connected_enabled_physical_output
              ? target_e::live_physical_layout
              : target_e::saved_baseline;
   }

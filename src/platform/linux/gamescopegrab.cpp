@@ -282,7 +282,8 @@ namespace gamescope {
     }
 
     bool is_hdr() override {
-      return shared_state && node_ && platf::gamescope_hdr::negotiated(hdr_requested_, node_->hdr_capable(), shared_state->pixel_format.load() == SPA_VIDEO_FORMAT_xBGR_210LE, shared_state->color_primaries.load() == SPA_VIDEO_COLOR_PRIMARIES_BT2020, shared_state->transfer_function.load() == SPA_VIDEO_TRANSFER_SMPTE2084, shared_state->color_range.load() == SPA_VIDEO_COLOR_RANGE_0_255 && shared_state->color_matrix.load() == SPA_VIDEO_COLOR_MATRIX_RGB);
+      const auto &format = capture_format_.format;
+      return shared_state && node_ && platf::gamescope_hdr::negotiated(hdr_requested_, node_->hdr_capable(), format.pixel_format == SPA_VIDEO_FORMAT_xBGR_210LE, format.color_primaries == SPA_VIDEO_COLOR_PRIMARIES_BT2020, format.transfer_function == SPA_VIDEO_TRANSFER_SMPTE2084, format.color_range == SPA_VIDEO_COLOR_RANGE_0_255 && format.color_matrix == SPA_VIDEO_COLOR_MATRIX_RGB);
     }
 
     bool is_codec_supported(std::string_view, const video::config_t &config) override {
