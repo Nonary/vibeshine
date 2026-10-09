@@ -3747,6 +3747,11 @@ namespace stream {
       if (display_restore_requested) {
         (void) display_helper_integration::revert();
       }
+#ifdef __APPLE__
+      if (!is_paused || display_restore_requested) {
+        platf::macos_virtual_display::end_pause_hold();
+      }
+#endif
 #endif
 
       if (shared_platform_started) {
@@ -3860,7 +3865,11 @@ namespace stream {
       // that is a false positive that would kill every other live stream.
 
 #ifdef __APPLE__
-      // Capture and input have stopped, so the virtual display (and turned-off displays) can go back.
+      // Capture and input have stopped, so the virtual display (and turned-off displays) can go back,
+      // unless the game is only paused: then they stay off, as on Windows, until it resumes.
+      if (config::video.virtual_display_keep_while_paused && proc::proc.current_app_id() > 0 && !config::video.dd.config_revert_on_disconnect) {
+        platf::macos_virtual_display::hold_for_pause(std::chrono::seconds {std::max(0, config::video.dd.paused_virtual_display_timeout_secs)});
+      }
       session.macos_virtual_display.reset();
 #endif
 
@@ -3998,6 +4007,7 @@ namespace stream {
         session.macos_virtual_display = platf::macos_virtual_display::acquire(session.config.monitor);
         // The display launch brought up is the session's now.
         platf::macos_virtual_display::end_launch_hold();
+        platf::macos_virtual_display::end_pause_hold();
       }
 #endif
       session.input = input::alloc(session.mail, session.config.guide_button, session.config.gcpersist);

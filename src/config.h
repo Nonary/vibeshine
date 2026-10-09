@@ -153,6 +153,7 @@ namespace config {
 
     virtual_display_mode_e virtual_display_mode;
     virtual_display_layout_e virtual_display_layout;
+    bool virtual_display_keep_while_paused;  ///< macOS: keep the virtual display, so the other displays stay off, while a game is paused.
 
     int virtual_display_max_clients;  ///< Shared normal-game/Remote Monitor client identity limit (1..8).
 
