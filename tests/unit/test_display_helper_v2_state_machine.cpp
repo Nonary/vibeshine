@@ -3061,6 +3061,46 @@ TEST(DisplayHelperV2StateMachine, ForcedDisarmSupersedesUnconfirmedRecoveryForSt
   EXPECT_TRUE(harness.state_machine.recovery_armed());
 }
 
+TEST(DisplayHelperV2StateMachine, FirstHeadlessLaunchWaitsForForcedRestoreHandoffBeforeSnapshotAcknowledgement) {
+  StateMachineHarness harness;
+  harness.seed_current_snapshot("TV");
+  harness.display_settings.physical_state = display_recovery_safety::PhysicalDisplayState::none_connected;
+  harness.state_machine.handle_message(display_helper::v2::RevertCommand {});
+  ASSERT_TRUE(harness.dispatcher.recovery_completion);
+  harness.restore_state.restore_attempted_unconfirmed.store(true);
+  harness.state_machine.handle_message(display_helper::v2::DisarmCommand {.force = true});
+  harness.state_machine.handle_message(display_helper::v2::SnapshotCurrentCommand {.request_id = 42});
+  EXPECT_FALSE(harness.snapshot_result.has_value());
+  display_helper::v2::RecoveryOutcome cancelled;
+  cancelled.display_may_have_changed = true;
+  harness.dispatcher.recovery_completion(cancelled);
+  harness.drain_messages();
+  ASSERT_TRUE(harness.snapshot_result);
+  EXPECT_TRUE(*harness.snapshot_result);
+  EXPECT_TRUE(harness.state_machine.recovery_armed());
+  EXPECT_EQ(harness.storage.load(display_helper::v2::SnapshotTier::Current)->m_topology,
+            (display_device::ActiveTopology {{"TV"}}));
+  EXPECT_EQ(harness.task_manager.deleted, 0);
+}
+
+TEST(DisplayHelperV2StateMachine, RetiredHeadlessLaunchCannotAcknowledgeDeferredHandoffSnapshot) {
+  StateMachineHarness harness;
+  std::uint64_t epoch = 1;
+  harness.state_machine.set_connection_epoch_provider([&] { return epoch; });
+  harness.seed_current_snapshot("TV");
+  harness.display_settings.physical_state = display_recovery_safety::PhysicalDisplayState::none_connected;
+  harness.state_machine.handle_message(display_helper::v2::RevertCommand {.connection_epoch = epoch});
+  harness.state_machine.handle_message(display_helper::v2::DisarmCommand {.connection_epoch = epoch, .force = true});
+  harness.state_machine.handle_message(display_helper::v2::SnapshotCurrentCommand {.connection_epoch = epoch, .request_id = 42});
+  EXPECT_FALSE(harness.snapshot_result);
+  epoch = 2;
+  harness.dispatcher.recovery_completion(display_helper::v2::RecoveryOutcome {});
+  harness.drain_messages();
+  EXPECT_FALSE(harness.snapshot_result);
+  EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+  EXPECT_EQ(harness.task_manager.deleted, 0);
+}
+
 TEST(DisplayHelperV2StateMachine, DuplicateDisconnectRevertJoinsActiveRecovery) {
   StateMachineHarness harness;
   harness.seed_current_snapshot();
@@ -4112,8 +4152,44 @@ TEST(DisplayHelperV2StateMachine, HeadlessRequiresPositiveHardwareObservationAnd
     EXPECT_EQ(harness.task_manager.created, 0);
     harness.seed_current_snapshot("UNPLUGGED");
     harness.state_machine.handle_message(display_helper::v2::SnapshotCurrentCommand {});
-    EXPECT_FALSE(*harness.snapshot_result);
+    EXPECT_EQ(*harness.snapshot_result, physical == PhysicalState::none_connected);
     EXPECT_TRUE(harness.storage.exists(display_helper::v2::SnapshotTier::Current));
+    EXPECT_EQ(harness.task_manager.created, physical == PhysicalState::none_connected ? 1 : 0);
+  }
+}
+
+TEST(DisplayHelperV2StateMachine, HeadlessWithHistoryPreservesBaselineAndRequiresDurableRecovery) {
+  using Tier = display_helper::v2::SnapshotTier;
+  for (const auto tier : {Tier::Current, Tier::Golden, Tier::Previous}) {
+    SCOPED_TRACE(static_cast<int>(tier));
+    StateMachineHarness harness;
+    harness.display_settings.physical_state = display_recovery_safety::PhysicalDisplayState::none_connected;
+    const auto original = make_snapshot("POWERED_OFF_TV");
+    ASSERT_TRUE(harness.storage.save(tier, original));
+    harness.task_manager.create_result = false;
+    harness.state_machine.handle_message(display_helper::v2::SnapshotCurrentCommand {});
+    ASSERT_TRUE(harness.snapshot_result);
+    EXPECT_FALSE(*harness.snapshot_result);
+    harness.task_manager.create_result = true;
+    harness.state_machine.handle_message(display_helper::v2::SnapshotCurrentCommand {});
+    EXPECT_TRUE(*harness.snapshot_result);
+    EXPECT_TRUE(harness.state_machine.recovery_armed());
+    EXPECT_EQ(harness.storage.load(tier)->m_topology, original.m_topology);
+    EXPECT_EQ(harness.task_manager.deleted, 0);
+    if (tier != Tier::Current) EXPECT_FALSE(harness.storage.exists(Tier::Current));
+    // Exact restore still waits for the TV, even though virtual streaming can
+    // start with a durable baseline. Readiness must never retire that history.
+    auto loaded = harness.storage.load_with_metadata(tier);
+    ASSERT_TRUE(loaded);
+    EXPECT_FALSE(display_helper::v2::codec::filter_loaded_snapshot(*loaded, {}, {}, "restore"));
+    harness.display_settings.physical_state = display_recovery_safety::PhysicalDisplayState::unknown;
+    EXPECT_FALSE(harness.snapshot_ledger.has_usable_recovery_baseline({}));
+    harness.display_settings.physical_state = display_recovery_safety::PhysicalDisplayState::none_connected;
+    EXPECT_FALSE(harness.snapshot_ledger.has_usable_recovery_baseline({"POWERED_OFF_TV"}));
+    auto invalid = original;
+    invalid.m_modes["POWERED_OFF_TV"].m_refresh_rate.m_denominator = 0;
+    ASSERT_TRUE(harness.storage.save(tier, invalid));
+    EXPECT_FALSE(harness.snapshot_ledger.has_usable_recovery_baseline({}));
   }
 }
 

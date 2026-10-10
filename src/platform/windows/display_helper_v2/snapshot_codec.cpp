@@ -738,7 +738,8 @@ namespace display_helper::v2::codec {
     ParsedSnapshot loaded,
     const EnumeratedDeviceList &devices,
     const std::vector<std::string> &exclusions,
-    const std::string &source_label) {
+    const std::string &source_label,
+    const bool require_connected_devices) {
     auto &snap = loaded.snapshot;
 
     // Filter snapshot using current exclusion list and currently enumerated devices.
@@ -788,7 +789,7 @@ namespace display_helper::v2::codec {
       }
     }
 
-    if (valid_devices_norm.empty()) {
+    if (require_connected_devices && valid_devices_norm.empty()) {
       BOOST_LOG(warning) << "Snapshot load rejected: no valid devices available for path=" << source_label;
       BOOST_LOG(debug) << "Snapshot load rejected details: enumerated_devices=[" << join_ids(enumerated_devices)
                        << "], exclusions=[" << join_ids(exclusions_norm) << "]";
@@ -807,7 +808,7 @@ namespace display_helper::v2::codec {
           filtered_out_excluded.push_back(device_id);
           continue;
         }
-        if (!valid_devices_norm.count(norm)) {
+        if (require_connected_devices && !valid_devices_norm.count(norm)) {
           BOOST_LOG(warning) << "Snapshot load rejected: baseline device is no longer available: "
                              << device_id << " for path=" << source_label;
           BOOST_LOG(debug) << "Snapshot load rejected details: present_devices=[" << join_ids(valid_devices_norm)
@@ -819,7 +820,7 @@ namespace display_helper::v2::codec {
 
     auto is_allowed = [&](const std::string &device_id) {
       const auto norm = normalize_device_id(device_id);
-      return valid_devices_norm.count(norm) && !exclusions_norm.count(norm);
+      return (!require_connected_devices || valid_devices_norm.count(norm)) && !exclusions_norm.count(norm);
     };
 
     ActiveTopology filtered_topology;

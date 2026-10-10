@@ -1213,7 +1213,9 @@ namespace platf::display_helper_client {
   static void drop_connection_if_current_within(
     const SessionPtr &session,
     const char *reason,
-    const std::chrono::steady_clock::time_point &deadline
+    const std::chrono::steady_clock::time_point &deadline,
+    std::optional<std::uint64_t> expected_apply_generation = std::nullopt,
+    const std::function<bool()> &cancelled = {}
   ) {
     SessionPtr retired;
     {
@@ -1233,7 +1235,8 @@ namespace platf::display_helper_client {
       if (!connection_lock.try_lock_for(std::chrono::milliseconds(remaining))) {
         return;
       }
-      if (session_singleton() == session) {
+      if (session_singleton() == session && (!cancelled || !cancelled()) &&
+          (!expected_apply_generation || apply_wait_generation().load(std::memory_order_acquire) == *expected_apply_generation)) {
         BOOST_LOG(warning) << "Display helper IPC: dropping cached connection after " << reason;
         retired = retire_session_locked();
       }
@@ -1837,6 +1840,34 @@ namespace platf::display_helper_client {
     }
     std::vector<uint8_t> payload;
     return send_serialized(session, MsgType::Disarm, payload, std::nullopt, wait_generation);
+  }
+
+  bool send_disarm_restore_within(
+    const std::chrono::steady_clock::time_point operation_deadline,
+    std::function<bool()> cancellation_predicate) {
+    const auto cancelled = [&] {
+      return (cancellation_predicate && cancellation_predicate()) ||
+             std::chrono::steady_clock::now() >= operation_deadline;
+    };
+    if (cancelled()) return false;
+    const auto wait_generation = cancel_or_begin_apply_wait_within(operation_deadline, cancelled);
+    if (!wait_generation) return false;
+    const std::vector<uint8_t> payload {1u};
+    for (int attempt = 0; attempt < 2 && !cancelled(); ++attempt) {
+      if (apply_wait_generation().load(std::memory_order_acquire) != *wait_generation) return false;
+      const auto session = connected_session_within(operation_deadline, kConnectTimeoutMs, cancelled);
+      if (!session) return false;
+      if (send_serialized_within(session, MsgType::Disarm, payload, operation_deadline,
+                                *wait_generation, std::nullopt, nullptr, false, cancelled)) {
+        return true;
+      }
+      // A broken cached pipe must not consume the first launch and leave the
+      // old restore owning a headless desktop until the user tries again.
+      if (cancelled() || !session_is_current(session) ||
+          apply_wait_generation().load(std::memory_order_acquire) != *wait_generation) return false;
+      drop_connection_if_current_within(session, "failed stream-start DISARM", operation_deadline, *wait_generation, cancelled);
+    }
+    return false;
   }
 
   bool send_disarm_restore_fast(

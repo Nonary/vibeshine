@@ -182,6 +182,12 @@ namespace platf::display_helper_client {
   }
   bool send_serialized(const SessionPtr &session, MsgType type, const std::vector<uint8_t> &payload,
                        std::optional<int>, std::optional<std::uint64_t>) {
+    if (type == MsgType::Disarm) {
+      assert(session && payload == std::vector<uint8_t> {1u});
+      ++fake::sends;
+      if (fake::on_send) fake::on_send();
+      return fake::send_succeeds;
+    }
     assert(type == MsgType::SnapshotCurrent);
     assert_reader_locked(session);
     ++fake::sends;
@@ -195,17 +201,27 @@ namespace platf::display_helper_client {
   }
   bool send_serialized_within(const SessionPtr &session, MsgType type, const std::vector<uint8_t> &payload,
                               Clock::time_point deadline, std::optional<std::uint64_t> generation,
-                              int, void *, bool, const std::function<bool()> &) {
+                              std::optional<int>, void *, bool, const std::function<bool()> &cancelled) {
     fake::send_deadline = deadline;
     assert(deadline == fake::connect_deadline);
+    if (type == MsgType::Disarm && ((cancelled && cancelled()) ||
+        (generation && *generation != apply_wait_generation().load()) || !session_is_current(session))) return false;
     return send_serialized(session, type, payload, std::nullopt, generation);
   }
   void drop_connection_if_current(const SessionPtr &session, const char *) {
     assert(session_is_current(session));
     ++fake::drops;
   }
-  void drop_connection_if_current_within(const SessionPtr &session, const char *reason, Clock::time_point) {
+  void drop_connection_if_current_within(const SessionPtr &session, const char *reason, Clock::time_point,
+                                       std::optional<std::uint64_t> generation = std::nullopt,
+                                       const std::function<bool()> &cancelled = {}) {
+    if ((cancelled && cancelled()) || (generation && *generation != apply_wait_generation().load())) return;
     drop_connection_if_current(session, reason);
+  }
+  std::optional<std::uint64_t> cancel_or_begin_apply_wait_within(Clock::time_point deadline,
+                                                              const std::function<bool()> &cancelled) {
+    if ((cancelled && cancelled()) || Clock::now() >= deadline) return std::nullopt;
+    return apply_wait_generation().load();
   }
 ''' + functions(
     "bool is_bufferable_response(",
@@ -217,7 +233,58 @@ namespace platf::display_helper_client {
     "static bool lock_response_reader_until(",
     "bool send_snapshot_current_and_wait(",
     "bool send_snapshot_current_within(",
+    "bool send_disarm_restore_within(",
 ) + r'''
+  void test_stream_start_disarm_reconnects_once_without_losing_authority() {
+    auto handoff = [] {
+      return send_disarm_restore_within(Clock::now() + 100ms, [] { return fake::cancelled; });
+    };
+    fake::reset();
+    assert(handoff());
+    assert(fake::sends == 1 && fake::connects == 1 && fake::drops == 0);
+
+    fake::reset();
+    const auto old = fake::session;
+    fake::on_send = [] { fake::send_succeeds = fake::sends > 1; };
+    fake::on_connect = [] {
+      if (fake::drops == 0) return;
+      auto replacement = std::make_shared<ConnectionSession>();
+      replacement->generation = 8;
+      replacement->pipe = std::make_shared<FakePipe>();
+      fake::session = replacement;
+      connection_generation() = replacement->generation;
+    };
+    assert(handoff());
+    assert(fake::sends == 2 && fake::connects == 2 && fake::drops == 1);
+    assert(fake::session != old && apply_wait_generation() == 11);
+
+    fake::reset(); fake::send_succeeds = false;
+    assert(!handoff());
+    assert(fake::sends == 2 && fake::connects == 2 && fake::drops == 2);
+    for (bool superseded : {false, true}) {
+      fake::reset(); fake::send_succeeds = false;
+      fake::on_send = [superseded] {
+        if (superseded) ++apply_wait_generation();
+        else fake::cancelled = true;
+      };
+      assert(!handoff());
+      assert(fake::sends == 1 && fake::connects == 1 && fake::drops == 0);
+    }
+    fake::reset();
+    fake::on_connect = [] { fake::cancelled = true; };
+    assert(!handoff());
+    assert(fake::sends == 0 && fake::drops == 0);
+    fake::reset(); fake::session.reset();
+    assert(!handoff());
+    assert(fake::sends == 0);
+    fake::reset(); fake::cancelled = true;
+    assert(!handoff());
+    assert(fake::connects == 0 && fake::sends == 0);
+    fake::reset();
+    assert(!send_disarm_restore_within(Clock::now() - 1ms, {}));
+    assert(fake::connects == 0 && fake::sends == 0);
+  }
+
   std::vector<uint8_t> frame(std::uint64_t request_id, uint8_t success = 1) {
     std::vector<uint8_t> result {static_cast<uint8_t>(MsgType::SnapshotResult), success};
     for (unsigned shift = 0; shift < 64; shift += 8) result.push_back(static_cast<uint8_t>(request_id >> shift));
@@ -488,6 +555,7 @@ int main() {
   test_real_json_tokenization();
   test_cancellation_supersession_and_retired_connections();
   test_reader_lock_budget_and_transport_failures();
+  test_stream_start_disarm_reconnects_once_without_losing_authority();
 }
 '''
 

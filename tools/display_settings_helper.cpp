@@ -1190,10 +1190,13 @@ namespace {
       return write_snapshot_text_atomically(out, path);
     }
 
-    // Load snapshot from file with compatibility metadata.
+    // Load snapshot from file with compatibility metadata. Disconnected
+    // validation is only for pre-stream recovery readiness after a native
+    // headless observation; restore callers must keep the default true.
     std::optional<LoadedSnapshot> load_display_settings_snapshot_with_metadata(
       const std::filesystem::path &path,
-      display_device::ActiveTopology *raw_topology = nullptr
+      display_device::ActiveTopology *raw_topology = nullptr,
+      bool require_connected_devices = true
     ) const {
       std::error_code ec;
       if (!std::filesystem::exists(path, ec)) {
@@ -1300,7 +1303,7 @@ namespace {
         }
       }
 
-      if (valid_devices_norm.empty()) {
+      if (require_connected_devices && valid_devices_norm.empty()) {
         BOOST_LOG(warning) << "Snapshot load rejected: no valid devices available for path=" << path.string();
         BOOST_LOG(debug) << "Snapshot load rejected details: enumerated_devices=[" << join(enumerated_devices)
                          << "], exclusions=[" << join(exclusions_norm) << "]";
@@ -1310,7 +1313,7 @@ namespace {
       for (const auto &group : snap.m_topology) {
         for (const auto &id : group) {
           const auto normalized = normalize_device_id(id);
-          if (!exclusions_norm.contains(normalized) && !valid_devices_norm.contains(normalized)) {
+          if (require_connected_devices && !exclusions_norm.contains(normalized) && !valid_devices_norm.contains(normalized)) {
             BOOST_LOG(warning) << "Snapshot load deferred: required physical display is unavailable: " << id;
             return std::nullopt;
           }
@@ -1319,7 +1322,7 @@ namespace {
 
       auto is_allowed = [&](const std::string &device_id) {
         const auto norm = normalize_device_id(device_id);
-        if (!valid_devices_norm.count(norm)) {
+        if (require_connected_devices && !valid_devices_norm.count(norm)) {
           return false;
         }
         return exclusions_norm.empty() || !exclusions_norm.count(norm);
@@ -1470,8 +1473,11 @@ namespace {
     }
 
     // Load snapshot from file.
-    std::optional<display_device::DisplaySettingsSnapshot> load_display_settings_snapshot(const std::filesystem::path &path) const {
-      auto loaded = load_display_settings_snapshot_with_metadata(path);
+    std::optional<display_device::DisplaySettingsSnapshot> load_display_settings_snapshot(
+      const std::filesystem::path &path,
+      bool require_connected_devices = true
+    ) const {
+      auto loaded = load_display_settings_snapshot_with_metadata(path, nullptr, require_connected_devices);
       if (!loaded) {
         return std::nullopt;
       }
@@ -3133,6 +3139,19 @@ namespace {
 
     bool prepare_recovery_baseline(const char *reason) {
       if (proven_headless_without_baseline()) return true;
+      if (controller.physical_display_state() == display_recovery_safety::PhysicalDisplayState::none_connected) {
+        // Historical recovery evidence still needs its durable task, but an
+        // absent TV does not need to be restored before virtual streaming can
+        // start. Validate the authoritative file without rewriting it. Actual
+        // restore continues to require every saved physical target to return.
+        for (const auto &path : authoritative_snapshot_paths()) {
+          if (!path_may_exist(path)) continue;
+          return controller.snapshot_file_has_restore_payload(path) &&
+                 controller.load_display_settings_snapshot(path, false).has_value() &&
+                 create_restore_scheduled_task();
+        }
+        return false;
+      }
       // Preserve an interrupted session's full baseline. A capture from its
       // partially restored layout cannot replace recovery evidence.
       if (!controller.snapshot_file_has_restore_payload(session_current_path)) {

@@ -88,11 +88,15 @@ namespace display_helper::v2::codec {
    *        displays).
    * @param exclusions Exclusion list (normalized internally).
    * @param source_label Used for log messages (e.g. the file path).
+   * @param require_connected_devices Keep true for restoration. False is only
+   *        for validating retained recovery evidence after a separate native
+   *        query has proven that no physical displays are connected.
    */
   std::optional<ParsedSnapshot> filter_loaded_snapshot(
     ParsedSnapshot loaded,
     const EnumeratedDeviceList &devices,
     const std::vector<std::string> &exclusions,
-    const std::string &source_label);
+    const std::string &source_label,
+    bool require_connected_devices = true);
 
 }  // namespace display_helper::v2::codec

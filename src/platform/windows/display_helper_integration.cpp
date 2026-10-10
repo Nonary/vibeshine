@@ -1309,12 +1309,15 @@ namespace {
     }
 
     g_last_disarm_attempt_us.store(now_us, std::memory_order_relaxed);
-    // The short recovery path intentionally makes one cache-only attempt. A
-    // reconnect or a synchronous reset can take seconds and would defeat the
-    // deadline that protects stream startup from a concurrent restore.
-    const bool ok = platf::display_helper_client::send_disarm_restore_fast(
-      static_cast<int>(kDisarmRestoreBudget.count()),
-      operation_deadline);
+    // A bounded stream start may reconnect a stale pipe before taking ownership
+    // from an old restore. Background recovery keeps its short cache-only probe.
+    const bool startup_handoff = restore_expected &&
+                                 operation_deadline != std::chrono::steady_clock::time_point::max();
+    const bool ok = startup_handoff ?
+                      platf::display_helper_client::send_disarm_restore_within(
+                        operation_deadline, cancellation_predicate) :
+                      platf::display_helper_client::send_disarm_restore_fast(
+                        static_cast<int>(kDisarmRestoreBudget.count()), operation_deadline);
 
     if (cancellation_requested(cancellation_predicate) ||
         operation_deadline_expired(operation_deadline)) {
@@ -1325,7 +1328,7 @@ namespace {
       g_last_disarm_success_us.store(now_us, std::memory_order_relaxed);
       g_disarm_generation_sent.store(restore_generation, std::memory_order_relaxed);
       g_restore_expected.store(false, std::memory_order_relaxed);
-      BOOST_LOG(info) << "Display helper: DISARM dispatched (fast).";
+      BOOST_LOG(info) << "Display helper: DISARM dispatched" << (startup_handoff ? " (stream start)." : " (fast).");
       return true;
     }
 
@@ -1333,8 +1336,7 @@ namespace {
     // terminate the helper so restore activity stops immediately (prevents virtual display crash loops).
     const bool revert_recent = (now_us - last_revert_us) < (30LL * 1000LL * 1000LL);
     if (revert_recent) {
-      BOOST_LOG(warning) << "Display helper: DISARM could not be delivered within "
-                         << kDisarmRestoreBudget.count() << "ms; terminating helper to stop restore activity.";
+      BOOST_LOG(warning) << "Display helper: DISARM could not be delivered within its budget; terminating helper to stop restore activity.";
       {
         std::unique_lock<std::mutex> lg(helper_mutex(), std::defer_lock);
         while (!lg.try_lock()) {

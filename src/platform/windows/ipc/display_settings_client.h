@@ -95,6 +95,12 @@ namespace platf::display_helper_client {
   // Best-effort cancel of any pending restore/watchdog activity on the helper
   bool send_disarm_restore();
 
+  // Authoritative stream-start handoff. Reconnect a stale pipe once within the
+  // caller's startup deadline; keep the fast recovery probe cache-only.
+  bool send_disarm_restore_within(
+    std::chrono::steady_clock::time_point operation_deadline,
+    std::function<bool()> cancellation_predicate);
+
   // Fast, best-effort DISARM using only an already-connected cached pipe. It
   // never starts anonymous/named-pipe connection setup; lock acquisition and
   // send initiation use timeout_ms as their budget. Intended for stream-start

@@ -197,6 +197,7 @@ namespace display_helper::v2 {
     bool golden_first,
     bool prefer_golden_if_current_missing) {
     try {
+      const bool disconnected = physical_displays_disconnected();
       const auto devices = service_.enumerate();
       for (const auto tier : snapshot_recovery_order(golden_first, prefer_golden_if_current_missing)) {
         auto loaded = persistence_.storage().load_with_metadata(tier);
@@ -206,7 +207,10 @@ namespace display_helper::v2 {
           }
           continue;
         }
-        auto filtered = codec::filter_loaded_snapshot(std::move(*loaded), devices, exclusions, "APPLY recovery guard");
+        // A powered-off TV must not prevent virtual streaming. Keep its full
+        // durable baseline, but leave exact restoration gated on its return.
+        // An uncertain hardware query never permits this readiness exception.
+        auto filtered = codec::filter_loaded_snapshot(std::move(*loaded), devices, exclusions, "APPLY recovery guard", !disconnected);
         if (!filtered || !service_.topology_is_valid(filtered->snapshot.m_topology)) {
           return false;
         }
@@ -238,9 +242,18 @@ namespace display_helper::v2 {
           return false;
         }
       }
-      return service_.physical_display_state() == display_recovery_safety::PhysicalDisplayState::none_connected;
+      return physical_displays_disconnected();
     } catch (const std::exception &error) {
       BOOST_LOG(warning) << "Display helper: headless check failed: " << error.what();
+      return false;
+    }
+  }
+
+  bool SnapshotLedger::physical_displays_disconnected() {
+    try {
+      return service_.physical_display_state() == display_recovery_safety::PhysicalDisplayState::none_connected;
+    } catch (const std::exception &error) {
+      BOOST_LOG(warning) << "Display helper: physical display check failed: " << error.what();
       return false;
     }
   }
@@ -758,6 +771,10 @@ namespace display_helper::v2 {
           handle_reset_command(deferred);
         }
       }, command);
+    }
+    if (!mutation_worker_active() && !staged_state_reset_pending_ && pending_handoff_snapshot_) {
+      const auto snapshot = std::exchange(pending_handoff_snapshot_, std::nullopt);
+      handle_snapshot_current(*snapshot);
     }
   }
 
@@ -1340,6 +1357,22 @@ namespace display_helper::v2 {
       BOOST_LOG(debug) << "Display helper: ignoring SNAPSHOT_CURRENT from a retired IPC connection.";
       return;
     }
+    // DISARM is asynchronous in v2. The first launch's correlated baseline
+    // probe follows it on the pipe before the cancelled restore worker can
+    // finish. Wait at that same fence instead of rejecting a valid handoff.
+    const bool handoff_queued = std::any_of(
+      deferred_mutation_commands_.begin(), deferred_mutation_commands_.end(),
+      [&](const DeferredMutationCommand &queued) {
+        const auto *disarm = std::get_if<DisarmCommand>(&queued);
+        return disarm && disarm->force && disarm->connection_epoch == command.connection_epoch;
+      });
+    if (command.request_id != 0 && handoff_queued) {
+      if (pending_handoff_snapshot_) {
+        send_snapshot_result(false, pending_handoff_snapshot_->connection_epoch, pending_handoff_snapshot_->request_id);
+      }
+      pending_handoff_snapshot_ = command;
+      return;
+    }
     // Never overwrite the restore baseline while a restore is being worked on
     // (72b0d996): the snapshot would capture the un-restored state.
     if (restore_pending() || apply_in_flight()) {
@@ -1361,7 +1394,8 @@ namespace display_helper::v2 {
         restore_state_.always_restore_from_golden.load(std::memory_order_acquire),
         restore_state_.prefer_golden_if_current_missing.load(std::memory_order_acquire));
     };
-    const bool saved = headless || ((recovery_armed_ || display_changes_pending_recovery_ || system_.restore_task_present()) ?
+    const bool saved = headless || ((recovery_armed_ || display_changes_pending_recovery_ || system_.restore_task_present() ||
+                                     snapshots_.physical_displays_disconnected()) ?
                                      usable_baseline() :
                                      snapshots_.refresh_current_preserving_previous(exclusions_vector()));
     const bool usable = saved && (headless || usable_baseline());

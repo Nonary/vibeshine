@@ -129,7 +129,9 @@ struct Controller {
     const auto found = snapshot_results.find(path.string());
     return found == snapshot_results.end() ? payload : found->second.first;
   }
-  std::optional<int> load_display_settings_snapshot(const std::filesystem::path &path) const {
+  mutable bool last_require_connected = true;
+  std::optional<int> load_display_settings_snapshot(const std::filesystem::path &path, bool require_connected = true) const {
+    last_require_connected = require_connected;
     const auto found = snapshot_results.find(path.string());
     return (found == snapshot_results.end() ? loadable : found->second.second) ? std::optional<int> {1} : std::nullopt;
   }
@@ -283,6 +285,31 @@ void test_headless_is_positive_and_does_not_erase_baseline() {
   state.evidence = true;
   assert(!state.prepare_recovery_baseline("unplugged-dock"));
   assert(task_calls == 0);
+  const auto captures_before_history = state.captures;
+  for (const auto &tier : {"current", "golden", "previous"}) {
+    state.controller.snapshot_results.clear();
+    state.controller.snapshot_results[tier] = {true, true};
+    task_result = false;
+    assert(!state.prepare_recovery_baseline("tv-off-task-failed"));
+    task_result = true;
+    assert(state.prepare_recovery_baseline("tv-off"));
+    assert(!state.controller.last_require_connected);
+    assert(state.captures == captures_before_history && state.controller.snapshot_results.contains(tier));
+    state.controller.snapshot_results[tier] = {false, true};
+    assert(!state.prepare_recovery_baseline("invalid-history"));
+    state.controller.snapshot_results[tier] = {true, false};
+    assert(!state.prepare_recovery_baseline("unreadable-history"));
+  }
+  state.controller.snapshot_results = {{"current", {false, false}}, {"golden", {true, true}}};
+  assert(!state.prepare_recovery_baseline("invalid-authority"));
+  state.controller.snapshot_results = {{"current", {true, true}}};
+  state.controller.physical_state = State::unknown;
+  state.controller.loadable = false;
+  // The ordinary connected loader must remain the default after a failed
+  // hardware probe; uncertainty cannot grant disconnected validation.
+  state.controller.snapshot_results["current"].second = false;
+  assert(!state.prepare_recovery_baseline("unknown-hardware"));
+  assert(state.controller.last_require_connected);
 }
 
 void test_missing_baseline_retains_failed_recovery() {

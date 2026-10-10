@@ -327,6 +327,7 @@ namespace display_helper::v2 {
     /// Headless requires a successful native hardware query proving that no
     /// physical output is connected, plus no retained physical baseline.
     bool is_headless_without_baseline();
+    bool physical_displays_disconnected();
 
   private:
     std::optional<std::pair<Snapshot, codec::layout_rotation_map_t>> capture_filtered(const std::vector<std::string> &exclusions, const char *reason);
@@ -549,6 +550,9 @@ namespace display_helper::v2 {
     // and replacement APPLYs behind the worker until it reports completion.
     std::optional<ActiveMutationWorker> active_mutation_worker_;
     std::deque<DeferredMutationCommand> deferred_mutation_commands_;
+    // Correlated stream-start probe ordered after a forced DISARM, waiting for
+    // the same worker fence before acknowledging durable baseline readiness.
+    std::optional<SnapshotCurrentCommand> pending_handoff_snapshot_;
     // If RESET is ordered before a newer Apply, hold the completed older
     // outcome until the barrier either starts that replacement or proves the
     // replacement stale. This prevents both obsolete capture-ready replies
