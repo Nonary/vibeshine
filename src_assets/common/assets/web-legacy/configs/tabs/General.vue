@@ -48,6 +48,13 @@ function removeCmd(index: number) {
 
 <template>
   <div id="general" class="config-page">
+    <ConfigFieldRenderer
+      v-if="platform === 'macos'"
+      v-model="config.lid_close_ends_streams"
+      setting-key="lid_close_ends_streams"
+      class="mb-3"
+    />
+
     <ConfigFieldRenderer v-model="config.locale" setting-key="locale" class="mb-6" />
 
     <ConfigFieldRenderer

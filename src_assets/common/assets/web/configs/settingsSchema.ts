@@ -1069,6 +1069,7 @@ export const settingsCategories: SettingsCategory[] = [
           extendedField('update_check_interval'),
           text('sunshine_name', { placeholderKey: 'ui.settings.placeholders.host_name' }),
           boolean('system_tray'),
+          boolean('lid_close_ends_streams', { platform: 'macos' }),
           boolean('notify_pre_releases'),
           select('min_log_level', [
             option('0', 'ui.settings.options.log_level.verbose'),
@@ -1248,6 +1249,7 @@ export const settingsDefaults: Record<string, unknown> = {
   csrf_allowed_origins: '',
   system_tray: true,
   notify_pre_releases: true,
+  lid_close_ends_streams: true,
   min_log_level: 2,
   global_prep_cmd: [],
   session_history_enabled: true,
