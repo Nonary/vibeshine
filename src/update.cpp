@@ -177,10 +177,11 @@ namespace update {
       url = state.last_notified_url;
     }
     const std::string title = prerelease ? "New update available (Pre-release)" : "New update available (Stable)";
-    const std::string body = "Version " + version;
-    system_tray::tray_notify(title.c_str(), body.c_str(), [url]() {
-      if (!url.empty()) platf::open_url(url);
-    });
+    // The C tray backend has no per-notification context, and Windows routes
+    // older toast clicks through its latest global callback. Keep the exact
+    // release link in the text; the Web UI provides its clickable counterpart.
+    const std::string body = "Version " + version + (url.empty() ? "" : "\n" + url);
+    system_tray::tray_notify(title.c_str(), body.c_str());
     // Do not hold the notification lock while acquiring nvhttp's client lock.
     nvhttp::save_state();
 #endif
