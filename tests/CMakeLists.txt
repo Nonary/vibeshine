@@ -343,6 +343,21 @@ sunshine_add_test_target(
 )
 
 sunshine_add_test_target(
+    NAME test_fast_update_release
+    CATEGORY fast
+    TEST_SOURCES unit/test_update_release_standalone.cpp
+    LINK_LIBRARIES nlohmann_json::nlohmann_json)
+
+# This standalone policy harness uses assert; retain its checks in Release.
+if(TARGET test_fast_update_release)
+    if(MSVC)
+        target_compile_options(test_fast_update_release PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(test_fast_update_release PRIVATE -UNDEBUG)
+    endif()
+endif()
+
+sunshine_add_test_target(
     NAME test_fast_nvenc_api
     CATEGORY fast
     TEST_SOURCES
