@@ -9,6 +9,12 @@ using nlohmann::json;
 std::string package_name() {
 #ifdef _WIN32
   return "VibeshineSetup.exe";
+#elif defined(__APPLE__)
+#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
+  return "Vibeshine-macOS-arm64.dmg";
+#else
+  return "Vibeshine-macOS-x86_64.dmg";
+#endif
 #elif defined(__x86_64__)
   return "vibeshine-fixture-x86_64.pkg.tar.zst";
 #elif defined(__aarch64__)
@@ -226,5 +232,22 @@ int main() {
   auto wrong_core = compatible;
   wrong_core["nightly_metadata"]["version"] = "2.0.2-daily.d20261011.3+aaaaaaaaaaaa";
   assert(select(json::array({wrong_core}), "2.0.0", true).is_null());
+  auto mac = release("2.0.0");
+  mac["assets"][0]["name"] = "Vibeshine-macOS-arm64.dmg";
+  assert(release_selection::macos_package(mac, true));
+  assert(!release_selection::macos_package(mac, false));
+  mac["assets"][0]["name"] = "Vibeshine-macOS-x86_64.dmg";
+  assert(release_selection::macos_package(mac, false));
+  assert(!release_selection::macos_package(mac, true));
+  mac["assets"][0]["size"] = 0;
+  assert(!release_selection::macos_package(mac, false));
+  mac["assets"][0]["size"] = 100;
+  mac["assets"][0]["state"] = "new";
+  assert(!release_selection::macos_package(mac, false));
+  mac["assets"][0]["state"] = "uploaded";
+  mac["assets"][0]["name"] = "Vibepollo-macOS-x86_64.dmg";
+  assert(!release_selection::macos_package(mac, false));
+  mac["assets"] = json::array();
+  assert(!release_selection::macos_package(mac, false));
   std::cout << "release selection regression checks passed\n";
 }

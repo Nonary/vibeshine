@@ -37,6 +37,9 @@ namespace release_selection {
     }
     return false;
   }
+  inline bool macos_package(const json &release, bool arm64) {
+    return asset(release, arm64 ? "Vibeshine-macOS-arm64.dmg" : "Vibeshine-macOS-x86_64.dmg");
+  }
   inline bool complete(const json &release, bool nightly) {
     if (!release.is_object() || !release.contains("draft") || !release["draft"].is_boolean() || release["draft"].get<bool>() ||
         !release.contains("prerelease") || !release["prerelease"].is_boolean() ||
@@ -46,6 +49,14 @@ namespace release_selection {
     if (version.starts_with('v')) version.erase(0, 1);
     const bool package = asset(release, "VibeshineSetup.exe") || (!nightly &&
       (asset(release, "VibeshineSetup-v" + version + ".exe") || asset(release, "VibeshineSetup-" + version + ".exe")));
+#elif defined(__APPLE__)
+#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
+    const bool package = macos_package(release, true);
+#elif defined(__x86_64__) || defined(_M_X64)
+    const bool package = macos_package(release, false);
+#else
+    const bool package = false;
+#endif
 #else
     bool package = false;
     if (release.contains("assets") && release["assets"].is_array()) {
