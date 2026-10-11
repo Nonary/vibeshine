@@ -417,6 +417,10 @@ const virtualDisplayCustomizationFields = (): SettingsField[] => [
     descriptionKey: 'ui.settings.fields.wayland_hdr_compatibility.description',
     visibleWhen: { key: 'virtual_display_mode', notEquals: 'disabled' },
   }),
+  boolean('virtual_display_keep_while_paused', {
+    platform: 'macos',
+    visibleWhen: { key: 'virtual_display_mode', notEquals: 'disabled' },
+  }),
 ];
 
 const remoteMonitorFields = (): SettingsField[] => [
@@ -664,7 +668,7 @@ export const settingsCategories: SettingsCategory[] = [
               descriptionKey:
                 'ui.settings.fields.dd_paused_virtual_display_timeout_secs.description',
               warningKey: 'ui.settings.fields.dd_paused_virtual_display_timeout_secs.warning',
-              platform: ['windows', 'linux'],
+              platform: ['windows', 'linux', 'macos'],
               visibleWhen: { key: 'dd_config_revert_on_disconnect', equals: false },
             },
           ),
@@ -805,7 +809,7 @@ export const settingsCategories: SettingsCategory[] = [
           number('dd_paused_virtual_display_timeout_secs', {
             min: 0,
             step: 1,
-            platform: ['windows', 'linux'],
+            platform: ['windows', 'linux', 'macos'],
           }),
           text('dd_snapshot_restore_hotkey_modifiers', { platform: 'windows' }),
           text('end_stream_hotkey', { platform: 'windows' }),
@@ -1148,6 +1152,7 @@ export const settingsDefaults: Record<string, unknown> = {
   virtual_display_mode: 'per_client',
   virtual_display_layout: 'exclusive',
   virtual_display_max_clients: 4,
+  virtual_display_keep_while_paused: true,
   remote_monitor_mute_audio: false,
   remote_monitor_disconnect_on_stream_end: false,
   remote_monitor_disconnect_on_client_disconnect: false,

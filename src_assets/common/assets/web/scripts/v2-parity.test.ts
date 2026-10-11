@@ -175,7 +175,6 @@ test('Linux keeps common virtual-display policy and hides Windows display intern
     'dd_virtual_display_scale',
     'dd_config_revert_delay',
     'dd_config_revert_on_disconnect',
-    'dd_paused_virtual_display_timeout_secs',
   ]) {
     const field = fields.find((candidate) => candidate.key === key);
     assert.deepEqual(field?.platform, ['windows', 'linux'], `${key} must support Linux cleanup`);
@@ -190,6 +189,11 @@ test('Linux keeps common virtual-display policy and hides Windows display intern
     'Wayland HDR compatibility must remain Linux-only',
   );
   assert.equal(settingsDefaults.wayland_hdr_compatibility, false);
+  // macOS keeps a paused session's virtual display for this long too.
+  assert.deepEqual(
+    fields.find((candidate) => candidate.key === 'dd_paused_virtual_display_timeout_secs')?.platform,
+    ['windows', 'linux', 'macos'],
+  );
 });
 
 test('Linux exposes Remote Monitor behavior controls', () => {
@@ -421,4 +425,13 @@ test('advanced encoder settings have actual fields and platform-aware options', 
     optionsForPlatform(settingsFields.get('virtual_display_mode')!, 'linux')[0].value,
     'per_client',
   );
+});
+
+
+test('macOS exposes paused display retention with the backend default', () => {
+  const fields = settingsCategories.flatMap((category) => category.groups.flatMap((group) => group.fields));
+  const field = fields.find((candidate) => candidate.key === 'virtual_display_keep_while_paused');
+  assert.equal(field?.platform, 'macos');
+  assert.deepEqual(field?.visibleWhen, { key: 'virtual_display_mode', notEquals: 'disabled' });
+  assert.equal(settingsDefaults.virtual_display_keep_while_paused, true);
 });
