@@ -280,7 +280,7 @@ namespace config {
 
     std::string file_apps;
 
-    int fec_percentage;
+    int fec_percentage;  ///< Standard FEC percentage (0-255); 0 disables FEC.
     int video_max_batch_size_kb;
     bool pacing_batch_demand_limit;  ///< Experimental demand-based ordinary-video pacing quantum and batch sizing (default off).
     bool host_adaptive_pacing;  ///< Experimental loss-responsive packet spacing for ordinary video, never changing encoder bitrate or FPS (default off).

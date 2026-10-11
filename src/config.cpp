@@ -2138,7 +2138,7 @@ namespace config {
     }
 #endif
 
-    int_between_f(vars, "fec_percentage", stream.fec_percentage, {1, 255});
+    int_between_f(vars, "fec_percentage", stream.fec_percentage, {0, 255});
     vars.erase("pyrowave_send_rate_mbps");
     int_between_f(vars, "pyrowave_critical_fec_percentage", stream.pyrowave_critical_fec_percentage, {0, 255});
     int_between_f(vars, "pacing_max_bitrate_kbps", stream.pacing_max_bitrate_kbps, {0, 10000000});
