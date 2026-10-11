@@ -30,6 +30,7 @@ async function host(
     } else if (path === '/api/metadata')
       body = {
         platform,
+        architecture: 'x86_64',
         version: '1.0.0',
         encoder_status: { state: 'ready', h264: true },
         virtual_display: {
@@ -1166,7 +1167,7 @@ test('Linux shows an automatic update notice across pages and retries failed che
 }) => {
   await host(page);
   let unavailable = true;
-  await page.route('https://api.github.com/repos/Nonary/vibeshine/releases', async (route) => {
+  await page.route('https://api.github.com/repos/Nonary/vibeshine/releases?**', async (route) => {
     await route.fulfill(
       unavailable
         ? { status: 403, json: { message: 'API rate limit exceeded' } }
@@ -1174,7 +1175,9 @@ test('Linux shows an automatic update notice across pages and retries failed che
             json: [
               {
                 tag_name: 'v1.1.0',
+                draft: false,
                 prerelease: false,
+                assets: [{ name: 'Vibeshine-x86_64.AppImage', state: 'uploaded', size: 100 }],
                 html_url: 'https://github.com/Nonary/vibeshine/releases/tag/v1.1.0',
               },
             ],
@@ -1197,13 +1200,90 @@ test('Linux shows an automatic update notice across pages and retries failed che
   await expect(notice.getByText('Vibeshine 1.1.0 is available')).toBeVisible();
 });
 
-test('Linux stable install does not advertise a prerelease without opt-in', async ({ page }) => {
-  await host(page);
-  await page.route('https://api.github.com/repos/Nonary/vibeshine/releases', async (route) => {
-    await route.fulfill({ json: [{ tag_name: 'v2.0.0-beta.1', prerelease: true }] });
+test('Linux stable install respects an explicit prerelease opt-out', async ({ page }) => {
+  await host(page, 'linux', { notify_pre_releases: false });
+  await page.route('https://api.github.com/repos/Nonary/vibeshine/releases?**', async (route) => {
+    await route.fulfill({ json: [{ tag_name: 'v2.0.0-beta.1', draft: false, prerelease: true, assets: [{ name: 'Vibeshine-x86_64.AppImage', state: 'uploaded', size: 100 }] }] });
   });
-  const response = page.waitForResponse('https://api.github.com/repos/Nonary/vibeshine/releases');
+  const response = page.waitForResponse((response) => response.url().startsWith('https://api.github.com/repos/Nonary/vibeshine/releases?'));
   await page.goto('/v2/');
   await response;
   await expect(page.locator('.update-notice')).toHaveCount(0);
+});
+
+test('Windows default nightly notification validates metadata and dismissal survives reload', async ({
+  page,
+}) => {
+  await host(page, 'windows', {}, true, { version: '1.9.0' });
+  const tag = 'daily-2026-10-11';
+  await page.route('https://api.github.com/repos/Nonary/vibeshine/releases?**', (route) =>
+    route.fulfill({
+      json: [
+        {
+          tag_name: tag,
+          draft: false,
+          prerelease: true,
+          html_url: `https://github.com/Nonary/vibeshine/releases/tag/${tag}`,
+          assets: ['VibeshineSetup.exe', 'nightly-metadata.json', 'SHA256SUMS'].map((name) => ({
+            name,
+            state: 'uploaded',
+            size: 100,
+          })),
+        },
+      ],
+    }),
+  );
+  await page.route('**/api/updates/nightly-metadata?**', (route) =>
+    route.fulfill({
+      json: {
+        schema_version: 1,
+        channel: 'nightly',
+        tag,
+        version: '2.0.0-daily.d20261011+aaaaaaaaaaaa',
+        source_commit: 'a'.repeat(40),
+        nightly_sequence: 20261011,
+      },
+    }),
+  );
+  await page.goto('/v2/');
+  const notice = page.locator('.update-notice');
+  await expect(notice.getByText(`Vibeshine ${tag} is available`)).toBeVisible();
+  await notice.getByRole('button', { name: 'Dismiss this update' }).click();
+  await expect(notice).toHaveCount(0);
+  await page.reload();
+  await expect(notice).toHaveCount(0);
+});
+
+test('Windows prerelease install opts out persistently and still receives a stable update', async ({
+  page,
+}) => {
+  await host(page, 'windows', { notify_pre_releases: 'disabled' }, true, {
+    version: '2.0.0-beta.1',
+  });
+  await page.route('https://api.github.com/repos/Nonary/vibeshine/releases?**', (route) =>
+    route.fulfill({
+      json: [
+        {
+          tag_name: '3.0.0-beta.1',
+          draft: false,
+          prerelease: true,
+          assets: [{ name: 'VibeshineSetup.exe', state: 'uploaded', size: 100 }],
+        },
+        {
+          tag_name: '2.0.0',
+          draft: false,
+          prerelease: false,
+          assets: [{ name: 'VibeshineSetup.exe', state: 'uploaded', size: 100 }],
+        },
+      ],
+    }),
+  );
+  await page.goto('/v2/');
+  await expect(
+    page.locator('.update-notice').getByText('Vibeshine 2.0.0 is available'),
+  ).toBeVisible();
+  await page.reload();
+  await expect(
+    page.locator('.update-notice').getByText('Vibeshine 2.0.0 is available'),
+  ).toBeVisible();
 });
