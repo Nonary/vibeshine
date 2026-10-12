@@ -169,7 +169,7 @@ public static class VibeshineUsbIpSetup {
                 Write-Output '[VibeshineUsbIp] Reusing the existing shared USB/IP transport without changing it.'
                 if ($state) { Remove-Item -LiteralPath $stateKey -Force }
             } else {
-                Write-UsbIpWarning 'Shared USB/IP drivers already exist but the controller is unavailable. Restart Windows or repair that installation; Vibeshine leaves it unchanged.'
+                Write-Output '[VibeshineUsbIp] USBIP_TRANSPORT_INFO: Shared USB/IP drivers already exist but the controller is unavailable. Vibeshine leaves them unchanged. Optional DualSense USB waveform haptics may be unavailable until Windows is restarted or that installation is repaired.'
             }
             exit 0
         }
@@ -194,7 +194,7 @@ public static class VibeshineUsbIpSetup {
         for ($i=0; $i -lt 40 -and ![VibeshineUsbIpSetup]::Available(); ++$i) { Start-Sleep -Milliseconds 250 }
         if ($rebootRequired) { Write-Output '[VibeshineUsbIp] USBIP_TRANSPORT_RESTART_REQUIRED' }
         if (![VibeshineUsbIpSetup]::Available()) {
-            Write-UsbIpWarning 'Driver installation completed but the controller is not ready. Restart Windows before using DualSense USB waveform haptics.'
+            Write-Output '[VibeshineUsbIp] USBIP_TRANSPORT_INFO: Driver installation completed but the controller is not ready. Restart Windows before using optional DualSense USB waveform haptics.'
             Write-Output '[VibeshineUsbIp] USBIP_TRANSPORT_RESTART_REQUIRED'
         } else {
             Remove-Item -LiteralPath $stateKey -Force
