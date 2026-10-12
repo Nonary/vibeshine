@@ -1216,11 +1216,22 @@ test('Windows default nightly notification validates metadata and dismissal surv
 }) => {
   await host(page, 'windows', {}, true, { version: '1.9.0' });
   const tag = 'daily-2026-10-11';
+  const metadata = {
+    schema_version: 1, channel: 'nightly', tag,
+    version: '2.0.0-daily.d20261011+aaaaaaaaaaaa',
+    source_commit: 'a'.repeat(40), nightly_sequence: 20261011,
+  };
+  const assetRequests: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/api/updates/nightly-metadata') || request.url().includes('/releases/download/'))
+      assetRequests.push(request.url());
+  });
   await page.route('https://api.github.com/repos/Nonary/vibeshine/releases?**', (route) =>
     route.fulfill({
       json: [
         {
           tag_name: tag,
+          body: `<!-- nightly-identity: ${JSON.stringify(metadata)} -->\n`,
           draft: false,
           prerelease: true,
           html_url: `https://github.com/Nonary/vibeshine/releases/tag/${tag}`,
@@ -1233,18 +1244,6 @@ test('Windows default nightly notification validates metadata and dismissal surv
       ],
     }),
   );
-  await page.route('**/api/updates/nightly-metadata?**', (route) =>
-    route.fulfill({
-      json: {
-        schema_version: 1,
-        channel: 'nightly',
-        tag,
-        version: '2.0.0-daily.d20261011+aaaaaaaaaaaa',
-        source_commit: 'a'.repeat(40),
-        nightly_sequence: 20261011,
-      },
-    }),
-  );
   await page.goto('/v2/');
   const notice = page.locator('.update-notice');
   await expect(notice.getByText(`Vibeshine ${tag} is available`)).toBeVisible();
@@ -1252,6 +1251,7 @@ test('Windows default nightly notification validates metadata and dismissal surv
   await expect(notice).toHaveCount(0);
   await page.reload();
   await expect(notice).toHaveCount(0);
+  expect(assetRequests).toEqual([]);
 });
 
 test('Windows prerelease install opts out persistently and still receives a stable update', async ({

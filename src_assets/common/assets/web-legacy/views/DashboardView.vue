@@ -514,6 +514,7 @@ import { useI18n } from 'vue-i18n';
 import { NCard, NAlert, useMessage, useDialog } from 'naive-ui';
 import ResourceCard from '@/ResourceCard.vue';
 import VirtualDisplayRecovery from '@/components/VirtualDisplayRecovery.vue';
+import { fetchUpdateReleases, selectAvailableUpdate, prereleasesEnabled } from '../../web/utils/updates';
 import { displayRecoverySupported } from '../../web/utils/displayRecovery';
 import ChangelogPanel from '@/components/ChangelogPanel.vue';
 import PlayniteReinstallButton from '@/components/PlayniteReinstallButton.vue';
@@ -541,6 +542,7 @@ const preReleaseVersion = computed(() =>
     : new VibeshineVersion('0.0.0'),
 );
 const notifyPreReleases = ref(false);
+const verifiedStableUpgrade = ref(false);
 const showPreNotes = ref(false);
 const showStableNotes = ref(false);
 const loading = ref(true);
@@ -694,8 +696,7 @@ async function runVersionChecks() {
       return;
     }
     // Normalize notify pre-release flag to boolean
-    notifyPreReleases.value =
-      cfg.notify_pre_releases === true || cfg.notify_pre_releases === 'enabled';
+    notifyPreReleases.value = prereleasesEnabled(cfg.notify_pre_releases);
     const serverVersion = configStore.metadata?.version || cfg.version;
     installedVersion.value = new VibeshineVersion(serverVersion || '0.0.0');
     branch.value = cfg.branch || '';
@@ -710,46 +711,28 @@ async function runVersionChecks() {
       // eslint-disable-next-line no-console
       console.warn('[Dashboard] latest release fetch failed', e);
     }
-    // Fetch list of releases to locate prereleases and determine installed stability
+    // Preserve GitHub's stable/latest display, but use the same API-only
+    // qualification and ordering as backend and v2 notices.
     try {
-      const releases = await fetch('https://api.github.com/repos/Nonary/vibeshine/releases').then(
-        (r) => r.json(),
-      );
-      if (Array.isArray(releases)) {
-        // Pick the latest prerelease by semver (not just the first one)
-        const prereleases = releases.filter((r: any) => r && r.prerelease && !r.draft);
-        if (prereleases.length > 0) {
-          let best = prereleases[0];
-          let bestV = VibeshineVersion.fromRelease(best);
-          for (let i = 1; i < prereleases.length; i++) {
-            const cand = prereleases[i];
-            const candV = VibeshineVersion.fromRelease(cand);
-            if (candV.isGreater(bestV)) {
-              best = cand;
-              bestV = candV;
-            }
-          }
-          preReleaseRelease.value = best as GitHubRelease;
-        }
-        // Determine if installed tag corresponds to a prerelease on GitHub
-        const installedTag = installedVersion.value?.version || '';
-        const installedTagV = installedTag.toLowerCase().startsWith('v')
-          ? installedTag
-          : 'v' + installedTag;
-        const match = releases.find(
-          (r: any) =>
-            r &&
-            !r.draft &&
-            typeof r.tag_name === 'string' &&
-            (r.tag_name === installedTag || r.tag_name === installedTagV),
-        );
-        installedIsPrerelease.value = !!(match && match.prerelease === true);
-      }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      try {
+        const platform = configStore.metadata?.platform || 'unknown';
+        const architecture = configStore.metadata?.architecture || 'unknown';
+        const releases = await fetchUpdateReleases(controller.signal, platform, notifyPreReleases.value, architecture);
+        const selected = selectAvailableUpdate(serverVersion || 'unknown', releases, cfg.notify_pre_releases, platform, architecture);
+        const candidate = selected ? releases.find((r) => r.tag_name?.replace(/^v/, '') === selected.tag.replace(/^v/, '')) : null;
+        preReleaseRelease.value = candidate?.prerelease ? candidate as GitHubRelease : null;
+        verifiedStableUpgrade.value = !!selectAvailableUpdate(serverVersion || 'unknown', githubRelease.value ? [githubRelease.value] : [], false, platform, architecture);
+        const installedTag = installedVersion.value.version.replace(/^v/, '');
+        const installedRelease = releases.find((r) => r.draft === false && r.tag_name?.replace(/^v/, '') === installedTag);
+        installedIsPrerelease.value = installedRelease?.prerelease === true;
+      } finally { clearTimeout(timeout); }
     } catch (e) {
-      // eslint-disable-next-line no-console
+      preReleaseRelease.value = null;
+      verifiedStableUpgrade.value = false;
       console.warn('[Dashboard] releases list fetch failed', e);
     }
-    // Tag-based comparison handled below via VibeshineVersion
 
     const plat = (configStore.metadata?.platform || '').toLowerCase();
     // ViGEm health (Windows only)
@@ -1090,17 +1073,8 @@ const displayVersion = computed(() => {
   }
   return v;
 });
-const stableBuildAvailable = computed(() => {
-  if (!githubRelease.value) return false;
-  return githubVersion.value.isGreater(installedVersion.value);
-});
-const preReleaseBuildAvailable = computed(() => {
-  if (!preReleaseRelease.value || !githubRelease.value) return false;
-  return (
-    preReleaseVersion.value.isGreater(installedVersion.value) &&
-    preReleaseVersion.value.isGreater(githubVersion.value)
-  );
-});
+const stableBuildAvailable = computed(() => verifiedStableUpgrade.value);
+const preReleaseBuildAvailable = computed(() => !!preReleaseRelease.value);
 const buildVersionIsDirty = computed(() => {
   if (!installedVersion.value) return false;
   return (
