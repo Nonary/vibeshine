@@ -105,6 +105,44 @@ namespace VibeshineInstaller {
     }
   }
 
+  internal sealed class InstallerDriverSelections {
+    public bool DisplayEnabled { get; private set; }
+    public bool GamepadEnabled { get; private set; }
+    private readonly Action<string, bool> _save;
+    public InstallerDriverSelections(Func<string, int?> read, Action<string, bool> save) {
+      DisplayEnabled = Resolve(read("DisplayEnabled"));
+      GamepadEnabled = Resolve(read("GamepadEnabled"));
+      _save = save;
+    }
+    private static bool Resolve(int? value) { return !value.HasValue || value.Value != 0; }
+    public void SelectDisplay(bool selected) { DisplayEnabled = selected; _save("DisplayEnabled", selected); }
+    public void SelectGamepad(bool selected) { GamepadEnabled = selected; _save("GamepadEnabled", selected); }
+  }
+  internal static class InstallerDriverSelectionStore {
+    private const string KeyPath = @"SOFTWARE\Nonary\Vibeshine\Installer\DriverSelections";
+    public static InstallerDriverSelections Load() { return new InstallerDriverSelections(Read, Save); }
+    private static int? Read(string name) {
+      try {
+        using (var user = Registry.CurrentUser.OpenSubKey(KeyPath)) {
+          var value = Parse(user == null ? null : user.GetValue(name));
+          if (value.HasValue) return value;
+        }
+        using (var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+        using (var key = machine.OpenSubKey(KeyPath)) { return Parse(key == null ? null : key.GetValue(name)); }
+      } catch { return null; }
+    }
+    internal static int? Parse(object value) {
+      int number;
+      return value != null && int.TryParse(Convert.ToString(value), out number) && (number == 0 || number == 1) ? (int?)number : null;
+    }
+    private static void Save(string name, bool selected) {
+      // Draft choices survive cancel/reopen; MSI commits machine choices only
+      // after an authorized install. This never touches certificate trust.
+      try { using (var key = Registry.CurrentUser.CreateSubKey(KeyPath)) { key.SetValue(name, selected ? "1" : "0", RegistryValueKind.String); } }
+      catch { /* A restricted profile still retains this window's choices. */ }
+    }
+  }
+
   internal sealed class InstallerWindow : Window {
     private readonly InstallerArguments _arguments;
     private readonly Border _installSection;
@@ -117,7 +155,8 @@ namespace VibeshineInstaller {
     private readonly TextBox _installPathTextBox;
     private readonly ComboBox _virtualDisplayDriverComboBox;
     private readonly CheckBox _virtualGamepadDriverCheckBox;
-    private readonly CheckBox _localGamepadCertificateTrustCheckBox;
+    private readonly CheckBox _virtualDisplayDriverCheckBox;
+    private readonly InstallerDriverSelections _driverSelections;
     private readonly CheckBox _usbIpTransportCheckBox;
     private readonly TextBlock _statusText;
     private readonly TextBlock _statusDetailText;
@@ -171,6 +210,7 @@ namespace VibeshineInstaller {
 
     public InstallerWindow(InstallerArguments arguments) {
       _arguments = arguments;
+      _driverSelections = InstallerDriverSelectionStore.Load();
       _bundleVersion = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0, 0);
       _licenseText = LoadEmbeddedLicenseText();
       _installedProduct = InstallerRunner.GetInstalledVibeshineProduct();
@@ -527,6 +567,15 @@ namespace VibeshineInstaller {
         Margin = new Thickness(0, 0, 0, 6)
       };
 
+      _virtualDisplayDriverCheckBox = new CheckBox {
+        Content = "Install or update the virtual display driver",
+        IsChecked = _driverSelections.DisplayEnabled,
+        Foreground = new SolidColorBrush(Color.FromRgb(232, 239, 253)),
+        Margin = new Thickness(0, 0, 0, 8)
+      };
+      _virtualDisplayDriverCheckBox.Checked += (sender, e) => _driverSelections.SelectDisplay(true);
+      _virtualDisplayDriverCheckBox.Unchecked += (sender, e) => _driverSelections.SelectDisplay(false);
+
       _virtualDisplayDriverComboBox = new ComboBox {
         FontSize = 13,
         MinHeight = 32,
@@ -628,6 +677,7 @@ namespace VibeshineInstaller {
       };
       _installVirtualDisplaySection.Child = driverStack;
       driverStack.Children.Add(virtualDisplayDriverLabel);
+      driverStack.Children.Add(_virtualDisplayDriverCheckBox);
       driverStack.Children.Add(_virtualDisplayDriverComboBox);
       driverStack.Children.Add(installVirtualDisplayHintText);
 
@@ -656,10 +706,12 @@ namespace VibeshineInstaller {
         Content = "Install Vibeshine virtual gamepad driver",
         FontSize = 13,
         Foreground = new SolidColorBrush(Color.FromRgb(232, 239, 253)),
-        IsChecked = _payloadMsiInfo == null || !_payloadMsiInfo.HasLocalGamepadCertificate,
+        IsChecked = _driverSelections.GamepadEnabled,
         Margin = new Thickness(0, 0, 0, 6),
         ToolTip = "Installs the bundled user-mode virtual gamepad driver."
       };
+      _virtualGamepadDriverCheckBox.Checked += (sender, e) => _driverSelections.SelectGamepad(true);
+      _virtualGamepadDriverCheckBox.Unchecked += (sender, e) => _driverSelections.SelectGamepad(false);
       gamepadStack.Children.Add(_virtualGamepadDriverCheckBox);
       gamepadStack.Children.Add(new TextBlock {
         Text = "Enable this to install or update Vibeshine's bundled virtual gamepad driver.",
@@ -668,19 +720,9 @@ namespace VibeshineInstaller {
         TextWrapping = TextWrapping.Wrap
       });
 
-      _localGamepadCertificateTrustCheckBox = new CheckBox {
-        Content = new TextBlock { Text = "I consent to machine-wide trust of this bundled gamepad certificate", TextWrapping = TextWrapping.Wrap },
-        IsChecked = false,
-        FontSize = 12,
-        Foreground = new SolidColorBrush(Color.FromRgb(232, 239, 253)),
-        Margin = new Thickness(0, 10, 0, 6),
-        Visibility = _payloadMsiInfo != null && _payloadMsiInfo.HasLocalGamepadCertificate ? Visibility.Visible : Visibility.Collapsed
-      };
-      _localGamepadCertificateTrustCheckBox.Checked += (sender, eventArgs) => { _virtualGamepadDriverCheckBox.IsChecked = true; };
-      gamepadStack.Children.Add(_localGamepadCertificateTrustCheckBox);
       if (_payloadMsiInfo != null && _payloadMsiInfo.HasLocalGamepadCertificate) {
         gamepadStack.Children.Add(new TextBlock {
-          Text = "Only if this gamepad driver is missing or older, this option may add its bundled self-issued, non-CA code-signing certificate to LocalMachine Root and TrustedPublisher. Trust persists for every user and can trust other code signed by the same key; it remains after uninstall. No Secure Boot, test-signing setting or reboot is changed. Daily builds use different certificates, so consent may be needed again.\n\nSigner: " + _payloadMsiInfo.LocalGamepadCertificateSubject + "\nThumbprint: " + _payloadMsiInfo.LocalGamepadCertificateThumbprint + "\nDriver version: " + _payloadMsiInfo.LocalGamepadDriverVersion,
+          Text = "Installing a missing or newer beta gamepad driver also adds persistent machine-wide trust for its verified bundled signing certificate. Equal or newer installed drivers remain unchanged. Windows security enforcement stays enabled.",
           FontSize = 11,
           Foreground = new SolidColorBrush(Color.FromRgb(190, 208, 236)),
           TextWrapping = TextWrapping.Wrap
@@ -1167,8 +1209,8 @@ namespace VibeshineInstaller {
         var installVirtualDisplayDriver = ShouldInstallVirtualDisplayDriver();
         var installVirtualGamepadDriver = ShouldInstallVirtualGamepadDriver();
         var installUsbIpTransport = ShouldInstallUsbIpTransport();
-        _arguments.AllowLocalGamepadCertificateTrust = _payloadMsiInfo != null && _payloadMsiInfo.HasLocalGamepadCertificate && installVirtualGamepadDriver && _localGamepadCertificateTrustCheckBox.IsChecked == true;
-        _arguments.ConsentCertificateThumbprint = _arguments.AllowLocalGamepadCertificateTrust ? _payloadMsiInfo.LocalGamepadCertificateThumbprint : string.Empty;
+        _arguments.InstallDisplayDriversRequested = _virtualDisplayDriverCheckBox.IsChecked == true;
+        InstallerRunner.ApplySelectedGamepadTrust(_arguments, _payloadMsiInfo, installVirtualGamepadDriver);
         return await Task.Run(() => InstallerRunner.RunInteractiveInstall(
           _arguments,
           selectedPath,
@@ -1580,7 +1622,7 @@ namespace VibeshineInstaller {
         _installPathTextBox.IsEnabled = false;
         _virtualDisplayDriverComboBox.IsEnabled = false;
         _virtualGamepadDriverCheckBox.IsEnabled = false;
-        _localGamepadCertificateTrustCheckBox.IsEnabled = false;
+        _virtualDisplayDriverCheckBox.IsEnabled = false;
         _usbIpTransportCheckBox.IsEnabled = false;
         _browseButton.IsEnabled = false;
         _installSection.Visibility = Visibility.Collapsed;
@@ -1602,7 +1644,7 @@ namespace VibeshineInstaller {
       _installPathTextBox.IsEnabled = allowInstallInputs && showInstallLocation;
       _virtualDisplayDriverComboBox.IsEnabled = allowInstallInputs && _showInstallVirtualDisplayOption;
       _virtualGamepadDriverCheckBox.IsEnabled = allowInstallInputs && _showInstallVirtualGamepadOption;
-      _localGamepadCertificateTrustCheckBox.IsEnabled = allowInstallInputs && _showInstallVirtualGamepadOption;
+      _virtualDisplayDriverCheckBox.IsEnabled = allowInstallInputs && _showInstallVirtualDisplayOption;
       _usbIpTransportCheckBox.IsEnabled = allowInstallInputs && _showInstallUsbIpTransportOption;
       _browseButton.IsEnabled = allowInstallInputs && showInstallLocation;
       _installSection.Visibility = showInstallLocation ? Visibility.Visible : Visibility.Collapsed;
@@ -2198,6 +2240,8 @@ namespace VibeshineInstaller {
     public string InternalInstallPath { get; set; }
     public bool InternalInstallVirtualDisplay { get; set; }
     public bool InternalInstallVirtualGamepad { get; set; }
+    private bool _installDisplayDriversRequested = true;
+    public bool InstallDisplayDriversRequested { get { return _installDisplayDriversRequested; } set { _installDisplayDriversRequested = value; } }
     public bool AllowLocalGamepadCertificateTrust { get; set; }
     public string ConsentCertificateThumbprint { get; set; }
     public bool InternalInstallUsbIpTransport { get; set; }
@@ -2268,6 +2312,10 @@ namespace VibeshineInstaller {
         }
         if (string.Equals(arg, "--internal-gamepad-certificate-trust", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
           parsed.AllowLocalGamepadCertificateTrust = ParseBooleanToken(args[++index]);
+          continue;
+        }
+        if (string.Equals(arg, "--internal-install-display-drivers", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
+          parsed.InstallDisplayDriversRequested = ParseBooleanToken(args[++index]);
           continue;
         }
         if (string.Equals(arg, "--internal-gamepad-consent-thumbprint", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
@@ -3606,6 +3654,19 @@ namespace VibeshineInstaller {
         (character >= '0' && character <= '9') || (character >= 'A' && character <= 'F'));
     }
 
+    internal static void ApplySelectedGamepadTrust(InstallerArguments arguments, PayloadMsiInfo payload, bool installGamepad) {
+      var approved = installGamepad && payload != null && payload.HasLocalGamepadCertificate
+        && string.Equals(payload.LocalGamepadCertificateThumbprint, "7F1868BF86698A8674F40E686B02C8C702BD3B88", StringComparison.OrdinalIgnoreCase);
+      arguments.AllowLocalGamepadCertificateTrust = approved;
+      arguments.ConsentCertificateThumbprint = approved ? payload.LocalGamepadCertificateThumbprint : string.Empty;
+    }
+    internal static IEnumerable<string> BuildDriverSelectionArguments(InstallerArguments arguments, bool useVirtualDisplay, bool installGamepad) {
+      return new[] {
+        "INSTALL_DISPLAY_DRIVERS=" + (arguments == null || arguments.InstallDisplayDriversRequested ? "1" : "0"),
+        "INSTALL_VIRTUAL_DISPLAY_DRIVER=" + (useVirtualDisplay ? "1" : "0"),
+        "INSTALL_VIRTUAL_GAMEPAD_DRIVER=" + (installGamepad ? "1" : "0")
+      };
+    }
     private static IEnumerable<string> BuildLocalGamepadTrustArguments(InstallerArguments arguments, bool installGamepad) {
       var consent = installGamepad && arguments != null && arguments.AllowLocalGamepadCertificateTrust
         && IsCertificateThumbprint(arguments.ConsentCertificateThumbprint);
@@ -3633,14 +3694,13 @@ namespace VibeshineInstaller {
         "/l*v",
         logPath,
         CreatePropertyArgument("INSTALL_ROOT", installDirectory),
-        "INSTALL_VIRTUAL_DISPLAY_DRIVER=" + (installVirtualDisplayDriver ? "1" : "0"),
-        "INSTALL_VIRTUAL_GAMEPAD_DRIVER=" + (installVirtualGamepadDriver ? "1" : "0"),
         "INSTALL_USBIP_TRANSPORT=" + (installUsbIpTransport ? "1" : "0"),
         "SKIP_REMOVE_CONFLICTING_PRODUCTS=1",
         "REBOOT=ReallySuppress",
         "SUPPRESSMSGBOXES=1"
       };
 
+      args.AddRange(BuildDriverSelectionArguments(arguments, installVirtualDisplayDriver, installVirtualGamepadDriver));
       args.AddRange(BuildLocalGamepadTrustArguments(arguments, installVirtualGamepadDriver));
 
       AppendInstallerLogMessage(logPath, "Quiescing Vibeshine/Sunshine services and helper processes before MSI install attempt.");
@@ -7263,6 +7323,8 @@ namespace VibeshineInstaller {
         "--internal-elevated-install",
         "--internal-install-path",
         installDirectory,
+        "--internal-install-display-drivers",
+        arguments.InstallDisplayDriversRequested ? "1" : "0",
         "--internal-install-virtual-display-driver",
         installVirtualDisplayDriver ? "1" : "0",
         "--internal-install-virtual-gamepad-driver",
