@@ -1641,6 +1641,7 @@ vibeshine_package_adopt_legacy_barriers() {
     # replacement path or an unrecorded new mask.
     if [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ]; then
       vibeshine_package_complete_quiescence_is_safe || return 1
+      [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
       if [ -e "$vibeshine_package_transaction/fence.owned" ] || [ -L "$vibeshine_package_transaction/fence.owned" ]; then
         vibeshine_package_record_is_safe "$vibeshine_package_transaction/fence.owned" || return 1
       fi
@@ -1670,9 +1671,11 @@ vibeshine_package_adopt_legacy_barriers() {
           fi
         done
       done
+      [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
       vibeshine_package_write_record fence.before absent || return 1
       rm -f -- "$vibeshine_package_transaction/fence.owned" || return 1
       vibeshine_package_write_record phase preflight || return 1
+      [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
       rm -f -- "$vibeshine_package_transaction/legacy-adopted" || return 1
       return 0
     fi
@@ -1708,6 +1711,10 @@ SendSIGKILL=no') ;;
     echo 'error: an earlier package fence remains, but the old host or session has not fully drained; it cannot be adopted safely.' >&2
     return 1
   }
+  # Generation inspection can take time. An administrator may edit the same
+  # inode while it runs; do not convert authority for changed fence bytes.
+  printf '%%s\n' "$vibeshine_package_legacy_contents" |
+    cmp -s -- - "$vibeshine_host_upgrade_dropin" || return 1
   for vibeshine_package_name in vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
     vibeshine_package_current=$(vibeshine_package_path_identity "/run/systemd/system/$vibeshine_package_name") || return 1
     case "$vibeshine_package_current" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
@@ -1723,15 +1730,32 @@ SendSIGKILL=no') ;;
     vibeshine_package_before=$(cat -- "$vibeshine_package_transaction/fence.owned") || return 1
   fi
   [ "$(vibeshine_package_path_identity "$vibeshine_host_upgrade_dropin")" = "$vibeshine_package_before" ] || return 1
+  vibeshine_package_adoption_fence_identity=$vibeshine_package_before
   vibeshine_package_write_record legacy-adopted yes || return 1
   for vibeshine_package_name in fence vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
     if [ "$vibeshine_package_name" = fence ]; then vibeshine_package_owned_path=$vibeshine_host_upgrade_dropin
     else vibeshine_package_owned_path=/run/systemd/system/$vibeshine_package_name; fi
+    # Recheck each original identity at publication, rather than claiming a
+    # replacement that appeared after the inventory pass.
+    if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+      vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned") || return 1
+    else
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.before" || return 1
+      vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.before") || return 1
+    fi
     vibeshine_package_current=$(vibeshine_package_path_identity "$vibeshine_package_owned_path") || return 1
+    [ "$vibeshine_package_current" = "$vibeshine_package_expected" ] || return 1
+    if [ "$vibeshine_package_name" != fence ]; then
+      [ "$(readlink -- "$vibeshine_package_owned_path")" = /dev/null ] || return 1
+    fi
     vibeshine_package_write_record "$vibeshine_package_name.owned" "$vibeshine_package_current" || return 1
     vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
   done
   vibeshine_package_write_record phase preflight || return 1
+  [ "$(vibeshine_package_path_identity "$vibeshine_host_upgrade_dropin")" = "$vibeshine_package_adoption_fence_identity" ] || return 1
+  printf '%%s\n' "$vibeshine_package_legacy_contents" |
+    cmp -s -- - "$vibeshine_host_upgrade_dropin" || return 1
   # Every owned identity and before snapshot is now durable; the pending
   # adoption marker is no longer needed by later release/retry operations.
   rm -f -- "$vibeshine_package_transaction/legacy-adopted"
@@ -2566,6 +2590,7 @@ vibeshine_package_adopt_legacy_barriers() {
     # replacement path or an unrecorded new mask.
     if [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ]; then
       vibeshine_package_complete_quiescence_is_safe || return 1
+      [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
       if [ -e "$vibeshine_package_transaction/fence.owned" ] || [ -L "$vibeshine_package_transaction/fence.owned" ]; then
         vibeshine_package_record_is_safe "$vibeshine_package_transaction/fence.owned" || return 1
       fi
@@ -2595,9 +2620,11 @@ vibeshine_package_adopt_legacy_barriers() {
           fi
         done
       done
+      [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
       vibeshine_package_write_record fence.before absent || return 1
       rm -f -- "$vibeshine_package_transaction/fence.owned" || return 1
       vibeshine_package_write_record phase preflight || return 1
+      [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
       rm -f -- "$vibeshine_package_transaction/legacy-adopted" || return 1
       return 0
     fi
@@ -2633,6 +2660,10 @@ SendSIGKILL=no') ;;
     echo 'error: an earlier package fence remains, but the old host or session has not fully drained; it cannot be adopted safely.' >&2
     return 1
   }
+  # Generation inspection can take time. An administrator may edit the same
+  # inode while it runs; do not convert authority for changed fence bytes.
+  printf '%%s\n' "$vibeshine_package_legacy_contents" |
+    cmp -s -- - "$vibeshine_host_upgrade_dropin" || return 1
   for vibeshine_package_name in vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
     vibeshine_package_current=$(vibeshine_package_path_identity "/run/systemd/system/$vibeshine_package_name") || return 1
     case "$vibeshine_package_current" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
@@ -2648,15 +2679,32 @@ SendSIGKILL=no') ;;
     vibeshine_package_before=$(cat -- "$vibeshine_package_transaction/fence.owned") || return 1
   fi
   [ "$(vibeshine_package_path_identity "$vibeshine_host_upgrade_dropin")" = "$vibeshine_package_before" ] || return 1
+  vibeshine_package_adoption_fence_identity=$vibeshine_package_before
   vibeshine_package_write_record legacy-adopted yes || return 1
   for vibeshine_package_name in fence vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
     if [ "$vibeshine_package_name" = fence ]; then vibeshine_package_owned_path=$vibeshine_host_upgrade_dropin
     else vibeshine_package_owned_path=/run/systemd/system/$vibeshine_package_name; fi
+    # Recheck each original identity at publication, rather than claiming a
+    # replacement that appeared after the inventory pass.
+    if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+      vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned") || return 1
+    else
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.before" || return 1
+      vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.before") || return 1
+    fi
     vibeshine_package_current=$(vibeshine_package_path_identity "$vibeshine_package_owned_path") || return 1
+    [ "$vibeshine_package_current" = "$vibeshine_package_expected" ] || return 1
+    if [ "$vibeshine_package_name" != fence ]; then
+      [ "$(readlink -- "$vibeshine_package_owned_path")" = /dev/null ] || return 1
+    fi
     vibeshine_package_write_record "$vibeshine_package_name.owned" "$vibeshine_package_current" || return 1
     vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
   done
   vibeshine_package_write_record phase preflight || return 1
+  [ "$(vibeshine_package_path_identity "$vibeshine_host_upgrade_dropin")" = "$vibeshine_package_adoption_fence_identity" ] || return 1
+  printf '%%s\n' "$vibeshine_package_legacy_contents" |
+    cmp -s -- - "$vibeshine_host_upgrade_dropin" || return 1
   # Every owned identity and before snapshot is now durable; the pending
   # adoption marker is no longer needed by later release/retry operations.
   rm -f -- "$vibeshine_package_transaction/legacy-adopted"
@@ -5850,6 +5898,7 @@ vibeshine_package_adopt_legacy_barriers() {
     # replacement path or an unrecorded new mask.
     if [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ]; then
       vibeshine_package_complete_quiescence_is_safe || return 1
+      [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
       if [ -e "$vibeshine_package_transaction/fence.owned" ] || [ -L "$vibeshine_package_transaction/fence.owned" ]; then
         vibeshine_package_record_is_safe "$vibeshine_package_transaction/fence.owned" || return 1
       fi
@@ -5879,9 +5928,11 @@ vibeshine_package_adopt_legacy_barriers() {
           fi
         done
       done
+      [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
       vibeshine_package_write_record fence.before absent || return 1
       rm -f -- "$vibeshine_package_transaction/fence.owned" || return 1
       vibeshine_package_write_record phase preflight || return 1
+      [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
       rm -f -- "$vibeshine_package_transaction/legacy-adopted" || return 1
       return 0
     fi
@@ -5917,6 +5968,10 @@ SendSIGKILL=no') ;;
     echo 'error: an earlier package fence remains, but the old host or session has not fully drained; it cannot be adopted safely.' >&2
     return 1
   }
+  # Generation inspection can take time. An administrator may edit the same
+  # inode while it runs; do not convert authority for changed fence bytes.
+  printf '%%s\n' "$vibeshine_package_legacy_contents" |
+    cmp -s -- - "$vibeshine_host_upgrade_dropin" || return 1
   for vibeshine_package_name in vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
     vibeshine_package_current=$(vibeshine_package_path_identity "/run/systemd/system/$vibeshine_package_name") || return 1
     case "$vibeshine_package_current" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
@@ -5932,15 +5987,32 @@ SendSIGKILL=no') ;;
     vibeshine_package_before=$(cat -- "$vibeshine_package_transaction/fence.owned") || return 1
   fi
   [ "$(vibeshine_package_path_identity "$vibeshine_host_upgrade_dropin")" = "$vibeshine_package_before" ] || return 1
+  vibeshine_package_adoption_fence_identity=$vibeshine_package_before
   vibeshine_package_write_record legacy-adopted yes || return 1
   for vibeshine_package_name in fence vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
     if [ "$vibeshine_package_name" = fence ]; then vibeshine_package_owned_path=$vibeshine_host_upgrade_dropin
     else vibeshine_package_owned_path=/run/systemd/system/$vibeshine_package_name; fi
+    # Recheck each original identity at publication, rather than claiming a
+    # replacement that appeared after the inventory pass.
+    if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+      vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned") || return 1
+    else
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.before" || return 1
+      vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.before") || return 1
+    fi
     vibeshine_package_current=$(vibeshine_package_path_identity "$vibeshine_package_owned_path") || return 1
+    [ "$vibeshine_package_current" = "$vibeshine_package_expected" ] || return 1
+    if [ "$vibeshine_package_name" != fence ]; then
+      [ "$(readlink -- "$vibeshine_package_owned_path")" = /dev/null ] || return 1
+    fi
     vibeshine_package_write_record "$vibeshine_package_name.owned" "$vibeshine_package_current" || return 1
     vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
   done
   vibeshine_package_write_record phase preflight || return 1
+  [ "$(vibeshine_package_path_identity "$vibeshine_host_upgrade_dropin")" = "$vibeshine_package_adoption_fence_identity" ] || return 1
+  printf '%%s\n' "$vibeshine_package_legacy_contents" |
+    cmp -s -- - "$vibeshine_host_upgrade_dropin" || return 1
   # Every owned identity and before snapshot is now durable; the pending
   # adoption marker is no longer needed by later release/retry operations.
   rm -f -- "$vibeshine_package_transaction/legacy-adopted"
@@ -7183,6 +7255,7 @@ vibeshine_package_adopt_legacy_barriers() {
     # replacement path or an unrecorded new mask.
     if [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ]; then
       vibeshine_package_complete_quiescence_is_safe || return 1
+      [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
       if [ -e "$vibeshine_package_transaction/fence.owned" ] || [ -L "$vibeshine_package_transaction/fence.owned" ]; then
         vibeshine_package_record_is_safe "$vibeshine_package_transaction/fence.owned" || return 1
       fi
@@ -7212,9 +7285,11 @@ vibeshine_package_adopt_legacy_barriers() {
           fi
         done
       done
+      [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
       vibeshine_package_write_record fence.before absent || return 1
       rm -f -- "$vibeshine_package_transaction/fence.owned" || return 1
       vibeshine_package_write_record phase preflight || return 1
+      [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
       rm -f -- "$vibeshine_package_transaction/legacy-adopted" || return 1
       return 0
     fi
@@ -7250,6 +7325,10 @@ SendSIGKILL=no') ;;
     echo 'error: an earlier package fence remains, but the old host or session has not fully drained; it cannot be adopted safely.' >&2
     return 1
   }
+  # Generation inspection can take time. An administrator may edit the same
+  # inode while it runs; do not convert authority for changed fence bytes.
+  printf '%%s\n' "$vibeshine_package_legacy_contents" |
+    cmp -s -- - "$vibeshine_host_upgrade_dropin" || return 1
   for vibeshine_package_name in vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
     vibeshine_package_current=$(vibeshine_package_path_identity "/run/systemd/system/$vibeshine_package_name") || return 1
     case "$vibeshine_package_current" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
@@ -7265,15 +7344,32 @@ SendSIGKILL=no') ;;
     vibeshine_package_before=$(cat -- "$vibeshine_package_transaction/fence.owned") || return 1
   fi
   [ "$(vibeshine_package_path_identity "$vibeshine_host_upgrade_dropin")" = "$vibeshine_package_before" ] || return 1
+  vibeshine_package_adoption_fence_identity=$vibeshine_package_before
   vibeshine_package_write_record legacy-adopted yes || return 1
   for vibeshine_package_name in fence vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
     if [ "$vibeshine_package_name" = fence ]; then vibeshine_package_owned_path=$vibeshine_host_upgrade_dropin
     else vibeshine_package_owned_path=/run/systemd/system/$vibeshine_package_name; fi
+    # Recheck each original identity at publication, rather than claiming a
+    # replacement that appeared after the inventory pass.
+    if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+      vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned") || return 1
+    else
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.before" || return 1
+      vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.before") || return 1
+    fi
     vibeshine_package_current=$(vibeshine_package_path_identity "$vibeshine_package_owned_path") || return 1
+    [ "$vibeshine_package_current" = "$vibeshine_package_expected" ] || return 1
+    if [ "$vibeshine_package_name" != fence ]; then
+      [ "$(readlink -- "$vibeshine_package_owned_path")" = /dev/null ] || return 1
+    fi
     vibeshine_package_write_record "$vibeshine_package_name.owned" "$vibeshine_package_current" || return 1
     vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
   done
   vibeshine_package_write_record phase preflight || return 1
+  [ "$(vibeshine_package_path_identity "$vibeshine_host_upgrade_dropin")" = "$vibeshine_package_adoption_fence_identity" ] || return 1
+  printf '%%s\n' "$vibeshine_package_legacy_contents" |
+    cmp -s -- - "$vibeshine_host_upgrade_dropin" || return 1
   # Every owned identity and before snapshot is now durable; the pending
   # adoption marker is no longer needed by later release/retry operations.
   rm -f -- "$vibeshine_package_transaction/legacy-adopted"
