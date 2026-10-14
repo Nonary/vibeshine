@@ -499,13 +499,26 @@ vibeshine_package_cleanup_record_temporaries() {
   # First validate the complete set, so one malformed entry prevents every
   # deletion. Writers inherit fd 8; a fresh caller cannot hold the lock while
   # an interrupted operation's surviving writer is still publishing a record.
-  for vibeshine_package_path in "$vibeshine_package_transaction"/.record.*; do
+  for vibeshine_package_path in "$vibeshine_package_transaction"/.record.* "$vibeshine_package_transaction"/.mask.*; do
     [ -e "$vibeshine_package_path" ] || [ -L "$vibeshine_package_path" ] || continue
     vibeshine_package_has_temporary=1
     vibeshine_package_suffix=${vibeshine_package_path##*/}
-    vibeshine_package_suffix=${vibeshine_package_suffix#.record.}
+    case "$vibeshine_package_suffix" in
+      .record.*) vibeshine_package_suffix=${vibeshine_package_suffix#.record.} ;;
+      .mask.*) vibeshine_package_suffix=${vibeshine_package_suffix#.mask.} ;;
+      *) return 1 ;;
+    esac
     [ "${#vibeshine_package_suffix}" -eq 6 ] || return 1
     case "$vibeshine_package_suffix" in *[!A-Za-z0-9]*) return 1 ;; esac
+    if [ -L "$vibeshine_package_path" ]; then
+      case "${vibeshine_package_path##*/}" in .mask.*) ;; *) return 1 ;; esac
+      [ "$(readlink -- "$vibeshine_package_path")" = /dev/null ] || return 1
+      vibeshine_package_temporary_attributes=$(stat -c '%u:%g:%h:%F' -- "$vibeshine_package_path") || return 1
+      case "$vibeshine_package_temporary_attributes" in
+        '0:0:1:symbolic link' | '0:0:2:symbolic link') continue ;;
+        *) return 1 ;;
+      esac
+    fi
     [ -f "$vibeshine_package_path" ] && [ ! -L "$vibeshine_package_path" ] || return 1
     vibeshine_package_temporary_attributes=$(stat -c '%u:%g:%a:%h:%F' -- "$vibeshine_package_path") || return 1
     case "$vibeshine_package_temporary_attributes" in
@@ -516,8 +529,8 @@ vibeshine_package_cleanup_record_temporaries() {
   [ "$vibeshine_package_has_temporary" -eq 1 ] || return 0
   [ "${vibeshine_package_lock_held:-0}" -eq 1 ] || return 1
   flock --nonblock 8 || return 1
-  for vibeshine_package_path in "$vibeshine_package_transaction"/.record.*; do
-    [ -e "$vibeshine_package_path" ] || continue
+  for vibeshine_package_path in "$vibeshine_package_transaction"/.record.* "$vibeshine_package_transaction"/.mask.*; do
+    [ -e "$vibeshine_package_path" ] || [ -L "$vibeshine_package_path" ] || continue
     rm -f -- "$vibeshine_package_path" || return 1
   done
 }
@@ -997,11 +1010,71 @@ vibeshine_package_record_owned() {
 }
 
 vibeshine_package_mask() (
+  vibeshine_package_mask_stage=
+  trap '[ -z "$vibeshine_package_mask_stage" ] || rm -f -- "$vibeshine_package_mask_stage"' 0
+  for vibeshine_package_name do
+    case "$vibeshine_package_name" in
+      vibeshine.service | vibeshine-session-exec.socket | vibeshine-vkms-control.socket | vibeshine-session-restore@.service) ;;
+      *) return 1 ;;
+    esac
+    vibeshine_package_mask_path=/run/systemd/system/$vibeshine_package_name
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.before" || return 1
+    vibeshine_package_mask_identity=$(vibeshine_package_path_identity "$vibeshine_package_mask_path") || return 1
+    if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ] || [ -L "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+      case "$vibeshine_package_mask_identity" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+      [ "$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.before")" = absent ] &&
+        [ "$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned")" = "$vibeshine_package_mask_identity" ] || return 1
+      continue
+    fi
+    if [ "$vibeshine_package_mask_identity" = absent ]; then
+      # Keep a private inode as creation evidence. Publish its ownership intent
+      # before linking it, so interruption cannot strand our published mask.
+      # ln -P -T never replaces an administrator's competing path.
+      vibeshine_package_mask_stage=$(mktemp "$vibeshine_package_transaction/.mask.XXXXXX") || return 1
+      rm -f -- "$vibeshine_package_mask_stage" || return 1
+      ln -s /dev/null "$vibeshine_package_mask_stage" || return 1
+      vibeshine_package_created_mask=$(vibeshine_package_path_identity "$vibeshine_package_mask_stage") || return 1
+      case "$vibeshine_package_created_mask" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+      vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
+      vibeshine_package_write_record "$vibeshine_package_name.owned" "$vibeshine_package_created_mask" || return 1
+      if ! ln -P -T -- "$vibeshine_package_mask_stage" "$vibeshine_package_mask_path" 2>/dev/null; then
+        vibeshine_package_mask_identity=$(vibeshine_package_path_identity "$vibeshine_package_mask_path") || return 1
+        if [ "$vibeshine_package_mask_identity" != "$vibeshine_package_created_mask" ]; then
+          # An exclusive-link failure published none of our inode. Drop only
+          # our exact intent, then preserve a valid competing external mask.
+          vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+          [ "$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned")" = "$vibeshine_package_created_mask" ] || return 1
+          rm -f -- "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+          [ "$vibeshine_package_mask_identity" != absent ] || return 1
+        fi
+      else
+        vibeshine_package_mask_identity=$(vibeshine_package_path_identity "$vibeshine_package_mask_path") || return 1
+        [ "$vibeshine_package_mask_identity" = "$vibeshine_package_created_mask" ] || return 1
+      fi
+      rm -f -- "$vibeshine_package_mask_stage" || return 1
+      vibeshine_package_mask_stage=
+      if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then continue; fi
+    fi
+    # Existing unowned masks, including ones added since a failed attempt's
+    # snapshot, remain policy. Refresh their preserved baseline, never claim.
+    case "$vibeshine_package_mask_identity" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+    vibeshine_package_write_record "$vibeshine_package_name.before" "$vibeshine_package_mask_identity" || return 1
+    [ "$(vibeshine_package_path_identity "$vibeshine_package_mask_path")" = "$vibeshine_package_mask_identity" ] || return 1
+  done
   timeout --signal=KILL 15 systemctl mask --runtime "$@" 2>/dev/null
   vibeshine_package_mask_status=$?
-  # A timed-out client may have completed the manager mutation.
+  # The manager can reload our prepublished masks, but cannot establish their
+  # ownership. Even a timed-out client must leave every recorded inode intact.
   for vibeshine_package_name do
-    vibeshine_package_record_owned "$vibeshine_package_name" "/run/systemd/system/$vibeshine_package_name" || return 1
+    vibeshine_package_mask_path=/run/systemd/system/$vibeshine_package_name
+    vibeshine_package_mask_identity=$(vibeshine_package_path_identity "$vibeshine_package_mask_path") || return 1
+    if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ] || [ -L "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+      [ "$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned")" = "$vibeshine_package_mask_identity" ] || return 1
+    else
+      [ "$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.before")" = "$vibeshine_package_mask_identity" ] || return 1
+    fi
   done
   return "$vibeshine_package_mask_status"
 )
