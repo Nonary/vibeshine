@@ -339,6 +339,13 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/*.desktop
 cd %{_builddir}/Sunshine/build
 %make_install
 
+# The shared CMake stage includes ALPM-only pretransaction files. RPM has its
+# own package scriptlets and must not ship files outside its manifest.
+rm -f %{buildroot}%{_prefix}/libexec/vibeshine/vibeshine-package-preflight
+rm -f %{buildroot}%{_datadir}/libalpm/hooks/00-vibeshine-quiesce.hook
+rm -f %{buildroot}%{_datadir}/vibeshine/arch-package-hooks
+rmdir %{buildroot}%{_datadir}/libalpm/hooks %{buildroot}%{_datadir}/libalpm 2>/dev/null || true
+
 %pre
 export LC_ALL=C
 vibeshine_controller=%{_prefix}/libexec/vibeshine/vibeshine-session-controller
