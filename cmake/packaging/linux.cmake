@@ -189,10 +189,18 @@ else()
                 "${LIBVIRTUALDISPLAY_LINUX_ROOT}/packaging/vibeshine-vkms-quiesce"
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-global-limiter.py"
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-machine-host"
+                "${CMAKE_SOURCE_DIR}/packaging/linux/Arch/vibeshine-package-preflight"
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-session-controller"
                 "${CMAKE_CURRENT_BINARY_DIR}/vibeshine-drm-install"
                 "${CMAKE_CURRENT_BINARY_DIR}/vibeshine-ds5-install"
                 DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
+        # Pacman loads hooks before extraction. Future upgrades use the
+        # previously installed function library to abort an unsafe transaction.
+        install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/Arch/vibeshine.install"
+                DESTINATION "${CMAKE_INSTALL_DATADIR}/vibeshine"
+                RENAME "arch-package-hooks")
+        install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/Arch/00-vibeshine-quiesce.hook"
+                DESTINATION "${CMAKE_INSTALL_DATADIR}/libalpm/hooks")
         install(TARGETS vibeshine_session_exec vibeshine_app_supervisor
                 vibeshine_profile_import vibeshine_kwin_session_environment
                 vibeshine_provider_scan vibeshine_steam_launch vibeshine_display_power vibeshine_app_focus
