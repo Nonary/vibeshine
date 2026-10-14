@@ -1303,8 +1303,10 @@ vibeshine_package_prepare_postinstall_start() {
   # This must be the full actual generation proof (controller, broker/apps,
   # restore/control instances, session record and retained executable inodes).
   # The local host-empty + no-jobs classifier is insufficient for release.
-  vibeshine_package_complete_quiescence_is_safe || return 1
-  vibeshine_package_release || return 1
+  if ! vibeshine_package_complete_quiescence_is_safe || ! vibeshine_package_release; then
+    echo 'error: safe package shutdown recovery could not finish; automatic service activation remains deferred. Resolve the preceding check and retry package configuration; administrator masks were preserved.' >&2
+    return 1
+  fi
   echo 'package: preserved administrator host mask or start fence; configuration completed and automatic service activation is deferred.' >&2
   return 0
 }
@@ -1711,6 +1713,25 @@ vibeshine_package_remove_owned() {
   [ "$vibeshine_package_before" = absent ] || return 0
   vibeshine_package_current=$(vibeshine_package_path_identity "$2") || return 1
   [ "$vibeshine_package_current" != absent ] || return 0
+  if [ ! -e "$vibeshine_package_transaction/$1.owned" ] && [ ! -L "$vibeshine_package_transaction/$1.owned" ]; then
+    # An idle Arch retry can skip mask creation. Reconcile an external mask
+    # added since the snapshot without claiming it or reopening its admission.
+    # New package masks publish intent first, so a missing record is not ours.
+    case "$1:$2" in
+      vibeshine.service:/run/systemd/system/vibeshine.service | vibeshine-session-exec.socket:/run/systemd/system/vibeshine-session-exec.socket | vibeshine-vkms-control.socket:/run/systemd/system/vibeshine-vkms-control.socket | vibeshine-session-restore@.service:/run/systemd/system/vibeshine-session-restore@.service) ;;
+      *) return 1 ;;
+    esac
+    case "$vibeshine_package_current" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+    vibeshine_package_lock || return 1
+    vibeshine_package_complete_quiescence_is_safe || return 1
+    [ ! -e "$vibeshine_package_transaction/$1.owned" ] && [ ! -L "$vibeshine_package_transaction/$1.owned" ] || return 1
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/$1.before" || return 1
+    [ "$(cat -- "$vibeshine_package_transaction/$1.before")" = absent ] || return 1
+    [ "$(vibeshine_package_path_identity "$2")" = "$vibeshine_package_current" ] || return 1
+    vibeshine_package_write_record "$1.before" "$vibeshine_package_current" || return 1
+    [ "$(vibeshine_package_path_identity "$2")" = "$vibeshine_package_current" ] || return 1
+    return 0
+  fi
   vibeshine_package_record_is_safe "$vibeshine_package_transaction/$1.owned" || return 1
   [ "$(cat -- "$vibeshine_package_transaction/$1.owned")" = "$vibeshine_package_current" ] || return 1
   rm -f -- "$2"
