@@ -97,6 +97,11 @@ else()
     find_package(Udev)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # The incoming installer extracts this compatibility step before old
+        # ALPM hooks run; it cannot depend on an already installed new helper.
+        install(FILES "${CMAKE_SOURCE_DIR}/scripts/linux/migrations/upgrade-2.0-lifecycle.sh"
+                "${CMAKE_SOURCE_DIR}/scripts/linux/migrations/upgrade-2.0.1-lifecycle.sh"
+                DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/vibeshine/installer-migrations")
         add_executable(vibeshine_session_exec
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-session-exec.c")
         set_target_properties(vibeshine_session_exec PROPERTIES OUTPUT_NAME "vibeshine-session-exec")
@@ -313,6 +318,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(CPACK_RPM_PRE_INSTALL_SCRIPT_FILE "${CMAKE_CURRENT_BINARY_DIR}/preinst")
     set(CPACK_RPM_POST_INSTALL_SCRIPT_FILE "${CMAKE_CURRENT_BINARY_DIR}/postinst")
     set(CPACK_RPM_PRE_UNINSTALL_SCRIPT_FILE "${CMAKE_CURRENT_BINARY_DIR}/prerm")
+    set(CPACK_RPM_POST_UNINSTALL_SCRIPT_FILE "${CMAKE_CURRENT_BINARY_DIR}/postrm")
 else()
     set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/postinst")
     set(CPACK_RPM_POST_INSTALL_SCRIPT_FILE "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/postinst")

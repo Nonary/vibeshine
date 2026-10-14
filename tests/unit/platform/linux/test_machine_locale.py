@@ -20,6 +20,12 @@ import tempfile
 root = pathlib.Path(sys.argv[1]).resolve()
 linux = root / "packaging/linux"
 brand = "vibeshine"
+hook_paths = {
+    "preinst": "vibeshine-preinst.in",
+    "postinst": "vibeshine-postinst.in",
+    "prerm": "vibeshine-prerm.in",
+    "postrm": "vibeshine-postrm.in",
+}
 bash = shutil.which("bash")
 
 
@@ -106,7 +112,7 @@ if read_settings; then exit 83; fi
 
     rpm = (linux / "copr/Sunshine.spec").read_text()
     lifecycle_sources = [("Arch install/upgrade/remove", (linux / f"Arch/{brand}.install").read_text())]
-    lifecycle_sources += [(name, (linux / f"{brand}-{name}.in").read_text())
+    lifecycle_sources += [(name, (linux / hook_paths[name]).read_text())
                           for name in ("preinst", "postinst", "prerm")]
     for section, following in (("pre", "post"), ("post", "preun"), ("preun", "files")):
         source = rpm.split(f"\n%{section}\n", 1)[1].split(f"\n%{following}\n", 1)[0]
@@ -153,6 +159,21 @@ rm "$helper.hardlink"
     # executable names. Redirect both supported layouts into fixture-only state.
     for helper_root in {"/usr/libexec/vibeshine/", f"/usr/libexec/{brand}/"}:
         arch = arch.replace(helper_root, str(helpers) + "/")
+    # Exercise the real boot-link retirement guard against package-owned
+    # fixture units, never the builder host's /usr, /etc or /run inventory.
+    boot_root = fixture / "boot-root"
+    unit_root = boot_root / "usr/lib/systemd/system"
+    unit_root.mkdir(parents=True)
+    boot_links = boot_root / "etc/systemd/system/multi-user.target.wants"
+    boot_links.mkdir(parents=True)
+    for unit in ("vibeshine.service", "vibeshine-session-exec.socket"):
+        expected = unit_root / unit
+        expected.write_text((linux / unit).read_text())
+        (boot_links / unit).symlink_to(expected)
+    retirement = "vibeshine_retire_obsolete_boot_links || return 1"
+    assert arch.count(retirement) == 1
+    arch = arch.replace(retirement,
+                        f"vibeshine_retire_obsolete_boot_links {shlex.quote(str(boot_root))} || return 1")
     arch = arch.replace("stat -c", "fixture_stat -c")
     trace = fixture / "lifecycle-trace"
     env["TRACE"] = str(trace)
@@ -182,6 +203,7 @@ post_install
 '''
     run(script)
     calls = trace.read_text().splitlines()
+    assert not any(boot_links.iterdir()), "obsolete fixture boot links survived retirement"
     assert calls.count("quiesce") == 7, calls
     assert calls.count("secure") == 3, calls
     assert calls.count(f"{brand}-machine-host configure-auto") == 3, calls
@@ -199,7 +221,7 @@ post_install
     etc = fixture / "etc" / brand
     etc.mkdir(parents=True)
     (etc / "machine.conf").write_text("desktop_user=alice\n")
-    purge = (linux / f"{brand}-postrm.in").read_text()
+    purge = (linux / hook_paths["postrm"]).read_text()
     purge = purge.replace("/var/lib", str(state.parent)).replace("/etc/" + brand, str(etc))
     purge = purge.replace("stat -c", "fixture_stat -c")
     run(fixture_stat + "set -- purge\n" + purge)
