@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Migration ID: upgrade-2.0.1-lifecycle-v1
-# Qualified source: Vibeshine tag 2.0.1 (66e169c32), Vibeshine tag 2.0.1
+# Qualified source: Vibepollo tag 2.0.1 (66e169c32), Vibeshine tag 2.0.1
 # (f078104b2). Both outgoing hooks select from helper text before proving the
 # host stopped and compare a fence lacking Restart=no. Retire this step when
 # upgrades from these builds are no longer supported; do not widen its version

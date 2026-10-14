@@ -1049,6 +1049,8 @@ vibeshine_select_upgrade_kill_mode() {
   fi
 }
 vibeshine_prepare_host_upgrade_fence() (
+  vibeshine_package_preserve_unowned_host_mask || exit 1
+  [ "$vibeshine_package_preserve_host_mask" -eq 0 ] || exit 0
   [ ! -L "$vibeshine_host_upgrade_dropin_dir" ] && \
     [ ! -L "$vibeshine_host_upgrade_dropin" ] || exit 1
   install -d -o root -g root -m 0755 -- "$vibeshine_host_upgrade_dropin_dir" || exit 1
@@ -1081,6 +1083,8 @@ vibeshine_prepare_host_upgrade_fence() (
   vibeshine_package_record_owned fence "$vibeshine_host_upgrade_dropin" || exit 1
 )
 vibeshine_activate_host_upgrade_fence() {
+  vibeshine_package_preserve_unowned_host_mask || return 1
+  [ "$vibeshine_package_preserve_host_mask" -eq 0 ] || return 0
   vibeshine_package_open_owned_host_for_stop || exit 1
   systemctl daemon-reload || exit 1
   vibeshine_host_stop_properties=$(timeout --signal=KILL 5 systemctl show vibeshine.service \
@@ -1474,6 +1478,82 @@ vibeshine_package_run_id_is_safe() {
   case "$1" in *[!0-9a-f]*) return 1 ;; esac
 }
 
+vibeshine_package_preserve_unowned_host_mask() {
+  vibeshine_package_preserve_host_mask=0
+  for vibeshine_package_mask_path in /etc/systemd/system/vibeshine.service /run/systemd/system/vibeshine.service; do
+    [ -L "$vibeshine_package_mask_path" ] || continue
+    [ "$(readlink -- "$vibeshine_package_mask_path")" = /dev/null ] || continue
+    vibeshine_package_mask_identity=$(vibeshine_package_path_identity "$vibeshine_package_mask_path") || return 1
+    case "$vibeshine_package_mask_identity" in
+      *:0:0:'symbolic link') ;;
+      *) echo "error: unsafe host mask at $vibeshine_package_mask_path; package operation is blocked." >&2; return 1 ;;
+    esac
+    if [ "$vibeshine_package_mask_path" = /run/systemd/system/vibeshine.service ] &&
+       { [ -e "$vibeshine_package_transaction/vibeshine.service.owned" ] || [ -L "$vibeshine_package_transaction/vibeshine.service.owned" ]; }; then
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/vibeshine.service.owned" || return 1
+      [ "$(cat -- "$vibeshine_package_transaction/vibeshine.service.owned")" = "$vibeshine_package_mask_identity" ] || return 1
+      continue
+    fi
+    vibeshine_package_preserve_host_mask=1
+  done
+  [ "$vibeshine_package_preserve_host_mask" -eq 1 ] || return 0
+  vibeshine_package_mask_state=$(timeout --signal=KILL 5 systemctl is-enabled vibeshine.service 2>/dev/null || true)
+  vibeshine_package_mask_load=$(timeout --signal=KILL 5 systemctl show vibeshine.service --property=LoadState 2>/dev/null) || vibeshine_package_mask_load=uncertain
+  vibeshine_package_mask_verified=0
+  case "$vibeshine_package_mask_state:$vibeshine_package_mask_load" in
+    masked:LoadState=masked | masked-runtime:LoadState=masked) vibeshine_package_mask_verified=1 ;;
+  esac
+  if [ "$vibeshine_package_mask_verified" -ne 1 ] ||
+     ! vibeshine_unit_is_quiescent vibeshine.service ||
+     ! vibeshine_package_no_jobs; then
+    echo 'error: an unowned Vibeshine host mask exists, but the host is active, populated, has a pending job, or its state is uncertain; package replacement is blocked. Force cannot remove an administrator or legacy mask without proving its activation ownership.' >&2
+    return 1
+  fi
+  # Preserve the actual mask and any unowned fence byte-for-byte. The mask
+  # supplies no-start admission while the full generation proof still runs.
+  return 0
+}
+
+vibeshine_package_prepare_postinstall_start() {
+  vibeshine_package_start_deferred=0
+  vibeshine_package_preserve_unowned_host_mask || return 1
+  if [ "$vibeshine_package_preserve_host_mask" -eq 1 ]; then
+    vibeshine_package_start_deferred=1
+  fi
+  for vibeshine_package_start_unit in vibeshine.service vibeshine-session-controller.service vibeshine-session-exec.socket vibeshine-vkms-control.socket; do
+    for vibeshine_package_start_directory in /etc/systemd/system /run/systemd/system; do
+      vibeshine_package_start_path=$vibeshine_package_start_directory/$vibeshine_package_start_unit
+      [ -L "$vibeshine_package_start_path" ] || continue
+      [ "$(readlink -- "$vibeshine_package_start_path")" = /dev/null ] || continue
+      vibeshine_package_start_identity=$(vibeshine_package_path_identity "$vibeshine_package_start_path") || return 1
+      case "$vibeshine_package_start_identity" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+      if [ "$vibeshine_package_start_directory" = /run/systemd/system ] &&
+         { [ -e "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned" ] || [ -L "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned" ]; }; then
+        vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned" || return 1
+        [ "$(cat -- "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned")" = "$vibeshine_package_start_identity" ] || return 1
+        continue
+      fi
+      vibeshine_package_start_deferred=1
+    done
+  done
+  if [ -e "$vibeshine_package_transaction/fence.before" ]; then
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/fence.before" || return 1
+    vibeshine_package_prior_fence=$(cat -- "$vibeshine_package_transaction/fence.before") || return 1
+    if [ "$vibeshine_package_prior_fence" != absent ]; then
+      [ "$(vibeshine_package_path_identity "$vibeshine_host_upgrade_dropin")" = "$vibeshine_package_prior_fence" ] || return 1
+      vibeshine_package_start_deferred=1
+    fi
+  fi
+  [ "$vibeshine_package_start_deferred" -eq 1 ] || return 0
+  # This must be the full actual generation proof (controller, broker/apps,
+  # restore/control instances, session record and retained executable inodes).
+  # The local host-empty + no-jobs classifier is insufficient for release.
+  vibeshine_package_complete_quiescence_is_safe || return 1
+  vibeshine_package_release || return 1
+  echo 'package: preserved administrator host mask or start fence; configuration completed and automatic service activation is deferred.' >&2
+  return 0
+}
+
 vibeshine_package_bind_run() {
   if [ -n "${VIBESHINE_PACKAGE_RUN_ID:-}" ]; then
     vibeshine_package_run_id_is_safe "$VIBESHINE_PACKAGE_RUN_ID" || return 1
@@ -1554,6 +1634,48 @@ vibeshine_package_adopt_legacy_barriers() {
     vibeshine_package_record_is_safe "$vibeshine_package_transaction/legacy-adopted" &&
       [ "$(cat -- "$vibeshine_package_transaction/legacy-adopted")" = yes ] || return 1
     vibeshine_package_adoption_pending=1
+    # The marker is published only after the exact old fence, all original
+    # mask identities and full generation proof were verified. An interrupted
+    # conversion may leave some .before snapshots unconverted when old package
+    # unwind removes the fence. Resume only those original masks, never a
+    # replacement path or an unrecorded new mask.
+    if [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ]; then
+      vibeshine_package_complete_quiescence_is_safe || return 1
+      if [ -e "$vibeshine_package_transaction/fence.owned" ] || [ -L "$vibeshine_package_transaction/fence.owned" ]; then
+        vibeshine_package_record_is_safe "$vibeshine_package_transaction/fence.owned" || return 1
+      fi
+      # Validate every path before changing any record. Repeat the identity
+      # checks during publication so interruption leaves resumable metadata.
+      for vibeshine_package_adoption_pass in validate commit; do
+        for vibeshine_package_name in vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
+          vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.before" || return 1
+          vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.before") || return 1
+          if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ] || [ -L "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
+            vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+            vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned") || return 1
+          fi
+          vibeshine_package_current=$(vibeshine_package_path_identity "/run/systemd/system/$vibeshine_package_name") || return 1
+          if [ "$vibeshine_package_current" != absent ]; then
+            case "$vibeshine_package_current" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+            [ "$(readlink -- "/run/systemd/system/$vibeshine_package_name")" = /dev/null ] || return 1
+            [ "$vibeshine_package_current" = "$vibeshine_package_expected" ] || return 1
+          fi
+          [ "$vibeshine_package_adoption_pass" = commit ] || continue
+          if [ "$vibeshine_package_current" = absent ]; then
+            vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
+            rm -f -- "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+          else
+            vibeshine_package_write_record "$vibeshine_package_name.owned" "$vibeshine_package_current" || return 1
+            vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
+          fi
+        done
+      done
+      vibeshine_package_write_record fence.before absent || return 1
+      rm -f -- "$vibeshine_package_transaction/fence.owned" || return 1
+      vibeshine_package_write_record phase preflight || return 1
+      rm -f -- "$vibeshine_package_transaction/legacy-adopted" || return 1
+      return 0
+    fi
   fi
   [ "$vibeshine_package_before" != absent ] || [ "$vibeshine_package_adoption_pending" -eq 1 ] || return 0
   [ -f "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
@@ -1586,6 +1708,7 @@ SendSIGKILL=no') ;;
   for vibeshine_package_name in vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
     vibeshine_package_current=$(vibeshine_package_path_identity "/run/systemd/system/$vibeshine_package_name") || return 1
     case "$vibeshine_package_current" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+    [ "$(readlink -- "/run/systemd/system/$vibeshine_package_name")" = /dev/null ] || return 1
     if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
       vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned") || return 1
     else
@@ -1605,18 +1728,30 @@ SendSIGKILL=no') ;;
     vibeshine_package_write_record "$vibeshine_package_name.owned" "$vibeshine_package_current" || return 1
     vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
   done
-  vibeshine_package_write_record phase preflight
+  vibeshine_package_write_record phase preflight || return 1
+  # Every owned identity and before snapshot is now durable; the pending
+  # adoption marker is no longer needed by later release/retry operations.
+  rm -f -- "$vibeshine_package_transaction/legacy-adopted"
 }
 
 vibeshine_package_rebaseline_unwound_run() {
-  # A fresh explicit installer operation may select the current healthy
-  # invocation after an older dpkg abort restored every owned barrier. This
-  # grants a fresh stop target; it does not prove old process resources gone.
-  [ -n "${VIBESHINE_PACKAGE_RUN_ID:-}" ] || return 0
-  vibeshine_package_run_id_is_safe "$VIBESHINE_PACKAGE_RUN_ID" || return 1
-  [ -e "$vibeshine_package_transaction/run-id" ] || return 0
-  vibeshine_package_record_is_safe "$vibeshine_package_transaction/run-id" || return 1
-  [ "$(cat -- "$vibeshine_package_transaction/run-id")" != "$VIBESHINE_PACKAGE_RUN_ID" ] || return 0
+  # Pending legacy authority is not a wholly unwound transaction even when
+  # no .owned file has been published yet. Reconcile it before a new target.
+  if [ -e "$vibeshine_package_transaction/legacy-adopted" ] || [ -L "$vibeshine_package_transaction/legacy-adopted" ]; then
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/legacy-adopted" &&
+      [ "$(cat -- "$vibeshine_package_transaction/legacy-adopted")" = yes ] || return 1
+    return 0
+  fi
+  # A native package retry, or a fresh explicit installer operation, may
+  # select the current healthy invocation after every owned barrier unwound.
+  # This grants a fresh target, never proof that old process resources vanished.
+  if [ -n "${VIBESHINE_PACKAGE_RUN_ID:-}" ]; then
+    vibeshine_package_run_id_is_safe "$VIBESHINE_PACKAGE_RUN_ID" || return 1
+    [ -e "$vibeshine_package_transaction/run-id" ] || return 0
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/run-id" || return 1
+    # A same-run force retry must retain its original invocation identity.
+    [ "$(cat -- "$vibeshine_package_transaction/run-id")" != "$VIBESHINE_PACKAGE_RUN_ID" ] || return 0
+  fi
   for vibeshine_package_path in "$vibeshine_package_transaction"/*.owned; do
     [ ! -e "$vibeshine_package_path" ] && [ ! -L "$vibeshine_package_path" ] || return 0
   done
@@ -1632,6 +1767,13 @@ vibeshine_package_rebaseline_unwound_run() {
       --property=FreezerState --property=InvocationID 2>/dev/null) || return 1
     vibeshine_package_controller_identity_is_safe "$vibeshine_package_controller" || return 1
     vibeshine_package_write_record controller "$vibeshine_package_controller" || return 1
+  fi
+  if [ -z "${VIBESHINE_PACKAGE_RUN_ID:-}" ]; then
+    # A native retry is a new operation. Retire any earlier wrapper's nonce
+    # atomically before refreshing phase or discarding its saved stop identity.
+    vibeshine_package_new_run=$(cat /proc/sys/kernel/random/uuid | tr -d '-') || return 1
+    vibeshine_package_run_id_is_safe "$vibeshine_package_new_run" || return 1
+    vibeshine_package_write_record run-id "$vibeshine_package_new_run" || return 1
   fi
   vibeshine_package_write_record phase early || return 1
   rm -f -- "$vibeshine_package_transaction/host-stop.before" || return 1
@@ -2249,6 +2391,82 @@ vibeshine_package_run_id_is_safe() {
   case "$1" in *[!0-9a-f]*) return 1 ;; esac
 }
 
+vibeshine_package_preserve_unowned_host_mask() {
+  vibeshine_package_preserve_host_mask=0
+  for vibeshine_package_mask_path in /etc/systemd/system/vibeshine.service /run/systemd/system/vibeshine.service; do
+    [ -L "$vibeshine_package_mask_path" ] || continue
+    [ "$(readlink -- "$vibeshine_package_mask_path")" = /dev/null ] || continue
+    vibeshine_package_mask_identity=$(vibeshine_package_path_identity "$vibeshine_package_mask_path") || return 1
+    case "$vibeshine_package_mask_identity" in
+      *:0:0:'symbolic link') ;;
+      *) echo "error: unsafe host mask at $vibeshine_package_mask_path; package operation is blocked." >&2; return 1 ;;
+    esac
+    if [ "$vibeshine_package_mask_path" = /run/systemd/system/vibeshine.service ] &&
+       { [ -e "$vibeshine_package_transaction/vibeshine.service.owned" ] || [ -L "$vibeshine_package_transaction/vibeshine.service.owned" ]; }; then
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/vibeshine.service.owned" || return 1
+      [ "$(cat -- "$vibeshine_package_transaction/vibeshine.service.owned")" = "$vibeshine_package_mask_identity" ] || return 1
+      continue
+    fi
+    vibeshine_package_preserve_host_mask=1
+  done
+  [ "$vibeshine_package_preserve_host_mask" -eq 1 ] || return 0
+  vibeshine_package_mask_state=$(timeout --signal=KILL 5 systemctl is-enabled vibeshine.service 2>/dev/null || true)
+  vibeshine_package_mask_load=$(timeout --signal=KILL 5 systemctl show vibeshine.service --property=LoadState 2>/dev/null) || vibeshine_package_mask_load=uncertain
+  vibeshine_package_mask_verified=0
+  case "$vibeshine_package_mask_state:$vibeshine_package_mask_load" in
+    masked:LoadState=masked | masked-runtime:LoadState=masked) vibeshine_package_mask_verified=1 ;;
+  esac
+  if [ "$vibeshine_package_mask_verified" -ne 1 ] ||
+     ! vibeshine_unit_is_quiescent vibeshine.service ||
+     ! vibeshine_package_no_jobs; then
+    echo 'error: an unowned Vibeshine host mask exists, but the host is active, populated, has a pending job, or its state is uncertain; package replacement is blocked. Force cannot remove an administrator or legacy mask without proving its activation ownership.' >&2
+    return 1
+  fi
+  # Preserve the actual mask and any unowned fence byte-for-byte. The mask
+  # supplies no-start admission while the full generation proof still runs.
+  return 0
+}
+
+vibeshine_package_prepare_postinstall_start() {
+  vibeshine_package_start_deferred=0
+  vibeshine_package_preserve_unowned_host_mask || return 1
+  if [ "$vibeshine_package_preserve_host_mask" -eq 1 ]; then
+    vibeshine_package_start_deferred=1
+  fi
+  for vibeshine_package_start_unit in vibeshine.service vibeshine-session-controller.service vibeshine-session-exec.socket vibeshine-vkms-control.socket; do
+    for vibeshine_package_start_directory in /etc/systemd/system /run/systemd/system; do
+      vibeshine_package_start_path=$vibeshine_package_start_directory/$vibeshine_package_start_unit
+      [ -L "$vibeshine_package_start_path" ] || continue
+      [ "$(readlink -- "$vibeshine_package_start_path")" = /dev/null ] || continue
+      vibeshine_package_start_identity=$(vibeshine_package_path_identity "$vibeshine_package_start_path") || return 1
+      case "$vibeshine_package_start_identity" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+      if [ "$vibeshine_package_start_directory" = /run/systemd/system ] &&
+         { [ -e "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned" ] || [ -L "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned" ]; }; then
+        vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned" || return 1
+        [ "$(cat -- "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned")" = "$vibeshine_package_start_identity" ] || return 1
+        continue
+      fi
+      vibeshine_package_start_deferred=1
+    done
+  done
+  if [ -e "$vibeshine_package_transaction/fence.before" ]; then
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/fence.before" || return 1
+    vibeshine_package_prior_fence=$(cat -- "$vibeshine_package_transaction/fence.before") || return 1
+    if [ "$vibeshine_package_prior_fence" != absent ]; then
+      [ "$(vibeshine_package_path_identity "$vibeshine_host_upgrade_dropin")" = "$vibeshine_package_prior_fence" ] || return 1
+      vibeshine_package_start_deferred=1
+    fi
+  fi
+  [ "$vibeshine_package_start_deferred" -eq 1 ] || return 0
+  # This must be the full actual generation proof (controller, broker/apps,
+  # restore/control instances, session record and retained executable inodes).
+  # The local host-empty + no-jobs classifier is insufficient for release.
+  vibeshine_package_complete_quiescence_is_safe || return 1
+  vibeshine_package_release || return 1
+  echo 'package: preserved administrator host mask or start fence; configuration completed and automatic service activation is deferred.' >&2
+  return 0
+}
+
 vibeshine_package_bind_run() {
   if [ -n "${VIBESHINE_PACKAGE_RUN_ID:-}" ]; then
     vibeshine_package_run_id_is_safe "$VIBESHINE_PACKAGE_RUN_ID" || return 1
@@ -2329,6 +2547,48 @@ vibeshine_package_adopt_legacy_barriers() {
     vibeshine_package_record_is_safe "$vibeshine_package_transaction/legacy-adopted" &&
       [ "$(cat -- "$vibeshine_package_transaction/legacy-adopted")" = yes ] || return 1
     vibeshine_package_adoption_pending=1
+    # The marker is published only after the exact old fence, all original
+    # mask identities and full generation proof were verified. An interrupted
+    # conversion may leave some .before snapshots unconverted when old package
+    # unwind removes the fence. Resume only those original masks, never a
+    # replacement path or an unrecorded new mask.
+    if [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ]; then
+      vibeshine_package_complete_quiescence_is_safe || return 1
+      if [ -e "$vibeshine_package_transaction/fence.owned" ] || [ -L "$vibeshine_package_transaction/fence.owned" ]; then
+        vibeshine_package_record_is_safe "$vibeshine_package_transaction/fence.owned" || return 1
+      fi
+      # Validate every path before changing any record. Repeat the identity
+      # checks during publication so interruption leaves resumable metadata.
+      for vibeshine_package_adoption_pass in validate commit; do
+        for vibeshine_package_name in vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
+          vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.before" || return 1
+          vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.before") || return 1
+          if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ] || [ -L "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
+            vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+            vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned") || return 1
+          fi
+          vibeshine_package_current=$(vibeshine_package_path_identity "/run/systemd/system/$vibeshine_package_name") || return 1
+          if [ "$vibeshine_package_current" != absent ]; then
+            case "$vibeshine_package_current" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+            [ "$(readlink -- "/run/systemd/system/$vibeshine_package_name")" = /dev/null ] || return 1
+            [ "$vibeshine_package_current" = "$vibeshine_package_expected" ] || return 1
+          fi
+          [ "$vibeshine_package_adoption_pass" = commit ] || continue
+          if [ "$vibeshine_package_current" = absent ]; then
+            vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
+            rm -f -- "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+          else
+            vibeshine_package_write_record "$vibeshine_package_name.owned" "$vibeshine_package_current" || return 1
+            vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
+          fi
+        done
+      done
+      vibeshine_package_write_record fence.before absent || return 1
+      rm -f -- "$vibeshine_package_transaction/fence.owned" || return 1
+      vibeshine_package_write_record phase preflight || return 1
+      rm -f -- "$vibeshine_package_transaction/legacy-adopted" || return 1
+      return 0
+    fi
   fi
   [ "$vibeshine_package_before" != absent ] || [ "$vibeshine_package_adoption_pending" -eq 1 ] || return 0
   [ -f "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
@@ -2361,6 +2621,7 @@ SendSIGKILL=no') ;;
   for vibeshine_package_name in vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
     vibeshine_package_current=$(vibeshine_package_path_identity "/run/systemd/system/$vibeshine_package_name") || return 1
     case "$vibeshine_package_current" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+    [ "$(readlink -- "/run/systemd/system/$vibeshine_package_name")" = /dev/null ] || return 1
     if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
       vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned") || return 1
     else
@@ -2380,18 +2641,30 @@ SendSIGKILL=no') ;;
     vibeshine_package_write_record "$vibeshine_package_name.owned" "$vibeshine_package_current" || return 1
     vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
   done
-  vibeshine_package_write_record phase preflight
+  vibeshine_package_write_record phase preflight || return 1
+  # Every owned identity and before snapshot is now durable; the pending
+  # adoption marker is no longer needed by later release/retry operations.
+  rm -f -- "$vibeshine_package_transaction/legacy-adopted"
 }
 
 vibeshine_package_rebaseline_unwound_run() {
-  # A fresh explicit installer operation may select the current healthy
-  # invocation after an older dpkg abort restored every owned barrier. This
-  # grants a fresh stop target; it does not prove old process resources gone.
-  [ -n "${VIBESHINE_PACKAGE_RUN_ID:-}" ] || return 0
-  vibeshine_package_run_id_is_safe "$VIBESHINE_PACKAGE_RUN_ID" || return 1
-  [ -e "$vibeshine_package_transaction/run-id" ] || return 0
-  vibeshine_package_record_is_safe "$vibeshine_package_transaction/run-id" || return 1
-  [ "$(cat -- "$vibeshine_package_transaction/run-id")" != "$VIBESHINE_PACKAGE_RUN_ID" ] || return 0
+  # Pending legacy authority is not a wholly unwound transaction even when
+  # no .owned file has been published yet. Reconcile it before a new target.
+  if [ -e "$vibeshine_package_transaction/legacy-adopted" ] || [ -L "$vibeshine_package_transaction/legacy-adopted" ]; then
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/legacy-adopted" &&
+      [ "$(cat -- "$vibeshine_package_transaction/legacy-adopted")" = yes ] || return 1
+    return 0
+  fi
+  # A native package retry, or a fresh explicit installer operation, may
+  # select the current healthy invocation after every owned barrier unwound.
+  # This grants a fresh target, never proof that old process resources vanished.
+  if [ -n "${VIBESHINE_PACKAGE_RUN_ID:-}" ]; then
+    vibeshine_package_run_id_is_safe "$VIBESHINE_PACKAGE_RUN_ID" || return 1
+    [ -e "$vibeshine_package_transaction/run-id" ] || return 0
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/run-id" || return 1
+    # A same-run force retry must retain its original invocation identity.
+    [ "$(cat -- "$vibeshine_package_transaction/run-id")" != "$VIBESHINE_PACKAGE_RUN_ID" ] || return 0
+  fi
   for vibeshine_package_path in "$vibeshine_package_transaction"/*.owned; do
     [ ! -e "$vibeshine_package_path" ] && [ ! -L "$vibeshine_package_path" ] || return 0
   done
@@ -2407,6 +2680,13 @@ vibeshine_package_rebaseline_unwound_run() {
       --property=FreezerState --property=InvocationID 2>/dev/null) || return 1
     vibeshine_package_controller_identity_is_safe "$vibeshine_package_controller" || return 1
     vibeshine_package_write_record controller "$vibeshine_package_controller" || return 1
+  fi
+  if [ -z "${VIBESHINE_PACKAGE_RUN_ID:-}" ]; then
+    # A native retry is a new operation. Retire any earlier wrapper's nonce
+    # atomically before refreshing phase or discarding its saved stop identity.
+    vibeshine_package_new_run=$(cat /proc/sys/kernel/random/uuid | tr -d '-') || return 1
+    vibeshine_package_run_id_is_safe "$vibeshine_package_new_run" || return 1
+    vibeshine_package_write_record run-id "$vibeshine_package_new_run" || return 1
   fi
   vibeshine_package_write_record phase early || return 1
   rm -f -- "$vibeshine_package_transaction/host-stop.before" || return 1
@@ -2833,6 +3113,8 @@ vibeshine_select_upgrade_kill_mode() {
 }
 
 vibeshine_prepare_host_upgrade_fence() (
+  vibeshine_package_preserve_unowned_host_mask || exit 1
+  [ "$vibeshine_package_preserve_host_mask" -eq 0 ] || exit 0
   [ ! -L "$vibeshine_host_upgrade_dropin_dir" ] && \
     [ ! -L "$vibeshine_host_upgrade_dropin" ] || exit 1
   install -d -o root -g root -m 0755 -- "$vibeshine_host_upgrade_dropin_dir" || exit 1
@@ -2866,6 +3148,8 @@ vibeshine_prepare_host_upgrade_fence() (
 )
 
 vibeshine_activate_host_upgrade_fence() {
+  vibeshine_package_preserve_unowned_host_mask || return 1
+  [ "$vibeshine_package_preserve_host_mask" -eq 0 ] || return 0
   vibeshine_package_open_owned_host_for_stop || exit 1
   systemctl daemon-reload || exit 1
   vibeshine_host_stop_properties=$(timeout --signal=KILL 5 systemctl show vibeshine.service \
@@ -4208,22 +4492,25 @@ if [ ! -x "$(command -v rpm-ostree)" ]; then
   systemctl disable --now vibeshine-prelogin.service 2>/dev/null || true
   systemctl daemon-reload || exit 1
   if "$vibeshine_machine_helper" configure-auto; then
-    if ! systemctl enable vibeshine-session-controller.service; then
-      if vibeshine_quiesce_or_abort; then
-        vibeshine_package_recover_failed_transaction ||
-          echo 'error: failed-start recovery could not prove a safe release; owned fences were retained for retry.' >&2
-      fi
-      echo "error: could not enable the Vibeshine controller safely; transaction recovery was attempted; inspect the preceding shutdown result." >&2
-      exit 1
-    fi
-    if ! vibeshine_unmask_host_for_controller || \
-       ! systemctl start vibeshine-session-controller.service; then
+    vibeshine_package_prepare_postinstall_start || exit 1
+    if [ "$vibeshine_package_start_deferred" -eq 0 ]; then
+      if ! systemctl enable vibeshine-session-controller.service; then
         if vibeshine_quiesce_or_abort; then
           vibeshine_package_recover_failed_transaction ||
             echo 'error: failed-start recovery could not prove a safe release; owned fences were retained for retry.' >&2
         fi
-      echo "error: could not start the Vibeshine controller safely; transaction recovery was attempted; inspect the preceding shutdown result." >&2
-      exit 1
+        echo "error: could not enable the Vibeshine controller safely; transaction recovery was attempted; inspect the preceding shutdown result." >&2
+        exit 1
+      fi
+      if ! vibeshine_unmask_host_for_controller || \
+         ! systemctl start vibeshine-session-controller.service; then
+          if vibeshine_quiesce_or_abort; then
+            vibeshine_package_recover_failed_transaction ||
+              echo 'error: failed-start recovery could not prove a safe release; owned fences were retained for retry.' >&2
+          fi
+        echo "error: could not start the Vibeshine controller safely; transaction recovery was attempted; inspect the preceding shutdown result." >&2
+        exit 1
+      fi
     fi
   else
     if ! vibeshine_package_complete_quiescence_is_safe ||
@@ -4737,6 +5024,8 @@ vibeshine_preun_select_upgrade_kill_mode() {
 }
 
 vibeshine_prepare_host_upgrade_fence() (
+  vibeshine_package_preserve_unowned_host_mask || exit 1
+  [ "$vibeshine_package_preserve_host_mask" -eq 0 ] || exit 0
   [ ! -L "$vibeshine_host_upgrade_dropin_dir" ] && \
     [ ! -L "$vibeshine_host_upgrade_dropin" ] || exit 1
   install -d -o root -g root -m 0755 -- "$vibeshine_host_upgrade_dropin_dir" || exit 1
@@ -4770,6 +5059,8 @@ vibeshine_prepare_host_upgrade_fence() (
 )
 
 vibeshine_activate_host_upgrade_fence() {
+  vibeshine_package_preserve_unowned_host_mask || return 1
+  [ "$vibeshine_package_preserve_host_mask" -eq 0 ] || return 0
   vibeshine_package_open_owned_host_for_stop || exit 1
   systemctl daemon-reload || exit 1
   vibeshine_host_stop_properties=$(timeout --signal=KILL 5 systemctl show vibeshine.service \
@@ -5372,6 +5663,82 @@ vibeshine_package_run_id_is_safe() {
   case "$1" in *[!0-9a-f]*) return 1 ;; esac
 }
 
+vibeshine_package_preserve_unowned_host_mask() {
+  vibeshine_package_preserve_host_mask=0
+  for vibeshine_package_mask_path in /etc/systemd/system/vibeshine.service /run/systemd/system/vibeshine.service; do
+    [ -L "$vibeshine_package_mask_path" ] || continue
+    [ "$(readlink -- "$vibeshine_package_mask_path")" = /dev/null ] || continue
+    vibeshine_package_mask_identity=$(vibeshine_package_path_identity "$vibeshine_package_mask_path") || return 1
+    case "$vibeshine_package_mask_identity" in
+      *:0:0:'symbolic link') ;;
+      *) echo "error: unsafe host mask at $vibeshine_package_mask_path; package operation is blocked." >&2; return 1 ;;
+    esac
+    if [ "$vibeshine_package_mask_path" = /run/systemd/system/vibeshine.service ] &&
+       { [ -e "$vibeshine_package_transaction/vibeshine.service.owned" ] || [ -L "$vibeshine_package_transaction/vibeshine.service.owned" ]; }; then
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/vibeshine.service.owned" || return 1
+      [ "$(cat -- "$vibeshine_package_transaction/vibeshine.service.owned")" = "$vibeshine_package_mask_identity" ] || return 1
+      continue
+    fi
+    vibeshine_package_preserve_host_mask=1
+  done
+  [ "$vibeshine_package_preserve_host_mask" -eq 1 ] || return 0
+  vibeshine_package_mask_state=$(timeout --signal=KILL 5 systemctl is-enabled vibeshine.service 2>/dev/null || true)
+  vibeshine_package_mask_load=$(timeout --signal=KILL 5 systemctl show vibeshine.service --property=LoadState 2>/dev/null) || vibeshine_package_mask_load=uncertain
+  vibeshine_package_mask_verified=0
+  case "$vibeshine_package_mask_state:$vibeshine_package_mask_load" in
+    masked:LoadState=masked | masked-runtime:LoadState=masked) vibeshine_package_mask_verified=1 ;;
+  esac
+  if [ "$vibeshine_package_mask_verified" -ne 1 ] ||
+     ! vibeshine_preun_unit_is_quiescent vibeshine.service ||
+     ! vibeshine_package_no_jobs; then
+    echo 'error: an unowned Vibeshine host mask exists, but the host is active, populated, has a pending job, or its state is uncertain; package replacement is blocked. Force cannot remove an administrator or legacy mask without proving its activation ownership.' >&2
+    return 1
+  fi
+  # Preserve the actual mask and any unowned fence byte-for-byte. The mask
+  # supplies no-start admission while the full generation proof still runs.
+  return 0
+}
+
+vibeshine_package_prepare_postinstall_start() {
+  vibeshine_package_start_deferred=0
+  vibeshine_package_preserve_unowned_host_mask || return 1
+  if [ "$vibeshine_package_preserve_host_mask" -eq 1 ]; then
+    vibeshine_package_start_deferred=1
+  fi
+  for vibeshine_package_start_unit in vibeshine.service vibeshine-session-controller.service vibeshine-session-exec.socket vibeshine-vkms-control.socket; do
+    for vibeshine_package_start_directory in /etc/systemd/system /run/systemd/system; do
+      vibeshine_package_start_path=$vibeshine_package_start_directory/$vibeshine_package_start_unit
+      [ -L "$vibeshine_package_start_path" ] || continue
+      [ "$(readlink -- "$vibeshine_package_start_path")" = /dev/null ] || continue
+      vibeshine_package_start_identity=$(vibeshine_package_path_identity "$vibeshine_package_start_path") || return 1
+      case "$vibeshine_package_start_identity" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+      if [ "$vibeshine_package_start_directory" = /run/systemd/system ] &&
+         { [ -e "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned" ] || [ -L "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned" ]; }; then
+        vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned" || return 1
+        [ "$(cat -- "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned")" = "$vibeshine_package_start_identity" ] || return 1
+        continue
+      fi
+      vibeshine_package_start_deferred=1
+    done
+  done
+  if [ -e "$vibeshine_package_transaction/fence.before" ]; then
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/fence.before" || return 1
+    vibeshine_package_prior_fence=$(cat -- "$vibeshine_package_transaction/fence.before") || return 1
+    if [ "$vibeshine_package_prior_fence" != absent ]; then
+      [ "$(vibeshine_package_path_identity "$vibeshine_host_upgrade_dropin")" = "$vibeshine_package_prior_fence" ] || return 1
+      vibeshine_package_start_deferred=1
+    fi
+  fi
+  [ "$vibeshine_package_start_deferred" -eq 1 ] || return 0
+  # This must be the full actual generation proof (controller, broker/apps,
+  # restore/control instances, session record and retained executable inodes).
+  # The local host-empty + no-jobs classifier is insufficient for release.
+  vibeshine_package_complete_quiescence_is_safe || return 1
+  vibeshine_package_release || return 1
+  echo 'package: preserved administrator host mask or start fence; configuration completed and automatic service activation is deferred.' >&2
+  return 0
+}
+
 vibeshine_package_bind_run() {
   if [ -n "${VIBESHINE_PACKAGE_RUN_ID:-}" ]; then
     vibeshine_package_run_id_is_safe "$VIBESHINE_PACKAGE_RUN_ID" || return 1
@@ -5452,6 +5819,48 @@ vibeshine_package_adopt_legacy_barriers() {
     vibeshine_package_record_is_safe "$vibeshine_package_transaction/legacy-adopted" &&
       [ "$(cat -- "$vibeshine_package_transaction/legacy-adopted")" = yes ] || return 1
     vibeshine_package_adoption_pending=1
+    # The marker is published only after the exact old fence, all original
+    # mask identities and full generation proof were verified. An interrupted
+    # conversion may leave some .before snapshots unconverted when old package
+    # unwind removes the fence. Resume only those original masks, never a
+    # replacement path or an unrecorded new mask.
+    if [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ]; then
+      vibeshine_package_complete_quiescence_is_safe || return 1
+      if [ -e "$vibeshine_package_transaction/fence.owned" ] || [ -L "$vibeshine_package_transaction/fence.owned" ]; then
+        vibeshine_package_record_is_safe "$vibeshine_package_transaction/fence.owned" || return 1
+      fi
+      # Validate every path before changing any record. Repeat the identity
+      # checks during publication so interruption leaves resumable metadata.
+      for vibeshine_package_adoption_pass in validate commit; do
+        for vibeshine_package_name in vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
+          vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.before" || return 1
+          vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.before") || return 1
+          if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ] || [ -L "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
+            vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+            vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned") || return 1
+          fi
+          vibeshine_package_current=$(vibeshine_package_path_identity "/run/systemd/system/$vibeshine_package_name") || return 1
+          if [ "$vibeshine_package_current" != absent ]; then
+            case "$vibeshine_package_current" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+            [ "$(readlink -- "/run/systemd/system/$vibeshine_package_name")" = /dev/null ] || return 1
+            [ "$vibeshine_package_current" = "$vibeshine_package_expected" ] || return 1
+          fi
+          [ "$vibeshine_package_adoption_pass" = commit ] || continue
+          if [ "$vibeshine_package_current" = absent ]; then
+            vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
+            rm -f -- "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+          else
+            vibeshine_package_write_record "$vibeshine_package_name.owned" "$vibeshine_package_current" || return 1
+            vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
+          fi
+        done
+      done
+      vibeshine_package_write_record fence.before absent || return 1
+      rm -f -- "$vibeshine_package_transaction/fence.owned" || return 1
+      vibeshine_package_write_record phase preflight || return 1
+      rm -f -- "$vibeshine_package_transaction/legacy-adopted" || return 1
+      return 0
+    fi
   fi
   [ "$vibeshine_package_before" != absent ] || [ "$vibeshine_package_adoption_pending" -eq 1 ] || return 0
   [ -f "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
@@ -5484,6 +5893,7 @@ SendSIGKILL=no') ;;
   for vibeshine_package_name in vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
     vibeshine_package_current=$(vibeshine_package_path_identity "/run/systemd/system/$vibeshine_package_name") || return 1
     case "$vibeshine_package_current" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+    [ "$(readlink -- "/run/systemd/system/$vibeshine_package_name")" = /dev/null ] || return 1
     if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
       vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned") || return 1
     else
@@ -5503,18 +5913,30 @@ SendSIGKILL=no') ;;
     vibeshine_package_write_record "$vibeshine_package_name.owned" "$vibeshine_package_current" || return 1
     vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
   done
-  vibeshine_package_write_record phase preflight
+  vibeshine_package_write_record phase preflight || return 1
+  # Every owned identity and before snapshot is now durable; the pending
+  # adoption marker is no longer needed by later release/retry operations.
+  rm -f -- "$vibeshine_package_transaction/legacy-adopted"
 }
 
 vibeshine_package_rebaseline_unwound_run() {
-  # A fresh explicit installer operation may select the current healthy
-  # invocation after an older dpkg abort restored every owned barrier. This
-  # grants a fresh stop target; it does not prove old process resources gone.
-  [ -n "${VIBESHINE_PACKAGE_RUN_ID:-}" ] || return 0
-  vibeshine_package_run_id_is_safe "$VIBESHINE_PACKAGE_RUN_ID" || return 1
-  [ -e "$vibeshine_package_transaction/run-id" ] || return 0
-  vibeshine_package_record_is_safe "$vibeshine_package_transaction/run-id" || return 1
-  [ "$(cat -- "$vibeshine_package_transaction/run-id")" != "$VIBESHINE_PACKAGE_RUN_ID" ] || return 0
+  # Pending legacy authority is not a wholly unwound transaction even when
+  # no .owned file has been published yet. Reconcile it before a new target.
+  if [ -e "$vibeshine_package_transaction/legacy-adopted" ] || [ -L "$vibeshine_package_transaction/legacy-adopted" ]; then
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/legacy-adopted" &&
+      [ "$(cat -- "$vibeshine_package_transaction/legacy-adopted")" = yes ] || return 1
+    return 0
+  fi
+  # A native package retry, or a fresh explicit installer operation, may
+  # select the current healthy invocation after every owned barrier unwound.
+  # This grants a fresh target, never proof that old process resources vanished.
+  if [ -n "${VIBESHINE_PACKAGE_RUN_ID:-}" ]; then
+    vibeshine_package_run_id_is_safe "$VIBESHINE_PACKAGE_RUN_ID" || return 1
+    [ -e "$vibeshine_package_transaction/run-id" ] || return 0
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/run-id" || return 1
+    # A same-run force retry must retain its original invocation identity.
+    [ "$(cat -- "$vibeshine_package_transaction/run-id")" != "$VIBESHINE_PACKAGE_RUN_ID" ] || return 0
+  fi
   for vibeshine_package_path in "$vibeshine_package_transaction"/*.owned; do
     [ ! -e "$vibeshine_package_path" ] && [ ! -L "$vibeshine_package_path" ] || return 0
   done
@@ -5530,6 +5952,13 @@ vibeshine_package_rebaseline_unwound_run() {
       --property=FreezerState --property=InvocationID 2>/dev/null) || return 1
     vibeshine_package_controller_identity_is_safe "$vibeshine_package_controller" || return 1
     vibeshine_package_write_record controller "$vibeshine_package_controller" || return 1
+  fi
+  if [ -z "${VIBESHINE_PACKAGE_RUN_ID:-}" ]; then
+    # A native retry is a new operation. Retire any earlier wrapper's nonce
+    # atomically before refreshing phase or discarding its saved stop identity.
+    vibeshine_package_new_run=$(cat /proc/sys/kernel/random/uuid | tr -d '-') || return 1
+    vibeshine_package_run_id_is_safe "$vibeshine_package_new_run" || return 1
+    vibeshine_package_write_record run-id "$vibeshine_package_new_run" || return 1
   fi
   vibeshine_package_write_record phase early || return 1
   rm -f -- "$vibeshine_package_transaction/host-stop.before" || return 1
@@ -5902,7 +6331,9 @@ vibeshine_abort_removal() {
       fi
       vibeshine_package_complete_quiescence_is_safe || return 1
       vibeshine_package_restore_legacy_handoff || return 1
-      vibeshine_package_release && return 0
+      vibeshine_package_restore_barriers || return 1
+      vibeshine_package_forget || return 1
+      return 0
     fi
   fi
   echo 'error: removal recovery remains uncertain; retry removal to finish exact host and session cleanup.' >&2
@@ -6553,6 +6984,82 @@ vibeshine_package_run_id_is_safe() {
   case "$1" in *[!0-9a-f]*) return 1 ;; esac
 }
 
+vibeshine_package_preserve_unowned_host_mask() {
+  vibeshine_package_preserve_host_mask=0
+  for vibeshine_package_mask_path in /etc/systemd/system/vibeshine.service /run/systemd/system/vibeshine.service; do
+    [ -L "$vibeshine_package_mask_path" ] || continue
+    [ "$(readlink -- "$vibeshine_package_mask_path")" = /dev/null ] || continue
+    vibeshine_package_mask_identity=$(vibeshine_package_path_identity "$vibeshine_package_mask_path") || return 1
+    case "$vibeshine_package_mask_identity" in
+      *:0:0:'symbolic link') ;;
+      *) echo "error: unsafe host mask at $vibeshine_package_mask_path; package operation is blocked." >&2; return 1 ;;
+    esac
+    if [ "$vibeshine_package_mask_path" = /run/systemd/system/vibeshine.service ] &&
+       { [ -e "$vibeshine_package_transaction/vibeshine.service.owned" ] || [ -L "$vibeshine_package_transaction/vibeshine.service.owned" ]; }; then
+      vibeshine_package_record_is_safe "$vibeshine_package_transaction/vibeshine.service.owned" || return 1
+      [ "$(cat -- "$vibeshine_package_transaction/vibeshine.service.owned")" = "$vibeshine_package_mask_identity" ] || return 1
+      continue
+    fi
+    vibeshine_package_preserve_host_mask=1
+  done
+  [ "$vibeshine_package_preserve_host_mask" -eq 1 ] || return 0
+  vibeshine_package_mask_state=$(timeout --signal=KILL 5 systemctl is-enabled vibeshine.service 2>/dev/null || true)
+  vibeshine_package_mask_load=$(timeout --signal=KILL 5 systemctl show vibeshine.service --property=LoadState 2>/dev/null) || vibeshine_package_mask_load=uncertain
+  vibeshine_package_mask_verified=0
+  case "$vibeshine_package_mask_state:$vibeshine_package_mask_load" in
+    masked:LoadState=masked | masked-runtime:LoadState=masked) vibeshine_package_mask_verified=1 ;;
+  esac
+  if [ "$vibeshine_package_mask_verified" -ne 1 ] ||
+     ! vibeshine_unit_is_quiescent vibeshine.service ||
+     ! vibeshine_package_no_jobs; then
+    echo 'error: an unowned Vibeshine host mask exists, but the host is active, populated, has a pending job, or its state is uncertain; package replacement is blocked. Force cannot remove an administrator or legacy mask without proving its activation ownership.' >&2
+    return 1
+  fi
+  # Preserve the actual mask and any unowned fence byte-for-byte. The mask
+  # supplies no-start admission while the full generation proof still runs.
+  return 0
+}
+
+vibeshine_package_prepare_postinstall_start() {
+  vibeshine_package_start_deferred=0
+  vibeshine_package_preserve_unowned_host_mask || return 1
+  if [ "$vibeshine_package_preserve_host_mask" -eq 1 ]; then
+    vibeshine_package_start_deferred=1
+  fi
+  for vibeshine_package_start_unit in vibeshine.service vibeshine-session-controller.service vibeshine-session-exec.socket vibeshine-vkms-control.socket; do
+    for vibeshine_package_start_directory in /etc/systemd/system /run/systemd/system; do
+      vibeshine_package_start_path=$vibeshine_package_start_directory/$vibeshine_package_start_unit
+      [ -L "$vibeshine_package_start_path" ] || continue
+      [ "$(readlink -- "$vibeshine_package_start_path")" = /dev/null ] || continue
+      vibeshine_package_start_identity=$(vibeshine_package_path_identity "$vibeshine_package_start_path") || return 1
+      case "$vibeshine_package_start_identity" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+      if [ "$vibeshine_package_start_directory" = /run/systemd/system ] &&
+         { [ -e "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned" ] || [ -L "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned" ]; }; then
+        vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned" || return 1
+        [ "$(cat -- "$vibeshine_package_transaction/$vibeshine_package_start_unit.owned")" = "$vibeshine_package_start_identity" ] || return 1
+        continue
+      fi
+      vibeshine_package_start_deferred=1
+    done
+  done
+  if [ -e "$vibeshine_package_transaction/fence.before" ]; then
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/fence.before" || return 1
+    vibeshine_package_prior_fence=$(cat -- "$vibeshine_package_transaction/fence.before") || return 1
+    if [ "$vibeshine_package_prior_fence" != absent ]; then
+      [ "$(vibeshine_package_path_identity "$vibeshine_host_upgrade_dropin")" = "$vibeshine_package_prior_fence" ] || return 1
+      vibeshine_package_start_deferred=1
+    fi
+  fi
+  [ "$vibeshine_package_start_deferred" -eq 1 ] || return 0
+  # This must be the full actual generation proof (controller, broker/apps,
+  # restore/control instances, session record and retained executable inodes).
+  # The local host-empty + no-jobs classifier is insufficient for release.
+  vibeshine_package_complete_quiescence_is_safe || return 1
+  vibeshine_package_release || return 1
+  echo 'package: preserved administrator host mask or start fence; configuration completed and automatic service activation is deferred.' >&2
+  return 0
+}
+
 vibeshine_package_bind_run() {
   if [ -n "${VIBESHINE_PACKAGE_RUN_ID:-}" ]; then
     vibeshine_package_run_id_is_safe "$VIBESHINE_PACKAGE_RUN_ID" || return 1
@@ -6633,6 +7140,48 @@ vibeshine_package_adopt_legacy_barriers() {
     vibeshine_package_record_is_safe "$vibeshine_package_transaction/legacy-adopted" &&
       [ "$(cat -- "$vibeshine_package_transaction/legacy-adopted")" = yes ] || return 1
     vibeshine_package_adoption_pending=1
+    # The marker is published only after the exact old fence, all original
+    # mask identities and full generation proof were verified. An interrupted
+    # conversion may leave some .before snapshots unconverted when old package
+    # unwind removes the fence. Resume only those original masks, never a
+    # replacement path or an unrecorded new mask.
+    if [ ! -e "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ]; then
+      vibeshine_package_complete_quiescence_is_safe || return 1
+      if [ -e "$vibeshine_package_transaction/fence.owned" ] || [ -L "$vibeshine_package_transaction/fence.owned" ]; then
+        vibeshine_package_record_is_safe "$vibeshine_package_transaction/fence.owned" || return 1
+      fi
+      # Validate every path before changing any record. Repeat the identity
+      # checks during publication so interruption leaves resumable metadata.
+      for vibeshine_package_adoption_pass in validate commit; do
+        for vibeshine_package_name in vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
+          vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.before" || return 1
+          vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.before") || return 1
+          if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ] || [ -L "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
+            vibeshine_package_record_is_safe "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+            vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned") || return 1
+          fi
+          vibeshine_package_current=$(vibeshine_package_path_identity "/run/systemd/system/$vibeshine_package_name") || return 1
+          if [ "$vibeshine_package_current" != absent ]; then
+            case "$vibeshine_package_current" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+            [ "$(readlink -- "/run/systemd/system/$vibeshine_package_name")" = /dev/null ] || return 1
+            [ "$vibeshine_package_current" = "$vibeshine_package_expected" ] || return 1
+          fi
+          [ "$vibeshine_package_adoption_pass" = commit ] || continue
+          if [ "$vibeshine_package_current" = absent ]; then
+            vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
+            rm -f -- "$vibeshine_package_transaction/$vibeshine_package_name.owned" || return 1
+          else
+            vibeshine_package_write_record "$vibeshine_package_name.owned" "$vibeshine_package_current" || return 1
+            vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
+          fi
+        done
+      done
+      vibeshine_package_write_record fence.before absent || return 1
+      rm -f -- "$vibeshine_package_transaction/fence.owned" || return 1
+      vibeshine_package_write_record phase preflight || return 1
+      rm -f -- "$vibeshine_package_transaction/legacy-adopted" || return 1
+      return 0
+    fi
   fi
   [ "$vibeshine_package_before" != absent ] || [ "$vibeshine_package_adoption_pending" -eq 1 ] || return 0
   [ -f "$vibeshine_host_upgrade_dropin" ] && [ ! -L "$vibeshine_host_upgrade_dropin" ] || return 1
@@ -6665,6 +7214,7 @@ SendSIGKILL=no') ;;
   for vibeshine_package_name in vibeshine.service vibeshine-session-exec.socket vibeshine-vkms-control.socket 'vibeshine-session-restore@.service'; do
     vibeshine_package_current=$(vibeshine_package_path_identity "/run/systemd/system/$vibeshine_package_name") || return 1
     case "$vibeshine_package_current" in *:0:0:'symbolic link') ;; *) return 1 ;; esac
+    [ "$(readlink -- "/run/systemd/system/$vibeshine_package_name")" = /dev/null ] || return 1
     if [ -e "$vibeshine_package_transaction/$vibeshine_package_name.owned" ]; then
       vibeshine_package_expected=$(cat -- "$vibeshine_package_transaction/$vibeshine_package_name.owned") || return 1
     else
@@ -6684,18 +7234,30 @@ SendSIGKILL=no') ;;
     vibeshine_package_write_record "$vibeshine_package_name.owned" "$vibeshine_package_current" || return 1
     vibeshine_package_write_record "$vibeshine_package_name.before" absent || return 1
   done
-  vibeshine_package_write_record phase preflight
+  vibeshine_package_write_record phase preflight || return 1
+  # Every owned identity and before snapshot is now durable; the pending
+  # adoption marker is no longer needed by later release/retry operations.
+  rm -f -- "$vibeshine_package_transaction/legacy-adopted"
 }
 
 vibeshine_package_rebaseline_unwound_run() {
-  # A fresh explicit installer operation may select the current healthy
-  # invocation after an older dpkg abort restored every owned barrier. This
-  # grants a fresh stop target; it does not prove old process resources gone.
-  [ -n "${VIBESHINE_PACKAGE_RUN_ID:-}" ] || return 0
-  vibeshine_package_run_id_is_safe "$VIBESHINE_PACKAGE_RUN_ID" || return 1
-  [ -e "$vibeshine_package_transaction/run-id" ] || return 0
-  vibeshine_package_record_is_safe "$vibeshine_package_transaction/run-id" || return 1
-  [ "$(cat -- "$vibeshine_package_transaction/run-id")" != "$VIBESHINE_PACKAGE_RUN_ID" ] || return 0
+  # Pending legacy authority is not a wholly unwound transaction even when
+  # no .owned file has been published yet. Reconcile it before a new target.
+  if [ -e "$vibeshine_package_transaction/legacy-adopted" ] || [ -L "$vibeshine_package_transaction/legacy-adopted" ]; then
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/legacy-adopted" &&
+      [ "$(cat -- "$vibeshine_package_transaction/legacy-adopted")" = yes ] || return 1
+    return 0
+  fi
+  # A native package retry, or a fresh explicit installer operation, may
+  # select the current healthy invocation after every owned barrier unwound.
+  # This grants a fresh target, never proof that old process resources vanished.
+  if [ -n "${VIBESHINE_PACKAGE_RUN_ID:-}" ]; then
+    vibeshine_package_run_id_is_safe "$VIBESHINE_PACKAGE_RUN_ID" || return 1
+    [ -e "$vibeshine_package_transaction/run-id" ] || return 0
+    vibeshine_package_record_is_safe "$vibeshine_package_transaction/run-id" || return 1
+    # A same-run force retry must retain its original invocation identity.
+    [ "$(cat -- "$vibeshine_package_transaction/run-id")" != "$VIBESHINE_PACKAGE_RUN_ID" ] || return 0
+  fi
   for vibeshine_package_path in "$vibeshine_package_transaction"/*.owned; do
     [ ! -e "$vibeshine_package_path" ] && [ ! -L "$vibeshine_package_path" ] || return 0
   done
@@ -6711,6 +7273,13 @@ vibeshine_package_rebaseline_unwound_run() {
       --property=FreezerState --property=InvocationID 2>/dev/null) || return 1
     vibeshine_package_controller_identity_is_safe "$vibeshine_package_controller" || return 1
     vibeshine_package_write_record controller "$vibeshine_package_controller" || return 1
+  fi
+  if [ -z "${VIBESHINE_PACKAGE_RUN_ID:-}" ]; then
+    # A native retry is a new operation. Retire any earlier wrapper's nonce
+    # atomically before refreshing phase or discarding its saved stop identity.
+    vibeshine_package_new_run=$(cat /proc/sys/kernel/random/uuid | tr -d '-') || return 1
+    vibeshine_package_run_id_is_safe "$vibeshine_package_new_run" || return 1
+    vibeshine_package_write_record run-id "$vibeshine_package_new_run" || return 1
   fi
   vibeshine_package_write_record phase early || return 1
   rm -f -- "$vibeshine_package_transaction/host-stop.before" || return 1
