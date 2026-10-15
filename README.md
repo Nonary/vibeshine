@@ -82,7 +82,7 @@ client also runs Linux. See [Linux PyroWave](docs/linux/pyrowave.md),
 
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/Nonary/vibeshine/vibe-test/scripts/linux_install.sh
+curl -fsSLO https://raw.githubusercontent.com/Nonary/vibeshine/master/scripts/linux_install.sh
 sudo bash linux_install.sh
 ```
 
