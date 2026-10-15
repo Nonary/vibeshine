@@ -1165,6 +1165,15 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+# Compile extracted production AMF submission and delivery without a GPU.
+find_program(SUNSHINE_TEST_AMF_CXX NAMES g++)
+if(Python3_Interpreter_FOUND AND SUNSHINE_TEST_AMF_CXX)
+    add_test(NAME regression_amf_output_first_retry
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_amf_output_first_retry.py"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}" --compiler "${SUNSHINE_TEST_AMF_CXX}")
+endif()
+
 find_program(SUNSHINE_TEST_POWERSHELL NAMES pwsh powershell)
 if(SUNSHINE_TEST_POWERSHELL)
     add_test(NAME regression_windows_usbip_package
