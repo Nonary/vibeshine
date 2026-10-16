@@ -171,6 +171,7 @@ namespace platf::dxgi {
       }
 
       if (_pipe) {
+        BOOST_LOG(debug) << "WGC IPC teardown: host stopping control pipe";
         _pipe->stop();
         _pipe.reset();
       }
@@ -684,6 +685,8 @@ namespace platf::dxgi {
   capture_e ipc_session_t::lock_frame(winrt::com_ptr<ID3D11Texture2D> &gpu_tex_out, uint64_t &frame_qpc_out) {
     // Additional validation: ensure required resources are available
     if (!_shared_texture || !_keyed_mutex) {
+      BOOST_LOG(debug) << "Capture restart request: source=wgc-ipc reason=missing-frame-resources texture="
+                       << static_cast<bool>(_shared_texture) << " mutex=" << static_cast<bool>(_keyed_mutex);
       _force_reinit = true;
       _initialized = false;
       return capture_e::reinit;
