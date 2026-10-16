@@ -1544,7 +1544,7 @@ namespace nvhttp {
       }
 
       // Snapshot current display state BEFORE any display enumeration.
-      // queryDisplayConfig(QueryType::All) in output_exists() and other calls can activate
+      // queryDisplayConfig(QueryType::All) calls during display discovery can activate
       // external dummy plugs, which would pollute the snapshot used for session restore.
       if (no_active_sessions) {
         if (!display_helper_integration::snapshot_current_display_state(
@@ -1566,14 +1566,18 @@ namespace nvhttp {
       BOOST_LOG(debug) << "framegen_requires_virtual_display: " << framegen_requires_virtual_display;
       BOOST_LOG(debug) << "request_virtual_display: " << request_virtual_display;
       const auto requested_output_name = config::get_active_output_name();
-      if (!request_virtual_display && !requested_output_name.empty()) {
-        if (!display_device::output_exists(requested_output_name)) {
+      bool preserve_requested_output = false;
+      if (!request_virtual_display) {
+        const auto output_state = display_device::get_output_state(requested_output_name);
+        preserve_requested_output = output_state == display_device::output_state_e::active ||
+                                    output_state == display_device::output_state_e::unknown;
+        if (!requested_output_name.empty() && output_state == display_device::output_state_e::missing) {
           BOOST_LOG(warning) << "Requested display '" << requested_output_name
                              << "' not found; initializing virtual display instead.";
           if (!has_app_output_override) {
             request_virtual_display = true;
           }
-        } else if (!display_device::output_is_active(requested_output_name)) {
+        } else if (output_state == display_device::output_state_e::inactive) {
           // The output exists but is currently inactive (no \\\\.\\DISPLAY# assigned). If we cannot
           // run the display helper to activate it (no signed-in user session), fall back to a
           // virtual display so capture can still start.
@@ -1584,6 +1588,7 @@ namespace nvhttp {
               request_virtual_display = true;
             }
           } else {
+            preserve_requested_output = true;
             BOOST_LOG(info) << "Requested display '" << requested_output_name
                             << "' is present but inactive; attempting activation via display helper.";
           }
@@ -1808,7 +1813,10 @@ namespace nvhttp {
         }
       };
 
-      if (!request_virtual_display && VDISPLAY::should_auto_enable_virtual_display()) {
+      // The selected output may be an existing VDD. Reuse the validation above;
+      // a second, physical-only enumeration must not take ownership away from
+      // that target (or from the helper that is about to activate it).
+      if (!request_virtual_display && !preserve_requested_output && VDISPLAY::should_auto_enable_virtual_display()) {
         BOOST_LOG(info) << "No physical monitors detected. Automatically enabling virtual display.";
         request_virtual_display = true;
       }
