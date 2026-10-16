@@ -2403,6 +2403,7 @@ namespace rtsp_stream {
         std::shared_ptr<stream::session_t> stream_session;
         bool startup_failed = true;
         bool failed_before_control_registration = false;
+        int startup_status = 500;
         std::string startup_error;
 
         try {
@@ -2411,7 +2412,11 @@ namespace rtsp_stream {
           startup_failed = start_result != 0;
           // The explicit -1 return is before control registration. Exceptions
           // may occur later and must not retire a potentially started session.
-          failed_before_control_registration = start_result == -1;
+          failed_before_control_registration = start_result == -1 || start_result == stream::session::START_PACING_REJECTED;
+          if (start_result == stream::session::START_PACING_REJECTED) {
+            startup_status = 400;
+            startup_error = "Requested video demand cannot fit the configured pacing ceiling with FEC and packet headers";
+          }
         } catch (const std::exception &e) {
           startup_error = e.what();
         } catch (...) {
@@ -2428,7 +2433,7 @@ namespace rtsp_stream {
         }
         if (failed_before_control_registration) server->retire_failed_monitor_start_locked(launch_session);
         if (startup_failed) server->set_pending_vulkan_hdr_layer_stream(false);
-        server->post([server, socket = std::move(socket), session = std::move(session), sequence_number, startup_failed, startup_error = std::move(startup_error),
+        server->post([server, socket = std::move(socket), session = std::move(session), sequence_number, startup_failed, startup_status, startup_error = std::move(startup_error),
                       audio_codec_name = std::string(audio::dolby_codec_name(selected_audio_codec))]() mutable {
           OPTION_ITEM completion_option {};
           completion_option.option = const_cast<char *>("CSeq");
@@ -2441,7 +2446,7 @@ namespace rtsp_stream {
             } else {
               BOOST_LOG(error) << "Failed to start a streaming session: "sv << startup_error;
             }
-            respond(socket->sock, *session, &completion_option, 500, "Internal Server Error", sequence_number, {});
+            respond(socket->sock, *session, &completion_option, startup_status, startup_status == 400 ? "BAD REQUEST" : "Internal Server Error", sequence_number, {});
           } else {
             OPTION_ITEM audio_codec_option {};
             std::string audio_codec_header {"X-SS-Audio-Codec"};

@@ -6356,6 +6356,12 @@ launch_session->exact_target_hold.reset();
     }
 
     const int updated = stream::set_bitrate_for_sessions(identity.uuid, applied);
+    if (updated < 0) {
+      tree.put("root.bitrate", 0);
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "Requested bitrate cannot fit the configured video pacing ceiling with FEC and packet headers");
+      return;
+    }
     if (updated <= 0) {
       BOOST_LOG(warning) << "Bitrate change requested by ["sv << identity.name << "] but no matching active session was found"sv;
       tree.put("root.bitrate", 0);

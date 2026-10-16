@@ -847,6 +847,9 @@ namespace stream {
 
   static auto broadcast = safe::make_shared<broadcast_ctx_t>(start_broadcast, end_broadcast);
 
+  static bool pacing_admits_locked(control_server_t &server, const config_t *starting,
+                                   const std::string *client_uuid, int bitrate_override);
+
   static broadcast_runtime::controls_t<broadcast_ctx_t> broadcast_controls {
     broadcast,
     [](broadcast_ctx_t &ctx, const broadcast_runtime::session_action_t &action) {
@@ -860,11 +863,68 @@ namespace stream {
         }
       }
       return action(sessions);
+    },
+    [](broadcast_ctx_t &ctx, const std::string &client_uuid, int bitrate_kbps) {
+      return pacing_admits_locked(ctx.control_server, nullptr, &client_uuid, bitrate_kbps);
     }
   };
 
   void request_idr_for_all_sessions() {
     broadcast_controls.request_idr_for_all_sessions();
+  }
+
+  static video_pacing_reservation_t pacing_reservation_for_config(const config_t &config, int bitrate_override = 0) {
+    if (config::stream.pacing_max_bitrate_kbps == 0 || config.monitor.input_only) {
+      return {true, 0, 0};
+    }
+    if (config.packetsize <= int(sizeof(video_packet_raw_t) - MAX_RTP_HEADER_SIZE)) {
+      return {};
+    }
+    const bool pyro = config.monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT;
+    const auto block = std::size_t(config.packetsize) + MAX_RTP_HEADER_SIZE;
+    const auto prefix = (config.encryptionFlagsEnabled & SS_ENC_VIDEO) ? sizeof(video_packet_enc_prefix_t) : 0;
+    const auto fps = std::max({std::int64_t(config.monitor.framerate),
+                              (std::int64_t(config.monitor.encodingFramerate) + 999) / 1000,
+                              (std::int64_t(config.monitor.framerateX100) + 99) / 100});
+    return video_pacing_reservation(config::stream.pacing_max_bitrate_kbps, {
+      bitrate_override > 0 ? bitrate_override : config.monitor.bitrate,
+      fps <= 4000 ? int(fps) : 4001,
+      block - sizeof(video_packet_raw_t), block + prefix, sizeof(video_short_frame_header_t),
+      pyro ? std::max(config::stream.pyrowave_critical_fec_percentage, pyrowave::policy::MAX_DETAIL_FEC_PERCENTAGE) : config::stream.fec_percentage,
+      std::max(config.minRequiredFecPackets, pyro ? 2 : 0), pyro,
+    });
+  }
+
+  // Caller holds _sessions. Reserve all published sessions, including a start
+  // whose state has not reached RUNNING yet, before publishing another owner or
+  // changing any bitrate. The video pacer/debt is shared by these sessions.
+  static bool pacing_admits_locked(control_server_t &server, const config_t *starting = nullptr,
+                                   const std::string *client_uuid = nullptr, int bitrate_override = 0) {
+    if (config::stream.pacing_max_bitrate_kbps == 0) {
+      return true;
+    }
+    std::uint64_t used = 0;
+    auto reserve = [&](const config_t &config, int bitrate) {
+      const auto reservation = pacing_reservation_for_config(config, bitrate);
+      if (!reserve_video_pacing_capacity(used, reservation)) {
+        BOOST_LOG(warning) << "Rejecting video demand that cannot fit pacing_max_bitrate_kbps="sv
+                           << config::stream.pacing_max_bitrate_kbps << "; packets/s="sv << reservation.packets_per_second
+                           << ", reserved send ns/s="sv << used << ", requested send ns/s="sv << reservation.send_ns_per_second;
+        return false;
+      }
+      return true;
+    };
+    for (const auto *session : *server._sessions) {
+      if (!session) {
+        continue;
+      }
+      const bool replacing = client_uuid && session->video.bitrate_events &&
+                             (client_uuid->empty() || session->device_uuid == *client_uuid);
+      if (!reserve(session->config, replacing ? bitrate_override : 0)) {
+        return false;
+      }
+    }
+    return !starting || reserve(*starting, 0);
   }
 
   int set_bitrate_for_sessions(const std::string &client_uuid, int bitrate_kbps) {
@@ -2533,8 +2593,22 @@ namespace stream {
       });
 
       try {
-        std::size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
-        // Host adaptive pacing replaces this with its exact rate below.
+        // Keep zero's legacy pacing byte-for-byte. Explicit ceilings count the
+        // full video datagram and are never raised to cover encoder/FEC demand:
+        // startup and bitrate admission reject demand that cannot fit instead.
+        const auto pacing_ceiling = config::stream.pacing_max_bitrate_kbps;
+        const auto capped_packets = video_pacing_packets_per_ms(
+          pacing_ceiling, blocksize + (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0));
+        size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
+        ratecontrol_packets_in_1ms = std::max<size_t>(1, ratecontrol_packets_in_1ms);
+        if (pacing_ceiling > 0 && capped_packets == 0) {
+          BOOST_LOG(error) << "Configured pacing ceiling cannot carry one video datagram per millisecond"sv;
+          session::stop(*session);
+          continue;
+        }
+        if (pacing_ceiling > 0) {
+          ratecontrol_packets_in_1ms = capped_packets;
+        }
         std::optional<pacing::packet_pace_t> adaptive_pace;
         if (pyrowave_session) {
           // Refresh the actual route periodically. Socket/interface discovery and
@@ -2583,6 +2657,11 @@ namespace stream {
             link_bps, stream_kbps, payload_blocksize, wire_bytes,
             packet->data_size() + sizeof(frame_header), monitor.framerate, monitor.pyrowave_peer_pace_bps
           );
+          // An adaptive pace may be slower, but cannot raise the operator's
+          // explicit ceiling. Apply it before reporting the selected pace.
+          if (pacing_ceiling > 0) {
+            ratecontrol_packets_in_1ms = std::min(ratecontrol_packets_in_1ms, capped_packets);
+          }
           const std::pair pacing_source {link_bps, link_interface_id};
           // Route probes can alternate between a link speed and the fallback on
           // successive refreshes. Rate-limit changes without logging each probe.
@@ -2599,7 +2678,8 @@ namespace stream {
                             << " bytes, stream "sv << stream_kbps << " kbps at "sv << monitor.framerate << " fps, pace "sv
                             << (monitor.pyrowave_peer_pace_bps ?
                                   "client-calibrated " + std::to_string(monitor.pyrowave_peer_pace_bps / 1'000'000) + " Mbps" :
-                                  std::string("default 80% of link"));
+                                  std::string("default 80% of link"))
+                            << (pacing_ceiling > 0 ? ", operator UDP ceiling " + std::to_string(pacing_ceiling) + " kbps" : std::string {});
           }
         } else if (session->video.adaptive_pacing_enabled) {
           // The ceiling is today's fixed pace, so a stream that settles at it
@@ -2673,6 +2753,9 @@ namespace stream {
         // before the next pacing wait.
         if (pyrowave_session || config::stream.pacing_batch_demand_limit || session->video.adaptive_pacing_enabled) {
           max_batch_size_bytes = pacing::max_batch_bytes(max_batch_size_bytes, ratecontrol_packets_in_1ms, datagram_size);
+        }
+        if (pacing_ceiling > 0) {
+          max_batch_size_bytes = std::min(max_batch_size_bytes, ratecontrol_packets_in_1ms * datagram_size);
         }
 
         // Encryption adds a prefix to every datagram. Omitting it here lets a
@@ -2817,7 +2900,7 @@ namespace stream {
               // Do pacing within the frame.
               // Also trigger pacing before the first send_batch() of the frame
               // to account for the last send_batch() of the previous frame.
-              if (ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms ||
+              if (pacing_ceiling > 0 || ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms ||
                   ratecontrol_frame_packets_sent == 0) {
                 auto due = ratecontrol_frame_start + ratecontrol_pace.offset(ratecontrol_frame_packets_sent);
 
@@ -4063,6 +4146,9 @@ namespace stream {
       // Insert this session into the session list
       {
         auto lg = session.broadcast_ref->control_server._sessions.lock();
+        if (!pacing_admits_locked(session.broadcast_ref->control_server, &session.config)) {
+          return START_PACING_REJECTED;
+        }
         session.broadcast_ref->control_server._sessions->push_back(&session);
       }
 
