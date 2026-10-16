@@ -2240,8 +2240,16 @@ namespace nvhttp {
       nlohmann::json remote_display_layout;
     };
 
-    const auto parse_state = [](const pt::ptree &tree) -> std::optional<parsed_state_t> {
+    const auto parse_state = [](pt::ptree tree) -> std::optional<parsed_state_t> {
       try {
+        // Apply the same legacy alias rule as durable snapshot validation.
+        // In particular, an old alias must not re-enable a disabled named client.
+        if (!statefile::policy::normalize_legacy_pairing_state(tree, [](const std::string &pem) {
+              return exact_certificate_identity(crypto::x509(pem));
+            })) {
+          BOOST_LOG(error) << "Pairing state contains invalid or duplicate client certificates."sv;
+          return std::nullopt;
+        }
         auto unique_id = tree.get_optional<std::string>("root.uniqueid");
         if (!unique_id || !pairing_policy::valid_unique_id(*unique_id)) {
           return std::nullopt;
