@@ -54,6 +54,7 @@
   #include "display_helper_integration.h"
   #include "remote_display_topology.h"
 #endif
+#include "globals.h"
 #include "logging.h"
 #include "nvhttp.h"
 #include "platform/common.h"
@@ -2721,6 +2722,7 @@ namespace proc {
     const bool has_run = had_active_app;
     const bool should_dispatch_revert = has_run && !proc::proc.get_last_run_app_name().empty();
     const auto undo_timeout = std::max(_app.exit_timeout, std::chrono::seconds(15));
+    const auto shutdown_event = mail::man ? mail::man->event<bool>(mail::shutdown) : nullptr;
 
     for (; _app_prep_it != _app_prep_begin; --_app_prep_it) {
       auto &cmd = *(_app_prep_it - 1);
@@ -2742,13 +2744,20 @@ namespace proc {
       }
 
       const auto deadline = std::chrono::steady_clock::now() + undo_timeout;
-      while (child.running() && std::chrono::steady_clock::now() < deadline) {
+      // Undo commands still run during shutdown, but their normal app-stop
+      // timeout can outlast the process shutdown watchdog. Leave a running
+      // command independent so display/audio teardown can finish in time.
+      while (child.running() && !(shutdown_event && shutdown_event->peek()) && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(100ms);
       }
 
       if (child.running()) {
-        BOOST_LOG(warning) << "Undo command timed out after " << undo_timeout.count()
-                           << " seconds; continuing teardown without waiting for completion.";
+        if (shutdown_event && shutdown_event->peek()) {
+          BOOST_LOG(info) << "Process shutdown requested; continuing teardown without waiting for undo command completion.";
+        } else {
+          BOOST_LOG(warning) << "Undo command timed out after " << undo_timeout.count()
+                             << " seconds; continuing teardown without waiting for completion.";
+        }
         try {
           child.detach();
         } catch (...) {
