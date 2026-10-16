@@ -1035,6 +1035,9 @@ namespace input {
       normalized->offset_y,
       normalized->width,
       normalized->height,
+      0,
+      0,
+      touch_port.output_name,
     };
   }
 

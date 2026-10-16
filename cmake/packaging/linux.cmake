@@ -112,12 +112,20 @@ else()
         set_target_properties(vibeshine_session_broker PROPERTIES OUTPUT_NAME "vibeshine-session-broker")
         target_include_directories(vibeshine_session_broker PRIVATE "${LIBCAP_INCLUDE_DIRS}")
         target_link_libraries(vibeshine_session_broker PRIVATE "${LIBCAP_LIBRARIES}")
+        add_executable(vibeshine_touch_map
+                "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-touch-map.c")
+        set_target_properties(vibeshine_touch_map PROPERTIES OUTPUT_NAME "vibeshine-touch-map")
+        target_include_directories(vibeshine_touch_map PRIVATE ${GIO_INCLUDE_DIRS})
+        target_link_libraries(vibeshine_touch_map PRIVATE ${GIO_LIBRARIES})
         add_executable(vibeshine_display_power
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-display-power.c")
         set_target_properties(vibeshine_display_power PROPERTIES OUTPUT_NAME "vibeshine-display-power")
         target_include_directories(vibeshine_display_power PRIVATE ${GIO_INCLUDE_DIRS})
         target_link_libraries(vibeshine_display_power PRIVATE ${GIO_LIBRARIES})
         if(WAYLAND_FOUND)
+            target_compile_definitions(vibeshine_touch_map PRIVATE VIBESHINE_HAVE_WAYLAND_TOUCH_MAP=1)
+            target_include_directories(vibeshine_touch_map PRIVATE ${WAYLAND_INCLUDE_DIRS})
+            target_link_libraries(vibeshine_touch_map PRIVATE ${WAYLAND_LIBRARIES})
             add_executable(vibeshine_display_observer
                     "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-display-observer.c"
                     "${CMAKE_BINARY_DIR}/generated-src/dpms.c")
@@ -203,7 +211,7 @@ else()
                 DESTINATION "${CMAKE_INSTALL_DATADIR}/libalpm/hooks")
         install(TARGETS vibeshine_session_exec vibeshine_app_supervisor
                 vibeshine_profile_import vibeshine_kwin_session_environment
-                vibeshine_provider_scan vibeshine_steam_launch vibeshine_display_power vibeshine_app_focus
+                vibeshine_provider_scan vibeshine_steam_launch vibeshine_display_power vibeshine_app_focus vibeshine_touch_map
                 RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
         if(TARGET vibeshine_display_observer)
             install(TARGETS vibeshine_display_observer
@@ -344,6 +352,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-display-power"
             "%attr(0700,root,root) %caps(cap_kill,cap_setgid,cap_setuid+p) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-session-broker"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-app-supervisor"
+            "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-touch-map"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-steam-launch"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-app-focus"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibeshine-kwin-session-environment"

@@ -86,12 +86,18 @@ class ArchiveTests(unittest.TestCase):
             members = deploy.inspect_archive(archive, VERSION)
         self.assertIn('usr/libexec/vibeshine/vibeshine-display-power', members)
         self.assertIn('usr/libexec/vibeshine/vibeshine-display-observer', members)
+        self.assertIn('usr/libexec/vibeshine/vibeshine-touch-map', members)
 
     def test_missing_recovery_helper_fails_preflight(self):
         with package(omit=['usr/libexec/vibeshine/vibeshine-display-power']) as archive:
             with self.assertRaises(deploy.DeployError):
                 deploy.inspect_archive(archive, VERSION)
         with package(omit=['usr/libexec/vibeshine/vibeshine-display-observer']) as archive:
+            with self.assertRaises(deploy.DeployError):
+                deploy.inspect_archive(archive, VERSION)
+
+    def test_missing_touch_mapping_helper_fails_preflight(self):
+        with package(omit=['usr/libexec/vibeshine/vibeshine-touch-map']) as archive:
             with self.assertRaises(deploy.DeployError):
                 deploy.inspect_archive(archive, VERSION)
 
@@ -117,6 +123,7 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(deploy.install_mode('usr/share/vibeshine/web/index.html', 0o7777), 0o644)
         self.assertEqual(deploy.install_mode('usr/libexec/vibeshine/vibeshine-display-power', 0o4777), 0o755)
         self.assertEqual(deploy.install_mode('usr/libexec/vibeshine/vibeshine-display-observer', 0o4777), 0o755)
+        self.assertEqual(deploy.install_mode('usr/libexec/vibeshine/vibeshine-touch-map', 0o4777), 0o755)
         self.assertEqual(deploy.install_mode('usr/libexec/vibeshine/vibeshine-host', 0o7777), 0o750)
         self.assertEqual(deploy.install_mode('usr/libexec/vibeshine/vibeshine-session-broker', 0o7777), 0o700)
         self.assertEqual(deploy.install_mode('usr/lib/libvibeshine-kwin-gpu.so'), 0o4755)

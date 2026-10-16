@@ -39,7 +39,7 @@ SOCKET = 'vibeshine-session-exec.socket'
 HELPERS = (
     'app-supervisor', 'app-focus', 'display-power', 'display-observer', 'drm-install', 'ds5-install', 'global-limiter.py', 'host',
     'kwin-session-environment', 'machine-host', 'profile-import', 'provider-scan',
-    'session-broker', 'session-controller', 'session-exec', 'steam-launch',
+    'session-broker', 'session-controller', 'session-exec', 'steam-launch', 'touch-map',
     'vkms', 'vkms-peercred', 'vkms-quiesce',
 )
 UNITS = (HOST, CONTROLLER, SOCKET, 'vibeshine-session-exec@.service',
