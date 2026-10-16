@@ -70,6 +70,7 @@ namespace statefile::policy {
   );
 
   using validate_primary_t = std::function<bool(const boost::property_tree::ptree &, bool allow_bootstrap)>;
+  using primary_diagnostic_t = std::function<std::string(const boost::property_tree::ptree &)>;
 
   using certificate_identity_t = std::function<std::optional<std::string>(const std::string &)>;
 
@@ -77,24 +78,30 @@ namespace statefile::policy {
    * named_devices. Remove only those legacy aliases from an in-memory snapshot;
    * the named record retains its UUID, enabled policy and all client settings.
    * Invalid certificates and duplicate named identities still fail closed.
-   * Failure leaves the supplied snapshot unchanged.
+   * Failure leaves the supplied snapshot unchanged. Optional diagnostics contain
+   * fixed field paths and record indices, never certificate or credential data.
    */
   bool normalize_legacy_pairing_state(
     boost::property_tree::ptree &tree,
-    const certificate_identity_t &certificate_identity
+    const certificate_identity_t &certificate_identity,
+    std::string *failure_reason = nullptr
   );
 
   /** Structural validation shared by primary reads and writes. */
   bool valid_primary_state(const boost::property_tree::ptree &tree, bool allow_bootstrap);
 
-  /** Read/modify/write recovery must retain host identity even with shared paths. */
+  /** Read/modify/write recovery must retain host identity even with shared paths.
+   * A readable but rejected primary is never replaced with older authorization.
+   * The optional diagnostic only explains validation; it cannot permit recovery.
+   */
   load_result_e load_primary_state_for_update(
     const std::string &path,
     boost::property_tree::ptree &tree,
     const read_file_t &read_file,
     const write_file_t &write_file,
     const validate_primary_t &validate,
-    std::string *failure_reason = nullptr
+    std::string *failure_reason = nullptr,
+    const primary_diagnostic_t &diagnostic = {}
   );
 
   /** Never let an incomplete metadata/bootstrap write replace an existing identity. */

@@ -120,17 +120,23 @@ namespace statefile {
       return {policy::read_status_e::loaded, std::move(contents)};
     }
 
+    std::optional<std::string> primary_certificate_identity(const std::string &pem) {
+      auto parsed = crypto::x509(pem);
+      if (!parsed) return std::nullopt;
+      return crypto::pem(parsed);
+    }
+
     bool valid_primary_snapshot(const pt::ptree &tree, bool allow_bootstrap) {
       auto normalized = tree;
-      const auto certificate = [](const std::string &pem) -> std::optional<std::string> {
-        auto parsed = crypto::x509(pem);
-        if (!parsed) {
-          return std::nullopt;
-        }
-        return crypto::pem(parsed);
-      };
-      return policy::normalize_legacy_pairing_state(normalized, certificate) &&
+      return policy::normalize_legacy_pairing_state(normalized, primary_certificate_identity) &&
              policy::valid_primary_state(normalized, allow_bootstrap);
+    }
+
+    std::string primary_snapshot_diagnostic(const pt::ptree &tree) {
+      auto normalized = tree;
+      std::string reason;
+      (void) policy::normalize_legacy_pairing_state(normalized, primary_certificate_identity, &reason);
+      return reason;
     }
 
     bool is_auxiliary_state(const std::string &path) {
@@ -156,7 +162,8 @@ namespace statefile {
           return file_handler::write_file(target.c_str(), contents) == 0;
         },
                                                                   valid_primary_snapshot,
-                                                                  &failure_reason);
+                                                                  &failure_reason,
+                                                                  primary_snapshot_diagnostic);
         if (result == policy::load_result_e::failed) {
           BOOST_LOG(error) << "statefile: could not select pairing state " << path.string()
                            << " or recovery copy " << path.string() + ".bak" << ": " << failure_reason;
