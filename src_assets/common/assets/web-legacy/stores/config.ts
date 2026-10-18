@@ -5,6 +5,7 @@ import { http } from '@/http';
 // Metadata describing build/runtime info returned by /api/meta
 export interface MetaInfo {
   platform?: string;
+  linux?: { machine_host?: boolean };
   status?: boolean;
   version?: string;
   commit?: string;
