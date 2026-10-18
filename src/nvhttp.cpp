@@ -2825,6 +2825,58 @@ namespace nvhttp {
     return std::nullopt;
   }
 
+  /**
+   * @brief Add a nonfatal, code-only warning for a suppressed virtual-display choice.
+   * @param tree Successful launch or resume response, after RTSP admission.
+   * @param args Original request; omission of virtualDisplay always means inheritance.
+   * @param session Actual prepared session, including display-creation outcome.
+   * @param client Authenticated paired-client settings for this request.
+   * @param joining_existing Whether this request joins an already selected capture output.
+   * @note This observes policy only; it cannot change admission, display or authorization.
+   */
+  template<class Client>
+  void add_client_display_warning(
+    pt::ptree &tree, const args_t &args, const rtsp_stream::launch_session_t &session,
+    const Client &client, bool joining_existing
+  ) {
+    if (get_arg(args, "virtualDisplay", "") != "0" || joining_existing ||
+        session.role != remote_session::role_e::game || session.virtual_display || session.virtual_display_failed ||
+        tree.get<int>("root.<xmlattr>.status_code", 0) != 200) {
+      return;
+    }
+
+#ifdef __linux__
+    // An existing compositor scene ignores virtual-display requests altogether.
+    if (!platf::linux_display::backend().capabilities().independent_outputs) return;
+#endif
+
+    // Reconstruct only the display choice with the wire disable absent. Use the
+    // same explicit-choice resolver as preparation; never treat absence as off.
+    rtsp_stream::launch_session_t intended {};
+    if (client) {
+      intended.client_requests_virtual_display = client->always_use_virtual_display;
+      if (!client->output_name_override.empty()) intended.output_name_override = client->output_name_override;
+      intended.virtual_display_mode_override = parse_virtual_display_mode_override(client->virtual_display_mode_override);
+    }
+    if (const auto app = proc::proc.resolve_app(session.appid)) {
+      if (!intended.virtual_display_mode_override) intended.virtual_display_mode_override = app->virtual_display_mode_override;
+      if (!intended.output_name_override) intended.output_name_override = app->output_name_override;
+    }
+    auto output_choice = proc::display_policy::app_override_e::inherit;
+    if (intended.output_name_override) {
+      const auto output = boost::algorithm::trim_copy(*intended.output_name_override);
+      output_choice = !output.empty() && VDISPLAY::policy::is_virtual_display_selection(output, true) ?
+                        proc::display_policy::app_override_e::virtual_display : proc::display_policy::app_override_e::physical;
+    }
+    // Layout-only and legacy app flags do not consistently request creation on
+    // both Launch and Resume. Do not attribute those paths to the wire disable.
+    const bool mode_requests_virtual = intended.virtual_display_mode_override.value_or(config::video.virtual_display_mode) !=
+                                       config::video_t::virtual_display_mode_e::disabled;
+    const bool otherwise_virtual = proc::display_policy::resolve_virtual_display_request(mode_requests_virtual, output_choice) ||
+                                   intended.client_requests_virtual_display;
+    if (otherwise_virtual) tree.put("root.clientWarning", "virtual_display_disabled_by_client");
+  }
+
   std::shared_ptr<rtsp_stream::launch_session_t> make_launch_session(
     bool host_audio,
     const args_t &args,
@@ -4919,6 +4971,7 @@ namespace nvhttp {
 #endif
     output_override_guard.disable();
     runtime_overrides_guard.disable();
+    add_client_display_warning(tree, args, *launch_session, client_settings, !no_active_sessions);
 
     // Stream was started successfully, we will revert the config when the app or session terminates
     revert_display_configuration = false;
@@ -5469,6 +5522,7 @@ namespace nvhttp {
 #endif
     output_override_guard.disable();
     runtime_overrides_guard.disable();
+    add_client_display_warning(tree, args, *launch_session, get_named_cert_by_uuid(launch_session->client_uuid), joining_existing_game_output);
     revert_display_configuration = false;
   }
 
