@@ -101,6 +101,7 @@ else()
         # ALPM hooks run; it cannot depend on an already installed new helper.
         install(FILES "${CMAKE_SOURCE_DIR}/scripts/linux/migrations/upgrade-2.0-lifecycle.sh"
                 "${CMAKE_SOURCE_DIR}/scripts/linux/migrations/upgrade-2.0.1-lifecycle.sh"
+                "${CMAKE_SOURCE_DIR}/scripts/linux/migrations/upgrade-2.0.2-fuse-scan.sh"
                 DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/vibeshine/installer-migrations")
         add_executable(vibeshine_session_exec
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibeshine-session-exec.c")

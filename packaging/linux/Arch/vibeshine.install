@@ -94,7 +94,22 @@ vibeshine_cgroup_is_quiescent() {
   [[ "$control_group" == /* && "$control_group" != */../* && "$control_group" != */.. ]] || return 1
   cgroup_path=/sys/fs/cgroup$control_group
   if [[ ! -e "$cgroup_path" && ! -L "$cgroup_path" ]]; then
-    return 0
+    # Shell existence tests also fail on denied lookup. Only ENOENT
+    # proves absence; errors or a path that reappeared stay blocked.
+    [ -x /usr/bin/python3 ] || return 1
+    timeout --signal=KILL 5 /usr/bin/python3 -I - "$cgroup_path" <<'PY'
+import os
+import sys
+
+try:
+    os.lstat(sys.argv[1])
+except FileNotFoundError:
+    sys.exit(0)
+except OSError:
+    pass
+sys.exit(1)
+PY
+    return $?
   fi
   [[ -d "$cgroup_path" && ! -L "$cgroup_path" &&
      -f "$cgroup_path/cgroup.events" && ! -L "$cgroup_path/cgroup.events" ]] &&
@@ -287,6 +302,36 @@ import stat
 import sys
 
 paths = ("/usr/bin/vibeshine", "/usr/libexec/vibeshine/vibeshine-host")
+def inaccessible_fuse_is_unrelated(fd, target, identities):
+    # O_PATH pins the kernel executable path without opening it for I/O. FUSE
+    # may refuse getattr even to root when allow_other is absent. Never infer
+    # absence from EACCES, argv, process UID, or an AppImage-looking pathname.
+    # fdinfo supplies the pinned mount ID without consulting the FUSE daemon;
+    # mountinfo binds it to a kernel device, even across PID reuse or exec.
+    if target in paths or target in tuple(name + " (deleted)" for name in paths):
+        return False
+    info = pathlib.Path(f"/proc/self/fdinfo/{fd}").read_text()
+    mounts = [line.split()[1:] for line in info.splitlines() if line.startswith("mnt_id:")]
+    if len(mounts) != 1 or len(mounts[0]) != 1 or not mounts[0][0].isdecimal():
+        return False
+    mount_id = mounts[0][0]
+    entries = [line for line in pathlib.Path("/proc/self/mountinfo").read_text().splitlines()
+               if line.split()[0] == mount_id]
+    if len(entries) != 1:
+        return False
+    before, separator, after = entries[0].partition(" - ")
+    fields, filesystem = before.split(), after.split()
+    if not separator or len(fields) < 6 or len(filesystem) != 3:
+        return False
+    if filesystem[0] != "fuse" and not filesystem[0].startswith("fuse."):
+        return False
+    device = fields[2].split(":")
+    if len(device) != 2 or not all(value.isdecimal() for value in device):
+        return False
+    # Even on FUSE, a retained executable on this device remains ambiguous.
+    # Do not use daemon-controlled inode numbers to exclude an old host.
+    return os.makedev(*map(int, device)) not in {dev for dev, ino in identities}
+
 try:
     records = json.loads(sys.argv[1])
     if not isinstance(records, list) or len(records) > 2:
@@ -307,12 +352,22 @@ try:
     for process in pathlib.Path("/proc").iterdir():
         if not process.name.isdecimal():
             continue
+        executable = process / "exe"
         try:
-            executable = process / "exe"
-            identity = executable.stat()
-            target = os.readlink(executable)
+            fd = os.open(executable, os.O_PATH | os.O_CLOEXEC)
         except (FileNotFoundError, ProcessLookupError):
             continue
+        try:
+            pinned = f"/proc/self/fd/{fd}"
+            target = os.readlink(pinned)
+            try:
+                identity = os.fstat(fd)
+            except PermissionError:
+                if inaccessible_fuse_is_unrelated(fd, target, identities):
+                    continue
+                raise ValueError(f"PID {process.name}: inaccessible executable identity is ambiguous; replacement is blocked")
+        finally:
+            os.close(fd)
         def report_old_owner(deleted=False):
             uid, scope = "unknown", "<unavailable>"
             try:
@@ -2054,49 +2109,51 @@ do_quiesce_machine_host() {
     vibeshine_stop_exact_unit vibeshine-machine-prepare.service
   fi
 
-  ((have_systemd)) || vibeshine_disable_legacy_handoff || return 1
-  vibeshine_runtime_root_is_safe_or_absent || return 1
+  ((have_systemd)) || vq vibeshine_disable_legacy_handoff || return 1
+  vq vibeshine_runtime_root_is_safe_or_absent || return 1
 
   if ((have_systemd == 0)) && [[ -e "$vibeshine_controller" || -L "$vibeshine_controller" ]]; then
-    vibeshine_privileged_helper_is_safe "$vibeshine_controller" || return 1
-    timeout --signal=KILL 40 "$vibeshine_controller" cleanup || return 1
+    vq vibeshine_privileged_helper_is_safe "$vibeshine_controller" || return 1
+    vq timeout --signal=KILL 40 "$vibeshine_controller" cleanup || return 1
   elif ((have_systemd == 0)); then
-    vibeshine_run_optional_legacy_command cleanup
+    vq vibeshine_run_optional_legacy_command cleanup
     legacy_status=$?
     ((legacy_status == 0 || legacy_status == 2)) || return 1
   fi
 
-  vibeshine_run_optional_legacy_command remove-pam
+  vq vibeshine_run_optional_legacy_command remove-pam
   legacy_status=$?
   ((legacy_status == 0 || legacy_status == 2)) || return 1
 
   if ((have_systemd)); then
-    vibeshine_restore_template_is_masked || return 1
-    vibeshine_host_unit_is_masked || return 1
-    vibeshine_broker_socket_is_masked || return 1
-    vibeshine_stop_restore_instances || return 1
-    vibeshine_stop_exact_unit vibeshine.service
-    vibeshine_unit_is_quiescent vibeshine.service || return 1
-    vibeshine_stop_exact_unit vibeshine-session-exec.socket
-    vibeshine_stop_brokers || return 1
+    vq vibeshine_restore_template_is_masked || return 1
+    vq vibeshine_host_unit_is_masked || return 1
+    vq vibeshine_broker_socket_is_masked || return 1
+    vq vibeshine_stop_restore_instances || return 1
+    vq vibeshine_stop_exact_unit vibeshine.service
+    vq vibeshine_unit_is_quiescent vibeshine.service || return 1
+    vq vibeshine_stop_exact_unit vibeshine-session-exec.socket
+    vq vibeshine_stop_brokers || return 1
     for unit in \
       vibeshine-session-exec.socket \
       vibeshine-session-controller.service \
       vibeshine.service \
       vibeshine-prelogin.service \
       vibeshine-machine-prepare.service; do
-      vibeshine_stop_exact_unit "$unit"
-      vibeshine_unit_is_quiescent "$unit" || return 1
+      vq vibeshine_stop_exact_unit "$unit"
+      vq vibeshine_unit_is_quiescent "$unit" || return 1
     done
-    vibeshine_brokers_are_quiescent || return 1
-    vibeshine_restore_instances_are_quiescent || return 1
+    vq vibeshine_brokers_are_quiescent || return 1
+    vq vibeshine_restore_instances_are_quiescent || return 1
   fi
 
-  vibeshine_cleanup_legacy_transition_state || return 1
+  vq vibeshine_cleanup_legacy_transition_state || return 1
 
+  vibeshine_quiesce_step='remove stale session broker socket'
   if [[ -S "$vibeshine_broker_socket" && ! -L "$vibeshine_broker_socket" ]]; then
     rm -f -- "$vibeshine_broker_socket" || return 1
   fi
+  vibeshine_quiesce_step='verify broker and legacy runtime state is absent'
   [[ ! -e "$vibeshine_broker_socket" && ! -L "$vibeshine_broker_socket" &&
      ! -e "$vibeshine_legacy_handoff_directory" && ! -L "$vibeshine_legacy_handoff_directory" &&
      ! -e "$vibeshine_legacy_restore_directory" && ! -L "$vibeshine_legacy_restore_directory" &&
@@ -2105,6 +2162,7 @@ do_quiesce_machine_host() {
     echo 'error: installed Vibeshine runtime state remains; replacement is blocked and admission stays disabled.' >&2
     return 1
   }
+  vibeshine_quiesce_step='verify trusted session record is absent'
   [ ! -e /run/vibeshine/session.env ] && [ ! -L /run/vibeshine/session.env ] || return 1
 
 }
