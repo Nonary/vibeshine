@@ -59,6 +59,7 @@
 #include "pyrowave_protocol.h"
 #include "pyrowave_udp_probe.h"
 #include "state_storage.h"
+#include "session_display_policy.h"
 #include "single_flight.h"
 #include "state_storage_policy.h"
 #ifdef _WIN32
@@ -3032,6 +3033,8 @@ namespace nvhttp {
       }
     }
 
+    const auto client_virtual_display_override = proc::display_policy::virtual_display_override(*launch_session);
+
     const auto scale_factor = util::from_view(get_arg(args, "scaleFactor", "100"));
     if (scale_factor > 0 && scale_factor != 100 && launch_session->width > 0 && launch_session->height > 0) {
       const auto scale_dimension = [scale_factor](const int dimension) -> std::optional<int> {
@@ -3092,8 +3095,11 @@ namespace nvhttp {
           if (!launch_session->virtual_display_layout_override && app_ctx->virtual_display_layout_override) {
             launch_session->virtual_display_layout_override = app_ctx->virtual_display_layout_override;
           }
-          if (!launch_session->dd_config_option_override && app_ctx->dd_config_option_override) {
+          if (!launch_session->dd_config_option_override) {
             launch_session->dd_config_option_override = app_ctx->dd_config_option_override;
+            if (!launch_session->dd_config_option_override) {
+              launch_session->dd_config_option_override = proc::display_policy::preparation_override(app_ctx->config_overrides);
+            }
           }
           if (!launch_session->output_name_override && app_ctx->output_name_override) {
             launch_session->output_name_override = *app_ctx->output_name_override;
@@ -3103,6 +3109,17 @@ namespace nvhttp {
       } catch (...) {
       }
     }
+
+    // Resolve display preparation after client and application fields.
+    const auto display_preparation = proc::display_policy::resolve_preparation(
+      config::video.dd.configuration_option,
+      launch_session->dd_config_option_override,
+      client_settings ? proc::display_policy::preparation_override(client_settings->config_overrides) : std::nullopt,
+      client_virtual_display_override.value_or(false),
+      client_virtual_display_override.value_or(proc::display_policy::virtual_display_override(*launch_session).value_or(false))
+    );
+    launch_session->dd_config_option_override = display_preparation.option;
+    launch_session->virtual_display_preparation_override = display_preparation.virtual_override;
 
     launch_session->framegen_refresh_rate.reset();
     launch_session->framegen_refresh_millihz.reset();
@@ -5151,6 +5168,7 @@ namespace nvhttp {
       launch_session->virtual_display_mode_override = config::video_t::virtual_display_mode_e::disabled;
       launch_session->virtual_display_layout_override.reset();
       launch_session->dd_config_option_override.reset();
+      launch_session->virtual_display_preparation_override = false;
       launch_session->output_name_override.reset();
       launch_session->virtual_display_guid_bytes.fill(0);
       launch_session->virtual_display_device_id.clear();

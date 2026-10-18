@@ -1260,6 +1260,8 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_windows_color_profile.py")
     add_test(NAME regression_display_policy_adapter
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_policy_adapter.py")
+    add_test(NAME regression_session_display_precedence
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_session_display_precedence.py")
     add_test(NAME regression_selected_output_fallback
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_selected_output_fallback.py")
     add_test(NAME regression_virtual_display_refresh
