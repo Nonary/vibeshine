@@ -1256,6 +1256,13 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(regression_playnite_connector_lifecycle PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_program(SUNSHINE_TEST_FOCUS_NODE NAMES node nodejs)
+    if(SUNSHINE_TEST_FOCUS_NODE)
+        add_test(NAME regression_managed_app_focus_adapters
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_managed_app_focus_adapters.py"
+                --compiler "${CMAKE_CXX_COMPILER}" --node "${SUNSHINE_TEST_FOCUS_NODE}")
+        set_tests_properties(regression_managed_app_focus_adapters PROPERTIES LABELS "component" TIMEOUT 60)
+    endif()
     add_test(NAME regression_windows_color_profile
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_windows_color_profile.py")
     add_test(NAME regression_display_policy_adapter
