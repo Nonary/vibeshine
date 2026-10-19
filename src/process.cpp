@@ -48,6 +48,7 @@
 #include "app_framegen_config.h"
 #include "audio.h"
 #include "config.h"
+#include "confighttp.h"
 #include "crypto.h"
 #include "deferred_action.h"
 #if defined(_WIN32) || defined(__linux__)
@@ -986,6 +987,7 @@ namespace proc {
   proc_t::proc_t(proc_t &&other) noexcept:
       _app_id(other._app_id.load(std::memory_order_acquire)),
       _env(std::move(other._env)),
+      _pending_catalog_environment(std::move(other._pending_catalog_environment)),
       _stream_owned_environment_keys(std::move(other._stream_owned_environment_keys)),
       _apps(std::move(other._apps)),
       _app(std::move(other._app)),
@@ -1033,11 +1035,7 @@ namespace proc {
 #ifdef _WIN32
       stop_lossless_scaling_support();
 #endif
-      _app_id.store(other._app_id.load(std::memory_order_acquire), std::memory_order_release);
-      _env = std::move(other._env);
-      _stream_owned_environment_keys = std::move(other._stream_owned_environment_keys);
-      _apps = std::move(other._apps);
-      _app = std::move(other._app);
+      catalog::move_state(catalog_state(), other.catalog_state());
       _app_launch_time = other._app_launch_time;
       _active_client_uuid = std::move(other._active_client_uuid);
       _active_client_vdd_identity_token = other._active_client_vdd_identity_token;
@@ -1307,7 +1305,9 @@ namespace proc {
     // Ensure starting from a clean slate
     const bool skip_display_revert = launch_session &&
                                     (launch_session->display_config_preapplied || launch_session->display_config_preapply_attempted);
-    terminate(skip_display_revert, true, config_read_gate_held);
+    catalog::prepare_launch(catalog_state(), [&]() {
+      terminate(skip_display_revert, true, config_read_gate_held);
+    });
 
 #ifdef __linux__
     // proc_t retains its parsed environment across launches. Remove only the
@@ -3906,44 +3906,29 @@ namespace proc {
   }
 
   void refresh(const std::string &file_name) {
-    auto proc_opt = proc::parse(file_name);
+    catalog::refresh(file_name,
+      {nvhttp::stream_lifecycle_mutex(), config::apply_gate_mutex(), confighttp::apps_file_mutex()}, proc.catalog_state(),
+      [](const std::string &path) -> std::optional<catalog::snapshot_t> {
+        auto parsed = proc::parse(path);
+        if (!parsed) {
+          return std::nullopt;
+        }
+        return catalog::snapshot_t {parsed->release_env(), parsed->release_apps()};
+      },
+      [](catalog::snapshot_t &&parsed) {
+        proc = proc_t {std::move(parsed.environment), std::move(parsed.apps)};
+      },
+      [](std::function<void()> retry, std::chrono::milliseconds delay) {
+        task_pool.pushDelayed(std::move(retry), delay);
+      });
+  }
 
-    if (!proc_opt) {
-      return;
-    }
-
-    // If an app is currently running, do not replace the entire proc_t instance.
-    // Replacing it would drop tracking state and cause the active stream loop
-    // to think no app is running, prematurely terminating the session.
-    // Instead, update only the applications list to reflect the latest config.
-    if (proc.running() > 0) {
-      // Move the parsed apps list and environment into the existing proc instance
-      // Use proc.update_apps(...) which safely replaces the app list and env
-      proc.update_apps(proc_opt->release_apps(), proc_opt->release_env());
-
-    } else {
-      // No app running: safe to refresh full state (env + apps)
-      proc = std::move(*proc_opt);
-    }
+  catalog::state_view_t proc_t::catalog_state() {
+    return {_app_id, _env, _pending_catalog_environment, _stream_owned_environment_keys, _apps, _app, _apps_mutex};
   }
 
   void proc_t::update_apps(std::vector<ctx_t> &&apps, bp::environment &&env) {
-    // Replace app list and environment while keeping current running app intact
-    {
-      std::scoped_lock lk(_apps_mutex);
-      const bool app_was_running = _app_id > 0;
-      if (app_was_running && !_app.uuid.empty()) {
-        const auto refreshed_app = std::find_if(apps.begin(), apps.end(), [&](const ctx_t &candidate) {
-          return candidate.uuid == _app.uuid;
-        });
-        if (refreshed_app != apps.end()) {
-          _app_id = util::from_view(refreshed_app->id);
-        }
-      }
-      _apps = std::move(apps);
-      _env = std::move(env);
-      _stream_owned_environment_keys.clear();
-    }
+    catalog::update_apps(catalog_state(), std::move(apps), std::move(env));
   }
 
 #ifdef _WIN32
