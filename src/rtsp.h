@@ -38,6 +38,10 @@ namespace rtsp_stream {
     // until the active capture has acquired its own reference. Deliberately
     // omitted from retained app/display-recovery snapshots.
     std::shared_ptr<void> display_power_guard;
+    // Windows role defaults must be captured before display preparation can
+    // unplug DP/HDMI audio. Only pending launch and active capture own this;
+    // retained display/recovery metadata deliberately omits the hold.
+    std::shared_ptr<void> audio_context_guard;
     struct resolution_override_t {
       int width;
       int height;

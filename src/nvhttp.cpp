@@ -42,6 +42,7 @@
 
 // local includes
 #include "app_display_policy.h"
+#include "audio.h"
 #include "config.h"
 #include "display_device.h"
 #include "display_helper_integration.h"
@@ -1235,6 +1236,7 @@ namespace nvhttp {
 
     void prepare_virtual_display_for_session(
       const std::shared_ptr<rtsp_stream::launch_session_t> &launch_session,
+      audio::display_change_hold_t &request_audio_hold,
       bool no_active_sessions,
       bool allow_display_changes,
       std::optional<std::string> &pending_output_override,
@@ -1243,6 +1245,9 @@ namespace nvhttp {
       const std::function<bool()> &display_startup_cancelled,
       const std::chrono::steady_clock::time_point display_startup_deadline
     ) {
+      // This must precede even virtual-display creation: changing topology can
+      // remove a monitor's audio endpoint before the later helper APPLY.
+      request_audio_hold.capture_if_empty_and_attach(launch_session->audio_context_guard);
       std::optional<std::string> app_output_override;
       auto app_display_override = proc::display_policy::app_override_e::inherit;
       if (launch_session->output_name_override) {
@@ -3926,6 +3931,9 @@ namespace nvhttp {
     // display removal, response publication, and any final helper restore.
     stream::session::cleanup_reservation_t cleanup_reservation;
 #endif
+    // Lazy until the authorized normal stream reaches a display boundary.
+    // Keep this copy through response/config rollback after metadata unwinds.
+    audio::display_change_hold_t request_audio_hold {audio::capture_before_display_change};
     pt::ptree tree;
     bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
@@ -4386,7 +4394,7 @@ namespace nvhttp {
 
       // Restore global config immediately when safe; otherwise defer.
       if (!has_stream_session_activity()) {
-        config::apply_config_now();
+        config::apply_config_now(std::ref(request_audio_hold));
       } else {
         config::mark_deferred_reload();
       }
@@ -4419,11 +4427,11 @@ namespace nvhttp {
         runtime_overrides_applied = true;
 
         // Re-apply config so overrides take effect in config::video/config::input/etc.
-        config::apply_config_now();
+        config::apply_config_now(std::ref(request_audio_hold));
       } catch (...) {
         // If something goes wrong, fall back to global config only.
         config::clear_runtime_config_overrides();
-        config::apply_config_now();
+        config::apply_config_now(std::ref(request_audio_hold));
         runtime_overrides_applied = true;
       }
     } else {
@@ -4445,14 +4453,17 @@ namespace nvhttp {
     };
     // First step on stream start: stop any in-flight helper restore loop immediately.
     // This must happen before any other display helper work to prevent restore/crash loops on virtual displays.
-    (void) display_helper_integration::disarm_pending_restore(
-      display_startup_cancelled,
-      display_startup_deadline
-    );
+    request_audio_hold.before([&] {
+      (void) display_helper_integration::disarm_pending_restore(
+        display_startup_cancelled,
+        display_startup_deadline
+      );
+    });
 #endif
 
     const bool allow_display_changes = true;
     auto launch_session = make_launch_session(host_audio, args, request, allow_display_changes, &request_client_identity);
+    request_audio_hold.attach(launch_session->audio_context_guard);
     std::optional<std::string> pending_output_override;
     auto output_override_guard = util::fail_guard([&]() {
       if (pending_output_override) {
@@ -4502,6 +4513,7 @@ namespace nvhttp {
     });
     prepare_virtual_display_for_session(
       launch_session,
+      request_audio_hold,
       no_active_sessions,
       allow_display_changes,
       pending_output_override,
@@ -4759,6 +4771,9 @@ namespace nvhttp {
     // after the virtual-display teardown guard has already completed.
     stream::session::cleanup_reservation_t cleanup_reservation;
 #endif
+    // Lazy until the authorized normal stream reaches a display boundary.
+    // Keep this copy through response/config rollback after metadata unwinds.
+    audio::display_change_hold_t request_audio_hold {audio::capture_before_display_change};
     pt::ptree tree;
     bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
@@ -4873,7 +4888,7 @@ namespace nvhttp {
       }
       config::set_runtime_config_overrides(std::move(previous_runtime_overrides));
       if (!has_stream_session_activity()) {
-        config::apply_config_now();
+        config::apply_config_now(std::ref(request_audio_hold));
       } else {
         config::mark_deferred_reload();
       }
@@ -4881,7 +4896,7 @@ namespace nvhttp {
 
     if (no_active_sessions && !secondary_game_client) {
       config::set_runtime_config_overrides(std::move(requested_runtime_overrides));
-      config::apply_config_now();
+      config::apply_config_now(std::ref(request_audio_hold));
       runtime_overrides_reapplied = true;
     }
 
@@ -4923,13 +4938,16 @@ namespace nvhttp {
     };
     if (allow_session_display_changes) {
       // Stop any in-flight helper restore loop before resuming display changes.
-      (void) display_helper_integration::disarm_pending_restore(
-        display_startup_cancelled,
-        display_startup_deadline
-      );
+      request_audio_hold.before([&] {
+        (void) display_helper_integration::disarm_pending_restore(
+          display_startup_cancelled,
+          display_startup_deadline
+        );
+      });
     }
 #endif
     const auto launch_session = make_launch_session(host_audio, args, request, allow_session_display_changes, &request_client_identity);
+    request_audio_hold.attach(launch_session->audio_context_guard);
     launch_session->secondary_game_client = secondary_game_client;
 #ifdef _WIN32
     if (retained_resume_owner_eligible &&
@@ -5042,6 +5060,7 @@ namespace nvhttp {
     if (!joining_existing_game_output) {
       prepare_virtual_display_for_session(
         launch_session,
+        request_audio_hold,
         no_active_sessions,
         allow_session_display_changes,
         pending_output_override,

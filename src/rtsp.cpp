@@ -197,6 +197,7 @@ namespace rtsp_stream {
     // This snapshot feeds stream::session::alloc, so carry the pending hold
     // across the handoff to active capture without an uninhibited gap.
     snapshot->display_power_guard = source.display_power_guard;
+    snapshot->audio_context_guard = source.audio_context_guard;
     snapshot->id = source.id;
     snapshot->role = source.role;
     snapshot->role_generation = source.role_generation;
