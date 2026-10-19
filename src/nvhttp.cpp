@@ -54,6 +54,7 @@
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
+#include "nvhttp_dispatch.h"
 #include "remote_session.h"
 #include "remote_display_topology.h"
 #include "platform/common.h"
@@ -5745,19 +5746,12 @@ namespace nvhttp {
     // a response and must never execute stale mutations after a client timeout.
     auto mutation_admission = std::make_shared<single_flight::admission_t>();
     auto run_blocking_nvhttp = [&blocking_route_pool, run_on_blocking_pool, mutation_admission](auto response, const char *operation, auto task) {
-      if (mutation_admission->try_submit([&](auto admitted) {
-            run_on_blocking_pool(blocking_route_pool, std::move(admitted));
-          }, std::move(task))) {
-        return;
-      }
-      pt::ptree tree;
-      tree.put(std::string("root.") + operation, 0);
-      tree.put("root.<xmlattr>.status_code", 503);
-      tree.put("root.<xmlattr>.status_message", "Another stream operation is still running. Retry after it completes; if this persists, check the host GPU and system-sleep logs.");
-      std::ostringstream data;
-      pt::write_xml(data, tree);
-      response->close_connection_after_response = true;
-      response->write(data.str());
+      dispatch::run_blocking(*mutation_admission, [&](auto admitted) {
+        run_on_blocking_pool(blocking_route_pool, std::move(admitted));
+      },
+                             std::move(response),
+                             operation,
+                             std::move(task));
     };
 
     auto run_discovery_nvhttp = [&discovery_route_pool, run_on_blocking_pool](auto task) {
@@ -5807,7 +5801,11 @@ namespace nvhttp {
         cancel(std::move(resp), std::move(req));
       });
     };
-    https_server.resource["^/bitrate$"]["GET"] = setBitrate;
+    https_server.resource["^/bitrate$"]["GET"] = [run_blocking_nvhttp](auto response, auto request) {
+      run_blocking_nvhttp(response, "bitrate", [response, request = std::move(request)]() mutable {
+        setBitrate(std::move(response), std::move(request));
+      });
+    };
     https_server.resource["^/api/abr/capabilities$"]["GET"] = getAbrCapabilities;
     https_server.resource["^/pyrowave-bandwidth-probe$"]["GET"] = getPyroWaveBandwidthProbe;
     https_server.resource["^/pyrowave-udp-probe$"]["GET"] = [run_blocking_nvhttp](auto resp, auto req) {

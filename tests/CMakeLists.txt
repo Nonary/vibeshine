@@ -330,6 +330,32 @@ sunshine_add_test_target(
     DEPENDENCIES
 )
 
+if(SUNSHINE_TEST_ENABLE_COMPONENT)
+    find_package(Threads REQUIRED)
+    sunshine_add_test_target(
+        NAME test_component_broadcast_runtime
+        CATEGORY component
+        TEST_SOURCES
+            "${CMAKE_CURRENT_LIST_DIR}/tests_main.cpp"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/test_broadcast_runtime.cpp"
+        PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/stream_broadcast_runtime.cpp"
+        LINK_LIBRARIES GTest::gtest Threads::Threads
+    )
+    set_tests_properties(test_component_broadcast_runtime PROPERTIES TIMEOUT 30)
+    sunshine_add_test_target(
+        NAME test_component_nvhttp_dispatch
+        CATEGORY component
+        TEST_SOURCES
+            "${CMAKE_CURRENT_LIST_DIR}/tests_main.cpp"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/test_nvhttp_dispatch.cpp"
+        PRODUCT_SOURCES
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/stream_broadcast_runtime.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/http_pairing_policy.cpp"
+        LINK_LIBRARIES GTest::gtest Threads::Threads Boost::property_tree
+    )
+    set_tests_properties(test_component_nvhttp_dispatch PROPERTIES TIMEOUT 30)
+endif()
+
 sunshine_add_test_target(
     NAME test_fast_version_compare
     CATEGORY fast
