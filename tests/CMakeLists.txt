@@ -872,6 +872,15 @@ sunshine_register_component(NAME test_component_config_http_policy TEST_SOURCE u
     LINK_LIBRARIES Boost::asio Boost::system ${SUNSHINE_TEST_SOCKET_LIBRARIES})
 sunshine_register_component(NAME test_component_http_pairing_policy TEST_SOURCE unit/test_http_pairing.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/http_pairing_policy.cpp")
+sunshine_register_component(NAME test_component_tls_client_identity TEST_SOURCE unit/test_tls_client_identity.cpp
+    PRODUCT_SOURCES
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/tls_client_identity.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/http_pairing_policy.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/crypto.cpp"
+    LINK_LIBRARIES sunshine_test_simple_web_headers ${SUNSHINE_TEST_SOCKET_LIBRARIES})
+if(TARGET test_component_tls_client_identity)
+    set_tests_properties(test_component_tls_client_identity PROPERTIES TIMEOUT 90)
+endif()
 sunshine_register_component(NAME test_component_video_policy TEST_SOURCE unit/test_video.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_policy.cpp")
 sunshine_register_component(NAME test_component_video_capture_source TEST_SOURCE unit/test_video_capture_source.cpp

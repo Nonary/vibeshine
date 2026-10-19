@@ -21,6 +21,7 @@
 
 // local includes
 #include "crypto.h"
+#include "nvhttp_server.h"
 #include "thread_safe.h"
 
 /**
@@ -75,18 +76,7 @@ namespace nvhttp {
   // between this check and a guarded display mutation.
   bool has_remote_role_owner();
 
-  class SunshineHTTPS: public SimpleWeb::HTTPS {
-  public:
-    SunshineHTTPS(boost::asio::io_context &io_context, boost::asio::ssl::context &ctx):
-        SimpleWeb::HTTPS(io_context, ctx) {
-    }
 
-    virtual ~SunshineHTTPS() {
-      // Gracefully shutdown the TLS connection
-      SimpleWeb::error_code ec;
-      shutdown(ec);
-    }
-  };
 
   enum class PAIR_PHASE {
     NONE,  ///< Sunshine is not in a pairing phase

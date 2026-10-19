@@ -49,6 +49,7 @@
 #include "globals.h"
 #include "httpcommon.h"
 #include "http_pairing_policy.h"
+#include "tls_client_identity.h"
 #include "hdr_request_policy.h"
 #include "logging.h"
 #include "network.h"
@@ -707,87 +708,7 @@ namespace nvhttp {
     return subject_name;
   }
 
-  class SunshineHTTPSServer: public SimpleWeb::ServerBase<SunshineHTTPS> {
-  public:
-    SunshineHTTPSServer(const std::string &certification_file, const std::string &private_key_file):
-        ServerBase<SunshineHTTPS>::ServerBase(443),
-        context(boost::asio::ssl::context::tls_server) {
-      // Disabling TLS 1.0 and 1.1 (see RFC 8996)
-      context.set_options(boost::asio::ssl::context::no_tlsv1);
-      context.set_options(boost::asio::ssl::context::no_tlsv1_1);
-      context.use_certificate_chain_file(certification_file);
-      context.use_private_key_file(private_key_file, boost::asio::ssl::context::pem);
-    }
 
-    std::function<int(SSL *, const boost::asio::ip::tcp::endpoint &)> verify;
-    std::function<void(std::shared_ptr<Response>, std::shared_ptr<Request>)> on_verify_failed;
-
-  protected:
-    boost::asio::ssl::context context;
-
-    void after_bind() override {
-      if (verify) {
-        context.set_verify_mode(boost::asio::ssl::verify_peer | boost::asio::ssl::verify_fail_if_no_peer_cert | boost::asio::ssl::verify_client_once);
-        context.set_verify_callback([](int verified, boost::asio::ssl::verify_context &ctx) {
-          // To respond with an error message, a connection must be established
-          return 1;
-        });
-      }
-    }
-
-    // This is Server<HTTPS>::accept() with SSL validation support added
-    void accept() override {
-      auto connection = create_connection(*io_service, context);
-
-      acceptor->async_accept(connection->socket->lowest_layer(), [this, connection](const SimpleWeb::error_code &ec) {
-        auto lock = connection->handler_runner->continue_lock();
-        if (!lock) {
-          return;
-        }
-
-        if (ec != SimpleWeb::error::operation_aborted) {
-          this->accept();
-        }
-
-        auto session = std::make_shared<Session>(config.max_request_streambuf_size, connection);
-
-        if (!ec) {
-          boost::asio::ip::tcp::no_delay option(true);
-          SimpleWeb::error_code ec;
-          session->connection->socket->lowest_layer().set_option(option, ec);
-
-          session->connection->set_timeout(config.timeout_request);
-          session->connection->socket->async_handshake(boost::asio::ssl::stream_base::server, [this, session](const SimpleWeb::error_code &ec) {
-            session->connection->cancel_timeout();
-            auto lock = session->connection->handler_runner->continue_lock();
-            if (!lock) {
-              return;
-            }
-            if (!ec) {
-              SimpleWeb::error_code remote_endpoint_ec;
-              const auto remote_endpoint = session->connection->socket->lowest_layer().remote_endpoint(remote_endpoint_ec);
-              if (remote_endpoint_ec) {
-                if (this->on_error) {
-                  this->on_error(session->request, remote_endpoint_ec);
-                }
-                return;
-              }
-
-              if (verify && !verify(session->connection->socket->native_handle(), remote_endpoint)) {
-                this->write(session, on_verify_failed);
-              } else {
-                this->read(session);
-              }
-            } else if (this->on_error) {
-              this->on_error(session->request, ec);
-            }
-          });
-        } else if (this->on_error) {
-          this->on_error(session->request, ec);
-        }
-      });
-    }
-  };
 
   using https_server_t = SunshineHTTPSServer;
   using http_server_t = SimpleWeb::Server<SimpleWeb::HTTP>;
@@ -2028,20 +1949,17 @@ namespace nvhttp {
     return client_root;
   }
 
+  std::vector<tls_identity::client_record_view_t> client_record_views(const client_t &client) {
+    std::vector<tls_identity::client_record_view_t> views;
+    views.reserve(client.named_devices.size());
+    for (const auto &record : client.named_devices) {
+      views.push_back({record.uuid, record.name, record.cert, record.enabled});
+    }
+    return views;
+  }
+
   std::optional<std::string> exact_certificate_identity(const crypto::x509_t &certificate) {
-    if (!certificate) {
-      return std::nullopt;
-    }
-    const auto encoded_length = i2d_X509(certificate.get(), nullptr);
-    if (encoded_length <= 0 || static_cast<std::size_t>(encoded_length) > pairing_policy::max_paired_certificate_length) {
-      return std::nullopt;
-    }
-    std::string identity(static_cast<std::size_t>(encoded_length), '\0');
-    auto *cursor = reinterpret_cast<unsigned char *>(identity.data());
-    if (i2d_X509(certificate.get(), &cursor) != encoded_length) {
-      return std::nullopt;
-    }
-    return identity;
+    return tls_identity::exact_certificate_identity(certificate);
   }
 
   bool build_paired_client_records(
@@ -2050,35 +1968,12 @@ namespace nvhttp {
     std::vector<pairing_policy::paired_client_record_view_t> &records,
     std::vector<crypto::x509_t> *parsed_certificates = nullptr
   ) {
-    certificate_identities.clear();
-    records.clear();
-    if (client.named_devices.size() > pairing_policy::max_paired_clients) {
-      return false;
-    }
-    certificate_identities.reserve(client.named_devices.size());
-    records.reserve(client.named_devices.size());
-    if (parsed_certificates) {
-      parsed_certificates->clear();
-      parsed_certificates->reserve(client.named_devices.size());
-    }
-
-    for (const auto &named_cert : client.named_devices) {
-      if (named_cert.name.size() > pairing_policy::max_paired_client_name_length || named_cert.cert.empty() || named_cert.cert.size() > pairing_policy::max_paired_certificate_length) {
-        return false;
-      }
-      auto certificate = crypto::x509(named_cert.cert);
-      auto identity = exact_certificate_identity(certificate);
-      if (!identity) {
-        return false;
-      }
-      certificate_identities.emplace_back(std::move(*identity));
-      records.push_back({named_cert.uuid, certificate_identities.back(), named_cert.enabled});
-      if (parsed_certificates) {
-        parsed_certificates->emplace_back(std::move(certificate));
-      }
-    }
-    return pairing_policy::paired_client_state_valid(records);
+    return tls_identity::build_paired_client_records(
+      client_record_views(client), certificate_identities, records, parsed_certificates
+    );
   }
+
+  tls_identity::store_t tls_client_identities;
 
   void clear_tls_client_identities();
 
@@ -2550,74 +2445,10 @@ namespace nvhttp {
     return true;
   }
 
-  struct resolved_client_identity_t {
-    std::string uuid;
-    std::string name;
-  };
-
-  std::optional<resolved_client_identity_t> resolve_client_identity_from_peer_cert_locked(
-    const crypto::x509_t &client_cert
-  ) {
-    auto presented_identity = exact_certificate_identity(client_cert);
-    if (!presented_identity) {
-      BOOST_LOG(debug) << "No valid client certificate identity available";
-      return std::nullopt;
-    }
-
-    std::vector<std::string> certificate_identities;
-    std::vector<pairing_policy::paired_client_record_view_t> paired_client_records;
-    if (!build_paired_client_records(client_root, certificate_identities, paired_client_records)) {
-      BOOST_LOG(error) << "Refusing client authentication because pairing state is invalid or ambiguous.";
-      return std::nullopt;
-    }
-
-    const auto resolution = pairing_policy::resolve_paired_client(
-      paired_client_records,
-      *presented_identity
-    );
-    switch (resolution.status) {
-      case pairing_policy::paired_client_resolution_e::authorized:
-        {
-          const auto &named_cert = client_root.named_devices[resolution.index];
-          BOOST_LOG(debug) << "Found exact enabled client UUID: " << named_cert.uuid
-                           << " for client: " << named_cert.name;
-          return resolved_client_identity_t {named_cert.uuid, named_cert.name};
-        }
-      case pairing_policy::paired_client_resolution_e::disabled:
-        BOOST_LOG(warning) << "Client certificate belongs to a disabled paired device.";
-        break;
-      case pairing_policy::paired_client_resolution_e::invalid_state:
-        BOOST_LOG(error) << "Refusing client authentication because pairing state is invalid or ambiguous.";
-        break;
-      case pairing_policy::paired_client_resolution_e::unknown_certificate:
-        BOOST_LOG(debug) << "No exact paired client certificate found";
-        break;
-    }
-    return std::nullopt;
-  }
-
-  constexpr std::size_t max_tls_client_identity_cache_entries =
-    pairing_policy::max_paired_clients * 8;
-  std::mutex tls_client_identity_mutex;
-  std::unordered_map<std::string, resolved_client_identity_t> tls_client_identity_by_endpoint;
+  using resolved_client_identity_t = tls_identity::identity_t;
 
   bool paired_client_uuid_enabled_locked(const std::string_view uuid) {
-    if (!pairing_policy::valid_paired_client_uuid(uuid) || client_root.named_devices.size() > pairing_policy::max_paired_clients) {
-      return false;
-    }
-
-    const named_cert_t *match = nullptr;
-    std::unordered_set<std::string_view> seen_uuids;
-    seen_uuids.reserve(client_root.named_devices.size());
-    for (const auto &client : client_root.named_devices) {
-      if (!pairing_policy::valid_paired_client_uuid(client.uuid) || client.name.size() > pairing_policy::max_paired_client_name_length || client.cert.empty() || client.cert.size() > pairing_policy::max_paired_certificate_length || !seen_uuids.insert(client.uuid).second) {
-        return false;
-      }
-      if (client.uuid == uuid) {
-        match = &client;
-      }
-    }
-    return match && match->enabled;
+    return tls_identity::client_enabled(client_record_views(client_root), uuid);
   }
 
   bool paired_client_uuid_enabled(const std::string_view uuid) {
@@ -2625,80 +2456,17 @@ namespace nvhttp {
     return paired_client_uuid_enabled_locked(uuid);
   }
 
-  std::string endpoint_key(const boost::asio::ip::tcp::endpoint &endpoint) {
-    if (endpoint.address().is_unspecified() || endpoint.port() == 0) {
-      return {};
-    }
-
-    return endpoint.address().to_string() + ":" + std::to_string(endpoint.port());
-  }
-
-  void remember_tls_client_identity(const boost::asio::ip::tcp::endpoint &endpoint, const resolved_client_identity_t &identity) {
-    const auto key = endpoint_key(endpoint);
-    if (key.empty() || identity.uuid.empty()) {
-      return;
-    }
-
-    std::lock_guard<std::mutex> lock(tls_client_identity_mutex);
-    if (!tls_client_identity_by_endpoint.contains(key) && tls_client_identity_by_endpoint.size() >= max_tls_client_identity_cache_entries) {
-      // This cache only bridges TLS verification to request dispatch. Evicting
-      // one old endpoint is fail-closed for that connection and keeps a paired
-      // client from growing process memory with connection churn.
-      tls_client_identity_by_endpoint.erase(tls_client_identity_by_endpoint.begin());
-    }
-    tls_client_identity_by_endpoint.insert_or_assign(key, identity);
-  }
-
-  void forget_tls_client_identity(const boost::asio::ip::tcp::endpoint &endpoint) {
-    const auto key = endpoint_key(endpoint);
-    if (key.empty()) {
-      return;
-    }
-
-    std::lock_guard<std::mutex> lock(tls_client_identity_mutex);
-    tls_client_identity_by_endpoint.erase(key);
-  }
-
   void forget_tls_client_identities_for_uuid(const std::string_view uuid) {
-    std::lock_guard<std::mutex> lock(tls_client_identity_mutex);
-    for (auto it = tls_client_identity_by_endpoint.begin(); it != tls_client_identity_by_endpoint.end();) {
-      if (it->second.uuid == uuid) {
-        it = tls_client_identity_by_endpoint.erase(it);
-      } else {
-        ++it;
-      }
-    }
+    tls_client_identities.revoke(uuid);
   }
 
   void clear_tls_client_identities() {
-    std::lock_guard<std::mutex> lock(tls_client_identity_mutex);
-    tls_client_identity_by_endpoint.clear();
+    tls_client_identities.clear();
   }
 
   std::optional<resolved_client_identity_t> get_remembered_tls_client_identity(req_https_t request) {
-    if (!request) {
-      return std::nullopt;
-    }
-
-    const auto key = endpoint_key(request->remote_endpoint());
-    if (key.empty()) {
-      return std::nullopt;
-    }
-
-    // Verification and revocation use the same client -> endpoint-cache lock
-    // order. A cached transport identity is only a lookup acceleration; the
-    // live machine pairing record remains authoritative on every request.
     std::lock_guard<std::mutex> client_lock(client_mutex);
-    std::lock_guard<std::mutex> cache_lock(tls_client_identity_mutex);
-    auto it = tls_client_identity_by_endpoint.find(key);
-    if (it == tls_client_identity_by_endpoint.end()) {
-      return std::nullopt;
-    }
-    if (!paired_client_uuid_enabled_locked(it->second.uuid)) {
-      tls_client_identity_by_endpoint.erase(it);
-      return std::nullopt;
-    }
-    return it->second;
+    return tls_client_identities.resolve(request, client_record_views(client_root));
   }
 
   std::string get_client_uuid_from_request(req_https_t request, std::string *client_name_out = nullptr) {
@@ -5922,62 +5690,27 @@ namespace nvhttp {
     discovery_route_pool.start(1);
 
     // Verify certificates after establishing connection
-    https_server.verify = [add_cert](SSL *ssl, const boost::asio::ip::tcp::endpoint &remote_endpoint) {
-      forget_tls_client_identity(remote_endpoint);
-
-      crypto::x509_t x509_verify {
-#if OPENSSL_VERSION_MAJOR >= 3
-        SSL_get1_peer_certificate(ssl)
-#else
-        SSL_get_peer_certificate(ssl)
-#endif
-      };
-
-      if (!x509_verify) {
-        BOOST_LOG(info) << "unknown -- denied"sv;
-        return 0;
-      }
-
-      int verified = 0;
-
-      auto fg = util::fail_guard([&]() {
-        const auto subject_name = cert_subject_name_for_log(x509_verify);
-
-        BOOST_LOG(verbose) << subject_name << " -- "sv << (verified ? "verified"sv : "denied"sv);
-      });
-
-      const char *err_str = nullptr;
-      std::optional<resolved_client_identity_t> identity;
+    https_server.verify = [add_cert](req_https_t req, SSL *ssl) {
+      // The component owns certificate-chain verification, exact pairing
+      // resolution, transport authority and live revocation. The HTTP layer
+      // supplies the locked current registry and drains the pairing queue.
+      tls_identity::authentication_result_t result;
       {
         std::lock_guard<std::mutex> lock(client_mutex);
         while (add_cert->peek()) {
           auto cert = add_cert->pop();
-          const auto subject_name = cert_subject_name_for_log(cert);
-
-          BOOST_LOG(verbose) << "Added cert ["sv << subject_name << ']';
+          BOOST_LOG(verbose) << "Added cert [" << cert_subject_name_for_log(cert) << ']';
           cert_chain.add(std::move(cert));
         }
-
-        err_str = cert_chain.verify(x509_verify.get());
-        if (!err_str) {
-          identity = resolve_client_identity_from_peer_cert_locked(x509_verify);
-          if (!identity) {
-            err_str = "Client certificate is not one exact enabled pairing record";
-          } else {
-            // Keep the client record and endpoint cache coherent with disable
-            // and unpair, which take the same client -> TLS-cache lock order.
-            remember_tls_client_identity(remote_endpoint, *identity);
-          }
-        }
+        result = tls_client_identities.authenticate(req, ssl, cert_chain, client_record_views(client_root));
       }
-      if (err_str) {
-        BOOST_LOG(warning) << "SSL Verification error :: "sv << err_str;
-
-        return verified;
+      if (!result.identity) {
+        BOOST_LOG(warning) << "SSL Verification error :: " << result.error;
+        return 0;
       }
-
-      verified = 1;
-      return verified;
+      BOOST_LOG(debug) << "Found exact enabled client UUID: " << result.identity->uuid
+                       << " for client: " << result.identity->name;
+      return 1;
     };
 
     https_server.on_verify_failed = [](resp_https_t resp, req_https_t req) {

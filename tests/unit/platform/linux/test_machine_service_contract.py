@@ -61,6 +61,7 @@ stream = (root / "src/stream.cpp").read_text()
 kmsgrab = (root / "src/platform/linux/kmsgrab.cpp").read_text()
 audio = (root / "src/platform/linux/audio.cpp").read_text()
 nvhttp = (root / "src/nvhttp.cpp").read_text()
+tls_identity = (root / "src/tls_client_identity.cpp").read_text() + (root / "src/tls_client_identity.h").read_text()
 state_storage = (root / "src/state_storage.cpp").read_text()
 confighttp = (root / "src/confighttp.cpp").read_text()
 linux_misc = (root / "src/platform/linux/misc.cpp").read_text()
@@ -574,19 +575,22 @@ for forbidden in ("VIBESHINE_ALLOWED_CLIENT_UUIDS", "session_allowed_clients", "
 for forbidden in ("VIBESHINE_ALLOWED_CLIENT_UUIDS", "greeter_client_allowed", "administrator allowlist"):
     forbid(nvhttp, forbidden, "TLS paired-client authorization")
 forbid(nvhttp, "tl_peer_certificate", "request-bound TLS identity")
+forbid(nvhttp + tls_identity, "tls_client_identity_by_endpoint", "connection-owned TLS identity")
 for invariant in (
     "exact_certificate_identity",
     "build_paired_client_records",
-    "resolve_client_identity_from_peer_cert_locked",
     "Client certificate is not one exact enabled pairing record",
     "revoke_paired_client_access",
     "forget_tls_client_identities_for_uuid",
     "clear_tls_client_identities",
-    "max_tls_client_identity_cache_entries",
+    "request->get_connection_context()",
+    "request->set_connection_context(authority)",
+    "std::vector<std::weak_ptr<authority_t>> authorities",
+    "authority->authorized.load(std::memory_order_acquire)",
     "client.named_devices.size() >= pairing_policy::max_paired_clients",
     "if (!add_authorized_client",
 ):
-    require(nvhttp, invariant, "exact enabled-pairing TLS authorization")
+    require(nvhttp + tls_identity, invariant, "exact enabled-pairing TLS authorization")
 for invariant in ("paired_client_state_valid", "resolve_paired_client", "invalid_state", "disabled"):
     require(pairing_policy, invariant, "paired-client authorization policy")
 disable_body = nvhttp.split("bool set_client_enabled", 1)[1].split("bool has_client_uuid", 1)[0]
@@ -664,7 +668,7 @@ remembered_identity_body = nvhttp.split(
 )[1].split("std::string get_client_uuid_from_request", 1)[0]
 require(
     remembered_identity_body,
-    "paired_client_uuid_enabled_locked(it->second.uuid)",
+    "tls_client_identities.resolve(request, client_record_views(client_root))",
     "cached TLS identity live authorization",
 )
 
