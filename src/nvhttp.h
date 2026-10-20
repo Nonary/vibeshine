@@ -204,6 +204,9 @@ namespace nvhttp {
    * @return true if the client was found and updated.
    */
   bool set_client_enabled(std::string_view uuid, bool enabled);
+  // Administrator opt-in, separate from permission to stream. New and legacy
+  // pairings deny power control unless this grant was explicitly persisted.
+  bool set_client_sleep_allowed(std::string_view uuid, bool allowed);
   bool has_client_uuid(std::string_view uuid);
   std::string get_cert_by_uuid(std::string_view uuid);
 

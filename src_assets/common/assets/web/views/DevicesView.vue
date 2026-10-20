@@ -31,6 +31,7 @@ interface PairedDevice {
   name: string;
   uuid: string;
   enabled: boolean;
+  allow_sleep?: boolean;
   connected: boolean;
   last_seen?: number | string | null;
   hdr_profile?: string | null;
@@ -52,6 +53,7 @@ interface ClientsResponse {
 interface MutationResponse {
   status?: boolean;
   enabled_updated?: boolean;
+  allow_sleep_updated?: boolean;
 }
 
 interface PendingAction {
@@ -168,6 +170,7 @@ function normalizeDevice(device: unknown, index: number): PairedDevice {
     uuid: stringValue(raw.uuid) || `unknown-device-${fallbackIdentity || index + 1}`,
     name: stringValue(raw.name),
     enabled: booleanValue(raw.enabled, true),
+    allow_sleep: raw.allow_sleep === true,
     connected: booleanValue(raw.connected, false),
     last_seen:
       typeof raw.last_seen === 'number' || typeof raw.last_seen === 'string' ? raw.last_seen : null,
@@ -344,6 +347,7 @@ function draftFromDevice(device: PairedDevice): ClientDeviceDraft {
 
   return {
     name: device.name,
+    allowSleep: device.allow_sleep === true,
     enabled: device.enabled,
     displayMode: device.display_mode ?? '',
     displayOverrideEnabled,
@@ -554,6 +558,7 @@ function updatePayload(device: PairedDevice, draft: ClientDeviceDraft): Record<s
   const payload: Record<string, unknown> = {
     uuid: device.uuid,
     name: draft.name.trim(),
+    allow_sleep: draft.allowSleep,
     enabled: draft.enabled,
     display_mode: draft.displayMode.trim(),
     output_name_override: outputName,
@@ -578,6 +583,7 @@ function updatePayload(device: PairedDevice, draft: ClientDeviceDraft): Record<s
 
 const draftScalarKeys = [
   'name',
+  'allowSleep',
   'enabled',
   'displayMode',
   'displayOverrideEnabled',
@@ -672,7 +678,11 @@ async function saveDevice(device: PairedDevice): Promise<void> {
       '/api/clients/update',
       updatePayload(device, saveDraft),
     );
-    if (response.status !== true || response.enabled_updated === false) {
+    if (
+      response.status !== true ||
+      response.enabled_updated === false ||
+      response.allow_sleep_updated !== true
+    ) {
       throw new Error(t('ui.devices.error.partial_update'));
     }
     drafts.value[device.uuid] = cloneDraft(saveDraft);

@@ -333,6 +333,7 @@ list(PREPEND PLATFORM_LIBRARIES
         ntdll
         ole32
         pdh
+        powrprof
         setupapi
         shlwapi
         shell32

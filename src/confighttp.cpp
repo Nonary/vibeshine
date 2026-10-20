@@ -2404,7 +2404,7 @@ namespace confighttp {
         input_tree.contains("virtual_display_layout") ||
         input_tree.contains("config_overrides") ||
         input_tree.contains("prefer_10bit_sdr");
-      const bool has_extended_fields = has_device_fields || input_tree.contains("enabled");
+      const bool has_extended_fields = has_device_fields || input_tree.contains("enabled") || input_tree.contains("allow_sleep");
 
       if (!has_extended_fields) {
         output_tree["status"] = nvhttp::set_client_hdr_profile(uuid, hdr_profile.value_or(""));
@@ -2412,10 +2412,28 @@ namespace confighttp {
         return;
       }
 
+      if (input_tree.contains("allow_sleep") && !input_tree["allow_sleep"].is_boolean()) {
+        bad_request(response, request, "allow_sleep must be a boolean");
+        return;
+      }
+      // Apply a requested disable before introducing a separate sleep grant.
       if (input_tree.contains("enabled")) {
         output_tree["enabled_updated"] = nvhttp::set_client_enabled(uuid, input_tree.value("enabled", true));
-        if (!has_device_fields && !hdr_profile.has_value()) {
+        if (!has_device_fields && !hdr_profile.has_value() && !input_tree.contains("allow_sleep")) {
           output_tree["status"] = output_tree["enabled_updated"];
+          send_response(response, output_tree);
+          return;
+        }
+      }
+      if (input_tree.contains("allow_sleep")) {
+        output_tree["allow_sleep_updated"] = nvhttp::set_client_sleep_allowed(uuid, input_tree["allow_sleep"].get<bool>());
+        if (!output_tree["allow_sleep_updated"].get<bool>()) {
+          output_tree["status"] = false;
+          send_response(response, output_tree);
+          return;
+        }
+        if (!has_device_fields && !hdr_profile.has_value()) {
+          output_tree["status"] = !output_tree.contains("enabled_updated") || output_tree["enabled_updated"].get<bool>();
           send_response(response, output_tree);
           return;
         }
