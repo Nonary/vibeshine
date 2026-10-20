@@ -2400,6 +2400,7 @@ namespace confighttp {
         input_tree.contains("display_mode") ||
         input_tree.contains("output_name_override") ||
         input_tree.contains("always_use_virtual_display") ||
+        input_tree.contains("requested_resolution_only") ||
         input_tree.contains("virtual_display_mode") ||
         input_tree.contains("virtual_display_layout") ||
         input_tree.contains("config_overrides") ||
@@ -2488,7 +2489,9 @@ namespace confighttp {
         virtual_display_layout,
         std::move(config_overrides),
         prefer_10bit_sdr,
-        hdr_profile
+        hdr_profile,
+        input_tree.contains("requested_resolution_only") ?
+          std::optional<bool> {input_tree.at("requested_resolution_only").get<bool>()} : std::nullopt
       );
       send_response(response, output_tree);
     } catch (std::exception &e) {
