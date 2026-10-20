@@ -811,8 +811,19 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_test(NAME test_component_recovery_status_integration
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_recovery_status_integration.py"
-                "${SUNSHINE_TEST_REPOSITORY_ROOT}")
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
         set_tests_properties(test_component_recovery_status_integration PROPERTIES LABELS "component")
+        add_test(NAME test_component_recovery_status_legacy_protocol
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_recovery_status_legacy_protocol.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}"
+                --json-include "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>")
+        set_tests_properties(test_component_recovery_status_legacy_protocol PROPERTIES LABELS "component")
+        add_test(NAME test_component_recovery_status_legacy_lifecycle
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_recovery_status_legacy_lifecycle.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_recovery_status_legacy_lifecycle PROPERTIES LABELS "component")
         add_test(NAME test_component_recovery_status_liveness
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_recovery_status_liveness.py"
@@ -1140,6 +1151,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND SUNSHINE_TEST_ENABLE_COMPONENT)
                 "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_session_controller.sh"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}/packaging/linux/vibeshine-session-controller")
         set_tests_properties(test_component_linux_session_controller PROPERTIES LABELS "component")
+        add_test(NAME test_component_linux_session_classifier
+            COMMAND bash "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_session_classifier.sh"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}/packaging/linux/vibeshine-session-controller")
+        set_tests_properties(test_component_linux_session_classifier PROPERTIES LABELS "component")
         add_test(
             NAME test_component_linux_machine_host_manifest
             COMMAND "${SUNSHINE_TEST_BASH_EXECUTABLE}"
@@ -1183,6 +1198,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND SUNSHINE_TEST_ENABLE_COMPONENT)
                 "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_machine_service_contract.py"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}")
         set_tests_properties(test_component_linux_machine_service_contract PROPERTIES LABELS "component")
+        add_test(NAME test_component_machine_status_polling_behavior
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_machine_status_polling_behavior.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" --compiler "${CMAKE_CXX_COMPILER}"
+                --json-include "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>")
+        set_tests_properties(test_component_machine_status_polling_behavior PROPERTIES LABELS "component")
         add_test(NAME test_component_linux_machine_tray_metadata
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_machine_tray_metadata.py"
