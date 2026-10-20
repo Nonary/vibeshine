@@ -211,6 +211,7 @@ namespace rtsp_stream {
     snapshot->unique_id = source.unique_id;
     snapshot->client_uuid = source.client_uuid;
     snapshot->client_name = source.client_name;
+    snapshot->guide_button = source.guide_button;
     snapshot->secondary_game_client = source.secondary_game_client;
     snapshot->device_name = source.device_name;
     snapshot->client_display_mode_override = source.client_display_mode_override;

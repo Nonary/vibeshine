@@ -24,6 +24,7 @@ def function(source, signature):
 
 
 PRELUDE = r'''
+#include "src/input_session_config.h"
 #include <array>
 #include <bitset>
 #include <atomic>
@@ -76,6 +77,7 @@ constexpr int BUTTON_LEFT = 1, BUTTON_RIGHT = 3, BUTTON_X2 = 5;
 constexpr int MOUSE_BUTTON_UP_EVENT_MAGIC_GEN5 = 1;
 namespace config { struct {
   bool mouse = true, keyboard = true, controller = true;
+  int guide_button_key = 0, guide_button_controller = 0;
   std::chrono::milliseconds key_repeat_delay {0}, key_repeat_period {10}, back_button_timeout {1000};
   std::unordered_map<short, short> keybindings;
 } input; }
@@ -119,6 +121,7 @@ struct gamepad_t {
   int id = -1;
   worker_t::task_id_t back_timeout_id = nullptr;
   platf::gamepad_state_t gamepad_state;
+  bool guide_key_down = false;
   button_state_e back_button_state = button_state_e::NONE;
 };
 namespace util::endian {
@@ -139,6 +142,13 @@ struct input_t {
   std::unordered_map<uint16_t, held_key_t> keys;
   worker_t::task_id_t key_press_repeat_id = nullptr;
   uint16_t repeating_key = 0;
+  // Fake backend constructor; compile the production field initializers below.
+  explicit input_t(input::guide_button_config_t guide_button = {config::input.guide_button_key, config::input.guide_button_controller}):
+      guide_button_key {guide_button.key},
+      guide_button_controller {guide_button.controller} {}
+  const int guide_button_key;
+  const int guide_button_controller;
+  bool guide_key_pressed = false;
   bool input_closed = false;
   std::vector<gamepad_t> gamepads {16};
   std::unique_ptr<platf::client_input_t> client_context;
@@ -177,6 +187,14 @@ def production_prelude(source):
         declaration = re.search(pattern, source)
         if declaration:
             prelude = re.sub(pattern, declaration.group(), prelude)
+    # Keep this fake backend constructor's value transfers identical to the
+    # production constructor. Session selection is tested through the real
+    # config resolver and allocation adapters in test_guide_session_config.py.
+    for name in ('guide_button_key', 'guide_button_controller'):
+        pattern = rf'{name} \{{guide_button\.[^}}]+\}}'
+        initializer = re.search(pattern, source)
+        if initializer:
+            prelude = re.sub(pattern, initializer.group(), prelude)
     return prelude
 
 
@@ -342,7 +360,7 @@ def main():
         cpp = Path(temp) / 'test.cpp'
         binary = Path(temp) / 'test'
         cpp.write_text(production_prelude(source) + handlers + TESTS)
-        subprocess.run(['c++', '-std=c++20', '-Wall', '-Wextra', '-Wno-sign-compare', '-Wno-unused-const-variable',
+        subprocess.run(['c++', '-I', str(ROOT), '-std=c++20', '-Wall', '-Wextra', '-Wno-sign-compare', '-Wno-unused-const-variable',
                         str(cpp), '-o', str(binary)], check=True)
         for case in cases:
             result = subprocess.run([str(binary), case], capture_output=True, text=True)

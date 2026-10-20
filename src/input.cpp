@@ -168,6 +168,7 @@ namespace input {
     }
 
     platf::gamepad_state_t gamepad_state;
+    bool guide_key_down = false;
 
     thread_pool_util::ThreadPool::task_id_t back_timeout_id;
 
@@ -181,6 +182,16 @@ namespace input {
     button_state_e back_button_state;
   };
 
+  // Keep the keyboard binding separate from native Guide and the Back timer.
+  // Controller packets and timer releases must not release a held bound key.
+  void send_gamepad_state(const gamepad_t &gamepad) {
+    auto state = gamepad.gamepad_state;
+    if (gamepad.guide_key_down) {
+      state.buttonFlags |= platf::HOME;
+    }
+    platf::gamepad_update(platf_input, gamepad.id, state);
+  }
+
   void reset_gamepad(gamepad_t &gamepad) {
     if (gamepad.back_timeout_id) {
       task_pool.cancel(gamepad.back_timeout_id);
@@ -191,6 +202,7 @@ namespace input {
       gamepad.id = -1;
     }
     gamepad.gamepad_state = {};
+    gamepad.guide_key_down = false;
     gamepad.back_button_state = button_state_e::NONE;
   }
 
@@ -204,9 +216,12 @@ namespace input {
 
     input_t(
       safe::mail_raw_t::event_t<input::touch_port_t> touch_port_event,
-      platf::feedback_queue_t feedback_queue
+      platf::feedback_queue_t feedback_queue,
+      input::guide_button_config_t guide_button
     ):
         shortcutFlags {},
+        guide_button_key {guide_button.key},
+        guide_button_controller {guide_button.controller},
         gamepads(MAX_GAMEPADS),
         client_context {platf::allocate_client_input_context(platf_input)},
         touch_port_event {std::move(touch_port_event)},
@@ -223,6 +238,12 @@ namespace input {
     std::unordered_map<uint16_t, held_key_t> keys;
     task_pool_util::TaskPool::task_id_t key_press_repeat_id {};
     uint16_t repeating_key = 0;
+
+    // Captured from this session's effective app/client configuration at launch.
+    // A later reload cannot retarget a held press or change its release key.
+    const int guide_button_key;
+    const int guide_button_controller;
+    bool guide_key_pressed = false;
 
     std::vector<gamepad_t> gamepads;
     std::unique_ptr<platf::client_input_t> client_context;
@@ -851,9 +872,41 @@ namespace input {
     input->key_press_repeat_id = task_pool.pushDelayed(repeat_key, config::input.key_repeat_period, input, key_code).task_id;
   }
 
+  bool passthrough_guide_key(input_t &input, uint16_t key_code, bool release) {
+    if (input.guide_button_key == 0 || key_code != input.guide_button_key) {
+      return false;
+    }
+    if (input.guide_key_pressed == !release) {
+      return true;
+    }
+    // Latch even an ignored press. Repeats must not activate a controller that
+    // connects later, or one whose input was disabled at the initial press.
+    input.guide_key_pressed = !release;
+    if (input.guide_button_controller < 0 || input.guide_button_controller >= input.gamepads.size()) {
+      return true;
+    }
+    auto &gamepad = input.gamepads[input.guide_button_controller];
+    if (release) {
+      if (gamepad.guide_key_down) {
+        gamepad.guide_key_down = false;
+        send_gamepad_state(gamepad);
+      }
+    } else if (config::input.keyboard && config::input.controller && gamepad.id >= 0) {
+      gamepad.guide_key_down = true;
+      send_gamepad_state(gamepad);
+    }
+    // The bound key is consumed before remapping, shortcuts and host injection.
+    // Only network packets enter here; synthesized controller output is never
+    // fed back into the input queue or translated into host keyboard events.
+    return true;
+  }
+
   void passthrough(std::shared_ptr<input_t> &input, PNV_KEYBOARD_PACKET packet) {
     const bool release = util::endian::little(packet->header.magic) == KEY_UP_EVENT_MAGIC;
     const uint16_t key_code = packet->keyCode & 0x00FF;
+    if (passthrough_guide_key(*input, key_code, release)) {
+      return;
+    }
     auto it = input->keys.find(key_code);
     if (release) {
       if (it == input->keys.end()) {
@@ -876,14 +929,18 @@ namespace input {
     }
 
     uint8_t synthetic_modifiers = 0;
+    auto consumed_modifiers = input->shortcutFlags;
+    if (input->guide_key_pressed) {
+      update_shortcutFlags(&consumed_modifiers, input->guide_button_key, false);
+    }
     if (!is_modifier(key_code)) {
-      if ((packet->modifiers & MODIFIER_SHIFT) && !(input->shortcutFlags & input_t::SHIFT)) {
+      if ((packet->modifiers & MODIFIER_SHIFT) && !(consumed_modifiers & input_t::SHIFT)) {
         synthetic_modifiers |= MODIFIER_SHIFT;
       }
-      if ((packet->modifiers & MODIFIER_CTRL) && !(input->shortcutFlags & input_t::CTRL)) {
+      if ((packet->modifiers & MODIFIER_CTRL) && !(consumed_modifiers & input_t::CTRL)) {
         synthetic_modifiers |= MODIFIER_CTRL;
       }
-      if ((packet->modifiers & MODIFIER_ALT) && !(input->shortcutFlags & input_t::ALT)) {
+      if ((packet->modifiers & MODIFIER_ALT) && !(consumed_modifiers & input_t::ALT)) {
         synthetic_modifiers |= MODIFIER_ALT;
       }
     }
@@ -1241,10 +1298,6 @@ namespace input {
   }
 
   void passthrough(std::shared_ptr<input_t> &input, PNV_MULTI_CONTROLLER_PACKET packet) {
-    if (!config::input.controller) {
-      return;
-    }
-
     if (packet->controllerNumber < 0 || packet->controllerNumber >= input->gamepads.size()) {
       BOOST_LOG(warning) << "ControllerNumber out of range ["sv << packet->controllerNumber << ']';
 
@@ -1258,6 +1311,13 @@ namespace input {
           (input->gamepads[i].id >= 0 || input->gamepads[i].back_timeout_id)) {
         reset_gamepad(input->gamepads[i]);
       }
+    }
+
+    // Inventory removal retires ownership even if a config reload disabled
+    // controller forwarding while a bound Guide key or Back timer was held.
+    // Do not allocate or forward any new controller state while disabled.
+    if (!config::input.controller) {
+      return;
     }
 
     auto &gamepad = input->gamepads[packet->controllerNumber];
@@ -1330,18 +1390,18 @@ namespace input {
             // Force the back button up
             gamepad.back_button_state = button_state_e::UP;
             state.buttonFlags &= ~platf::BACK;
-            platf::gamepad_update(platf_input, gamepad.id, state);
+            send_gamepad_state(gamepad);
 
             // Press Home button
             state.buttonFlags |= platf::HOME;
-            platf::gamepad_update(platf_input, gamepad.id, state);
+            send_gamepad_state(gamepad);
 
             // Sleep for a short time to allow the input to be detected
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
             // Release Home button
             state.buttonFlags &= ~platf::HOME;
-            platf::gamepad_update(platf_input, gamepad.id, state);
+            send_gamepad_state(gamepad);
 
             gamepad.back_timeout_id = nullptr;
           };
@@ -1354,9 +1414,8 @@ namespace input {
       }
     }
 
-    platf::gamepad_update(platf_input, gamepad.id, gamepad_state);
-
     gamepad.gamepad_state = gamepad_state;
+    send_gamepad_state(gamepad);
   }
 
   enum class batch_result_e {
@@ -1832,6 +1891,7 @@ namespace input {
       }
       input->keys.clear();
       input->shortcutFlags = 0;
+      input->guide_key_pressed = false;
       for (auto &gamepad : input->gamepads) {
         reset_gamepad(gamepad);
       }
@@ -1880,10 +1940,11 @@ namespace input {
     return true;
   }
 
-  std::shared_ptr<input_t> alloc(safe::mail_t mail, bool persist_gamepads) {
+  std::shared_ptr<input_t> alloc(safe::mail_t mail, guide_button_config_t guide_button, bool persist_gamepads) {
     auto input = std::make_shared<input_t>(
       mail->event<input::touch_port_t>(mail::touch_port),
-      mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback)
+      mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback),
+      guide_button
     );
     input->persist_gamepads = persist_gamepads;
 

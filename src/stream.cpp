@@ -3584,7 +3584,7 @@ namespace stream {
     }
 
     int start(session_t &session, const std::string &addr_string) {
-      session.input = input::alloc(session.mail, session.config.gcpersist);
+      session.input = input::alloc(session.mail, session.config.guide_button, session.config.gcpersist);
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
@@ -3811,6 +3811,7 @@ namespace stream {
 
       session->config = config;
       session->config.gcpersist = launch_session.gcpersist;
+      session->config.guide_button = launch_session.guide_button;
       session->stream_fps = session->config.monitor.framerate;
       session->client_display_refresh_millihz = launch_session.client_display_refresh_millihz;
       session->secondary_game_client = launch_session.secondary_game_client;
