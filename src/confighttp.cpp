@@ -245,6 +245,78 @@ namespace confighttp {
   namespace fs = std::filesystem;
   using enum confighttp::StatusCode;
 
+  static std::optional<proc::ctx_t> resolve_cover_app_for_uuid(const std::string &uuid) {
+    if (uuid.empty()) return std::nullopt;
+    try {
+      return proc::proc.resolve_app("", uuid);
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "resolve_cover_app_for_uuid: failed for uuid '" << uuid << "': " << e.what();
+    } catch (...) {
+      BOOST_LOG(warning) << "resolve_cover_app_for_uuid: failed for uuid '" << uuid << "': unknown error";
+    }
+    return std::nullopt;
+  }
+
+  static void attach_configured_cover_versions(nlohmann::json &apps) {
+    const auto snapshot = proc::proc.get_apps();
+    std::unordered_map<std::string, const proc::ctx_t *> by_uuid;
+    for (const auto &app : snapshot) by_uuid.emplace(app.uuid, &app);
+    for (auto &app : apps) {
+      if (!app.is_object()) continue;
+      app.erase("image-version");
+      if (!app.contains("uuid") || !app["uuid"].is_string()) continue;
+      const auto found = by_uuid.find(app["uuid"].get<std::string>());
+      if (found != by_uuid.end()) {
+        try {
+          app["image-version"] = proc::configured_app_image_version(*found->second);
+        } catch (const std::exception &) {
+          // Artwork metadata is best-effort; preserve the rest of the app list.
+        }
+      }
+    }
+  }
+
+  struct configured_cover_reply_t {
+    SimpleWeb::StatusCode code;
+    std::string body;
+    SimpleWeb::CaseInsensitiveMultimap headers;
+  };
+
+  // Authentication and UUID syntax checks stay at the route boundary. This
+  // operation owns the response/cache decision for one copied runtime app.
+  static configured_cover_reply_t configured_cover_reply(const std::string &uuid, const std::string &expected_version) {
+    configured_cover_reply_t reply {SimpleWeb::StatusCode::client_error_not_found, {}, {
+      {"Cache-Control", "private, no-store"},
+      {"X-Frame-Options", "DENY"},
+      {"Content-Security-Policy", "frame-ancestors 'none';"}}};
+    const auto fail = [&](SimpleWeb::StatusCode code, const std::string &message) {
+      reply.code = code;
+      reply.headers.emplace("Content-Type", "application/json");
+      reply.body = nlohmann::json {{"status_code", code}, {"error", message}}.dump();
+      return reply;
+    };
+    try {
+      const auto app = resolve_cover_app_for_uuid(uuid);
+      if (!app) return fail(SimpleWeb::StatusCode::client_error_not_found, "Configured cover unavailable. Moonlight may use its default image.");
+      const auto version = proc::configured_app_image_version(*app);
+      if (!expected_version.empty() && expected_version != version) {
+        return fail(SimpleWeb::StatusCode::client_error_conflict, "Cover changed. Refresh the application list and try again.");
+      }
+      const auto image = proc::read_configured_app_image(app->image_path);
+      if (!image) return fail(SimpleWeb::StatusCode::client_error_not_found, "Configured cover unavailable. Moonlight may use its default image. Use a readable PNG file no larger than 16 MiB.");
+      if (proc::configured_app_image_version(*app) != version) {
+        return fail(SimpleWeb::StatusCode::client_error_conflict, "Cover changed. Refresh the application list and try again.");
+      }
+      reply.code = SimpleWeb::StatusCode::success_ok;
+      reply.body = *image;
+      reply.headers.emplace("Content-Type", "image/png");
+      return reply;
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Configured cover read failed: " << e.what();
+      return fail(SimpleWeb::StatusCode::client_error_not_found, "Configured cover unavailable. Moonlight may use its default image.");
+    }
+  }
+
   using https_server_t = SimpleWeb::Server<SimpleWeb::HTTPS>;
 
   using args_t = SimpleWeb::CaseInsensitiveMultimap;
@@ -1625,6 +1697,7 @@ namespace confighttp {
       // regenerated (the icon/cover URLs are otherwise stable and get cached by the browser).
       // Added after persistence so these transient fields never get written to apps.json.
       if (file_tree.contains("apps") && file_tree["apps"].is_array()) {
+        attach_configured_cover_versions(file_tree["apps"]);
         auto art_stamp = [](const std::string &path) -> long long {
           std::error_code ec;
           auto t = fs::last_write_time(fs::path(path), ec);
@@ -1641,12 +1714,6 @@ namespace confighttp {
                 app["playnite-icon-version"] = v;
               }
             }
-            if (app.contains("image-path") && app["image-path"].is_string()) {
-              const auto v = art_stamp(app["image-path"].get<std::string>());
-              if (v) {
-                app["image-version"] = v;
-              }
-            }
             const auto control = configurable_remote_session(app.value("uuid", ""));
             if (control != remote_session::control_e::none) {
               app["remote-session"] = control == remote_session::control_e::input ? "input" : "monitor";
@@ -1656,7 +1723,7 @@ namespace confighttp {
         }
       }
 
-      send_response(response, file_tree);
+      send_response(response, file_tree, "no-store");
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "GetApps: "sv << e.what();
       bad_request(response, request, e.what());
@@ -1678,20 +1745,13 @@ namespace confighttp {
       return;
     }
 
-    // Use the parsed runtime app, including its expanded environment, exactly as
-    // /appasset does. Alternate cover files must not hide an unusable image-path.
-    const auto app = proc::proc.resolve_app("", uuid);
-    const auto image = app ? proc::read_configured_app_image(app->image_path) : std::nullopt;
-    if (!image) {
-      not_found(response, request, "Configured cover unavailable. Moonlight may use its default image. Use a readable PNG file no larger than 16 MiB.");
-      return;
+    const auto query = request->parse_query_string();
+    const auto version = query.find("v");
+    auto reply = configured_cover_reply(uuid, version == query.end() ? "" : version->second);
+    if (reply.code != SimpleWeb::StatusCode::success_ok) {
+      reply.headers.emplace("Access-Control-Allow-Origin", get_cors_origin());
     }
-
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "image/png");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(success_ok, *image, headers);
+    response->write(reply.code, reply.body, reply.headers);
   }
 
   /**
