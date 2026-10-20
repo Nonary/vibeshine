@@ -1561,3 +1561,5 @@ if(WIN32)
         set_tests_properties(test_script_bootstrap_migration PROPERTIES LABELS "installer;component")
     endif()
 endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/WindowsPortablePackagingTest.cmake")
