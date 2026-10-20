@@ -8329,6 +8329,8 @@ fi
 # Executables
 %{_bindir}/vibeshine
 %{_bindir}/vibeshine-mangohud
+%{_bindir}/vibeshine-tray
+%{_sysconfdir}/xdg/autostart/vibeshine-tray.desktop
 %{_prefix}/libexec/vibeshine/vibeshine-drm-install
 %{_prefix}/libexec/vibeshine/vibeshine-ds5-install
 %{_prefix}/libexec/vibeshine/vibeshine-vkms
