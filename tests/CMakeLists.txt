@@ -702,6 +702,7 @@ sunshine_register_component(NAME test_component_display_device_policy TEST_SOURC
     LINK_LIBRARIES nlohmann_json::nlohmann_json)
 sunshine_register_component(NAME test_component_process_policy TEST_SOURCE unit/test_process.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/app_catalog_policy.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/remote_session.cpp"
     LINK_LIBRARIES Boost::crc)
 sunshine_register_component(NAME test_component_process_framegen_json TEST_SOURCE unit/test_process_framegen_json.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/app_framegen_config.cpp"
@@ -1464,10 +1465,12 @@ if(WIN32)
             test_playnite_sync_autosync.cpp)
         get_filename_component(_playnite_name "${_playnite_test}" NAME_WE)
         sunshine_register_component(NAME "test_component_${_playnite_name}" TEST_SOURCE "${_playnite_test}"
-            PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/playnite_sync_policy.cpp")
+            PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/playnite_sync_policy.cpp"
+            LINK_LIBRARIES nlohmann_json::nlohmann_json)
     endforeach()
     sunshine_register_component(NAME test_component_test_playnite_sync TEST_SOURCE test_playnite_sync.cpp
-        PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/playnite_sync_policy.cpp")
+        PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/playnite_sync_policy.cpp"
+            LINK_LIBRARIES nlohmann_json::nlohmann_json)
     sunshine_register_component(NAME test_component_display_helper_watchdog TEST_SOURCE unit/test_display_helper_watchdog.cpp
         PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_watchdog.cpp")
     sunshine_register_component(NAME test_component_display_helper_session_deferral TEST_SOURCE unit/test_display_helper_session_deferral.cpp

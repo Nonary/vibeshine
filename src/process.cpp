@@ -93,6 +93,7 @@
   #include <unistd.h>
 #endif
 #include "process.h"
+#include "remote_monitor_profile_policy.h"
 #ifdef _WIN32
   #include "platform/windows/virtual_display.h"
 #endif
@@ -1309,6 +1310,12 @@ namespace proc {
     // admitted before closure keeps its owner through startup and cleanup tails.
     host_stream_control::start_guard_t admission {host_stream_control::request_ticket()};
     if (!admission) return 503;
+    // Monitor profiles are admitted only by the authenticated role path. Fail
+    // before prepare_launch() can terminate a running game or run commands.
+    if (const auto selected = resolve_app(app_id); selected && selected->remote_monitor_profile) {
+      BOOST_LOG(error) << "Remote Monitor profiles require the paired-client Monitor launch path.";
+      return 400;
+    }
     // Ensure starting from a clean slate
     const bool skip_display_revert = launch_session &&
                                     (launch_session->display_config_preapplied || launch_session->display_config_preapply_attempted);
@@ -3032,6 +3039,112 @@ namespace proc {
     return ss.str();
   }
 
+  bp::native_environment configured_app_environment(const pt::ptree &env_vars) {
+      auto this_env = bp::this_process::env();
+#if defined(__linux__)
+      // Keep the daemon's own HOME pointed at the machine-owned profile while
+      // giving desktop applications the environment of the session account
+      // that the capability helper will actually enter.
+      if (std::getenv("VIBESHINE_MACHINE_HOST")) {
+        const auto *session_home = std::getenv("VIBESHINE_SESSION_HOME");
+        const auto *session_user = std::getenv("VIBESHINE_SESSION_USER");
+        if (session_home && *session_home && session_user && *session_user) {
+          this_env["HOME"] = session_home;
+          this_env["USER"] = session_user;
+          this_env["LOGNAME"] = session_user;
+          this_env["XDG_CONFIG_HOME"] = std::string {session_home} + "/.config";
+          this_env["XDG_DATA_HOME"] = std::string {session_home} + "/.local/share";
+        }
+      }
+#endif
+
+      for (auto &[name, val] : env_vars) {
+        if (!is_valid_env_key(name)) {
+          BOOST_LOG(warning) << "Skipping invalid environment variable name ["sv << name << ']';
+          continue;
+        }
+        this_env[name] = parse_env_val(this_env, val.get_value<std::string>());
+      }
+
+      return this_env;
+  }
+
+  std::string configured_app_uuid(bp::native_environment &env, const pt::ptree &app) {
+    const auto uuid = app.get_optional<std::string>("uuid");
+    return uuid ? parse_env_val(env, *uuid) : std::string {};
+  }
+
+  std::vector<std::string> configured_app_uuids(bp::native_environment &env, const pt::ptree &apps, const nlohmann::json &json_apps) {
+    std::vector<std::string> result;
+    std::size_t index = 0;
+    for (const auto &[_, app] : apps) {
+      // Marked UUIDs are literal input. Invalid marked expressions are omitted
+      // by admission and must never execute expansion before that rejection.
+      if (json_apps.is_array() && index < json_apps.size() && remote_session::marked_monitor_profile(json_apps[index])) {
+        const auto value = json_apps[index].find("uuid");
+        result.push_back(value != json_apps[index].end() && value->is_string() ? value->get<std::string>() : std::string {});
+      } else {
+        result.push_back(configured_app_uuid(env, app));
+      }
+      ++index;
+    }
+    return result;
+  }
+
+  std::vector<std::string> configured_app_uuids_from_text(const std::string &content, const nlohmann::json &json_apps) {
+    // Decode through property_tree exactly as parse() does. The JSON object
+    // order here is the order that saveApp will persist and refresh.
+    pt::ptree tree;
+    std::istringstream input(content);
+    pt::read_json(input, tree);
+    const pt::ptree empty;
+    auto env = configured_app_environment(tree.get_child("env", empty));
+    return configured_app_uuids(env, tree.get_child("apps", empty), json_apps);
+  }
+
+  std::vector<std::string> configured_app_uuids(const nlohmann::json &file_tree) {
+    return configured_app_uuids_from_text(file_tree.dump(), file_tree.value("apps", nlohmann::json::array()));
+  }
+
+  std::string_view configured_monitor_profile_error_from_file(const nlohmann::json &app, const nlohmann::json &file_tree, const std::string_view content) {
+    if (!remote_session::marked_monitor_profile(app)) return {};
+    const auto identities = configured_app_uuids_from_text(std::string {content}, file_tree.value("apps", nlohmann::json::array()));
+    std::vector<std::string_view> views;
+    for (const auto &uuid : identities) views.push_back(uuid);
+    return remote_session::monitor_profile_json_error(app, views);
+  }
+
+  std::string_view configured_monitor_profile_error(const nlohmann::json &app, const nlohmann::json &file_tree) {
+    if (!remote_session::marked_monitor_profile(app)) return {};
+    return configured_monitor_profile_error_from_file(app, file_tree, file_tree.dump());
+  }
+
+  std::string_view monitor_profile_changes_error(const nlohmann::json &before, const nlohmann::json &after, const std::string_view before_file) {
+    if (!after.contains("apps") || !after["apps"].is_array()) return {};
+    if (std::none_of(after["apps"].begin(), after["apps"].end(), remote_session::marked_monitor_profile)) return {};
+    const auto before_ids = before_file.empty() ? configured_app_uuids(before) : configured_app_uuids_from_text(std::string {before_file}, before.value("apps", nlohmann::json::array()));
+    std::vector<std::string_view> before_views;
+    for (const auto &uuid : before_ids) before_views.push_back(uuid);
+    for (const auto &app : after["apps"]) {
+      const auto error = configured_monitor_profile_error(app, after);
+      if (error.empty()) continue;
+      // Existing invalid marked rows stay available for explicit repair.
+      // An unrelated ordinary edit may preserve them, but cannot invalidate
+      // a previously valid profile by changing an effective ordinary UUID.
+      bool unchanged_invalid = false;
+      if (before.contains("apps") && before["apps"].is_array()) {
+        for (const auto &old : before["apps"]) {
+          if (old == app && remote_session::monitor_profile_json_error(old, before_views) == error) {
+            unchanged_invalid = true;
+            break;
+          }
+        }
+      }
+      if (!unchanged_invalid) return error;
+    }
+    return {};
+  }
+
   /**
    * @brief Validates a path whether it is a valid PNG.
    * @param path The path to the PNG file.
@@ -3572,31 +3685,10 @@ namespace proc {
       auto &apps_node = tree.get_child("apps"s);
       auto &env_vars = tree.get_child("env"s);
 
-      auto this_env = bp::this_process::env();
-#if defined(__linux__)
-      // Keep the daemon's own HOME pointed at the machine-owned profile while
-      // giving desktop applications the environment of the session account
-      // that the capability helper will actually enter.
-      if (std::getenv("VIBESHINE_MACHINE_HOST")) {
-        const auto *session_home = std::getenv("VIBESHINE_SESSION_HOME");
-        const auto *session_user = std::getenv("VIBESHINE_SESSION_USER");
-        if (session_home && *session_home && session_user && *session_user) {
-          this_env["HOME"] = session_home;
-          this_env["USER"] = session_user;
-          this_env["LOGNAME"] = session_user;
-          this_env["XDG_CONFIG_HOME"] = std::string {session_home} + "/.config";
-          this_env["XDG_DATA_HOME"] = std::string {session_home} + "/.local/share";
-        }
-      }
-#endif
-
-      for (auto &[name, val] : env_vars) {
-        if (!is_valid_env_key(name)) {
-          BOOST_LOG(warning) << "Skipping invalid environment variable name ["sv << name << ']';
-          continue;
-        }
-        this_env[name] = parse_env_val(this_env, val.get_value<std::string>());
-      }
+      auto this_env = configured_app_environment(env_vars);
+      const auto configured_uuids = configured_app_uuids(this_env, apps_node, json_tree.is_object() ? json_tree.value("apps", nlohmann::json::array()) : nlohmann::json::array());
+      std::vector<std::string_view> configured_uuid_views;
+      for (const auto &uuid : configured_uuids) configured_uuid_views.push_back(uuid);
 
       std::set<std::string> ids;
       std::vector<proc::ctx_t> apps;
@@ -3605,8 +3697,18 @@ namespace proc {
       bool app_id_alias_state_changed = false;
       int i = 0;
       for (auto &[_, app_node] : apps_node) {
-        const int json_index = i;
+        const int json_index = i++;
+        if (json_tree.is_object() && json_tree.contains("apps") && json_tree["apps"].is_array() &&
+            json_index < static_cast<int>(json_tree["apps"].size())) {
+          const auto &json_apps = json_tree["apps"];
+          const auto error = remote_session::monitor_profile_json_error(json_apps[json_index], configured_uuid_views);
+          if (!error.empty()) {
+            BOOST_LOG(warning) << "Skipping configured Remote Monitor profile at JSON index " << json_index << ": " << error;
+            continue;
+          }
+        }
         proc::ctx_t ctx;
+        ctx.configured_index = static_cast<std::size_t>(json_index);
 
         auto prep_nodes_opt = app_node.get_child_optional("prep-cmd"s);
         auto detached_nodes_opt = app_node.get_child_optional("detached"s);
@@ -3614,7 +3716,6 @@ namespace proc {
         auto output = app_node.get_optional<std::string>("output"s);
         auto display_output = app_node.get_optional<std::string>("display-output"s);
         auto name = parse_env_val(this_env, app_node.get<std::string>("name"s));
-        auto uuid = app_node.get_optional<std::string>("uuid"s);
         auto cmd = app_node.get_optional<std::string>("cmd"s);
         auto image_path = app_node.get_optional<std::string>("image-path"s);
         auto working_dir = app_node.get_optional<std::string>("working-dir"s);
@@ -3652,6 +3753,8 @@ namespace proc {
             const auto &japps = json_tree["apps"];
             if (json_index >= 0 && json_index < static_cast<int>(japps.size()) && japps[json_index].is_object()) {
               const auto &japp = japps[json_index];
+              ctx.remote_monitor_profile = japp.contains("remote-monitor-profile") &&
+                japp["remote-monitor-profile"].is_boolean() && japp["remote-monitor-profile"].get<bool>();
               if (japp.contains("config-overrides") && japp["config-overrides"].is_object()) {
                 for (const auto &item : japp["config-overrides"].items()) {
                   const std::string &key = item.key();
@@ -3836,9 +3939,7 @@ namespace proc {
           ctx.image_path = parse_env_val(this_env, *image_path);
         }
 
-        if (uuid) {
-          ctx.uuid = parse_env_val(this_env, *uuid);
-        }
+        ctx.uuid = configured_app_uuid(this_env, app_node);
 
         if (playnite_id) {
           ctx.playnite_id = parse_env_val(this_env, *playnite_id);
@@ -3912,7 +4013,7 @@ namespace proc {
           ctx.lossless_scaling_rtss_limit.reset();
         }
 
-        assign_compatible_app_id(ctx, name, i++, ids, app_id_alias_state, active_app_uuids, app_id_alias_state_changed);
+        assign_compatible_app_id(ctx, name, json_index, ids, app_id_alias_state, active_app_uuids, app_id_alias_state_changed);
 
         ctx.name = std::move(name);
         ctx.prep_cmds = std::move(prep_cmds);

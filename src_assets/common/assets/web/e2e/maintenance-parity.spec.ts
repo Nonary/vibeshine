@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 interface HostOptions {
   platform?: 'windows' | 'linux';
+  markBeforeDelete?: boolean;
   apps?: Array<Record<string, unknown>>;
   browse?: boolean;
   playniteUndetected?: boolean;
@@ -29,6 +30,8 @@ async function setupHost(page: Page, options: HostOptions = {}) {
     launch: 0,
     purgeAutosync: 0,
     appDeletes: [] as string[],
+    appDeleteBodies: [] as unknown[],
+    appDeleteHeaders: [] as Record<string, string>[],
     browse: [] as string[],
     configPatches: [] as Record<string, unknown>[],
     playniteStatus: 0,
@@ -119,8 +122,16 @@ async function setupHost(page: Page, options: HostOptions = {}) {
     } else if (method === 'DELETE' && /^\/api\/apps\/[^/]+$/.test(path)) {
       const uuid = decodeURIComponent(path.slice('/api/apps/'.length));
       calls.appDeletes.push(uuid);
-      currentApps = currentApps.filter((app) => app.uuid !== uuid);
-      body = { status: true };
+      const payload = request.postData() ? request.postDataJSON() : null;
+      calls.appDeleteBodies.push(payload);
+      calls.appDeleteHeaders.push(request.headers());
+      if (options.markBeforeDelete) {
+        currentApps = currentApps.map((app) => app.uuid === uuid ? { ...app, 'remote-monitor-profile': true } : app);
+      }
+      const beforeCount = currentApps.length;
+      currentApps = currentApps.filter((app) => app.uuid !== uuid ||
+        (payload?.['provider-maintenance'] === true && app['remote-monitor-profile'] === true));
+      body = { status: true, removed: beforeCount - currentApps.length };
     } else if (path === '/api/steam/status') {
       body = { enabled: true, available: true, game_count: 0 };
     } else if (path === '/api/steam/games') {
@@ -332,7 +343,7 @@ test('Lossless picker browses host roots and UNC directories without saving unti
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
-test('Windows library purge keeps non-Playnite applications', async ({ page }) => {
+test('Windows library provider purge keeps explicit Monitor profiles and other providers', async ({ page }) => {
   const calls = await setupHost(page, {
     apps: [
       {
@@ -341,6 +352,7 @@ test('Windows library purge keeps non-Playnite applications', async ({ page }) =
         'playnite-id': 'p1',
         'playnite-managed': 'auto',
       },
+      { uuid: 'a1234567-1234-4234-8234-123456789abc', name: 'Retained Monitor profile', 'playnite-id': 'profile', 'playnite-managed': 'auto', 'remote-monitor-profile': true },
       { uuid: 'manual-playnite', name: 'Manual game', 'playnite-id': 'p2' },
       { uuid: 'fullscreen-playnite', name: 'Playnite (Fullscreen)', cmd: ['--fullscreen'] },
       { uuid: 'steam-game', name: 'Steam game', 'steam-id': 's1' },
@@ -353,6 +365,7 @@ test('Windows library purge keeps non-Playnite applications', async ({ page }) =
   await expect(purgeButton).toBeVisible();
   await purgeButton.click();
   await expect(page.getByRole('dialog')).toContainText('currently 3');
+  await expect(page.getByRole('dialog')).toContainText('Explicit Monitor profiles are kept');
   expect(calls.appDeletes).toEqual([]);
   await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
   expect(calls.appDeletes).toEqual([]);
@@ -362,7 +375,14 @@ test('Windows library purge keeps non-Playnite applications', async ({ page }) =
   await expect
     .poll(() => calls.appDeletes)
     .toEqual(['managed-playnite', 'manual-playnite', 'fullscreen-playnite']);
+  expect(calls.appDeleteBodies).toEqual(Array(3).fill({ 'provider-maintenance': true }));
+  for (const headers of calls.appDeleteHeaders) {
+    expect(headers['content-type']).toContain('application/json');
+    expect(headers['x-csrf-token']).toBe('test-token');
+  }
+  await expect(page.getByText('Removed 3 Playnite applications.', { exact: true })).toBeVisible();
   await expect(purgeButton).toHaveCount(0);
+  await expect(page.getByText('Retained Monitor profile', { exact: true }).first()).toBeVisible();
 });
 
 test('Linux integrations do not query or expose Playnite', async ({ page }) => {
@@ -692,3 +712,31 @@ for (const initiallyAvailable of [false, true]) {
     ).toBe('same-document');
   });
 }
+
+
+test('maintenance cleanup reports zero after latest row becomes marked', async ({ page }) => {
+  const calls = await setupHost(page, { markBeforeDelete: true, apps: [
+    { uuid: 'a1234567-1234-4234-8234-123456789abc', name: 'Intervening profile', 'playnite-id': 'p1', 'playnite-managed': 'auto' },
+  ] });
+  await page.goto('/v2/library');
+  await page.getByRole('button', { name: 'Remove Playnite entries' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Remove Playnite entries' }).click();
+  await expect.poll(() => calls.appDeletes.length).toBe(1);
+  expect(calls.appDeleteBodies).toEqual([{ 'provider-maintenance': true }]);
+  await expect(page.getByText('Removed 0 Playnite applications.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Intervening profile', { exact: true }).first()).toBeVisible();
+});
+
+test('deliberate Library row deletion keeps empty request body', async ({ page }) => {
+  const calls = await setupHost(page, { apps: [
+    { uuid: 'a1234567-1234-4234-8234-123456789abc', name: 'Deliberate profile', 'remote-monitor-profile': true },
+  ] });
+  await page.goto('/v2/library');
+  await page.getByRole('button', { name: 'More actions for Deliberate profile' }).focus();
+  await page.getByRole('button', { name: 'More actions for Deliberate profile' }).press('Enter');
+  await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Delete application', exact: true }).click();
+  await expect.poll(() => calls.appDeletes.length).toBe(1);
+  expect(calls.appDeleteBodies).toEqual([null]);
+  expect(calls.appDeleteHeaders[0]['x-csrf-token']).toBe('test-token');
+});

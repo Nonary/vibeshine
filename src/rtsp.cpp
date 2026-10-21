@@ -202,6 +202,7 @@ namespace rtsp_stream {
     snapshot->id = source.id;
     snapshot->role = source.role;
     snapshot->role_generation = source.role_generation;
+    snapshot->monitor_profile_uuid = source.monitor_profile_uuid;
     snapshot->remote_capture_output = source.remote_capture_output;
     snapshot->rtsp_source_address = source.rtsp_source_address;
     snapshot->gcm_key = source.gcm_key;

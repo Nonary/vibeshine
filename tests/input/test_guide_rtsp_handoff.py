@@ -100,6 +100,7 @@ namespace stream {
     bool secondary_game_client = false, input_only = false, audio_disabled = false;
     remote_session::role_e remote_role {};
     uint64_t remote_role_generation = 0;
+    std::string monitor_profile_uuid;
     struct { bool active = false; } virtual_display;
     struct {
       uint32_t connect_data = 0;
