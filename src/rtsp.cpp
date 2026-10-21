@@ -2270,7 +2270,7 @@ namespace rtsp_stream {
     const std::string client_uuid = session->client_uuid;
     auto launch_session = make_startup_launch_session_snapshot(*session);
     try {
-      server->run_startup([server, socket = std::move(socket), session = std::move(session), launch_session, config = std::move(config), remote_address = std::move(remote_address), client_uuid, sequence_number](bool admitted) mutable {
+      server->run_startup([server, socket = std::move(socket), session = std::move(session), launch_session, config = std::move(config), remote_address = std::move(remote_address), client_uuid, sequence_number, selected_audio_codec](bool admitted) mutable {
         // Apply deferred updates and take the hot-apply gate on the startup worker so
         // display/config churn cannot stall the RTSP io_context.
         std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
