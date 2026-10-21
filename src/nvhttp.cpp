@@ -6595,7 +6595,7 @@ launch_session->exact_target_hold.reset();
     const auto monitor_generation = config::video.remote_monitor_disconnect_on_client_disconnect ?
                                       remote_owner_generation(uuid, remote_session::role_e::monitor) :
                                       std::nullopt;
-    const auto disconnect = rtsp_stream::disconnect_client_sessions_with_result(uuid);
+    const auto disconnect = rtsp_stream::disconnect_client_sessions_with_result(uuid, true);
     // The result is the pending-map removal linearization point. Never look
     // up the current Input owner here: a newer generation may have been
     // admitted after the RTSP critical section and must survive.

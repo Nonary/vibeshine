@@ -1606,6 +1606,13 @@ if(Python3_Interpreter_FOUND)
             --dotnet "${SUNSHINE_TEST_DOTNET}")
     set_tests_properties(regression_playnite_connector_lifecycle PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+find_program(SUNSHINE_TEST_GXX NAMES g++)
+if(Python3_Interpreter_FOUND AND SUNSHINE_TEST_GXX)
+    add_test(NAME regression_stream_disconnect_lifecycle
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_stream_disconnect_lifecycle.py"
+            --compiler "${SUNSHINE_TEST_GXX}")
+    set_tests_properties(regression_stream_disconnect_lifecycle PROPERTIES LABELS "component" TIMEOUT 45)
+endif()
 if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_program(SUNSHINE_TEST_FOCUS_NODE NAMES node nodejs)
     if(SUNSHINE_TEST_FOCUS_NODE)
