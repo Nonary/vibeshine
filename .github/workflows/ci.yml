@@ -218,7 +218,8 @@ jobs:
     if: >-
       ${{ (github.event_name != 'workflow_dispatch' || inputs.validate_hosted_linux != true) &&
           (github.event_name != 'push' ||
-           (github.ref_type == 'tag' && needs.release-candidate.outputs.should_release == 'true')) }}
+           (github.ref_type == 'tag' && needs.release-candidate.outputs.should_release == 'true') ||
+           (github.ref_type == 'branch' && github.ref_name == 'test/vibeshine-dolby-ac3')) }}
     permissions:
       actions: read
       contents: read
