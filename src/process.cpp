@@ -58,6 +58,7 @@
 #include "globals.h"
 #include "logging.h"
 #include "nvhttp.h"
+#include "host_stream_control.h"
 #include "platform/common.h"
 #ifdef _WIN32
   #include "config_playnite.h"
@@ -1302,6 +1303,12 @@ namespace proc {
   }
 
   int proc_t::execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session, bool config_read_gate_held) {
+    // Callers serialize app changes with lifecycle. Admission never waits, so
+    // a lifecycle-held caller can reject terminal cleanup without lock inversion.
+    // New startup is refused even from terminal-owned nested cleanup; an execute
+    // admitted before closure keeps its owner through startup and cleanup tails.
+    host_stream_control::start_guard_t admission {host_stream_control::request_ticket()};
+    if (!admission) return 503;
     // Ensure starting from a clean slate
     const bool skip_display_revert = launch_session &&
                                     (launch_session->display_config_preapplied || launch_session->display_config_preapply_attempted);
@@ -2338,6 +2345,8 @@ namespace proc {
   }
 
   int proc_t::running() {
+    host_stream_control::activity_guard_t activity;
+    if (!activity) return current_app_id();
 #ifndef _WIN32
     // Detached launchers still need collecting, but other children retain
     // their own wait status (Boost, provider scans and GLib helpers).
@@ -2613,6 +2622,8 @@ namespace proc {
     bool stream_lifecycle_lock_held,
     bool config_read_gate_held
   ) {
+    host_stream_control::activity_guard_t activity;
+    if (!activity) return;
 #ifdef __linux__
     // This owner represents a running-Steam handoff. Dropping it when the
     // app ends also prevents a later SDR launch from retaining HDR policy.

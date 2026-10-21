@@ -44,6 +44,10 @@
 #include "app_display_policy.h"
 #include "audio.h"
 #include "config.h"
+#include "host_stream_control.h"
+#ifdef _WIN32
+  #include "platform/windows/hotkey_manager.h"
+#endif
 #include "display_device.h"
 #include "display_helper_integration.h"
 #include "file_handler.h"
@@ -197,6 +201,8 @@ namespace nvhttp {
   static constexpr std::string_view EMPTY_PROPERTY_TREE_ERROR_MSG = "Property tree is empty. Probably, control flow got interrupted by an unexpected C++ exception. This is a bug in Sunshine. Moonlight-qt will report Malformed XML (missing root element)."sv;
 
   void notify_remote_input_transport_lost(const std::string_view client_uuid, const std::uint64_t generation) {
+    host_stream_control::activity_guard_t activity;
+    if (!activity) return;
     forget_remote_owner(client_uuid, remote_session::role_e::input, generation);
     if (!has_stream_session_activity() && remote_display_topology::instance().managed_client_identity_count() == 0) {
       config::clear_runtime_config_overrides();
@@ -896,6 +902,8 @@ namespace nvhttp {
     }
 
     void cleanup_virtual_display_if_idle_locked() {
+      host_stream_control::activity_guard_t activity;
+      if (!activity) return;
       try {
         remote_display_topology::instance().release_drained_normal_game_identities();
         reconcile_remote_monitor_owners();
@@ -926,6 +934,8 @@ namespace nvhttp {
     }
 
     void cleanup_virtual_display_if_idle() {
+      host_stream_control::activity_guard_t activity;
+      if (!activity) return;
       // Serialize the final owner check through cleanup and exclude a
       // concurrent RTSP or WebRTC start. Callers already holding the lifecycle
       // gate must use cleanup_virtual_display_if_idle_locked().
@@ -1871,6 +1881,8 @@ namespace nvhttp {
 #ifdef __linux__
   namespace {
     void cleanup_virtual_display_if_idle_locked() {
+      host_stream_control::activity_guard_t activity;
+      if (!activity) return;
       try {
         remote_display_topology::instance().release_drained_normal_game_identities();
         reconcile_remote_monitor_owners();
@@ -1894,6 +1906,8 @@ namespace nvhttp {
     }
 
     void cleanup_virtual_display_if_idle() {
+      host_stream_control::activity_guard_t activity;
+      if (!activity) return;
       std::unique_lock<std::mutex> lifecycle_lock(stream_lifecycle_mutex());
       cleanup_virtual_display_if_idle_locked();
     }
@@ -2616,6 +2630,44 @@ namespace nvhttp {
   std::mutex &stream_lifecycle_mutex() {
     return stream_lifecycle_gate;
   }
+
+#ifdef _WIN32
+  void terminate_all_streams_from_host(const std::function<bool()> &authorized) {
+    const bool drained = host_stream_control::terminate(authorized, [&] {
+      std::lock_guard cancel_lock {launch_request_mutex};
+      if (!authorized()) return;
+      stream::session::cleanup_reservation_t cleanup_reservation;
+      BOOST_LOG(info) << "Host end-stream shortcut: ending all streams and restoring the physical desktop.";
+      // Existing natural reapers/closes/expiry notifications have drained.
+      // Joins acquire lifecycle themselves; admission is closed without holding
+      // lifecycle, so terminal-owned nested cleanup cannot deadlock on it.
+      rtsp_stream::terminate_sessions(false);
+      webrtc_stream::shutdown_all_sessions();
+      proc::proc.terminate();
+      remote_session::notify_monitor_shutdown();
+      {
+        // Old queued RTSP workers no longer own this epoch. Complete ordinary
+        // runtime cleanup/config restoration before the final physical restore.
+        std::unique_lock lifecycle_lock {stream_lifecycle_mutex()};
+        (void) stream::session::finalize_shared_runtime_if_idle("host_end_stream");
+        // A false finalizer result can mean either no armed work or retained
+        // ownership after topology failure. Only the former is safe to finish.
+        if (stream::session::has_shared_runtime_owner() ||
+            !remote_display_topology::instance().shutdown_complete()) {
+          BOOST_LOG(error) << "Host end-stream shortcut: runtime/display ownership remains; physical recovery deferred. Retry after the teardown or topology failure is resolved.";
+          return;
+        }
+      }
+      const auto cleanup = platf::virtual_display_cleanup::terminate_all("end_stream_hotkey");
+      if (!cleanup.virtual_displays_removed || !cleanup.physical_display_recovered) {
+        BOOST_LOG(warning) << "Host end-stream shortcut: display recovery did not confirm an active physical monitor.";
+      }
+    });
+    if (!drained) {
+      BOOST_LOG(warning) << "Host end-stream shortcut: authorization changed or in-process activity did not drain within 30 seconds; physical recovery was not attempted.";
+    }
+  }
+#endif
 
   power_action::service_t paired_power_actions {stream_lifecycle_gate};
 
@@ -5586,6 +5638,14 @@ namespace nvhttp {
       return;
     }
 
+    host_stream_control::activity_guard_t activity;
+    if (!activity) {
+      tree.put("root.cancel", 0);
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "Host end-stream cleanup is in progress. Retry after it completes.");
+      return;
+    }
+
     const bool has_running_app = proc::proc.running() > 0;
     if (!has_running_app) {
       // Natural app exit clears its owner before the client sends the final
@@ -6012,6 +6072,18 @@ namespace nvhttp {
     // a response and must never execute stale mutations after a client timeout.
     auto mutation_admission = std::make_shared<single_flight::admission_t>();
     auto run_blocking_nvhttp = [&blocking_route_pool, run_on_blocking_pool, mutation_admission](auto response, const char *operation, auto task) {
+#ifdef _WIN32
+      const bool terminal_fenced = std::string_view(operation) == "launch" ||
+                                   std::string_view(operation) == "resume" ||
+                                   std::string_view(operation) == "cancel" ||
+                                   std::string_view(operation) == "SleepAccepted";
+      if (terminal_fenced) {
+        dispatch::run_start(*mutation_admission, [&](auto admitted) {
+          run_on_blocking_pool(blocking_route_pool, std::move(admitted));
+        }, response, operation, std::move(task));
+        return;
+      }
+#endif
       dispatch::run_blocking(*mutation_admission, [&](auto admitted) {
         run_on_blocking_pool(blocking_route_pool, std::move(admitted));
       },
@@ -6150,6 +6222,10 @@ namespace nvhttp {
         return;
       }
     };
+#ifdef _WIN32
+    platf::hotkey::start_end_stream_hotkey();
+    auto stop_hotkey = util::fail_guard([] { platf::hotkey::stop_end_stream_hotkey(); });
+#endif
     std::thread ssl {accept_and_run, &https_server};
     std::thread tcp {accept_and_run, &http_server};
     std::jthread pairing_expiry_worker([](std::stop_token stop_token) {
@@ -6177,6 +6253,10 @@ namespace nvhttp {
     }
 #endif
 
+#ifdef _WIN32
+    platf::hotkey::stop_end_stream_hotkey();
+    stop_hotkey.disable();
+#endif
     pairing_expiry_worker.request_stop();
     pairing_expiry_worker.join();
 
@@ -6201,6 +6281,8 @@ namespace nvhttp {
   }
 
   bool erase_all_clients() {
+    host_stream_control::activity_guard_t activity;
+    if (!activity) return false;
     if (!config::sunshine.flags[config::flag::FRESH_STATE] &&
         !authorization_state_ready.load(std::memory_order_acquire)) {
       BOOST_LOG(error) << "Refusing to erase pairing state because durable state is unavailable."sv;
@@ -6331,7 +6413,10 @@ namespace nvhttp {
   }
 
   void revoke_paired_client_access(const std::string_view uuid) {
+    // Revocation takes effect even if terminal already owns runtime teardown.
     forget_tls_client_identities_for_uuid(uuid);
+    host_stream_control::activity_guard_t activity;
+    if (!activity) return;
     // The caller has already disabled or removed the live pairing record.
     // Cross the launch/resume gate before scanning sessions so any handler
     // that copied the old identity either fails its final live recheck or has
@@ -6349,6 +6434,8 @@ namespace nvhttp {
   }
 
   bool set_client_enabled(std::string_view uuid, bool enabled) {
+    host_stream_control::activity_guard_t activity;
+    if (!activity) return false;
     bool updated = false;
     bool previously_enabled = false;
     bool persisted = false;
@@ -6431,6 +6518,8 @@ namespace nvhttp {
   }
 
   bool disconnect_client(const std::string &uuid) {
+    host_stream_control::activity_guard_t activity;
+    if (!activity) return false;
     // Capture the generation before stopping transport. The join path may
     // retain it for Resume, while a newer launch admitted after this point
     // must never be released by this disconnect request.
@@ -6503,6 +6592,8 @@ namespace nvhttp {
   // (Windows-only) display_helper_integration is included above
 
   bool unpair_client(const std::string_view uuid) {
+    host_stream_control::activity_guard_t activity;
+    if (!activity) return false;
     if (!config::sunshine.flags[config::flag::FRESH_STATE] &&
         !authorization_state_ready.load(std::memory_order_acquire)) {
       BOOST_LOG(error) << "Refusing to remove pairing state because durable state is unavailable."sv;

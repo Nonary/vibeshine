@@ -8,6 +8,7 @@
 // standard includes
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -286,6 +287,13 @@ namespace nvhttp {
    * publication; final teardown holds it through its shared cleanup decision.
    */
   std::mutex &stream_lifecycle_mutex();
+
+#ifdef _WIN32
+  /** End all transports, pending launches and the app, then restore displays.
+   * Revalidate the pinned local helper after draining in-flight starts.
+   */
+  void terminate_all_streams_from_host(const std::function<bool()> &authorized);
+#endif
 
   /**
    * @brief Persist a per-client HDR color profile selection (Windows only).

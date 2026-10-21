@@ -103,6 +103,8 @@ namespace proc {
 
     // Callers holding config::acquire_apply_read_gate() must pass true so
     // replacement/failure cleanup defers its configuration write.
+    // The caller owns stream lifecycle serialization. Startup returns 503 before
+    // mutation when terminal admission is closed; an admitted execute stays counted.
     int execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session, bool config_read_gate_held = false);
 
     /**
