@@ -2062,6 +2062,8 @@ namespace config {
     bool_f(vars, "stream_audio", audio.stream);
     bool_f(vars, "audio_sink_capture_only", audio.sink_capture_only);
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
+    string_restricted_f(vars, "audio_format", audio.format, {"opus"sv, "ac3"sv, "eac3"sv});
+    bool_f(vars, "high_quality_audio", audio.high_quality_audio);
 
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, {"pc"sv, "lan"sv, "wan"sv});
     // reflect origin ACL update immediately in HTTP layer
