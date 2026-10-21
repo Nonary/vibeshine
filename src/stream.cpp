@@ -481,7 +481,7 @@ namespace stream {
     return ((size + 15) / 16) * 16;
   }
 
-  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = 1400;
+  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = 2048;
 
   using audio_aes_t = std::array<char, round_to_pkcs7_padded(MAX_AUDIO_PACKET_SIZE)>;
 
