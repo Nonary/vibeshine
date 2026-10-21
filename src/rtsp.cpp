@@ -203,6 +203,7 @@ namespace rtsp_stream {
     snapshot->role = source.role;
     snapshot->role_generation = source.role_generation;
     snapshot->monitor_profile_uuid = source.monitor_profile_uuid;
+    snapshot->exact_monitor_target = source.exact_monitor_target;
     snapshot->remote_capture_output = source.remote_capture_output;
     snapshot->rtsp_source_address = source.rtsp_source_address;
     snapshot->gcm_key = source.gcm_key;
@@ -891,11 +892,12 @@ namespace rtsp_stream {
     // Retire its resources explicitly, without destroying them under the map
     // mutex. Copying into an admitted startup uses the same mutex.
     void release_pending_runtime_holds(const std::shared_ptr<launch_session_t> &pending) {
-      std::shared_ptr<void> audio_hold, power_hold;
+      std::shared_ptr<void> audio_hold, power_hold, target_hold;
       {
         std::lock_guard lock {pending_launches_mutex};
         audio_hold = std::move(pending->audio_context_guard);
         power_hold = std::move(pending->display_power_guard);
+        target_hold = std::move(pending->exact_target_hold);
       }
     }
 
@@ -905,6 +907,7 @@ namespace rtsp_stream {
       if (it == pending_launches.end() || it->second.session->unique_id != snapshot->unique_id) return false;
       snapshot->audio_context_guard = it->second.session->audio_context_guard;
       snapshot->display_power_guard = it->second.session->display_power_guard;
+      snapshot->exact_target_hold = it->second.session->exact_target_hold;
       return true;
     }
 
@@ -2230,6 +2233,7 @@ namespace rtsp_stream {
         auto release_startup_holds = util::fail_guard([&] {
           launch_session->audio_context_guard.reset();
           launch_session->display_power_guard.reset();
+          launch_session->exact_target_hold.reset();
         });
         config::maybe_apply_deferred();
         auto _hot_apply_gate = config::acquire_apply_read_gate();

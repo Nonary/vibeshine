@@ -73,6 +73,7 @@
 #include "state_storage_policy.h"
 #ifdef _WIN32
   #include "platform/windows/display.h"
+  #include "platform/windows/display_target_borrow.h"
   #include "platform/windows/display_helper_request_policy.h"
   #include "platform/windows/display_helper_request_helpers.h"
   #include "platform/windows/misc.h"
@@ -373,6 +374,8 @@ namespace nvhttp {
     }
 
     void register_remote_monitor_runtime() {
+      // Exact helper/native quiescence is retained through pending/capture teardown.
+      platf::windows_borrow::register_exact_target_probe(http::shared_virtual_display_guid_snapshot);
       remote_display_topology::instance().set_runtime_callbacks({
         .create_or_reclaim = [](const std::string &client_uuid, const std::string &client_label, const remote_display_topology::mode_t &mode) {
           if (!VDISPLAY::ensure_driver_is_ready()) return false;
@@ -664,6 +667,7 @@ namespace nvhttp {
     }
 
     void register_remote_monitor_runtime() {
+      remote_session::register_exact_target_probe(platf::linux_private_display::observe_exact_target);
       remote_display_topology::instance().set_runtime_callbacks({
         .create_or_reclaim = [](const std::string &client_uuid, const std::string &, const remote_display_topology::mode_t &mode) {
           return platf::linux_private_display::remote_create_or_reclaim(client_uuid, mode);
@@ -1325,10 +1329,11 @@ namespace nvhttp {
       const bool shared_virtual_display_mode =
         requested_virtual_display_mode == config::video_t::virtual_display_mode_e::shared;
       auto shared_virtual_display_uuid = VDISPLAY::persistentVirtualDisplayUuid();
-      if (shared_virtual_display_mode && !http::shared_virtual_display_guid.empty()) {
+      const auto shared_guid_snapshot=http::shared_virtual_display_guid_snapshot();
+      if (shared_virtual_display_mode && !shared_guid_snapshot.empty()) {
         try {
           shared_virtual_display_uuid =
-            uuid_util::uuid_t::parse(http::shared_virtual_display_guid);
+            uuid_util::uuid_t::parse(shared_guid_snapshot);
         } catch (...) {
           // Creation uses the same persistent fallback and repairs the stored value.
         }
@@ -1662,13 +1667,14 @@ namespace nvhttp {
         };
 
         auto ensure_shared_guid = [&]() -> uuid_util::uuid_t {
-          if (!http::shared_virtual_display_guid.empty()) {
-            if (auto parsed = parse_uuid(http::shared_virtual_display_guid)) {
+          const auto persisted=http::shared_virtual_display_guid_snapshot();
+          if (!persisted.empty()) {
+            if (auto parsed = parse_uuid(persisted)) {
               return *parsed;
             }
           }
           auto generated = VDISPLAY::persistentVirtualDisplayUuid();
-          http::shared_virtual_display_guid = generated.string();
+          http::set_shared_virtual_display_guid(generated.string());
           nvhttp::save_state();
           return generated;
         };
@@ -2201,8 +2207,9 @@ namespace nvhttp {
       }
 
 #ifdef _WIN32
-      if (!http::shared_virtual_display_guid.empty()) {
-        vibe_root.put("shared_virtual_display_guid", http::shared_virtual_display_guid);
+      const auto persisted_shared_guid=http::shared_virtual_display_guid_snapshot();
+      if (!persisted_shared_guid.empty()) {
+        vibe_root.put("shared_virtual_display_guid", persisted_shared_guid);
       }
 #endif
       {
@@ -2388,7 +2395,7 @@ namespace nvhttp {
         update::state.last_notified_version.clear();
         update::state.notified_versions.clear();
 #ifdef _WIN32
-        http::shared_virtual_display_guid.clear();
+        http::set_shared_virtual_display_guid({});
 #endif
         {
           std::lock_guard<std::mutex> lock(client_mutex);
@@ -2433,21 +2440,21 @@ namespace nvhttp {
         }
         if (!update::state.last_notified_version.empty()) update::state.notified_versions.push_back(update::state.last_notified_version);
 #ifdef _WIN32
-        http::shared_virtual_display_guid = vibeshine_tree.get("root.shared_virtual_display_guid", "");
+        http::set_shared_virtual_display_guid(vibeshine_tree.get("root.shared_virtual_display_guid", ""));
 #endif
       } catch (const std::exception &e) {
         BOOST_LOG(warning) << "Couldn't read "sv << vibeshine_path << " for notification state: "sv << e.what();
         update::state.last_notified_version.clear();
         update::state.notified_versions.clear();
 #ifdef _WIN32
-        http::shared_virtual_display_guid.clear();
+        http::set_shared_virtual_display_guid({});
 #endif
       }
     } else {
       update::state.last_notified_version.clear();
       update::state.notified_versions.clear();
 #ifdef _WIN32
-      http::shared_virtual_display_guid.clear();
+      http::set_shared_virtual_display_guid({});
 #endif
     }
 
@@ -3028,7 +3035,8 @@ namespace nvhttp {
 
     // Start with the client requested mode
     if (const auto requested_mode = parse_mode_string(get_arg(args, "mode", "0x0x0"))) {
-      launch_session->width = requested_mode->width;
+      launch_session->exact_requested_refresh_millihz = requested_mode->refresh_millihz;
+        launch_session->width = requested_mode->width;
       launch_session->height = requested_mode->height;
       launch_session->fps = framegen::rounded_fps_from_millihz(requested_mode->refresh_millihz);
     }
@@ -4409,7 +4417,7 @@ namespace nvhttp {
       std::optional<remote_session::monitor_profile_t> monitor_profile;
       if (monitor_request) {
         monitor_profile = remote_session::select_monitor_profile(
-          {requested_profile_uuid, runtime_app ? runtime_app->config_overrides : std::unordered_map<std::string, std::string> {}},
+          {requested_profile_uuid, runtime_app ? runtime_app->config_overrides : std::unordered_map<std::string, std::string> {}, runtime_app ? runtime_app->monitor_target : std::nullopt},
           retained_profile
         );
         if (!monitor_profile) {
@@ -4419,6 +4427,14 @@ namespace nvhttp {
           return;
         }
       }
+#ifndef SUNSHINE_EXPERIMENTAL_TARGET_LEASES
+      if (monitor_profile && monitor_profile->target) {
+        tree.put("root.resume", 0);
+        tree.put("root.<xmlattr>.status_code", 409);
+        tree.put("root.<xmlattr>.status_message", "Exact target borrowing is disabled in this build.");
+        return;
+      }
+#endif
       const auto client_settings = get_named_cert_by_uuid(identity.uuid);
       std::unordered_map<std::string, std::string> requested_runtime_overrides;
       if (monitor_profile) {
@@ -4492,8 +4508,8 @@ namespace nvhttp {
       launch_session->continuous_audio = false;
       if (launch_session->role == remote_session::role_e::monitor) {
 #ifdef __linux__
-        launch_session->display_power_guard = platf::display_power::acquire();
-        if (!launch_session->display_power_guard) {
+        if (!monitor_profile || !monitor_profile->target) launch_session->display_power_guard = platf::display_power::acquire();
+        if ((!monitor_profile || !monitor_profile->target) && !launch_session->display_power_guard) {
           tree.put("root.resume", 0);
           tree.put("root.<xmlattr>.status_code", 503);
           tree.put("root.<xmlattr>.status_message", "The desktop display could not be woken for streaming");
@@ -4501,7 +4517,11 @@ namespace nvhttp {
         }
 #endif
         const auto mode = std::format("{}x{}@{}", launch_session->width, launch_session->height, launch_session->fps);
-        const auto monitor = remote_session::activate_or_resume_monitor(
+        auto monitor = monitor_profile && monitor_profile->target ? remote_session::borrow_monitor_target(
+          identity.uuid, launch_session->role_generation, *monitor_profile->target,
+          {launch_session->width, launch_session->height, launch_session->client_display_refresh_millihz ?
+            launch_session->client_display_refresh_millihz : launch_session->exact_requested_refresh_millihz,
+            rtsp_stream::effective_hdr_requested(*launch_session)}, launch_session->output_name_override) : remote_session::activate_or_resume_monitor(
           identity.uuid,
           identity.name,
           mode,
@@ -4516,7 +4536,7 @@ namespace nvhttp {
         }
         if (!monitor.ready || monitor.output.empty()) {
           tree.put("root.resume", 0);
-          tree.put("root.<xmlattr>.status_code", monitor.retryable ? 503 : 500);
+          tree.put("root.<xmlattr>.status_code", monitor.conflict ? 409 : monitor.retryable ? 503 : 500);
           tree.put("root.<xmlattr>.status_message", monitor.error.empty() ? "Remote Monitor exact capture target is not ready" : monitor.error);
           return;
         }
@@ -4525,6 +4545,8 @@ namespace nvhttp {
           launch_session->force_sdr = true;
         }
         launch_session->remote_capture_output = monitor.output;
+        launch_session->exact_monitor_target = monitor.exact_target;
+        launch_session->exact_target_hold = std::move(monitor.target_hold);
         BOOST_LOG(info) << "Remote Monitor exact capture target for client '" << identity.uuid
                         << "' is '" << monitor.output << "'.";
       }
@@ -4534,6 +4556,7 @@ namespace nvhttp {
           if (remote_session::release_monitor(identity.uuid, launch_session->role_generation, "Paired client authorization revoked")) {
             forget_remote_owner(identity.uuid, launch_session->role, launch_session->role_generation);
           }
+launch_session->exact_target_hold.reset();
 #if defined(_WIN32) || defined(__linux__)
           cleanup_virtual_display_if_idle_locked();
 #endif
@@ -4548,6 +4571,7 @@ namespace nvhttp {
           if (remote_session::release_monitor(identity.uuid, launch_session->role_generation, "RTSP admission rejected")) {
             forget_remote_owner(identity.uuid, launch_session->role, launch_session->role_generation);
           }
+launch_session->exact_target_hold.reset();
 #if defined(_WIN32) || defined(__linux__)
           cleanup_virtual_display_if_idle_locked();
 #endif

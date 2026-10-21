@@ -3755,6 +3755,7 @@ namespace proc {
               const auto &japp = japps[json_index];
               ctx.remote_monitor_profile = japp.contains("remote-monitor-profile") &&
                 japp["remote-monitor-profile"].is_boolean() && japp["remote-monitor-profile"].get<bool>();
+              if (ctx.remote_monitor_profile) ctx.monitor_target = remote_session::monitor_target_from_json(japp);
               if (japp.contains("config-overrides") && japp["config-overrides"].is_object()) {
                 for (const auto &item : japp["config-overrides"].items()) {
                   const std::string &key = item.key();

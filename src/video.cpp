@@ -3030,6 +3030,7 @@ namespace video {
         return;
       }
 
+      if (capture_config.capture_target_valid && !capture_config.capture_target_valid()) return;
       const auto required_output = capture_config.capture_source == capture_source_e::exact_output ? capture_config.capture_output : std::nullopt;
       const bool log_display_retry = policy::should_log_display_retry(display_retry_failures);
       refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, required_output, log_display_retry);
@@ -3413,6 +3414,7 @@ namespace video {
               disp.reset();
 
               // Refresh display names since a display removal might have caused the reinitialization
+              if (capture_ctxs.front().config.capture_target_valid && !capture_ctxs.front().config.capture_target_valid()) return;
               const auto required_output = capture_ctxs.front().config.capture_source == capture_source_e::exact_output ? capture_ctxs.front().config.capture_output : std::nullopt;
               refresh_displays(
                 encoder.platform_formats->dev_type,
@@ -5727,6 +5729,7 @@ namespace video {
         return encode_e::ok;
       }
       // Refresh display names since a display removal might have caused the reinitialization
+      if (synced_session_ctxs.front()->config.capture_target_valid && !synced_session_ctxs.front()->config.capture_target_valid()) return encode_e::error;
       const auto required_output = synced_session_ctxs.front()->config.capture_source == capture_source_e::exact_output ? synced_session_ctxs.front()->config.capture_output : std::nullopt;
       refresh_displays(
         encoder.platform_formats->dev_type,
