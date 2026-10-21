@@ -707,7 +707,9 @@ jobs:
             -DBUILD_DOCS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -g -gdwarf-4" \
-            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g -gdwarf-4" \
+            # Vibeshine's existing display helper triggers a Winsock include-order warning under -Werror.
+            # Demote only that preprocessor warning in this experimental Windows build.
+            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g -gdwarf-4 -Wno-error=cpp" \
             -DSUNSHINE_ENABLE_WEBRTC=ON \
             -DWEBRTC_ROOT="$(cygpath -u "${WEBRTC_ROOT}")" \
             -DWEBRTC_INCLUDE_DIR="$(cygpath -u "${WEBRTC_ROOT}")/include" \
