@@ -226,10 +226,10 @@ jobs:
     uses: ./.github/workflows/ci-windows.yml
     with:
       use_self_hosted: ${{ github.event_name == 'workflow_dispatch' && inputs.use_self_hosted }}
-      build_only: ${{ needs.release-candidate.outputs.should_release == 'true' }}
+      build_only: ${{ needs.release-candidate.outputs.should_release == 'true' || (github.ref_type == 'branch' && github.ref_name == 'test/vibeshine-dolby-ac3') }}
       build_tests: ${{ needs.release-candidate.outputs.should_release == 'true' }}
       release_commit: ${{ needs.release-candidate.outputs.release_commit || github.sha }}
-      release_version: ${{ needs.release-candidate.outputs.release_version || '0.0.0' }}
+      release_version: ${{ needs.release-candidate.outputs.release_version || (github.ref_type == 'branch' && github.ref_name == 'test/vibeshine-dolby-ac3' && '0.0.1-dolby-test') || '0.0.0' }}
       release_tag: ${{ needs.release-candidate.outputs.tag_name }}
       release_artifact_retention_days: ${{ needs.release-candidate.outputs.should_release == 'true' && 14 || 1 }}
       symbol_product_name: Vibeshine
