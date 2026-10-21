@@ -692,6 +692,13 @@ jobs:
             echo "Using pinned TrueHDR runtime: ${SUNSHINE_TRUEHDR_RUNTIME_DIR}"
           fi
 
+          # The experimental Dolby branch only needs sunshine.exe. Skip Vibeshine's
+          # unrelated display-helper executable, which has an existing MinGW TLS link error.
+          dolby_test_cmake_args=()
+          if [[ "${BRANCH}" == "test/vibeshine-dolby-ac3" ]]; then
+            dolby_test_cmake_args+=(-DVIBESHINE_TEST_SKIP_DISPLAY_HELPER=ON)
+          fi
+
           mkdir -p build
           # Test targets are opt-in for CI builds.
           # Keep the inherited Windows Winsock include-order warning from blocking this test build.
@@ -725,9 +732,14 @@ jobs:
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/Nonary/vibeshine/issues" \
             "${vdd_prebuilt_arg[@]}" \
             "${vhf_gamepad_package_arg[@]}" \
-            "${truehdr_runtime_arg[@]}"
+            "${truehdr_runtime_arg[@]}" \
+            "${dolby_test_cmake_args[@]}"
           echo "::add-matcher::.github/matchers/gcc.json"
-          cmake --build build --target all --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
+          if [[ "${BRANCH}" == "test/vibeshine-dolby-ac3" ]]; then
+            cmake --build build --target sunshine --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
+          else
+            cmake --build build --target all --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
+          fi
           echo "::remove-matcher owner=gcc::"
 
       - name: Upload standalone executable for Dolby testing
