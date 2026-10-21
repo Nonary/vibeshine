@@ -110,7 +110,7 @@ add_dependencies(sunshine sunshine_end_stream_hotkey)
 
 # Ensure the Windows display helper is built and placed next to the Sunshine binary
 # so the runtime launcher can find it reliably.
-if (TARGET sunshine_display_helper)
+if (TARGET sunshine_display_helper AND NOT VIBESHINE_TEST_SKIP_DISPLAY_HELPER)
     # Build helper before sunshine to make the copy step reliable
     add_dependencies(sunshine sunshine_display_helper)
 
