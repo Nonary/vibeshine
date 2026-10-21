@@ -66,6 +66,7 @@ std::optional<std::string> runtime_output_name_override() { return std::nullopt;
 namespace rtsp_stream {
 struct launch_session_t {
  bool virtual_display = false, client_requests_virtual_display = false;
+ bool requested_resolution_only = false;
  bool virtual_display_preparation_override = false;
  std::string virtual_display_device_id;
  std::optional<bool> client_virtual_display_override;
@@ -85,6 +86,7 @@ struct App {
 };
 struct Client {
  bool always_use_virtual_display = false;
+ bool requested_resolution_only = false;
  std::string output_name_override, virtual_display_mode_override, virtual_display_layout_override, hdr_profile;
  std::unordered_map<std::string, std::string> config_overrides;
 };
@@ -164,6 +166,11 @@ int main() {
    }
  };
  check("true inherited VerifyOnly", {}, {}, Prep::verify_only);
+ ++count;
+ if (assemble({}, {}, {})->requested_resolution_only) { std::cerr << "FAIL RTSP requested-resolution-only defaults false\n"; ++failed; }
+ Client requested_resolution_client; requested_resolution_client.requested_resolution_only = true;
+ ++count;
+ if (!assemble(requested_resolution_client, {}, {})->requested_resolution_only) { std::cerr << "FAIL RTSP requested-resolution-only propagates true\n"; ++failed; }
  App app; app.virtual_display_mode_override = Mode::per_client;
  check("app mode beats global VerifyOnly", {}, app, Prep::ensure_active);
  app = {}; app.virtual_display_layout_override = Layout::extended_primary;
