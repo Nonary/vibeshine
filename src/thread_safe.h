@@ -8,7 +8,6 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
-#include <cstdint>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -18,41 +17,6 @@
 #include "utility.h"
 
 namespace safe {
-  namespace detail {
-    // Advisory state for per-frame polls. Payloads and all state writes remain
-    // protected by the owning mailbox's mutex, but observing an empty/running
-    // mailbox must not block capture behind a descheduled producer or consumer.
-    // Publish only after changing the payload; readers must still lock before
-    // accessing it and cannot treat peek() as a reservation.
-    class poll_state_t {
-    public:
-      bool running() const {
-        return _state.load(std::memory_order_acquire) != state_e::stopped;
-      }
-
-      bool peek() const {
-        return _state.load(std::memory_order_acquire) == state_e::ready;
-      }
-
-      void set_ready(bool ready) {
-        _state.store(ready ? state_e::ready : state_e::empty, std::memory_order_release);
-      }
-
-      void stop() {
-        _state.store(state_e::stopped, std::memory_order_release);
-      }
-
-    private:
-      enum class state_e : std::uint8_t {
-        stopped,
-        empty,
-        ready
-      };
-      static_assert(std::atomic<state_e>::is_always_lock_free);
-      std::atomic<state_e> _state {state_e::empty};
-    };
-  }  // namespace detail
-
   template<class T>
   class event_t {
   public:
@@ -61,7 +25,7 @@ namespace safe {
     template<class... Args>
     void raise(Args &&...args) {
       std::lock_guard lg {_lock};
-      if (!_poll_state.running()) {
+      if (!_continue) {
         return;
       }
 
@@ -70,8 +34,7 @@ namespace safe {
       } else {
         _status = status_t {std::forward<Args>(args)...};
       }
-      _poll_state.set_ready((bool) _status);
-      _generation.fetch_add(1, std::memory_order_release);
+      ++_generation;
 
       _cv.notify_all();
     }
@@ -80,53 +43,37 @@ namespace safe {
     status_t pop() {
       std::unique_lock ul {_lock};
 
-      if (!_poll_state.running()) {
+      if (!_continue) {
         return util::false_v<status_t>;
       }
 
       while (!_status) {
         _cv.wait(ul);
 
-        if (!_poll_state.running()) {
+        if (!_continue) {
           return util::false_v<status_t>;
         }
       }
 
       auto val = std::move(_status);
       _status = util::false_v<status_t>;
-      _poll_state.set_ready(false);
       return val;
     }
 
     // pop and view should not be used interchangeably
     template<typename Rep, typename Period>
     status_t pop(std::chrono::duration<Rep, Period> delay) {
-      std::unique_lock ul {_lock, std::defer_lock};
-      if (delay <= decltype(delay)::zero()) {
-        if (!peek() || !ul.try_lock()) {
-          return util::false_v<status_t>;
-        }
-      } else {
-        ul.lock();
-      }
+      std::unique_lock ul {_lock};
 
-      // Another consumer may have won after peek(). Never enter a timed wait
-      // for a nonpositive poll, even when it races with that consumer.
-      if (!_poll_state.running()) {
+      if (bool success = _cv.wait_for(ul, delay, [this] {
+            return (bool) _status || !_continue;
+          });
+          !success || !_continue) {
         return util::false_v<status_t>;
-      }
-      if (!_status) {
-        if (delay <= decltype(delay)::zero() || !_cv.wait_for(ul, delay, [this] {
-              return (bool) _status || !_poll_state.running();
-            }) ||
-            !_poll_state.running()) {
-          return util::false_v<status_t>;
-        }
       }
 
       auto val = std::move(_status);
-      _status = util::false_v<status_t>;
-      _poll_state.set_ready(false);
+      _status.reset();
       return val;
     }
 
@@ -134,14 +81,14 @@ namespace safe {
     status_t view() {
       std::unique_lock ul {_lock};
 
-      if (!_poll_state.running()) {
+      if (!_continue) {
         return util::false_v<status_t>;
       }
 
       while (!_status) {
         _cv.wait(ul);
 
-        if (!_poll_state.running()) {
+        if (!_continue) {
           return util::false_v<status_t>;
         }
       }
@@ -152,21 +99,14 @@ namespace safe {
     // pop and view should not be used interchangeably
     template<class Rep, class Period>
     status_t view(std::chrono::duration<Rep, Period> delay) {
-      std::unique_lock ul {_lock, std::defer_lock};
-      if (delay <= decltype(delay)::zero()) {
-        if (!peek() || !ul.try_lock()) {
-          return util::false_v<status_t>;
-        }
-      } else {
-        ul.lock();
-      }
+      std::unique_lock ul {_lock};
 
-      if (!_poll_state.running()) {
+      if (!_continue) {
         return util::false_v<status_t>;
       }
 
       while (!_status) {
-        if (delay <= decltype(delay)::zero() || _cv.wait_for(ul, delay) == std::cv_status::timeout || !_poll_state.running()) {
+        if (!_continue || _cv.wait_for(ul, delay) == std::cv_status::timeout) {
           return util::false_v<status_t>;
         }
       }
@@ -175,31 +115,29 @@ namespace safe {
     }
 
     bool peek() {
-      return _poll_state.peek();
+      std::lock_guard lg {_lock};
+      return _continue && (bool) _status;
     }
 
     [[nodiscard]] std::uint64_t generation() const {
-      return _generation.load(std::memory_order_acquire);
+      std::lock_guard lg {_lock};
+      return _generation;
     }
 
     status_t view_if_newer(std::uint64_t &observed_generation) {
-      if (generation() == observed_generation) {
-        return util::false_v<status_t>;
-      }
       std::lock_guard lg {_lock};
-      const auto current_generation = generation();
-      if (!_poll_state.running() || !_status || observed_generation == current_generation) {
+      if (!_continue || !_status || observed_generation == _generation) {
         return util::false_v<status_t>;
       }
 
-      observed_generation = current_generation;
+      observed_generation = _generation;
       return _status;
     }
 
     void stop() {
       std::lock_guard lg {_lock};
 
-      _poll_state.stop();
+      _continue = false;
 
       _cv.notify_all();
     }
@@ -207,21 +145,23 @@ namespace safe {
     void reset() {
       std::lock_guard lg {_lock};
 
+      _continue = true;
+
       _status = util::false_v<status_t>;
-      _poll_state.set_ready(false);
     }
 
     [[nodiscard]] bool running() const {
-      return _poll_state.running();
+      std::lock_guard lg {_lock};
+      return _continue;
     }
 
   private:
-    detail::poll_state_t _poll_state;
+    bool _continue {true};
     status_t _status {util::false_v<status_t>};
-    std::atomic<std::uint64_t> _generation {};
+    std::uint64_t _generation {};
 
     std::condition_variable _cv;
-    std::mutex _lock;
+    mutable std::mutex _lock;
   };
 
   template<class T>
@@ -338,17 +278,15 @@ namespace safe {
     void raise(Args &&...args) {
       std::lock_guard ul {_lock};
 
-      if (!_poll_state.running()) {
+      if (!_continue) {
         return;
       }
 
       if (_queue.size() == _max_elements) {
         _queue.clear();
-        _poll_state.set_ready(false);
       }
 
       _queue.emplace_back(std::forward<Args>(args)...);
-      _poll_state.set_ready(true);
 
       _cv.notify_all();
     }
@@ -357,61 +295,44 @@ namespace safe {
     bool try_raise(Args &&...args) {
       std::lock_guard ul {_lock};
 
-      if (!_poll_state.running() || _queue.size() >= _max_elements) {
+      if (!_continue || _queue.size() >= _max_elements) {
         return false;
       }
 
       _queue.emplace_back(std::forward<Args>(args)...);
-      _poll_state.set_ready(true);
       _cv.notify_all();
       return true;
     }
 
     bool peek() {
-      return _poll_state.peek();
+      std::lock_guard lg {_lock};
+      return _continue && !_queue.empty();
     }
 
     template<class Rep, class Period>
     bool wait_for_data(std::chrono::duration<Rep, Period> delay) {
-      if (delay <= decltype(delay)::zero()) {
-        return peek();
-      }
       std::unique_lock ul {_lock};
       return _cv.wait_for(ul, delay, [this] {
-        return !_queue.empty() || !_poll_state.running();
-      }) && _poll_state.running() &&
-             !_queue.empty();
+        return !_queue.empty() || !_continue;
+      }) && _continue && !_queue.empty();
     }
 
     template<class Rep, class Period>
     status_t pop(std::chrono::duration<Rep, Period> delay) {
-      std::unique_lock ul {_lock, std::defer_lock};
-      if (delay <= decltype(delay)::zero()) {
-        if (!peek() || !ul.try_lock()) {
-          return util::false_v<status_t>;
-        }
-      } else {
-        ul.lock();
-      }
+      std::unique_lock ul {_lock};
 
-      if (!_poll_state.running()) {
+      if (!_continue) {
         return util::false_v<status_t>;
       }
 
       while (_queue.empty()) {
-        // A zero-duration condition-variable wait can still yield to the
-        // scheduler on Windows. Keep nonblocking capture polls out of it.
-        if (delay <= decltype(delay)::zero()) {
-          return util::false_v<status_t>;
-        }
-        if (_cv.wait_for(ul, delay) == std::cv_status::timeout || !_poll_state.running()) {
+        if (!_continue || _cv.wait_for(ul, delay) == std::cv_status::timeout) {
           return util::false_v<status_t>;
         }
       }
 
       auto val = std::move(_queue.front());
       _queue.erase(std::begin(_queue));
-      _poll_state.set_ready(!_queue.empty());
 
       return val;
     }
@@ -419,21 +340,20 @@ namespace safe {
     status_t pop() {
       std::unique_lock ul {_lock};
 
-      if (!_poll_state.running()) {
+      if (!_continue) {
         return util::false_v<status_t>;
       }
 
       while (_queue.empty()) {
         _cv.wait(ul);
 
-        if (!_poll_state.running()) {
+        if (!_continue) {
           return util::false_v<status_t>;
         }
       }
 
       auto val = std::move(_queue.front());
       _queue.erase(std::begin(_queue));
-      _poll_state.set_ready(!_queue.empty());
 
       return val;
     }
@@ -445,7 +365,7 @@ namespace safe {
     void stop() {
       std::lock_guard lg {_lock};
 
-      _poll_state.stop();
+      _continue = false;
 
       _cv.notify_all();
     }
@@ -453,19 +373,20 @@ namespace safe {
     void reset() {
       std::lock_guard lg {_lock};
 
+      _continue = true;
       _queue.clear();
-      _poll_state.set_ready(false);
     }
 
     [[nodiscard]] bool running() const {
-      return _poll_state.running();
+      std::lock_guard lg {_lock};
+      return _continue;
     }
 
   private:
-    detail::poll_state_t _poll_state;
+    bool _continue {true};
     std::uint32_t _max_elements;
 
-    std::mutex _lock;
+    mutable std::mutex _lock;
     std::condition_variable _cv;
 
     std::vector<T> _queue;
