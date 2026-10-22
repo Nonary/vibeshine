@@ -111,7 +111,7 @@ namespace display_helper::borrow {
     std::map<process_context_t, std::uint64_t> retired_;
     std::size_t active_ = 0;
     bool permanent_ = false;
-    inline static thread_local std::map<const gate_t *, std::size_t> depth_;
+    static thread_local std::map<const gate_t *, std::size_t> depth_;
   };
   inline gate_t &process_gate() { static gate_t value; return value; }
 }
