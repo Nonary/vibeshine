@@ -26,6 +26,7 @@ on:
     branches:
       - main
       - master
+      - canary
 
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"

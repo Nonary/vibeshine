@@ -28,8 +28,11 @@ def identity(commit, day, base):
 def validate_source(repository, branch, confirmation):
     if repository not in {"Nonary/vibeshine", "Nonary/Vibepollo"}:
         raise ValueError("Daily publishing is limited to the designated upstream repositories")
-    if branch not in {"master", "main"}:
-        raise ValueError("Daily source must use the verified master/main primary; legacy vibe/test lanes are retired")
+    allowed = {"master", "main"}
+    if repository == "Nonary/vibeshine":
+        allowed.add("canary")
+    if branch not in allowed:
+        raise ValueError("Daily source must use a confirmed primary or the Vibeshine canary branch; legacy vibe/test lanes are retired")
     if confirmation != f"{repository}:{branch}":
         raise ValueError("Set DAILY_RELEASE_SOURCE_BRANCH and explicitly confirm repository:branch in DAILY_RELEASE_SOURCE_CONFIRMED")
     subprocess.run(["git", "check-ref-format", f"refs/heads/{branch}"], check=True)
@@ -77,8 +80,10 @@ def resolve():
     repository = os.environ["GITHUB_REPOSITORY"]
     branch = os.environ.get("DAILY_RELEASE_SOURCE_BRANCH", "")
     validate_source(repository, branch, os.environ.get("DAILY_RELEASE_SOURCE_CONFIRMED", ""))
-    if branch != os.environ.get("DAILY_PRIMARY_BRANCH"):
-        raise ValueError("Daily source must equal the verified repository default primary")
+    if branch != os.environ.get("DAILY_PRIMARY_BRANCH") and not (
+        repository == "Nonary/vibeshine" and branch == "canary"
+    ):
+        raise ValueError("Daily source must equal the verified repository default primary or Vibeshine canary")
     # Fetch only the explicitly confirmed remote branch; ignore local HEAD/tags.
     run("git", "fetch", "--no-tags", "origin", f"refs/heads/{branch}:refs/remotes/origin/daily-source")
     commit = run("git", "rev-parse", "refs/remotes/origin/daily-source^{commit}")

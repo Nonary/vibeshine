@@ -3,6 +3,7 @@
  */
 #pragma once
 #include "dmabuf_surface.h"
+#include "truehdr.h"
 
 #include <array>
 #include <cstdint>
@@ -16,6 +17,8 @@ namespace pyrowave::linux_gpu {
     bool yuv444 = false, ten_bit = false, hdr = false;
     std::array<float, 12> matrix {};
     std::string render_device;
+    std::string truehdr_runtime;
+    bool truehdr_external_sync = true;  // False selects the compatibility CPU-fence path.
   };
 
   struct source_t {
@@ -28,6 +31,9 @@ namespace pyrowave::linux_gpu {
     // Capture color state is independent of framebuffer component precision.
     // An 8-bit KMS framebuffer can already contain BT.2020/PQ pixels.
     bool hdr10 = false;
+    bool truehdr_enabled = false;
+    int sdr_brightness = 0;
+    platf::linux_truehdr::settings_t truehdr_settings {};
     const std::uint8_t *cursor = nullptr;
     int cursor_width = 0, cursor_height = 0;
     int cursor_x = 0, cursor_y = 0, cursor_dst_width = 0, cursor_dst_height = 0;
@@ -44,6 +50,7 @@ namespace pyrowave::linux_gpu {
     // Called after stream/probe users drain, while the process deadline is live.
     static void shutdown();
     ~core_t();
+    bool using_truehdr_external_sync() const;
     bool encode(const source_t &source, std::size_t budget, std::size_t boundary, std::vector<std::uint8_t> &bitstream, std::vector<packet_t> &packets, std::string &error);
 
   private:

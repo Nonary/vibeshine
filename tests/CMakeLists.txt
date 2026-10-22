@@ -352,6 +352,14 @@ set(SUNSHINE_TEST_FAST_FOUNDATION_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/tests_main.cpp"
 )
 
+# Header-only VHF ownership recovery runs on every platform without a driver.
+find_package(Threads REQUIRED)
+sunshine_add_test_target(
+    NAME test_fast_vhf_gamepad_recovery
+    CATEGORY FAST
+    TEST_SOURCES unit/platform/windows/test_vhf_gamepad_recovery.cpp
+    LINK_LIBRARIES Threads::Threads)
+
 sunshine_add_test_target(
     NAME test_fast_foundation
     CATEGORY fast
@@ -688,7 +696,7 @@ sunshine_register_component(NAME test_component_pairing_recovery TEST_SOURCE uni
                     "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/crypto.cpp"
                     "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/http_pairing_policy.cpp"
     LINK_LIBRARIES Boost::property_tree nlohmann_json::nlohmann_json OpenSSL::Crypto
-                   $<$<PLATFORM_ID:Windows>:advapi32>)
+                   $<$<PLATFORM_ID:Windows>:advapi32> $<$<PLATFORM_ID:Windows>:shell32>)
 sunshine_register_component(NAME test_component_virtual_display_scale TEST_SOURCE unit/test_virtual_display_scale.cpp)
 
 # The additive host policy deliberately compiles against the pinned 3.7 control
@@ -927,6 +935,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_capture_admission.py"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
         set_tests_properties(test_component_display_capture_admission PROPERTIES LABELS "component")
+        add_test(NAME test_component_vhf_gamepad_input_replay
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_vhf_gamepad_input_replay.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_vhf_gamepad_input_replay PROPERTIES LABELS "component" TIMEOUT 30)
         add_test(NAME test_component_capture_restart_diagnostics
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_capture_restart_diagnostics.py"
@@ -1195,6 +1208,11 @@ sunshine_register_component(NAME test_component_input_geometry_transport TEST_SO
 if(SUNSHINE_TEST_ENABLE_COMPONENT AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     find_program(SUNSHINE_TEST_WGC_PYTHON_EXECUTABLE NAMES python3)
     if(SUNSHINE_TEST_WGC_PYTHON_EXECUTABLE)
+        add_test(NAME test_component_encoder_probe_lifetime
+            COMMAND "${SUNSHINE_TEST_WGC_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_encoder_probe_lifetime.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_encoder_probe_lifetime PROPERTIES LABELS "component" TIMEOUT 30)
         add_test(NAME test_component_video_capture_demand
             COMMAND "${SUNSHINE_TEST_WGC_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_video_capture_demand.py"
@@ -1230,6 +1248,8 @@ if(SUNSHINE_TEST_ENABLE_COMPONENT AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 sunshine_register_component(NAME test_component_present_timing_policy TEST_SOURCE unit/test_present_timing_policy.cpp)
 sunshine_register_component(NAME test_component_encoder_probe_policy TEST_SOURCE unit/test_encoder_probe_policy.cpp)
+sunshine_register_component(NAME test_component_gpu_priority_lifetime
+    TEST_SOURCE unit/platform/windows/test_gpu_priority_lifetime.cpp)
 sunshine_register_component(NAME test_component_resource_config_catalog TEST_SOURCE unit/test_config_catalog_contract.cpp
     INCLUDE_DIRECTORIES "${SUNSHINE_TEST_GENERATED_INCLUDE_DIR}")
 sunshine_register_component(NAME test_component_resource_locale_catalog TEST_SOURCE integration/test_locale_consistency.cpp
@@ -1800,6 +1820,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET libinputtino)
 endif()
 
 if(WIN32 AND TARGET pyrowave::capi)
+    add_executable(test_pyrowave_windows_shaders test_pyrowave_windows_shaders.cpp)
+    target_compile_definitions(test_pyrowave_windows_shaders PRIVATE
+        "PYROWAVE_TEST_SHADER_PATH=L\"${SUNSHINE_TEST_REPOSITORY_ROOT}/src_assets/windows/assets/shaders/directx/convert_pyrowave_cs.hlsl\"")
+    target_link_libraries(test_pyrowave_windows_shaders PRIVATE d3dcompiler)
+    add_test(NAME pyrowave_windows_shaders COMMAND test_pyrowave_windows_shaders)
+    set_tests_properties(pyrowave_windows_shaders PROPERTIES LABELS "component;shader")
     add_executable(test_pyrowave_windows_gpu test_pyrowave_windows_gpu.cpp
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/pyrowave_d3d11_core.cpp"
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/pyrowave_policy.cpp")
@@ -1818,6 +1844,20 @@ if(WIN32 AND TARGET pyrowave::capi)
     endif()
     add_test(NAME pyrowave_windows_gpu COMMAND test_pyrowave_windows_gpu)
     set_tests_properties(pyrowave_windows_gpu PROPERTIES SKIP_RETURN_CODE 77 LABELS "integration;gpu")
+endif()
+
+if(TARGET linux-truehdr)
+    add_test(NAME test_component_linux_truehdr_cuda_abi
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_linux_truehdr_cuda_abi.py"
+            "${CMAKE_BINARY_DIR}")
+    set_tests_properties(test_component_linux_truehdr_cuda_abi PROPERTIES LABELS "component" TIMEOUT 60)
+    add_executable(test_linux_truehdr_gpu test_linux_truehdr_gpu.cpp)
+    target_include_directories(test_linux_truehdr_gpu PRIVATE "${SUNSHINE_TEST_REPOSITORY_ROOT}")
+    target_link_libraries(test_linux_truehdr_gpu PRIVATE linux-truehdr glad ${CMAKE_DL_LIBS})
+    add_test(NAME linux_truehdr_gpu COMMAND test_linux_truehdr_gpu "${SUNSHINE_TRUEHDR_LINUX_ROOT}")
+    add_test(NAME linux_truehdr_private_context_gpu COMMAND test_linux_truehdr_gpu "${SUNSHINE_TRUEHDR_LINUX_ROOT}" private-context)
+    set_tests_properties(linux_truehdr_gpu PROPERTIES SKIP_RETURN_CODE 77 LABELS "integration;gpu" TIMEOUT 60)
+    set_tests_properties(linux_truehdr_private_context_gpu PROPERTIES SKIP_RETURN_CODE 77 LABELS "integration;gpu" TIMEOUT 60)
 endif()
 
 if(TARGET pyrowave-linux)
@@ -1842,9 +1882,21 @@ if(TARGET pyrowave-linux)
     add_test(NAME pyrowave_instance_gpu COMMAND test_pyrowave_instance_gpu)
     set_tests_properties(pyrowave_instance_gpu PROPERTIES SKIP_RETURN_CODE 77 LABELS "integration;gpu" TIMEOUT 120)
 
+    # Manual benchmark, deliberately outside CTest to avoid concurrent GPU load.
+    add_executable(benchmark_pyrowave_linux benchmark_pyrowave_linux.cpp)
+    target_include_directories(benchmark_pyrowave_linux PRIVATE "${SUNSHINE_TEST_REPOSITORY_ROOT}")
+    target_link_libraries(benchmark_pyrowave_linux PRIVATE pyrowave-linux gbm vulkan)
+
     add_executable(test_pyrowave_linux_gpu test_pyrowave_linux_gpu.cpp)
     target_include_directories(test_pyrowave_linux_gpu PRIVATE "${SUNSHINE_TEST_REPOSITORY_ROOT}")
     target_link_libraries(test_pyrowave_linux_gpu PRIVATE pyrowave-linux pyrowave::capi gbm vulkan)
+    if(TARGET linux-truehdr)
+        add_test(NAME pyrowave_linux_truehdr_gpu COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_pyrowave_truehdr.py"
+            "${SUNSHINE_TRUEHDR_LINUX_ROOT}" "$<TARGET_FILE:test_pyrowave_linux_gpu>")
+        set_tests_properties(pyrowave_linux_truehdr_gpu PROPERTIES
+            LABELS "integration;gpu" SKIP_RETURN_CODE 77 TIMEOUT 120)
+    endif()
     add_test(NAME pyrowave_linux_gpu COMMAND test_pyrowave_linux_gpu)
     set_tests_properties(pyrowave_linux_gpu PROPERTIES SKIP_RETURN_CODE 77 LABELS "integration;gpu")
 endif()

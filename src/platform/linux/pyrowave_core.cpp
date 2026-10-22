@@ -10,6 +10,9 @@
 #include "pyrowave_import_diagnostics.h"
 #include "pyrowave_instance.h"
 #include "pyrowave_linear_upload.h"
+#ifdef SUNSHINE_ENABLE_NV_TRUEHDR
+  #include "pyrowave_truehdr.h"
+#endif
 
 #include <algorithm>
 #include <cerrno>
@@ -64,7 +67,8 @@ namespace pyrowave::linux_gpu {
       std::array<float, 12> matrix;
       std::array<int, 4> crop, cursor;
       std::array<int, 2> output;
-      int subsampled, invert_y, use_lut, transfer, output_hdr;
+      int subsampled, invert_y, use_lut, transfer, output_hdr, truehdr_stage;
+      float white_nits;
     };
   }  // namespace
 
@@ -80,8 +84,15 @@ namespace pyrowave::linux_gpu {
     import_diagnostics::device_t diagnostic_device;
     Vulkan::Program *program = nullptr;
     Vulkan::ImageHandle planes[3];
+    Vulkan::ImageHandle cursor_image, gamma_image;
+    std::vector<std::uint8_t> cursor_bytes;
+    std::vector<std::array<std::uint16_t, 4>> gamma_values;
+    int cursor_width = 0, cursor_height = 0;
     Vulkan::BufferHandle meta_gpu, bits_gpu, meta_cpu, bits_cpu;
     bool initialized = false;
+#ifdef SUNSHINE_ENABLE_NV_TRUEHDR
+    std::unique_ptr<truehdr_t> truehdr;
+#endif
 
     ~impl_t() {
       if (initialized) {
@@ -153,7 +164,7 @@ namespace pyrowave::linux_gpu {
         if (exact && !((drm.hasRender && drm.renderMajor == major(node.st_rdev) && drm.renderMinor == minor(node.st_rdev)) || (drm.hasPrimary && drm.primaryMajor == major(node.st_rdev) && drm.primaryMinor == minor(node.st_rdev)))) {
           continue;
         }
-        if (properties.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
+        if ((!c.truehdr_runtime.empty() && properties.properties.vendorID != 0x10de) || properties.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
           continue;
         }
         const char *extensions[] = {VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME};
@@ -187,8 +198,9 @@ namespace pyrowave::linux_gpu {
       layout.sets[0].sampled_image_mask = (1u << 0) | (1u << 4) | (1u << 5);
       layout.sets[0].storage_image_mask = (1u << 1) | (1u << 2) | (1u << 3);
       layout.sets[0].uniform_buffer_mask = 1u << 6;
+      layout.sets[0].storage_buffer_mask = (1u << 7) | (1u << 8);
       layout.sets[0].fp_mask = 0x3f;
-      for (int i = 0; i < 7; ++i) {
+      for (int i = 0; i < 9; ++i) {
         layout.sets[0].meta[i].array_size = 1;
       }
       program = device.request_program(shader.data(), shader.size() * sizeof(shader[0]), &layout);
@@ -210,6 +222,24 @@ namespace pyrowave::linux_gpu {
           error = "plane allocation failed";
           return false;
         }
+      }
+      if (!c.truehdr_runtime.empty()) {
+#ifdef SUNSHINE_ENABLE_NV_TRUEHDR
+        if (!c.hdr || !c.ten_bit) {
+          error = "PyroWave RTX HDR requires a 10-bit HDR stream";
+          return false;
+        }
+        try {
+          truehdr = std::make_unique<truehdr_t>();
+          truehdr->init(device, c);
+        } catch (const std::exception &e) {
+          error = e.what();
+          return false;
+        }
+#else
+        error = "PyroWave RTX HDR is unavailable in this build";
+        return false;
+#endif
       }
       return true;
     }
@@ -388,6 +418,14 @@ namespace pyrowave::linux_gpu {
     impl.reset();
   }
 
+  bool core_t::using_truehdr_external_sync() const {
+#ifdef SUNSHINE_ENABLE_NV_TRUEHDR
+    return impl->truehdr && impl->truehdr->asynchronous();
+#else
+    return false;
+#endif
+  }
+
   void core_t::shutdown() {
     std::shared_ptr<instance_factory_t> retired;
     {
@@ -443,7 +481,27 @@ namespace pyrowave::linux_gpu {
       return false;
     }
     const std::uint32_t transparent = 0;
-    auto cursor = s.cursor ? d.upload(s.cursor, s.cursor_width, s.cursor_height, s.cursor_width * 4, VK_FORMAT_B8G8R8A8_UNORM) : d.upload(&transparent, 1, 1, 4, VK_FORMAT_B8G8R8A8_UNORM);
+    const auto *cursor_pixels = s.cursor ? s.cursor : reinterpret_cast<const std::uint8_t *>(&transparent);
+    const int cursor_width = s.cursor ? s.cursor_width : 1;
+    const int cursor_height = s.cursor ? s.cursor_height : 1;
+    if (cursor_width <= 0 || cursor_height <= 0 || cursor_width > 16384 || cursor_height > 16384) {
+      error = "invalid cursor dimensions";
+      return false;
+    }
+    const auto cursor_size = std::size_t(cursor_width) * cursor_height * 4;
+    if (!d.cursor_image || d.cursor_width != cursor_width || d.cursor_height != cursor_height ||
+        d.cursor_bytes.size() != cursor_size || std::memcmp(d.cursor_bytes.data(), cursor_pixels, cursor_size)) {
+      auto image = d.upload(cursor_pixels, cursor_width, cursor_height, cursor_width * 4, VK_FORMAT_B8G8R8A8_UNORM);
+      if (!image) {
+        error = "cursor upload failed";
+        return false;
+      }
+      d.cursor_bytes.assign(cursor_pixels, cursor_pixels + cursor_size);
+      d.cursor_width = cursor_width;
+      d.cursor_height = cursor_height;
+      d.cursor_image = std::move(image);
+    }
+    auto &cursor = d.cursor_image;
     std::vector<std::array<std::uint16_t, 4>> lut;
     if (s.lut && !s.lut->empty()) {
       for (auto &v : *s.lut) {
@@ -452,7 +510,16 @@ namespace pyrowave::linux_gpu {
     } else {
       lut = {{{0, 0, 0, 65535}}, {{65535, 65535, 65535, 65535}}};
     }
-    auto gamma = d.upload(lut.data(), lut.size(), 1, lut.size() * 8, VK_FORMAT_R16G16B16A16_UNORM);
+    if (!d.gamma_image || d.gamma_values != lut) {
+      auto image = d.upload(lut.data(), lut.size(), 1, lut.size() * 8, VK_FORMAT_R16G16B16A16_UNORM);
+      if (!image) {
+        error = "gamma LUT upload failed";
+        return false;
+      }
+      d.gamma_values = std::move(lut);
+      d.gamma_image = std::move(image);
+    }
+    auto &gamma = d.gamma_image;
     if (!cursor || !gamma) {
       error = "cursor or gamma LUT upload failed";
       return false;
@@ -481,6 +548,7 @@ namespace pyrowave::linux_gpu {
     uniform_t u {};
     u.matrix = d.config.matrix;
     u.output_hdr = d.config.hdr;
+    u.white_nits = 100.0f + s.sdr_brightness;
     u.crop = {s.offset_x, s.offset_y, s.width, s.height};
     u.output = {d.config.width, d.config.height};
     u.subsampled = !d.config.yuv444;
@@ -496,6 +564,72 @@ namespace pyrowave::linux_gpu {
     if (s.cursor) {
       u.cursor = {(s.cursor_x - s.offset_x) * d.config.width / s.width, (s.cursor_y - s.offset_y) * d.config.height / s.height, s.cursor_dst_width * d.config.width / s.width, s.cursor_dst_height * d.config.height / s.height};
     }
+    Vulkan::Buffer *hdr_input = d.meta_gpu.get(), *hdr_output = d.meta_gpu.get();
+#ifdef SUNSHINE_ENABLE_NV_TRUEHDR
+    if (d.truehdr) {
+      if (s.hdr10) {
+        d.device.submit_discard(cmd);
+        error = "PyroWave RTX HDR requires an SDR capture source";
+        return false;
+      }
+      // Foreground bypass remains SDR-to-PQ at every framebuffer precision.
+      u.transfer = 3;
+      hdr_input = d.truehdr->input.get();
+      hdr_output = d.truehdr->output.get();
+      if (s.truehdr_enabled) {
+        // Compose/crop/scale/LUT in SDR before the SDK sees RGBA8 pixels.
+        auto prepare = u;
+        prepare.output_hdr = 0;
+        prepare.transfer = 0;
+        prepare.truehdr_stage = 1;
+        cmd->set_storage_buffer(0, 7, *hdr_input);
+        cmd->set_storage_buffer(0, 8, *hdr_output);
+        *cmd->allocate_typed_constant_data<uniform_t>(0, 6, 1) = prepare;
+        cmd->dispatch((d.config.width + 15) / 16, (d.config.height + 15) / 16, 1);
+        cmd->release_buffer_barrier(*hdr_input, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
+        cmd->release_buffer_barrier(*hdr_output, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        std::uint64_t hdr_value = 0;
+        if (d.truehdr->asynchronous()) {
+          hdr_value = d.truehdr->next_value();
+          auto signal = d.device.request_timeline_semaphore_as_binary(*d.truehdr->timeline, hdr_value - 1);
+          d.device.submit(cmd);
+          d.device.submit_empty(Vulkan::CommandBuffer::Type::AsyncCompute, nullptr, signal.get());
+        } else {
+          Vulkan::Fence ready;
+          d.device.submit(cmd, &ready);
+          if (!ready->wait_timeout(UINT64_MAX)) {
+            error = "PyroWave RTX HDR: preprocessing wait failed";
+            return false;
+          }
+        }
+        try {
+          d.truehdr->run(s.truehdr_settings, d.config.width, d.config.height);
+        } catch (const std::exception &e) {
+          error = e.what();
+          return false;
+        }
+        if (hdr_value) {
+          auto wait = d.device.request_timeline_semaphore_as_binary(*d.truehdr->timeline, hdr_value);
+          wait->signal_external();
+          wait->set_signal_is_foreign_queue();
+          d.device.add_wait_semaphore(Vulkan::CommandBuffer::Type::AsyncCompute, std::move(wait), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, false);
+        }
+        cmd = d.device.request_command_buffer(Vulkan::CommandBuffer::Type::AsyncCompute);
+        cmd->acquire_buffer_barrier(*hdr_input, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
+        cmd->acquire_buffer_barrier(*hdr_output, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        cmd->set_program(d.program);
+        cmd->set_texture(0, 0, source->get_view(), Vulkan::StockSampler::LinearClamp);
+        for (int i = 0; i < 3; ++i) {
+          cmd->set_storage_texture(0, 1 + i, d.planes[i]->get_view());
+        }
+        cmd->set_texture(0, 4, cursor->get_view(), Vulkan::StockSampler::LinearClamp);
+        cmd->set_texture(0, 5, gamma->get_view(), Vulkan::StockSampler::LinearClamp);
+        u.truehdr_stage = 2;
+      }
+    }
+#endif
+    cmd->set_storage_buffer(0, 7, *hdr_input);
+    cmd->set_storage_buffer(0, 8, *hdr_output);
     auto *data = cmd->allocate_typed_constant_data<uniform_t>(0, 6, 1);
     *data = u;
     cmd->dispatch((d.config.width + 15) / 16, (d.config.height + 15) / 16, 1);
