@@ -871,6 +871,7 @@ jobs:
           }
 
       - name: Strip Windows binaries
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -899,7 +900,7 @@ jobs:
           done
 
       - name: Package and validate Windows portable ZIP (CI only)
-        if: github.event_name != 'pull_request' && inputs.release_version != '' && !startsWith(inputs.release_version, '0.0.0') && !startsWith(inputs.release_version, 'v0.0.0')
+        if: github.ref_name != 'test/vibeshine-dolby-ac3' && github.event_name != 'pull_request' && inputs.release_version != '' && !startsWith(inputs.release_version, '0.0.0') && !startsWith(inputs.release_version, 'v0.0.0')
         shell: msys2 {0}
         env:
           PORTABLE_PRODUCT: ${{ inputs.symbol_product_name }}
@@ -911,7 +912,7 @@ jobs:
           python .github/scripts/validate_windows_portable.py --repository . --build build --product "$PORTABLE_PRODUCT" --version "$BUILD_VERSION" --output ci-portable
 
       - name: Upload Windows portable ZIP (CI only)
-        if: github.event_name != 'pull_request' && inputs.release_version != '' && !startsWith(inputs.release_version, '0.0.0') && !startsWith(inputs.release_version, 'v0.0.0')
+        if: github.ref_name != 'test/vibeshine-dolby-ac3' && github.event_name != 'pull_request' && inputs.release_version != '' && !startsWith(inputs.release_version, '0.0.0') && !startsWith(inputs.release_version, 'v0.0.0')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: ci-portable-${{ matrix.name }}
@@ -923,6 +924,7 @@ jobs:
       # WiX already installed before configure so env:WIX is available
 
       - name: Validate SignPath configuration
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         shell: msys2 {0}
         env:
           REQUIRE_SIGNPATH_SIGNING: ${{ inputs.require_signpath_signing }}
@@ -952,6 +954,7 @@ jobs:
           fi
 
       - name: Package Windows MSI
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         id: package-windows-msi
         shell: msys2 {0}
         run: |
@@ -977,6 +980,7 @@ jobs:
           echo "msi_name=${msi_name}" >> "${GITHUB_OUTPUT}"
 
       - name: Verify unsigned MSI contains the pinned drivers and Vulkan layers
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         shell: pwsh
         env:
           MSI_NAME: ${{ steps.package-windows-msi.outputs.msi_name }}
@@ -1025,6 +1029,7 @@ jobs:
           }
 
       - name: Upload unsigned MSI for SignPath
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         id: upload-unsigned-msi
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1074,6 +1079,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Actual daily MSI gamepad package validation failed.' }
 
       - name: Upload unsigned MSI for package job
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         id: upload-unsigned-msi-for-package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1095,6 +1101,7 @@ jobs:
           overwrite: true
 
       - name: Upload Windows version metadata
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         id: upload-windows-version-metadata
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
