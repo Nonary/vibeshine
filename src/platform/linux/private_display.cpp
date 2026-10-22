@@ -995,10 +995,9 @@ namespace platf::linux_private_display {
         auto snapshot = snapshot_policy::decode<json>(*saved, snapshot_owner(), &restore_pending, &manager.snapshot_legacy_record);
         if (!snapshot) {
           const auto current = query_configuration();
-          const auto managed = discover_managed_outputs();
           if (current) {
             snapshot = handoff_policy::adopt(*saved, snapshot_owner(), snapshot_handoff_context(), *current,
-                                             {managed.begin(), managed.end()}, physical_connector_identities(*current));
+                                             physical_connector_identities(*current));
           }
           if (snapshot) {
             const auto identities = json::parse(*saved).at("machine_handoff").at("physical_identities").get<std::map<std::string, std::string>>();
