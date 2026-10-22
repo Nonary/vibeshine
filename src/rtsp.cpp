@@ -966,8 +966,14 @@ namespace rtsp_stream {
       return static_cast<int>(_session_state->sessions.size());
     }
 
-    bool has_pending_launch_or_startup() {
-      return has_pending_launches() || startup_count() > 0;
+    bool has_pending_launch_or_startup(bool expire_pending = true) {
+      if (expire_pending) {
+        return has_pending_launches() || startup_count() > 0;
+      }
+      // Cleanup callers need a conservative snapshot without reentering
+      // ownership callbacks through pending-launch expiry.
+      std::lock_guard lock {pending_launches_mutex};
+      return !pending_launches.empty() || startup_count() > 0;
     }
 
     struct pending_launch_t {
@@ -1526,8 +1532,8 @@ namespace rtsp_stream {
     server.session_clear(launch_session_id);
   }
 
-  bool has_pending_launch_or_startup() {
-    return server.has_pending_launch_or_startup();
+  bool has_pending_launch_or_startup(bool expire_pending) {
+    return server.has_pending_launch_or_startup(expire_pending);
   }
 
   void set_vulkan_hdr_layer_pending_stream(bool active) {
