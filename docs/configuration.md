@@ -2676,6 +2676,31 @@ These settings are host-wide and are not application runtime overrides.
     </tr>
 </table>
 
+### pacing_batch_demand_limit
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Experimental opt-in for ordinary video streams. Vibeshine derives a sender pacing quantum from the negotiated bitrate,
+            frame demand, and FEC-expanded packet count, then uses it for the pacing group and per-call batch limit.
+            This may split a frame across more send calls and increase host-side send work.
+            It does not guarantee a wire-level burst limit or establish the cause of a reported streaming failure.
+            PyroWave keeps its existing adaptive pacing behavior.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}false@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            pacing_batch_demand_limit = true
+            @endcode</td>
+    </tr>
+</table>
+
 ## Config Files
 
 ### file_apps

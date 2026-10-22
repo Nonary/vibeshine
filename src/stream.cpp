@@ -2261,7 +2261,7 @@ namespace stream {
       // Pace standard video against the actual FEC-expanded packet count. The
       // PyroWave path keeps its protocol-specific frame accounting below.
       std::size_t pacing_frame_packets = total_shards;
-      if (!pyrowave_session) {
+      if (!pyrowave_session && config::stream.pacing_batch_demand_limit) {
         pacing_frame_packets = 0;
         for (std::size_t x = 0; x < fec_blocks_needed; ++x) {
           const auto data_shards = (fec_blocks[x].size() + blocksize - 1) / blocksize;
@@ -2285,7 +2285,7 @@ namespace stream {
       });
 
       try {
-        std::size_t ratecontrol_packets_in_1ms = 1;
+        std::size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
         if (pyrowave_session) {
           // Refresh the actual route periodically. Socket/interface discovery and
           // sysfs reads must not block the send path on every frame.
@@ -2351,7 +2351,7 @@ namespace stream {
                                   "client-calibrated " + std::to_string(monitor.pyrowave_peer_pace_bps / 1'000'000) + " Mbps" :
                                   std::string("default 80% of link"));
           }
-        } else {
+        } else if (config::stream.pacing_batch_demand_limit) {
           const auto &monitor = session->config.monitor;
           const auto stream_kbps = session->video.pacing_bitrate_kbps.load(std::memory_order_relaxed);
           const auto ip_header_bytes = session->video.peer.address().is_v6() ? 40u : 20u;
@@ -2378,7 +2378,11 @@ namespace stream {
         if (!pyrowave_session) {
           max_batch_size_bytes = std::min<size_t>(max_batch_size_bytes, (size_t) config::stream.video_max_batch_size_kb * 1024);
         }
-        max_batch_size_bytes = pacing::max_batch_bytes(max_batch_size_bytes, ratecontrol_packets_in_1ms, datagram_size);
+        // The optional ordinary-stream demand bound applies to one send call;
+        // it does not cap aggregate sends before the next pacing wait.
+        if (pyrowave_session || config::stream.pacing_batch_demand_limit) {
+          max_batch_size_bytes = pacing::max_batch_bytes(max_batch_size_bytes, ratecontrol_packets_in_1ms, datagram_size);
+        }
 
         // Encryption adds a prefix to every datagram. Omitting it here lets a
         // nominally 64 KiB batch cross the Windows buffering threshold.
