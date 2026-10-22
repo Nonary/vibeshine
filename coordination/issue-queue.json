@@ -2,7 +2,7 @@
   "schema": 1,
   "run_id": "20261022-dot-pr-queue",
   "coordinator": "dot",
-  "updated_at": "2026-10-22T16:53:40Z",
+  "updated_at": "2026-10-22T17:01:40Z",
   "target_active_issues": 10,
   "host_total_native_capacity": 7,
   "implementation_location": "dot cloud computer",
@@ -163,12 +163,31 @@
     },
     {
       "key": "Nonary/Vibepollo#609",
-      "status": "investigating",
+      "status": "blocked",
       "branch": "dot/issue-609-auto-profile",
       "pr_url": null,
       "reviews": [],
       "scope": "Read/test-only Automatic vs explicit profile comparison; avoid PR629/333 owned implementation",
-      "next_step": "Compare identical controller metadata through Auto and forced DualSense policy."
+      "next_step": "Compare identical controller metadata through Auto and forced DualSense policy.",
+      "blocker": "No Auto-specific defect reproduced; logs compare Xbox vs Auto rather than forced DualSense vs Auto",
+      "resume_condition": "Controlled same-client/build Auto vs forced DualSense comparison",
+      "finding": "Production policy/request comparison byte-identical across4194304 combinations per affected/current build"
+    },
+    {
+      "key": "Nonary/Vibepollo#616",
+      "kind": "contribution_adaptation",
+      "related": [
+        "Nonary/Vibepollo#502",
+        "Nonary/Vibepollo#579"
+      ],
+      "status": "implementing",
+      "branch": "dot/pr-616-idle-display-origins",
+      "source_pr": "https://github.com/Nonary/Vibepollo/pull/616",
+      "source_head": "2d9cb289cdafa8366cb9debd2f0737ba87fa85b5",
+      "implementation_repo": "Nonary/vibeshine",
+      "next_step": "Adapt credited idle baseline preservation and no-op shutdown fix into source draft; run behavioral regression",
+      "pr_url": null,
+      "reviews": []
     }
   ]
 }
