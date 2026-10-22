@@ -234,6 +234,7 @@ interface FrameGenMetadata {
     vendor_id?: number | string;
   }>;
   has_nvidia_gpu?: boolean;
+  rtx_hdr_supported?: boolean;
   platform?: unknown;
   windows_build_number?: unknown;
 }
@@ -624,7 +625,8 @@ const hasNvidiaGpu = computed(() => {
   return true;
 });
 const showRtxHdrSection = computed(
-  () => (isWindowsHost.value || isLinuxHost.value) && hasNvidiaGpu.value,
+  () => (isWindowsHost.value || isLinuxHost.value) && hasNvidiaGpu.value &&
+    (!isLinuxHost.value || overrideMetadata.value.rtx_hdr_supported === true),
 );
 const rtxHdrModeLabel = computed(() => {
   const option = rtxHdrModeOptions.value.find((candidate) => candidate.value === form.rtxHdrMode);
