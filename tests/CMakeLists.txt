@@ -352,6 +352,14 @@ set(SUNSHINE_TEST_FAST_FOUNDATION_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/tests_main.cpp"
 )
 
+# Header-only VHF ownership recovery runs on every platform without a driver.
+find_package(Threads REQUIRED)
+sunshine_add_test_target(
+    NAME test_fast_vhf_gamepad_recovery
+    CATEGORY FAST
+    TEST_SOURCES unit/platform/windows/test_vhf_gamepad_recovery.cpp
+    LINK_LIBRARIES Threads::Threads)
+
 sunshine_add_test_target(
     NAME test_fast_foundation
     CATEGORY fast
@@ -923,6 +931,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_capture_admission.py"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
         set_tests_properties(test_component_display_capture_admission PROPERTIES LABELS "component")
+        add_test(NAME test_component_vhf_gamepad_input_replay
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_vhf_gamepad_input_replay.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_vhf_gamepad_input_replay PROPERTIES LABELS "component" TIMEOUT 30)
         add_test(NAME test_component_capture_restart_diagnostics
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_capture_restart_diagnostics.py"
