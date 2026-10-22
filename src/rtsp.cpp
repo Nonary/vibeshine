@@ -1708,6 +1708,18 @@ namespace rtsp_stream {
 
     std::stringstream ss;
 
+    // Offer only the configured Dolby codec when its FFmpeg encoder is available.
+    // If the client does not accept this exact offer, ANNOUNCE will keep the Opus path.
+    session->audio_codec_offered.clear();
+    if (config::audio.format == "ac3"sv && audio::ac3_available()) {
+      session->audio_codec_offered = "AC3";
+    } else if (config::audio.format == "eac3"sv && audio::eac3_available()) {
+      session->audio_codec_offered = "EAC3";
+    }
+    if (!session->audio_codec_offered.empty()) {
+      ss << "a=x-ss-audio-codec-offer:"sv << session->audio_codec_offered << std::endl;
+    }
+
     // Tell the client about our supported features
     ss << "a=x-ss-general.featureFlags:" << (uint32_t) platf::get_capabilities() << std::endl;
 
@@ -1990,6 +2002,39 @@ namespace rtsp_stream {
       return false;
     }
 
+    // Dolby is used only when the client accepts the exact codec offered in DESCRIBE.
+    // Every mismatch or unavailable encoder falls back to the original Opus behavior.
+    const auto audio_accept = args.find("x-ss-audio-codec-accept"sv);
+    const std::string_view accepted_audio_codec =
+      audio_accept == args.end() ? std::string_view {} : std::string_view {audio_accept->second};
+    const bool client_accepted_audio_codec =
+      !session->audio_codec_offered.empty() && audio_accept != args.end() &&
+      audio_accept->second == session->audio_codec_offered;
+    const bool ac3_encoder_available = session->audio_codec_offered == "AC3"sv && audio::ac3_available();
+    const bool eac3_encoder_available = session->audio_codec_offered == "EAC3"sv && audio::eac3_available();
+    const bool selected_encoder_available = ac3_encoder_available || eac3_encoder_available;
+    const bool supported_dolby_channel_count = config.audio.channels == 2 || config.audio.channels == 6;
+    const auto selected_audio_codec = audio::configure_dolby_audio(
+      config.audio,
+      session->audio_codec_offered,
+      accepted_audio_codec,
+      ac3_encoder_available,
+      eac3_encoder_available,
+      config::audio.high_quality_audio
+    );
+
+    if (config::audio.format != "opus"sv && session->audio_codec_offered.empty()) {
+      BOOST_LOG(warning) << "Dolby audio format ["sv << config::audio.format
+                         << "] was selected, but its FFmpeg encoder is unavailable; using Opus"sv;
+    } else if (!session->audio_codec_offered.empty() && !client_accepted_audio_codec) {
+      BOOST_LOG(info) << "Client did not accept "sv << session->audio_codec_offered << "; falling back to Opus"sv;
+    } else if (client_accepted_audio_codec && !selected_encoder_available) {
+      BOOST_LOG(warning) << "The selected Dolby encoder is no longer available; falling back to Opus"sv;
+    } else if (client_accepted_audio_codec && !supported_dolby_channel_count) {
+      BOOST_LOG(info) << "The selected Dolby encoder does not support the requested channel count ["
+                      << config.audio.channels << "]; falling back to Opus"sv;
+    }
+
     // When using stereo audio, the audio quality is (strangely) indicated by whether the Host field
     // in the RTSP message matches a local interface's IP address. Fortunately, Moonlight always sends
     // 0.0.0.0 when it wants low quality, so it is easy to check without enumerating interfaces.
@@ -2023,6 +2068,10 @@ namespace rtsp_stream {
         }
       }
       config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
+    }
+    // Dolby uses its standard channel order, not an Opus-specific custom mapping.
+    if (config.audio.use_ac3 || config.audio.use_eac3) {
+      config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = false;
     }
     if (session->continuous_audio) {
       BOOST_LOG(info) << "Client requested continuous audio"sv;
@@ -2145,8 +2194,18 @@ namespace rtsp_stream {
       }
 
       // Adjust the bitrate to account for audio traffic bandwidth usage (capped at 20% reduction).
-      // The bitrate per channel is 256 Kbps for high quality mode and 96 Kbps for normal quality.
-      auto audioBitrateAdjustment = (config.audio.flags[audio::config_t::HIGH_QUALITY] ? 256 : 96) * config.audio.channels;
+      // Dolby reserves its configured bitrate; leave the established Opus calculation unchanged.
+      int audioBitrateAdjustment {};
+      if (config.audio.use_ac3 || config.audio.use_eac3) {
+        audioBitrateAdjustment = audio::dolby_bitrate_kbps(
+          config.audio.use_eac3,
+          config.audio.high_quality_dolby,
+          config.audio.channels
+        );
+      } else {
+        // The bitrate per channel is 256 Kbps for high quality mode and 96 Kbps for normal quality.
+        audioBitrateAdjustment = (config.audio.flags[audio::config_t::HIGH_QUALITY] ? 256 : 96) * config.audio.channels;
+      }
       // Audio adds two parity packets for every four data packets. Include
       // that fixed 50% FEC cost inside PyroWave's total wire budget too.
       if (pyrowave_session) audioBitrateAdjustment = (audioBitrateAdjustment * 3 + 1) / 2;
@@ -2211,7 +2270,7 @@ namespace rtsp_stream {
     const std::string client_uuid = session->client_uuid;
     auto launch_session = make_startup_launch_session_snapshot(*session);
     try {
-      server->run_startup([server, socket = std::move(socket), session = std::move(session), launch_session, config = std::move(config), remote_address = std::move(remote_address), client_uuid, sequence_number](bool admitted) mutable {
+      server->run_startup([server, socket = std::move(socket), session = std::move(session), launch_session, config = std::move(config), remote_address = std::move(remote_address), client_uuid, sequence_number, selected_audio_codec](bool admitted) mutable {
         // Apply deferred updates and take the hot-apply gate on the startup worker so
         // display/config churn cannot stall the RTSP io_context.
         std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
@@ -2271,7 +2330,8 @@ namespace rtsp_stream {
           server->insert(stream_session, client_uuid, stream_session && stream_hdr_enabled);
         }
         if (startup_failed) server->set_pending_vulkan_hdr_layer_stream(false);
-        server->post([server, socket = std::move(socket), session = std::move(session), sequence_number, startup_failed, startup_error = std::move(startup_error)]() mutable {
+        server->post([server, socket = std::move(socket), session = std::move(session), sequence_number, startup_failed, startup_error = std::move(startup_error),
+                      audio_codec_name = std::string(audio::dolby_codec_name(selected_audio_codec))]() mutable {
           OPTION_ITEM completion_option {};
           completion_option.option = const_cast<char *>("CSeq");
           auto completion_seqn = std::to_string(sequence_number);
@@ -2285,6 +2345,11 @@ namespace rtsp_stream {
             }
             respond(socket->sock, *session, &completion_option, 500, "Internal Server Error", sequence_number, {});
           } else {
+            OPTION_ITEM audio_codec_option {};
+            std::string audio_codec_header {"X-SS-Audio-Codec"};
+            audio_codec_option.option = audio_codec_header.data();
+            audio_codec_option.content = audio_codec_name.data();
+            completion_option.next = &audio_codec_option;
             respond(socket->sock, *session, &completion_option, 200, "OK", sequence_number, {});
           }
 

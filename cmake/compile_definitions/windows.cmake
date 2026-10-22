@@ -199,6 +199,7 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_request_policy.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_integration.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_integration.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_borrow_gate.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_session_deferral.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_session_deferral.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_session_deferral_rtsp.cpp"

@@ -120,12 +120,14 @@ target_link_libraries(sunshine_end_stream_hotkey PRIVATE user32 wtsapi32)
 target_compile_definitions(sunshine_end_stream_hotkey PRIVATE _WIN32_WINNT=0x0602)
 target_compile_options(sunshine_end_stream_hotkey PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
+if(NOT VIBESHINE_TEST_SKIP_DISPLAY_HELPER)
 # Display settings helper: detached helper that applies/reverts display settings via IPC.
 # One exe hosts both engines (legacy + v2), selected by --engine= or persisted state.
 add_executable(sunshine_display_helper
         display_settings_helper_main.cpp
         display_settings_helper.cpp
         display_settings_helper_v2.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_borrow_gate.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_v2/diagnostics.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_v2/diagnostics_boost.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_v2/file_text_storage.cpp
@@ -161,3 +163,4 @@ target_link_libraries(sunshine_display_helper
         taskschd
         ${PLATFORM_LIBRARIES})
 target_compile_options(sunshine_display_helper PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+endif()

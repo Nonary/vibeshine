@@ -92,6 +92,7 @@ namespace rtsp_stream {
     std::optional<app_metadata_t> app_metadata;
     int surround_info;
     std::string surround_params;
+    std::string audio_codec_offered;  ///< Dolby codec offered during DESCRIBE, or empty when using Opus.
     bool continuous_audio;
     // The client's `hdrMode=1` launch flag. Every Moonlight client derives this bit from
     // `supportedVideoFormats & VIDEO_FORMAT_MASK_10BIT`, so it is also the only wire signal

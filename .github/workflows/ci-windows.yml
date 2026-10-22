@@ -460,6 +460,7 @@ jobs:
             mingw-w64-${{ matrix.toolchain }}-boost
             mingw-w64-${{ matrix.toolchain }}-cmake
             mingw-w64-${{ matrix.toolchain }}-cppwinrt
+            mingw-w64-${{ matrix.toolchain }}-ccache
             mingw-w64-${{ matrix.toolchain }}-curl-winssl
             mingw-w64-${{ matrix.toolchain }}-gcc
             mingw-w64-${{ matrix.toolchain }}-libjpeg-turbo
@@ -474,6 +475,15 @@ jobs:
             mingw-w64-${{ matrix.toolchain }}-opus
             mingw-w64-${{ matrix.toolchain }}-sqlite3
             mingw-w64-${{ matrix.toolchain }}-tools
+
+      - name: Restore C/C++ compiler cache
+        id: ccache-restore
+        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57  # v4.2.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: windows-ccache-${{ matrix.toolchain }}-${{ github.sha }}
+          restore-keys: |
+            windows-ccache-${{ matrix.toolchain }}-
 
       - name: Setup dotnet  # needed for wix
         uses: actions/setup-dotnet@baa11fbfe1d6520db94683bd5c7a3818018e4309  # v5.1.0
@@ -649,7 +659,10 @@ jobs:
           COMMIT: ${{ inputs.release_commit }}
           REQUIRE_TRUEHDR_RUNTIME: ${{ inputs.require_truehdr_runtime }}
           DAILY_UNSIGNED: ${{ inputs.daily_unsigned }}
+          CCACHE_DIR: ${{ runner.temp }}/ccache
         run: |
+          export CCACHE_DIR="$(cygpath -u "${CCACHE_DIR}")"
+          ccache --zero-stats
           echo "Using BUILD_VERSION=${BUILD_VERSION}"
 
           NODEJS_PATH=$(cygpath -u "$NODEJS_PATH")
@@ -692,8 +705,17 @@ jobs:
             echo "Using pinned TrueHDR runtime: ${SUNSHINE_TRUEHDR_RUNTIME_DIR}"
           fi
 
+          # The experimental Dolby branch only needs sunshine.exe. Skip Vibeshine's
+          # unrelated display-helper executable, which has an existing MinGW TLS link error.
+          dolby_test_cmake_args=()
+          if [[ "${BRANCH}" == "test/vibeshine-dolby-ac3" ]]; then
+            dolby_test_cmake_args+=(-DVIBESHINE_TEST_SKIP_DISPLAY_HELPER=ON)
+          fi
+
           mkdir -p build
           # Test targets are opt-in for CI builds.
+          # Keep the inherited Windows Winsock include-order warning from blocking this test build.
+          # The specific warning is demoted through CMAKE_CXX_FLAGS_RELEASE below; source stays untouched.
           cmake \
             -B build \
             -G Ninja \
@@ -706,8 +728,10 @@ jobs:
             -DBUILD_VIRTUALDISPLAY_VULKAN_LAYER=OFF \
             -DBUILD_DOCS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -g -gdwarf-4" \
-            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g -gdwarf-4" \
+            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g -gdwarf-4 -Wno-error=cpp -Wno-error=unused-function" \
             -DSUNSHINE_ENABLE_WEBRTC=ON \
             -DWEBRTC_ROOT="$(cygpath -u "${WEBRTC_ROOT}")" \
             -DWEBRTC_INCLUDE_DIR="$(cygpath -u "${WEBRTC_ROOT}")/include" \
@@ -723,10 +747,55 @@ jobs:
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/Nonary/vibeshine/issues" \
             "${vdd_prebuilt_arg[@]}" \
             "${vhf_gamepad_package_arg[@]}" \
-            "${truehdr_runtime_arg[@]}"
+            "${truehdr_runtime_arg[@]}" \
+            "${dolby_test_cmake_args[@]}"
           echo "::add-matcher::.github/matchers/gcc.json"
-          cmake --build build --target all --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
+          if [[ "${BRANCH}" == "test/vibeshine-dolby-ac3" ]]; then
+            cmake --build build --target sunshine --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
+          else
+            cmake --build build --target all --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
+          fi
           echo "::remove-matcher owner=gcc::"
+
+      - name: Save C/C++ compiler cache
+        if: always() && steps.ccache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57  # v4.2.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: windows-ccache-${{ matrix.toolchain }}-${{ github.sha }}
+
+      - name: Prepare stripped executable for Dolby testing
+        if: github.event_name == 'workflow_dispatch' || github.ref_name == 'test/vibeshine-dolby-ac3'
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+
+          mkdir -p build/dolby-test-artifact/assets
+          cp build/sunshine.exe build/dolby-test-artifact/sunshine.exe
+          cp -a build/assets/web build/dolby-test-artifact/assets/web
+          strip --strip-debug --strip-unneeded build/dolby-test-artifact/sunshine.exe
+
+          if objdump -h build/dolby-test-artifact/sunshine.exe | grep -Eq ' \.(debug|zdebug)'; then
+            echo "Debug sections remain in the Dolby test executable." >&2
+            exit 1
+          fi
+
+          if ! grep -R -l 'audio_format' build/dolby-test-artifact/assets/web/v2/assets/settingsSchema-*.js >/dev/null; then
+            echo "The V2 settings bundle does not contain the audio format selector." >&2
+            exit 1
+          fi
+
+          ls -lh build/dolby-test-artifact/sunshine.exe
+          du -sh build/dolby-test-artifact/assets/web
+
+      - name: Upload Sunshine and web assets for Dolby testing
+        if: github.event_name == 'workflow_dispatch' || github.ref_name == 'test/vibeshine-dolby-ac3'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: sunshine-vibeshine-dolby-test
+          path: build/dolby-test-artifact/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Execute Windows tests
         if: inputs.build_tests
@@ -830,6 +899,7 @@ jobs:
           }
 
       - name: Strip Windows binaries
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -858,7 +928,7 @@ jobs:
           done
 
       - name: Package and validate Windows portable ZIP (CI only)
-        if: github.event_name != 'pull_request' && inputs.release_version != '' && !startsWith(inputs.release_version, '0.0.0') && !startsWith(inputs.release_version, 'v0.0.0')
+        if: github.ref_name != 'test/vibeshine-dolby-ac3' && github.event_name != 'pull_request' && inputs.release_version != '' && !startsWith(inputs.release_version, '0.0.0') && !startsWith(inputs.release_version, 'v0.0.0')
         shell: msys2 {0}
         env:
           PORTABLE_PRODUCT: ${{ inputs.symbol_product_name }}
@@ -870,7 +940,7 @@ jobs:
           python .github/scripts/validate_windows_portable.py --repository . --build build --product "$PORTABLE_PRODUCT" --version "$BUILD_VERSION" --output ci-portable
 
       - name: Upload Windows portable ZIP (CI only)
-        if: github.event_name != 'pull_request' && inputs.release_version != '' && !startsWith(inputs.release_version, '0.0.0') && !startsWith(inputs.release_version, 'v0.0.0')
+        if: github.ref_name != 'test/vibeshine-dolby-ac3' && github.event_name != 'pull_request' && inputs.release_version != '' && !startsWith(inputs.release_version, '0.0.0') && !startsWith(inputs.release_version, 'v0.0.0')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: ci-portable-${{ matrix.name }}
@@ -882,6 +952,7 @@ jobs:
       # WiX already installed before configure so env:WIX is available
 
       - name: Validate SignPath configuration
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         shell: msys2 {0}
         env:
           REQUIRE_SIGNPATH_SIGNING: ${{ inputs.require_signpath_signing }}
@@ -911,6 +982,7 @@ jobs:
           fi
 
       - name: Package Windows MSI
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         id: package-windows-msi
         shell: msys2 {0}
         run: |
@@ -936,6 +1008,7 @@ jobs:
           echo "msi_name=${msi_name}" >> "${GITHUB_OUTPUT}"
 
       - name: Verify unsigned MSI contains the pinned drivers and Vulkan layers
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         shell: pwsh
         env:
           MSI_NAME: ${{ steps.package-windows-msi.outputs.msi_name }}
@@ -984,6 +1057,7 @@ jobs:
           }
 
       - name: Upload unsigned MSI for SignPath
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         id: upload-unsigned-msi
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1033,6 +1107,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Actual daily MSI gamepad package validation failed.' }
 
       - name: Upload unsigned MSI for package job
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         id: upload-unsigned-msi-for-package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1054,6 +1129,7 @@ jobs:
           overwrite: true
 
       - name: Upload Windows version metadata
+        if: github.ref_name != 'test/vibeshine-dolby-ac3'
         id: upload-windows-version-metadata
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:

@@ -909,6 +909,12 @@ export const settingsCategories: SettingsCategory[] = [
         id: 'audio_routing',
         fields: [
           boolean('stream_audio'),
+          select('audio_format', [
+            option('opus', 'config.audio_format_opus'),
+            option('ac3', 'config.audio_format_ac3'),
+            option('eac3', 'config.audio_format_eac3'),
+          ]),
+          boolean('high_quality_audio', { visibleWhen: { key: 'audio_format', notEquals: 'opus' } }),
           text('audio_sink', { monospace: true, stacked: true }),
           boolean('audio_sink_capture_only', { platform: 'windows' }),
           text('virtual_sink', { monospace: true, stacked: true }),
@@ -1145,6 +1151,8 @@ export const settingsDefaults: Record<string, unknown> = {
   rtss_allow_virtual_display_override: false,
   capture: '',
   stream_audio: true,
+  audio_format: 'opus',
+  high_quality_audio: false,
   controller: true,
   origin_web_ui_allowed: 'lan',
   upnp: false,
