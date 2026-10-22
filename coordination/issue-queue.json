@@ -2,7 +2,7 @@
   "schema": 1,
   "run_id": "20261022-dot-pr-queue",
   "coordinator": "dot",
-  "updated_at": "2026-10-22T20:50:00Z",
+  "updated_at": "2026-10-22T21:37:00Z",
   "target_active_issues": 10,
   "host_total_native_capacity": 7,
   "implementation_location": "dot cloud computer",
@@ -41,7 +41,7 @@
           "comment_url": "https://github.com/Nonary/vibeshine/pull/331#pullrequestreview-5618284838"
         }
       ],
-      "next_step": "Verify migration and exact containing release, then reporter follow-up",
+      "next_step": "Await reporter confirmation on published containing nightly.",
       "worker": "/root/fix_gpu_idle_retention",
       "head_sha": "13f12b6597b01a5917f614f4e450dfc791072075",
       "scope": "Probe resource lifetime and balanced GPU scheduling priority",
@@ -53,9 +53,10 @@
       "merged_by": "Dot after additional cloud review",
       "fixed_label": true,
       "reporter_confirmed": false,
-      "nightly_inclusion": "not_verified",
-      "downstream_migration": "not_verified",
-      "implementation_session_id": "/root/fix_gpu_idle_retention"
+      "nightly_inclusion": "verified_source_and_target",
+      "downstream_migration": "verified",
+      "implementation_session_id": "/root/fix_gpu_idle_retention",
+      "reporter_update": "https://github.com/Nonary/vibeshine/issues/326#issuecomment-6351829926"
     },
     {
       "key": "Nonary/Vibepollo#657",
@@ -77,7 +78,8 @@
       "issue_resolved": false,
       "latest_final_review": "https://github.com/Nonary/libvirtualdisplay/pull/3#pullrequestreview-5620399949",
       "merge_comment": "https://github.com/Nonary/libvirtualdisplay/pull/3#issuecomment-6350648422",
-      "own_cloud_review": "GO; production and real mapped-DSO tests and negative controls passed. Native compositor unverified; baseline CI failures and added formatting violations disclosed."
+      "own_cloud_review": "GO; production and real mapped-DSO tests and negative controls passed. Native compositor unverified; baseline CI failures and added formatting violations disclosed.",
+      "nightly_inclusion": "excluded_from_current_pair"
     },
     {
       "key": "Nonary/Vibepollo#643",
@@ -171,15 +173,15 @@
     },
     {
       "key": "Nonary/Vibepollo#638",
-      "status": "queued",
+      "status": "merged",
       "implementation_repo": "Nonary/vibeshine",
-      "next_step": "Final review queued behind higher-priority functional repairs; first-pass evidence retained",
+      "next_step": "Diagnostics merged; runtime cause and later delivery remain separate.",
       "branch": "dot/issue-638-dualsense-pcm",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/328",
       "head_sha": "ecae44d171f543eada469e96a471b7a7ee5ac7c0",
       "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
       "scope": "Partial PCM forwarding diagnostics; runtime cause unproven",
-      "resume_condition": "Reconnect authorized review environment then round1",
+      "resume_condition": null,
       "worker": "/root/fix_dualsense_pcm_forwarding",
       "reviews": [
         {
@@ -197,7 +199,14 @@
       ],
       "implementation_session_id": "/root/fix_dualsense_pcm_forwarding",
       "target_branch": "canary",
-      "workflow_only_delta": "Common Lint made manual-only; source/test blobs unchanged from previously reviewed e89ef712."
+      "workflow_only_delta": "Common Lint made manual-only; source/test blobs unchanged from previously reviewed e89ef712.",
+      "merge_sha": "cc8824afb94d99c7405614dd448887bda4b7f911",
+      "latest_final_review": "https://github.com/Nonary/vibeshine/pull/328#pullrequestreview-5620800098",
+      "latest_final_correction": "https://github.com/Nonary/vibeshine/pull/328#issuecomment-6351268644",
+      "own_review": "Production diagnostic policy, mapped callback/concurrency, integrated tests and negative controls passed; CI baseline fixture failure disclosed.",
+      "issue_resolved": false,
+      "fixed_label": false,
+      "nightly_inclusion": "excluded_from_current_pair"
     },
     {
       "key": "Nonary/Vibepollo#658",
@@ -407,7 +416,7 @@
       "merged_by": "Dot after additional cloud review",
       "fixed_label": false,
       "reporter_confirmed": false,
-      "nightly_inclusion": "not_verified",
+      "nightly_inclusion": "excluded_from_current_pair",
       "downstream_migration": "not_verified"
     },
     {
@@ -441,12 +450,12 @@
       "merge_sha": "44c563b29fac79db81ec617735ba17cba08b108c",
       "merged_by": "Dot after additional cloud review",
       "blocker": null,
-      "nightly_inclusion": "not_verified",
+      "nightly_inclusion": "excluded_from_current_pair",
       "reporter_confirmed": false
     },
     {
       "key": "Nonary/Vibepollo#475",
-      "status": "review_1",
+      "status": "repairing_review_findings",
       "branch": "dot/issue-475-speaker-pcm-abi",
       "implementation_repo": "Nonary/moonlight-common-c + Nonary/moonlight-qt",
       "scope": "Frozen host/common/client speaker PCM source tuple; hardware validation remains separate",
@@ -454,9 +463,9 @@
       "reviews": [],
       "dependency_pr_url": "https://github.com/Nonary/moonlight-common-c/pull/2",
       "dependency_head_sha": "6ab59a5819834925e76a512288025b027bdddeb3",
-      "head_sha": "6d1edbe451c28db612e2245e279f42f3276eda95",
+      "head_sha": "c867116b709819e0b818faddf3beff7eb3a7034b",
       "worker": "/root/recover_speaker_pcm_fixes",
-      "next_step": "Finish current first dispositions and independent final rounds. Own cloud current-base source review is clear; no native WASAPI/hardware or release inclusion claim.",
+      "next_step": "Repair confirmed q147 baseline capacity differential and bounded user-space ingress provenance locally; publish frozen tuple only after tests, then independent review.",
       "implementation_session_id": "/root/recover_speaker_pcm_fixes",
       "host_pr_url": "https://github.com/Nonary/vibeshine/pull/337",
       "host_head_sha": "7687b60c82e8c09a3b3e0030d8d82f7386f5e07c",
@@ -465,7 +474,16 @@
         "01a16514-451c-7390-8ce2-019ec270001c"
       ],
       "latest_first_review": "https://github.com/Nonary/moonlight-common-c/pull/2#pullrequestreview-5620642227",
-      "own_cloud_review": "Integrated host and client sanitizer suites, common4/4, actual sender4/4, cross-repository wire contracts and seven behavioral negative controls passed."
+      "own_cloud_review": "Integrated host and client sanitizer suites, common4/4, actual sender4/4, cross-repository wire contracts and seven behavioral negative controls passed.",
+      "host_head": "209d1709758093388386bdae567a49f56d14dcc5",
+      "common_head": "d6119a98043ac0e43e36765560cd04a18fa314d8",
+      "latest_findings": [
+        "q147 actual production ASan/UBSan and historical receiver replay: baseline initializes controller, current optional binding crowds out legacy MC under one competing packet. P2 retained; q149 remains baseline-equivalent and withdrawn.",
+        "Already-submitted URB incarnation protection works. Received/fragmented bytes crossing rebind motivate separately scoped ingress strengthening; no kernel-buffer guarantee."
+      ],
+      "nightly_inclusion": "not_in_current_pair",
+      "issue_resolved": false,
+      "reporter_confirmed": false
     },
     {
       "key": "Nonary/Vibepollo#600",
@@ -507,7 +525,7 @@
       "implementation_session_id": "/root/implement_hid_power_lifecycle",
       "latest_final_review": "https://github.com/Nonary/libvirtualgamepad/pull/9#pullrequestreview-5619715726",
       "merge_sha": "998deebd15d0991562dec812dc62c52853463779",
-      "nightly_inclusion": "not_verified",
+      "nightly_inclusion": "excluded_from_current_pair",
       "reporter_confirmed": false
     },
     {
@@ -538,17 +556,18 @@
       "key": "Nonary/vibeshine#335",
       "status": "awaiting_native_msi_validation",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/335",
-      "head_sha": "d6a469ea6dbbe892bb821f9a1a9cb030ed829e83",
+      "head_sha": "fe6878e2d62f10d4bb348769d1ec8343395965e1",
       "scope": "PR CI build version fixture; production version validation unchanged",
       "implementation_session_id": "01a16431-e9d3-738a-8033-9689171d5033",
       "review_sessions": [
         "01a1650f-db8d-7718-855d-7fa9b6512032"
       ],
       "target_branch": "canary",
-      "next_step": "Current exact-head CI39850719512 is compiling Windows; verify actual MSI gate, then refresh final readiness.",
+      "next_step": "Wait for corrected actual packaged-MSI gate, then final readiness and integration.",
       "latest_final_review": "https://github.com/Nonary/vibeshine/pull/335#pullrequestreview-5620086476",
-      "validation_run": "https://github.com/Nonary/vibeshine/actions/runs/39850719512",
-      "validation_note": "Prior run39844279187 failed on unchanged Winsock include order before MSI gate. Current head cleanly incorporates canary1e4674a; six-file repair behavior unchanged;24 Python+18 Node and actual CMake contracts pass."
+      "validation_run": "https://github.com/Nonary/vibeshine/actions/runs/39854277504",
+      "validation_note": "Previous native run packaged MSI but exposed incorrect test expectation. Current test-only repair expects canonical inclusive zero minimum; source review and assertion fixtures pass. Arch passed; Windows still compiling at21:32. No corrected native gate pass yet.",
+      "latest_first_review": "https://github.com/Nonary/vibeshine/pull/335#pullrequestreview-5620986764"
     },
     {
       "key": "Nonary/vibeshine#339",
@@ -572,16 +591,20 @@
     "target_run": "39851260678",
     "source_tag": "2.0.2-nightly.d20261022.1e4674a00adc",
     "target_tag": "2.0.2-nightly.d20261022.83bb31680419",
-    "status": "both_running",
-    "published": false,
+    "status": "both_published",
+    "published": true,
     "repair_pr": "https://github.com/Nonary/vibeshine/pull/340",
     "repair_merge_sha": "1e4674a00adcb90e50e1c84a586062a3ea766c3b",
     "schedule_status": "Release-workflow-only default-branch promotion approval remains pending.",
-    "validation_note": "Standalone39849447654 failed because its generic mode fetched depth1 without tags. Existing daily mode uses full history and2.0.1 fallback anchor. Corrected validation39850869184 and paired daily runs are active; no version-policy redesign was needed.",
+    "validation_note": "Both pinned release runs succeeded; published Windows and Arch assets verified. Reporter confirmation remains separate.",
     "superseded_runs": [
       "39846082371",
       "39846230003"
-    ]
+    ],
+    "source_published_at": "2026-10-22T21:24:44Z",
+    "target_published_at": "2026-10-22T21:35:31Z",
+    "source_release_url": "https://github.com/Nonary/vibeshine/releases/tag/2.0.2-nightly.d20261022.1e4674a00adc",
+    "target_release_url": "https://github.com/Nonary/Vibepollo/releases/tag/2.0.2-nightly.d20261022.83bb31680419"
   },
   "target_branch_policy": {
     "vibeshine": "canary",
@@ -597,7 +620,7 @@
       "workflow_dispatch"
     ],
     "verified": true,
-    "release_snapshot_inclusion": false,
+    "release_snapshot_inclusion": true,
     "additional_changes": [
       {
         "repo": "Nonary/libvirtualdisplay",
