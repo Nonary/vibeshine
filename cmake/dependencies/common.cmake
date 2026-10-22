@@ -23,6 +23,20 @@ add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/libdisplaydevice")
 include(dependencies/libvirtualdisplay_source)
 add_subdirectory("${SUNSHINE_LIBVIRTUALDISPLAY_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/third-party/libvirtualdisplay")
 
+# The static MinGW build does not ship a kernelbase import library. The
+# libvirtualdisplay target lists kernelbase for MSVC; MinGW resolves these
+# Windows APIs through kernel32 instead.
+if(MINGW AND TARGET libvirtualdisplay_driver)
+    get_target_property(_sunshine_lvd_driver_link_libraries
+            libvirtualdisplay_driver LINK_LIBRARIES)
+    if(_sunshine_lvd_driver_link_libraries)
+        list(REMOVE_ITEM _sunshine_lvd_driver_link_libraries kernelbase)
+        set_property(TARGET libvirtualdisplay_driver PROPERTY LINK_LIBRARIES
+                "${_sunshine_lvd_driver_link_libraries}")
+    endif()
+    unset(_sunshine_lvd_driver_link_libraries)
+endif()
+
 # common dependencies
 include("${CMAKE_MODULE_PATH}/dependencies/nlohmann_json.cmake")
 find_package(PkgConfig REQUIRED)
