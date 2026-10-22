@@ -2,7 +2,7 @@
   "schema": 1,
   "run_id": "20261022-dot-pr-queue",
   "coordinator": "dot",
-  "updated_at": "2026-10-22T16:40:20Z",
+  "updated_at": "2026-10-22T16:47:00Z",
   "target_active_issues": 10,
   "host_total_native_capacity": 7,
   "implementation_location": "dot cloud computer",
@@ -97,35 +97,47 @@
     },
     {
       "key": "Nonary/Vibepollo#655",
-      "status": "investigating",
+      "status": "blocked",
       "next_step": "Obtain exact symbols and symbolicate crash before patch.",
       "pr_url": null,
       "reviews": [],
-      "branch": "dot/issue-655-crash-evidence"
+      "branch": "dot/issue-655-crash-evidence",
+      "blocker": "Exact historical build stripped and matching debug symbols not retained",
+      "resume_condition": "Exact unstripped symbols or symbol-enabled startup-cancellation reproduction",
+      "finding": "SIGINT during startup encoder probing then teardown; cause unproven"
     },
     {
       "key": "Nonary/Vibepollo#653",
-      "status": "investigating",
-      "next_step": "Compare trace with existing fixes and display PRs before duplicating work.",
+      "status": "no_change",
+      "next_step": "Verify published containing release then reporter retest; not resolved",
       "pr_url": null,
       "reviews": [],
-      "branch": "dot/issue-653-display-restore"
+      "branch": "dot/issue-653-display-restore",
+      "finding": "Observed repeated restore predicate already fixed source b8a17b8f and migrated e96c8018; incorrect initial baseline remains unproven/overlaps PR592"
     },
     {
       "key": "Nonary/Vibepollo#540",
-      "status": "investigating",
+      "status": "blocked",
       "next_step": "Reproduce ALPM/systemd upgrade fence failure before changing semantics.",
       "pr_url": null,
       "reviews": [],
-      "branch": "dot/issue-540-upgrade-fence"
+      "branch": "dot/issue-540-upgrade-fence",
+      "blocker": "Original generic error lacks exact current package and phase-specific runtime evidence",
+      "resume_condition": "Current package/build and phase-specific fence/mask metadata",
+      "finding": "Current safe transaction tests pass; no new defect established"
     },
     {
       "key": "Nonary/vibeshine#315",
-      "status": "investigating",
+      "status": "blocked",
       "next_step": "Assess HTTPS-port UX without enabling plaintext administration.",
-      "pr_url": null,
+      "pr_url": "https://github.com/Nonary/vibeshine/pull/332",
       "reviews": [],
-      "branch": "dot/issue-315-https-guidance"
+      "branch": "dot/issue-315-https-guidance",
+      "head_sha": "895c392930783fab11e5c8a9256ff8b1663b4848",
+      "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
+      "scope": "Docs-only HTTPS guidance; network behavior unchanged",
+      "blocker": "Independent Codex review environment offline",
+      "resume_condition": "Reconnect authorized review environment then round1"
     }
   ]
 }
