@@ -1150,6 +1150,7 @@ sunshine_register_component(NAME test_component_video_colorspace TEST_SOURCE uni
     LINK_LIBRARIES Boost::log Boost::asio Boost::crc Boost::format Boost::process ZLIB::ZLIB ${FFMPEG_LIBRARIES}
                    ${SUNSHINE_TEST_FFMPEG_PLATFORM_LIBRARIES} ${SUNSHINE_TEST_SOCKET_LIBRARIES})
 sunshine_register_component(NAME test_component_wgc_monitor_selection TEST_SOURCE unit/test_wgc_monitor_selection.cpp)
+sunshine_register_component(NAME test_component_input_geometry_transport TEST_SOURCE unit/test_input_geometry_transport.cpp)
 if(SUNSHINE_TEST_ENABLE_COMPONENT AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     find_program(SUNSHINE_TEST_WGC_PYTHON_EXECUTABLE NAMES python3)
     if(SUNSHINE_TEST_WGC_PYTHON_EXECUTABLE)
