@@ -25,15 +25,20 @@ add_subdirectory("${SUNSHINE_LIBVIRTUALDISPLAY_SOURCE_DIR}" "${CMAKE_BINARY_DIR}
 
 # The static MinGW build does not ship a kernelbase import library. The
 # libvirtualdisplay target lists kernelbase for MSVC; MinGW resolves these
-# Windows APIs through kernel32 instead.
+# Windows APIs through kernel32 instead. For a static library CMake also
+# propagates PRIVATE link dependencies through INTERFACE_LINK_LIBRARIES.
 if(MINGW AND TARGET libvirtualdisplay_driver)
-    get_target_property(_sunshine_lvd_driver_link_libraries
-            libvirtualdisplay_driver LINK_LIBRARIES)
-    if(_sunshine_lvd_driver_link_libraries)
-        list(REMOVE_ITEM _sunshine_lvd_driver_link_libraries kernelbase)
-        set_property(TARGET libvirtualdisplay_driver PROPERTY LINK_LIBRARIES
-                "${_sunshine_lvd_driver_link_libraries}")
-    endif()
+    foreach(_sunshine_lvd_link_property LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
+        get_target_property(_sunshine_lvd_driver_link_libraries
+                libvirtualdisplay_driver ${_sunshine_lvd_link_property})
+        if(_sunshine_lvd_driver_link_libraries)
+            list(REMOVE_ITEM _sunshine_lvd_driver_link_libraries kernelbase)
+            set_property(TARGET libvirtualdisplay_driver
+                    PROPERTY ${_sunshine_lvd_link_property}
+                    "${_sunshine_lvd_driver_link_libraries}")
+        endif()
+    endforeach()
+    unset(_sunshine_lvd_link_property)
     unset(_sunshine_lvd_driver_link_libraries)
 endif()
 
