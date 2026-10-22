@@ -307,7 +307,7 @@ for invariant in (
     'std::getenv("VIBESHINE_MACHINE_HOST")',
     "machine_host_environment[0] == '1'",
     "machine_host_environment[1] == '\\0'",
-    "shutdown_deadline_t shutdown_deadline {&shutdown_signal_requested, supervised_machine_host}",
+    "shutdown_deadline_t shutdown_deadline {&shutdown_signal_requested, supervised_machine_host, shutdown_phase_state}",
     "if (supervised_machine_host)",
     "pthread_sigmask(SIG_BLOCK",
     "sigwait(&termination_signal_set",
