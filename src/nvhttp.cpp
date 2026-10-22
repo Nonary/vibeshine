@@ -124,6 +124,9 @@ namespace nvhttp {
     // state transitions so a retry cannot make its dispatch decision against
     // half-published ownership or race an explicit disconnect.
     std::mutex remote_http_control_transition_mutex;
+    // Serialize Input owner retirement with the destructive part of its
+    // completion callback. Never hold this across transport joins or config apply.
+    std::mutex remote_input_cleanup_mutex;
 
     std::string remote_role_owner_key(std::string_view uuid, remote_session::role_e role) {
       return std::string {uuid} + ':' + std::to_string(static_cast<unsigned int>(role));
@@ -197,11 +200,11 @@ namespace nvhttp {
       remote_session::clear_app_replacement_confirmation(uuid);
     }
 
-    bool has_stream_session_activity() {
+    bool has_stream_session_activity(bool expire_pending = true) {
       // RTSP removes STOPPING sessions from session_count() before stream::session::join()
       // returns; pending launches/creations reserve the process-wide runtime layer
       // before either protocol publishes an active session.
-      return rtsp_stream::has_pending_launch_or_startup() ||
+      return rtsp_stream::has_pending_launch_or_startup(expire_pending) ||
              rtsp_stream::session_count_no_cleanup() > 0 ||
              stream::session::running_sessions.load(std::memory_order_acquire) != 0 ||
              stream::session::teardown_sessions.load(std::memory_order_acquire) != 0 ||
@@ -218,14 +221,26 @@ namespace nvhttp {
     if (!activity) {
       return;
     }
-    // A retired input generation may finish while its replacement is still
-    // preparing, before it has an RTSP pending record. It no longer owns the
-    // runtime overrides either, even if no transport is visible yet.
-    if (!forget_remote_owner(client_uuid, remote_session::role_e::input, generation)) {
-      return;
+    bool cleared_overrides = false;
+    {
+      std::lock_guard cleanup_lock {remote_input_cleanup_mutex};
+      // Match ownership and complete destructive cleanup before a retry may
+      // prepare its replacement. A generation already retired by /launch has
+      // no claim on that replacement, even before its pending record exists.
+      if (!forget_remote_owner(client_uuid, remote_session::role_e::input, generation)) {
+        return;
+      }
+      // Do not expire other pending launches while holding the cleanup gate:
+      // their callbacks reenter here. A paused game still owns its overrides.
+      if (!has_stream_session_activity(false) && proc::proc.current_app_id() <= 0 &&
+          remote_display_topology::instance().managed_client_identity_count() == 0) {
+        config::clear_runtime_config_overrides();
+        cleared_overrides = true;
+      }
     }
-    if (!has_stream_session_activity() && remote_display_topology::instance().managed_client_identity_count() == 0) {
-      config::clear_runtime_config_overrides();
+    // Config apply can wait for a launch's read gate, so it must not retain
+    // the cleanup gate. It reads the current (possibly replaced) overrides.
+    if (cleared_overrides) {
       config::apply_config_now();
     }
   }
@@ -4534,14 +4549,23 @@ namespace nvhttp {
       }
 
       std::unique_lock normal_transition_lock {normal_http_app_transition_mutex};
-      if (synthetic_control == remote_session::control_e::input && owner.role == remote_session::role_e::input) {
+      if (synthetic_control == remote_session::control_e::input) {
         // A cached tile or a retry can arrive before the old input transport
         // finishes closing. Retire only this client's previous generation,
         // including pending RTSP startup, before publishing its replacement.
         // /launch already owns the lifecycle gate; transfer it to teardown.
-        if (const auto generation = remote_owner_generation(identity.uuid, remote_session::role_e::input)) {
+        std::optional<std::uint64_t> generation;
+        {
+          // Drain even an expiry callback that already removed the owner. It
+          // must finish clearing old overrides before replacement preparation.
+          std::lock_guard cleanup_lock {remote_input_cleanup_mutex};
+          generation = remote_owner_generation(identity.uuid, remote_session::role_e::input);
+          if (generation) {
+            forget_remote_owner(identity.uuid, remote_session::role_e::input, *generation);
+          }
+        }
+        if (generation) {
           (void) rtsp_stream::disconnect_remote_role_session(identity.uuid, remote_session::role_e::input, *generation, true);
-          forget_remote_owner(identity.uuid, remote_session::role_e::input, *generation);
         }
       }
       const bool no_active_sessions =

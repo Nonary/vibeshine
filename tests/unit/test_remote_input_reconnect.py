@@ -47,17 +47,25 @@ std::unordered_map<std::string, remote_role_owner_t> remote_role_owners;\n'''
         'bool retain_pending_runtime_holds(',
         'void expire_pending_locked(',
         'void notify_expired_pending(',
+        'void expire_pending()',
+        'bool has_pending_launches()',
+        'bool has_pending_launch_or_startup(',
         'bool disconnect_remote_role(',
     ))
     start = nv.index('      const auto owner =', nv.index('  void launch('))
     dispatch = nv[start:nv.index('      remote_session::clear_app_replacement_confirmation', start)]
     start = nv.index('      std::unique_lock normal_transition_lock', start)
     replacement = nv[start:nv.index('      const bool no_active_sessions =', start)]
+    start = nv.index('      const bool no_active_sessions =', start)
+    runtime_idle = nv[start:nv.index('      const auto retained_profile =', start)]
+    start = nv.index('      bool runtime_overrides_applied = false;', start)
+    runtime_apply = function(nv[start:], '      if (no_active_sessions) {')
     matches = '\n'.join(function(stream, signature) for signature in (
         'bool uuid_match(', 'bool remote_role_match(',
     ))
     return (template.replace('/* @OWNERS@ */', owners).replace('/* @RTSP_METHODS@ */', methods)
             .replace('/* @DISPATCH@ */', dispatch).replace('/* @REPLACEMENT@ */', replacement)
+            .replace('/* @RUNTIME_IDLE@ */', runtime_idle).replace('/* @RUNTIME_APPLY@ */', runtime_apply)
             .replace('/* @MATCHES@ */', matches))
 
 
