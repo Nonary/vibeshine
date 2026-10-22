@@ -30,6 +30,7 @@
 #include "vhf_gamepad.h"
 #include "dualsense_haptics.h"
 #include "vhf_gamepad_policy.h"
+#include "vhf_gamepad_recovery.h"
 
 namespace platf {
   using namespace std::literals;
@@ -70,6 +71,13 @@ namespace platf {
       bool active {};
       std::uint16_t client_relative_index {};
       lvg::profile profile {};
+      // Durable client state, guarded by lifetime exclusively even while recovery is pending.
+      // Touch contacts and time-dependent motion samples belong to the old device epoch.
+      std::optional<lvg::input_state_request> last_input;
+      std::optional<lvg::battery_state_request> last_battery;
+      // Unknown percentage updates preserve the producer level. Replay its original
+      // percentage-bearing request first, with its original cable/charging flags.
+      std::optional<lvg::battery_state_request> battery_level_seed;
 
       // A client pointer id is an arbitrary handle; the touchpad has two
       // numbered contacts. Reserving a contact per pointer keeps a moved touch
@@ -90,6 +98,9 @@ namespace platf {
         active = false;
         client_relative_index = 0;
         profile = {};
+        last_input.reset();
+        last_battery.reset();
+        battery_level_seed.reset();
         contact_of_pointer.clear();
         free_contacts = 0x3;
         feedback_queue.reset();
@@ -256,6 +267,8 @@ namespace platf {
     // lifetime changes need exclusive access.
     std::shared_mutex lifetime;
     lvg::client client;
+    vhf_gamepad::connection_recovery_t recovery;
+    bool recovery_failure_logged {false};
     std::array<slot_t, MAX_GAMEPADS> slots;
 
     std::atomic<unsigned> active_count {0};
@@ -266,6 +279,14 @@ namespace platf {
     std::mutex wake_mutex;
     std::condition_variable wake;
     std::thread feedback_thread;
+
+    // Called under the lifetime lock by every transport path. No lock upgrade
+    // or driver call here: the feedback worker owns exclusive reconstruction.
+    void observe_status(const DWORD status) {
+      if (status == ERROR_DEVICE_REMOVED) {
+        recovery.request();
+      }
+    }
 
     void feedback_loop();
     void raise_feedback(
@@ -396,12 +417,47 @@ namespace platf {
         break;
       }
 
+      if (recovery.pending()) {
+        std::unique_lock lock {lifetime};
+        if (active_count.load(std::memory_order_acquire) == 0) {
+          recovery.reset();
+          continue;
+        }
+        const auto result = recovery.attempt(client, slots, vhf_gamepad::connection_recovery_t::clock::now(), [](const auto nr, auto &slot) {
+          // Retain logical ownership, profile and feedback routing, but not
+          // touch contacts or feedback cached for the previous device.
+          slot.contact_of_pointer.clear();
+          slot.free_contacts = 0x3;
+          slot.submit_failed.store(false, std::memory_order_relaxed);
+          slot.have_feedback = false;
+          slot.last_feedback = {};
+          dualsense_audio::set_slot(nr, false);
+        });
+        if (result && *result == ERROR_SUCCESS) {
+          for (int nr = 0; nr < MAX_GAMEPADS; ++nr) {
+            if (slots[nr].active) {
+              dualsense_audio::set_slot(nr, slots[nr].profile == lvg::profile::dualsense);
+            }
+          }
+          recovery_failure_logged = false;
+          BOOST_LOG(info) << "Recreated owned VHF gamepads after device removal"sv;
+        } else if (result && !recovery_failure_logged) {
+          recovery_failure_logged = true;
+          BOOST_LOG(warning) << "VHF device removal recovery is waiting for the driver ["sv
+                             << util::hex(*result).to_string_view() << ']';
+        }
+        continue;
+      }
+
       std::shared_lock lock {lifetime};
-      if (!client.connected()) {
+      if (!client.connected() || recovery.pending()) {
         continue;
       }
 
       for (int nr = 0; nr < MAX_GAMEPADS; ++nr) {
+        if (recovery.pending()) {
+          break;
+        }
         if (!slots[nr].active) {
           continue;
         }
@@ -418,6 +474,7 @@ namespace platf {
         }
         lvg::feedback_event event {};
         const DWORD status = client.poll_feedback(static_cast<std::uint32_t>(nr), &event);
+        observe_status(status);
         if (status != ERROR_SUCCESS) {
           if (status != ERROR_NO_MORE_ITEMS) {
             log_rumble_poll_error(slots[nr].rumble_poll_summary, static_cast<std::uint32_t>(nr), status);
@@ -452,7 +509,9 @@ namespace platf {
       // them explicitly keeps removal ordered while the driver is still responsive.
       for (int nr = 0; nr < MAX_GAMEPADS; ++nr) {
         if (impl->slots[nr].active) {
-          std::ignore = impl->client.destroy_controller(static_cast<std::uint32_t>(nr));
+          if (!impl->recovery.pending()) {
+            std::ignore = impl->client.destroy_controller(static_cast<std::uint32_t>(nr));
+          }
           dualsense_audio::set_slot(nr, false);
           impl->slots[nr].reset();
         }
@@ -522,6 +581,10 @@ namespace platf {
     }
 
     std::unique_lock lock {impl->lifetime};
+    if (impl->recovery.pending()) {
+      BOOST_LOG(warning) << "VHF controller allocation deferred while recovering a removed device"sv;
+      return -1;
+    }
     auto &slot = impl->slots[id.globalIndex];
     if (slot.active) {
       BOOST_LOG(error) << "VHF gamepad "sv << id.globalIndex << " is already allocated"sv;
@@ -552,6 +615,9 @@ namespace platf {
       profile
     );
     if (status != ERROR_SUCCESS) {
+      if (impl->active_count.load(std::memory_order_acquire) > 0) {
+        impl->observe_status(status);
+      }
       BOOST_LOG(error) << "Couldn't create VHF gamepad "sv << id.globalIndex << " ["sv
                        << util::hex(status).to_string_view() << ']';
       if (impl->active_count.load(std::memory_order_acquire) == 0) {
@@ -600,7 +666,9 @@ namespace platf {
       return;
     }
 
-    const DWORD status = impl->client.destroy_controller(static_cast<std::uint32_t>(nr));
+    const DWORD status = impl->recovery.pending() ? ERROR_SUCCESS :
+                                                    impl->client.destroy_controller(static_cast<std::uint32_t>(nr));
+    impl->observe_status(status);
     if (status != ERROR_SUCCESS) {
       BOOST_LOG(warning) << "Couldn't destroy VHF gamepad "sv << nr << " ["sv
                          << util::hex(status).to_string_view() << ']';
@@ -611,6 +679,8 @@ namespace platf {
     if (impl->active_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
       BOOST_LOG(debug) << "Disconnecting from the Vibeshine virtual gamepad driver"sv;
       impl->client.close();
+      impl->recovery.reset();
+      impl->recovery_failure_logged = false;
     }
   }
 
@@ -631,7 +701,7 @@ namespace platf {
     // Exclusive: the pointer-to-contact mapping is mutated here.
     std::unique_lock lock {impl->lifetime};
     auto &slot = impl->slots[nr];
-    if (!slot.active || !is_playstation(slot.profile)) {
+    if (!slot.active || impl->recovery.pending() || !is_playstation(slot.profile)) {
       return;
     }
 
@@ -683,6 +753,7 @@ namespace platf {
     request.pressure = vhf_gamepad::to_normalized_touch(touch_event.pressure);
 
     const DWORD status = impl->client.submit_touch_state(request);
+    impl->observe_status(status);
     if (status != ERROR_SUCCESS && !slot.submit_failed.exchange(true, std::memory_order_relaxed)) {
       BOOST_LOG(warning) << "Couldn't send gamepad touch to the VHF driver ["sv
                          << util::hex(status).to_string_view() << ']';
@@ -696,7 +767,7 @@ namespace platf {
 
     std::shared_lock lock {impl->lifetime};
     auto &slot = impl->slots[nr];
-    if (!slot.active || !has_motion(slot.profile)) {
+    if (!slot.active || impl->recovery.pending() || !has_motion(slot.profile)) {
       return;
     }
 
@@ -712,7 +783,7 @@ namespace platf {
     request.y_milli = vhf_gamepad::to_milli_units(motion_event.y);
     request.z_milli = vhf_gamepad::to_milli_units(motion_event.z);
 
-    std::ignore = impl->client.submit_motion_state(request);
+    impl->observe_status(impl->client.submit_motion_state(request));
   }
 
   void vhf_gamepad_t::battery(const int nr, const gamepad_battery_t &battery_event) {
@@ -720,7 +791,7 @@ namespace platf {
       return;
     }
 
-    std::shared_lock lock {impl->lifetime};
+    std::unique_lock lock {impl->lifetime};
     auto &slot = impl->slots[nr];
     if (!slot.active || !has_motion(slot.profile)) {
       return;
@@ -735,7 +806,17 @@ namespace platf {
                         : battery_event.percentage;
     request.flags = vhf_gamepad::to_protocol_battery_state(battery_event.state);
 
-    std::ignore = impl->client.submit_battery_state(request);
+    // Battery events are not periodic: retain even a pending or failed submission.
+    if (request.percent <= 100) {
+      slot.battery_level_seed.reset();
+    } else if (slot.last_battery && slot.last_battery->percent <= 100) {
+      slot.battery_level_seed = slot.last_battery;
+    }
+    slot.last_battery = request;
+    if (impl->recovery.pending()) {
+      return;
+    }
+    impl->observe_status(impl->client.submit_battery_state(request));
   }
 
   void vhf_gamepad_t::update(const int nr, const gamepad_state_t &gamepad_state) {
@@ -743,7 +824,8 @@ namespace platf {
       return;
     }
 
-    std::shared_lock lock {impl->lifetime};
+    // Serialize the cached snapshot and submission with reconstruction and slot reuse.
+    std::unique_lock lock {impl->lifetime};
     auto &slot = impl->slots[nr];
     if (!slot.active) {
       return;
@@ -760,7 +842,12 @@ namespace platf {
     };
 
     const auto request = vhf_gamepad::make_input_state(static_cast<std::uint32_t>(nr), normalized);
+    slot.last_input = request;
+    if (impl->recovery.pending()) {
+      return;
+    }
     const DWORD status = impl->client.submit_input_state(request);
+    impl->observe_status(status);
     if (status != ERROR_SUCCESS) {
       // A wedged or removed device would otherwise log on every input packet.
       if (!slot.submit_failed.exchange(true, std::memory_order_relaxed)) {

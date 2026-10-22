@@ -384,7 +384,7 @@
           </div>
 
           <AppEditRtxHdrSection
-            v-if="(isWindows || isLinux) && hasNvidia"
+            v-if="(isWindows || isLinux) && hasNvidia && (!isLinux || rtxHdrSupported)"
             v-model:form="form"
             :live-status="liveRtxHdrStatus"
             :live-error="liveRtxHdrError"
@@ -1930,6 +1930,7 @@ const isWindows = computed(
   () => (configStore.metadata?.platform || '').toLowerCase() === 'windows',
 );
 const isLinux = computed(() => configStore.metadata?.platform?.toLowerCase() === 'linux');
+const rtxHdrSupported = computed(() => (configStore.metadata as any)?.rtx_hdr_supported === true);
 const gpuList = computed(() => {
   const raw = (configStore.metadata as any)?.gpus;
   return Array.isArray(raw) ? raw : [];
