@@ -2,7 +2,7 @@
   "schema": 1,
   "run_id": "20261022-dot-pr-queue",
   "coordinator": "dot",
-  "updated_at": "2026-10-22T16:38:10Z",
+  "updated_at": "2026-10-22T16:38:45Z",
   "target_active_issues": 10,
   "host_total_native_capacity": 7,
   "implementation_location": "dot cloud computer",
@@ -50,10 +50,17 @@
         "Nonary/Vibepollo#566",
         "Nonary/vibeshine#300"
       ],
-      "status": "investigating",
+      "status": "blocked",
       "implementation_repo": "Nonary/vibeshine",
       "next_step": "Investigate alignment and EGL allocation root cause beyond already shipped diagnostics.",
-      "branch": "dot/issue-644-dmabuf-alignment"
+      "branch": "dot/issue-644-dmabuf-alignment",
+      "pr_url": "https://github.com/Nonary/vibeshine/pull/329",
+      "head_sha": "94d790459af0a3bdfe0aa7615a4a010bcb6abcf9",
+      "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
+      "scope": "Guarded VAAPI CPU upload fallback; pitch alignment already fixed",
+      "blocker": "Independent Codex review environment offline",
+      "resume_condition": "Reconnect authorized review environment then round1",
+      "worker": "/root/fix_dmabuf_import_alignment"
     },
     {
       "key": "Nonary/Vibepollo#638",
@@ -74,8 +81,9 @@
       "related": [
         "Nonary/Vibepollo#462"
       ],
-      "status": "queued",
-      "next_step": "Investigate gamepad power transition and existing PR4 review; separate producer scope and dump evidence."
+      "status": "investigating",
+      "next_step": "Investigate gamepad power transition and existing PR4 review; separate producer scope and dump evidence.",
+      "branch": "dot/issue-658-suspend-gamepad"
     },
     {
       "key": "Nonary/Vibepollo#655",
@@ -93,17 +101,19 @@
     },
     {
       "key": "Nonary/Vibepollo#540",
-      "status": "queued",
+      "status": "investigating",
       "next_step": "Reproduce ALPM/systemd upgrade fence failure before changing semantics.",
       "pr_url": null,
-      "reviews": []
+      "reviews": [],
+      "branch": "dot/issue-540-upgrade-fence"
     },
     {
       "key": "Nonary/vibeshine#315",
-      "status": "queued",
+      "status": "investigating",
       "next_step": "Assess HTTPS-port UX without enabling plaintext administration.",
       "pr_url": null,
-      "reviews": []
+      "reviews": [],
+      "branch": "dot/issue-315-https-guidance"
     }
   ]
 }
