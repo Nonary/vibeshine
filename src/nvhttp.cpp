@@ -722,13 +722,6 @@ namespace nvhttp {
   }  // namespace
 #endif
 
-  std::string cert_subject_name_for_log(const crypto::x509_t &cert) {
-    auto subject_name = pairing_policy::certificate_subject_name(crypto::subject_name(cert.get()));
-    if (subject_name.empty()) {
-      return "unknown"s;
-    }
-    return subject_name;
-  }
 
 
 
@@ -997,7 +990,8 @@ namespace nvhttp {
 
     void apply_rtsp_framegen_refresh_policy(
       rtsp_stream::launch_session_t &launch_session,
-      const bool uses_virtual_display
+      const bool uses_virtual_display,
+      const bool include_request_detail_log_fields
     ) {
       const auto framegen_policy = make_rtsp_framegen_policy(launch_session, uses_virtual_display);
       launch_session.framegen_refresh_rate = framegen_policy.framegen_refresh_rate;
@@ -1005,7 +999,11 @@ namespace nvhttp {
       launch_session.framegen_refresh_multiplier = framegen_policy.refresh_multiplier;
       launch_session.framegen_fixed_refresh = framegen_policy.fixed_refresh;
       if (uses_virtual_display) {
-        display_helper_integration::helpers::resolve_virtual_display_refresh(config::video, launch_session);
+        display_helper_integration::helpers::resolve_virtual_display_refresh(
+          config::video,
+          launch_session,
+          include_request_detail_log_fields
+        );
       }
     }
 
@@ -1031,7 +1029,8 @@ namespace nvhttp {
       display_helper_integration::helpers::SessionDisplayConfigurationHelper initial_display_helper(
         config::video,
         launch_session,
-        true
+        true,
+        false
       );
       if (auto initial_configuration = initial_display_helper.initial_virtual_display_configuration()) {
         if (initial_configuration->m_resolution &&
@@ -1039,14 +1038,12 @@ namespace nvhttp {
             initial_configuration->m_resolution->m_height > 0) {
           recovery_params.width = initial_configuration->m_resolution->m_width;
           recovery_params.height = initial_configuration->m_resolution->m_height;
-          BOOST_LOG(info) << "Virtual display initial resolution resolved from display configuration: "
-                          << recovery_params.width << 'x' << recovery_params.height;
+          BOOST_LOG(info) << "Virtual display initial resolution resolved from display configuration.";
         }
         if (initial_configuration->m_hdr_state) {
           recovery_params.hdr_requested =
             *initial_configuration->m_hdr_state == display_device::HdrState::Enabled;
-          BOOST_LOG(info) << "Virtual display creation HDR state aligned with source-display policy: "
-                          << (*recovery_params.hdr_requested ? "enabled" : "disabled") << '.';
+          BOOST_LOG(info) << "Virtual display creation HDR state aligned with source-display policy.";
         }
       }
 
@@ -1089,13 +1086,14 @@ namespace nvhttp {
 
     void schedule_rtsp_virtual_display_recovery_monitor(
       std::shared_ptr<rtsp_stream::launch_session_t> recovery_session,
-      VDISPLAY::VirtualDisplayRecoveryParams recovery_params
+      VDISPLAY::VirtualDisplayRecoveryParams recovery_params,
+      const bool include_request_detail_log_fields = true
     ) {
       const GUID recovery_guid = recovery_params.guid;
       recovery_params.should_abort = [recovery_guid]() {
         return !VDISPLAY::is_virtual_display_guid_tracked(recovery_guid);
       };
-      recovery_params.on_recovery_success = [recovery_session = std::move(recovery_session)](const VDISPLAY::VirtualDisplayCreationResult &result, std::stop_token stop_token) -> std::function<void()> {
+      recovery_params.on_recovery_success = [recovery_session = std::move(recovery_session), include_request_detail_log_fields](const VDISPLAY::VirtualDisplayCreationResult &result, std::stop_token stop_token) -> std::function<void()> {
           const auto cancelled = [&] {
             return stop_token.stop_requested();
           };
@@ -1148,7 +1146,11 @@ namespace nvhttp {
                 return {};
               }
 
-              auto request = display_helper_integration::helpers::build_request_from_session(config::video, *recovery_session);
+              auto request = display_helper_integration::helpers::build_request_from_session(
+                config::video,
+                *recovery_session,
+                include_request_detail_log_fields
+              );
               if (!request) {
                 BOOST_LOG(warning) << "Virtual display recovery: failed to rebuild display helper request after recreation (attempt "
                                    << attempt << "/" << kMaxApplyAttempts << ").";
@@ -1214,7 +1216,8 @@ namespace nvhttp {
       const rtsp_stream::launch_session_t &launch_session,
       const std::string &normal_identity_owner,
       const GUID &virtual_display_guid,
-      const std::string &device_id
+      const std::string &device_id,
+      const bool include_request_detail_log_fields = true
     ) {
       if (!rearm || normal_identity_owner.empty() || device_id.empty()) {
         return;
@@ -1251,11 +1254,13 @@ namespace nvhttp {
 
       rearm->stage(reuse_path, [
         recovery_session = std::move(recovery_session),
-        recovery_params = std::move(recovery_params)
+        recovery_params = std::move(recovery_params),
+        include_request_detail_log_fields
       ]() mutable {
         schedule_rtsp_virtual_display_recovery_monitor(
           std::move(recovery_session),
-          std::move(recovery_params)
+          std::move(recovery_params),
+          include_request_detail_log_fields
         );
       });
     }
@@ -1287,7 +1292,8 @@ namespace nvhttp {
       const std::function<void()> &disarm_startup_restore,
       const std::function<bool()> &display_startup_cancelled,
       const std::chrono::steady_clock::time_point display_startup_deadline,
-      const bool preserve_owned_peers = false
+      const bool preserve_owned_peers = false,
+      const bool include_identity_log_fields = true
     ) {
       // This must precede even virtual-display creation: changing topology can
       // remove a monitor's audio endpoint before the later helper APPLY.
@@ -1364,7 +1370,11 @@ namespace nvhttp {
         has_app_output_override = false;
       }
       auto apply_framegen_refresh_policy = [&](bool uses_virtual_display) {
-        apply_rtsp_framegen_refresh_policy(*launch_session, uses_virtual_display);
+        apply_rtsp_framegen_refresh_policy(
+          *launch_session,
+          uses_virtual_display,
+          include_identity_log_fields
+        );
       };
       launch_session->virtual_display_catalog_error.clear();
       if (no_active_sessions && VDISPLAY::hasOwnedSunshineVirtualDisplays() &&
@@ -1426,23 +1436,31 @@ namespace nvhttp {
         if (!reservation.accepted) {
           launch_session->normal_vdd_capacity_rejected = true;
           launch_session->virtual_display_failed = true;
-          BOOST_LOG(warning) << "Rejecting per-client virtual display for client '" << launch_session->client_uuid
-                             << "' because the virtual display client limit has been reached.";
+          if (include_identity_log_fields) {
+            BOOST_LOG(warning) << "Rejecting per-client virtual display for client '" << launch_session->client_uuid
+                               << "' because the virtual display client limit has been reached.";
+          } else {
+            BOOST_LOG(warning) << "Rejecting per-client virtual display because the virtual display client limit has been reached.";
+          }
           return false;
         }
         launch_session->normal_vdd_identity_token = reservation.token;
         launch_session->normal_vdd_identity_newly_reserved = reservation.newly_reserved;
         return true;
       };
-      BOOST_LOG(debug) << "Display helper: session prep client='" << launch_session->client_name
-                       << "' allow_display_changes=" << allow_display_changes
-                       << " no_active_sessions=" << no_active_sessions
-                       << " request_virtual_display=" << request_virtual_display
-                       << " framegen_requires_virtual_display=" << framegen_requires_virtual_display
-                       << " previous_virtual_device_id='" << launch_session->virtual_display_device_id
-                       << "' active_output='" << config::get_active_output_name()
-                       << "' app_output_override='" << (app_output_override ? *app_output_override : std::string {})
-                       << "'.";
+      if (include_identity_log_fields) {
+        BOOST_LOG(debug) << "Display helper: session prep client='" << launch_session->client_name
+                         << "' allow_display_changes=" << allow_display_changes
+                         << " no_active_sessions=" << no_active_sessions
+                         << " request_virtual_display=" << request_virtual_display
+                         << " framegen_requires_virtual_display=" << framegen_requires_virtual_display
+                         << " previous_virtual_device_id='" << launch_session->virtual_display_device_id
+                         << "' active_output='" << config::get_active_output_name()
+                         << "' app_output_override='" << (app_output_override ? *app_output_override : std::string {})
+                         << "'.";
+      } else {
+        BOOST_LOG(debug) << "Display helper: preparing session display request.";
+      }
 
       if (!VDISPLAY::policy::should_prepare_display_for_new_session(no_active_sessions)) {
         const auto previous_virtual_display_device_id = launch_session->virtual_display_device_id;
@@ -1474,8 +1492,12 @@ namespace nvhttp {
             launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
             launch_session->virtual_display_hdr_enabled.reset();
             apply_framegen_refresh_policy(true);
-            BOOST_LOG(info) << "Display helper: another session is active; joining its validated virtual capture target (device_id="
-                            << *existing_device << ").";
+            if (include_identity_log_fields) {
+              BOOST_LOG(info) << "Display helper: another session is active; joining its validated virtual capture target (device_id="
+                              << *existing_device << ").";
+            } else {
+              BOOST_LOG(info) << "Display helper: another session is active; joining its validated virtual capture target.";
+            }
           } else if (existing_device) {
             BOOST_LOG(error) << "Existing virtual display does not match the configured capture adapter; refusing to claim shared-session virtual-display reuse.";
           } else {
@@ -1525,11 +1547,16 @@ namespace nvhttp {
                   *launch_session,
                   virtual_display_stable_id,
                   virtual_display_stable_guid,
-                  *existing_device
+                  *existing_device,
+                  include_identity_log_fields
                 );
               }
-              BOOST_LOG(info) << "Display helper: preserving virtual display capture target for resume (device_id="
-                              << *existing_device << ").";
+              if (include_identity_log_fields) {
+                BOOST_LOG(info) << "Display helper: preserving virtual display capture target for resume (device_id="
+                                << *existing_device << ").";
+              } else {
+                BOOST_LOG(info) << "Display helper: preserving virtual display capture target for resume.";
+              }
               BOOST_LOG(debug) << "Display helper: preserving capture target and refreshing display state for resume.";
               return;
             }
@@ -1550,8 +1577,12 @@ namespace nvhttp {
             config::set_runtime_output_name_override(*app_output_override);
             pending_output_override = *app_output_override;
             apply_framegen_refresh_policy(false);
-            BOOST_LOG(info) << "Display helper: preserving output override for resume: "
-                            << (app_output_override->empty() ? "primary display" : *app_output_override);
+            if (include_identity_log_fields) {
+              BOOST_LOG(info) << "Display helper: preserving output override for resume: "
+                              << (app_output_override->empty() ? "primary display" : *app_output_override);
+            } else {
+              BOOST_LOG(info) << "Display helper: preserving configured output selection for resume.";
+            }
           } else {
             BOOST_LOG(debug) << "Display helper: skipping virtual display changes for resume.";
           }
@@ -1573,14 +1604,22 @@ namespace nvhttp {
       if (app_output_override) {
         config::set_runtime_output_name_override(*app_output_override);
         pending_output_override = *app_output_override;
-        BOOST_LOG(info) << "App-specific display override requested: output_name="
-                        << (app_output_override->empty() ? "primary display" : *app_output_override);
+        if (include_identity_log_fields) {
+          BOOST_LOG(info) << "App-specific display override requested: output_name="
+                          << (app_output_override->empty() ? "primary display" : *app_output_override);
+        } else {
+          BOOST_LOG(info) << "Display helper: app-specific output selection requested.";
+        }
       }
-      BOOST_LOG(debug) << "config_requests_virtual: " << config_requests_virtual;
-      BOOST_LOG(debug) << "client_requests_virtual: " << client_requests_virtual;
-      BOOST_LOG(debug) << "session_requests_virtual: " << session_requests_virtual;
-      BOOST_LOG(debug) << "framegen_requires_virtual_display: " << framegen_requires_virtual_display;
-      BOOST_LOG(debug) << "request_virtual_display: " << request_virtual_display;
+      if (include_identity_log_fields) {
+        BOOST_LOG(debug) << "config_requests_virtual: " << config_requests_virtual;
+        BOOST_LOG(debug) << "client_requests_virtual: " << client_requests_virtual;
+        BOOST_LOG(debug) << "session_requests_virtual: " << session_requests_virtual;
+        BOOST_LOG(debug) << "framegen_requires_virtual_display: " << framegen_requires_virtual_display;
+        BOOST_LOG(debug) << "request_virtual_display: " << request_virtual_display;
+      } else {
+        BOOST_LOG(debug) << "Display helper: evaluating virtual-display policy.";
+      }
       const auto requested_output_name = config::get_active_output_name();
       bool preserve_requested_output = false;
       if (!request_virtual_display) {
@@ -1588,8 +1627,12 @@ namespace nvhttp {
         preserve_requested_output = output_state == display_device::output_state_e::active ||
                                     output_state == display_device::output_state_e::unknown;
         if (!requested_output_name.empty() && output_state == display_device::output_state_e::missing) {
-          BOOST_LOG(warning) << "Requested display '" << requested_output_name
-                             << "' not found; initializing virtual display instead.";
+          if (include_identity_log_fields) {
+            BOOST_LOG(warning) << "Requested display '" << requested_output_name
+                               << "' not found; initializing virtual display instead.";
+          } else {
+            BOOST_LOG(warning) << "Display helper: requested output is unavailable; initializing virtual display instead.";
+          }
           if (!has_app_output_override) {
             request_virtual_display = true;
           }
@@ -1598,8 +1641,12 @@ namespace nvhttp {
           // run the display helper to activate it (no signed-in user session), fall back to a
           // virtual display so capture can still start.
           if (no_active_sessions && !display_helper_session_available()) {
-            BOOST_LOG(warning) << "Requested display '" << requested_output_name
-                               << "' is present but inactive and cannot be activated without a signed-in user; initializing virtual display instead.";
+            if (include_identity_log_fields) {
+              BOOST_LOG(warning) << "Requested display '" << requested_output_name
+                                 << "' is present but inactive and cannot be activated without a signed-in user; initializing virtual display instead.";
+            } else {
+              BOOST_LOG(warning) << "Display helper: requested output is inactive and cannot be activated; initializing virtual display instead.";
+            }
             if (!has_app_output_override) {
               request_virtual_display = true;
             }
@@ -1611,12 +1658,18 @@ namespace nvhttp {
             preserve_requested_output = preparation == preparation_e::ensure_active ||
                                         preparation == preparation_e::ensure_primary ||
                                         preparation == preparation_e::ensure_only_display;
-            if (preserve_requested_output) {
-              BOOST_LOG(info) << "Requested display '" << requested_output_name
-                              << "' is present but inactive; attempting activation via display helper.";
+            if (include_identity_log_fields) {
+              if (preserve_requested_output) {
+                BOOST_LOG(info) << "Requested display '" << requested_output_name
+                                << "' is present but inactive; attempting activation via display helper.";
+              } else {
+                BOOST_LOG(info) << "Requested display '" << requested_output_name
+                                << "' is present but inactive; display preparation policy does not activate it.";
+              }
             } else {
-              BOOST_LOG(info) << "Requested display '" << requested_output_name
-                              << "' is present but inactive; display preparation policy does not activate it.";
+              BOOST_LOG(info) << (preserve_requested_output ?
+                "Display helper: inactive output activation will be attempted." :
+                "Display helper: inactive output will be left unchanged by policy.");
             }
           }
         }
@@ -1694,10 +1747,18 @@ namespace nvhttp {
         std::string display_uuid_source;
         if (!shared_mode && !launch_session->client_uuid.empty()) {
           display_uuid_source = launch_session->client_uuid;
-          BOOST_LOG(debug) << "Using client UUID for virtual display: " << display_uuid_source;
+          if (include_identity_log_fields) {
+            BOOST_LOG(debug) << "Using client UUID for virtual display: " << display_uuid_source;
+          } else {
+            BOOST_LOG(debug) << "Using paired-client display identity for virtual display.";
+          }
         } else {
           display_uuid_source = session_uuid.string();
-          BOOST_LOG(debug) << "Using session UUID for virtual display: " << display_uuid_source;
+          if (include_identity_log_fields) {
+            BOOST_LOG(debug) << "Using session UUID for virtual display: " << display_uuid_source;
+          } else {
+            BOOST_LOG(debug) << "Using session identity for virtual display.";
+          }
         }
 
         GUID virtual_display_guid {};
@@ -1806,10 +1867,12 @@ namespace nvhttp {
           }
           launch_session->virtual_display_ready_since = display_info->ready_since;
           launch_session->virtual_display_hdr_enabled = display_info->hdr_enabled;
-          if (display_info->display_name && !display_info->display_name->empty()) {
+          if (include_identity_log_fields && display_info->display_name && !display_info->display_name->empty()) {
             BOOST_LOG(info) << "Virtual display created at " << platf::to_utf8(*display_info->display_name);
-          } else {
+          } else if (include_identity_log_fields) {
             BOOST_LOG(info) << "Virtual display created (device name pending enumeration).";
+          } else {
+            BOOST_LOG(info) << "Virtual display created.";
           }
 
           recovery_params.display_name = display_info->display_name;
@@ -1825,7 +1888,8 @@ namespace nvhttp {
           );
           schedule_rtsp_virtual_display_recovery_monitor(
             std::move(recovery_session),
-            std::move(recovery_params)
+            std::move(recovery_params),
+            include_identity_log_fields
           );
         } else {
           launch_session->virtual_display = false;
@@ -2758,7 +2822,7 @@ namespace nvhttp {
       return launch_unique_id;
     }
 
-    BOOST_LOG(debug) << "Ignoring unmatched launch uniqueid for per-client settings: " << launch_unique_id;
+    BOOST_LOG(debug) << "Ignoring unmatched launch uniqueid for per-client settings.";
     return {};
   }
 
@@ -2881,7 +2945,8 @@ namespace nvhttp {
     req_https_t request = nullptr,
     bool allow_display_changes = true,
     const resolved_client_identity_t *resolved_client_identity = nullptr,
-    bool use_app_color_preference = true
+    bool use_app_color_preference = true,
+    bool include_identity_log_fields = true
   ) {
     auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
 
@@ -2940,8 +3005,12 @@ namespace nvhttp {
     if (!original_client_name.empty() && is_placeholder_client_name(original_client_name)) {
       const auto resolved_display_client_name =
         display_client_name_for_session(launch_session->client_name, launch_session->device_name, config::nvhttp.sunshine_name);
-      BOOST_LOG(warning) << "Resolved paired client name '" << launch_session->client_name
-                         << "' is not safe for display identity; using '" << resolved_display_client_name << "' instead.";
+      if (include_identity_log_fields) {
+        BOOST_LOG(warning) << "Resolved paired client name '" << launch_session->client_name
+                           << "' is not safe for display identity; using '" << resolved_display_client_name << "' instead.";
+      } else {
+        BOOST_LOG(warning) << "Resolved an unsafe paired-client display name to a host-derived label.";
+      }
       launch_session->client_name = resolved_display_client_name;
     } else {
       launch_session->client_name = original_client_name;
@@ -3053,7 +3122,11 @@ namespace nvhttp {
         launch_session->client_display_mode_override = true;
         launch_session->client_display_refresh_millihz = display_mode->refresh_millihz;
       } else {
-        BOOST_LOG(warning) << "Failed to parse client display mode override: " << client_settings->display_mode;
+        if (include_identity_log_fields) {
+          BOOST_LOG(warning) << "Failed to parse client display mode override: " << client_settings->display_mode;
+        } else {
+          BOOST_LOG(warning) << "Failed to parse the paired-client display mode override.";
+        }
       }
     }
 
@@ -3109,11 +3182,19 @@ namespace nvhttp {
           .width = *width,
           .height = *height,
         };
-        BOOST_LOG(info) << "Using launch resolution override " << *width << "x" << *height
-                        << " for client scaleFactor=" << scale_factor << ".";
+        if (include_identity_log_fields) {
+          BOOST_LOG(info) << "Using launch resolution override " << *width << "x" << *height
+                          << " for client scaleFactor=" << scale_factor << ".";
+        } else {
+          BOOST_LOG(info) << "Applied launch resolution override.";
+        }
       } else {
-        BOOST_LOG(warning) << "Ignoring invalid client scaleFactor=" << scale_factor
-                           << " for requested mode " << launch_session->width << "x" << launch_session->height << ".";
+        if (include_identity_log_fields) {
+          BOOST_LOG(warning) << "Ignoring invalid client scaleFactor=" << scale_factor
+                             << " for requested mode " << launch_session->width << "x" << launch_session->height << ".";
+        } else {
+          BOOST_LOG(warning) << "Ignoring an invalid client launch resolution override.";
+        }
       }
     }
 
@@ -4170,11 +4251,15 @@ namespace nvhttp {
     }
   }
 
-  void resume(bool &host_audio, resp_https_t response, req_https_t request, int current_appid, bool normal_app_transition = true, bool launched_from_applist = false);
+  void resume(bool &host_audio, resp_https_t response, req_https_t request, int current_appid, bool normal_app_transition = true, bool launched_from_applist = false, std::uint64_t trace_id = 0);
   void cancel(resp_https_t response, req_https_t request);
 
-  void launch(bool &host_audio, resp_https_t response, req_https_t request, int current_appid) {
-    print_req<SunshineHTTPS>(request);
+  void launch(bool &host_audio, resp_https_t response, req_https_t request, int current_appid, std::uint64_t trace_id = 0) {
+    // Trace-enabled launch/resume routes correlate with a private trace ID;
+    // do not emit raw request headers or query values into verbose logs.
+    if (dispatch::include_request_identity_log_fields(trace_id)) {
+      print_req<SunshineHTTPS>(request);
+    }
 
 #ifdef _WIN32
     // Keep encoder probes blocked across the complete failure unwind: virtual
@@ -4248,7 +4333,7 @@ namespace nvhttp {
         if (requests_active_app) {
           remote_session::clear_app_replacement_confirmation(request_identity.uuid);
           g.disable();
-          resume(host_audio, std::move(response), std::move(request), current_appid, true, true);
+          resume(host_audio, std::move(response), std::move(request), current_appid, true, true, trace_id);
           return;
         }
       }
@@ -4285,7 +4370,7 @@ namespace nvhttp {
       remote_session::clear_app_replacement_confirmation(identity.uuid);
       if (decision.resume && decision.resume_role == remote_session::role_e::game && current_appid > 0) {
         g.disable();
-        resume(host_audio, std::move(response), std::move(request), current_appid, true, true);
+        resume(host_audio, std::move(response), std::move(request), current_appid, true, true, trace_id);
         return;
       }
       if (decision.terminate) {
@@ -4296,22 +4381,34 @@ namespace nvhttp {
             )) {
           const auto confirmation = remote_session::arm_or_confirm_termination(identity.uuid, game.generation, game.app.id);
           if (confirmation == remote_session::terminate_confirmation_e::prompt) {
-            BOOST_LOG(info) << "Terminate confirmation armed for client " << identity.uuid
-                            << " (app=" << game.app.id << ", generation=" << game.generation << ").";
+            if (dispatch::include_request_identity_log_fields(trace_id)) {
+              BOOST_LOG(info) << "Terminate confirmation armed for client " << identity.uuid
+                              << " (app=" << game.app.id << ", generation=" << game.generation << ").";
+            } else {
+              BOOST_LOG(info) << "NVHTTP launch trace #" << trace_id << " termination confirmation armed.";
+            }
             tree.put("root.resume", 0);
             tree.put("root.gamesession", 0);
             tree.put("root.<xmlattr>.status_code", 410);
             tree.put("root.<xmlattr>.status_message", std::string {remote_session::termination_confirmation_message()});
             return;
           }
-          BOOST_LOG(info) << "Terminate confirmation accepted for client " << identity.uuid
-                          << " (app=" << game.app.id << ", generation=" << game.generation << ").";
+          if (dispatch::include_request_identity_log_fields(trace_id)) {
+            BOOST_LOG(info) << "Terminate confirmation accepted for client " << identity.uuid
+                            << " (app=" << game.app.id << ", generation=" << game.generation << ").";
+          } else {
+            BOOST_LOG(info) << "NVHTTP launch trace #" << trace_id << " termination confirmation accepted.";
+          }
         } else {
           // Do not let a previous guarded request survive a configuration
           // change or an owner request and confirm a later extra-client launch.
           remote_session::clear_termination_confirmation(identity.uuid);
-          BOOST_LOG(info) << "Terminate accepted on the first request for client " << identity.uuid
-                          << (caller_owns_active_game ? " (active-game owner)." : " (configured first-request mode).");
+          if (dispatch::include_request_identity_log_fields(trace_id)) {
+            BOOST_LOG(info) << "Terminate accepted on the first request for client " << identity.uuid
+                            << (caller_owns_active_game ? " (active-game owner)." : " (configured first-request mode).");
+          } else {
+            BOOST_LOG(info) << "NVHTTP launch trace #" << trace_id << " first-request termination accepted.";
+          }
         }
         const bool disconnected = rtsp_stream::disconnect_game_sessions(true);
         stream::session::release_terminated_game_displays();
@@ -4378,7 +4475,7 @@ namespace nvhttp {
           synthetic_control == remote_session::control_e::running_game) {
         if (decision.resume_role == remote_session::role_e::game && current_appid > 0) {
           g.disable();
-          resume(host_audio, std::move(response), std::move(request), current_appid, true, true);
+          resume(host_audio, std::move(response), std::move(request), current_appid, true, true, trace_id);
           return;
         }
         if (decision.resume_role != remote_session::role_e::monitor ||
@@ -4495,7 +4592,7 @@ namespace nvhttp {
       if (no_active_sessions) {
         config::record_active_adapter_config();
       }
-      auto launch_session = make_launch_session(false, args, request, false, &identity, false);
+      auto launch_session = make_launch_session(false, args, request, false, &identity, false, dispatch::include_request_identity_log_fields(trace_id));
       if (launch_session->requested_resolution_only) {
         tree.put("root.<xmlattr>.status_code", 409);
         tree.put("root.<xmlattr>.status_message", "Requested-resolution catalog is supported only for a private Windows game session.");
@@ -4547,8 +4644,12 @@ namespace nvhttp {
         launch_session->remote_capture_output = monitor.output;
         launch_session->exact_monitor_target = monitor.exact_target;
         launch_session->exact_target_hold = std::move(monitor.target_hold);
-        BOOST_LOG(info) << "Remote Monitor exact capture target for client '" << identity.uuid
-                        << "' is '" << monitor.output << "'.";
+        if (dispatch::include_request_identity_log_fields(trace_id)) {
+          BOOST_LOG(info) << "Remote Monitor exact capture target for client '" << identity.uuid
+                          << "' is '" << monitor.output << "'.";
+        } else {
+          BOOST_LOG(info) << "NVHTTP launch trace #" << trace_id << " Remote Monitor capture target selected.";
+        }
       }
       stream::session::arm_shared_runtime_cleanup(launch_session->virtual_display_guid_bytes);
       if (!paired_client_uuid_enabled(launch_session->client_uuid)) {
@@ -4620,22 +4721,34 @@ launch_session->exact_target_hold.reset();
           static_cast<std::int32_t>(appid)
         );
         if (confirmation == remote_session::app_replacement_confirmation_e::prompt) {
-          BOOST_LOG(info) << "App replacement confirmation armed for client " << request_identity.uuid
-                          << " (running_app=" << current_appid << ", requested_app=" << appid << ").";
+          if (dispatch::include_request_identity_log_fields(trace_id)) {
+            BOOST_LOG(info) << "App replacement confirmation armed for client " << request_identity.uuid
+                            << " (running_app=" << current_appid << ", requested_app=" << appid << ").";
+          } else {
+            BOOST_LOG(info) << "NVHTTP launch trace #" << trace_id << " app replacement confirmation armed.";
+          }
           tree.put("root.resume", 0);
           tree.put("root.gamesession", 0);
           tree.put("root.<xmlattr>.status_code", 410);
           tree.put("root.<xmlattr>.status_message", std::string {remote_session::app_replacement_confirmation_message()});
           return;
         }
-        BOOST_LOG(info) << "App replacement confirmation accepted for client " << request_identity.uuid
-                        << " (running_app=" << current_appid << ", requested_app=" << appid << ").";
+        if (dispatch::include_request_identity_log_fields(trace_id)) {
+          BOOST_LOG(info) << "App replacement confirmation accepted for client " << request_identity.uuid
+                          << " (running_app=" << current_appid << ", requested_app=" << appid << ").";
+        } else {
+          BOOST_LOG(info) << "NVHTTP launch trace #" << trace_id << " app replacement confirmation accepted.";
+        }
       } else {
         remote_session::clear_app_replacement_confirmation(request_identity.uuid);
       }
 
-      BOOST_LOG(info) << "Replacing running app " << current_appid << " with app " << appid
-                      << " at the request of paired client " << request_identity.uuid << ".";
+      if (dispatch::include_request_identity_log_fields(trace_id)) {
+        BOOST_LOG(info) << "Replacing running app " << current_appid << " with app " << appid
+                        << " at the request of paired client " << request_identity.uuid << ".";
+      } else {
+        BOOST_LOG(info) << "NVHTTP launch trace #" << trace_id << " app replacement requested.";
+      }
       (void) rtsp_stream::disconnect_game_sessions(true);
       proc::proc.terminate(false, true);
     }
@@ -4711,12 +4824,20 @@ launch_session->exact_target_hold.reset();
           if (const auto profile_peak = VDISPLAY::hdr_profile_peak_luminance_nits(client_settings->hdr_profile)) {
             const auto effective_peak = std::clamp<std::uint32_t>(*profile_peak, 400, 2000);
             overrides.insert_or_assign("rtx_hdr_peak_brightness", std::to_string(effective_peak));
-            BOOST_LOG(info) << "HDR peak: using " << effective_peak << " nits from MHC2 profile '"
-                            << client_settings->hdr_profile << "'"
-                            << (*profile_peak == effective_peak ? "." : " (clamped to supported range).");
+            if (dispatch::include_request_identity_log_fields(trace_id)) {
+              BOOST_LOG(info) << "HDR peak: using " << effective_peak << " nits from MHC2 profile '"
+                              << client_settings->hdr_profile << "'"
+                              << (*profile_peak == effective_peak ? "." : " (clamped to supported range).");
+            } else {
+              BOOST_LOG(info) << "HDR peak: using the paired client's selected calibration profile.";
+            }
           } else {
-            BOOST_LOG(warning) << "HDR peak: profile '" << client_settings->hdr_profile
-                               << "' has no readable MHC2 peak; using the configured default.";
+            if (dispatch::include_request_identity_log_fields(trace_id)) {
+              BOOST_LOG(warning) << "HDR peak: profile '" << client_settings->hdr_profile
+                                 << "' has no readable MHC2 peak; using the configured default.";
+            } else {
+              BOOST_LOG(warning) << "HDR peak: the paired client's selected calibration profile is unreadable; using the configured default.";
+            }
           }
         }
 #endif
@@ -4760,7 +4881,7 @@ launch_session->exact_target_hold.reset();
 #endif
 
     const bool allow_display_changes = true;
-    auto launch_session = make_launch_session(host_audio, args, request, allow_display_changes, &request_client_identity);
+    auto launch_session = make_launch_session(host_audio, args, request, allow_display_changes, &request_client_identity, true, dispatch::include_request_identity_log_fields(trace_id));
 #ifndef _WIN32
     if (launch_session->requested_resolution_only) {
       tree.put("root.<xmlattr>.status_code", 503);
@@ -4826,7 +4947,9 @@ launch_session->exact_target_hold.reset();
       nullptr,
       disarm_startup_restore,
       display_startup_cancelled,
-      display_startup_deadline
+      display_startup_deadline,
+      false,
+      dispatch::include_request_identity_log_fields(trace_id)
     );
     if (!launch_session->virtual_display_catalog_error.empty()) {
       tree.put("root.<xmlattr>.status_code", 503);
@@ -4890,7 +5013,11 @@ launch_session->exact_target_hold.reset();
 
 #ifdef _WIN32
       disarm_startup_restore();
-      auto request = display_helper_integration::helpers::build_request_from_session(config::video, *launch_session);
+      auto request = display_helper_integration::helpers::build_request_from_session(
+        config::video,
+        *launch_session,
+        dispatch::include_request_identity_log_fields(trace_id)
+      );
       launch_session->display_config_preapply_attempted = true;
       if (!request) {
         BOOST_LOG(warning) << "Display helper: no display configuration request; using the existing display.";
@@ -5072,8 +5199,12 @@ launch_session->exact_target_hold.reset();
     revert_display_configuration = false;
   }
 
-  void resume(bool &host_audio, resp_https_t response, req_https_t request, int current_appid, const bool normal_app_transition, const bool launched_from_applist) {
-    print_req<SunshineHTTPS>(request);
+  void resume(bool &host_audio, resp_https_t response, req_https_t request, int current_appid, const bool normal_app_transition, const bool launched_from_applist, const std::uint64_t trace_id) {
+    // Trace-enabled launch/resume routes correlate with a private trace ID;
+    // do not emit raw request headers or query values into verbose logs.
+    if (dispatch::include_request_identity_log_fields(trace_id)) {
+      print_req<SunshineHTTPS>(request);
+    }
 
 #ifdef _WIN32
     // See launch(): the response fail guard can restore through the helper
@@ -5093,8 +5224,19 @@ launch_session->exact_target_hold.reset();
       }
 
       pt::write_xml(data, tree);
-      response->write(data.str());
+      const auto response_body = data.str();
+      const auto status_code = tree.get("root.<xmlattr>.status_code", 200);
+      if (trace_id != 0) {
+        BOOST_LOG(info) << "NVHTTP Resume trace #" << trace_id
+                        << " handler response status=" << status_code
+                        << "; response write call starting.";
+      }
+      response->write(response_body);
       response->close_connection_after_response = true;
+      if (trace_id != 0) {
+        BOOST_LOG(info) << "NVHTTP Resume trace #" << trace_id
+                        << " response write call returned; this records the server write boundary, not client receipt.";
+      }
 
       if (revert_display_configuration) {
         display_helper_integration::revert();
@@ -5164,8 +5306,12 @@ launch_session->exact_target_hold.reset();
           std::find(capture_outputs.begin(), capture_outputs.end(), retained_capture_name) != capture_outputs.end();
         if (retained_game_output_ready) {
           retained_game_output = *retained_output;
-          BOOST_LOG(info) << "Resume will join the capture-ready retained game output '"
-                          << *retained_output << "'.";
+          if (dispatch::include_request_identity_log_fields(trace_id)) {
+            BOOST_LOG(info) << "Resume will join the capture-ready retained game output '"
+                            << *retained_output << "'.";
+          } else {
+            BOOST_LOG(info) << "Resume will join the capture-ready retained game output.";
+          }
         }
       }
     }
@@ -5288,7 +5434,7 @@ launch_session->exact_target_hold.reset();
       request_audio_hold.before(disarm_startup_restore);
     }
 #endif
-    const auto launch_session = make_launch_session(host_audio, args, request, allow_session_display_changes, &request_client_identity);
+    const auto launch_session = make_launch_session(host_audio, args, request, allow_session_display_changes, &request_client_identity, true, dispatch::include_request_identity_log_fields(trace_id));
 #ifndef _WIN32
     if (launch_session->requested_resolution_only) {
       tree.put("root.<xmlattr>.status_code", 503);
@@ -5336,7 +5482,8 @@ launch_session->exact_target_hold.reset();
           *launch_session,
           active_game.client_uuid,
           retained_virtual_display_guid,
-          *retained_game_output
+          *retained_game_output,
+          dispatch::include_request_identity_log_fields(trace_id)
         );
       } else {
         BOOST_LOG(warning) << "Retained game output is capture-ready but does not resolve to the running app's normal virtual-display identity; recovery will remain idle.";
@@ -5425,7 +5572,8 @@ launch_session->exact_target_hold.reset();
         disarm_startup_restore,
         display_startup_cancelled,
         display_startup_deadline,
-        retained_resume_owner_eligible
+        retained_resume_owner_eligible,
+        dispatch::include_request_identity_log_fields(trace_id)
       );
     }
     if (!launch_session->virtual_display_catalog_error.empty()) {
@@ -5502,17 +5650,25 @@ launch_session->exact_target_hold.reset();
         launch_session->virtual_display_needs_resume_apply;
 #endif
       if (should_apply_display_request) {
-        BOOST_LOG(debug) << "Display helper: applying session display request on "
-                         << (allow_session_display_changes ? "normal start/resume" :
-                                                       (launch_session->virtual_display_recreated_on_demand ?
-                                                          "resume virtual-display recreation" :
-                                                          "resume virtual-display refresh"))
-                         << " for client '" << launch_session->client_name << "'.";
+        if (dispatch::include_request_identity_log_fields(trace_id)) {
+          BOOST_LOG(debug) << "Display helper: applying session display request on "
+                           << (allow_session_display_changes ? "normal start/resume" :
+                                                         (launch_session->virtual_display_recreated_on_demand ?
+                                                            "resume virtual-display recreation" :
+                                                            "resume virtual-display refresh"))
+                           << " for client '" << launch_session->client_name << "'.";
+        } else {
+          BOOST_LOG(debug) << "NVHTTP Resume trace #" << trace_id << " applying session display request.";
+        }
         revert_display_configuration = allow_session_display_changes || launch_session->virtual_display_failed;
 
 #ifdef _WIN32
         disarm_startup_restore();
-        auto request = display_helper_integration::helpers::build_request_from_session(config::video, *launch_session);
+        auto request = display_helper_integration::helpers::build_request_from_session(
+          config::video,
+          *launch_session,
+          dispatch::include_request_identity_log_fields(trace_id)
+        );
         if (!request) {
           BOOST_LOG(warning) << "Display helper: no display configuration request; using the existing display.";
         }
@@ -6095,7 +6251,7 @@ launch_session->exact_target_hold.reset();
         std::lock_guard<std::mutex> lock(client_mutex);
         while (add_cert->peek()) {
           auto cert = add_cert->pop();
-          BOOST_LOG(verbose) << "Added cert [" << cert_subject_name_for_log(cert) << ']';
+          BOOST_LOG(verbose) << "Added pending client certificate.";
           cert_chain.add(std::move(cert));
         }
         result = tls_client_identities.authenticate(req, ssl, cert_chain, client_record_views(client_root));
@@ -6104,8 +6260,7 @@ launch_session->exact_target_hold.reset();
         BOOST_LOG(warning) << "SSL Verification error :: " << result.error;
         return 0;
       }
-      BOOST_LOG(debug) << "Found exact enabled client UUID: " << result.identity->uuid
-                       << " for client: " << result.identity->name;
+      BOOST_LOG(debug) << "Authenticated an enabled paired TLS client.";
       return 1;
     };
 
@@ -6140,25 +6295,29 @@ launch_session->exact_target_hold.reset();
     // remain stuck in the kernel even after SIGKILL. Later requests must get
     // a response and must never execute stale mutations after a client timeout.
     auto mutation_admission = std::make_shared<single_flight::admission_t>();
-    auto run_blocking_nvhttp = [&blocking_route_pool, run_on_blocking_pool, mutation_admission](auto response, const char *operation, auto task) {
+    auto run_blocking_nvhttp = [&blocking_route_pool, run_on_blocking_pool, mutation_admission](auto response, const char *operation, auto task, std::function<void(const dispatch::trace_event_t &)> trace_observer = {}) {
+      auto submit = [&](auto admitted) {
+        run_on_blocking_pool(blocking_route_pool, std::move(admitted));
+      };
 #ifdef _WIN32
       const bool terminal_fenced = std::string_view(operation) == "launch" ||
                                    std::string_view(operation) == "resume" ||
                                    std::string_view(operation) == "cancel" ||
                                    std::string_view(operation) == "SleepAccepted";
       if (terminal_fenced) {
-        dispatch::run_start(*mutation_admission, [&](auto admitted) {
-          run_on_blocking_pool(blocking_route_pool, std::move(admitted));
-        }, response, operation, std::move(task));
+        if (trace_observer) {
+          dispatch::run_start(*mutation_admission, submit, response, operation, std::move(task), std::move(trace_observer));
+        } else {
+          dispatch::run_start(*mutation_admission, submit, response, operation, std::move(task));
+        }
         return;
       }
 #endif
-      dispatch::run_blocking(*mutation_admission, [&](auto admitted) {
-        run_on_blocking_pool(blocking_route_pool, std::move(admitted));
-      },
-                             std::move(response),
-                             operation,
-                             std::move(task));
+      if (trace_observer) {
+        dispatch::run_blocking(*mutation_admission, submit, std::move(response), operation, std::move(task), std::move(trace_observer));
+      } else {
+        dispatch::run_blocking(*mutation_admission, submit, std::move(response), operation, std::move(task));
+      }
     };
 
     auto run_discovery_nvhttp = [&discovery_route_pool, run_on_blocking_pool](auto task) {
@@ -6209,20 +6368,54 @@ launch_session->exact_target_hold.reset();
     };
     https_server.resource["^/appasset$"]["GET"] = appasset;
     https_server.resource["^/launch$"]["GET"] = [&host_audio, run_blocking_nvhttp](auto resp, auto req) {
-      run_blocking_nvhttp(resp, "launch", [&host_audio, resp, req = std::move(req)]() mutable {
+      const auto trace_id = dispatch::next_trace_id();
+      BOOST_LOG(info) << "NVHTTP launch trace #" << trace_id << " entered GET /launch route.";
+      const auto trace_observer = [trace_id](const dispatch::trace_event_t &event) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(event.elapsed).count();
+        BOOST_LOG(info) << "NVHTTP launch trace #" << trace_id << ' '
+                        << dispatch::trace_stage_name(event.stage)
+                        << " elapsed_ms=" << elapsed;
+      };
+      run_blocking_nvhttp(resp, "launch", [&host_audio, resp, req = std::move(req), trace_id]() mutable {
         (void) proc::proc.running();
+        const auto lifecycle_wait_started = std::chrono::steady_clock::now();
         auto lifecycle_lock = acquire_stream_start_lifecycle_lock();
+        const auto lifecycle_wait = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      std::chrono::steady_clock::now() - lifecycle_wait_started
+        )
+                                      .count();
         const int current_appid = proc::proc.current_app_id();
-        launch(host_audio, std::move(resp), std::move(req), current_appid);
-      });
+        BOOST_LOG(info) << "NVHTTP launch trace #" << trace_id
+                        << " acquired stream lifecycle gate after " << lifecycle_wait
+                        << " ms.";
+        launch(host_audio, std::move(resp), std::move(req), current_appid, trace_id);
+      },
+                          trace_observer);
     };
     https_server.resource["^/resume$"]["GET"] = [&host_audio, run_blocking_nvhttp](auto resp, auto req) {
-      run_blocking_nvhttp(resp, "resume", [&host_audio, resp, req = std::move(req)]() mutable {
+      const auto trace_id = dispatch::next_trace_id();
+      BOOST_LOG(info) << "NVHTTP Resume trace #" << trace_id << " entered GET /resume route.";
+      const auto trace_observer = [trace_id](const dispatch::trace_event_t &event) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(event.elapsed).count();
+        BOOST_LOG(info) << "NVHTTP Resume trace #" << trace_id << ' '
+                        << dispatch::trace_stage_name(event.stage)
+                        << " elapsed_ms=" << elapsed;
+      };
+      run_blocking_nvhttp(resp, "resume", [&host_audio, resp, req = std::move(req), trace_id]() mutable {
         (void) proc::proc.running();
+        const auto lifecycle_wait_started = std::chrono::steady_clock::now();
         auto lifecycle_lock = acquire_stream_start_lifecycle_lock();
+        const auto lifecycle_wait = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      std::chrono::steady_clock::now() - lifecycle_wait_started
+        )
+                                      .count();
         const int current_appid = proc::proc.current_app_id();
-        resume(host_audio, std::move(resp), std::move(req), current_appid);
-      });
+        BOOST_LOG(info) << "NVHTTP Resume trace #" << trace_id
+                        << " acquired stream lifecycle gate after " << lifecycle_wait
+                        << " ms.";
+        resume(host_audio, std::move(resp), std::move(req), current_appid, true, false, trace_id);
+      },
+                          trace_observer);
     };
     https_server.resource["^/cancel$"]["GET"] = [run_blocking_nvhttp](auto resp, auto req) {
       run_blocking_nvhttp(resp, "cancel", [resp, req = std::move(req)]() mutable {

@@ -26,6 +26,7 @@
 
 // local includes
 #include "audio.h"
+#include "input_geometry_snapshot.h"
 #include "src/boost_process_shim.h"
 #include "src/config.h"
 #include "src/amf/amf_initialization_policy.h"
@@ -511,6 +512,7 @@ namespace platf {
 
   class display_t {
   public:
+    std::uint64_t recovery_capture_instance {0};
     /**
      * @brief Callback for when a new image is ready.
      * When display has a new image ready or a timeout occurs, this callback will be called with the image.
@@ -528,6 +530,13 @@ namespace platf {
      * @retval false When capture has been interrupted, img_out contains nullptr
      */
     using pull_free_image_cb_t = std::function<bool(std::shared_ptr<img_t> &img_out)>;
+
+    // Capture backends that can preserve frames while absolute-input geometry
+    // changes publish their latest immutable mapping here. Other backends keep
+    // using the ordinary display fields and their existing reinit behavior.
+    virtual std::optional<input_geometry_snapshot_t> input_geometry_snapshot() const {
+      return std::nullopt;
+    }
 
     display_t() noexcept:
         offset_x {0},

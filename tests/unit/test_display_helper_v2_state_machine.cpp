@@ -2,7 +2,7 @@
  * @file tests/unit/test_display_helper_v2_state_machine.cpp
  * @brief Unit tests for display helper v2 state machine and operations.
  */
-#ifdef _WIN32
+#if defined(_WIN32) || defined(SUNSHINE_TEST_PORTABLE_WINDOWS_TYPES)
 
   #include "../tests_common.h"
   #include "src/platform/windows/display_helper_v2/async_dispatcher.h"
@@ -333,6 +333,7 @@ namespace {
       display_device::Rational {60, 1}
     };
     snapshot.m_hdr_states[id] = std::nullopt;
+    snapshot.m_origins[id] = display_device::Point {0, 0};
     return snapshot;
   }
 
@@ -2781,6 +2782,7 @@ TEST(DisplayHelperV2StateMachine, ContinuouslyConnectedInactivePhysicalMemberRem
   harness.display_settings.snapshot.m_topology.push_back({"virtual_current"});
   harness.display_settings.snapshot.m_modes["virtual_current"] = display_device::DisplayMode {};
   harness.display_settings.snapshot.m_hdr_states["virtual_current"] = std::nullopt;
+  harness.display_settings.snapshot.m_origins["virtual_current"] = display_device::Point {0, 0};
   harness.add_inactive_device("physical_b");
   harness.state_machine.handle_message(display_helper::v2::DisplayEventMessage {
     display_helper::v2::DisplayEvent::DisplayChange,
@@ -2814,10 +2816,12 @@ TEST(DisplayHelperV2StateMachine, PoweredOffPhysicalBaselineReturnsInactiveAndGe
       harness.add_active_device("virtual_current");
       harness.display_settings.snapshot = make_snapshot("physical_a");
       harness.display_settings.snapshot.m_topology.push_back({"virtual_current"});
+      harness.display_settings.snapshot.m_origins["virtual_current"] = display_device::Point {0, 0};
       if (physical_b_present) {
         if (physical_b_active) {
           harness.add_active_device("physical_b");
           harness.display_settings.snapshot.m_topology.push_back({"physical_b"});
+          harness.display_settings.snapshot.m_origins["physical_b"] = display_device::Point {0, 0};
         } else {
           harness.add_inactive_device("PHYSICAL_B");
         }
@@ -2906,6 +2910,7 @@ TEST(DisplayHelperV2StateMachine, HealthyPhysicalReturnConsumesEvidenceBeforeLat
   harness.add_active_device("virtual_current");
   harness.display_settings.snapshot = make_snapshot("physical_a");
   harness.display_settings.snapshot.m_topology.push_back({"virtual_current"});
+  harness.display_settings.snapshot.m_origins["virtual_current"] = display_device::Point {0, 0};
   harness.display_settings.topology = harness.display_settings.snapshot.m_topology;
   display_helper::v2::ApplyRequest request;
   request.configuration = display_device::SingleDisplayConfiguration {};
@@ -2960,6 +2965,7 @@ TEST(DisplayHelperV2StateMachine, InactivePhysicalReturnsRespectExclusiveExclude
     harness.display_settings.snapshot = make_snapshot("virtual_current");
     if (policy != "exclusive") {
       harness.display_settings.snapshot.m_topology.push_back({"physical_a"});
+      harness.display_settings.snapshot.m_origins["physical_a"] = display_device::Point {0, 0};
     }
     harness.display_settings.topology = harness.display_settings.snapshot.m_topology;
     display_helper::v2::ApplyRequest request;
@@ -3003,6 +3009,7 @@ TEST(DisplayHelperV2StateMachine, NewApplyDiscardsPriorInactivePhysicalReturnEvi
   harness.add_active_device("virtual_current");
   harness.display_settings.snapshot = make_snapshot("physical_a");
   harness.display_settings.snapshot.m_topology.push_back({"virtual_current"});
+  harness.display_settings.snapshot.m_origins["virtual_current"] = display_device::Point {0, 0};
   harness.display_settings.topology = harness.display_settings.snapshot.m_topology;
   display_helper::v2::ApplyRequest request;
   request.configuration = display_device::SingleDisplayConfiguration {};
@@ -3248,6 +3255,7 @@ TEST(DisplayHelperV2StateMachine, ActivePhysicalBaselineReturnGetsOneTopologyRep
   harness.display_settings.snapshot.m_topology.push_back({"virtual_current"});
   harness.display_settings.snapshot.m_modes["virtual_current"] = display_device::DisplayMode {};
   harness.display_settings.snapshot.m_hdr_states["virtual_current"] = std::nullopt;
+  harness.display_settings.snapshot.m_origins["virtual_current"] = display_device::Point {0, 0};
 
   display_helper::v2::ApplyRequest request;
   request.configuration = display_device::SingleDisplayConfiguration {};
@@ -4326,10 +4334,19 @@ TEST(DisplayHelperV2StateMachine, ExportGoldenCapturesSnapshotWithBlacklist) {
 
   display_device::DisplaySettingsSnapshot snapshot;
   snapshot.m_topology = {{"A", "B"}};
-  snapshot.m_modes["A"] = display_device::DisplayMode {};
-  snapshot.m_modes["B"] = display_device::DisplayMode {};
+  snapshot.m_modes["A"] = display_device::DisplayMode {
+    display_device::Resolution {3840, 2160},
+    display_device::Rational {143857, 1000}
+  };
+  snapshot.m_modes["B"] = display_device::DisplayMode {
+    display_device::Resolution {1920, 1080},
+    display_device::Rational {180, 1}
+  };
   snapshot.m_hdr_states["A"] = std::nullopt;
   snapshot.m_hdr_states["B"] = std::nullopt;
+  snapshot.m_primary_device = "A";
+  snapshot.m_origins["A"] = display_device::Point {0, 0};
+  snapshot.m_origins["B"] = display_device::Point {-1920, 0};
   harness.display_settings.snapshot = snapshot;
 
   display_helper::v2::SnapshotCommandPayload payload;
@@ -4343,6 +4360,16 @@ TEST(DisplayHelperV2StateMachine, ExportGoldenCapturesSnapshotWithBlacklist) {
   ASSERT_EQ(stored->m_topology.front().size(), 1u);
   EXPECT_EQ(stored->m_topology.front().front(), "A");
   EXPECT_EQ(stored->m_modes.count("B"), 0u);
+  ASSERT_EQ(stored->m_modes.count("A"), 1u);
+  EXPECT_EQ(stored->m_modes.at("A").m_resolution.m_width, 3840u);
+  EXPECT_EQ(stored->m_modes.at("A").m_resolution.m_height, 2160u);
+  EXPECT_EQ(stored->m_modes.at("A").m_refresh_rate.m_numerator, 143857u);
+  EXPECT_EQ(stored->m_modes.at("A").m_refresh_rate.m_denominator, 1000u);
+  EXPECT_EQ(stored->m_primary_device, "A");
+  ASSERT_EQ(stored->m_origins.count("A"), 1u);
+  EXPECT_EQ(stored->m_origins.at("A").m_x, 0);
+  EXPECT_EQ(stored->m_origins.at("A").m_y, 0);
+  EXPECT_EQ(stored->m_origins.count("B"), 0u);
 }
 
 TEST(DisplayHelperV2StateMachine, SnapshotCurrentRefreshesPreservingPrevious) {
@@ -4367,6 +4394,84 @@ TEST(DisplayHelperV2StateMachine, SnapshotCurrentRefreshesPreservingPrevious) {
   EXPECT_TRUE(display_helper::v2::topology::equal_snapshot(*stored_current, current));
   ASSERT_TRUE(harness.snapshot_result.has_value());
   EXPECT_TRUE(*harness.snapshot_result);
+}
+
+TEST(DisplayHelperV2StateMachine, SnapshotCurrentPersistsModesAndOriginsForEveryActiveOutput) {
+  StateMachineHarness harness;
+  harness.add_active_device("A");
+  harness.add_active_device("B");
+
+  display_device::DisplaySettingsSnapshot captured;
+  captured.m_topology = {{"A", "B"}};
+  captured.m_modes["A"] = display_device::DisplayMode {
+    display_device::Resolution {3840, 2160},
+    display_device::Rational {143857, 1000}
+  };
+  captured.m_modes["B"] = display_device::DisplayMode {
+    display_device::Resolution {1920, 1080},
+    display_device::Rational {180, 1}
+  };
+  captured.m_origins["A"] = display_device::Point {0, 0};
+  captured.m_origins["B"] = display_device::Point {-1920, 0};
+  harness.display_settings.snapshot = captured;
+
+  display_helper::v2::SnapshotCommandPayload payload;
+  harness.state_machine.handle_message(display_helper::v2::SnapshotCurrentCommand {payload, harness.cancellation.current_generation()});
+
+  ASSERT_TRUE(harness.snapshot_result.has_value());
+  EXPECT_TRUE(*harness.snapshot_result);
+  const auto stored = harness.storage.load(display_helper::v2::SnapshotTier::Current);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->m_modes.size(), 2u);
+  EXPECT_EQ(stored->m_modes.at("A").m_refresh_rate.m_numerator, 143857u);
+  EXPECT_EQ(stored->m_modes.at("A").m_refresh_rate.m_denominator, 1000u);
+  EXPECT_EQ(stored->m_modes.at("B").m_refresh_rate.m_numerator, 180u);
+  EXPECT_EQ(stored->m_modes.at("B").m_refresh_rate.m_denominator, 1u);
+  EXPECT_EQ(stored->m_origins.at("A").m_x, 0);
+  EXPECT_EQ(stored->m_origins.at("B").m_x, -1920);
+}
+
+TEST(DisplayHelperV2StateMachine, SnapshotCurrentRejectsCaptureMissingActiveOutputOrigin) {
+  StateMachineHarness harness;
+  harness.add_active_device("A");
+  harness.add_active_device("B");
+
+  display_device::DisplaySettingsSnapshot existing;
+  existing.m_topology = {{"A", "B"}};
+  existing.m_modes["A"] = display_device::DisplayMode {
+    display_device::Resolution {3840, 2160},
+    display_device::Rational {143857, 1000}
+  };
+  existing.m_modes["B"] = display_device::DisplayMode {
+    display_device::Resolution {1920, 1080},
+    display_device::Rational {180, 1}
+  };
+  existing.m_origins["A"] = display_device::Point {0, 0};
+  existing.m_origins["B"] = display_device::Point {-1920, 0};
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Current, existing));
+  const auto previous = make_snapshot("OLD");
+  ASSERT_TRUE(harness.storage.save(display_helper::v2::SnapshotTier::Previous, previous));
+
+  auto incomplete = existing;
+  incomplete.m_origins.erase("B");
+  harness.display_settings.snapshot = incomplete;
+
+  display_helper::v2::SnapshotCommandPayload payload;
+  harness.state_machine.handle_message(display_helper::v2::SnapshotCurrentCommand {payload, harness.cancellation.current_generation()});
+
+  ASSERT_TRUE(harness.snapshot_result.has_value());
+  EXPECT_FALSE(*harness.snapshot_result);
+  const auto stored_current = harness.storage.load(display_helper::v2::SnapshotTier::Current);
+  ASSERT_TRUE(stored_current.has_value());
+  EXPECT_EQ(stored_current->m_topology, existing.m_topology);
+  ASSERT_EQ(stored_current->m_modes.size(), 2u);
+  EXPECT_EQ(stored_current->m_modes.at("A").m_refresh_rate.m_numerator, 143857u);
+  EXPECT_EQ(stored_current->m_modes.at("B").m_refresh_rate.m_numerator, 180u);
+  ASSERT_EQ(stored_current->m_origins.size(), 2u);
+  EXPECT_EQ(stored_current->m_origins.at("B").m_x, -1920);
+  const auto stored_previous = harness.storage.load(display_helper::v2::SnapshotTier::Previous);
+  ASSERT_TRUE(stored_previous.has_value());
+  EXPECT_EQ(stored_previous->m_topology, previous.m_topology);
 }
 
 // f3841ad8: APPLY with no session baseline on disk must self-capture the
@@ -5204,4 +5309,126 @@ TEST(DisplayHelperV2StateMachine, InconsistentPhysicalCapturePreservesCurrentAnd
   EXPECT_EQ(h.storage.load(display_helper::v2::SnapshotTier::Previous)->m_topology, previous.m_topology);
 }
 
-#endif  // _WIN32
+namespace {
+  void verify_virtual_session(StateMachineHarness &harness, std::uint64_t id = 41) {
+    display_helper::v2::ApplyRequest request;
+    request.configuration = display_device::SingleDisplayConfiguration {};
+    request.configuration->m_device_id = "virtual1";
+    request.configuration->m_resolution = display_device::Resolution {1920, 1280};
+    request.configuration->m_refresh_rate = display_device::Rational {1'000'000, 1000};
+    request.virtual_layout = "extended";
+    request.request_id = id;
+    harness.state_machine.handle_message(display_helper::v2::ApplyCommand {
+      request,
+      harness.cancellation.current_generation(),
+      7,
+    });
+    display_helper::v2::ApplyOutcome outcome;
+    outcome.status = display_helper::v2::ApplyStatus::Ok;
+    harness.dispatcher.apply_completion(outcome);
+    harness.drain_messages();
+    harness.dispatcher.verification_completion(true);
+    harness.drain_messages();
+    ASSERT_EQ(harness.state_machine.state(), display_helper::v2::State::VirtualDisplayMonitoring);
+  }
+
+  display_helper::v2::ApplyCommand repair_command(StateMachineHarness &harness, std::uint64_t owner = 41) {
+    display_helper::v2::ApplyRequest request;
+    request.configuration = display_device::SingleDisplayConfiguration {};
+    request.configuration->m_device_id = "virtual1";
+    request.reactivation_of = owner;
+    request.request_id = 99;
+    return {request, harness.cancellation.current_generation(), 7};
+  }
+}  // namespace
+
+TEST(DisplayHelperV2Reactivation, ReusesVerifiedSessionWithoutReplayingStartupOrRestoreState) {
+  StateMachineHarness harness;
+  verify_virtual_session(harness);
+  const int tasks = harness.task_manager.created;
+  const int resets = harness.dispatcher.reset_dispatch_count;
+  const int verifications = harness.dispatcher.verification_dispatch_count;
+  harness.state_machine.handle_message(repair_command(harness));
+  EXPECT_TRUE(harness.dispatcher.apply_request.reactivation_only);
+  EXPECT_FALSE(harness.dispatcher.apply_reset_virtual_display);
+  ASSERT_TRUE(harness.dispatcher.apply_request.configuration->m_refresh_rate);
+  EXPECT_EQ(
+    std::get<display_device::Rational>(*harness.dispatcher.apply_request.configuration->m_refresh_rate),
+    (display_device::Rational {1'000'000, 1000})
+  );
+  display_helper::v2::ApplyOutcome outcome;
+  outcome.status = display_helper::v2::ApplyStatus::Ok;
+  harness.dispatcher.apply_completion(outcome);
+  harness.drain_messages();
+  EXPECT_EQ(harness.state_machine.state(), display_helper::v2::State::VirtualDisplayMonitoring);
+  EXPECT_TRUE(harness.state_machine.recovery_armed());
+  EXPECT_EQ(harness.task_manager.created, tasks);
+  EXPECT_EQ(harness.dispatcher.reset_dispatch_count, resets);
+  EXPECT_EQ(harness.dispatcher.verification_dispatch_count, verifications);
+  // The original session APPLY remains the owner after any number of repairs.
+  harness.state_machine.handle_message(repair_command(harness));
+  EXPECT_TRUE(harness.dispatcher.apply_request.reactivation_only);
+  EXPECT_EQ(harness.dispatcher.apply_request.request_id, 41u);
+}
+
+TEST(DisplayHelperV2Reactivation, RejectsWrongOwnerTargetConnectionAndConcurrentMutation) {
+  StateMachineHarness harness;
+  verify_virtual_session(harness);
+  const int initial = harness.dispatcher.apply_dispatch_count;
+  harness.state_machine.handle_message(repair_command(harness, 40));
+  EXPECT_EQ(harness.dispatcher.apply_dispatch_count, initial);
+  auto wrong_target = repair_command(harness);
+  wrong_target.request.configuration->m_device_id = "other-client";
+  harness.state_machine.handle_message(wrong_target);
+  EXPECT_EQ(harness.dispatcher.apply_dispatch_count, initial);
+  auto retired = repair_command(harness);
+  retired.connection_epoch = 6;
+  harness.state_machine.handle_message(retired);
+  EXPECT_EQ(harness.dispatcher.apply_dispatch_count, initial);
+  harness.state_machine.handle_message(repair_command(harness));
+  harness.state_machine.handle_message(repair_command(harness));
+  EXPECT_EQ(harness.dispatcher.apply_dispatch_count, initial + 1);
+}
+
+TEST(DisplayHelperV2Reactivation, UsesLatestConfirmedFractionalRefresh) {
+  StateMachineHarness harness;
+  verify_virtual_session(harness);
+  display_helper::v2::RefreshRateCommand refresh {
+    "virtual1",
+    479'520,
+    1000,
+    harness.cancellation.current_generation(),
+    7,
+    77,
+  };
+  harness.state_machine.handle_message(refresh);
+  ASSERT_TRUE(harness.dispatcher.refresh_completion);
+  harness.dispatcher.refresh_completion(true);
+  harness.drain_messages();
+  harness.state_machine.handle_message(repair_command(harness));
+  ASSERT_TRUE(harness.dispatcher.apply_request.configuration->m_refresh_rate);
+  EXPECT_EQ(
+    std::get<display_device::Rational>(*harness.dispatcher.apply_request.configuration->m_refresh_rate),
+    (display_device::Rational {479'520, 1000})
+  );
+}
+
+TEST(DisplayHelperV2Reactivation, TeardownWaitsForRepairAndRejectsLateCompletion) {
+  StateMachineHarness harness;
+  harness.seed_current_snapshot();
+  verify_virtual_session(harness);
+  harness.state_machine.handle_message(repair_command(harness));
+  const auto generation = harness.cancellation.current_generation();
+  harness.state_machine.handle_message(display_helper::v2::RevertCommand {generation, 7});
+  display_helper::v2::ApplyOutcome outcome;
+  outcome.status = display_helper::v2::ApplyStatus::Ok;
+  outcome.display_may_have_changed = true;
+  harness.dispatcher.apply_completion(outcome);
+  harness.drain_messages();
+  EXPECT_NE(harness.state_machine.state(), display_helper::v2::State::VirtualDisplayMonitoring);
+  const int applies = harness.dispatcher.apply_dispatch_count;
+  harness.state_machine.handle_message(repair_command(harness));
+  EXPECT_EQ(harness.dispatcher.apply_dispatch_count, applies);
+}
+
+#endif  // _WIN32 || SUNSHINE_TEST_PORTABLE_WINDOWS_TYPES
