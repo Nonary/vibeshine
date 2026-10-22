@@ -2,7 +2,7 @@
   "schema": 1,
   "run_id": "20261022-dot-pr-queue",
   "coordinator": "dot",
-  "updated_at": "2026-10-22T16:38:45Z",
+  "updated_at": "2026-10-22T16:40:20Z",
   "target_active_issues": 10,
   "host_total_native_capacity": 7,
   "implementation_location": "dot cloud computer",
@@ -11,13 +11,17 @@
   "issues": [
     {
       "key": "Nonary/vibeshine#326",
-      "status": "investigating",
+      "status": "blocked",
       "branch": "dot/issue-326-gpu-idle",
       "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
-      "pr_url": null,
+      "pr_url": "https://github.com/Nonary/vibeshine/pull/331",
       "reviews": [],
       "next_step": "Trace retained GPU resources and policy after last stream; avoid unproven leak assumptions.",
-      "worker": "/root/fix_gpu_idle_retention"
+      "worker": "/root/fix_gpu_idle_retention",
+      "head_sha": "a57ecaeb1509afa830f99010c8e86295a82a4ffb",
+      "scope": "Probe resource lifetime and balanced GPU scheduling priority",
+      "blocker": "Independent Codex review environment offline",
+      "resume_condition": "Reconnect authorized review environment then round1"
     },
     {
       "key": "Nonary/Vibepollo#657",
@@ -37,12 +41,18 @@
     },
     {
       "key": "Nonary/Vibepollo#643",
-      "status": "investigating",
+      "status": "blocked",
       "implementation_repo": "Nonary/vibeshine",
       "branch": "dot/issue-643-aux-state-recovery",
-      "pr_url": null,
+      "pr_url": "https://github.com/Nonary/vibeshine/pull/330",
       "reviews": [],
-      "next_step": "Investigate recovery of zeroed auxiliary state; do not duplicate existing failed-write prevention or pairing recovery."
+      "next_step": "Investigate recovery of zeroed auxiliary state; do not duplicate existing failed-write prevention or pairing recovery.",
+      "head_sha": "937273c55a1904d8089a8b8d1e955e2feb341886",
+      "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
+      "scope": "Explicit auxiliary reset candidate; not data reconstruction",
+      "worker": "/root/fix_aux_state_recovery",
+      "blocker": "Independent Codex review environment offline",
+      "resume_condition": "Reconnect authorized review environment then round1"
     },
     {
       "key": "Nonary/Vibepollo#644",
@@ -87,17 +97,19 @@
     },
     {
       "key": "Nonary/Vibepollo#655",
-      "status": "queued",
+      "status": "investigating",
       "next_step": "Obtain exact symbols and symbolicate crash before patch.",
       "pr_url": null,
-      "reviews": []
+      "reviews": [],
+      "branch": "dot/issue-655-crash-evidence"
     },
     {
       "key": "Nonary/Vibepollo#653",
-      "status": "queued",
+      "status": "investigating",
       "next_step": "Compare trace with existing fixes and display PRs before duplicating work.",
       "pr_url": null,
-      "reviews": []
+      "reviews": [],
+      "branch": "dot/issue-653-display-restore"
     },
     {
       "key": "Nonary/Vibepollo#540",
