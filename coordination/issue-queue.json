@@ -2,7 +2,7 @@
   "schema": 1,
   "run_id": "20261022-dot-pr-queue",
   "coordinator": "dot",
-  "updated_at": "2026-10-22T21:37:00Z",
+  "updated_at": "2026-10-22T21:44:00Z",
   "target_active_issues": 10,
   "host_total_native_capacity": 7,
   "implementation_location": "dot cloud computer",
@@ -108,7 +108,7 @@
           "session_id": "01a164b6-0864-7354-a2fd-031b9064e01a"
         }
       ],
-      "next_step": "Verify migration and exact containing release, then reporter follow-up",
+      "next_step": "Published containing build verified; reporter confirmation and scope limitations remain separate.",
       "head_sha": "98bb22a063fa215787171ebe95c1526325cabc49",
       "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
       "scope": "Explicit auxiliary reset candidate; not data reconstruction",
@@ -119,9 +119,10 @@
       "merged_by": "Dot after additional cloud review",
       "fixed_label": false,
       "reporter_confirmed": false,
-      "nightly_inclusion": "not_verified",
-      "downstream_migration": "not_verified",
-      "implementation_session_id": "/root/fix_aux_state_recovery"
+      "nightly_inclusion": "verified_source_and_target",
+      "downstream_migration": "verified",
+      "implementation_session_id": "/root/fix_aux_state_recovery",
+      "reporter_update": "https://github.com/Nonary/Vibepollo/issues/643#issuecomment-6351982133"
     },
     {
       "key": "Nonary/Vibepollo#644",
@@ -131,7 +132,7 @@
       ],
       "status": "merged",
       "implementation_repo": "Nonary/vibeshine",
-      "next_step": "Current pinned release contains source delivery; verify downstream and actual publication before reporter confirmation",
+      "next_step": "Published containing build verified; reporter confirmation and scope limitations remain separate.",
       "branch": "dot/issue-644-dmabuf-alignment",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/329",
       "head_sha": "94d790459af0a3bdfe0aa7615a4a010bcb6abcf9",
@@ -160,13 +161,13 @@
       "implementation_session_id": "/root/fix_dmabuf_import_alignment",
       "merge_sha": "dab193443081e40bc55714670437d026050bcd30",
       "merged_by": "Dot after additional cloud review",
-      "nightly_inclusion": "not_verified",
+      "nightly_inclusion": "verified_source_and_target",
       "reporter_confirmed": false,
       "integration_base_sha": "1318b146a89f3450ac31ef1ba663314b26fe172e",
       "fixed_label": false,
-      "downstream_migration": "pending",
-      "reporter_update": "https://github.com/Nonary/Vibepollo/issues/644#issuecomment-6349451160",
-      "release_note": "Excluded from currently building source snapshot 863469a1",
+      "downstream_migration": "verified",
+      "reporter_update": "https://github.com/Nonary/Vibepollo/issues/644#issuecomment-6351886664",
+      "release_note": "Reviewed implementation94d79045 and canary delivery4a3ed9d5 included; original master merge dab19344 is not an ancestor. Target e72ca2c9 included.",
       "canary_delivery_pr": "https://github.com/Nonary/vibeshine/pull/338",
       "canary_delivery_status": "merged",
       "canary_merge_sha": "4a3ed9d5441532517ec3c199290e16d78fa3245a"
@@ -214,7 +215,7 @@
         "Nonary/Vibepollo#462"
       ],
       "status": "merged",
-      "next_step": "Verify downstream/binary delivery and exact containing release, then reporter testing",
+      "next_step": "Published containing build verified; reporter confirmation and scope limitations remain separate.",
       "branch": "dot/issue-658-suspend-gamepad",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/333",
       "head_sha": "688ce26d1872125a1ebadf966b6defb996b3947e",
@@ -253,8 +254,9 @@
       "implementation_session_id": "/root/investigate_gamepad_sleep_recovery",
       "merge_sha": "863469a1daa1e587c66bc3907a506156f1de256d",
       "merged_by": "Dot after additional cloud review",
-      "nightly_inclusion": "not_verified",
-      "reporter_confirmed": false
+      "nightly_inclusion": "verified_source_and_target",
+      "reporter_confirmed": false,
+      "downstream_migration": "verified"
     },
     {
       "key": "Nonary/Vibepollo#655",
@@ -339,7 +341,7 @@
       "source_pr": "https://github.com/Nonary/Vibepollo/pull/616",
       "source_head": "2d9cb289cdafa8366cb9debd2f0737ba87fa85b5",
       "implementation_repo": "Nonary/vibeshine",
-      "next_step": "Verify migration and exact containing release, then reporter follow-up",
+      "next_step": "Published containing build verified; reporter confirmation and scope limitations remain separate.",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/334",
       "reviews": [
         {
@@ -367,8 +369,8 @@
       "merged_by": "Dot after additional cloud review",
       "fixed_label": false,
       "reporter_confirmed": false,
-      "nightly_inclusion": "not_verified",
-      "downstream_migration": "not_verified"
+      "nightly_inclusion": "verified_source_and_target",
+      "downstream_migration": "verified"
     },
     {
       "key": "Nonary/libvirtualgamepad#6",
@@ -451,7 +453,12 @@
       "merged_by": "Dot after additional cloud review",
       "blocker": null,
       "nightly_inclusion": "excluded_from_current_pair",
-      "reporter_confirmed": false
+      "reporter_confirmed": false,
+      "delivery_audit": {
+        "status": "reserved",
+        "worker": "/root/prepare_gamepad_driver_delivery",
+        "scope": "Read-only producer package delivery plan for merged PR7/8; default-OFF KM prerequisite remains separate. No dispatch/signing/release authorized by this assignment."
+      }
     },
     {
       "key": "Nonary/Vibepollo#475",
@@ -554,7 +561,7 @@
     },
     {
       "key": "Nonary/vibeshine#335",
-      "status": "awaiting_native_msi_validation",
+      "status": "merged",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/335",
       "head_sha": "fe6878e2d62f10d4bb348769d1ec8343395965e1",
       "scope": "PR CI build version fixture; production version validation unchanged",
@@ -563,11 +570,12 @@
         "01a1650f-db8d-7718-855d-7fa9b6512032"
       ],
       "target_branch": "canary",
-      "next_step": "Wait for corrected actual packaged-MSI gate, then final readiness and integration.",
-      "latest_final_review": "https://github.com/Nonary/vibeshine/pull/335#pullrequestreview-5620086476",
+      "next_step": "Observe subsequent PR validation; no runtime issue-resolution claim.",
+      "latest_final_review": "https://github.com/Nonary/vibeshine/pull/335#pullrequestreview-5621194865",
       "validation_run": "https://github.com/Nonary/vibeshine/actions/runs/39854277504",
-      "validation_note": "Previous native run packaged MSI but exposed incorrect test expectation. Current test-only repair expects canonical inclusive zero minimum; source review and assertion fixtures pass. Arch passed; Windows still compiling at21:32. No corrected native gate pass yet.",
-      "latest_first_review": "https://github.com/Nonary/vibeshine/pull/335#pullrequestreview-5620986764"
+      "validation_note": "Exact-head Windows compilation, actual MSI packaging and three packaged-MSI tests passed; Arch passed. Final independent readiness and own-cloud integration review cleared current canary. Not included retroactively in published nightly pair.",
+      "latest_first_review": "https://github.com/Nonary/vibeshine/pull/335#pullrequestreview-5620986764",
+      "merge_sha": "8ae2ce2a552679862c717fa3176c8fdbc691b276"
     },
     {
       "key": "Nonary/vibeshine#339",
@@ -654,5 +662,34 @@
       }
     ],
     "verification": "At20:45UTC no lint runs queued/running across seven active repos. Updated PRs start normal CI but no lint. Latest lint failure20:09:42 belongs to a run created before original setting change. Email arrival/delay unverified."
-  }
+  },
+  "release_followups": [
+    {
+      "issue": "Nonary/vibeshine#326",
+      "comment": "https://github.com/Nonary/vibeshine/issues/326#issuecomment-6351829926",
+      "state": "awaiting_reporter"
+    },
+    {
+      "issue": "Nonary/Vibepollo#512",
+      "comment": "https://github.com/Nonary/Vibepollo/issues/512#issuecomment-6351885469",
+      "state": "awaiting_reporter",
+      "scope": "Historical timing fix, not a newly invented fix count."
+    },
+    {
+      "issue": "Nonary/Vibepollo#644",
+      "comment": "https://github.com/Nonary/Vibepollo/issues/644#issuecomment-6351886664",
+      "state": "awaiting_reporter"
+    },
+    {
+      "issue": "Nonary/Vibepollo#643",
+      "comment": "https://github.com/Nonary/Vibepollo/issues/643#issuecomment-6351982133",
+      "state": "offline_preparation_only_not_recovery"
+    },
+    {
+      "issue": "Nonary/vibeshine#308",
+      "comment": "https://github.com/Nonary/vibeshine/issues/308#issuecomment-6351980520",
+      "state": "awaiting_reporter",
+      "source_fix": "3390096d01ab197c8a100e946bb466f96974aff5"
+    }
+  ]
 }
