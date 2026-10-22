@@ -167,6 +167,10 @@ namespace remote_display_topology {
 
   void coordinator_t::set_physical_baseline(std::vector<node_t> nodes) {
     std::lock_guard lock(mutex_);
+    // A new launch must not turn a failed restore into its next baseline.
+    if (physical_restore_pending_) {
+      return;
+    }
     physical_baseline_ = std::move(nodes);
   }
 
