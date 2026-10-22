@@ -2,7 +2,7 @@
   "schema": 1,
   "run_id": "20261022-dot-pr-queue",
   "coordinator": "dot",
-  "updated_at": "2026-10-22T17:01:40Z",
+  "updated_at": "2026-10-22T17:02:40Z",
   "target_active_issues": 10,
   "host_total_native_capacity": 7,
   "implementation_location": "dot cloud computer",
@@ -186,6 +186,18 @@
       "source_head": "2d9cb289cdafa8366cb9debd2f0737ba87fa85b5",
       "implementation_repo": "Nonary/vibeshine",
       "next_step": "Adapt credited idle baseline preservation and no-op shutdown fix into source draft; run behavioral regression",
+      "pr_url": null,
+      "reviews": []
+    },
+    {
+      "key": "Nonary/libvirtualgamepad#6",
+      "kind": "contribution_adaptation",
+      "status": "implementing",
+      "branch": "dot/pr-6-touch-id-collision",
+      "source_pr": "https://github.com/Nonary/libvirtualgamepad/pull/6",
+      "source_head": "597b69a8d5edeff46244d7464133bab7163a84e5",
+      "scope": "Narrow DS4/DualSense active touch ID collision only, not Steam Controller support",
+      "next_step": "Adapt credited existing fix into isolated source draft with actual encoder behavior test",
       "pr_url": null,
       "reviews": []
     }
