@@ -91,6 +91,7 @@ def generate(root):
 #include <string>
 #include <string_view>
 #include <vector>
+using DWORD = std::uint32_t;
 struct LUID {uint32_t LowPart; int32_t HighPart;};
 struct Log {template<class T> Log& operator<<(const T&){return *this;}};
 #define BOOST_LOG(level) Log{}

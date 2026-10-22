@@ -50,6 +50,8 @@ apply_entry = between(config, "  void apply_config(std::unordered_map<std::strin
 helpers = between(config, "  void string_f(", "  void string_restricted_f(")
 parse = between(config, '    generic_f(vars, "control_peer_timeout",', '    int_between_f(vars, "lan_encryption_mode",')
 iterate = between(stream, "  void control_server_t::iterate(", "  namespace fec {")
+stop_reason = between(stream, "  enum class stop_reason_e {", "  struct session_t {")
+request_stop = function(stream, "    static void request_stop(")
 stop = between(stream, "    void stop(session_t &session) {", "    void join(session_t &session,")
 reap = between(stream, "          if (now > session->pingTimeout) {", "          const bool game_session_requires_shutdown =")
 
@@ -131,6 +133,7 @@ struct ENetEvent { int type; ENetPeer *peer; std::uint32_t data; ENetPacket *pac
 struct host_t { std::uint32_t totalReceivedPackets = 0; };
 ENetEvent next_event {};
 int disconnects = 0, callbacks = 0, input_resets = 0;
+int termination_messages = 0, flush_calls = 0;
 int enet_host_service(host_t *, ENetEvent *out, enet_uint32) { *out = next_event; return 1; }
 void enet_peer_timeout(ENetPeer *peer, enet_uint32 limit, enet_uint32 minimum, enet_uint32 maximum) {
   ++peer->calls; peer->limit = limit; peer->minimum = minimum; peer->maximum = maximum;
@@ -149,8 +152,10 @@ template<class T> struct lockable_t {
 };
 namespace stream {
 namespace session { enum class state_e { STARTING, RUNNING, STOPPING }; }
+''' + stop_reason + r'''
 struct session_t {
   std::atomic<session::state_e> state {session::state_e::RUNNING};
+  std::atomic<stop_reason_e> stop_reason {stop_reason_e::none};
   std::chrono::steady_clock::time_point pingTimeout {};
   std::atomic_bool client_disconnected {false};
   struct { ENetPeer *peer = nullptr; std::uint32_t enet_recv_baseline = 0; std::string expected_peer_address; } control;
@@ -161,10 +166,11 @@ struct session_t {
 };
 void while_starting_do_nothing(const std::atomic<session::state_e> &state) { assert(state != session::state_e::STARTING); }
 namespace session {
-''' + stop + r'''
+''' + request_stop + stop + r'''
 }
 struct decoded_t { std::uint16_t type; std::string_view payload; };
 std::optional<decoded_t> decode_control_packet(std::string_view bytes) { return decoded_t {1, bytes}; }
+void send_termination(session_t *) { ++termination_messages; }
 struct control_server_t {
   std::unique_ptr<host_t> _host = std::make_unique<host_t>();
   std::unique_ptr<std::vector<session_t *>> _sessions = std::make_unique<std::vector<session_t *>>();
@@ -173,6 +179,7 @@ struct control_server_t {
     auto it = _peer_to_session->find(peer); return it == _peer_to_session->end() ? nullptr : it->second;
   }
   void call(std::uint16_t, session_t *, std::string_view, bool) { ++callbacks; }
+  void flush() { ++flush_calls; }
   void iterate(std::chrono::milliseconds timeout);
 };
 ''' + iterate + r'''
@@ -349,6 +356,13 @@ int main() {
   assert(input_resets == resets + 1); // repeated stop is idempotent
   stream::reap_sessions(&server, deadline);
   assert(!p3.connected && third.controlEnd.value && server._sessions->size() == 1);
+  stream::session_t graceful;
+  ENetPeer graceful_peer;
+  connect(server, graceful, graceful_peer);
+  stream::session::graceful_stop(graceful);
+  stream::reap_sessions(&server, deadline);
+  assert(termination_messages == 1 && flush_calls == 1);
+  assert(!graceful_peer.connected && graceful.controlEnd.value);
   // A peer's explicit disconnect also stops immediately rather than waiting.
   next_event = {ENET_EVENT_TYPE_DISCONNECT, &p1, 0, nullptr};
   server.iterate(0ms);

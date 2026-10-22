@@ -29,7 +29,7 @@ deadline = replace_once(
     '~shutdown_deadline_t() {\n      complete();\n      record("deadline completed");\n    }',
 )
 
-declaration = "  shutdown_deadline_t shutdown_deadline {&shutdown_signal_requested, supervised_machine_host};"
+declaration = "  shutdown_deadline_t shutdown_deadline {&shutdown_signal_requested, supervised_machine_host, shutdown_phase_state};"
 deadline_at = source.index(declaration)
 guard_at = source.index("  auto pyrowave_shutdown_guard = util::fail_guard(")
 guard_end = source.index("\n  });", guard_at) + len("\n  });")
@@ -74,6 +74,7 @@ program = r'''
 #include <utility>
 #include <vector>
 #include "src/utility.h"
+#include "src/shutdown_phase.h"
 using namespace std::literals;
 
 std::mutex records_mutex;
@@ -129,6 +130,7 @@ int run(bool stop_after_probe) {
   auto shutdown_event = std::make_shared<event_t>();
   std::atomic_bool shutdown_signal_requested {false};
   const bool supervised_machine_host = true;
+  shutdown_phase::tracker_t shutdown_phase_state;
 PRODUCTION_DECLARATION
 PRODUCTION_SHUTDOWN_GUARD
   auto termination_signal_monitor_guard = util::fail_guard([] {
