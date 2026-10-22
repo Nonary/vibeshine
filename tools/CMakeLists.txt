@@ -127,6 +127,7 @@ add_executable(sunshine_display_helper
         display_settings_helper_main.cpp
         display_settings_helper.cpp
         display_settings_helper_v2.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_borrow_gate.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_v2/diagnostics.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_v2/diagnostics_boost.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_v2/file_text_storage.cpp
