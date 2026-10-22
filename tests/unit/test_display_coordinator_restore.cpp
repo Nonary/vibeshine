@@ -305,3 +305,83 @@ TEST(DisplayCoordinatorRestore, FailedGeometryRejectsBaselineRecaptureUntilShutd
   EXPECT_EQ(applies, completed_applies);
   EXPECT_EQ(removals, 1);
 }
+
+TEST(DisplayCoordinatorRestore, FailedShutdownRejectsBaselineRecaptureUntilRetryCompletes) {
+  remote_display_topology::coordinator_t coordinator;
+  remote_display_topology::node_t physical {.id = "MSI", .physical = true, .active = true, .primary = true, .x = 128, .y = 64};
+  physical.baseline_refresh_rate = {240, 4};
+  coordinator.set_physical_baseline({physical});
+  auto expected = physical;
+  bool geometry_ok = true;
+  bool removal_ok = false;
+  int creates = 0;
+  int applies = 0;
+  int removals = 0;
+  coordinator.set_runtime_callbacks({
+    .create_or_reclaim = [&](const auto &, const auto &, const auto &) {
+      ++creates;
+      return true;
+    },
+    .apply_composed_topology = [&](const auto &nodes) {
+      ++applies;
+      EXPECT_EQ(nodes.front().id, expected.id);
+      EXPECT_EQ(nodes.front().x, expected.x);
+      EXPECT_EQ(nodes.front().y, expected.y);
+      EXPECT_EQ(nodes.front().primary, expected.primary);
+      EXPECT_EQ(nodes.front().baseline_refresh_rate, expected.baseline_refresh_rate);
+      return geometry_ok;
+    },
+    .exact_target_has_current_mode_and_dxgi = [](const auto &, const auto &) {
+      return std::optional<std::string> {"DISPLAY7"};
+    },
+    .remove_owned_display = [&](const auto &) {
+      ++removals;
+      return removal_ok;
+    },
+  });
+  ASSERT_TRUE(coordinator.activate_or_resume("client", "Client", {}, 1).ready);
+  geometry_ok = false;
+  coordinator.shutdown();
+  EXPECT_FALSE(coordinator.shutdown_complete());
+  EXPECT_EQ(coordinator.managed_client_identity_count(), 1u);
+  EXPECT_EQ(removals, 0);
+
+  auto recaptured = physical;
+  recaptured.id = "recaptured";
+  recaptured.x = 0;
+  recaptured.y = 0;
+  recaptured.baseline_refresh_rate = {59997, 1000};
+  const auto attempt_new_launch = [&] {
+    // nvhttp captures before activate_or_resume checks shutdown_pending_.
+    coordinator.set_physical_baseline({recaptured});
+    coordinator.refresh_idle_physical_baseline({recaptured});
+    const auto previous_applies = applies;
+    const auto blocked = coordinator.activate_or_resume("new-client", "New", {}, 2);
+    EXPECT_FALSE(blocked.accepted);
+    EXPECT_TRUE(blocked.retryable);
+    EXPECT_EQ(creates, 1);
+    EXPECT_EQ(applies, previous_applies);
+    EXPECT_EQ(coordinator.physical_node_ids(), (std::vector<std::string> {"MSI"}));
+  };
+  attempt_new_launch();
+
+  geometry_ok = true;
+  coordinator.release_drained_normal_game_identities();
+  EXPECT_FALSE(coordinator.shutdown_complete());
+  EXPECT_EQ(removals, 1);
+  // Geometry succeeded but failed removal still owns the shutdown target.
+  attempt_new_launch();
+  removal_ok = true;
+  coordinator.release_drained_normal_game_identities();
+  EXPECT_TRUE(coordinator.shutdown_complete());
+  EXPECT_EQ(removals, 2);
+
+  // Completed shutdown must not permanently suppress later baseline captures.
+  expected = recaptured;
+  coordinator.set_physical_baseline({recaptured});
+  EXPECT_EQ(coordinator.physical_node_ids(), (std::vector<std::string> {"recaptured"}));
+  ASSERT_TRUE(coordinator.activate_or_resume("new-client", "New", {}, 3).ready);
+  EXPECT_EQ(creates, 2);
+  coordinator.shutdown();
+  EXPECT_TRUE(coordinator.shutdown_complete());
+}
