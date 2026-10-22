@@ -2,7 +2,7 @@
   "schema": 1,
   "run_id": "20261022-dot-pr-queue",
   "coordinator": "dot",
-  "updated_at": "2026-10-22T16:51:50Z",
+  "updated_at": "2026-10-22T16:53:40Z",
   "target_active_issues": 10,
   "host_total_native_capacity": 7,
   "implementation_location": "dot cloud computer",
@@ -22,7 +22,7 @@
           "head_sha": "a57ecaeb1509afa830f99010c8e86295a82a4ffb",
           "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
           "profile": "UltraCode 72 Luna High",
-          "profile_verified": false,
+          "profile_verified": true,
           "status": "started",
           "verdict": "pending"
         }
@@ -35,33 +35,31 @@
     },
     {
       "key": "Nonary/Vibepollo#657",
-      "status": "blocked",
+      "status": "draft_created",
       "implementation_repo": "Nonary/libvirtualdisplay",
       "dependency_repo": "Nonary/libvirtualdisplay",
-      "next_step": "Investigate KWin bridge rebuild dependency and version mismatch diagnostics without weakening ABI guard.",
+      "next_step": "Await bounded independent review allocation",
       "pr_url": "https://github.com/Nonary/libvirtualdisplay/pull/3",
       "reviews": [],
       "branch": "dot/issue-657-kwin-bridge",
       "head_sha": "58218260411d6a65d1ce9276f162601e3f18af42",
       "base_sha": "b2946d02a09bc453d9e6d287623390ca1dedf964",
       "scope": "Partial diagnostic hardening, not FPS fix",
-      "blocker": "Independent Codex review environment offline",
       "resume_condition": "Authorized review environment reconnects; launch round1 UltraCode72 LunaHigh",
       "worker": "/root/fix_kwin_bridge_upgrade"
     },
     {
       "key": "Nonary/Vibepollo#643",
-      "status": "blocked",
+      "status": "draft_created",
       "implementation_repo": "Nonary/vibeshine",
       "branch": "dot/issue-643-aux-state-recovery",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/330",
       "reviews": [],
-      "next_step": "Investigate recovery of zeroed auxiliary state; do not duplicate existing failed-write prevention or pairing recovery.",
+      "next_step": "Await bounded independent review allocation",
       "head_sha": "937273c55a1904d8089a8b8d1e955e2feb341886",
       "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
       "scope": "Explicit auxiliary reset candidate; not data reconstruction",
       "worker": "/root/fix_aux_state_recovery",
-      "blocker": "Independent Codex review environment offline",
       "resume_condition": "Reconnect authorized review environment then round1"
     },
     {
@@ -70,29 +68,27 @@
         "Nonary/Vibepollo#566",
         "Nonary/vibeshine#300"
       ],
-      "status": "blocked",
+      "status": "draft_created",
       "implementation_repo": "Nonary/vibeshine",
-      "next_step": "Investigate alignment and EGL allocation root cause beyond already shipped diagnostics.",
+      "next_step": "Await bounded independent review allocation",
       "branch": "dot/issue-644-dmabuf-alignment",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/329",
       "head_sha": "94d790459af0a3bdfe0aa7615a4a010bcb6abcf9",
       "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
       "scope": "Guarded VAAPI CPU upload fallback; pitch alignment already fixed",
-      "blocker": "Independent Codex review environment offline",
       "resume_condition": "Reconnect authorized review environment then round1",
       "worker": "/root/fix_dmabuf_import_alignment"
     },
     {
       "key": "Nonary/Vibepollo#638",
-      "status": "blocked",
+      "status": "draft_created",
       "implementation_repo": "Nonary/vibeshine",
-      "next_step": "Investigate composite DualSense PCM forwarding; serialize shared input code with sleep recovery.",
+      "next_step": "Await bounded independent review allocation",
       "branch": "dot/issue-638-dualsense-pcm",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/328",
       "head_sha": "e89ef712cded4ef68be70df7f0d0e72c6402cdb6",
       "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
       "scope": "Partial PCM forwarding diagnostics; runtime cause unproven",
-      "blocker": "Independent Codex review environment offline",
       "resume_condition": "Reconnect authorized review environment then round1",
       "worker": "/root/fix_dualsense_pcm_forwarding"
     },
@@ -101,14 +97,26 @@
       "related": [
         "Nonary/Vibepollo#462"
       ],
-      "status": "draft_created",
+      "status": "review_1",
       "next_step": "Independent round1 review",
       "branch": "dot/issue-658-suspend-gamepad",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/333",
       "head_sha": "c47af5089f90e627874f108734b75624b1cf1a8d",
       "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
       "scope": "Host ERROR_DEVICE_REMOVED recovery only; no kernel sleep-crash prevention",
-      "worker": "/root/investigate_gamepad_sleep_recovery"
+      "worker": "/root/investigate_gamepad_sleep_recovery",
+      "reviews": [
+        {
+          "round": 1,
+          "session_id": "01a16488-0449-725d-b3cc-9b400a7d702e",
+          "head_sha": "c47af5089f90e627874f108734b75624b1cf1a8d",
+          "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
+          "profile": "UltraCode 72 Luna High",
+          "profile_verified": false,
+          "status": "started",
+          "verdict": "pending"
+        }
+      ]
     },
     {
       "key": "Nonary/Vibepollo#655",
@@ -143,15 +151,14 @@
     },
     {
       "key": "Nonary/vibeshine#315",
-      "status": "blocked",
-      "next_step": "Assess HTTPS-port UX without enabling plaintext administration.",
+      "status": "draft_created",
+      "next_step": "Await bounded independent review allocation",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/332",
       "reviews": [],
       "branch": "dot/issue-315-https-guidance",
       "head_sha": "895c392930783fab11e5c8a9256ff8b1663b4848",
       "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
       "scope": "Docs-only HTTPS guidance; network behavior unchanged",
-      "blocker": "Independent Codex review environment offline",
       "resume_condition": "Reconnect authorized review environment then round1"
     },
     {
