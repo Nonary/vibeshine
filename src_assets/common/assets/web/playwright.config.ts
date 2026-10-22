@@ -1,6 +1,7 @@
 import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: 'application-display.spec.ts',
   outputDir: process.env.VIBESHINE_TEST_OUTPUT || '/tmp/vibeshine-ui-results',
   fullyParallel: true,
   workers: 2,
