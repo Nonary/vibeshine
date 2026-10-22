@@ -742,12 +742,29 @@ jobs:
           fi
           echo "::remove-matcher owner=gcc::"
 
+      - name: Prepare stripped executable for Dolby testing
+        if: github.event_name == 'workflow_dispatch' || github.ref_name == 'test/vibeshine-dolby-ac3'
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+
+          mkdir -p build/dolby-test-artifact
+          cp build/sunshine.exe build/dolby-test-artifact/sunshine.exe
+          strip --strip-debug --strip-unneeded build/dolby-test-artifact/sunshine.exe
+
+          if objdump -h build/dolby-test-artifact/sunshine.exe | grep -Eq ' \.(debug|zdebug)'; then
+            echo "Debug sections remain in the Dolby test executable." >&2
+            exit 1
+          fi
+
+          ls -lh build/sunshine.exe build/dolby-test-artifact/sunshine.exe
+
       - name: Upload standalone executable for Dolby testing
         if: github.event_name == 'workflow_dispatch' || github.ref_name == 'test/vibeshine-dolby-ac3'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: sunshine.exe-vibeshine-dolby-test
-          path: build/sunshine.exe
+          path: build/dolby-test-artifact/sunshine.exe
           if-no-files-found: error
           retention-days: 7
           archive: false
