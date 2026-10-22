@@ -748,8 +748,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p build/dolby-test-artifact
+          mkdir -p build/dolby-test-artifact/assets
           cp build/sunshine.exe build/dolby-test-artifact/sunshine.exe
+          cp -a build/assets/web build/dolby-test-artifact/assets/web
           strip --strip-debug --strip-unneeded build/dolby-test-artifact/sunshine.exe
 
           if objdump -h build/dolby-test-artifact/sunshine.exe | grep -Eq ' \.(debug|zdebug)'; then
@@ -757,17 +758,22 @@ jobs:
             exit 1
           fi
 
-          ls -lh build/sunshine.exe build/dolby-test-artifact/sunshine.exe
+          if ! grep -R -l 'audio_format' build/dolby-test-artifact/assets/web/v2/assets/settingsSchema-*.js >/dev/null; then
+            echo "The V2 settings bundle does not contain the audio format selector." >&2
+            exit 1
+          fi
 
-      - name: Upload standalone executable for Dolby testing
+          ls -lh build/dolby-test-artifact/sunshine.exe
+          du -sh build/dolby-test-artifact/assets/web
+
+      - name: Upload Sunshine and web assets for Dolby testing
         if: github.event_name == 'workflow_dispatch' || github.ref_name == 'test/vibeshine-dolby-ac3'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: sunshine.exe-vibeshine-dolby-test
-          path: build/dolby-test-artifact/sunshine.exe
+          name: sunshine-vibeshine-dolby-test
+          path: build/dolby-test-artifact/
           if-no-files-found: error
           retention-days: 7
-          archive: false
 
       - name: Execute Windows tests
         if: inputs.build_tests
