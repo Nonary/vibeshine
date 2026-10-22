@@ -32,7 +32,8 @@ if(MINGW AND TARGET libvirtualdisplay_driver)
         get_target_property(_sunshine_lvd_driver_link_libraries
                 libvirtualdisplay_driver ${_sunshine_lvd_link_property})
         if(_sunshine_lvd_driver_link_libraries)
-            list(REMOVE_ITEM _sunshine_lvd_driver_link_libraries kernelbase)
+            list(REMOVE_ITEM _sunshine_lvd_driver_link_libraries
+                    kernelbase "$<LINK_ONLY:kernelbase>")
             set_property(TARGET libvirtualdisplay_driver
                     PROPERTY ${_sunshine_lvd_link_property}
                     "${_sunshine_lvd_driver_link_libraries}")
