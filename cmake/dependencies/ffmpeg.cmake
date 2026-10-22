@@ -172,6 +172,29 @@ else()
     list(APPEND FFMPEG_LIBRARIES ${FFMPEG_PLATFORM_LIBRARIES})
 endif()
 
+
+# FFmpeg builds with their optional decoders enabled need these static
+# dependencies for libavcodec. Keep them before libavutil so its symbols
+# can resolve references introduced by these archives.
+set(_FFMPEG_CODEC_DEPENDENCIES)
+foreach(_ffmpeg_library IN ITEMS libswresample.a libdav1d.a libopus.a)
+    set(_ffmpeg_library_path "${FFMPEG_PREPARED_BINARIES}/lib/${_ffmpeg_library}")
+    if(EXISTS "${_ffmpeg_library_path}")
+        list(APPEND _FFMPEG_CODEC_DEPENDENCIES "${_ffmpeg_library_path}")
+    endif()
+endforeach()
+
+list(FIND FFMPEG_LIBRARIES "${FFMPEG_PREPARED_BINARIES}/lib/libavutil.a" _ffmpeg_avutil_index)
+if(_ffmpeg_avutil_index GREATER -1 AND _FFMPEG_CODEC_DEPENDENCIES)
+    list(INSERT FFMPEG_LIBRARIES ${_ffmpeg_avutil_index} ${_FFMPEG_CODEC_DEPENDENCIES})
+else()
+    list(APPEND FFMPEG_LIBRARIES ${_FFMPEG_CODEC_DEPENDENCIES})
+endif()
+
+unset(_FFMPEG_CODEC_DEPENDENCIES)
+unset(_ffmpeg_library)
+unset(_ffmpeg_library_path)
+unset(_ffmpeg_avutil_index)
 if(WIN32)
     # Static libavutil uses BCrypt for av_random_bytes(). Keep its system
     # dependency with FFmpeg so focused consumers do not rely on the host's
