@@ -1,12 +1,12 @@
 # Daily Windows prereleases
 
-The daily workflow is inactive by default. No activation variables are created by this change. Its UTC schedule is 06:17 for Vibeshine and 06:32 for Vibepollo. GitHub may delay scheduled runs.
+The daily workflow is inactive unless `DAILY_RELEASE_ENABLED=true`. Its UTC schedule is 06:17 for Vibeshine and 06:32 for Vibepollo. GitHub may delay scheduled runs. Vibeshine uses `canary` as its nightly source and `master` as its default workflow control and stable review branch. Nightly publication never merges into `master` or publishes a stable release.
 
 ## Validate before activation
 
 Merge the workflow, helper scripts, driver safeguards and mandatory tests into the default branch and the intended source branch. The source branch must contain `packaging/windows/test_driver_install_safety.ps1` and `scripts/tests/test_daily_version_contract.cmake`; a legacy branch without the safeguards fails the daily build.
 
-Set repository variables `DAILY_RELEASE_SOURCE_BRANCH` to the intended branch and `DAILY_RELEASE_SOURCE_CONFIRMED` to the exact `owner/repository:branch` string. For example, after independently confirming the source, `Nonary/vibeshine:master` or `Nonary/Vibepollo:master`. The verified single primary is now `master` in both repositories; historical `vibe` and `vibe-test` are retired release lanes. The repository's default branch is only the workflow control branch and does not prove the intended release source.
+Set repository variables `DAILY_RELEASE_SOURCE_BRANCH` to `canary` and `DAILY_RELEASE_SOURCE_CONFIRMED` to `Nonary/vibeshine:canary` for Vibeshine. Vibepollo continues to require its confirmed default primary, for example `Nonary/Vibepollo:master`, and its separate migration attestation. Historical `vibe` and `vibe-test` are retired release lanes. The repository's default branch is only the workflow control branch and does not prove the intended release source. Scheduled and manual runs start from the default branch, fetch the confirmed remote source, and pin its exact SHA before building; later pushes wait until the next run. Unchanged sources are skipped.
 
 Dispatch **Daily Windows prerelease** from the default branch with `publish` left **false**. This permits a build, test and package validation while activation remains disabled. Inspect the Windows tests, driver safety matrix, extracted MSI safety-script hashes, finalized provenance and the MSI/setup run artifacts. Do not activate until the full remote build succeeds and fresh-install/upgrade/downgrade behavior is tested on suitable disposable Windows machines.
 

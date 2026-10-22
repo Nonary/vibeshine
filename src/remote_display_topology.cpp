@@ -165,7 +165,21 @@ namespace remote_display_topology {
     return node;
   }
 
-  void coordinator_t::set_physical_baseline(std::vector<node_t> nodes) { std::lock_guard lock(mutex_); physical_baseline_ = std::move(nodes); }
+  void coordinator_t::set_physical_baseline(std::vector<node_t> nodes) {
+    std::lock_guard lock(mutex_);
+    physical_baseline_ = std::move(nodes);
+  }
+
+  void coordinator_t::refresh_idle_physical_baseline(std::vector<node_t> nodes) {
+    std::lock_guard lock(mutex_);
+    if (nodes.empty() || physical_restore_pending_ || std::any_of(clients_.begin(), clients_.end(), [](const auto &entry) {
+          return entry.second.normal_game || entry.second.remote_monitor;
+        })) {
+      return;
+    }
+    physical_baseline_ = std::move(nodes);
+  }
+
   std::vector<std::string> coordinator_t::physical_node_ids() const {
     std::lock_guard lock(mutex_);
     std::vector<std::string> ids;
@@ -344,6 +358,21 @@ namespace remote_display_topology {
     }
     std::sort(managed_ids.begin(), managed_ids.end());
 
+    // With no managed display there is nothing to restore or remove. Applying
+    // the physical baseline on idle shutdown can mutate otherwise correct
+    // Windows monitor origins (including a baseline refreshed by the UI).
+    if (managed_ids.empty() && !physical_restore_pending_) {
+      clients_.clear();
+      shutdown_pending_ = false;
+      return;
+    }
+
+    // A pending restore cannot complete without its platform callback.
+    if (physical_restore_pending_ && !callbacks_.apply_composed_topology) {
+      shutdown_pending_ = true;
+      return;
+    }
+
     auto retained_clients = std::move(clients_);
     clients_.clear();
     if (callbacks_.apply_composed_topology) {
@@ -354,6 +383,8 @@ namespace remote_display_topology {
         return;
       }
     }
+
+    physical_restore_pending_ = false;
 
     for (const auto &uuid : managed_ids) {
       const bool removed = !callbacks_.remove_owned_display || callbacks_.remove_owned_display(uuid);
@@ -660,7 +691,7 @@ namespace remote_display_topology {
 
   bool coordinator_t::shutdown_complete() const {
     std::lock_guard lock(mutex_);
-    return !shutdown_pending_ && clients_.empty();
+    return !shutdown_pending_ && !physical_restore_pending_ && clients_.empty();
   }
 
   void coordinator_t::shutdown(const bool preserve_owned_displays) {
@@ -671,6 +702,7 @@ namespace remote_display_topology {
       clients_.clear();
       observed_monitor_generations_.clear();
       released_monitor_generations_.clear();
+      physical_restore_pending_ = false;
       shutdown_pending_ = false;
       return;
     }
@@ -728,7 +760,11 @@ namespace remote_display_topology {
     // must not keep the caller's screen connected.
     if (callbacks_.apply_composed_topology) {
       std::vector<std::string> ignored;
-      if (!callbacks_.apply_composed_topology(compose_locked(ignored)) && !callbacks_.terminate_owned_display) {
+      const bool applied = callbacks_.apply_composed_topology(compose_locked(ignored));
+      if (!applied) {
+        physical_restore_pending_ = true;
+      }
+      if (!applied && !callbacks_.terminate_owned_display) {
         state.remote_monitor = true;
         state.monitor_requested_mode = monitor_mode;
         state.lease_held = previous_lease;
