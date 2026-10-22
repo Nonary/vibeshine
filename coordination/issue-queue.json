@@ -2,7 +2,7 @@
   "schema": 1,
   "run_id": "20261022-dot-pr-queue",
   "coordinator": "dot",
-  "updated_at": "2026-10-22T19:42:00Z",
+  "updated_at": "2026-10-22T20:10:00Z",
   "target_active_issues": 10,
   "host_total_native_capacity": 7,
   "implementation_location": "dot cloud computer",
@@ -124,7 +124,7 @@
       ],
       "status": "merged",
       "implementation_repo": "Nonary/vibeshine",
-      "next_step": "Verify and deliver unchanged source fix through canary PR338, then downstream and release",
+      "next_step": "Current pinned release contains source delivery; verify downstream and actual publication before reporter confirmation",
       "branch": "dot/issue-644-dmabuf-alignment",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/329",
       "head_sha": "94d790459af0a3bdfe0aa7615a4a010bcb6abcf9",
@@ -161,7 +161,8 @@
       "reporter_update": "https://github.com/Nonary/Vibepollo/issues/644#issuecomment-6349451160",
       "release_note": "Excluded from currently building source snapshot 863469a1",
       "canary_delivery_pr": "https://github.com/Nonary/vibeshine/pull/338",
-      "canary_delivery_status": "draft_same_reviewed_commit"
+      "canary_delivery_status": "merged",
+      "canary_merge_sha": "4a3ed9d5441532517ec3c199290e16d78fa3245a"
     },
     {
       "key": "Nonary/Vibepollo#638",
@@ -437,20 +438,20 @@
     },
     {
       "key": "Nonary/Vibepollo#475",
-      "status": "review_2",
+      "status": "review_1",
       "branch": "dot/issue-475-speaker-pcm-abi",
       "implementation_repo": "Nonary/moonlight-common-c + Nonary/moonlight-qt",
       "scope": "Frozen host/common/client speaker PCM source tuple; hardware validation remains separate",
       "pr_url": "https://github.com/Nonary/moonlight-qt/pull/27",
       "reviews": [],
       "dependency_pr_url": "https://github.com/Nonary/moonlight-common-c/pull/2",
-      "dependency_head_sha": "f05b0677fd9eae2eb221d0037584d57f46594a14",
-      "head_sha": "4212e9753cd492d4b7624151c1554b49f4299cf9",
+      "dependency_head_sha": "cb15903218c70d244c1ff12b39692e0b2dff5fc4",
+      "head_sha": "a91e721f6568a1a7ce306056c648b9358604ce70",
       "worker": "/root/recover_speaker_pcm_fixes",
-      "next_step": "Host final canary posting/readiness and own cloud review; common final/client first active",
+      "next_step": "Independent first reviews of coherent explicit-owner binding tuple; old tuple clearance superseded",
       "implementation_session_id": "/root/recover_speaker_pcm_fixes",
       "host_pr_url": "https://github.com/Nonary/vibeshine/pull/337",
-      "host_head_sha": "95a4bed93ab9f0aa3fe2048238224d7ea3b0093b",
+      "host_head_sha": "397d9a9d5edf037723383c350a5c8912cb54a572",
       "review_sessions": [
         "01a16510-12da-70f4-8122-8d3526ce2035",
         "01a16514-451c-7390-8ce2-019ec270001c"
@@ -501,11 +502,11 @@
     },
     {
       "key": "Nonary/Vibepollo#592",
-      "status": "awaiting_final_review",
+      "status": "repairing_review_finding",
       "scope": "Source-first client refresh contract and contributor dependency adaptation",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/336",
-      "next_step": "First reviewer accepted repair; dependency readiness and fresh canary final review pending",
-      "head_sha": "7220adda0fee0c99e9c3a1c2ea4e036bb6824f2c",
+      "next_step": "Repair confirmed active-composition primary/origin coordinate-frame regression; keep draft",
+      "head_sha": "22abe985a14b1f6faa225bed86e10a31b31cd183",
       "worker": "/root/restore_client_refresh_contract",
       "dependencies": [
         "PR334 merged",
@@ -515,34 +516,64 @@
       "latest_first_review": "https://github.com/Nonary/vibeshine/pull/336#pullrequestreview-5619547835",
       "dependency_clarification_pr": "https://github.com/Nonary/libdisplaydevice/pull/18",
       "dependency_clarification_head": "d55c5317e86da980e22f891283788adbf6164f27",
-      "target_branch": "canary"
+      "target_branch": "canary",
+      "dependency_merge_sha": "0e9a30ec551cd65c8538036c0e63ba665c78e6cc",
+      "own_review_finding": "F336-DOT-PRIMARY-01",
+      "finding_comment": "https://github.com/Nonary/vibeshine/pull/336#issuecomment-6350081208"
     },
     {
       "key": "Nonary/vibeshine#335",
-      "status": "repairing_review_finding",
+      "status": "awaiting_native_msi_validation",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/335",
-      "head_sha": "688dd692702be5e0d2d508894e98e8ca0e6aa3aa",
+      "head_sha": "3c5d2fb5e4283319c694ae9ca5b1960aa5770ef8",
       "scope": "PR CI build version fixture; production version validation unchanged",
       "implementation_session_id": "01a16431-e9d3-738a-8033-9689171d5033",
       "review_sessions": [
         "01a1650f-db8d-7718-855d-7fa9b6512032"
       ],
       "target_branch": "canary",
-      "next_step": "Cloud owner repairing validation installer isolation/retention against canary"
+      "next_step": "Verify actual packaged MSI safety gate in39844279187, then complete final readiness; do not delay active nightly",
+      "latest_final_review": "https://github.com/Nonary/vibeshine/pull/335#pullrequestreview-5620086476"
+    },
+    {
+      "key": "Nonary/vibeshine#339",
+      "pr_url": "https://github.com/Nonary/vibeshine/pull/339",
+      "status": "merged",
+      "target_branch": "canary",
+      "head_sha": "78c275b2da7d92bbfa2e030545ffeaa02677805a",
+      "merge_sha": "7c428ef07bb2ac132ff4837f5eb43b0183135bb7",
+      "scope": "Manual-canary portable validator workflow repair; automatic schedule remains separate",
+      "reviews": [
+        "https://github.com/Nonary/vibeshine/pull/339#pullrequestreview-5620100625",
+        "https://github.com/Nonary/vibeshine/pull/339#pullrequestreview-5620106636"
+      ]
     }
   ],
   "merge_policy": "Dot may merge this active queue after its additional cloud review under the user's October22 request; no auto-merge by review workers",
   "release_snapshot": {
-    "source_sha": "863469a1daa1e587c66bc3907a506156f1de256d",
-    "target_sha": "73f3253c8c7e01d9c9f617c3e7cc19190d5a8e7a",
-    "source_run": "39834360316",
-    "target_run": "39837989799",
-    "status": "source_arch_failed_other_jobs_running",
-    "published": false
+    "source_sha": "7c428ef07bb2ac132ff4837f5eb43b0183135bb7",
+    "target_sha": "da2aaf62c5e0f7b6aa004f83b79a03ccea3b2468",
+    "source_run": "39846082371",
+    "target_run": "39846230003",
+    "source_tag": "2.0.2-nightly.d20261022.7c428ef07bb2",
+    "status": "source_running_target_pending",
+    "published": false,
+    "schedule_status": "workflow-only default-branch promotion requires separate approval"
   },
   "target_branch_policy": {
     "vibeshine": "canary",
     "other_repositories": "existing targets unchanged",
     "user_instruction": "2026-10-22T19:39:46Z"
+  },
+  "lint_setting": {
+    "repository": "Nonary/vibeshine",
+    "branch": "canary",
+    "commit": "18053bb4593297948a4330b7c3c5da37af6ea1cb",
+    "path": ".github/workflows/_common-lint.yml",
+    "events": [
+      "workflow_dispatch"
+    ],
+    "verified": true,
+    "release_snapshot_inclusion": false
   }
 }
