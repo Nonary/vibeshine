@@ -2,7 +2,7 @@
   "schema": 1,
   "run_id": "20261022-dot-pr-queue",
   "coordinator": "dot",
-  "updated_at": "2026-10-22T17:40:00Z",
+  "updated_at": "2026-10-22T17:46:30Z",
   "target_active_issues": 10,
   "host_total_native_capacity": 7,
   "implementation_location": "dot cloud computer",
@@ -52,22 +52,23 @@
     },
     {
       "key": "Nonary/Vibepollo#657",
-      "status": "draft_created",
+      "status": "awaiting_final_review",
       "implementation_repo": "Nonary/libvirtualdisplay",
       "dependency_repo": "Nonary/libvirtualdisplay",
-      "next_step": "Await bounded independent review allocation",
+      "next_step": "Fresh final review after CI test-target and mapped identity repairs",
       "pr_url": "https://github.com/Nonary/libvirtualdisplay/pull/3",
       "reviews": [],
       "branch": "dot/issue-657-kwin-bridge",
-      "head_sha": "58218260411d6a65d1ce9276f162601e3f18af42",
+      "head_sha": "bb40fe7f9366e32ce38e3fc7913deb7bf44a9995",
       "base_sha": "b2946d02a09bc453d9e6d287623390ca1dedf964",
       "scope": "Partial diagnostic hardening, not FPS fix",
       "resume_condition": "Authorized review environment reconnects; launch round1 UltraCode72 LunaHigh",
-      "worker": "/root/fix_kwin_bridge_upgrade"
+      "worker": "/root/fix_kwin_bridge_upgrade",
+      "blocked_reason": null
     },
     {
       "key": "Nonary/Vibepollo#643",
-      "status": "repairing",
+      "status": "review_2",
       "implementation_repo": "Nonary/vibeshine",
       "branch": "dot/issue-643-aux-state-recovery",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/330",
@@ -83,6 +84,12 @@
           "verdict": "blocked",
           "comment_url": "https://github.com/Nonary/vibeshine/pull/330#pullrequestreview-5617959511",
           "completed_helpers": 13
+        },
+        {
+          "round": 2,
+          "thread_id": "01a164b6-0864-7354-a2fd-031b9064e01a",
+          "status": "in_progress",
+          "head_sha": "98bb22a063fa215787171ebe95c1526325cabc49"
         }
       ],
       "next_step": "Fresh final review on repaired Unicode arguments and actual integration base",
@@ -90,7 +97,8 @@
       "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
       "scope": "Explicit auxiliary reset candidate; not data reconstruction",
       "worker": "/root/fix_aux_state_recovery",
-      "resume_condition": "Reconnect authorized review environment then round1"
+      "resume_condition": "Reconnect authorized review environment then round1",
+      "blocked_reason": null
     },
     {
       "key": "Nonary/Vibepollo#644",
@@ -98,9 +106,9 @@
         "Nonary/Vibepollo#566",
         "Nonary/vibeshine#300"
       ],
-      "status": "blocked",
+      "status": "awaiting_final_review",
       "implementation_repo": "Nonary/vibeshine",
-      "next_step": "Await bounded independent review allocation",
+      "next_step": "Fresh final integration review on current master",
       "branch": "dot/issue-644-dmabuf-alignment",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/329",
       "head_sha": "94d790459af0a3bdfe0aa7615a4a010bcb6abcf9",
@@ -122,7 +130,8 @@
           "comment_url": "https://github.com/Nonary/vibeshine/pull/329#pullrequestreview-5617975001",
           "completed_helpers": 12
         }
-      ]
+      ],
+      "blocked_reason": null
     },
     {
       "key": "Nonary/Vibepollo#638",
@@ -156,11 +165,11 @@
       "related": [
         "Nonary/Vibepollo#462"
       ],
-      "status": "blocked",
+      "status": "review_2",
       "next_step": "Independent round1 review",
       "branch": "dot/issue-658-suspend-gamepad",
       "pr_url": "https://github.com/Nonary/vibeshine/pull/333",
-      "head_sha": "0714538f9c3e060a71eab77d40af1d12f50e97c8",
+      "head_sha": "7246ef9d690c2918ca041721e34177bd735a9de9",
       "base_sha": "b4e88bf7278e4d7f5944e4a87008e17a1cf97dce",
       "scope": "Host ERROR_DEVICE_REMOVED recovery only; no kernel sleep-crash prevention",
       "worker": "/root/investigate_gamepad_sleep_recovery",
@@ -176,11 +185,18 @@
           "verdict": "changes_requested",
           "comment_url": "https://github.com/Nonary/vibeshine/pull/333#issuecomment-6346427381",
           "completed_helpers": 11
+        },
+        {
+          "round": 2,
+          "thread_id": "01a164b5-b9ac-76e1-9c5f-2232c249a002",
+          "status": "in_progress",
+          "head_sha": "7246ef9d690c2918ca041721e34177bd735a9de9"
         }
       ],
       "blocker": "Shared PR CI invalid version and final review pending after repair",
       "resume_condition": "Pipeline repair and independent final review",
-      "round_1_dispositions_complete": true
+      "round_1_dispositions_complete": true,
+      "blocked_reason": null
     },
     {
       "key": "Nonary/Vibepollo#655",
@@ -257,7 +273,7 @@
         "Nonary/Vibepollo#502",
         "Nonary/Vibepollo#579"
       ],
-      "status": "review_1",
+      "status": "review_2",
       "branch": "dot/pr-616-idle-display-origins",
       "source_pr": "https://github.com/Nonary/Vibepollo/pull/616",
       "source_head": "2d9cb289cdafa8366cb9debd2f0737ba87fa85b5",
@@ -274,10 +290,17 @@
           "profile_verified": false,
           "status": "started",
           "verdict": "pending"
+        },
+        {
+          "round": 2,
+          "thread_id": "01a164b5-e528-7665-bbee-b792ef758009",
+          "status": "in_progress",
+          "head_sha": "2e74625ad5134c76c0699190705e079534952f0d"
         }
       ],
-      "head_sha": "04216f38d8256f82fca7ab7175cc4109416ec4bc",
-      "base_sha": "78c8dd847f2d6bc3e57b817eb3ef3ee141f24a4e"
+      "head_sha": "2e74625ad5134c76c0699190705e079534952f0d",
+      "base_sha": "78c8dd847f2d6bc3e57b817eb3ef3ee141f24a4e",
+      "blocked_reason": null
     },
     {
       "key": "Nonary/libvirtualgamepad#6",
@@ -329,33 +352,45 @@
         "Nonary/Vibepollo#658",
         "Nonary/Vibepollo#462"
       ],
-      "status": "draft_created",
+      "status": "review_1",
       "branch": "dot/pr-4-bounded-power-cleanup",
       "source_pr": "https://github.com/Nonary/libvirtualgamepad/pull/4",
       "source_head": "d68ddc5baa6a6b66a0bec19f91ee10ace1afebb1",
       "scope": "Repair already-reviewed enumeration/deadline/power-off defects in retained source proposal",
       "pr_url": "https://github.com/Nonary/libvirtualgamepad/pull/8",
-      "reviews": [],
+      "reviews": [
+        {
+          "round": 1,
+          "thread_id": "01a164b6-3234-72fa-8d52-d8da5fa32009",
+          "status": "in_progress",
+          "head_sha": "fd67a37554f17fce3c6ad586f6acb20f7a48cb8d"
+        }
+      ],
       "head_sha": "fd67a37554f17fce3c6ad586f6acb20f7a48cb8d",
-      "base_sha": "d8161a3f27936e3c603db9072735e694aab263f6"
+      "base_sha": "d8161a3f27936e3c603db9072735e694aab263f6",
+      "blocked_reason": null
     },
     {
       "key": "Nonary/Vibepollo#475",
       "status": "implementing",
       "branch": "dot/issue-475-speaker-pcm-abi",
       "implementation_repo": "Nonary/moonlight-common-c + Nonary/moonlight-qt",
-      "scope": "Recovered additive ABI and client routing; correct reachable dependency gitlink",
+      "scope": "Client/common source recovery; host speaker producer is a separate remaining prerequisite",
       "pr_url": null,
-      "reviews": []
+      "reviews": [],
+      "dependency_pr_url": "https://github.com/Nonary/moonlight-common-c/pull/2",
+      "dependency_head_sha": "8f3de309e3eccd9103b9952af01a2c17904622fe"
     },
     {
       "key": "Nonary/Vibepollo#600",
-      "status": "implementing",
+      "status": "draft_created",
       "branch": "dot/issue-600-client-power-actions",
       "implementation_repo": "Nonary/moonlight-qt",
       "scope": "Recovered client sleep action; preserve default-off grant, one-use token and response-before-sleep safeguards",
-      "pr_url": null,
-      "reviews": []
+      "pr_url": "https://github.com/Nonary/moonlight-qt/pull/26",
+      "reviews": [],
+      "head_sha": "696afb075950b1ed0edd445597c477afb26863aa",
+      "next_step": "Independent first review; full hardware sleep untested"
     },
     {
       "key": "Nonary/Vibepollo#602",
@@ -375,6 +410,13 @@
       "dependency_audit_verified_at": "2026-10-22T17:39:31Z",
       "ownership": "PR8 implementation complete; no duplicate KM PR; isolated producer lane only",
       "capacity": "A ready issue freed a slot; lower-priority diagnostic final reviews queued"
+    },
+    {
+      "key": "Nonary/Vibepollo#592",
+      "status": "investigating_and_implementing",
+      "scope": "Source-first client refresh contract and contributor dependency adaptation",
+      "pr_url": null,
+      "next_step": "Verify contribution/current source gap; publish actual behavioral fix as isolated draft"
     }
   ]
 }
