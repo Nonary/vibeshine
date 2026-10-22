@@ -8,6 +8,7 @@
 #include "src/haptics_gain.h"
 #include "src/send_result_observation.h"
 #include "src/stream_protocol.h"
+#include "src/video_pacing_policy.h"
 #include "src/video_send.h"
 
 namespace {
@@ -354,6 +355,46 @@ TEST(DeferredStreamStartPolicy, ReadyWorkRunsWhileHoldingTheLifecycleGate) {
   EXPECT_EQ(lifecycle_gate.try_lock_calls, 1);
   EXPECT_EQ(lifecycle_gate.unlock_calls, 1);
   EXPECT_FALSE(lifecycle_gate.locked);
+}
+
+TEST(VideoSendBatchTests, OrdinaryVideoPacesByBitrateAndFecExpandedFrameDemand) {
+  constexpr std::size_t payload_bytes = 1376;
+  constexpr std::size_t wire_bytes = 1474;
+  constexpr std::size_t block_size = 1408;
+  constexpr std::size_t prefix_size = 32;
+  constexpr std::size_t datagram_bytes = block_size + prefix_size;
+  constexpr std::size_t max_batch = 64 * 1024;
+
+  // A small frame follows encoder bitrate; an FEC-expanded keyframe retains
+  // enough allowance to carry its actual packets at 120 FPS.
+  const auto small_frame = stream::pacing::packets_per_ms(0, 200000, payload_bytes, wire_bytes, 5, 120, 0);
+  const auto keyframe_packets = stream::pacing::fec_expanded_packets(161, 20, 2);
+  EXPECT_EQ(keyframe_packets, 194u);
+  EXPECT_EQ(stream::pacing::fec_expanded_packets(3, 20, 4), 7u);
+  const auto keyframe_with_fec = stream::pacing::packets_per_ms(0, 170000, payload_bytes, wire_bytes, keyframe_packets, 120, 0);
+  EXPECT_EQ(small_frame, 19u);
+  EXPECT_EQ(keyframe_with_fec, 24u);
+  EXPECT_GT(keyframe_with_fec, small_frame);
+
+  // Negative control: the former 80%-of-1-Gbps quantum ignores video bitrate.
+  const auto legacy_fixed_quantum = std::size_t(1000000000ULL * 80 / 100 / 1000 / block_size / 8);
+  EXPECT_EQ(legacy_fixed_quantum, 71u);
+  EXPECT_LT(keyframe_with_fec, legacy_fixed_quantum);
+
+  const auto batch_budget = stream::pacing::max_batch_bytes(max_batch, keyframe_with_fec, datagram_bytes);
+  EXPECT_EQ(batch_budget, 24u * datagram_bytes);
+  EXPECT_LT(batch_budget, max_batch);
+  const auto batch_packets = stream::video_send_batch_size(block_size, prefix_size, batch_budget);
+  EXPECT_EQ(batch_packets, 24u);
+  EXPECT_LE(batch_packets * datagram_bytes, batch_budget);
+
+  // The existing 16-KiB setting remains the tighter cap when configured.
+  const auto configured_budget = stream::pacing::max_batch_bytes(16 * 1024, keyframe_with_fec, datagram_bytes);
+  EXPECT_EQ(configured_budget, 16 * 1024);
+  EXPECT_EQ(stream::video_send_batch_size(block_size, prefix_size, configured_budget), 11u);
+
+  // A high encoder bitrate remains the dominant demand for a small frame.
+  EXPECT_EQ(stream::pacing::packets_per_ms(0, 800000, payload_bytes, wire_bytes, 5, 120, 0), 73u);
 }
 
 TEST(VideoSendBatchTests, EncryptedDefaultPacketsStayWithinWindowsBufferingLimit) {
