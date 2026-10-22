@@ -12,6 +12,7 @@ on:
   push:
     branches:
       - '**'
+      - '!archive/**'
     tags:
       - '*'
   pull_request:

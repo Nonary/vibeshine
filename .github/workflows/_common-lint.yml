@@ -8,6 +8,8 @@ permissions: {}
 
 on:
   pull_request:
+    branches-ignore:
+      - 'archive/**'
 
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
