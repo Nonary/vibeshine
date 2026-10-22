@@ -98,6 +98,25 @@ using namespace std::literals;
 namespace video {
 
   namespace {
+#ifdef _WIN32
+    void observe_recovery_capture_frame(const std::string &output, std::uint64_t instance) {
+      // A capture name is mutable: resolve it against the current Windows
+      // device list and let the observer accept only the exact leased ID.
+      capture_recovery::observe_frame_from_current_device_list(
+        capture_recovery::observations(),
+        output,
+        instance,
+        [] {
+          return display_helper_integration::enumerate_devices(
+            display_device::DeviceEnumerationDetail::Minimal
+          );
+        },
+        [](const auto &device) -> const std::string & { return device.m_display_name; },
+        [](const auto &device) -> const std::string & { return device.m_device_id; }
+      );
+    }
+#endif
+
     void wait_before_display_retry(std::size_t &consecutive_failures) {
       std::this_thread::sleep_for(policy::display_retry_delay(consecutive_failures));
       if (consecutive_failures < std::numeric_limits<std::size_t>::max()) {
@@ -3254,7 +3273,7 @@ namespace video {
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
 #ifdef _WIN32
         if (frame_captured && img && display_p >= 0 && static_cast<std::size_t>(display_p) < display_names.size()) {
-          capture_recovery::observations().frame(display_names[display_p], disp->recovery_capture_instance);
+          observe_recovery_capture_frame(display_names[display_p], disp->recovery_capture_instance);
         }
 #endif
         if (event_driven_capture) {
@@ -5867,7 +5886,7 @@ namespace video {
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
 #ifdef _WIN32
         if (frame_captured && img && display_p >= 0 && static_cast<std::size_t>(display_p) < display_names.size()) {
-          capture_recovery::observations().frame(display_names[display_p], disp->recovery_capture_instance);
+          observe_recovery_capture_frame(display_names[display_p], disp->recovery_capture_instance);
         }
 #endif
         if (frame_captured && !img) {
