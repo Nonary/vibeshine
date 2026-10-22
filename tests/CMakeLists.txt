@@ -1561,6 +1561,7 @@ if(WIN32)
     sunshine_register_component(NAME test_component_startup_encoder_probe_policy TEST_SOURCE unit/test_startup_encoder_probe_policy.cpp)
     sunshine_register_component(NAME test_component_audio_visibility_recovery TEST_SOURCE unit/test_audio_visibility_recovery.cpp)
     sunshine_register_component(NAME test_component_display_helper_v2_async_dispatcher TEST_SOURCE unit/test_display_helper_v2_async_dispatcher.cpp
+        EXTRA_TEST_SOURCES "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_helper_borrow_gate_peer.cpp"
         PRODUCT_SOURCES
             "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/diagnostics.cpp"
             "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/text_storage.cpp"
@@ -1632,7 +1633,7 @@ if(WIN32)
     sunshine_register_component(NAME test_component_vhf_gamepad_policy TEST_SOURCE unit/platform/windows/test_vhf_gamepad_policy.cpp
         PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/vhf_gamepad_policy.cpp"
         INCLUDE_DIRECTORIES "${SUNSHINE_LIBVIRTUALGAMEPAD_INCLUDE_DIR}"
-        LINK_LIBRARIES sunshine_test_moonlight_headers)
+        LINK_LIBRARIES sunshine_test_moonlight_headers Boost::process)
     sunshine_register_component(NAME test_component_virtual_display_cleanup_policy TEST_SOURCE unit/test_virtual_display_cleanup_policy.cpp)
     sunshine_register_component(NAME test_component_lossless_scaling_policy TEST_SOURCE unit/test_lossless_scaling.cpp
         PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/tools/playnite_launcher/lossless_scaling_policy.cpp")
