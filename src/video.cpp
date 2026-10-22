@@ -36,6 +36,7 @@ extern "C" {
 
 // local includes
 #include "cbs.h"
+#include "capture_recovery.h"
 #include "config.h"
 #include "display_device.h"
 #include "amf/amf_encoder.h"
@@ -2828,6 +2829,7 @@ namespace video {
       disp.reset();
       disp = platf::display(type, display_name, config, required_adapter);
       if (disp) {
+        disp->recovery_capture_instance = capture_recovery::observations().begin_capture();
         break;
       }
 
@@ -3074,6 +3076,7 @@ namespace video {
       }
       disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_config);
       if (disp) {
+        disp->recovery_capture_instance = capture_recovery::observations().begin_capture();
         break;
       }
 
@@ -3249,6 +3252,11 @@ namespace video {
       const bool event_driven_capture = disp->is_event_driven_capture();
 
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
+#ifdef _WIN32
+        if (frame_captured && img && display_p >= 0 && static_cast<std::size_t>(display_p) < display_names.size()) {
+          capture_recovery::observations().frame(display_names[display_p], disp->recovery_capture_instance);
+        }
+#endif
         if (event_driven_capture) {
           bool new_context_needs_frame = false;
           while (auto pending_context = capture_ctx_queue->pop(0ms)) {
@@ -5857,6 +5865,11 @@ namespace video {
     auto ec = platf::capture_e::ok;
     while (encode_session_ctx_queue.running()) {
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
+#ifdef _WIN32
+        if (frame_captured && img && display_p >= 0 && static_cast<std::size_t>(display_p) < display_names.size()) {
+          capture_recovery::observations().frame(display_names[display_p], disp->recovery_capture_instance);
+        }
+#endif
         if (frame_captured && !img) {
           BOOST_LOG(error) << "Capture backend reported a frame without an image"sv;
           ec = platf::capture_e::error;

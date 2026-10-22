@@ -1096,6 +1096,30 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         LINK_LIBRARIES nlohmann_json::nlohmann_json)
     sunshine_register_component(NAME test_component_linux_private_display_resume_policy TEST_SOURCE unit/platform/linux/test_private_display_resume_policy.cpp)
 endif()
+
+if(NOT WIN32)
+    sunshine_register_component(NAME test_component_windows_display_recovery
+        TEST_SOURCE unit/test_display_helper_v2_state_machine.cpp
+        DEFINITIONS SUNSHINE_TEST_PORTABLE_WINDOWS_TYPES
+        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/support/display_helper_core"
+        PRODUCT_SOURCES
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/diagnostics.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/text_storage.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/topology_policy.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/async_dispatcher.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/golden_health.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/operations.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/snapshot.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/snapshot_codec.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/state_machine.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/windows/types.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/common/types.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/common/json.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/common/json_serializer.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/common/logging.cpp"
+        LINK_LIBRARIES sunshine_test_displaydevice_headers Boost::algorithm nlohmann_json::nlohmann_json)
+endif()
+
 find_package(ZLIB REQUIRED)
 sunshine_register_component(NAME test_component_log_export_reader TEST_SOURCE unit/test_log_export_reader.cpp
     LINK_LIBRARIES Boost::asio Boost::crc ZLIB::ZLIB ${SUNSHINE_TEST_SOCKET_LIBRARIES})
@@ -1612,6 +1636,11 @@ if(WIN32)
         PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/tools/playnite_launcher/lossless_scaling_policy.cpp")
 endif()
 
+# The repair waits for a frame from a newly initialized capture instance.
+sunshine_register_component(NAME test_component_capture_recovery TEST_SOURCE unit/test_capture_recovery.cpp)
+sunshine_register_component(NAME test_component_virtual_display_recovery_timing
+    TEST_SOURCE unit/test_virtual_display_recovery_timing.cpp)
+
 if(APPLE)
     # This file intentionally contains only portable C++ policy tests. Compile
     # it as C++ so this target does not enable or link Objective-C frameworks.
@@ -1666,6 +1695,10 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_virtual_display_recovery_transport.py")
     add_test(NAME regression_virtual_display_recovery_modes
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_virtual_display_recovery_modes.py")
+    add_test(NAME regression_virtual_display_reactivation
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_virtual_display_reactivation.py")
+    add_test(NAME regression_virtual_display_live_recovery
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_virtual_display_live_recovery.py")
     add_test(NAME regression_playnite_close_grace
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_close_grace.py")
     add_test(NAME regression_playnite_plugin_upgrade
