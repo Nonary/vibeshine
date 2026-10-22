@@ -2324,16 +2324,18 @@ namespace nvhttp {
       client_t client;
       std::vector<crypto::x509_t> certificates;
       nlohmann::json remote_display_layout;
+      std::vector<statefile::policy::collapsed_pairing_record_t> collapsed;
     };
 
     const auto parse_state = [](pt::ptree tree) -> std::optional<parsed_state_t> {
       try {
         // Apply the same legacy alias rule as durable snapshot validation.
         // In particular, an old alias must not re-enable a disabled named client.
+        std::vector<statefile::policy::collapsed_pairing_record_t> collapsed;
         if (!statefile::policy::normalize_legacy_pairing_state(tree, [](const std::string &pem) {
               return exact_certificate_identity(crypto::x509(pem));
-            })) {
-          BOOST_LOG(error) << "Pairing state contains invalid or duplicate client certificates."sv;
+            }, nullptr, &collapsed)) {
+          BOOST_LOG(error) << "Pairing state contains invalid client certificates."sv;
           return std::nullopt;
         }
         auto unique_id = tree.get_optional<std::string>("root.uniqueid");
@@ -2343,6 +2345,7 @@ namespace nvhttp {
 
         parsed_state_t parsed;
         parsed.unique_id = std::move(*unique_id);
+        parsed.collapsed = std::move(collapsed);
         if (auto root = tree.get_child_optional("root")) {
           // Import from old format.
           if (auto device_nodes = root->get_child_optional("devices")) {
@@ -2482,6 +2485,28 @@ namespace nvhttp {
     }
 
     http::unique_id = parsed->unique_id;
+
+    if (!parsed->collapsed.empty()) {
+      BOOST_LOG(warning) << "Pairing state had "sv << parsed->collapsed.size()
+                         << " duplicate record(s) for already-paired clients, left behind by Vibeshine 1.x. "
+                            "Keeping the record 1.x used for each client."sv;
+      for (const auto &record : parsed->collapsed) {
+        BOOST_LOG(warning) << "Pairing state: kept client UUID "sv << record.kept_uuid << " (record "sv << record.kept_index
+                           << "), removed duplicate UUID "sv << record.dropped_uuid << " (record "sv << record.dropped_index << ')';
+      }
+      // The next save rewrites the primary and a later startup refreshes the
+      // recovery copy, so keep the first original for administrators.
+      const auto original_path = sunshine_path + ".before-dedupe.bak";
+      std::error_code ec;
+      if (!fs::exists(original_path, ec) && !ec) {
+        try {
+          statefile::write_json_atomic(original_path, tree);
+          BOOST_LOG(info) << "Saved the original pairing state to "sv << original_path;
+        } catch (const std::exception &e) {
+          BOOST_LOG(warning) << "Could not save the original pairing state to "sv << original_path << ": "sv << e.what();
+        }
+      }
+    }
 
     // Selection already restored a damaged primary. Refresh only the validated
     // chosen snapshot, without making another independent recovery decision.
@@ -6201,13 +6226,18 @@ launch_session->exact_target_hold.reset();
     bool clean_slate = config::sunshine.flags[config::flag::FRESH_STATE];
 
     if (!clean_slate) {
-      if (!load_state()) {
-        // Do not expose a newly generated uniqueid when durable pairing state
-        // is unavailable. The controller will retry after the filesystem or
-        // profile issue is repaired, while the recovery copy remains intact.
-        BOOST_LOG(fatal) << "HTTP interface is stopping because durable pairing state could not be loaded."sv;
-        shutdown_event->raise(true);
-        return;
+      // Do not expose a newly generated uniqueid when durable pairing state is
+      // unavailable, but do not exit either: that put the host in a service
+      // restart loop and took the Web UI down with it. Keep the rest of the
+      // host up and retry until the filesystem or profile issue is repaired.
+      std::chrono::seconds retry_delay = 15s;
+      while (!load_state()) {
+        BOOST_LOG(error) << "Pairing and streaming are unavailable because durable pairing state could not be loaded; retrying in "sv
+                         << retry_delay.count() << " seconds."sv;
+        if (shutdown_event->view(retry_delay)) {
+          return;
+        }
+        retry_delay = std::min<std::chrono::seconds>(retry_delay * 2, 5min);
       }
     } else {
       // FRESH_STATE is an explicit, non-persistent test/reset mode. It is the
