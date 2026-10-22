@@ -460,6 +460,7 @@ jobs:
             mingw-w64-${{ matrix.toolchain }}-boost
             mingw-w64-${{ matrix.toolchain }}-cmake
             mingw-w64-${{ matrix.toolchain }}-cppwinrt
+            mingw-w64-${{ matrix.toolchain }}-ccache
             mingw-w64-${{ matrix.toolchain }}-curl-winssl
             mingw-w64-${{ matrix.toolchain }}-gcc
             mingw-w64-${{ matrix.toolchain }}-libjpeg-turbo
@@ -474,6 +475,15 @@ jobs:
             mingw-w64-${{ matrix.toolchain }}-opus
             mingw-w64-${{ matrix.toolchain }}-sqlite3
             mingw-w64-${{ matrix.toolchain }}-tools
+
+      - name: Restore C/C++ compiler cache
+        id: ccache-restore
+        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57  # v4.2.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: windows-ccache-${{ matrix.toolchain }}-${{ github.sha }}
+          restore-keys: |
+            windows-ccache-${{ matrix.toolchain }}-
 
       - name: Setup dotnet  # needed for wix
         uses: actions/setup-dotnet@baa11fbfe1d6520db94683bd5c7a3818018e4309  # v5.1.0
@@ -649,7 +659,10 @@ jobs:
           COMMIT: ${{ inputs.release_commit }}
           REQUIRE_TRUEHDR_RUNTIME: ${{ inputs.require_truehdr_runtime }}
           DAILY_UNSIGNED: ${{ inputs.daily_unsigned }}
+          CCACHE_DIR: ${{ runner.temp }}/ccache
         run: |
+          export CCACHE_DIR="$(cygpath -u "${CCACHE_DIR}")"
+          ccache --zero-stats
           echo "Using BUILD_VERSION=${BUILD_VERSION}"
 
           NODEJS_PATH=$(cygpath -u "$NODEJS_PATH")
@@ -715,6 +728,8 @@ jobs:
             -DBUILD_VIRTUALDISPLAY_VULKAN_LAYER=OFF \
             -DBUILD_DOCS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -g -gdwarf-4" \
             -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g -gdwarf-4 -Wno-error=cpp -Wno-error=unused-function" \
             -DSUNSHINE_ENABLE_WEBRTC=ON \
@@ -741,6 +756,13 @@ jobs:
             cmake --build build --target all --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
           fi
           echo "::remove-matcher owner=gcc::"
+
+      - name: Save C/C++ compiler cache
+        if: always() && steps.ccache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57  # v4.2.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: windows-ccache-${{ matrix.toolchain }}-${{ github.sha }}
 
       - name: Prepare stripped executable for Dolby testing
         if: github.event_name == 'workflow_dispatch' || github.ref_name == 'test/vibeshine-dolby-ac3'

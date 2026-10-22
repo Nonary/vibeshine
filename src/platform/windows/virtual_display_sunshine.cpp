@@ -49,6 +49,7 @@
 #include <cstring>
 #include <cwchar>
 #include <cwctype>
+#include <initguid.h>
 #include <devguid.h>
 #include <devpkey.h>
 #include <dxgi.h>
@@ -59,7 +60,6 @@
 #include <highlevelmonitorconfigurationapi.h>
 #include <icm.h>
 #include <iomanip>
-#include <initguid.h>
 #include <iostream>
 #include <limits>
 #include <map>
