@@ -194,27 +194,35 @@ if(WIN32)
 endif()
 add_subdirectory("${GTEST_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/googletest")
 
+# Standalone test configuration does not load the project-wide dependencies.
+# Reuse the same system-first, pinned-source fallback as the full project.
+include("${SUNSHINE_TEST_REPOSITORY_ROOT}/cmake/dependencies/nlohmann_json.cmake")
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
-if(NOT TARGET Boost::algorithm OR
-   NOT TARGET Boost::asio OR
-   NOT TARGET Boost::crc OR
-   NOT TARGET Boost::format OR
-   NOT TARGET Boost::function OR
-   NOT TARGET Boost::log OR
-   NOT TARGET Boost::log_setup OR
-   NOT TARGET Boost::property_tree OR
-   NOT TARGET Boost::system)
+set(_sunshine_test_boost_components
+    algorithm
+    asio
+    crc
+    format
+    function
+    log
+    log_setup
+    property_tree
+    system)
+if(SUNSHINE_TEST_ENABLE_COMPONENT)
+    list(APPEND _sunshine_test_boost_components process)
+endif()
+set(_sunshine_test_missing_boost_target FALSE)
+foreach(_sunshine_test_boost_component IN LISTS _sunshine_test_boost_components)
+    if(NOT TARGET "Boost::${_sunshine_test_boost_component}")
+        set(_sunshine_test_missing_boost_target TRUE)
+        break()
+    endif()
+endforeach()
+if(_sunshine_test_missing_boost_target)
     find_package(Boost CONFIG REQUIRED COMPONENTS
-        algorithm
-        asio
-        crc
-        format
-        function
-        log
-        log_setup
-        property_tree
-        system)
+        ${_sunshine_test_boost_components})
 endif()
 find_package(OpenSSL REQUIRED)
 
@@ -1195,8 +1203,10 @@ sunshine_register_component(NAME test_component_resource_config_catalog TEST_SOU
 sunshine_register_component(NAME test_component_resource_locale_catalog TEST_SOURCE integration/test_locale_consistency.cpp
     SUPPORT_SOURCES "${CMAKE_CURRENT_LIST_DIR}/support/file_handler_read_only.cpp"
     LINK_LIBRARIES nlohmann_json::nlohmann_json)
-set_tests_properties(test_component_resource_locale_catalog PROPERTIES
-    WORKING_DIRECTORY "${SUNSHINE_TEST_REPOSITORY_ROOT}")
+if(TARGET test_component_resource_locale_catalog)
+    set_tests_properties(test_component_resource_locale_catalog PROPERTIES
+        WORKING_DIRECTORY "${SUNSHINE_TEST_REPOSITORY_ROOT}")
+endif()
 sunshine_register_component(NAME test_component_external_command_policy TEST_SOURCE integration/test_external_commands.cpp)
 sunshine_register_component(NAME test_component_virtual_display_manifest TEST_SOURCE integration/test_virtual_display_packaging.cpp
     INCLUDE_DIRECTORIES "${SUNSHINE_TEST_GENERATED_INCLUDE_DIR}")
@@ -1448,12 +1458,21 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND SUNSHINE_TEST_ENABLE_COMPONENT)
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_local_deploy.py")
         set_tests_properties(test_component_linux_local_deploy PROPERTIES LABELS "component" TIMEOUT 30)
-        add_test(
-            NAME test_component_linux_vkms_peercred
-            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
-                "${SUNSHINE_LIBVIRTUALDISPLAY_SOURCE_DIR}/tests/linux/test-vkms-peercred.py"
-                "$<TARGET_FILE:vibeshine_vkms_peercred>")
-        set_tests_properties(test_component_linux_vkms_peercred PROPERTIES LABELS "component")
+        if(TARGET vibeshine_vkms_peercred)
+            add_test(
+                NAME test_component_linux_vkms_peercred
+                COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                    "${SUNSHINE_LIBVIRTUALDISPLAY_SOURCE_DIR}/tests/linux/test-vkms-peercred.py"
+                    "$<TARGET_FILE:vibeshine_vkms_peercred>")
+            set_tests_properties(test_component_linux_vkms_peercred PROPERTIES LABELS "component")
+        elseif(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+            message(STATUS
+                "Skipping optional test_component_linux_vkms_peercred: "
+                "vibeshine_vkms_peercred is provided by the full project, not the standalone tests entry point")
+        else()
+            message(FATAL_ERROR
+                "The full Linux component test configuration requires the vibeshine_vkms_peercred target")
+        endif()
         set(_sunshine_native_drm_source_root "${SUNSHINE_LIBVIRTUALDISPLAY_SOURCE_DIR}")
         if(NOT _sunshine_native_drm_source_root)
             set(_sunshine_native_drm_source_root "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libvirtualdisplay")
