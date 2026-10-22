@@ -2,7 +2,7 @@
   "schema": 1,
   "run_id": "20261022-dot-pr-queue",
   "coordinator": "dot",
-  "updated_at": "2026-10-22T17:16:40Z",
+  "updated_at": "2026-10-22T17:30:30Z",
   "target_active_issues": 10,
   "host_total_native_capacity": 7,
   "implementation_location": "dot cloud computer",
@@ -269,7 +269,7 @@
     {
       "key": "Nonary/libvirtualgamepad#6",
       "kind": "contribution_adaptation",
-      "status": "review_1",
+      "status": "ready_waiting_for_chase",
       "branch": "dot/pr-6-touch-id-collision",
       "source_pr": "https://github.com/Nonary/libvirtualgamepad/pull/6",
       "source_head": "597b69a8d5edeff46244d7464133bab7163a84e5",
@@ -283,13 +283,31 @@
           "head_sha": "c992a43775b64bce1f89fe08b53ba3717b8300b3",
           "base_sha": "d8161a3f27936e3c603db9072735e694aab263f6",
           "profile": "UltraCode 72 Luna High",
-          "profile_verified": false,
-          "status": "started",
-          "verdict": "pending"
+          "profile_verified": true,
+          "status": "completed",
+          "verdict": "clear",
+          "comment_url": "https://github.com/Nonary/libvirtualgamepad/pull/7#issuecomment-6346818721",
+          "completed_helpers": 11
+        },
+        {
+          "round": 2,
+          "session_id": "01a164a2-2818-73bb-b338-77c55aed000c",
+          "head_sha": "c992a43775b64bce1f89fe08b53ba3717b8300b3",
+          "base_sha": "d8161a3f27936e3c603db9072735e694aab263f6",
+          "profile": "UltraCode 72 Luna High",
+          "profile_verified": true,
+          "status": "completed",
+          "verdict": "clear",
+          "comment_url": "https://github.com/Nonary/libvirtualgamepad/pull/7#issuecomment-6346983740",
+          "completed_helpers": 11
         }
       ],
       "head_sha": "c992a43775b64bce1f89fe08b53ba3717b8300b3",
-      "base_sha": "d8161a3f27936e3c603db9072735e694aab263f6"
+      "base_sha": "d8161a3f27936e3c603db9072735e694aab263f6",
+      "ready_verified_at": "2026-10-22T17:29:51Z",
+      "required_checks_known": true,
+      "required_checks": [],
+      "round_1_dispositions_complete": true
     },
     {
       "key": "Nonary/libvirtualgamepad#4",
