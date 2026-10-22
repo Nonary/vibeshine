@@ -15,10 +15,6 @@ def function(signature):
         end += 1
     return source[start:end]
 
-empty_enumeration = function('    MonitorTargetPresence monitor_target_presence(')
-empty_enumeration = empty_enumeration[:empty_enumeration.index('      const bool has_stable_identity')]
-empty_enumeration = empty_enumeration.replace('monitor_target_presence(', 'empty_enumeration_presence(')
-empty_enumeration += 'return MonitorTargetPresence::unknown; }'
 ccd_presence = function('    MonitorTargetPresence ccd_target_presence(')
 driver_presence = function('    MonitorTargetPresence driver_target_presence(')
 target_presence = function('    MonitorTargetPresence monitor_target_presence(')
@@ -141,18 +137,18 @@ bool reactivate_owned_virtual_display(const std::string &id,const std::function<
  ++helper_applies;return helper_ok;
 }
 }
-''' + ccd_presence + '\n' + driver_presence + '\n' + target_presence + '\n' + reactivate_presence + '\n' + empty_enumeration + r'''
+''' + ccd_presence + '\n' + driver_presence + '\n' + target_presence + '\n' + reactivate_presence + r'''
 int main() {
  RecoveryMonitorState state;
  ccd_paths={{"virtual1","monitor1",0},{"physical","monitor2",DISPLAYCONFIG_PATH_ACTIVE}};
- // Preserve indeterminate enumeration, exact owned inactive detection, and
- // the existing missing-target classification when the driver has no lease.
+ // Exercise the complete production monitor path: query failures stay unknown,
+ // while an exact leased inactive target stays recoverable at zero active paths.
  ccd_result.reset();
- assert(empty_enumeration_presence(state)==MonitorTargetPresence::unknown);
+ assert(actual_monitor_target_presence(state)==MonitorTargetPresence::unknown);
  ccd_result=true;
- assert(empty_enumeration_presence(state)==MonitorTargetPresence::present_inactive);
+ assert(actual_monitor_target_presence(state)==MonitorTargetPresence::present_inactive);
  ccd_result=false;
- assert(empty_enumeration_presence(state)==MonitorTargetPresence::present_inactive);
+ assert(actual_monitor_target_presence(state)==MonitorTargetPresence::present_inactive);
  // A retained driver lease alone must not turn a missing target into a 12s
  // inactive grace. Other enumerated CCD outputs do not prove this target exists.
  ccd_result=true;
@@ -190,14 +186,20 @@ int main() {
  enumerated_devices={{"replacement-virtual","monitor3","DISPLAY16","DISPLAY16",true}};
  assert(actual_monitor_target_presence(identity_state)==MonitorTargetPresence::present_active);
  assert(!identity_state.current_display_name_verified);
+ // A subsequent stable match to the weakly adopted ID cannot verify it unless
+ // the candidate ID is the exact device ID retained by the driver lease.
+ enumerated_devices={{"replacement-virtual","monitor3","DISPLAY17","DISPLAY16",true}};
+ assert(actual_monitor_target_presence(identity_state)==MonitorTargetPresence::present_active);
+ assert(identity_state.current_display_name==L"DISPLAY17");
+ assert(!identity_state.current_display_name_verified);
  enumerated_devices.clear();
  ccd_paths={{"virtual1","monitor1",0}};
 
  ccd_result=false;
  owned.reset();
- assert(empty_enumeration_presence(state)==MonitorTargetPresence::missing);
+ assert(actual_monitor_target_presence(state)==MonitorTargetPresence::missing);
  ccd_result=true;
- assert(empty_enumeration_presence(state)==MonitorTargetPresence::unknown);
+ assert(actual_monitor_target_presence(state)==MonitorTargetPresence::unknown);
  owned=Lease{};
  assert(driver_target_presence(state)==MonitorTargetPresence::present_inactive);
  query_ok=false;
@@ -242,6 +244,25 @@ int main() {
  assert(!state.current_display_name_verified);
  captures.frame("DISPLAY15",captures.begin_capture());
  assert(state.capture_confirmation.poll(std::chrono::steady_clock::now()+6s)==video::capture_recovery::confirmation_status::retry);
+
+ // A false friendly-name match can select a candidate for presence tracking,
+ // but its display/path aliases cannot acknowledge a frame for the leased ID.
+ RecoveryMonitorState weak_state;
+ weak_state.params.client_name="client";
+ weak_state.current_device_id.reset();
+ weak_state.current_monitor_device_path.reset();
+ weak_state.normalized_monitor_device_path.reset();
+ weak_state.normalized_display_name.reset();
+ enumerated_devices={{"replacement-virtual","monitor3","DISPLAY17","client",true}};
+ assert(actual_monitor_target_presence(weak_state)==MonitorTargetPresence::present_active);
+ assert(!weak_state.current_display_name_verified);
+ ccd_paths={{"virtual1","monitor1",DISPLAYCONFIG_PATH_ACTIVE}};
+ assert(reactivate_owned_virtual_display(weak_state,{}));
+ assert(!weak_state.current_display_name_verified);
+ captures.frame("DISPLAY17",captures.begin_capture());
+ assert(weak_state.capture_confirmation.poll(std::chrono::steady_clock::now()+6s)==video::capture_recovery::confirmation_status::retry);
+ captures.frame("virtual1",captures.begin_capture());
+ assert(weak_state.capture_confirmation.poll(std::chrono::steady_clock::now()+7s)==video::capture_recovery::confirmation_status::confirmed);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='live-recovery-') as d:
@@ -250,4 +271,4 @@ with tempfile.TemporaryDirectory(prefix='live-recovery-') as d:
     cpp.write_text(program)
     subprocess.run(['g++', '-std=c++23', '-O1', '-pthread', '-Wall', '-Wextra', '-Werror', '-I', str(root), str(cpp), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True, timeout=10)
-print('Live recovery: exact lease, stable identity, cancellation, lock contention and capture acknowledgement passed')
+print('Live recovery: exact lease, identity provenance, cancellation, lock contention and capture acknowledgement passed')
