@@ -338,6 +338,15 @@ TEST(WgcGeometryUpdatePolicy, OnlyTheSameAttachedDxgiTargetPassesTheContinuation
   }
 }
 
+TEST(WgcHelperPublication, DirectPublishOnlyWhenNothingOlderIsInFlight) {
+  using platf::dxgi::wgc_policy::may_publish_directly;
+  EXPECT_TRUE(may_publish_directly(false, false, false));
+  // A queued or mid-delivery scratch frame is older and must be published first.
+  EXPECT_FALSE(may_publish_directly(false, true, false));
+  EXPECT_FALSE(may_publish_directly(false, false, true));
+  EXPECT_FALSE(may_publish_directly(true, false, false));
+}
+
 TEST(WgcDirectEncoderInput, EncodesEachSharedFrameOnce) {
   using platf::dxgi::wgc_policy::direct_frame_cursor_t;
   using platf::dxgi::wgc_policy::take_direct_frame;
