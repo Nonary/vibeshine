@@ -12,6 +12,18 @@ set(CPACK_WIX_PROGRAM_MENU_FOLDER "Vibeshine")
 # NOTE: Do not change once released, or upgrades will break.
 set(CPACK_WIX_UPGRADE_GUID "{C2C36624-2D9C-4AFD-9C79-6B7861AE4A0D}")
 
+# Validation packages share service/file locations with released builds, so a
+# second UpgradeCode would not make side-by-side installation safe. Permit a
+# clean-machine test install, but reject replacement of any related product.
+# Maintenance of an already installed validation product remains possible.
+set(CPACK_WIX_VALIDATION_CONDITION "")
+if(PROJECT_VERSION_FULL MATCHES "-pr-validation($|[.+])")
+  string(CONCAT CPACK_WIX_VALIDATION_CONDITION
+    "<Condition Message='PR validation packages cannot replace an existing "
+    "Vibeshine installation. Use a clean test machine.'>"
+    "Installed OR NOT WIX_UPGRADE_DETECTED</Condition>")
+endif()
+
 # Generate a fresh sortable ProductCode for every CPack WiX invocation.  The
 # Upgrade GUID above intentionally remains stable so Windows Installer still
 # treats all Vibeshine MSIs as the same product family.
