@@ -14,6 +14,7 @@ async function setupWindowsHost(
     driverStatus?: DriverStatus | number;
     activeDriver?: 'vibeshine' | 'sudovda' | null;
     statusCode?: number;
+    initializationAttempted?: boolean;
     configuredDriver?: 'vibeshine' | 'sudovda';
     config?: Record<string, unknown>;
   } = {},
@@ -53,6 +54,7 @@ async function setupWindowsHost(
         encoder_status: { state: 'ready', h264: true },
         virtual_display_driver: {
           configured: options.configuredDriver ?? 'vibeshine',
+          initialization_attempted: options.initializationAttempted,
           active: options.activeDriver === undefined ? 'vibeshine' : options.activeDriver,
           status: options.driverStatus ?? 'unknown',
           status_code:
@@ -73,6 +75,7 @@ test('uninitialized driver stays hidden until a runtime result is observed', asy
   const options = {
     driverStatus: 'unknown' as DriverStatus | number,
     statusCode: 1,
+    initializationAttempted: false,
     activeDriver: null as 'vibeshine' | null,
   };
   await setupWindowsHost(page, options);
@@ -91,6 +94,7 @@ test('uninitialized driver stays hidden until a runtime result is observed', asy
   await expect(page.locator('.settings-section').first()).toBeVisible();
   await expect(status).toHaveCount(0);
 
+  options.initializationAttempted = true;
   options.driverStatus = 'failed';
   options.statusCode = -1;
   await page.reload();
@@ -121,7 +125,8 @@ test('uninitialized driver stays hidden until a runtime result is observed', asy
   options.statusCode = 1;
   options.activeDriver = null;
   await status.getByRole('button', { name: 'Refresh status', exact: true }).click();
-  await expect(status).toHaveCount(0);
+  await expect(status).toBeVisible();
+  await expect(alert).toContainText('Driver status is unknown');
   expect(mutations).toEqual([]);
 });
 

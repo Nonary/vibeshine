@@ -20,6 +20,7 @@ test('Windows driver component omits deferred startup but renders real results a
         active: null,
         status: 'unknown',
         status_code: 1,
+        initialization_attempted: false,
       },
     };
     async function render(props: Record<string, unknown>) {
@@ -36,6 +37,16 @@ test('Windows driver component omits deferred startup but renders real results a
       return renderToString(app);
     }
     assert.equal(await render({ metadata }), '<!---->');
+    for (const initialization_attempted of [true, undefined, 'false']) {
+      const recovery = await render({
+        metadata: {
+          ...metadata,
+          virtual_display_driver: { ...metadata.virtual_display_driver, initialization_attempted },
+        },
+      });
+      assert.match(recovery, /windows-display-status/);
+      assert.match(recovery, /messages.unknown.title/);
+    }
     assert.match(await render({ metadata, loading: true }), /windows-display-status/);
     const error = await render({ metadata, error: 'Unable to fetch driver status' });
     assert.match(error, /Unable to fetch driver status/);

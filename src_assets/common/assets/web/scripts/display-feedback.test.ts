@@ -44,7 +44,12 @@ test('Windows driver health accepts the runtime status contract without false re
   assert.equal(
     windowsDisplayHealth({
       platform: 'windows',
-      virtual_display_driver: { configured: 'sudovda', status: 1, active: null },
+      virtual_display_driver: {
+        configured: 'sudovda',
+        status: 1,
+        active: null,
+        initialization_attempted: false,
+      },
     }).state,
     'uninitialized',
   );
@@ -137,6 +142,7 @@ test('cold startup is unobserved, not ready, while real failures remain failures
       active: null,
       status: 'unknown',
       status_code: 1,
+      initialization_attempted: false,
     },
   };
   assert.equal(windowsDisplayHealth(metadata).state, 'uninitialized');
@@ -159,6 +165,7 @@ const uninitializedMetadata = {
     active: null,
     status: 'unknown',
     status_code: 1,
+    initialization_attempted: false,
   },
 };
 
@@ -207,4 +214,27 @@ test('unexpected or missing driver data is not silently treated as deferred star
     },
   };
   assert.equal(showWindowsDisplayStatus(malformed), true);
+});
+
+test('failed recovery UNKNOWN metadata stays visible after an actual initialization attempt', () => {
+  for (const initialization_attempted of [true, undefined, 'false']) {
+    const metadata = {
+      ...uninitializedMetadata,
+      virtual_display_driver: {
+        ...uninitializedMetadata.virtual_display_driver,
+        initialization_attempted,
+      },
+    };
+    assert.equal(windowsDisplayHealth(metadata).state, 'unknown');
+    assert.equal(showWindowsDisplayStatus(metadata), true);
+  }
+  const explicitUnknown = {
+    ...uninitializedMetadata,
+    virtual_display_driver: {
+      ...uninitializedMetadata.virtual_display_driver,
+      status: 'uninitialized',
+      initialization_attempted: true,
+    },
+  };
+  assert.equal(showWindowsDisplayStatus(explicitUnknown), true);
 });

@@ -15,6 +15,7 @@ export interface WindowsDisplayDriverMetadata {
   active?: unknown;
   status?: unknown;
   status_code?: unknown;
+  initialization_attempted?: unknown;
 }
 
 export interface DisplayMetadataWithDriver {
@@ -100,8 +101,8 @@ export function windowsDisplayHealth(
   const configuredDriver = normalizeDriver(driver?.configured);
   const activeDriver = normalizeDriver(driver?.active);
   const parsedState = normalizeStatus(driver?.status ?? statusCode);
-  // Only the host's explicit UNKNOWN result proves deferred initialization.
-  // Missing or unfamiliar status data must remain visible as unknown.
+  // UNKNOWN also covers failed recovery: only explicit never-attempted
+  // provenance can identify quiet startup. Missing data stays visible.
   const deferredStatus =
     driver?.status == null ||
     numericStatus(driver.status) === 1 ||
@@ -109,6 +110,7 @@ export function windowsDisplayHealth(
   return {
     state:
       parsedState === 'unknown' &&
+      driver?.initialization_attempted === false &&
       deferredStatus &&
       numericStatus(driver?.status_code ?? driver?.status) === 1 &&
       configuredDriver &&
@@ -135,7 +137,10 @@ export function showWindowsDisplayStatus(
 ): boolean {
   return (
     isWindowsHost(metadata) &&
-    (loading || Boolean(error) || windowsDisplayHealth(metadata).state !== 'uninitialized')
+    (loading ||
+      Boolean(error) ||
+      metadata?.virtual_display_driver?.initialization_attempted !== false ||
+      windowsDisplayHealth(metadata).state !== 'uninitialized')
   );
 }
 
