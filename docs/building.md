@@ -213,11 +213,45 @@ fi
 pacman -S "${dependencies[@]}"
 ```
 
-##### WebRTC (optional, Windows only)
+##### WebRTC (optional, Windows and Linux)
 Sunshine can link against the libwebrtc C++ wrapper when `SUNSHINE_ENABLE_WEBRTC=ON`. The wrapper source is vendored as
 the `third-party/libwebrtc` submodule, but you must build WebRTC separately and provide a staging directory that
 contains `include/` and `lib/` (e.g., `libwebrtc.dll` and its import library). We use the `third-party/depot_tools`
 submodule for `gclient`/`gn`.
+
+###### Linux (opt-in, source-built SDK)
+
+The Linux x86_64 helper adapts [CodyECSL's Linux support](https://github.com/Nonary/Vibepollo/pull/642).
+Install the Chromium/WebRTC host build prerequisites first; the helper does not install packages.
+It uses `m125_release`, matching the Windows helper, and disables the wrapper's desktop capturer.
+
+```bash
+git submodule update --init third-party/libwebrtc
+scripts/build_linux_webrtc.sh  # --stage=sync or --stage=build; --debug is optional
+cmake -S . -B build -DSUNSHINE_ENABLE_WEBRTC=ON
+```
+
+The staged SDK defaults to `${XDG_CACHE_HOME:-~/.cache}/Vibeshine/deps/libwebrtc/out`.
+`VIBESHINE_DEPS_DIR` overrides the cache root; `WEBRTC_BUILD_DIR` and `WEBRTC_OUT_DIR`
+override the source workspace and staged SDK. If overriding `WEBRTC_OUT_DIR`, pass the same
+path to CMake as `-DWEBRTC_ROOT=...`. Explicit `WEBRTC_INCLUDE_DIR` and `WEBRTC_LIBRARY`
+are also supported, including a versioned `.so` or a static archive with its required
+`WEBRTC_EXTRA_LIBRARIES`. Shared SDKs install the payload and matching SONAME links;
+native packages resolve them relative to the executable. SteamOS retains its existing
+bundle dependency scan. Local deployment accepts optional WebRTC libraries under `/usr/lib`;
+preconfigure its build directory with `SUNSHINE_ENABLE_WEBRTC=ON` before using that helper.
+
+The build helper retains its source workspace, including unrelated files and caches.
+It never automatically deletes the workspace after staging. Remove it manually when no
+longer needed. Avoid reusing a workspace with unrelated source changes for `gclient sync`.
+
+This wiring does not publish or update a prebuilt dependency. The host's wrapper source pin
+and Windows binary pin are unchanged. In particular, the dummy-audio-device fallback in
+[libwebrtc #1](https://github.com/Nonary/libwebrtc/pull/1) needs a wrapper built from a commit
+containing that fix; enabling this option or changing only a source pointer does not update
+an existing SDK. A host without a reachable sound server may still abort with the pinned
+wrapper. Full Chromium builds, live streaming, codec/HDR coverage, and Windows runtime
+compatibility must be qualified separately before shipping a new dependency binary.
 
 ###### Quickstart (recommended)
 A helper script automates the full depot_tools / gclient / gn / ninja flow:
