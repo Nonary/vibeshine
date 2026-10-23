@@ -51,6 +51,7 @@
 #include "confighttp.h"
 #include "crypto.h"
 #include "deferred_action.h"
+#include "file_clock.h"
 #if defined(_WIN32) || defined(__linux__)
   #include "display_helper_integration.h"
   #include "remote_display_topology.h"
@@ -3374,7 +3375,7 @@ namespace proc {
         if (ec) return std::nullopt;
         const auto size = std::filesystem::file_size(path, ec);
         if (ec) return std::nullopt;
-        return std::to_string(modified.time_since_epoch().count()) + "-" + std::to_string(size);
+        return file_clock::count_string(modified.time_since_epoch().count()) + "-" + std::to_string(size);
       });
   }
 
