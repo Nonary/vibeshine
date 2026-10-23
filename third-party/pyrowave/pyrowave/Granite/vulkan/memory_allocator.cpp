@@ -814,8 +814,8 @@ bool DeviceAllocator::internal_allocate(
 				                                   "vkAllocateMemory");
 				res = table->vkAllocateMemory(device->get_device(), &info, nullptr, &device_memory);
 #ifndef _WIN32
-		if (res == VK_SUCCESS)
-			imported_dmabuf.fd = -1;
+				if (res == VK_SUCCESS)
+					imported_dmabuf.fd = -1;
 #endif
 			}
 			++block_itr;
