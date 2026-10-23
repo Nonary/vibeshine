@@ -100,9 +100,19 @@ export function windowsDisplayHealth(
   const configuredDriver = normalizeDriver(driver?.configured);
   const activeDriver = normalizeDriver(driver?.active);
   const parsedState = normalizeStatus(driver?.status ?? statusCode);
+  // Only the host's explicit UNKNOWN result proves deferred initialization.
+  // Missing or unfamiliar status data must remain visible as unknown.
+  const deferredStatus =
+    driver?.status == null ||
+    numericStatus(driver.status) === 1 ||
+    (typeof driver.status === 'string' && driver.status.trim().toLowerCase() === 'unknown');
   return {
     state:
-      parsedState === 'unknown' && driver && configuredDriver && !activeDriver
+      parsedState === 'unknown' &&
+      deferredStatus &&
+      numericStatus(driver?.status_code ?? driver?.status) === 1 &&
+      configuredDriver &&
+      !activeDriver
         ? 'uninitialized'
         : parsedState,
     activeDriver,
@@ -115,6 +125,18 @@ export function isWindowsHost(metadata: DisplayMetadataWithDriver | null | undef
   return String(metadata?.platform ?? '')
     .toLocaleLowerCase()
     .includes('windows');
+}
+
+/** Keep deferred initialization quiet without suppressing loading or request errors. */
+export function showWindowsDisplayStatus(
+  metadata: DisplayMetadataWithDriver | null | undefined,
+  loading = false,
+  error = '',
+): boolean {
+  return (
+    isWindowsHost(metadata) &&
+    (loading || Boolean(error) || windowsDisplayHealth(metadata).state !== 'uninitialized')
+  );
 }
 
 export interface DummyPlugVsyncState {

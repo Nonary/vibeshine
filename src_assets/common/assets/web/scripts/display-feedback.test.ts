@@ -6,6 +6,7 @@ import {
   dummyPlugVsyncState,
   isWindowsHost,
   windowsDisplayHealth,
+  showWindowsDisplayStatus,
 } from '../utils/displayHealth.ts';
 
 test('Windows driver health accepts the runtime status contract without false readiness', () => {
@@ -149,4 +150,61 @@ test('cold startup is unobserved, not ready, while real failures remain failures
       status,
     );
   }
+});
+
+const uninitializedMetadata = {
+  platform: 'windows',
+  virtual_display_driver: {
+    configured: 'vibeshine',
+    active: null,
+    status: 'unknown',
+    status_code: 1,
+  },
+};
+
+test('only an uninitialized non-error Windows driver panel is hidden', () => {
+  assert.equal(showWindowsDisplayStatus(uninitializedMetadata), false);
+  assert.equal(showWindowsDisplayStatus(uninitializedMetadata, true), true);
+  assert.equal(
+    showWindowsDisplayStatus(uninitializedMetadata, false, 'Metadata request failed'),
+    true,
+  );
+  for (const status of [
+    'ready',
+    'failed',
+    'version_incompatible',
+    'watchdog_failed',
+    'unexpected',
+    42,
+  ]) {
+    const metadata = {
+      ...uninitializedMetadata,
+      virtual_display_driver: { configured: 'vibeshine', active: null, status },
+    };
+    assert.equal(showWindowsDisplayStatus(metadata), true, String(status));
+  }
+  assert.equal(showWindowsDisplayStatus({ platform: 'windows' }), true);
+  assert.equal(
+    showWindowsDisplayStatus({ ...uninitializedMetadata, platform: 'linux' }, true, 'error'),
+    false,
+  );
+});
+
+test('unexpected or missing driver data is not silently treated as deferred startup', () => {
+  for (const status of ['unexpected', undefined, 'unknown']) {
+    const metadata = {
+      ...uninitializedMetadata,
+      virtual_display_driver: { configured: 'vibeshine', active: null, status },
+    };
+    assert.equal(windowsDisplayHealth(metadata).state, 'unknown');
+    assert.equal(showWindowsDisplayStatus(metadata), true);
+  }
+  const malformed = {
+    ...uninitializedMetadata,
+    virtual_display_driver: {
+      ...uninitializedMetadata.virtual_display_driver,
+      status: 'unexpected',
+    },
+  };
+  assert.equal(showWindowsDisplayStatus(malformed), true);
 });
