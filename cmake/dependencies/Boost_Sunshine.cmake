@@ -9,6 +9,7 @@ set(BOOST_COMPONENTS
         log
         process
         program_options
+        regex
         system
 )
 # system is not used by Sunshine, but by Simple-Web-Server, added here for convenience
