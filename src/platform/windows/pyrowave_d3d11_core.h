@@ -68,7 +68,7 @@ namespace pyrowave::d3d11 {
     // Optional RGB processing on a persistent private snapshot. Capture ownership
     // is released before this callback; its borrowed SRV must survive encode().
     std::function<bool(ID3D11Texture2D *, source_t &)> transform_rgb;
-    bool experimental_d3d12_conversion = false;  ///< Build-gated conversion-only prototype; D3D11 fallback.
+    bool d3d12_conversion = false;  ///< Convert on a D3D12 compute queue; falls back to D3D11 with a warning.
   };
 
   /// Caller attestation, not a generic shared_ptr guarantee. Every writer of
