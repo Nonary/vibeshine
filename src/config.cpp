@@ -968,7 +968,8 @@ namespace config {
 
     0,  // max_bitrate
     20,  // minimum_fps_target (0 = framerate)
-    true  // wgc_pacing_smoothing
+    true,  // wgc_pacing_smoothing
+    true  // wgc_direct_encoder_input
   };
 
   audio_t audio {
@@ -1836,6 +1837,7 @@ namespace config {
 
     string_f(vars, "capture", video.capture);
     bool_f(vars, "wgc_pacing_smoothing", video.wgc_pacing_smoothing);
+    bool_f(vars, "wgc_direct_encoder_input", video.wgc_direct_encoder_input);
     string_f(vars, "encoder", video.encoder);
     const auto configured_encoder = video.encoder;
     video.encoder = std::string(nvenc::canonical_encoder_name(video.encoder));
