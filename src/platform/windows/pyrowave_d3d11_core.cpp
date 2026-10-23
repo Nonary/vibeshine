@@ -96,11 +96,26 @@ namespace pyrowave::d3d11 {
       return std::chrono::duration<double, std::milli>(end - start).count();
     }
 
-    pyrowave_result create_device_for(const LUID *luid, pyrowave_device *device) {
-      if (luid) {
-        return pyrowave_create_device_by_compat(0, 0, nullptr, nullptr, reinterpret_cast<const pyrowave_luid *>(luid), device);
+    pyrowave_result create_device_for(const LUID *luid, VkQueueGlobalPriority priority, pyrowave_device *device) {
+      if (luid || priority != VK_QUEUE_GLOBAL_PRIORITY_MEDIUM) {
+        return pyrowave_create_device_by_compat(0, 0, nullptr, nullptr, reinterpret_cast<const pyrowave_luid *>(luid), priority, device);
       }
       return pyrowave_create_default_device(device);
+    }
+
+    const char *global_priority_string(VkQueueGlobalPriority priority) {
+      switch (priority) {
+        case VK_QUEUE_GLOBAL_PRIORITY_LOW:
+          return "low";
+        case VK_QUEUE_GLOBAL_PRIORITY_MEDIUM:
+          return "medium";
+        case VK_QUEUE_GLOBAL_PRIORITY_HIGH:
+          return "high";
+        case VK_QUEUE_GLOBAL_PRIORITY_REALTIME:
+          return "realtime";
+        default:
+          return "unknown";
+      }
     }
 
     static_assert(sizeof(LUID) == sizeof(pyrowave_luid), "LUID and pyrowave_luid differ");
@@ -252,11 +267,21 @@ namespace pyrowave::d3d11 {
         return false;
       }
 
-      auto result = create_device_for(&desc.AdapterLuid, &pw_device);
+      // Ask for a high global queue priority so the encode is not queued behind the game's
+      // submissions. Not realtime: a realtime queue has timed out an AMD engine in testing.
+      // PyroWave already steps down to the default itself when the queue family does not
+      // report the priority; the retry covers a driver that refuses at device creation.
+      constexpr auto requested_priority = VK_QUEUE_GLOBAL_PRIORITY_HIGH;
+      auto result = create_device_for(&desc.AdapterLuid, requested_priority, &pw_device);
+      if (result != PYROWAVE_SUCCESS) {
+        warning(std::string("Vulkan device creation at ") + global_priority_string(requested_priority) + " queue priority failed (" + pyrowave_result_string(result) + "); retrying at the default priority");
+        result = create_device_for(&desc.AdapterLuid, VK_QUEUE_GLOBAL_PRIORITY_MEDIUM, &pw_device);
+      }
       if (result != PYROWAVE_SUCCESS) {
         error(std::string("no Vulkan device matches the capture adapter: ") + pyrowave_result_string(result));
         return false;
       }
+      info(std::string("Vulkan encode queue priority: requested ") + global_priority_string(requested_priority) + ", granted " + global_priority_string(pyrowave_device_get_global_priority(pw_device)));
       std::string detail;
       if (!supports_d3d11_import(pw_device, config.ten_bit, detail)) {
         error(detail);
@@ -825,7 +850,7 @@ namespace pyrowave::d3d11 {
       return result_e::skipped;
     }
 
-    auto result = pyrowave_encoder_encode_gpu_synchronous(state.pw_encoder, &acquire, &release, &state.pw_buffers, &rate);
+    auto result = pyrowave_encoder_encode_gpu(state.pw_encoder, &acquire, &release, &state.pw_buffers, &rate);
     if (result != PYROWAVE_SUCCESS) {
       state.error(std::string("encode failed: ") + pyrowave_result_string(result));
       return result_e::failed;
@@ -905,7 +930,7 @@ namespace pyrowave::d3d11 {
 
   bool probe(const LUID *luid, std::string &detail) {
     pyrowave_device device = nullptr;
-    auto result = create_device_for(luid, &device);
+    auto result = create_device_for(luid, VK_QUEUE_GLOBAL_PRIORITY_MEDIUM, &device);
     if (result != PYROWAVE_SUCCESS) {
       detail = std::string("no usable Vulkan device: ") + pyrowave_result_string(result);
       return false;

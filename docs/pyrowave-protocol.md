@@ -17,11 +17,15 @@ and `vibeshine/docs/pyrowave-protocol.md`). Change both together.
 Both ends vendor upstream PyroWave at the same commit through
 `pyrowave/vendor-pyrowave.ps1` (moonlight-qt) and `third-party/pyrowave`
 (vibeshine); see `VENDOR.txt`. The PyroWave bitstream has no version field, so the
-host advertises the vendored commit (below) and the client warns on a mismatch.
+host advertises the bitstream ID below and the client warns on a mismatch. The
+host is on the PyroWave SDK 1.0 (`502a3b52`); 1.0 keeps the bitstream of
+`186f0393` (quantizer, dequantizer, block packing and rate-control resolve are
+byte-identical), so clients built from either commit decode each other and the ID
+stays `186f0393`.
 
 | Name | Value |
 |---|---|
-| `PYROWAVE_BITSTREAM_ID` | `186f0393` (first 8 hex digits of the vendored pyrowave commit) |
+| `PYROWAVE_BITSTREAM_ID` | `186f0393` (first 8 hex digits of the pyrowave commit whose bitstream is spoken; the vendored SDK is 1.0, `502a3b52`, with the same bitstream, see `VENDOR.txt`) |
 
 Local patches retain the native bitstream layout. The deterministic-padding encoder patch
 initializes unused sign bits and word-alignment bytes so identical coefficients
