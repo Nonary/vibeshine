@@ -1,4 +1,4 @@
-# libwebrtc dependency (Windows only)
+# libwebrtc dependency (Windows and Linux)
 
 if(NOT SUNSHINE_ENABLE_WEBRTC)
     return()
@@ -9,7 +9,8 @@ endif()
 #   1. Explicit -DWEBRTC_ROOT=...        (user override)
 #   2. $ENV{VIBESHINE_DEPS_DIR}/libwebrtc/out
 #   3. $ENV{LOCALAPPDATA}/Vibeshine/deps/libwebrtc/out  (Windows default)
-#   4. ${CMAKE_BINARY_DIR}/libwebrtc                    (legacy fallback)
+#   4. ${XDG_CACHE_HOME:-~/.cache}/Vibeshine/deps/libwebrtc/out (Linux)
+#   5. ${CMAKE_BINARY_DIR}/libwebrtc                    (legacy fallback)
 # build_mingw_webrtc.ps1 uses the same defaults so a single rebuild populates
 # the location every sunshine build dir / worktree on this machine sees.
 set(_vibeshine_default_webrtc_root "")
@@ -17,6 +18,10 @@ if(DEFINED ENV{VIBESHINE_DEPS_DIR} AND NOT "$ENV{VIBESHINE_DEPS_DIR}" STREQUAL "
     set(_vibeshine_default_webrtc_root "$ENV{VIBESHINE_DEPS_DIR}/libwebrtc/out")
 elseif(WIN32 AND DEFINED ENV{LOCALAPPDATA} AND NOT "$ENV{LOCALAPPDATA}" STREQUAL "")
     set(_vibeshine_default_webrtc_root "$ENV{LOCALAPPDATA}/Vibeshine/deps/libwebrtc/out")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT "$ENV{XDG_CACHE_HOME}" STREQUAL "")
+    set(_vibeshine_default_webrtc_root "$ENV{XDG_CACHE_HOME}/Vibeshine/deps/libwebrtc/out")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT "$ENV{HOME}" STREQUAL "")
+    set(_vibeshine_default_webrtc_root "$ENV{HOME}/.cache/Vibeshine/deps/libwebrtc/out")
 endif()
 
 if(_vibeshine_default_webrtc_root AND EXISTS "${_vibeshine_default_webrtc_root}/include")
@@ -97,6 +102,9 @@ if(WIN32)
 endif()
 
 if(NOT WEBRTC_INCLUDE_DIR)
+    # Empty cache values suppress CMake's find commands, unlike NOTFOUND.
+    unset(WEBRTC_INCLUDE_DIR CACHE)
+    unset(WEBRTC_INCLUDE_DIR)
     if(WEBRTC_ROOT)
         if(EXISTS "${WEBRTC_ROOT}/include/libwebrtc.h")
             set(WEBRTC_INCLUDE_DIR "${WEBRTC_ROOT}/include")
@@ -112,6 +120,8 @@ if(NOT WEBRTC_INCLUDE_DIR)
 endif()
 
 if(NOT WEBRTC_LIBRARY)
+    unset(WEBRTC_LIBRARY CACHE)
+    unset(WEBRTC_LIBRARY)
     if(WEBRTC_ROOT)
         if(WIN32)
             if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -241,3 +251,9 @@ list(APPEND WEBRTC_INCLUDE_DIRS "${WEBRTC_INCLUDE_DIR}")
 list(APPEND WEBRTC_LIBRARIES "${WEBRTC_LIBRARY}" ${WEBRTC_EXTRA_LIBRARIES})
 list(APPEND SUNSHINE_EXTERNAL_LIBRARIES ${WEBRTC_LIBRARIES})
 list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_ENABLE_WEBRTC=1)
+
+# Static SDKs need no runtime staging. Versioned ELF libraries do.
+set(WEBRTC_RUNTIME_LIB "")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND WEBRTC_LIBRARY MATCHES "\\.so(\\.[0-9]+)*$")
+    set(WEBRTC_RUNTIME_LIB "${WEBRTC_LIBRARY}")
+endif()

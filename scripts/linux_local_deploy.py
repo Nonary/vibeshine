@@ -118,9 +118,14 @@ def safe_name(name):
             not any(ord(char) < 32 or ord(char) == 127 for char in name))
 
 
+def webrtc_library(name):
+    # Native local deployment uses /usr/lib, not arbitrary library paths.
+    return re.fullmatch(r'usr/lib/libwebrtc\.so(?:\.[0-9]+)*', name) is not None
+
+
 def allowed(name):
     return safe_name(name) and (
-        name in FIXED or (name.startswith('usr/bin/vibeshine-') and
+        name in FIXED or webrtc_library(name) or (name.startswith('usr/bin/vibeshine-') and
                          VERSION.fullmatch(name.removeprefix('usr/bin/vibeshine-')) is not None) or
         name.startswith(('usr/share/vibeshine/', 'usr/lib/vibeshine/')) or
         re.fullmatch(r'usr/src/vibeshine-(?:drm|ds5)-[1-9][0-9]*\.[0-9]+\.[0-9]+/[^/]+', name) is not None
@@ -142,10 +147,28 @@ def inspect_archive(archive, version):
         if not entry.isdir():
             if not allowed(name) or not (entry.isfile() or entry.issym()):
                 raise DeployError(f'Unexpected artifact/type: {name}')
-            if entry.issym() and (name != 'usr/bin/vibeshine' or
-                                  entry.linkname != f'vibeshine-{version}'):
-                raise DeployError(f'Unexpected symlink: {name}')
+            if entry.issym():
+                public_link = name == 'usr/bin/vibeshine' and entry.linkname == f'vibeshine-{version}'
+                library_link = (webrtc_library(name) and '/' not in entry.linkname and
+                                webrtc_library('usr/lib/' + entry.linkname))
+                if not (public_link or library_link):
+                    raise DeployError(f'Unexpected symlink: {name}')
         members[name] = entry
+    # Every optional library link must terminate at a regular payload member.
+    for name, entry in members.items():
+        if webrtc_library(name) and entry.issym():
+            seen = {name}
+            target = 'usr/lib/' + entry.linkname
+            while True:
+                if target in seen or target not in members:
+                    raise DeployError(f'Broken/cyclic WebRTC symlink: {name}')
+                seen.add(target)
+                linked = members[target]
+                if linked.isfile():
+                    break
+                if not linked.issym():
+                    raise DeployError(f'Invalid WebRTC symlink target: {target}')
+                target = 'usr/lib/' + linked.linkname
     required = FIXED | {f'usr/bin/vibeshine-{version}',
                         'usr/share/vibeshine/web/index.html',
                         'usr/share/vibeshine/web/v2/index.html'}

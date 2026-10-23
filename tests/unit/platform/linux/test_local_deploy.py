@@ -72,6 +72,32 @@ def package(extra=(), omit=()):
     return tarfile.open(fileobj=stream, mode='r:gz')
 
 
+class WebrtcPayloadTests(unittest.TestCase):
+    def library(self, name, target=None):
+        entry = tarfile.TarInfo('usr/lib/' + name)
+        if target is not None:
+            entry.type = tarfile.SYMTYPE
+            entry.linkname = target
+        return entry
+
+    def test_versioned_library_chain_is_optional_and_validated(self):
+        entries = [self.library('libwebrtc.so', 'libwebrtc.so.1'),
+                   self.library('libwebrtc.so.1', 'libwebrtc.so.1.2'),
+                   self.library('libwebrtc.so.1.2')]
+        with package(entries) as archive:
+            members = deploy.inspect_archive(archive, VERSION)
+            self.assertIn('usr/lib/libwebrtc.so.1.2', members)
+        with package() as archive:
+            deploy.inspect_archive(archive, VERSION)
+
+    def test_rejects_missing_cyclic_escaping_and_unrelated_links(self):
+        for target in ('libwebrtc.so', 'libwebrtc.so.99', '../libwebrtc.so',
+                       '/tmp/libwebrtc.so', 'libunrelated.so'):
+            with self.subTest(target=target), package([self.library('libwebrtc.so', target)]) as archive:
+                with self.assertRaises(deploy.DeployError):
+                    deploy.inspect_archive(archive, VERSION)
+
+
 class InstallerShellTests(unittest.TestCase):
     def test_installer_shell_contract(self):
         result = subprocess.run(
