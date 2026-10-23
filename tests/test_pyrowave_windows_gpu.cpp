@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
       ComPtr<ID3D11DeviceContext> capture_context;
       require(SUCCEEDED(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &capture_device, nullptr, &capture_context)), "capture device failed");
       pyrowave_device device = nullptr;
-      require(pyrowave_create_device_by_compat(0, 0, nullptr, nullptr, reinterpret_cast<const pyrowave_luid *>(&desc.AdapterLuid), &device) == PYROWAVE_SUCCESS, "decoder device failed");
+      require(pyrowave_create_device_by_compat(0, 0, nullptr, nullptr, reinterpret_cast<const pyrowave_luid *>(&desc.AdapterLuid), VK_QUEUE_GLOBAL_PRIORITY_MEDIUM, &device) == PYROWAVE_SUCCESS, "decoder device failed");
 
       struct device_guard_t {
         pyrowave_device device;
@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
             config.width = config.height = 256;
             config.ten_bit = ten_bit;
             config.yuv444 = yuv444;
-            config.experimental_d3d12_conversion = request_d3d12;
+            config.d3d12_conversion = request_d3d12;
             config.shader_path = PYROWAVE_TEST_SHADER_PATH;
             if (transform) {
               config.transform_rgb = [&](ID3D11Texture2D *input, pyrowave::d3d11::source_t &frame) {
@@ -106,10 +106,10 @@ int main(int argc, char **argv) {
             require(bool(core), "D3D11 encoder initialization failed");
             require(core->using_d3d12_conversion() == (request_d3d12 && !transform), "requested conversion backend was not selected");
             if (request_d3d12 && !transform) {
-              // Only one prototype generation may own an adapter. A second
+              // Only one D3D12 backend generation may own an adapter. A second
               // session falls back before submitting work to shared resources.
               auto second = pyrowave::d3d11::core_t::create(adapter.Get(), config, {});
-              require(bool(second) && !second->using_d3d12_conversion(), "prototype adapter admission was not bounded");
+              require(bool(second) && !second->using_d3d12_conversion(), "D3D12 adapter admission was not bounded");
             }
             pyrowave_decoder_create_info info {};
             info.device = device;
@@ -244,7 +244,7 @@ int main(int argc, char **argv) {
             }
             if (transform) require(transform_calls > 0, "private RGB callback never ran");
             if (request_d3d12 && !transform) {
-              // A legal D3D11 SRGB source is outside the prototype's supported
+              // A legal D3D11 SRGB source is outside the D3D12 conversion's supported
               // raw capture formats. Fallback must occur before queue submission.
               std::vector<std::uint32_t> pixels(256 * 256, 0xff202020u);
               D3D11_TEXTURE2D_DESC desc {};

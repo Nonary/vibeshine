@@ -1,5 +1,6 @@
-// Experimental conversion-only backend. Capture and the Vulkan encoder keep
-// their D3D11 texture contracts; no native AMF DX12 input is provided here.
+// Conversion-only D3D12 backend, the default PyroWave conversion path on
+// Windows. Capture and the Vulkan encoder keep their D3D11 texture contracts;
+// no native AMF DX12 input is provided here.
 #pragma once
 
 #include "pyrowave_d3d11_core.h"
