@@ -5022,6 +5022,7 @@ launch_session->exact_target_hold.reset();
       dispatch::include_request_identity_log_fields(trace_id)
     );
     if (!launch_session->virtual_display_catalog_error.empty()) {
+      BOOST_LOG(error) << launch_session->virtual_display_catalog_error;
       tree.put("root.<xmlattr>.status_code", 503);
       tree.put("root.<xmlattr>.status_message", launch_session->virtual_display_catalog_error);
       tree.put("root.gamesession", 0);
@@ -5647,6 +5648,7 @@ launch_session->exact_target_hold.reset();
       );
     }
     if (!launch_session->virtual_display_catalog_error.empty()) {
+      BOOST_LOG(error) << launch_session->virtual_display_catalog_error;
       tree.put("root.<xmlattr>.status_code", 503);
       tree.put("root.<xmlattr>.status_message", launch_session->virtual_display_catalog_error);
       tree.put("root.resume", 0);
