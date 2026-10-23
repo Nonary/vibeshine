@@ -1172,6 +1172,10 @@ namespace video {
       return device->convert(img);
     }
 
+    platf::converted_frame_t converted_frame() const override {
+      return device ? device->converted_frame : platf::converted_frame_t {};
+    }
+
     void request_idr_frame() override {
       if (device && device->frame) {
         auto &frame = device->frame;
@@ -1269,6 +1273,10 @@ namespace video {
       return device->convert(img);
     }
 
+    platf::converted_frame_t converted_frame() const override {
+      return device ? device->converted_frame : platf::converted_frame_t {};
+    }
+
     void request_idr_frame() override {
       force_idr = true;
     }
@@ -1348,10 +1356,14 @@ namespace video {
         return -1;
       }
       const auto result = device->convert(img);
-      if (result == 0) {
+      if (result == 0 && !device->converted_frame.repeats_previous) {
         fresh_conversion_pending = true;
       }
       return result;
+    }
+
+    platf::converted_frame_t converted_frame() const override {
+      return device ? device->converted_frame : platf::converted_frame_t {};
     }
 
     void request_idr_frame() override {
@@ -3319,8 +3331,7 @@ namespace video {
         }
 
         const auto pacing = capture_pacing_for_display();
-        if (const auto demand = capture_config_for_consumers(capture_ctxs, pacing);
-            demand && !same_capture_pacing(producer_config, *demand, pacing)) {
+        if (const auto demand = capture_config_for_consumers(capture_ctxs, pacing); demand && !same_capture_demand(producer_config, *demand, pacing)) {
           // Reuse the existing serialized teardown: all encoders release the
           // old display before its single replacement is created. This also
           // refreshes WGC admission and the capture loop's pacing state.
@@ -5266,6 +5277,7 @@ namespace video {
       uint64_t pop_timeouts = 0;
       uint64_t gate_skipped = 0;
       uint64_t converted = 0;
+      uint64_t repeated_inputs = 0;
       uint64_t encoded = 0;
       uint64_t dropped_submissions = 0;
       std::chrono::steady_clock::time_point last_log = std::chrono::steady_clock::now();
@@ -5280,6 +5292,7 @@ namespace video {
                          << " pop_timeouts=" << loop_stats.pop_timeouts
                          << " gate_skipped=" << loop_stats.gate_skipped
                          << " converted=" << loop_stats.converted
+                         << " repeated_inputs=" << loop_stats.repeated_inputs
                          << " encoded=" << loop_stats.encoded
                          << " dropped_submissions=" << loop_stats.dropped_submissions
                          << " frame_nr=" << frame_nr;
@@ -5434,6 +5447,15 @@ namespace video {
             native_amf_runtime_failed = native_amf_session;
             break;
           }
+
+          // Direct WGC input reads the helper's live frame, so the conversion reports
+          // which frame it actually got. Pixels this session already sent would only
+          // repeat that frame; wait for the next capture instead.
+          const auto converted = policy::resolve_converted_input(session->converted_frame(), img->frame_timestamp, img->host_processing_timestamp);
+          if (!converted.encode) {
+            ++loop_stats.repeated_inputs;
+            continue;
+          }
           ++loop_stats.converted;
 
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
@@ -5452,8 +5474,8 @@ namespace video {
 
           if (!placeholder_input) {
             bootstrap_state.real_frame_seen = true;
-            frame_timestamp = img->frame_timestamp;
-            host_processing_timestamp = img->host_processing_timestamp;
+            frame_timestamp = converted.frame_timestamp;
+            host_processing_timestamp = converted.host_processing_timestamp;
           } else {
             frame_timestamp.reset();
             host_processing_timestamp.reset();
@@ -5992,6 +6014,14 @@ namespace video {
               continue;
             }
 
+            // Direct WGC input: encode the frame the conversion actually read, and
+            // skip pixels this session already sent rather than repeating them.
+            const auto converted = policy::resolve_converted_input(pos->session->converted_frame(), img->frame_timestamp, img->host_processing_timestamp);
+            if (!converted.encode) {
+              ++pos;
+              continue;
+            }
+
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
             if (refresh_rtx_hdr_metadata_if_needed(
                   ctx->config,
@@ -6008,8 +6038,8 @@ namespace video {
 
             if (!placeholder_input) {
               pos->bootstrap.real_frame_seen = true;
-              frame_timestamp = img->frame_timestamp;
-              host_processing_timestamp = img->host_processing_timestamp;
+              frame_timestamp = converted.frame_timestamp;
+              host_processing_timestamp = converted.host_processing_timestamp;
             }
           } else {
             placeholder_input = pos->bootstrap.current_input_placeholder;
