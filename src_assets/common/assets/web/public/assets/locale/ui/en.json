@@ -2327,7 +2327,8 @@
           "unknown": "Unknown driver"
         },
         "states": {
-          "failed": "Unavailable"
+          "failed": "Unavailable",
+          "uninitialized": "No driver result"
         },
         "messages": {
           "ready": {
@@ -2339,8 +2340,8 @@
             "description": "{driver} did not respond to the latest runtime check. Repair or reinstall the selected driver before using a virtual display."
           },
           "uninitialized": {
-            "title": "Driver has not been initialized",
-            "description": "The host has not initialized a virtual-display driver yet. Start a stream or restart Vibeshine, then check this status again."
+            "title": "No driver result available",
+            "description": "Vibeshine opens the virtual-display connection when needed. No current driver result is available. This status alone does not indicate a failure."
           },
           "version_incompatible": {
             "title": "Driver version mismatch",
