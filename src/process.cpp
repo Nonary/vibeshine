@@ -57,6 +57,7 @@
 #endif
 #include "globals.h"
 #include "logging.h"
+#include "paused_app_monitor.h"
 #include "nvhttp.h"
 #include "host_stream_control.h"
 #include "platform/common.h"
@@ -1216,6 +1217,7 @@ namespace proc {
     }
 
     ~deinit_t() {
+      paused_app_monitor_.stop();
       proc.terminate();
     }
 
@@ -1223,6 +1225,18 @@ namespace proc {
 #ifdef _WIN32
     std::unique_ptr<platf::deinit_t> playnite_integration_;
 #endif
+    paused_app_monitor_t paused_app_monitor_ {
+      [] {
+        try {
+          proc.poll_paused_app();
+        } catch (const std::exception &e) {
+          BOOST_LOG(error) << "Paused app monitor: liveness check failed: " << e.what();
+        } catch (...) {
+          BOOST_LOG(error) << "Paused app monitor: liveness check failed.";
+        }
+      },
+      3s,
+    };
   };
 
   std::unique_ptr<platf::deinit_t> init() {
@@ -2353,8 +2367,32 @@ namespace proc {
   }
 
   int proc_t::running() {
+    return observe_app(false);
+  }
+
+  void proc_t::poll_paused_app() {
+    (void) observe_app(true);
+  }
+
+  int proc_t::observe_app(bool paused_only) {
     host_stream_control::activity_guard_t activity;
     if (!activity) return current_app_id();
+    return observe_app_liveness(
+      nvhttp::stream_lifecycle_mutex(),
+      [this] { return current_app_id(); },
+      [this, paused_only] {
+        if (!paused_only) return true;
+        // Never start a login/controller-deferred app without a client. Check
+        // under the same gate as execute(), not before acquiring that gate.
+        if (current_app_id() <= 0) return false;
+        return paused_app_poll_allowed(current_app_id(), is_launch_deferred(),
+                                       stream::session::has_capture_runtime_owner());
+      },
+      [this] { return running_locked(); }
+    );
+  }
+
+  int proc_t::running_locked() {
 #ifndef _WIN32
     // Detached launchers still need collecting, but other children retain
     // their own wait status (Boost, provider scans and GLib helpers).
@@ -2365,13 +2403,6 @@ namespace proc {
 
 #ifdef _WIN32
     if (_deferred_launch) {
-      // Discovery and the control thread can observe readiness together.
-      // Admit exactly one launch/cleanup owner without blocking discovery
-      // behind another stream lifecycle operation.
-      std::unique_lock deferred_lock {nvhttp::stream_lifecycle_mutex(), std::try_to_lock};
-      if (!deferred_lock.owns_lock() || !_deferred_launch) {
-        return _app_id;
-      }
       if (platf::is_running_as_system()) {
         HANDLE user_token = platf::dxgi::retrieve_users_token(false);
         if (!user_token) {
@@ -2521,16 +2552,6 @@ namespace proc {
 
     // Perform cleanup actions now if needed
     if (_process) {
-      std::unique_lock<std::mutex> stream_lifecycle_lock {nvhttp::stream_lifecycle_mutex(), std::try_to_lock};
-      if (!stream_lifecycle_lock.owns_lock()) {
-        // Teardown is already in flight on another thread. Blocking here
-        // parks the caller - including the single serverinfo worker, which
-        // made the host undiscoverable for the whole teardown tail
-        // (vibepollo#326). The gate owner performs the cleanup; report
-        // not-running without waiting on it.
-        BOOST_LOG(debug) << "[running] App exited but stream teardown is already in flight; deferring cleanup to the gate owner.";
-        return 0;
-      }
       BOOST_LOG(info) << "[running] _process.running() is false; calling terminate(). App exited with code ["sv << _process.native_exit_code() << "] for app '" << _app.name << "' (id=" << _app_id << ")";
       terminate(false, true);
     }
