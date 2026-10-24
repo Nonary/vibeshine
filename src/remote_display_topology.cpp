@@ -167,12 +167,16 @@ namespace remote_display_topology {
 
   void coordinator_t::set_physical_baseline(std::vector<node_t> nodes) {
     std::lock_guard lock(mutex_);
+    // A new launch must not replace a target still needed by release or shutdown.
+    if (physical_restore_pending_ || shutdown_pending_) {
+      return;
+    }
     physical_baseline_ = std::move(nodes);
   }
 
   void coordinator_t::refresh_idle_physical_baseline(std::vector<node_t> nodes) {
     std::lock_guard lock(mutex_);
-    if (nodes.empty() || physical_restore_pending_ || std::any_of(clients_.begin(), clients_.end(), [](const auto &entry) {
+    if (nodes.empty() || physical_restore_pending_ || shutdown_pending_ || std::any_of(clients_.begin(), clients_.end(), [](const auto &entry) {
           return entry.second.normal_game || entry.second.remote_monitor;
         })) {
       return;

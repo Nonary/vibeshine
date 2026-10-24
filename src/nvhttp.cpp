@@ -73,9 +73,10 @@
 #include "state_storage_policy.h"
 #ifdef _WIN32
   #include "platform/windows/display.h"
-  #include "platform/windows/display_target_borrow.h"
-  #include "platform/windows/display_helper_request_policy.h"
+  #include "platform/windows/display_coordinator_restore.h"
   #include "platform/windows/display_helper_request_helpers.h"
+  #include "platform/windows/display_helper_request_policy.h"
+  #include "platform/windows/display_target_borrow.h"
   #include "platform/windows/misc.h"
   #include "platform/windows/virtual_display.h"
   #include "platform/windows/virtual_display_cleanup.h"
@@ -344,6 +345,7 @@ namespace nvhttp {
           .refresh_hz = remote_refresh_hz(device.m_info->m_refresh_rate),
           .hdr = device.m_info->m_hdr_state.value_or(display_device::HdrState::Disabled) == display_device::HdrState::Enabled,
         };
+        node.baseline_refresh_rate = display_helper::exact_baseline_refresh(device.m_info->m_refresh_rate);
         baseline.push_back(std::move(node));
       }
       remote_display_topology::instance().set_physical_baseline(std::move(baseline));
@@ -370,6 +372,7 @@ namespace nvhttp {
         if (!has_device(device_id)) topology.topology.push_back({device_id});
         topology.monitor_positions.emplace(device_id, display_device::Point {node.x, node.y});
         if (node.primary) topology.primary_device = device_id;
+        display_helper::append_physical_refresh_override(node, device_id, topology);
       }
       return display_helper_integration::apply_remote_composed_topology(topology);
     }
