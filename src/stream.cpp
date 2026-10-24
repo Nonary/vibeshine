@@ -730,6 +730,9 @@ namespace stream {
       std::atomic<std::int64_t> client_reported_losses {0};
       std::atomic<std::uint16_t> last_encode_latency_us10 {0};  // in 1/10 ms units
       std::atomic<std::int64_t> last_frame_index {0};
+      /// Index of the newest frame whose send began, or -1 before the first one.
+      /// Written only with host_adaptive_pacing, which fences client reports on it.
+      std::atomic<std::int64_t> wire_frame_index {-1};
       /// Frames abandoned by a socket send failure; adaptive pacing treats a rise as loss.
       std::atomic<std::uint64_t> video_send_failures {0};
       std::chrono::steady_clock::time_point start_time {std::chrono::steady_clock::now()};
@@ -1533,12 +1536,13 @@ namespace stream {
     }
   }
 
-  /// Index of the newest frame fully sent, or nothing before the first one.
+  /// Index of the newest frame whose send began, or nothing before the first one.
   static std::optional<std::uint32_t> last_sent_frame(const session_t *session) {
-    if (session->stats.frames_sent.load(std::memory_order_relaxed) == 0) {
+    const auto index = session->stats.wire_frame_index.load(std::memory_order_relaxed);
+    if (index < 0) {
       return std::nullopt;
     }
-    return static_cast<std::uint32_t>(session->stats.last_frame_index.load(std::memory_order_relaxed));
+    return static_cast<std::uint32_t>(index);
   }
 
   /**
@@ -1570,8 +1574,11 @@ namespace stream {
       events = session->video.adaptive_pacing.take_events();
       snapshot = session->video.adaptive_pacing.snapshot();
     }
-    if (events.any()) {
-      log_adaptive_pacing(events, snapshot, change ? change->first : 0);
+    // A cut that left the rate unchanged (already at the floor) is not news.
+    auto shown = events;
+    shown.cut = events.cut && change.has_value();
+    if (shown.any()) {
+      log_adaptive_pacing(shown, snapshot, change ? change->first : 0);
     }
   }
 
@@ -1589,6 +1596,12 @@ namespace stream {
     // recovery or was dropped. (Host to client, the same number is Set RGB LED.)
     server->map(pacing::fec_status_packet_type, [](session_t *session, const std::string_view &payload) {
       if (!session->video.adaptive_pacing_enabled) {
+        // Off: behave as before this type had a handler.
+        BOOST_LOG(debug)
+          << "type [Unknown] { "sv << util::hex(pacing::fec_status_packet_type).to_string_view() << " }"sv << std::endl
+          << "---data---"sv << std::endl
+          << util::hex_vec(payload) << std::endl
+          << "---end data---"sv;
         return;
       }
       const auto last_sent = last_sent_frame(session);
@@ -2309,6 +2322,9 @@ namespace stream {
       // may also protect detail, bounded by unused bitrate and FEC block capacity.
       const bool pyrowave_session = session->config.monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT;
       auto fecPercentage = pyrowave_session ? 0 : config::stream.fec_percentage;
+      if (session->video.adaptive_pacing_enabled) {
+        session->stats.wire_frame_index.store(packet->frame_index(), std::memory_order_relaxed);
+      }
 
       // Insert space for packet headers
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
@@ -2524,7 +2540,9 @@ namespace stream {
             sizeof(frame_header),
             payload_blocksize,
             wire_bytes,
-            fecPercentage,
+            // The configured value: oversized frames zero fecPercentage for
+            // themselves only and must not move the controller's wire floor.
+            config::stream.fec_percentage,
             min_parity_shards
           );
           pacing::adaptive_pacing_events_t events;

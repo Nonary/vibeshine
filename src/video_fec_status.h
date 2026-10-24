@@ -11,10 +11,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <iterator>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace stream::pacing {
   /// Control message type of SS_FRAME_FEC_STATUS (client to host).
@@ -192,7 +192,7 @@ namespace stream::pacing {
       std::uint8_t block_count;
     };
 
-    std::deque<frame_t> frames_;
+    std::vector<frame_t> frames_;
     std::uint64_t reports_ {};
     std::uint64_t invalid_reports_ {};
     std::uint64_t duplicate_reports_ {};

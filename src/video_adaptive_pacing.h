@@ -78,10 +78,6 @@ namespace stream::pacing {
         enabled_ {enabled},
         startup_ {enabled} {}
 
-    bool enabled() const {
-      return enabled_;
-    }
-
     /// Refresh on each frame: FEC, FPS, bitrate and the route can change.
     /// The physical/configured ceiling wins when the requested stream cannot
     /// fit. The caller reports that shortfall; this controller cannot fix it.
@@ -140,33 +136,6 @@ namespace stream::pacing {
         limit_ = next;
       }
       return current();
-    }
-
-    /// Preview the rate for a possible frame without changing the sender's
-    /// demand, tentative probe or feedback fence.
-    std::uint64_t preview_rate(std::uint64_t ceiling, std::uint64_t needed, std::uint32_t encoder_kbps) const {
-      if (!enabled_) {
-        return ceiling;
-      }
-      ceiling = std::max<std::uint64_t>(ceiling, 1);
-      const auto floor = wire_floor(needed, ceiling);
-      std::optional<std::uint64_t> limit;
-      if (!initialized_) {
-        limit = saturating_mul(std::uint64_t(encoder_kbps), 2000);
-      } else if (ceiling != ceiling_ || floor != floor_) {
-        // A changed budget retracts an unconfirmed probe. A confirmed fast
-        // route retains its previous ceiling when the route grows.
-        if (probe_) {
-          limit = probe_->stable;
-        } else if (limit_) {
-          limit = limit_;
-        } else if (ceiling > ceiling_) {
-          limit = current();
-        }
-      } else {
-        limit = limit_;
-      }
-      return limit ? std::clamp(*limit, floor, ceiling) : ceiling;
     }
 
     /// Standard periodic pings (type 0x0200, payload starting 04 00 00 00)
@@ -362,14 +331,6 @@ namespace stream::pacing {
 
     std::uint64_t current() const {
       return limit_ ? *limit_ : ceiling_;
-    }
-
-    std::uint64_t ceiling() const {
-      return ceiling_;
-    }
-
-    std::uint64_t wire_floor() const {
-      return floor_;
     }
 
   private:

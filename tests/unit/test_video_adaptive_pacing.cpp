@@ -158,65 +158,34 @@ namespace {
   };
 }  // namespace
 
-TEST(VideoAdaptivePacing, PreviewMatchesTheNextSenderRateAcrossBudgetChanges) {
-  for (int state = 0; state < 7; ++state) {
-    for (const std::uint64_t ceiling : {std::uint64_t {0}, std::uint64_t {1}, std::uint64_t {30'000'000}, fast, std::uint64_t {950'000'000}, u64_max}) {
-      for (const std::uint64_t needed : {std::uint64_t {0}, demand, std::uint64_t {90'000'000}, u64_max}) {
-        for (const std::uint32_t encoder_kbps : {0u, 40'000u, 80'000u, u32_max}) {
-          adaptive_pacing_t pacing {state != 0};
-          if (state >= 2) {
-            pacing.rate(fast, demand, 40'000);
-          }
-          if (state == 3) {
-            // Fully validated fast route.
-            priv::limit(pacing).reset();
-          } else if (state >= 4) {
-            priv::limit(pacing) = 420'000'000;
-            if (state >= 5) {
-              priv::set_probe(pacing, 400'000'000, adaptive_pacing_t::clock::now(), 2s);
-              priv::set_any_loss(pacing, state == 6);
-            }
-          }
-          const auto preview = pacing.preview_rate(ceiling, needed, encoder_kbps);
-          EXPECT_EQ(preview, pacing.rate(ceiling, needed, encoder_kbps))
-            << "state=" << state << ", ceiling=" << ceiling << ", demand=" << needed << ", encoder=" << encoder_kbps;
-        }
-      }
-    }
-  }
-}
+TEST(VideoAdaptivePacing, AnOversizedFrameDoesNotMoveTheWireFloorOrWithdrawAProbe) {
+  // The sender zeroes the FEC percentage for frames over four FEC blocks. The
+  // demand it reports must still come from the configured percentage, so such
+  // a frame between two ordinary ones changes nothing.
+  const auto without_fec = nominal_wire_demand_bps(40'000, 60, 16, 1376, 1458, 0, 2);
+  ASSERT_LT(without_fec, nominal_wire_demand_bps(40'000, 60, 16, 1376, 1458, 20, 2));
 
-TEST(VideoAdaptivePacing, RecoveryBudgetPreviewsPreserveProbeProgressAndLossFeedback) {
-  auto stream = stream_t::fresh(true);
-  for (int i = 0; i < 40; ++i) {
-    // The encoder asks about the full recovery FEC on every picture; the
-    // sender retains the ordinary frame's smaller demand.
-    for (int j = 0; j < 30; ++j) {
-      stream.pacing.preview_rate(fast, 70'000'000, 40'000);
-      stream.pacing.rate(fast, demand, 40'000);
-    }
-    stream.healthy();
-  }
-  EXPECT_EQ(stream.pacing.current(), fast);
-  EXPECT_FALSE(priv::has_probe(stream.pacing));
-
+  auto stream = stream_t::established(true);
   stream.first_probe();
+  ASSERT_TRUE(priv::has_probe(stream.pacing));
   const auto before = stream.pacing.snapshot();
   const auto sample_at = priv::sample_time(stream.pacing);
   const auto clean_since = priv::clean_since(stream.pacing);
-  for (int i = 0; i < 100; ++i) {
-    EXPECT_EQ(stream.pacing.preview_rate(fast, 70'000'000, 40'000), 400'000'000u);
-    stream.pacing.preview_rate(fast * 2, demand, 40'000);
+
+  // Normal, oversized and normal frames all report the configured demand.
+  for (int i = 0; i < 3; ++i) {
+    stream.pacing.rate(fast, demand, 40'000);
   }
+  EXPECT_TRUE(priv::has_probe(stream.pacing));
+  EXPECT_FALSE(priv::awaiting_fence(stream.pacing));
   EXPECT_EQ(stream.pacing.snapshot(), before);
   EXPECT_EQ(priv::sample_time(stream.pacing), sample_at);
   EXPECT_EQ(priv::clean_since(stream.pacing), clean_since);
-  EXPECT_FALSE(priv::awaiting_fence(stream.pacing));
-  // Feedback still rejects the unconfirmed probe immediately, instead of
-  // being discarded as evidence from a changed demand or a previous rate.
-  const auto frame = stream.last + 1;
-  stream.report(frame, frame, failed);
-  EXPECT_EQ(stream.healthy(), change(420'000'000, 400'000'000));
+
+  // The failure the caller must avoid: a different floor mid-probe withdraws it.
+  stream.pacing.rate(fast, without_fec, 40'000);
+  EXPECT_FALSE(priv::has_probe(stream.pacing));
+  EXPECT_TRUE(priv::awaiting_fence(stream.pacing));
 }
 
 TEST(VideoAdaptivePacing, FreshStreamsSeedFromEncoderAndWireDemandBeforeTheFirstPacket) {
