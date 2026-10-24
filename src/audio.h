@@ -12,6 +12,7 @@
 #include "utility.h"
 
 #include <bitset>
+#include <string_view>
 
 namespace audio {
   enum stream_config_e : int {
