@@ -1,10 +1,24 @@
 # Steam Big Picture controls
 
-> **Status:** under development. The setting, status endpoint, message formats and the injected
-> script (`src_assets/windows/assets/steam/big_picture_controls.js`) exist. The helper and the
-> service actions are not implemented yet, and the status endpoint reports `"implemented": false`.
-> The script's tests run with `npm run test:unit` in the web UI, against a fake Steam
-> (`scripts/support/fake-steam.ts`).
+> **Status:** under development. The setting, status endpoint, message formats, the injected script
+> (`src_assets/windows/assets/steam/big_picture_controls.js`) and the helper's Steam side
+> (`tools/steam_ui_helper/`) exist. The pipe between the helper and the service, and the service's
+> actions, are not implemented yet, so the status endpoint still reports `"implemented": false`.
+
+## Developing
+
+- **Script tests:** `npm run test:unit` in the web UI runs the script against a fake Steam
+  (`scripts/support/fake-steam.ts`).
+- **Helper tests:** `test_component_steam_big_picture_controls` (decisions) and
+  `test_component_steam_ui_helper_controller` (injection lifecycle against a fake Steam).
+- **Check a Steam build:** `tools/sunshine_steam_ui_helper.exe --check` finds everything in the running
+  Steam without patching it and prints the script's report.
+- **Try it without the service:**
+  `tools/sunshine_steam_ui_helper.exe --fixture tools/steam_ui_helper/fixtures/streaming.json`.
+  The status comes from the fixture file, which is re-read when it changes. Button presses are printed
+  and applied to the fixture status in memory, so Steam shows their effect. Ctrl+C removes the patches
+  from Steam. Add `--simulate-missing=…`, `--simulate-crash=…` or `--max-errors=N` for fault tests,
+  and `--script <path>` to use a script from a source checkout.
 
 When enabled with `steam_big_picture_controls`, Vibeshine shows stream controls inside Steam
 Big Picture on the Windows host:

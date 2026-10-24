@@ -3,9 +3,13 @@
  */
 #pragma once
 
+#include <chrono>
+#include <cstdint>
+#include <deque>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace platf::steam::big_picture::policy {
@@ -66,4 +70,103 @@ namespace platf::steam::big_picture::policy {
 
   /** Parse an action message from the helper. Rejects unknown actions and malformed client ids. */
   std::optional<action_t> parse_action(const nlohmann::json &message);
+
+  // ---------------------------------------------------------------------------------------------
+  // Helper side: finding and trusting Steam's debugger, injecting, and keeping the script injected.
+  // ---------------------------------------------------------------------------------------------
+
+  /** Steam's CEF debug port, opened by an empty .cef-enable-remote-debugging file in the Steam folder. */
+  constexpr int steam_debug_port = 8080;
+
+  /** Name of the CDP binding the script reports through (window.__vibeshineBridge). */
+  constexpr std::string_view bridge_binding = "__vibeshineBridge";
+
+  /** Evaluated in each candidate page: true only in Steam's shared JS context, the one page that owns
+   * the webpack chunk registry and was not opened by another window. */
+  constexpr std::string_view is_shared_context_expression =
+    "!window.opener && typeof SteamClient === 'object' && Object.keys(window).some((k) => k.startsWith('webpackChunk'))";
+
+  /** Titles Steam has used for its shared JS context, tried before probing every Steam page. */
+  constexpr std::string_view shared_context_titles[] = {"SharedJSContext", "Steam Shared Context presented by Valve™"};
+
+  struct debug_target_t {
+    std::string title;
+    std::string url;
+    std::string ws_url;
+  };
+
+  /** True for ws://127.0.0.1:<port>/devtools/... (or localhost / [::1]); anything else is refused. */
+  bool is_local_debugger_url(std::string_view url, int port = steam_debug_port);
+
+  /** Pages from Steam's /json list worth probing for the shared context, best first. Skips non-page
+   * targets, pages outside steamloopback.host, and debugger URLs that are not local. */
+  std::vector<debug_target_t> shared_context_candidates(const nlohmann::json &targets);
+
+  enum class endpoint_e {
+    ok,  ///< Steam's own steamwebhelper.exe, in the helper's session, is listening.
+    not_running,  ///< Nothing listens and Steam is not running.
+    port_closed,  ///< Steam runs, but its debug port is off (no flag file, or not restarted yet).
+    port_foreign,  ///< Something else owns the port, or Steam's in another session; never connect.
+  };
+
+  /** What the platform code found out about the debug port. */
+  struct endpoint_facts_t {
+    bool steam_running = false;
+    bool listening = false;
+    bool owner_is_steam_webhelper = false;  ///< Owner image is <Steam root>\bin\cef\cef.win64\steamwebhelper.exe
+    bool owner_in_helper_session = false;
+  };
+
+  endpoint_e endpoint_verdict(const endpoint_facts_t &facts);
+  std::string_view endpoint_state_name(endpoint_e endpoint);
+
+  /** Expression that sets the script's options and evaluates it; its value is the script's report. */
+  std::string inject_expression(const nlohmann::json &options, std::string_view script);
+
+  /** Expression that pushes a status payload to the injected script. */
+  std::string set_status_expression(const nlohmann::json &status);
+
+  /** Expression that removes the injected script's patches, used when the helper stops. */
+  constexpr std::string_view unpatch_expression = "window.VibeshineBPM?.unpatch?.(), true";
+
+  /** Validate the script's injection report and turn it into a "report" message for the service.
+   * Returns nullopt when it isn't a report or speaks another protocol version. */
+  std::optional<nlohmann::json> report_message(const nlohmann::json &report, std::string_view steam_build);
+
+  /** Validate a message the script sent through the binding and normalise it for the service.
+   * Returns nullopt for anything malformed, oversized or not in the allowlist. */
+  std::optional<nlohmann::json> script_message(std::string_view payload);
+
+  /** Retry pacing and the circuit breaker for injecting into Steam.
+   *
+   * Failed injections back off 2 s, 4 s, 8 s ... up to 60 s. A Steam UI reload within 30 s of injecting
+   * counts as a quick reload; three in five minutes trip the breaker, which stays open until reset()
+   * (a config change or a helper restart), so a script that destabilises Steam stops being re-injected. */
+  class injection_tracker_t {
+  public:
+    using clock = std::chrono::steady_clock;
+    static constexpr auto initial_backoff = std::chrono::seconds(2);
+    static constexpr auto max_backoff = std::chrono::seconds(60);
+    static constexpr auto quick_reload = std::chrono::seconds(30);
+    static constexpr auto breaker_window = std::chrono::minutes(5);
+    static constexpr int breaker_reloads = 3;
+
+    bool may_attempt(clock::time_point now) const;
+    void injected(clock::time_point now);
+    /** Record a failed injection; returns how long until the next attempt. */
+    clock::duration failed(clock::time_point now);
+    /** Record that Steam's UI reloaded; returns true if this trips the breaker. */
+    bool reloaded(clock::time_point now);
+    bool tripped() const {
+      return tripped_;
+    }
+    void reset();
+
+  private:
+    int failures_ = 0;
+    bool tripped_ = false;
+    std::optional<clock::time_point> next_attempt_;
+    std::optional<clock::time_point> injected_at_;
+    std::deque<clock::time_point> quick_reloads_;
+  };
 }  // namespace platf::steam::big_picture::policy

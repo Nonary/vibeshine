@@ -23,6 +23,7 @@
  *    "errors":<n>,"features":{"<name>":"<value>"}}            after each injection
  *   {"type":"feature","name":"...","value":"..."}            live feature change from the script
  *   {"type":"error","where":"...","message":"..."}           error caught inside Steam
+ *   {"type":"disabled","reason":"..."}                       the script switched itself off
  *   {"type":"action","action":"end_stream"|"disconnect","client":"<client id>"}
  *   {"type":"check_result","id":<n>,"report":{...}}
  *   {"type":"log","level":"info"|"warning"|"error","message":"..."}
@@ -77,6 +78,7 @@ namespace platf::steam::big_picture::protocol {
     constexpr std::string_view action = "action";
     constexpr std::string_view check_result = "check_result";
     constexpr std::string_view log = "log";
+    constexpr std::string_view disabled = "disabled";
   }  // namespace message
 
   namespace action {

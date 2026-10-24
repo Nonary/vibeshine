@@ -123,7 +123,17 @@ target_compile_options(sunshine_end_stream_hotkey PRIVATE ${SUNSHINE_COMPILE_OPT
 # Runs in the interactive user's session and connects Steam Big Picture to the machine host over
 # Steam's CEF debug port. Untrusted CDP traffic stays in this process; the host verifies it like the
 # end-stream hotkey helper before acting on its requests.
-add_executable(sunshine_steam_ui_helper steam_ui_helper.cpp)
+add_executable(sunshine_steam_ui_helper
+        steam_ui_helper/main.cpp
+        steam_ui_helper/controller.cpp
+        steam_ui_helper/steam_link_windows.cpp
+        "${CMAKE_SOURCE_DIR}/src/steam_big_picture_controls_policy.cpp")
+target_include_directories(sunshine_steam_ui_helper PRIVATE ${CMAKE_SOURCE_DIR}/tools/steam_ui_helper)
+target_link_libraries(sunshine_steam_ui_helper PRIVATE
+        nlohmann_json::nlohmann_json
+        winhttp
+        iphlpapi
+        ${CMAKE_THREAD_LIBS_INIT})
 target_compile_definitions(sunshine_steam_ui_helper PRIVATE _WIN32_WINNT=0x0602)
 target_compile_options(sunshine_steam_ui_helper PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
