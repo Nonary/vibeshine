@@ -514,6 +514,15 @@ namespace platf::dxgi {
     // Permit peer identity checks without granting the server impersonation rights.
     void set_client_identification_only();
 
+    // Require client connections to terminate at the named-pipe server process
+    // launched by the caller. A non-pipe handle or a different server PID is
+    // rejected before it can participate in IPC.
+    void set_expected_server_process_id(DWORD process_id);
+
+    // Refuse to create a server when another process already owns the name.
+    // This is intentionally opt-in because some callers use multiple instances.
+    void set_first_pipe_instance_only();
+
   private:
     /**
      * @brief Creates a security descriptor for the pipe.
@@ -569,6 +578,8 @@ namespace platf::dxgi {
     ) const;
 
     DWORD _client_security_flags = 0;
+    DWORD _expected_server_process_id = 0;
+    bool _first_pipe_instance_only = false;
     SecurityDescriptorBuilder _secdesc_builder;  // optional custom SD builder (Playnite can override)
   };
 
@@ -618,6 +629,8 @@ namespace platf::dxgi {
     // Forward a custom SD builder into the underlying NamedPipeFactory
     void set_security_descriptor_builder(NamedPipeFactory::SecurityDescriptorBuilder builder);
     void set_client_identification_only();
+    void set_expected_server_process_id(DWORD process_id);
+    void set_first_pipe_instance_only();
 
   private:
     std::unique_ptr<INamedPipe> handshake_server(std::unique_ptr<INamedPipe> pipe);

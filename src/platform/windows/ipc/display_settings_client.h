@@ -14,6 +14,10 @@
   #include "src/platform/windows/display_helper_borrow_protocol.h"
 
 namespace platf::display_helper_client {
+  // Bind future IPC connections to the exact helper process launched by the
+  // integration layer. Zero clears admission until a new helper is started.
+  void set_expected_helper_process_id(std::uint32_t process_id);
+
   // Independent exact-version handshake; no old APPLY/DISARM capability is
   // accepted. Unknown completion is returned explicitly for the native fence.
   std::optional<::display_helper::borrow::result_t> acquire_borrow_quiescence(

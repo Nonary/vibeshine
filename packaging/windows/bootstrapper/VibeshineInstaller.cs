@@ -515,7 +515,7 @@ namespace VibeshineInstaller {
       installStack.Children.Add(_installLocationTitleText);
 
       _installLocationHintText = new TextBlock {
-        Text = "Choose where Vibeshine will be installed. The default is recommended.",
+        Text = "Choose a folder beneath Program Files. The default is recommended.",
         FontSize = 12.5,
         Foreground = new SolidColorBrush(Color.FromRgb(209, 222, 241)),
         Margin = new Thickness(0, 0, 0, 10),
@@ -1379,7 +1379,7 @@ namespace VibeshineInstaller {
         throw new InvalidOperationException("The drive " + root.TrimEnd('\\') + " does not exist. Choose an install folder on an available local drive.");
       }
 
-      return fullPath;
+      return InstallerRunner.ValidateInstallRootPath(fullPath);
     }
 
     /// <summary>
@@ -2408,7 +2408,7 @@ namespace VibeshineInstaller {
       Console.WriteLine("  /?, /h, --help  Show this help message");
       Console.WriteLine();
       Console.WriteLine("Supported MSI properties:");
-      Console.WriteLine("  INSTALL_ROOT=<path>  Install to a custom directory (default: %ProgramFiles%\\Sunshine)");
+      Console.WriteLine("  INSTALL_ROOT=<path>  Install beneath Program Files (default: %ProgramFiles%\\Sunshine)");
       Console.WriteLine("  INSTALL_VIRTUAL_DISPLAY_DRIVER=0  Use SudoVDA instead of the default Vibeshine Display Driver");
       Console.WriteLine("  INSTALL_VIRTUAL_GAMEPAD_DRIVER=0  Do not install the bundled Vibeshine virtual gamepad driver");
       Console.WriteLine("  INSTALL_USBIP_TRANSPORT=1  Install the optional signed USB/IP driver for DualSense USB waveform haptics");
@@ -2416,7 +2416,7 @@ namespace VibeshineInstaller {
       Console.WriteLine();
       Console.WriteLine("Examples:");
       Console.WriteLine("  VibeshineSetup.exe /qn");
-      Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_ROOT=\"D:\\Vibeshine\"");
+      Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_ROOT=\"C:\\Program Files\\Vibeshine-Custom\"");
       Console.WriteLine("  VibeshineSetup.exe /x {PRODUCT-CODE} /qn");
       Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_VIRTUAL_DISPLAY_DRIVER=0");
       Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_VIRTUAL_GAMEPAD_DRIVER=0");
@@ -2562,6 +2562,140 @@ namespace VibeshineInstaller {
           Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
           "Sunshine");
       }
+    }
+
+    internal static string ValidateInstallRootPath(string installPath) {
+      var requestedPath = (installPath ?? string.Empty).Trim().Trim('"');
+      if (requestedPath.Length == 0) {
+        throw new InvalidOperationException("The install folder is empty.");
+      }
+      var fullPath = Path.GetFullPath(requestedPath)
+        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+      if (fullPath.StartsWith(@"\\", StringComparison.Ordinal)) {
+        throw new InvalidOperationException("A network path cannot be used as the Vibeshine install folder.");
+      }
+      var pathRoot = (Path.GetPathRoot(fullPath) ?? string.Empty)
+        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+      if (string.IsNullOrWhiteSpace(fullPath)
+          || string.Equals(fullPath, pathRoot, StringComparison.OrdinalIgnoreCase)) {
+        throw new InvalidOperationException("A filesystem root cannot be used as the Vibeshine install folder.");
+      }
+      var programFilesRoots = new[] {
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+        Environment.GetEnvironmentVariable("ProgramW6432")
+      }
+        .Select(NormalizePath)
+        .Where(path => !string.IsNullOrWhiteSpace(path))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+      if (!programFilesRoots.Any(root =>
+        !string.Equals(fullPath, root, StringComparison.OrdinalIgnoreCase)
+        && PathIsUnderDirectory(fullPath, root))) {
+        throw new InvalidOperationException(
+          "The Vibeshine install folder must be a child folder beneath Program Files.");
+      }
+
+      var current = fullPath;
+      var aclChecksRemaining = Directory.Exists(fullPath) ? 2 : 1;
+      while (!string.IsNullOrWhiteSpace(current)) {
+        if (Directory.Exists(current)) {
+          var info = new DirectoryInfo(current);
+          info.Refresh();
+          if ((info.Attributes & FileAttributes.ReparsePoint) != 0) {
+            throw new InvalidOperationException(
+              "The install folder or one of its parent folders is a reparse point. "
+              + "Choose a direct local path so the installer can secure it safely.");
+          }
+          if (aclChecksRemaining > 0) {
+            RejectUntrustedWritableInstallAncestor(info);
+            aclChecksRemaining--;
+          }
+        }
+        var parent = Path.GetDirectoryName(current);
+        if (string.IsNullOrWhiteSpace(parent)
+            || string.Equals(parent, current, StringComparison.OrdinalIgnoreCase)) break;
+        current = parent;
+      }
+
+      if (!Directory.Exists(fullPath)) return fullPath;
+
+      var pending = new Stack<string>();
+      pending.Push(fullPath);
+      while (pending.Count > 0) {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(pending.Pop())) {
+          var attributes = File.GetAttributes(entry);
+          if ((attributes & FileAttributes.ReparsePoint) != 0) {
+            throw new InvalidOperationException(
+              "The install folder contains a reparse point. Remove it or choose an empty folder.");
+          }
+          if ((attributes & FileAttributes.Directory) != 0) pending.Push(entry);
+        }
+      }
+
+      if (Directory.EnumerateFileSystemEntries(fullPath).Any()
+          && !IsRegisteredInstallRoot(fullPath)) {
+        throw new InvalidOperationException(
+          "The selected install folder is not empty and is not the registered Vibeshine or Sunshine install folder. "
+          + "Choose a new empty folder so unrelated files are never modified.");
+      }
+      return fullPath;
+    }
+
+    private static void RejectUntrustedWritableInstallAncestor(DirectoryInfo directory) {
+      var security = directory.GetAccessControl(AccessControlSections.Access | AccessControlSections.Owner);
+      var owner = security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
+      if (owner != null && !IsTrustedInstallRootPrincipal(owner)) {
+        throw new InvalidOperationException(
+          "The install folder or one of its parent folders is owned by an untrusted account: " + directory.FullName);
+      }
+
+      // Use only primitive mutation bits. Composite Write/Modify/FullControl
+      // include read/synchronize bits, so testing them by overlap rejects a
+      // normal Users RX ACE.
+      const FileSystemRights unsafeRights = FileSystemRights.WriteData
+        | FileSystemRights.AppendData
+        | FileSystemRights.WriteExtendedAttributes
+        | FileSystemRights.WriteAttributes
+        | FileSystemRights.Delete
+        | FileSystemRights.DeleteSubdirectoriesAndFiles
+        | FileSystemRights.ChangePermissions
+        | FileSystemRights.TakeOwnership;
+      foreach (FileSystemAccessRule rule in security.GetAccessRules(true, true, typeof(SecurityIdentifier))) {
+        var sid = rule.IdentityReference as SecurityIdentifier;
+        if (rule.AccessControlType == AccessControlType.Allow
+            && (rule.FileSystemRights & unsafeRights) != 0
+            && sid != null
+            && !IsTrustedInstallRootPrincipal(sid)) {
+          throw new InvalidOperationException(
+            "The install folder or one of its parent folders grants write access to an untrusted account: "
+            + directory.FullName);
+        }
+      }
+    }
+
+    private static bool IsTrustedInstallRootPrincipal(SecurityIdentifier sid) {
+      if (sid == null) return false;
+      return sid.IsWellKnown(WellKnownSidType.LocalSystemSid)
+        || sid.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid)
+        || sid.IsWellKnown(WellKnownSidType.CreatorOwnerSid)
+        || string.Equals(
+          sid.Value,
+          "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
+          StringComparison.Ordinal);
+    }
+
+    private static bool IsRegisteredInstallRoot(string installRoot) {
+      var candidates = GetInstalledProductRegistrations(true)
+        .Where(product => product.Kind == InstalledProductKind.Vibeshine
+          || product.Kind == InstalledProductKind.Sunshine)
+        .Select(product => product.InstallLocation);
+      foreach (var candidate in candidates) {
+        var normalized = NormalizePath(candidate);
+        if (!string.IsNullOrWhiteSpace(normalized)
+            && string.Equals(normalized, installRoot, StringComparison.OrdinalIgnoreCase)) return true;
+      }
+      return false;
     }
 
     public static bool IsSunshineVirtualDisplayDriverEnabledInConfiguration(string installDirectory) {
@@ -3558,6 +3692,15 @@ namespace VibeshineInstaller {
       bool installUsbIpTransport,
       bool saveInstallLogs,
       bool allowSelfElevation = true) {
+      try {
+        installDirectory = ValidateInstallRootPath(installDirectory);
+      } catch (Exception ex) {
+        return new InstallerResult {
+          Operation = InstallerOperation.Install,
+          ExitCode = 1603,
+          Message = "The install folder is not safe to use: " + ex.Message
+        };
+      }
       if (allowSelfElevation && !IsProcessElevated()) {
         return RunElevatedBootstrapperInstall(
           arguments,
@@ -3911,6 +4054,13 @@ namespace VibeshineInstaller {
       }
 
       try {
+        var normalized = NormalizePath(msiPath);
+        lock (EmbeddedMsiSecurityLock) {
+          if (!string.IsNullOrWhiteSpace(normalized)
+              && EmbeddedMsiPayloadHashes.ContainsKey(normalized)) {
+            return true;
+          }
+        }
         foreach (var root in GetEmbeddedMsiExtractRoots()) {
           if (PathIsUnderDirectory(msiPath, root)) {
             return true;
@@ -4155,7 +4305,10 @@ namespace VibeshineInstaller {
       }
     }
 
-    private static bool VerifyRecoveryBundleSignature(string path) {
+    private static bool VerifyAuthenticodeSignature(string path) {
+      if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) {
+        return false;
+      }
       var file = new RecoveryWinTrustFile { Size = (uint)Marshal.SizeOf(typeof(RecoveryWinTrustFile)), Path = path };
       var pointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(RecoveryWinTrustFile)));
       try {
@@ -4169,6 +4322,21 @@ namespace VibeshineInstaller {
       } finally {
         Marshal.DestroyStructure(pointer, typeof(RecoveryWinTrustFile));
         Marshal.FreeHGlobal(pointer);
+      }
+    }
+
+    private static bool VerifyRecoveryBundleSignature(string path) {
+      return VerifyAuthenticodeSignature(path);
+    }
+
+    private static bool HasAuthenticodeSignature(string path) {
+      try {
+        using (var certificate = new System.Security.Cryptography.X509Certificates.X509Certificate2(
+          System.Security.Cryptography.X509Certificates.X509Certificate.CreateFromSignedFile(path))) {
+          return certificate.RawData != null && certificate.RawData.Length > 0;
+        }
+      } catch {
+        return false;
       }
     }
 
@@ -4688,6 +4856,7 @@ namespace VibeshineInstaller {
           errorMessage = "The edited MSI copy no longer matched the exact failed ProductCode.";
           return false;
         }
+        RegisterAuthorizedDerivedMsiPayload(workingMsiPath, normalizedProductCode, recoveryDirectory);
         return true;
       } catch (Exception ex) {
         errorMessage = ex.Message;
@@ -5832,6 +6001,15 @@ namespace VibeshineInstaller {
       }
       var isInstallOperation = IsMsiInstallOperation(cliArgs);
       var isUninstallOperation = IsMsiUninstallOperation(cliArgs);
+      PreserveCliInstallDirectory(cliArgs);
+      string installRootFailure;
+      if (isInstallOperation && !TryNormalizeAndValidateCliInstallRoot(cliArgs, out installRootFailure)) {
+        return new InstallerResult {
+          Operation = InstallerOperation.Install,
+          ExitCode = 1603,
+          Message = installRootFailure
+        };
+      }
       var cliUninstallRecoveryProduct = isUninstallOperation
         ? TryResolveCliMsiUninstallRecoveryProduct(cliArgs)
         : null;
@@ -5848,7 +6026,6 @@ namespace VibeshineInstaller {
       if (!HasProperty(cliArgs, "SUPPRESSMSGBOXES")) {
         cliArgs.Add("SUPPRESSMSGBOXES=1");
       }
-      PreserveCliInstallDirectory(cliArgs);
       PreserveCliVirtualDisplayDriverSelection(cliArgs);
 
       var logPath = TryGetMsiLogPath(cliArgs);
@@ -6122,6 +6299,27 @@ namespace VibeshineInstaller {
       var installed = GetInstalledVibeshineProduct();
       if (installed != null && !string.IsNullOrWhiteSpace(installed.InstallLocation))
         cliArgs.Add(CreatePropertyArgument("INSTALL_ROOT", installed.InstallLocation));
+    }
+
+    private static bool TryNormalizeAndValidateCliInstallRoot(List<string> cliArgs, out string failureMessage) {
+      failureMessage = string.Empty;
+      var installRoot = GetPropertyValue(cliArgs, "INSTALL_ROOT");
+      if (string.IsNullOrWhiteSpace(installRoot)) return true;
+      try {
+        var normalized = ValidateInstallRootPath(installRoot);
+        for (var index = 0; index < cliArgs.Count; index++) {
+          var argument = (cliArgs[index] ?? string.Empty).Trim();
+          if (argument.StartsWith("INSTALL_ROOT=", StringComparison.OrdinalIgnoreCase)) {
+            cliArgs[index] = CreatePropertyArgument("INSTALL_ROOT", normalized);
+            return true;
+          }
+        }
+        failureMessage = "The INSTALL_ROOT property could not be normalized.";
+        return false;
+      } catch (Exception ex) {
+        failureMessage = "The INSTALL_ROOT property is not safe to use: " + ex.Message;
+        return false;
+      }
     }
 
     private static void PreserveCliVirtualDisplayDriverSelection(List<string> cliArgs) {
@@ -7122,20 +7320,27 @@ namespace VibeshineInstaller {
         return ValidateResolvedMsiPayload(explicitPath);
       }
 
-      // Prefer the embedded payload to avoid stale sidecar MSI files overriding the
-      // version and install target unexpectedly. Sidecar remains a fallback.
-      try {
+      // Prefer the embedded payload to avoid stale sidecar MSI files overriding
+      // the version and install target unexpectedly. Never turn a validation or
+      // secure-extraction failure into a sidecar fallback: that would let a
+      // replaceable adjacent file bypass the protected embedded-payload path.
+      if (Assembly.GetExecutingAssembly().GetManifestResourceNames()
+          .Contains("Payload.msi", StringComparer.Ordinal)) {
         return ValidateResolvedMsiPayload(ExtractEmbeddedMsi(forceFreshExtract));
-      } catch {
-        var sidecarMsi = FindSidecarMsi();
-        if (!string.IsNullOrWhiteSpace(sidecarMsi)) {
-          return ValidateResolvedMsiPayload(sidecarMsi);
-        }
-        throw;
       }
+
+      var sidecarMsi = FindSidecarMsi();
+      if (!string.IsNullOrWhiteSpace(sidecarMsi)) {
+        return ValidateResolvedMsiPayload(sidecarMsi);
+      }
+      throw new InvalidOperationException("No embedded or sidecar MSI payload was found.");
     }
 
     private static string ValidateResolvedMsiPayload(string msiPath) {
+      if (ShouldRequireSignedMsiPayload() && !VerifyAuthenticodeSignature(msiPath)) {
+        throw new InvalidDataException(
+          "The MSI payload is not signed by a publisher trusted by Windows: " + msiPath);
+      }
       var payloadInfo = TryGetPayloadMsiInfo(msiPath);
       if (payloadInfo == null || !LooksLikeProductCode(payloadInfo.ProductCode)) {
         throw new InvalidDataException(
@@ -7188,6 +7393,11 @@ namespace VibeshineInstaller {
             + "but Windows still could not open it.");
         }
 
+        // The hash is derived from the embedded resource in this running
+        // bootstrapper. Record it only after the final availability check so
+        // every later msiexec handoff can re-verify the exact protected copy.
+        RegisterEmbeddedMsiPayload(msiPath, versionToken);
+
         return msiPath;
       }
     }
@@ -7204,10 +7414,11 @@ namespace VibeshineInstaller {
     private static string GetEmbeddedMsiExtractRoot() {
       // Windows Installer may run in the service context and fail to read per-user temp payloads.
       if (IsProcessElevated()) {
-        var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-        if (!string.IsNullOrWhiteSpace(programData)) {
-          return Path.Combine(programData, "Vibeshine", "InstallerCache");
-        }
+        // Never extract a privileged MSI beneath a predictable ProgramData
+        // hierarchy. A standard user can pre-create that hierarchy and retain
+        // replace rights through inherited ACLs or reparse points. The random
+        // Windows Temp directory is created atomically with a protected DACL.
+        return GetOrCreateSecureEmbeddedMsiDirectory();
       }
 
       return Path.Combine(Path.GetTempPath(), "VibeshineInstaller");
@@ -7220,6 +7431,9 @@ namespace VibeshineInstaller {
 
       var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
       if (!string.IsNullOrWhiteSpace(programData)) {
+        // Retain the legacy location only so an in-flight upgrade can classify
+        // an older payload path for its one-time fresh-extraction retry. New
+        // elevated payloads are never extracted or executed from here.
         roots.Add(Path.Combine(programData, "Vibeshine", "InstallerCache"));
       }
 
@@ -7295,6 +7509,138 @@ namespace VibeshineInstaller {
           StringComparison.OrdinalIgnoreCase);
       } catch {
         return false;
+      }
+    }
+
+    private const string EmbeddedMsiDirectoryPrefix = InstallerRecoveryDirectoryPrefix + "Payload_";
+    private static readonly object EmbeddedMsiSecurityLock = new object();
+    private static readonly Dictionary<string, string> EmbeddedMsiPayloadHashes =
+      new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, string> AuthorizedDerivedMsiPayloadHashes =
+      new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    private static string SecureEmbeddedMsiDirectory;
+    private static bool? RequireSignedMsiPayload;
+
+    private static string GetOrCreateSecureEmbeddedMsiDirectory() {
+      lock (EmbeddedMsiSecurityLock) {
+        if (!string.IsNullOrWhiteSpace(SecureEmbeddedMsiDirectory)
+            && Directory.Exists(SecureEmbeddedMsiDirectory)) {
+          return SecureEmbeddedMsiDirectory;
+        }
+
+        var windowsDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        if (string.IsNullOrWhiteSpace(windowsDirectory)) {
+          throw new IOException("The Windows directory could not be resolved for secure MSI extraction.");
+        }
+
+        var trustedParent = new DirectoryInfo(Path.Combine(windowsDirectory, "Temp"));
+        trustedParent.Refresh();
+        if (!trustedParent.Exists || (trustedParent.Attributes & FileAttributes.ReparsePoint) != 0) {
+          throw new IOException("The Windows Temp payload parent is missing or is a reparse point.");
+        }
+
+        var directory = new DirectoryInfo(Path.Combine(
+          trustedParent.FullName,
+          EmbeddedMsiDirectoryPrefix + Guid.NewGuid().ToString("N")));
+        RegisterActiveInstallerRecoveryDirectory(directory.FullName);
+        directory.Create(BuildInstallerRecoveryDirectorySecurity());
+        directory.SetAccessControl(BuildInstallerRecoveryDirectorySecurity());
+        directory.Refresh();
+        if ((directory.Attributes & FileAttributes.ReparsePoint) != 0) {
+          throw new IOException("The secure MSI extraction directory is a reparse point.");
+        }
+
+        SecureEmbeddedMsiDirectory = directory.FullName;
+        return SecureEmbeddedMsiDirectory;
+      }
+    }
+
+    private static void RegisterEmbeddedMsiPayload(string path, string expectedSha256Hex) {
+      var normalized = NormalizePath(path);
+      if (string.IsNullOrWhiteSpace(normalized) || !FileHashMatches(normalized, expectedSha256Hex)) {
+        throw new IOException("The extracted MSI payload changed before it could be registered.");
+      }
+      lock (EmbeddedMsiSecurityLock) {
+        EmbeddedMsiPayloadHashes[normalized] = expectedSha256Hex;
+      }
+    }
+
+    private static void RegisterAuthorizedDerivedMsiPayload(
+      string path,
+      string expectedProductCode,
+      string protectedDirectory) {
+      var normalized = NormalizePath(path);
+      var normalizedDirectory = NormalizePath(protectedDirectory);
+      if (string.IsNullOrWhiteSpace(normalized)
+          || string.IsNullOrWhiteSpace(normalizedDirectory)
+          || !IsActiveInstallerRecoveryDirectory(normalizedDirectory)
+          || !string.Equals(Path.GetDirectoryName(normalized), normalizedDirectory, StringComparison.OrdinalIgnoreCase)
+          || !string.Equals(Path.GetFileName(normalized), "firewall_cleanup.msi", StringComparison.OrdinalIgnoreCase)) {
+        throw new IOException("The derived MSI was not created at its authorized protected path.");
+      }
+      var directoryInfo = new DirectoryInfo(normalizedDirectory);
+      var fileAttributes = File.GetAttributes(normalized);
+      if ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0
+          || (fileAttributes & FileAttributes.ReparsePoint) != 0) {
+        throw new IOException("The derived MSI path contains a reparse point.");
+      }
+      var payload = TryGetPayloadMsiInfo(normalized);
+      if (payload == null
+          || !string.Equals(
+            NormalizeProductCode(payload.ProductCode),
+            NormalizeProductCode(expectedProductCode),
+            StringComparison.OrdinalIgnoreCase)) {
+        throw new IOException("The derived MSI did not retain the authorized ProductCode.");
+      }
+      var exactHash = ComputeFileSha256Hex(normalized);
+      lock (EmbeddedMsiSecurityLock) {
+        AuthorizedDerivedMsiPayloadHashes[normalized] = exactHash;
+      }
+    }
+
+    private static void ValidateMsiPayloadImmediatelyBeforeExecution(IReadOnlyList<string> arguments) {
+      var msiPath = GetMsiPathArgument(arguments == null ? null : arguments.ToList());
+      if (string.IsNullOrWhiteSpace(msiPath)) {
+        return;
+      }
+
+      var normalized = NormalizePath(msiPath);
+      string expectedHash = null;
+      string authorizedDerivedHash = null;
+      lock (EmbeddedMsiSecurityLock) {
+        if (!string.IsNullOrWhiteSpace(normalized)) {
+          EmbeddedMsiPayloadHashes.TryGetValue(normalized, out expectedHash);
+          AuthorizedDerivedMsiPayloadHashes.TryGetValue(normalized, out authorizedDerivedHash);
+        }
+      }
+
+      if (!string.IsNullOrWhiteSpace(expectedHash) && !FileHashMatches(normalized, expectedHash)) {
+        throw new InvalidDataException("The embedded MSI payload changed before Windows Installer could start.");
+      }
+      if (!string.IsNullOrWhiteSpace(authorizedDerivedHash)) {
+        if (!FileHashMatches(normalized, authorizedDerivedHash)) {
+          throw new InvalidDataException("The authorized derived MSI changed before Windows Installer could start.");
+        }
+        return;
+      }
+      if (ShouldRequireSignedMsiPayload() && !VerifyAuthenticodeSignature(normalized)) {
+        throw new InvalidDataException("The MSI payload signature is not trusted immediately before execution.");
+      }
+    }
+
+    private static bool ShouldRequireSignedMsiPayload() {
+      lock (EmbeddedMsiSecurityLock) {
+        if (!RequireSignedMsiPayload.HasValue) {
+          var bootstrapperPath = Assembly.GetExecutingAssembly().Location;
+          // Signature presence, rather than an online trust result, decides
+          // whether this is a signed distribution build. This prevents an
+          // offline revocation failure from silently disabling the MSI trust
+          // requirement; the MSI itself must still pass WinVerifyTrust.
+          RequireSignedMsiPayload = !string.IsNullOrWhiteSpace(bootstrapperPath)
+            && File.Exists(bootstrapperPath)
+            && HasAuthenticodeSignature(bootstrapperPath);
+        }
+        return RequireSignedMsiPayload.Value;
       }
     }
 
@@ -8028,6 +8374,17 @@ namespace VibeshineInstaller {
     }
 
     private static int RunMsiexec(IReadOnlyList<string> arguments, bool hiddenWindow, bool requestElevationIfNeeded) {
+      // This check intentionally happens in the last in-process step before
+      // Process.Start. Protected extraction prevents an unprivileged rename
+      // after the hash/signature check; checking here also detects accidental
+      // cache corruption between discovery and execution.
+      var logPath = TryGetMsiLogPath(arguments == null ? new List<string>() : arguments.ToList());
+      try {
+        ValidateMsiPayloadImmediatelyBeforeExecution(arguments);
+      } catch (Exception ex) {
+        AppendInstallerLogMessage(logPath, "Refusing to execute an untrusted MSI payload: " + ex.Message);
+        return 1603;
+      }
       return RunProcess(
         ResolveMsiexecPath(),
         BuildCommandLine(arguments),
@@ -8035,7 +8392,7 @@ namespace VibeshineInstaller {
         requestElevationIfNeeded,
         MsiExecTimeoutMilliseconds,
         MsiExecTimeoutExitCode,
-        TryGetMsiLogPath(arguments == null ? new List<string>() : arguments.ToList()));
+        logPath);
     }
 
     private static int RunProcess(string executablePath, string arguments, bool hiddenWindow, bool requestElevationIfNeeded) {

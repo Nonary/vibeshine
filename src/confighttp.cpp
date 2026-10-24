@@ -43,6 +43,8 @@
 #endif
 // local includes
 #include "config.h"
+#include "config_http_log_policy.h"
+#include "config_http_login_limiter.h"
 #include "host_stream_control.h"
 #include "update.h"
 #include "confighttp.h"
@@ -566,7 +568,7 @@ namespace confighttp {
       BOOST_LOG(verbose) << "Headers:"sv;
       for (auto &[name, val] : request->header) {
         BOOST_LOG(verbose) << name << " -- "
-                           << (name == "Authorization" ? "CREDENTIALS REDACTED" : val);
+                           << (policy::is_sensitive_http_field(name) ? "CREDENTIALS REDACTED" : val);
       }
     }
 
@@ -574,7 +576,8 @@ namespace confighttp {
     if (!query.empty()) {
       BOOST_LOG(verbose) << "Query Params:"sv;
       for (auto &[name, val] : query) {
-        BOOST_LOG(verbose) << name << " -- " << val;
+        BOOST_LOG(verbose) << name << " -- "
+                           << (policy::is_sensitive_http_field(name) ? "CREDENTIALS REDACTED" : val);
       }
     }
   }
@@ -976,6 +979,15 @@ namespace confighttp {
       } else {
         response->write(result.code);
       }
+      return false;
+    }
+    return true;
+  }
+
+  bool authorize_remote(resp_https_t response, const req_https_t &request) {
+    const auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    if (auto result = check_remote_access(address); !result.ok) {
+      response->write(result.code, result.body, result.headers);
       return false;
     }
     return true;
@@ -4470,6 +4482,9 @@ namespace confighttp {
     if (!check_content_type(response, request, "application/json")) {
       return;
     }
+    if (!authorize_remote(response, request)) {
+      return;
+    }
     if (!config::sunshine.username.empty() && !authenticate(response, request)) {
       return;
     }
@@ -5735,6 +5750,10 @@ namespace confighttp {
     configure_https_listener_diagnostics(server, [](std::string_view message) {
       BOOST_LOG(warning) << message;
     });
+    // Bound unauthenticated header and body buffering before route dispatch.
+    // Configuration payloads may include base64 artwork, so keep a generous
+    // ceiling while preventing request-driven memory exhaustion.
+    server.config.max_request_streambuf_size = 16U * 1024U * 1024U;
     server.default_resource["DELETE"] = [](resp_https_t response, req_https_t request) {
       bad_request(response, request);
     };
@@ -6018,7 +6037,24 @@ namespace confighttp {
    * @api_examples{/api/auth/login| POST| {"username": "admin", "password": "password"}}
    */
   void loginUser(resp_https_t response, req_https_t request) {
+    if (!authorize_remote(response, request)) {
+      return;
+    }
     print_req(request);
+
+    static policy::LoginAttemptLimiter login_attempts;
+    const std::string remote_address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    const auto admission = login_attempts.consume(remote_address);
+    if (!admission.allowed) {
+      nlohmann::json body {{"status", false}, {"error", "Too many login attempts"}};
+      SimpleWeb::CaseInsensitiveMultimap headers {
+        {"Content-Type", "application/json"},
+        {"Retry-After", std::to_string(admission.retry_after.count())},
+      };
+      add_cors_headers(headers);
+      response->write(SimpleWeb::StatusCode::client_error_too_many_requests, body.dump(), headers);
+      return;
+    }
 
     std::stringstream ss;
     ss << request->content.rdbuf();
@@ -6045,9 +6081,10 @@ namespace confighttp {
       if (auto ua = request->header.find("user-agent"); ua != request->header.end()) {
         user_agent = ua->second;
       }
-      std::string remote_address = net::addr_to_normalized_string(request->remote_endpoint().address());
-
       APIResponse api_response = session_token_api.login(username, password, redirect_url, remember_me, user_agent, remote_address);
+      if (api_response.status_code == StatusCode::success_ok) {
+        login_attempts.reset(remote_address);
+      }
       write_api_response(response, api_response);
 
     } catch (const nlohmann::json::exception &e) {

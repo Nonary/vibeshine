@@ -656,6 +656,11 @@ int run_v2_helper(int argc, char *argv[]) {
   const int min_log_level = log_level_override.value_or(2);
   auto log_guard = logging::init(min_log_level, log_file);
 
+  if (snapshot_dir.empty()) {
+    BOOST_LOG(error) << "Display helper v2: refusing SYSTEM startup because the shared snapshot directory is not already private.";
+    return 2;
+  }
+
   BOOST_LOG(info) << "Display helper v2 starting up" << (restore_mode ? " (restore mode)" : "") << "...";
 
   HANDLE singleton = nullptr;
@@ -958,10 +963,14 @@ int run_v2_helper(int argc, char *argv[]) {
   auto last_connect_wait_log = std::chrono::steady_clock::time_point::min();
   constexpr auto kReconnectLogInterval = std::chrono::hours(1);
   while (running.load(std::memory_order_acquire)) {
-    platf::dxgi::FramedPipeFactory pipe_factory(std::make_unique<platf::dxgi::AnonymousPipeFactory>());
+    auto anonymous_pipe_factory = std::make_unique<platf::dxgi::AnonymousPipeFactory>();
+    anonymous_pipe_factory->set_first_pipe_instance_only();
+    platf::dxgi::FramedPipeFactory pipe_factory(std::move(anonymous_pipe_factory));
     auto server_pipe = pipe_factory.create_server("sunshine_display_helper");
     if (!server_pipe) {
-      platf::dxgi::FramedPipeFactory fallback_factory(std::make_unique<platf::dxgi::NamedPipeFactory>());
+      auto named_pipe_factory = std::make_unique<platf::dxgi::NamedPipeFactory>();
+      named_pipe_factory->set_first_pipe_instance_only();
+      platf::dxgi::FramedPipeFactory fallback_factory(std::move(named_pipe_factory));
       server_pipe = fallback_factory.create_server("sunshine_display_helper");
       if (!server_pipe) {
         BOOST_LOG(error) << "Failed to create control pipe; retrying while keeping recovery timers alive.";

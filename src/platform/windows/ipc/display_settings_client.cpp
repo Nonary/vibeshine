@@ -58,6 +58,11 @@ namespace platf::display_helper_client {
     // gets its own short budget: the deadlines that lead here are already spent.
     constexpr int kStaleConnectionRetireTimeoutMs = 250;
 
+    std::atomic<std::uint32_t> &expected_helper_process_id() {
+      static std::atomic<std::uint32_t> pid {0};
+      return pid;
+    }
+
     bool shutdown_requested() {
       if (!mail::man) {
         return false;
@@ -79,6 +84,10 @@ namespace platf::display_helper_client {
     }
 
   }  // namespace
+
+  void set_expected_helper_process_id(const std::uint32_t process_id) {
+    expected_helper_process_id().store(process_id, std::memory_order_release);
+  }
 
   /**
    * @brief IPC message types used by the display settings helper protocol.
@@ -856,13 +865,20 @@ namespace platf::display_helper_client {
     if (shutdown_requested() || (cancelled && cancelled())) {
       return false;
     }
+    const auto expected_pid = expected_helper_process_id().load(std::memory_order_acquire);
     auto &session = session_singleton();
-    if (session && session->pipe && session->pipe->is_connected()) {
+    if (expected_pid != 0 && session && session->pipe && session->pipe->is_connected() &&
+        session->pipe->peer_process_id() == expected_pid) {
       return true;
     }
     if (session) {
       (void) retire_session_locked();
       reset_log_level_cache();
+    }
+
+    if (expected_pid == 0) {
+      BOOST_LOG(error) << "Display helper IPC: refusing an unbound helper connection.";
+      return false;
     }
 
     BOOST_LOG(debug) << "Display helper IPC: connecting to server pipe 'sunshine_display_helper'";
@@ -898,8 +914,10 @@ namespace platf::display_helper_client {
     // Create fresh pipe - try anonymous first, then named fallback. The
     // normal connection path is allowed to negotiate the anonymous transport;
     // fast paths below intentionally never call this function.
-    if (remaining_ms() > 0 && create_session([cancelled, connect_deadline]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
+    if (remaining_ms() > 0 && create_session([cancelled, connect_deadline, expected_pid]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
           platf::dxgi::AnonymousPipeFactory factory;
+          factory.set_client_identification_only();
+          factory.set_expected_server_process_id(expected_pid);
           auto pipe = factory.create_client("sunshine_display_helper", cancelled, connect_deadline);
           return pipe ? std::make_unique<platf::dxgi::FramedPipe>(std::move(pipe)) : nullptr;
         })) {
@@ -907,8 +925,10 @@ namespace platf::display_helper_client {
     }
     if (remaining_ms() > 0) {
       BOOST_LOG(debug) << "Display helper IPC: anonymous connect failed; trying named fallback";
-      if (create_session([cancelled, connect_deadline]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
+      if (create_session([cancelled, connect_deadline, expected_pid]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
             platf::dxgi::NamedPipeFactory factory;
+            factory.set_client_identification_only();
+            factory.set_expected_server_process_id(expected_pid);
             auto pipe = factory.create_client("sunshine_display_helper", cancelled, connect_deadline);
             return pipe ? std::make_unique<platf::dxgi::FramedPipe>(std::move(pipe)) : nullptr;
           })) {

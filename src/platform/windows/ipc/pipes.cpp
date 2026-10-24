@@ -61,6 +61,30 @@ namespace platf::dxgi {
                                .count();
       return static_cast<int>(std::clamp<long long>(remaining, 0, stage_limit_ms));
     }
+
+    std::wstring validated_data_pipe_name(const wchar_t *name, const size_t capacity) {
+      constexpr size_t guid_len = 38;
+      const auto terminator = std::find(name, name + capacity, L'\0');
+      const size_t len = static_cast<size_t>(terminator - name);
+      if (len != guid_len) {
+        return {};
+      }
+
+      for (size_t i = 0; i < len; ++i) {
+        const wchar_t ch = name[i];
+        const bool dash = i == 9 || i == 14 || i == 19 || i == 24;
+        if ((i == 0 && ch != L'{') ||
+            (i == len - 1 && ch != L'}') ||
+            (dash && ch != L'-') ||
+            (i != 0 && i != len - 1 && !dash &&
+             !((ch >= L'0' && ch <= L'9') ||
+               (ch >= L'a' && ch <= L'f') ||
+               (ch >= L'A' && ch <= L'F')))) {
+          return {};
+        }
+      }
+      return std::wstring(name, len);
+    }
   }  // namespace
 
   // Helper functions for proper string conversion
@@ -248,7 +272,8 @@ namespace platf::dxgi {
     winrt::file_handle hPipe {
       CreateNamedPipeW(
         fullPipeName.c_str(),
-        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED |
+          (_first_pipe_instance_only ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0),
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
         1,
         65536,
@@ -275,6 +300,14 @@ namespace platf::dxgi {
     _client_security_flags = SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION;
   }
 
+  void NamedPipeFactory::set_expected_server_process_id(const DWORD process_id) {
+    _expected_server_process_id = process_id;
+  }
+
+  void NamedPipeFactory::set_first_pipe_instance_only() {
+    _first_pipe_instance_only = true;
+  }
+
   std::unique_ptr<INamedPipe> NamedPipeFactory::create_client(const std::string &pipeName) {
     return create_client(pipeName, {}, std::chrono::steady_clock::time_point::max());
   }
@@ -295,6 +328,19 @@ namespace platf::dxgi {
       DWORD err = GetLastError();
       BOOST_LOG(error) << "CreateFileW failed (" << err << ")";
       return nullptr;
+    }
+
+    if (_expected_server_process_id != 0) {
+      ULONG server_pid = 0;
+      const bool server_pid_available = GetNamedPipeServerProcessId(hPipe.get(), &server_pid) != FALSE;
+      const DWORD identity_error = server_pid_available ? ERROR_SUCCESS : GetLastError();
+      if (!server_pid_available || server_pid != _expected_server_process_id) {
+        BOOST_LOG(error) << "Rejecting pipe server identity for '" << pipeName
+                         << "' (expected pid=" << _expected_server_process_id
+                         << ", actual pid=" << server_pid
+                         << ", winerr=" << identity_error << ')';
+        return nullptr;
+      }
     }
 
     auto pipeObj = std::make_unique<WinPipe>(std::move(hPipe), false);
@@ -423,6 +469,14 @@ namespace platf::dxgi {
 
   void AnonymousPipeFactory::set_client_identification_only() {
     _pipe_factory.set_client_identification_only();
+  }
+
+  void AnonymousPipeFactory::set_expected_server_process_id(const DWORD process_id) {
+    _pipe_factory.set_expected_server_process_id(process_id);
+  }
+
+  void AnonymousPipeFactory::set_first_pipe_instance_only() {
+    _pipe_factory.set_first_pipe_instance_only();
   }
 
   class PrefetchedPipe: public INamedPipe {
@@ -904,7 +958,12 @@ namespace platf::dxgi {
       return nullptr;
     }
 
-    std::wstring wpipeName(msg.pipe_name);
+    const std::wstring wpipeName = validated_data_pipe_name(msg.pipe_name, std::size(msg.pipe_name));
+    if (wpipeName.empty()) {
+      BOOST_LOG(error) << "Anonymous handshake: rejected malformed data-pipe name.";
+      pipe->disconnect();
+      return nullptr;
+    }
     std::string pipeNameStr = wide_to_utf8(wpipeName);
     auto data_pipe = connect_to_data_pipe(pipeNameStr, cancelled, operation_deadline);
     if (client_wait_ms(operation_deadline, 5000, cancelled) <= 0) {

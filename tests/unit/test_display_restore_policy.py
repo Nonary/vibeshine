@@ -33,10 +33,21 @@ def function(source, signature):
 writer = function((root / "src/state_storage.cpp").read_text(),
                   "  void save_display_restore_preference(")
 paths = (root / "tools/display_helper_paths.h").read_text()
+assert 'L"O:SYG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"' in paths
+assert "FILE_FLAG_OPEN_REPARSE_POINT" in paths
+assert "SE_DACL_PROTECTED" in paths
+assert "remove_untrusted_snapshot_objects" in paths
+assert "SetSecurityInfo(" not in paths
+assert "SeTakeOwnershipPrivilege" not in paths
+assert "is_private_system_dacl" in paths
+assert "MoveFileExW" in paths and 'L".untrusted-"' in paths
+assert "return {};" in function(paths, "  inline std::filesystem::path compute_snapshot_dir()")
 command_line_reader = function(paths, "  inline std::optional<std::filesystem::path> restore_state_file_from_command_line()")
 task_arguments = function(paths, "  inline std::wstring restore_task_arguments()")
 legacy = (root / "tools/display_settings_helper.cpp").read_text()
 v2 = (root / "tools/display_settings_helper_v2.cpp").read_text()
+assert "refusing SYSTEM startup because the shared snapshot directory is not already private" in legacy
+assert "refusing SYSTEM startup because the shared snapshot directory is not already private" in v2
 legacy_boot = legacy[legacy.index('Display helper started in restore mode'):]
 v2_boot = v2[v2.index('Display helper v2 running in restore mode.'):]
 legacy_assignment = re.search(r"state\.always_restore_from_golden\.store\([\s\S]+?;", legacy_boot).group()

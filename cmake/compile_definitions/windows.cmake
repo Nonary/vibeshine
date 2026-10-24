@@ -360,6 +360,7 @@ list(PREPEND PLATFORM_LIBRARIES
         synchronization.lib
         Windowscodecs
         userenv
+        wintrust
         ws2_32
         wsock32
 )

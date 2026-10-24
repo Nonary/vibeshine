@@ -80,6 +80,11 @@ namespace {
     return h;
   }
 
+  void terminate_helper_process() {
+    platf::display_helper_client::set_expected_helper_process_id(0);
+    helper_proc().terminate();
+  }
+
   // The legacy and v2 engines intentionally share one executable and one IPC
   // pipe. Keep the engine selected for the process owned by this Sunshine
   // instance so a configuration change cannot reuse the other engine merely
@@ -782,7 +787,7 @@ namespace {
         operation_deadline_expired(operation_deadline)) {
       return false;
     }
-    helper_proc().terminate();
+    terminate_helper_process();
 
     if (cancellation_requested(cancellation_predicate)) {
       return false;
@@ -1565,7 +1570,7 @@ namespace {
             operation_deadline_expired(operation_deadline)) {
           return false;
         }
-        helper_proc().terminate();
+        terminate_helper_process();
       }
       g_restore_expected.store(false, std::memory_order_relaxed);
     }
@@ -1603,6 +1608,7 @@ namespace {
       DWORD wait = WaitForSingleObject(h, 0);
       if (wait == WAIT_TIMEOUT) {
         DWORD pid = GetProcessId(h);
+        platf::display_helper_client::set_expected_helper_process_id(pid);
         BOOST_LOG(debug) << "Display helper already running (pid=" << pid << ")";
         const bool engine_matches = g_running_helper_legacy.has_value() &&
                                      *g_running_helper_legacy == legacy_engine;
@@ -1617,7 +1623,7 @@ namespace {
                 operation_deadline)) {
             return false;
           }
-          helper_proc().terminate();
+          terminate_helper_process();
 
           DWORD wait_result = WAIT_TIMEOUT;
           if (!wait_for_process_with_cancellation(
@@ -1704,7 +1710,7 @@ namespace {
               operation_deadline)) {
           return false;
         }
-        helper_proc().terminate();
+        terminate_helper_process();
 
         DWORD wait_result = WAIT_TIMEOUT;
         if (!wait_for_process_with_cancellation(
@@ -1737,6 +1743,7 @@ namespace {
         }
       } else {
         // Process exited; fall through to restart
+        platf::display_helper_client::set_expected_helper_process_id(0);
         DWORD exit_code = 0;
         GetExitCodeProcess(h, &exit_code);
         BOOST_LOG(debug) << "Display helper process detected as exited (code=" << exit_code << "); preparing restart.";
@@ -1817,6 +1824,7 @@ namespace {
     g_running_helper_legacy = legacy_engine;
 
     DWORD pid = GetProcessId(h);
+    platf::display_helper_client::set_expected_helper_process_id(pid);
     BOOST_LOG(info) << "Display helper successfully started (pid=" << pid << ")";
 
     // Give the helper process time to initialize and create its named pipe server
@@ -1859,6 +1867,7 @@ namespace {
           h = helper_proc().get_process_handle();
           if (h) {
             pid = GetProcessId(h);
+            platf::display_helper_client::set_expected_helper_process_id(pid);
             BOOST_LOG(info) << "Display helper retry succeeded (pid=" << pid << ")";
             if (!sleep_with_cancellation(
                   std::chrono::milliseconds(300),
@@ -1869,6 +1878,7 @@ namespace {
           }
           break;
         } else {
+          platf::display_helper_client::set_expected_helper_process_id(0);
           BOOST_LOG(error) << "Display helper exited unexpectedly with code " << exit_code;
           note_helper_start_failure("unexpected process exit");
           return false;
@@ -2811,7 +2821,7 @@ namespace display_helper_integration {
         // A wedged helper must be gone before native fallback can change topology.
         const auto wait = WaitForSingleObject(handle, 3000);
         if (wait == WAIT_TIMEOUT) {
-          helper_proc().terminate();
+          terminate_helper_process();
           DWORD exit_code {};
           if (!helper_proc().wait_for(exit_code, 5000)) return false;
         } else if (wait != WAIT_OBJECT_0) {

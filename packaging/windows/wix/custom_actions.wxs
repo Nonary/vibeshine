@@ -127,10 +127,15 @@
   </Fragment>
 
   <Fragment>
-    <!-- Post-install housekeeping runs after InstallFiles. ACL, migration, and optional
+    <!-- Native MSI policy: direct MSI and bootstrapper installs are restricted
+         to descendants of ProgramFilesFolder. No INSTALL_ROOT value is ever
+         interpolated into command source. -->
+    <CustomAction Id="BlockUnsafeInstallRoot"
+                  Error="Vibeshine must be installed in a folder beneath Program Files." />
+
+    <!-- Post-install housekeeping runs after InstallFiles. Migration and optional
          driver/Vulkan-layer failures remain best-effort because the core application
          can still install and the bootstrapper reports component warnings from logs. -->
-    <CustomAction Id="ResetAcls" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="MigrateConfig" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="RunInstallerMigrations" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="InstallSudovda" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="check" Impersonate="no" />
@@ -159,10 +164,6 @@
     <CustomAction Id="CleanupEmptyInstallRoot" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
 
     <!-- Immediate property setters to pass commands to deferred QuietExec actions -->
-    <CustomAction Id="SetResetAcls"
-                 Property="ResetAcls"
-                 Value="&quot;[SystemFolder]icacls.exe&quot; &quot;[INSTALL_ROOT].&quot; /reset"/>
-
     <CustomAction Id="SetMigrateConfig"
                  Property="MigrateConfig"
                  Value="&quot;[SystemFolder]cmd.exe&quot; /C &quot;&quot;[INSTALL_ROOT]scripts\migrate-config.bat&quot;&quot;"/>

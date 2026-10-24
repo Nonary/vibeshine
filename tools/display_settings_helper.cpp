@@ -5165,21 +5165,7 @@ namespace {
   }
 
   std::filesystem::path compute_snapshot_dir() {
-    // When running as SYSTEM, prefer a shared ProgramData location for snapshots.
-    if (platf::dxgi::is_running_as_system()) {
-      std::wstring programDataW;
-      programDataW.resize(MAX_PATH);
-      if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_COMMON_APPDATA, nullptr, SHGFP_TYPE_CURRENT, programDataW.data()))) {
-        programDataW.resize(wcslen(programDataW.c_str()));
-        auto path = std::filesystem::path(programDataW) / L"Sunshine";
-        std::error_code ec;
-        std::filesystem::create_directories(path, ec);
-        return path;
-      }
-    }
-
-    // Default to per-user roaming AppData (or fallback locations inside compute_log_dir).
-    return compute_log_dir();
+    return display_helper_paths::compute_snapshot_dir();
   }
 
   struct SnapshotPaths {
@@ -5220,35 +5206,7 @@ namespace {
   }
 
   std::vector<std::filesystem::path> snapshot_search_roots() {
-    std::vector<std::filesystem::path> roots;
-    const auto user_root = compute_log_dir();
-    if (!user_root.empty()) {
-      roots.push_back(user_root);
-    }
-    {
-      std::wstring programDataW;
-      programDataW.resize(MAX_PATH);
-      if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_COMMON_APPDATA, nullptr, SHGFP_TYPE_CURRENT, programDataW.data()))) {
-        programDataW.resize(wcslen(programDataW.c_str()));
-        roots.push_back(std::filesystem::path(programDataW) / L"Sunshine");
-      }
-    }
-    for (const auto &root : executable_config_search_roots()) {
-      if (!root.empty()) {
-        roots.push_back(root);
-      }
-    }
-    // De-duplicate while preserving order.
-    std::vector<std::filesystem::path> uniq;
-    for (const auto &root : roots) {
-      if (root.empty()) {
-        continue;
-      }
-      if (std::find(uniq.begin(), uniq.end(), root) == uniq.end()) {
-        uniq.push_back(root);
-      }
-    }
-    return uniq;
+    return display_helper_paths::snapshot_search_roots();
   }
 
   bool create_restore_scheduled_task() {
@@ -6342,9 +6300,13 @@ int run_legacy_helper(int argc, char *argv[]) {
   const auto logdir = compute_log_dir();
   const auto snapshot_dir = compute_snapshot_dir();
   const auto logfile = (logdir / L"sunshine_display_helper.log");
+  auto _log_guard = logging::init(2 /*info*/, logfile);
+  if (snapshot_dir.empty()) {
+    BOOST_LOG(error) << "Display helper: refusing SYSTEM startup because the shared snapshot directory is not already private.";
+    return 2;
+  }
   const auto active_snapshots = make_snapshot_paths(snapshot_dir);
   const auto search_roots = snapshot_search_roots();
-  auto _log_guard = logging::init(2 /*info*/, logfile);
 
   if (restore_mode) {
     BOOST_LOG(info) << "Display helper started in restore mode (--restore flag)";
@@ -6428,7 +6390,9 @@ int run_legacy_helper(int argc, char *argv[]) {
     return 0;
   }
 
-  platf::dxgi::FramedPipeFactory pipe_factory(std::make_unique<platf::dxgi::AnonymousPipeFactory>());
+  auto anonymous_pipe_factory = std::make_unique<platf::dxgi::AnonymousPipeFactory>();
+  anonymous_pipe_factory->set_first_pipe_instance_only();
+  platf::dxgi::FramedPipeFactory pipe_factory(std::move(anonymous_pipe_factory));
   dd_log_bridge().install();
   ServiceState state;
   // Suppression of startup restore is deprecated; REVERTs are always allowed.
@@ -6496,7 +6460,9 @@ int run_legacy_helper(int argc, char *argv[]) {
   while (running.load(std::memory_order_acquire)) {
     auto ctrl_pipe = pipe_factory.create_server("sunshine_display_helper");
     if (!ctrl_pipe) {
-      platf::dxgi::FramedPipeFactory fallback_factory(std::make_unique<platf::dxgi::NamedPipeFactory>());
+      auto named_pipe_factory = std::make_unique<platf::dxgi::NamedPipeFactory>();
+      named_pipe_factory->set_first_pipe_instance_only();
+      platf::dxgi::FramedPipeFactory fallback_factory(std::move(named_pipe_factory));
       ctrl_pipe = fallback_factory.create_server("sunshine_display_helper");
       if (!ctrl_pipe) {
         BOOST_LOG(error) << "Failed to create control pipe; retrying in 500ms";
