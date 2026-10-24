@@ -2056,10 +2056,10 @@ namespace rtsp_stream {
     const bool supported_dolby_channel_count = config.audio.channels == 2 || config.audio.channels == 6;
 
     // Once a client has explicitly accepted an advertised codec, do not silently
-    // change the negotiated codec if its encoder is unavailable.
-    if (client_accepted_audio_codec && !selected_encoder_available) {
-      BOOST_LOG(error) << "Client accepted a Dolby codec whose FFmpeg encoder is unavailable";
-      respond(socket->sock, *session, &option, 500, "INTERNAL SERVER ERROR", req->sequenceNumber, {});
+    // change the negotiated codec if its encoder or requested channel layout is unsupported.
+    if (client_accepted_audio_codec && (!selected_encoder_available || !supported_dolby_channel_count)) {
+      BOOST_LOG(error) << "Client accepted a Dolby codec that cannot be provided for the requested stream";
+      respond(socket->sock, *session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return false;
     }
     const auto selected_audio_codec = audio::configure_dolby_audio(
@@ -2075,9 +2075,6 @@ namespace rtsp_stream {
                          << "] was selected, but its FFmpeg encoder is unavailable; using Opus"sv;
     } else if (!session->audio_codec_offered.empty() && !client_accepted_audio_codec) {
       BOOST_LOG(info) << "Client did not accept "sv << session->audio_codec_offered << "; falling back to Opus"sv;
-    } else if (client_accepted_audio_codec && !supported_dolby_channel_count) {
-      BOOST_LOG(info) << "The selected Dolby encoder does not support the requested channel count ["
-                      << config.audio.channels << "]; using Opus because Dolby was not selected";
     }
 
     if (session->continuous_audio) {
