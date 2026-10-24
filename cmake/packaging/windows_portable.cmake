@@ -75,6 +75,7 @@ set(SUNSHINE_PORTABLE_REQUIRED_FILES
     assets/web/index.html
     assets/web/v2/index.html
     assets/shaders/directx/cursor_vs.hlsl
+    assets/steam/big_picture_controls.js
     plugins/playnite/SunshinePlaynite/extension.yaml
     plugins/playnite/SunshinePlaynite/${_portable_plugin_filename}
     plugins/playnite/SunshinePlaynite/icon.png)

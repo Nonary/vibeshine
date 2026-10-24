@@ -27,11 +27,18 @@
  *   {"type":"check_result","id":<n>,"report":{...}}
  *   {"type":"log","level":"info"|"warning"|"error","message":"..."}
  *
- * Script <-> helper, inside Steam
- *   The helper sets window.__vibeshineOptions = <inject_options> and evaluates the script, which returns
- *   its report. Status is delivered with window.VibeshineBPM.setStatus(<status payload>). The script
- *   sends {"type":"action"|"feature"|"error"|"disabled", ...} through the window.__vibeshineBridge binding,
- *   with the same fields as the helper -> service messages above.
+ * Script <-> helper, inside Steam (assets/steam/big_picture_controls.js)
+ *   The helper sets window.__vibeshineOptions = <inject_options> and evaluates the script. inject_options:
+ *     {"checkOnly":false,"features":{"power_menu":true,"header_icon":true},
+ *      "simulateMissing":[...],"simulateCrash":[...],"maxErrors":8}       the last three for fault tests
+ *   The evaluation returns the script's report, which the helper forwards as a "report" message:
+ *     {"protocol":1,"version":<script version>,"react":"...","enabled":true,"errors":<n>,
+ *      "features":{"power_menu":"...","header_icon":"...","header_menu":"...","focusable":"...",
+ *                  "header_styles":"..."}}                              values start with ok, fallback or off
+ *   The helper must refuse a script whose "protocol" differs from protocol::version.
+ *   Status is delivered with window.VibeshineBPM.setStatus(<status payload>). The script sends
+ *   {"type":"action"|"feature"|"error"|"disabled", ...} through the window.__vibeshineBridge binding,
+ *   with the same fields as the helper -> service messages above ("disabled" carries a "reason").
  *
  * Status payload (built by policy::status_payload)
  *   {"version":1,"appRunning":true,"appName":"...",

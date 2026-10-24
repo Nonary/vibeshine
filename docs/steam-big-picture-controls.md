@@ -1,8 +1,10 @@
 # Steam Big Picture controls
 
-> **Status:** under development. The setting, status endpoint and message formats exist; the
-> helper, injection and actions are not implemented yet, and the status endpoint reports
-> `"implemented": false`.
+> **Status:** under development. The setting, status endpoint, message formats and the injected
+> script (`src_assets/windows/assets/steam/big_picture_controls.js`) exist. The helper and the
+> service actions are not implemented yet, and the status endpoint reports `"implemented": false`.
+> The script's tests run with `npm run test:unit` in the web UI, against a fake Steam
+> (`scripts/support/fake-steam.ts`).
 
 When enabled with `steam_big_picture_controls`, Vibeshine shows stream controls inside Steam
 Big Picture on the Windows host:
