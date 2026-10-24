@@ -2460,6 +2460,8 @@ namespace stream {
 
       try {
         std::size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
+        // Host adaptive pacing replaces this with its exact rate below.
+        std::optional<pacing::packet_pace_t> adaptive_pace;
         if (pyrowave_session) {
           // Refresh the actual route periodically. Socket/interface discovery and
           // sysfs reads must not block the send path on every frame.
@@ -2559,7 +2561,10 @@ namespace stream {
           if (events.any()) {
             log_adaptive_pacing(events, snapshot, 0);
           }
-          ratecontrol_packets_in_1ms = pacing::packets_per_ms_at_rate(rate_bps, wire_bytes);
+          // Deadlines follow the exact rate; whole packets per millisecond
+          // only bound the burst between waits.
+          adaptive_pace = pacing::packet_pace_t::at_rate(rate_bps, wire_bytes);
+          ratecontrol_packets_in_1ms = adaptive_pace->packets_per_ms;
         } else if (config::stream.pacing_batch_demand_limit) {
           const auto &monitor = session->config.monitor;
           const auto stream_kbps = session->video.pacing_bitrate_kbps.load(std::memory_order_relaxed);
@@ -2576,6 +2581,8 @@ namespace stream {
             0
           );
         }
+
+        const auto ratecontrol_pace = adaptive_pace.value_or(pacing::packet_pace_t::fixed(ratecontrol_packets_in_1ms));
 
         // Send less than 64K in a single batch.
         // On Windows, batches above 64K seem to bypass SO_SNDBUF regardless of its size,
@@ -2738,9 +2745,7 @@ namespace stream {
               // to account for the last send_batch() of the previous frame.
               if (ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms ||
                   ratecontrol_frame_packets_sent == 0) {
-                auto due = ratecontrol_frame_start +
-                           std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                             ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+                auto due = ratecontrol_frame_start + ratecontrol_pace.offset(ratecontrol_frame_packets_sent);
 
                 auto now = std::chrono::steady_clock::now();
                 if (now < due) {
@@ -2794,9 +2799,7 @@ namespace stream {
               ratecontrol_frame_packets_sent += send_result.packets_accepted;
               // Keep pacing debt from accepted batches even if this block or
               // frame aborts before its final shard.
-              ratecontrol_next_frame_start = ratecontrol_frame_start +
-                                             std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                                               ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+              ratecontrol_next_frame_start = ratecontrol_frame_start + ratecontrol_pace.offset(ratecontrol_frame_packets_sent);
               if (!send_result.sent) {
                 throw video_send_failed_t {send_result.cancelled, unsigned(blockIndex), send_result.packets_accepted};
               }
@@ -2811,9 +2814,7 @@ namespace stream {
           }
 
           // remember this in case the next frame comes immediately
-          ratecontrol_next_frame_start = ratecontrol_frame_start +
-                                         std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                                           ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+          ratecontrol_next_frame_start = ratecontrol_frame_start + ratecontrol_pace.offset(ratecontrol_frame_packets_sent);
           ratecontrol_frame_packets_logger.collect_and_log((double) ratecontrol_frame_packets_sent);
 
           frame_network_latency_logger.second_point_now_and_log();
@@ -2841,11 +2842,17 @@ namespace stream {
             const auto now = std::chrono::steady_clock::now();
             if (now >= next_burst_detail_log) {
               next_burst_detail_log = now + 1s;
+              // Under adaptive pacing the packets/ms quantum only bounds bursts;
+              // the deadlines follow the applied rate.
+              const auto pacing_detail = adaptive_pace ?
+                                           std::to_string(ratecontrol_pace.applied_bps() / 1'000) + " kbps, bursts up to " +
+                                             std::to_string(ratecontrol_packets_in_1ms) + " packets" :
+                                           std::to_string(ratecontrol_packets_in_1ms) + " packets/ms";
               BOOST_LOG(debug) << "Network: frame "sv << packet->frame_index() << " send burst "sv << burst_ms << " ms for "sv
                                << ratecontrol_frame_packets_sent << " packets ("sv << burst_bytes << " UDP payload bytes, "sv
                                << burst_mbps << " Mbps); paced sleep "sv << burst_sleep_ms << " ms, in send_batch() "sv
                                << burst_send_ms << " ms (longest "sv << burst_max_send_ms << " ms), fallback batches "sv
-                               << burst_fallback_batches << ", pacing "sv << ratecontrol_packets_in_1ms << " packets/ms"sv;
+                               << burst_fallback_batches << ", pacing "sv << pacing_detail;
             }
           }
         }

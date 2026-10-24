@@ -465,4 +465,45 @@ namespace stream::pacing {
     }
     return std::size_t(std::max<std::uint64_t>(1, rate_bps / 8 / 1000 / wire_bytes));
   }
+
+  /// How the sender spaces one frame's packets: up to `packets_per_ms` packets
+  /// between pacing waits, and a deadline for each packet sent so far.
+  ///
+  /// A fixed pace charges whole packets per millisecond. A rate pace charges
+  /// each packet its exact wire time at `rate_bps`, so rounding the burst
+  /// quantum down to whole packets cannot slow the sustained rate below what
+  /// the controller chose (Rubylight's pacer charges exact wire time too).
+  struct packet_pace_t {
+    std::size_t packets_per_ms {1};
+    std::uint64_t rate_bps {};  ///< Zero for a fixed pace.
+    std::size_t wire_bytes {};
+
+    static packet_pace_t fixed(std::size_t packets_per_ms, std::size_t wire_bytes = 0) {
+      return {std::max<std::size_t>(packets_per_ms, 1), 0, wire_bytes};
+    }
+
+    static packet_pace_t at_rate(std::uint64_t rate_bps, std::size_t wire_bytes) {
+      if (rate_bps == 0 || wire_bytes == 0) {
+        return fixed(packets_per_ms_at_rate(rate_bps, wire_bytes), wire_bytes);
+      }
+      return {packets_per_ms_at_rate(rate_bps, wire_bytes), rate_bps, wire_bytes};
+    }
+
+    /// Pacing time owed once `packets` packets of the frame were sent.
+    std::chrono::nanoseconds offset(std::size_t packets) const {
+      if (rate_bps == 0) {
+        return std::chrono::nanoseconds {std::chrono::milliseconds {1}} * packets / packets_per_ms;
+      }
+      // bits * 1e9 / rate, split so large frames cannot overflow.
+      const auto bits = std::uint64_t(packets) * wire_bytes * 8;
+      const auto whole = bits / rate_bps;
+      const auto fraction = double(bits % rate_bps) * 1e9 / double(rate_bps);
+      return std::chrono::nanoseconds {std::int64_t(whole * 1'000'000'000 + std::uint64_t(fraction))};
+    }
+
+    /// The sustained rate these deadlines enforce.
+    std::uint64_t applied_bps() const {
+      return rate_bps ? rate_bps : std::uint64_t(packets_per_ms) * wire_bytes * 8000;
+    }
+  };
 }  // namespace stream::pacing

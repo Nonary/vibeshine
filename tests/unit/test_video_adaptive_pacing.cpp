@@ -15,6 +15,7 @@
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace stream::pacing {
   /// Test-only view of the controller's private state.
@@ -98,9 +99,10 @@ namespace {
     traffic_t traffic;
     std::uint32_t last {};
     duration period;
+    std::uint32_t kbps {40'000};
 
     static stream_t fresh(bool enabled) {
-      stream_t stream {adaptive_pacing_t {enabled}, adaptive_pacing_t::clock::now(), {}, 0, std::chrono::duration_cast<duration>(std::chrono::duration<double>(1. / 60.))};
+      stream_t stream {adaptive_pacing_t {enabled}, adaptive_pacing_t::clock::now(), {}, 0, std::chrono::duration_cast<duration>(std::chrono::duration<double>(1. / 60.)), 40'000};
       EXPECT_EQ(stream.pacing.rate(fast, demand, 40'000), enabled ? seed : fast);
       stream.pacing.tick(stream.now, {}, 0, stream.period, 40'000, duration::zero());
       return stream;
@@ -130,11 +132,12 @@ namespace {
       if (payload) {
         pacing.on_ping(now, *payload);
       }
-      return pacing.tick(now, traffic, last, period, 40'000, rtt);
+      return pacing.tick(now, traffic, last, period, kbps, rtt);
     }
 
     change_t healthy() {
-      return step(ping, 30, 2'500'000, 2ms);
+      // Half a second of the encoder's bitrate.
+      return step(ping, 30, std::uint64_t {kbps} * 125 / 2, 2ms);
     }
 
     void report(std::uint32_t frame, std::uint32_t last_sent, fec_block_t block) {
@@ -679,4 +682,212 @@ TEST(VideoAdaptivePacing, PacketsPerMillisecondFollowTheRate) {
   EXPECT_EQ(packets_per_ms_at_rate(800'000'000, 1458), 68u);
   EXPECT_EQ(packets_per_ms_at_rate(1, 1458), 1u);
   EXPECT_EQ(packets_per_ms_at_rate(800'000'000, 0), 1u);
+}
+
+namespace {
+  /// One ordinary video stream as stream.cpp packetizes and paces it.
+  struct sender_case_t {
+    int kbps;
+    int fps;
+    std::size_t packet_size;
+    bool ipv6;
+    bool encrypted;
+    int fec = 20;
+    std::size_t min_parity = 2;
+
+    // stream.cpp: blocksize = packetsize + MAX_RTP_HEADER_SIZE (16), a
+    // 32-byte video_packet_raw_t, an 8-byte frame header, a 32-byte
+    // video_packet_enc_prefix_t, and Ethernet, IP and UDP overhead.
+    std::size_t blocksize() const {
+      return packet_size + 16;
+    }
+
+    std::size_t payload_blocksize() const {
+      return blocksize() - 32;
+    }
+
+    std::size_t wire_bytes() const {
+      return blocksize() + 38 + (ipv6 ? 40 : 20) + 8 + (encrypted ? 32 : 0);
+    }
+
+    /// The fixed pace adaptive pacing uses as its ceiling.
+    std::size_t ceiling_packets_per_ms() const {
+      return std::size_t(1'000'000'000ull * 80 / 100 / 1000 / blocksize() / 8);
+    }
+
+    std::uint64_t ceiling_bps() const {
+      return std::uint64_t(ceiling_packets_per_ms()) * wire_bytes() * 8000;
+    }
+
+    std::uint64_t needed_bps() const {
+      return nominal_wire_demand_bps(kbps, fps, 8, payload_blocksize(), wire_bytes(), fec, min_parity);
+    }
+
+    duration period() const {
+      return std::chrono::duration_cast<duration>(std::chrono::duration<double>(1. / fps));
+    }
+
+    /// Packets of an average frame, split into aligned FEC blocks and
+    /// FEC-expanded like stream.cpp and fec::encode do.
+    std::size_t frame_packets() const {
+      const std::uint64_t frame_bytes = (std::uint64_t(kbps) * 125 + std::uint64_t(fps) - 1) / std::uint64_t(fps);
+      // concat_and_insert() puts a video_packet_raw_t before every payload slice.
+      const auto data_bytes = std::size_t(frame_bytes) + 8;
+      const auto slices = (data_bytes + payload_blocksize() - 1) / payload_blocksize();
+      const auto payload = data_bytes + slices * (blocksize() - payload_blocksize());
+      const std::size_t max_data_per_block = std::size_t(255 * 100 / (100 + fec)) * blocksize();
+      std::size_t blocks = (payload + max_data_per_block - 1) / max_data_per_block;
+      int percentage = fec;
+      if (blocks > 4) {
+        blocks = 4;
+        percentage = 0;
+      }
+      const auto aligned = (payload / blocks + blocksize() - 1) / blocksize() * blocksize();
+      std::size_t packets = 0;
+      for (std::size_t block = 0; block < blocks && block * aligned < payload; ++block) {
+        const auto bytes = block + 1 == blocks ? payload - block * aligned : aligned;
+        packets += fec_expanded_packets((bytes + blocksize() - 1) / blocksize(), percentage, min_parity);
+      }
+      return packets;
+    }
+  };
+
+  /// Send `frames` average frames arriving once per period, carrying pacing
+  /// debt from one frame into the next like stream.cpp. Returns the most any
+  /// frame finished after the next one arrived; zero when the pace keeps up.
+  duration worst_backlog(const packet_pace_t &pace, std::size_t packets, duration period, int frames) {
+    duration next_start {};
+    duration worst {};
+    for (int frame = 0; frame < frames; ++frame) {
+      const auto arrival = period * frame;
+      const auto start = std::max(next_start, arrival);
+      next_start = start + pace.offset(packets);
+      worst = std::max(worst, next_start - (arrival + period));
+    }
+    return worst;
+  }
+
+  /// The applied pace must enforce the controller's rate, stay within the
+  /// ceiling's burst quantum, and keep up with the stream whenever its wire
+  /// demand fits under the ceiling.
+  void expect_pace_keeps_up(const sender_case_t &stream, std::uint64_t rate_bps, const char *phase) {
+    SCOPED_TRACE(testing::Message() << phase << ": " << stream.kbps << " kbps, " << stream.fps << " fps, packetSize "
+                                    << stream.packet_size << (stream.ipv6 ? ", IPv6" : ", IPv4")
+                                    << (stream.encrypted ? ", encrypted" : "") << ", rate " << rate_bps);
+    const auto pace = packet_pace_t::at_rate(rate_bps, stream.wire_bytes());
+    EXPECT_LE(rate_bps, stream.ceiling_bps());
+    EXPECT_LE(pace.packets_per_ms, stream.ceiling_packets_per_ms());
+    EXPECT_GE(pace.packets_per_ms, 1u);
+    if (stream.needed_bps() <= stream.ceiling_bps()) {
+      // The demand estimate alone, without the floor's headroom, must carry
+      // the frames the sender actually builds.
+      EXPECT_LE(packet_pace_t::at_rate(stream.needed_bps(), stream.wire_bytes()).offset(stream.frame_packets()), stream.period());
+      EXPECT_GE(rate_bps, stream.needed_bps());
+      EXPECT_LE(pace.offset(stream.frame_packets()), stream.period());
+      EXPECT_EQ(worst_backlog(pace, stream.frame_packets(), stream.period(), stream.fps * 10), duration::zero());
+    }
+  }
+
+  std::vector<sender_case_t> sender_cases() {
+    std::vector<sender_case_t> cases;
+    for (const int kbps : {500, 1'000, 3'000, 10'000, 20'000, 50'000, 150'000}) {
+      for (const int fps : {60, 120}) {
+        // A conservative WAN packet size and the usual LAN one.
+        for (const std::size_t packet_size : {std::size_t {1024}, std::size_t {1392}}) {
+          for (const bool ipv6 : {false, true}) {
+            for (const bool encrypted : {false, true}) {
+              cases.push_back({kbps, fps, packet_size, ipv6, encrypted});
+            }
+          }
+        }
+      }
+    }
+    return cases;
+  }
+}  // namespace
+
+TEST(VideoAdaptivePacing, AFixedPaceKeepsWholePacketsPerMillisecond) {
+  const auto pace = packet_pace_t::fixed(7);
+  EXPECT_EQ(pace.rate_bps, 0u);
+  EXPECT_EQ(pace.offset(0), duration::zero());
+  EXPECT_EQ(pace.offset(7), duration {1ms});
+  EXPECT_EQ(pace.offset(10), std::chrono::duration_cast<duration>(1ms) * 10 / 7);
+  EXPECT_EQ(packet_pace_t::fixed(0).packets_per_ms, 1u);
+  EXPECT_EQ(packet_pace_t::fixed(68, 1458).applied_bps(), std::uint64_t {68} * 1458 * 8000);
+}
+
+TEST(VideoAdaptivePacing, ARatePaceChargesExactWireTime) {
+  const auto pace = packet_pace_t::at_rate(20'000'000, 1474);
+  EXPECT_EQ(pace.packets_per_ms, 1u);
+  EXPECT_EQ(pace.applied_bps(), 20'000'000u);
+  // 1474 bytes at 20 Mbps is 589.6 us.
+  EXPECT_EQ(pace.offset(1), duration {589'600});
+  EXPECT_EQ(pace.offset(20), duration {11'792'000});
+  // Huge frames at tiny rates and small frames at fast rates neither overflow
+  // nor lose precision.
+  EXPECT_EQ(packet_pace_t::at_rate(1'000'000, 65'535).offset(1'000'000), std::chrono::duration_cast<duration>(std::chrono::seconds {524'280}));
+  EXPECT_EQ(packet_pace_t::at_rate(800'000'000'000, 1458).offset(4096), duration {59'719});
+  // Without a rate or a packet size it falls back to a fixed pace.
+  EXPECT_EQ(packet_pace_t::at_rate(0, 1458).rate_bps, 0u);
+  EXPECT_EQ(packet_pace_t::at_rate(20'000'000, 0).rate_bps, 0u);
+}
+
+TEST(VideoAdaptivePacing, TheTenMegabitStartupPaceKeepsUpWithoutPings) {
+  // The reported case: 10 Mbps at 60 fps, packetSize 1392, IPv4, unencrypted,
+  // 20% FEC with two parity packets minimum.
+  const sender_case_t stream {10'000, 60, 1392, false, false};
+  ASSERT_EQ(stream.payload_blocksize(), 1376u);
+  ASSERT_EQ(stream.wire_bytes(), 1474u);
+  ASSERT_EQ(stream.needed_bps(), 14'150'400u);
+  ASSERT_EQ(stream.frame_packets(), 20u);
+
+  stream_t live {adaptive_pacing_t {true}, adaptive_pacing_t::clock::now(), {}, 0, stream.period(), 10'000};
+  const auto rate_bps = live.pacing.rate(stream.ceiling_bps(), stream.needed_bps(), 10'000);
+  ASSERT_EQ(rate_bps, 20'000'000u);
+  // Whole packets per millisecond round 20 Mbps down to 11.792 Mbps, which
+  // cannot carry 20 packets every 16.7 ms.
+  EXPECT_EQ(packets_per_ms_at_rate(rate_bps, stream.wire_bytes()), 1u);
+  EXPECT_GT(packet_pace_t::fixed(1).offset(stream.frame_packets()), stream.period());
+
+  EXPECT_EQ(packet_pace_t::at_rate(rate_bps, stream.wire_bytes()).offset(stream.frame_packets()), duration {11'792'000});
+  expect_pace_keeps_up(stream, rate_bps, "startup");
+
+  // Busy video with a measured RTT but no pings never probes; the starting
+  // pace must hold.
+  live.pacing.tick(live.now, {}, 0, live.period, 10'000, duration::zero());
+  for (int i = 0; i < 20; ++i) {
+    EXPECT_EQ(live.step(std::nullopt, 30, 625'000, 2ms), std::nullopt);
+    EXPECT_EQ(live.pacing.rate(stream.ceiling_bps(), stream.needed_bps(), 10'000), rate_bps);
+  }
+}
+
+TEST(VideoAdaptivePacing, AppliedPaceKeepsUpAtStartupAcrossCommonStreams) {
+  for (const auto &stream : sender_cases()) {
+    adaptive_pacing_t pacing {true};
+    const auto rate_bps = pacing.rate(stream.ceiling_bps(), stream.needed_bps(), std::uint32_t(stream.kbps));
+    expect_pace_keeps_up(stream, rate_bps, "startup");
+  }
+}
+
+TEST(VideoAdaptivePacing, AppliedPaceKeepsUpAtTheWireFloorThroughTheRecoveryHold) {
+  for (const auto &stream : sender_cases()) {
+    const auto kbps = std::uint32_t(stream.kbps);
+    stream_t live {adaptive_pacing_t {true}, adaptive_pacing_t::clock::now(), {}, 0, stream.period(), kbps};
+    live.pacing.rate(stream.ceiling_bps(), stream.needed_bps(), kbps);
+    live.pacing.tick(live.now, {}, 0, live.period, kbps, duration::zero());
+    // Repeated failed frames cut the rate down to the wire floor.
+    for (int i = 0; i < 40; ++i) {
+      live.failures();
+      live.pacing.rate(stream.ceiling_bps(), stream.needed_bps(), kbps);
+    }
+    const auto floor_bps = live.pacing.rate(stream.ceiling_bps(), stream.needed_bps(), kbps);
+    EXPECT_EQ(floor_bps / 1000, live.pacing.snapshot().wire_floor_kbps);
+    expect_pace_keeps_up(stream, floor_bps, "loss cut");
+    // The recovery hold keeps the floor until it has seen healthy seconds.
+    for (int i = 0; i < 15; ++i) {
+      live.healthy();
+      EXPECT_EQ(live.pacing.rate(stream.ceiling_bps(), stream.needed_bps(), kbps), floor_bps);
+      expect_pace_keeps_up(stream, floor_bps, "recovery hold");
+    }
+  }
 }
