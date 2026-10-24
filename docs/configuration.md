@@ -5031,6 +5031,16 @@ default, matching the Playnite picker. Vibeshine also reads Steam's local user
 play-history and `appinfo.vdf` caches to rank installed games for recent-game
 synchronization without requiring a Steam Web API key or a public profile.
 
+### steam_big_picture_controls
+
+Windows only. Shows Vibeshine stream controls inside Steam Big Picture on the
+host: End Stream and Stop Streaming entries in the Power menu, and a status
+icon next to the clock. It needs Steam's CEF debug port, which lets any program
+on the PC control Steam while it is on. Independent of `steam_enabled`. Under
+development; see [Steam Big Picture controls](steam-big-picture-controls.md).
+
+Default: `false`
+
 ## Lutris Integration
 
 ### lutris_enabled

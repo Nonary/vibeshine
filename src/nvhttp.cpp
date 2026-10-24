@@ -47,6 +47,7 @@
 #include "host_stream_control.h"
 #ifdef _WIN32
   #include "platform/windows/hotkey_manager.h"
+  #include "platform/windows/steam_big_picture_controls.h"
 #endif
 #include "display_device.h"
 #include "display_helper_integration.h"
@@ -6584,6 +6585,9 @@ launch_session->exact_target_hold.reset();
 #ifdef _WIN32
     platf::hotkey::start_end_stream_hotkey();
     auto stop_hotkey = util::fail_guard([] { platf::hotkey::stop_end_stream_hotkey(); });
+    // Its actions end streams through nvhttp, so it lives for exactly as long as nvhttp does.
+    platf::steam::big_picture::start();
+    auto stop_big_picture = util::fail_guard([] { platf::steam::big_picture::stop(); });
 #endif
     std::thread ssl {accept_and_run, &https_server};
     std::thread tcp {accept_and_run, &http_server};
@@ -6613,6 +6617,8 @@ launch_session->exact_target_hold.reset();
 #endif
 
 #ifdef _WIN32
+    platf::steam::big_picture::stop();
+    stop_big_picture.disable();
     platf::hotkey::stop_end_stream_hotkey();
     stop_hotkey.disable();
 #endif

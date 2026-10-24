@@ -35,6 +35,7 @@ async function setupHost(page: Page, options: HostOptions = {}) {
     browse: [] as string[],
     configPatches: [] as Record<string, unknown>[],
     playniteStatus: 0,
+    bigPictureStatus: 0,
     failGoldenStatus: false,
     goldenStatusReads: 0,
     goldenExports: 0,
@@ -134,6 +135,16 @@ async function setupHost(page: Page, options: HostOptions = {}) {
       body = { status: true, removed: beforeCount - currentApps.length };
     } else if (path === '/api/steam/status') {
       body = { enabled: true, available: true, game_count: 0 };
+    } else if (path === '/api/steam/big_picture/status') {
+      calls.bigPictureStatus += 1;
+      body = {
+        status: true,
+        supported: true,
+        enabled: currentConfig.steam_big_picture_controls === true,
+        implemented: false,
+        state: 'not_implemented',
+        features: {},
+      };
     } else if (path === '/api/steam/games') {
       body = [];
     } else if (path === '/api/rtss/status') {
@@ -391,6 +402,29 @@ test('Linux integrations do not query or expose Playnite', async ({ page }) => {
   await expect(page.locator('.integrations-page')).toBeVisible();
   await expect(page.getByText('Playnite', { exact: true })).toHaveCount(0);
   expect(calls.playniteStatus).toBe(0);
+  await expect(page.getByRole('heading', { name: 'Big Picture controls' })).toHaveCount(0);
+  expect(calls.bigPictureStatus).toBe(0);
+});
+
+test('Windows Steam card offers the Big Picture controls opt-in', async ({ page }, testInfo) => {
+  const calls = await setupHost(page);
+  await page.goto('/v2/integrations');
+  await expect(page.getByRole('heading', { name: 'Big Picture controls' })).toBeVisible();
+  await expect(page.getByText('Not implemented yet', { exact: true })).toBeVisible();
+
+  const toggle = page.locator('#steam-big-picture-controls');
+  await expect(toggle).not.toBeChecked();
+  await toggle.check({ force: true });
+  await expect.poll(() => calls.configPatches).toContainEqual({ steam_big_picture_controls: true });
+  await expect(toggle).toBeChecked();
+  await page
+    .getByRole('heading', { name: 'Big Picture controls' })
+    .evaluate((heading) => heading.scrollIntoView({ block: 'center' }));
+  await page.screenshot({
+    path: testInfo.outputPath('steam-big-picture-controls.png'),
+    animations: 'disabled',
+    fullPage: false,
+  });
 });
 
 test('Linux virtual display termination requires confirmation and avoids Windows recovery APIs', async ({

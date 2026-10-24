@@ -512,6 +512,7 @@ namespace confighttp {
   void getSteamGames(resp_https_t response, req_https_t request);
   void postSteamForceSync(resp_https_t response, req_https_t request);
   void postSteamLaunch(resp_https_t response, req_https_t request);
+  void getSteamBigPictureStatus(resp_https_t response, req_https_t request);
 
 #ifdef __linux__
   void getLutrisStatus(resp_https_t response, req_https_t request);
@@ -5911,6 +5912,7 @@ namespace confighttp {
     register_api_route("^/api/steam/games$", "GET", getSteamGames);
     register_api_route("^/api/steam/force_sync$", "POST", postSteamForceSync);
     register_api_route("^/api/steam/launch$", "POST", postSteamLaunch);
+    register_api_route("^/api/steam/big_picture/status$", "GET", getSteamBigPictureStatus);
 #ifdef __linux__
     register_api_route("^/api/lutris/status$", "GET", getLutrisStatus);
     register_api_route("^/api/lutris/games$", "GET", getLutrisGames);

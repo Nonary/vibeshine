@@ -14,6 +14,15 @@ TEST(SteamConfig, DefaultsToOptInRecentSynchronizationOnBothPlatforms) {
   EXPECT_FALSE(result.sync_all_installed);
   EXPECT_EQ(result.recent_games, 10);
   EXPECT_EQ(result.recent_max_age_days, 30);
+  EXPECT_FALSE(result.big_picture_controls);
+}
+
+TEST(SteamConfig, ParsesBigPictureControlsOptIn) {
+  std::unordered_map<std::string, std::string> vars {{"steam_big_picture_controls", "on"}};
+  const auto result = config::parse_steam(vars);
+  EXPECT_TRUE(result.big_picture_controls);
+  EXPECT_FALSE(result.auto_sync);
+  EXPECT_TRUE(vars.empty());
 }
 
 TEST(SteamConfig, PreservesExplicitSyncOptIns) {

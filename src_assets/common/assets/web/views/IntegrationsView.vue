@@ -51,6 +51,14 @@ interface SteamStatus {
   exclude_games?: Array<{ id?: string; name?: string }> | string[] | number;
 }
 
+interface SteamBigPictureStatus {
+  supported?: boolean;
+  enabled?: boolean;
+  implemented?: boolean;
+  state?: string;
+  features?: Record<string, string>;
+}
+
 interface MangoHudStatus {
   enabled?: boolean;
   configured_provider?: string;
@@ -184,6 +192,8 @@ const libraryApps = ref<LibraryApp[]>([]);
 const libraryAppsLoaded = ref(false);
 const playniteLaunching = ref(false);
 const steam = ref<SteamStatus | null>(null);
+const steamBigPicture = ref<SteamBigPictureStatus | null>(null);
+const steamBigPictureError = ref('');
 const steamGames = ref<SteamGame[]>([]);
 const steamGamesLoading = ref(false);
 const steamGamesError = ref('');
@@ -500,6 +510,13 @@ async function load(preserveNotice = false): Promise<void> {
   if (!system.metadata) await system.refreshHost();
 
   const steamResult = (await Promise.allSettled([apiGet<SteamStatus>('/api/steam/status')]))[0];
+  const bigPictureResult = isWindows.value
+    ? (
+        await Promise.allSettled([
+          apiGet<SteamBigPictureStatus>('/api/steam/big_picture/status'),
+        ])
+      )[0]
+    : undefined;
   const lutrisResult = isLinux.value
     ? (await Promise.allSettled([apiGet<LutrisStatus>('/api/lutris/status')]))[0]
     : undefined;
@@ -521,6 +538,16 @@ async function load(preserveNotice = false): Promise<void> {
 
   if (steamResult.status === 'fulfilled') steam.value = steamResult.value;
   else nextErrors.steam = message(steamResult.reason, t('ui.integrations.errors.steamStatus'));
+
+  if (bigPictureResult?.status === 'fulfilled') {
+    steamBigPicture.value = bigPictureResult.value;
+    steamBigPictureError.value = '';
+  } else if (bigPictureResult) {
+    steamBigPictureError.value = message(
+      bigPictureResult.reason,
+      t('ui.integrations.errors.steamBigPictureStatus'),
+    );
+  }
 
   if (lutrisResult?.status === 'fulfilled') lutris.value = lutrisResult.value;
   else if (lutrisResult)
@@ -1234,6 +1261,28 @@ async function setSteamRecentPolicy(
   }
 }
 
+const steamBigPictureBadge = computed<{ label: string; tone: StatusTone }>(() => {
+  const value = steamBigPicture.value;
+  if (!value) return { label: t('ui.integrations.steam.bigPictureUnknown'), tone: 'neutral' };
+  if (value.implemented === false) {
+    return { label: t('ui.integrations.steam.bigPictureNotImplemented'), tone: 'neutral' };
+  }
+  return value.enabled
+    ? { label: t('ui.integrations.steam.bigPictureOn'), tone: 'success' }
+    : { label: t('ui.integrations.steam.bigPictureOff'), tone: 'neutral' };
+});
+
+async function setSteamBigPictureControls(value: boolean): Promise<void> {
+  try {
+    await apiPatch('/api/config', { steam_big_picture_controls: value });
+    steamBigPicture.value = await apiGet<SteamBigPictureStatus>('/api/steam/big_picture/status');
+    steamBigPictureError.value = '';
+    notice.value = t('ui.integrations.notices.providerUpdated');
+  } catch (cause) {
+    steamBigPictureError.value = message(cause, t('ui.integrations.errors.providerUpdateFailed'));
+  }
+}
+
 async function setSteamIncludeTools(value: boolean): Promise<void> {
   try {
     await apiPatch('/api/config', { steam_include_tools: value });
@@ -1708,6 +1757,50 @@ function libraryRequest(
                 </div>
               </div>
             </details>
+
+            <template v-if="isWindows">
+              <div class="integration-settings__heading steam-big-picture__heading">
+                <div>
+                  <h3 id="steam-big-picture-heading">
+                    {{ t('ui.integrations.steam.bigPictureTitle') }}
+                  </h3>
+                  <small>{{ t('ui.integrations.steam.bigPictureDescription') }}</small>
+                </div>
+                <StatusBadge
+                  :label="steamBigPictureBadge.label"
+                  :tone="steamBigPictureBadge.tone"
+                  compact
+                />
+              </div>
+              <p v-if="steamBigPictureError" class="integration-notice">
+                {{ steamBigPictureError }}
+              </p>
+              <div
+                class="integration-settings__rows"
+                role="group"
+                aria-labelledby="steam-big-picture-heading"
+              >
+                <SettingRow
+                  class="steam-setting-row"
+                  :label="t('ui.integrations.steam.bigPictureControls')"
+                  :description="t('ui.integrations.steam.bigPictureControlsDescription')"
+                  control-id="steam-big-picture-controls"
+                >
+                  <label class="vs-switch">
+                    <input
+                      id="steam-big-picture-controls"
+                      type="checkbox"
+                      :checked="steamBigPicture?.enabled === true"
+                      @change="
+                        setSteamBigPictureControls(($event.target as HTMLInputElement).checked)
+                      "
+                    />
+                    <span class="vs-switch__track" aria-hidden="true" />
+                    <span class="vs-sr-only">{{ t('ui.integrations.steam.bigPictureControls') }}</span>
+                  </label>
+                </SettingRow>
+              </div>
+            </template>
           </section>
 
           <section
@@ -2376,6 +2469,12 @@ function libraryRequest(
 
 .integration-row--steam .integration-details {
   margin-top: 0;
+}
+
+.steam-big-picture__heading {
+  margin-top: var(--vs-space-8);
+  padding-top: var(--vs-space-12);
+  border-top: var(--vs-border-width) solid var(--vs-color-border-subtle);
 }
 
 .integration-notice {

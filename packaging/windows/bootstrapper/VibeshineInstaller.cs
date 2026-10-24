@@ -2484,6 +2484,7 @@ namespace VibeshineInstaller {
       "playnite_launcher",
       "sunshine_display_helper",
       "sunshine_end_stream_hotkey",
+      "sunshine_steam_ui_helper",
       "vibeshine_dualsense_haptics"
     };
 

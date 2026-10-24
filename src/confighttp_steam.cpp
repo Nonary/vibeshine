@@ -8,6 +8,9 @@
 #include "steam_artwork.h"
 #include "steam_integration.h"
 #include "steam_sync_policy.h"
+#ifdef _WIN32
+  #include "platform/windows/steam_big_picture_controls.h"
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -208,5 +211,25 @@ namespace confighttp {
     } catch (const std::exception &error) {
       bad_request(response, request, error.what());
     }
+  }
+
+  /**
+   * @brief Report the state of the stream controls shown inside Steam Big Picture.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/steam/big_picture/status| GET| null}
+   */
+  void getSteamBigPictureStatus(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+#ifdef _WIN32
+    auto out = platf::steam::big_picture::status();
+#else
+    nlohmann::json out {{"status", true}, {"supported", false}, {"enabled", false}, {"implemented", false}, {"state", "unsupported"}, {"features", nlohmann::json::object()}};
+#endif
+    out["enabled"] = config::steam.big_picture_controls;
+    send_response(response, out);
   }
 }  // namespace confighttp

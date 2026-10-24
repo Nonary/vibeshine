@@ -120,6 +120,13 @@ target_link_libraries(sunshine_end_stream_hotkey PRIVATE user32 wtsapi32)
 target_compile_definitions(sunshine_end_stream_hotkey PRIVATE _WIN32_WINNT=0x0602)
 target_compile_options(sunshine_end_stream_hotkey PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
+# Runs in the interactive user's session and connects Steam Big Picture to the machine host over
+# Steam's CEF debug port. Untrusted CDP traffic stays in this process; the host verifies it like the
+# end-stream hotkey helper before acting on its requests.
+add_executable(sunshine_steam_ui_helper steam_ui_helper.cpp)
+target_compile_definitions(sunshine_steam_ui_helper PRIVATE _WIN32_WINNT=0x0602)
+target_compile_options(sunshine_steam_ui_helper PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
 # Display settings helper: detached helper that applies/reverts display settings via IPC.
 # One exe hosts both engines (legacy + v2), selected by --engine= or persisted state.
 add_executable(sunshine_display_helper
