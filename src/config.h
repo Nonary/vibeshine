@@ -260,6 +260,8 @@ namespace config {
     bool stream;
     bool install_steam_drivers;
     bool sink_capture_only;  ///< Capture the selected Windows audio sink without changing default outputs.
+    std::string format {"opus"};  ///< Encoded stream format: Opus, AC-3, or E-AC-3.
+    bool high_quality_audio {false};  ///< Higher bitrate for negotiated Dolby streams; ignored for Opus.
   };
 
   constexpr int ENCRYPTION_MODE_NEVER = 0;  // Never use video encryption, even if the client supports it
