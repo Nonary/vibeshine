@@ -119,11 +119,18 @@ with tempfile.TemporaryDirectory(prefix="dolby-session-isolation-") as temporary
     cpp = pathlib.Path(temporary) / "test.cpp"
     executable = pathlib.Path(temporary) / "test"
     cpp.write_text(program)
-    subprocess.run(
-        [compiler, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
-         str(cpp), "-o", str(executable)],
-        check=True,
-    )
+    compiler_name = pathlib.Path(compiler).name.lower()
+    if compiler_name in {"cl", "cl.exe", "clang-cl", "clang-cl.exe"}:
+        compile_command = [
+            compiler, "/nologo", "/std:c++20", "/O2", "/W4", "/WX", "/EHsc",
+            str(cpp), f"/Fe:{executable}",
+        ]
+    else:
+        compile_command = [
+            compiler, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
+            str(cpp), "-o", str(executable),
+        ]
+    subprocess.run(compile_command, check=True)
     result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=5, check=True)
     print(result.stdout, end="")
 
