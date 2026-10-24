@@ -123,6 +123,64 @@ namespace platf::steam::big_picture::policy {
     }
   }
 
+  std::optional<debug_port_request_t> parse_debug_port_request(const nlohmann::json &body) {
+    if (!body.is_object()) {
+      return std::nullopt;
+    }
+    debug_port_request_t request;
+    const auto read = [&](const char *key, bool &out, bool required) {
+      const auto found = body.find(key);
+      if (found == body.end()) {
+        return !required;
+      }
+      if (!found->is_boolean()) {
+        return false;
+      }
+      out = found->get<bool>();
+      return true;
+    };
+    if (!read("enabled", request.enabled, true) || !read("restart_steam", request.restart_steam, false) || !read("allow_during_stream", request.allow_during_stream, false)) {
+      return std::nullopt;
+    }
+    return request;
+  }
+
+  restart_decision_e restart_decision(bool steam_running, bool streaming, bool allow_during_stream, bool restart_in_progress) {
+    if (restart_in_progress) {
+      return restart_decision_e::busy;
+    }
+    if (!steam_running) {
+      return restart_decision_e::not_running;
+    }
+    if (streaming && !allow_during_stream) {
+      return restart_decision_e::stream_active;
+    }
+    return restart_decision_e::start;
+  }
+
+  std::string_view restart_decision_name(restart_decision_e decision) {
+    switch (decision) {
+      case restart_decision_e::start:
+        return "started";
+      case restart_decision_e::not_running:
+        return "not_running";
+      case restart_decision_e::stream_active:
+        return "stream_active";
+      case restart_decision_e::busy:
+        return "busy";
+    }
+    return "";
+  }
+
+  bool is_big_picture_window_title(std::wstring_view title) {
+    // "Steam Big Picture Mode" in English; Steam keeps the "Big Picture" name in most languages.
+    return title.find(L"Big Picture") != std::wstring_view::npos;
+  }
+
+  bool restart_into_big_picture(bool big_picture_open, std::optional<std::chrono::steady_clock::duration> since_big_picture_restart) {
+    return big_picture_open || (since_big_picture_restart && *since_big_picture_restart < big_picture_restart_memory);
+  }
+
   bool is_local_debugger_url(std::string_view url, int port) {
     for (const std::string_view host : {"127.0.0.1", "localhost", "[::1]"}) {
       const auto prefix = "ws://" + std::string(host) + ":" + std::to_string(port) + "/devtools/";

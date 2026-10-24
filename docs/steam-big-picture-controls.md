@@ -1,25 +1,7 @@
 # Steam Big Picture controls
 
-> **Status:** under development. The setting, the service module (helper supervision, pipe, status
-> and actions), the helper and the injected script exist; the status endpoint reports the helper's
-> state and each feature. Turning on Steam's debug port from the web UI and the compatibility check
-> button are not built yet: create the empty `.cef-enable-remote-debugging` file in the Steam folder
-> and restart Steam by hand.
-
-## Developing
-
-- **Script tests:** `npm run test:unit` in the web UI runs the script against a fake Steam
-  (`scripts/support/fake-steam.ts`).
-- **Helper tests:** `test_component_steam_big_picture_controls` (decisions) and
-  `test_component_steam_ui_helper_controller` (injection lifecycle against a fake Steam).
-- **Check a Steam build:** `tools/sunshine_steam_ui_helper.exe --check` finds everything in the running
-  Steam without patching it and prints the script's report.
-- **Try it without the service:**
-  `tools/sunshine_steam_ui_helper.exe --fixture tools/steam_ui_helper/fixtures/streaming.json`.
-  The status comes from the fixture file, which is re-read when it changes. Button presses are printed
-  and applied to the fixture status in memory, so Steam shows their effect. Ctrl+C removes the patches
-  from Steam. Add `--simulate-missing=…`, `--simulate-crash=…` or `--max-errors=N` for fault tests,
-  and `--script <path>` to use a script from a source checkout.
+> **Status:** under development. Everything below is built; the live acceptance checks and a code
+> review are still to do.
 
 When enabled with `steam_big_picture_controls`, Vibeshine shows stream controls inside Steam
 Big Picture on the Windows host:
@@ -31,6 +13,22 @@ Big Picture on the Windows host:
     (`nvhttp::disconnect_client`).
 - **Header icon** left of the clock: green while a client is connected, amber while the app runs with
   no client, hidden when idle. Selecting it opens a menu with the same actions and the stream details.
+
+## Turning it on
+
+On the **Integrations** page, in the Steam card's **Big Picture controls** section:
+
+1. Turn on **Show stream controls in Steam Big Picture**.
+2. Under **Steam debug port**, select **Turn on** and confirm. Vibeshine adds the empty
+   `.cef-enable-remote-debugging` file to the Steam folder and restarts Steam, reopening Big Picture
+   if it was open. The status changes to **Working** once Vibeshine is connected to Steam again.
+
+Restarting Steam closes games running through it, so while a stream or app is running Vibeshine
+asks a second time before restarting. If Steam isn't running, nothing restarts and Steam uses the
+debug port the next time it starts. **Turn off** deletes the file and restarts Steam the same way.
+
+**Check compatibility** runs the script's check mode in the running Steam without changing it and
+lists each control as working, using a fallback, or off. Run it after a Steam update.
 
 ## How it works
 
@@ -75,10 +73,36 @@ All formats are defined in `src/steam_big_picture_controls_protocol.h`:
 
 - Off by default. While Steam's debug port is on, any program on the PC can control Steam; the web
   UI says so before turning it on.
+- The flag file is created and deleted as the signed-in user, never as SYSTEM, and only in the folder
+  of the running `steam.exe` (or Steam's registered folder when Steam isn't running). Steam is
+  restarted under that user's token.
 - Actions are allowlisted, `disconnect` must name a currently connected client, and requests are
   rate-limited.
 
-## Status endpoint
+## API
 
-`GET /api/steam/big_picture/status` returns `supported`, `enabled`, `implemented`, `state` and a
-per-feature report (`features`).
+- `GET /api/steam/big_picture/status` returns `supported`, `enabled`, `implemented`, `state`, a
+  per-feature report (`features`), Steam's folder and whether the flag file exists (`debug_port`),
+  and the progress of a Steam restart (`steam_restart`).
+- `POST /api/steam/big_picture/debug_port` with `{"enabled": bool, "restart_steam": bool,
+  "allow_during_stream": bool}` creates or deletes the flag file and optionally restarts Steam.
+- `POST /api/steam/big_picture/check` runs the compatibility check.
+
+See [the API reference](api.md) for the details.
+
+## Developing
+
+- **Script tests:** `npm run test:unit` in the web UI runs the script against a fake Steam
+  (`scripts/support/fake-steam.ts`).
+- **Helper tests:** `test_component_steam_big_picture_controls` (decisions) and
+  `test_component_steam_ui_helper_controller` (injection lifecycle against a fake Steam).
+- **Web UI tests:** the Big Picture tests in `e2e/maintenance-parity.spec.ts` cover the debug-port
+  confirmations and the compatibility report against a mocked API.
+- **Check a Steam build:** `tools/sunshine_steam_ui_helper.exe --check` finds everything in the running
+  Steam without patching it and prints the script's report.
+- **Try it without the service:**
+  `tools/sunshine_steam_ui_helper.exe --fixture tools/steam_ui_helper/fixtures/streaming.json`.
+  The status comes from the fixture file, which is re-read when it changes. Button presses are printed
+  and applied to the fixture status in memory, so Steam shows their effect. Ctrl+C removes the patches
+  from Steam. Add `--simulate-missing=…`, `--simulate-crash=…` or `--max-errors=N` for fault tests,
+  and `--script <path>` to use a script from a source checkout.

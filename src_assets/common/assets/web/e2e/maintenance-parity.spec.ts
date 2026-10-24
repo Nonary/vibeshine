@@ -9,6 +9,7 @@ interface HostOptions {
   golden?: Record<string, unknown>;
   config?: Record<string, unknown>;
   termination?: Record<string, unknown>;
+  bigPicture?: { flagFile?: boolean; state?: string; streaming?: boolean };
 }
 
 async function setupHost(page: Page, options: HostOptions = {}) {
@@ -24,6 +25,13 @@ async function setupHost(page: Page, options: HostOptions = {}) {
     ...options.config,
   };
   const goldenStatus: Record<string, unknown> = { exists: false, ...options.golden };
+  const bigPicture = {
+    flagFile: false,
+    state: 'port_closed',
+    restart: 'idle',
+    streaming: false,
+    ...options.bigPicture,
+  };
   const calls = {
     crashManifest: 0,
     crashParts: [] as number[],
@@ -42,6 +50,8 @@ async function setupHost(page: Page, options: HostOptions = {}) {
     goldenDeletes: 0,
     displayResets: 0,
     displayTerminations: 0,
+    debugPortRequests: [] as Record<string, unknown>[],
+    compatibilityChecks: 0,
   };
   let failedPartTwo = true;
 
@@ -137,13 +147,57 @@ async function setupHost(page: Page, options: HostOptions = {}) {
       body = { enabled: true, available: true, game_count: 0 };
     } else if (path === '/api/steam/big_picture/status') {
       calls.bigPictureStatus += 1;
+      const enabled = currentConfig.steam_big_picture_controls === true;
       body = {
         status: true,
         supported: true,
-        enabled: currentConfig.steam_big_picture_controls === true,
-        implemented: false,
-        state: 'not_implemented',
+        enabled,
+        implemented: true,
+        state: enabled ? bigPicture.state : 'off',
         features: {},
+        debug_port: {
+          steam_found: true,
+          steam_root: 'C:\\Program Files (x86)\\Steam',
+          steam_running: true,
+          big_picture_open: false,
+          flag_file: bigPicture.flagFile,
+        },
+        steam_restart: { state: bigPicture.restart, detail: '' },
+      };
+    } else if (path === '/api/steam/big_picture/debug_port' && method === 'POST') {
+      const payload = request.postDataJSON() as Record<string, unknown>;
+      calls.debugPortRequests.push(payload);
+      if (bigPicture.streaming && payload.allow_during_stream !== true) {
+        body = {
+          status: false,
+          restart: 'stream_active',
+          error_code: 'stream_active',
+          error: 'A stream or app is running.',
+        };
+      } else {
+        // Steam is back and the controls are connected by the next status read.
+        bigPicture.flagFile = payload.enabled === true;
+        bigPicture.restart = 'done';
+        bigPicture.state = bigPicture.flagFile ? 'injected' : 'port_closed';
+        body = { status: true, restart: 'started' };
+      }
+    } else if (path === '/api/steam/big_picture/check' && method === 'POST') {
+      calls.compatibilityChecks += 1;
+      body = {
+        status: true,
+        report: {
+          steam_build: 'Oct 22 2026 14:39:25',
+          script_version: 1,
+          errors: 0,
+          // A check patches nothing, so found controls report "ready" rather than "ok".
+          features: {
+            focusable: 'ok',
+            header_icon: 'off: header component not found',
+            header_menu: 'ok (menu parts: learned)',
+            header_styles: 'fallback: inline styles',
+            power_menu: 'ready',
+          },
+        },
       };
     } else if (path === '/api/steam/games') {
       body = [];
@@ -406,25 +460,84 @@ test('Linux integrations do not query or expose Playnite', async ({ page }) => {
   expect(calls.bigPictureStatus).toBe(0);
 });
 
-test('Windows Steam card offers the Big Picture controls opt-in', async ({ page }, testInfo) => {
+test('Windows Steam card turns on the Big Picture controls and Steam debug port', async ({
+  page,
+}, testInfo) => {
   const calls = await setupHost(page);
   await page.goto('/v2/integrations');
   await expect(page.getByRole('heading', { name: 'Big Picture controls' })).toBeVisible();
-  await expect(page.getByText('Not implemented yet', { exact: true })).toBeVisible();
+  const debugPort = page.getByTestId('steam-debug-port');
+  await expect(debugPort).toHaveCount(0);
 
   const toggle = page.locator('#steam-big-picture-controls');
   await expect(toggle).not.toBeChecked();
   await toggle.check({ force: true });
   await expect.poll(() => calls.configPatches).toContainEqual({ steam_big_picture_controls: true });
   await expect(toggle).toBeChecked();
+  await expect(page.getByText('Steam debug port off', { exact: true })).toBeVisible();
+
+  // Turning the port on asks first and explains the risk; nothing is sent before confirming.
+  await debugPort.getByRole('button', { name: 'Turn on', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText("Turn on Steam's debug port?")).toBeVisible();
+  await expect(dialog.getByText(/any program on this PC can control Steam/)).toBeVisible();
+  expect(calls.debugPortRequests).toEqual([]);
+  await dialog.getByRole('button', { name: 'Turn on and restart Steam' }).click();
+  await expect
+    .poll(() => calls.debugPortRequests)
+    .toEqual([{ enabled: true, restart_steam: true, allow_during_stream: false }]);
+  await expect(page.getByText('Steam restarted.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Working', { exact: true })).toBeVisible();
+  await expect(debugPort.getByRole('button', { name: 'Turn off', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Check compatibility' }).click();
+  await expect(
+    page.getByText('4 of 5 controls work with Steam build Oct 22 2026 14:39:25.'),
+  ).toBeVisible();
+  const report = page.getByTestId('steam-compatibility-report');
+  await expect(
+    report.getByRole('listitem').filter({ hasText: 'Power menu entries' }),
+  ).toContainText('Works');
+  await expect(report.getByText('ready')).toHaveCount(0);
+  await expect(
+    report.getByRole('listitem').filter({ hasText: 'Header icon styling' }),
+  ).toContainText('Fallback');
+  await expect(report.getByText('off: header component not found')).toBeVisible();
+  expect(calls.compatibilityChecks).toBe(1);
+
   await page
     .getByRole('heading', { name: 'Big Picture controls' })
-    .evaluate((heading) => heading.scrollIntoView({ block: 'center' }));
+    .evaluate((heading) => heading.scrollIntoView({ block: 'start' }));
   await page.screenshot({
     path: testInfo.outputPath('steam-big-picture-controls.png'),
     animations: 'disabled',
     fullPage: false,
   });
+});
+
+test('Steam restarts during a stream need a second confirmation', async ({ page }) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: { flagFile: true, state: 'injected', streaming: true },
+  });
+  await page.goto('/v2/integrations');
+  const debugPort = page.getByTestId('steam-debug-port');
+  await debugPort.getByRole('button', { name: 'Turn off', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Turn off and restart Steam' }).click();
+
+  await expect(dialog.getByText('A stream is running')).toBeVisible();
+  expect(calls.debugPortRequests).toEqual([
+    { enabled: false, restart_steam: true, allow_during_stream: false },
+  ]);
+  await dialog.getByRole('button', { name: 'Restart Steam anyway' }).click();
+  await expect
+    .poll(() => calls.debugPortRequests)
+    .toEqual([
+      { enabled: false, restart_steam: true, allow_during_stream: false },
+      { enabled: false, restart_steam: true, allow_during_stream: true },
+    ]);
+  await expect(debugPort.getByRole('button', { name: 'Turn on', exact: true })).toBeVisible();
 });
 
 test('Linux virtual display termination requires confirmation and avoids Windows recovery APIs', async ({

@@ -96,6 +96,46 @@ namespace platf::steam::big_picture::policy {
   std::string_view codec_name(int video_format);
 
   // ---------------------------------------------------------------------------------------------
+  // Web UI: Steam's debug port and Steam restarts.
+  // ---------------------------------------------------------------------------------------------
+
+  /** Name of the empty file in the Steam folder that turns on Steam's debug port at its next start. */
+  constexpr std::string_view debug_port_flag_file = ".cef-enable-remote-debugging";
+
+  /** Body of POST /api/steam/big_picture/debug_port. */
+  struct debug_port_request_t {
+    bool enabled = false;
+    bool restart_steam = false;
+    bool allow_during_stream = false;  ///< The user confirmed restarting Steam while a stream or app runs.
+  };
+
+  /** Parse a debug_port request. "enabled" is required; every field must be a boolean when present. */
+  std::optional<debug_port_request_t> parse_debug_port_request(const nlohmann::json &body);
+
+  enum class restart_decision_e {
+    start,
+    not_running,  ///< Nothing to restart: Steam picks the change up when it starts.
+    stream_active,  ///< Restarting would close games running through Steam; needs the user's confirmation.
+    busy,  ///< A restart is already running.
+  };
+
+  /** Whether a Steam restart may start now. */
+  restart_decision_e restart_decision(bool steam_running, bool streaming, bool allow_during_stream, bool restart_in_progress);
+  std::string_view restart_decision_name(restart_decision_e decision);
+
+  /** True for the title of Steam's Big Picture window, so a restart can reopen Big Picture. Only a
+   * hint: a miss reopens Steam in its desktop mode. */
+  bool is_big_picture_window_title(std::wstring_view title);
+
+  /** How long after Vibeshine reopened Steam in Big Picture a new restart still reopens it there:
+   * Steam takes a while to start, and its Big Picture window only appears at the end. */
+  constexpr auto big_picture_restart_memory = std::chrono::minutes(2);
+
+  /** Whether a Steam restart reopens Big Picture: when its window is open now, or when the previous
+   * restart reopened Big Picture recently enough that Steam may not show it yet. */
+  bool restart_into_big_picture(bool big_picture_open, std::optional<std::chrono::steady_clock::duration> since_big_picture_restart);
+
+  // ---------------------------------------------------------------------------------------------
   // Helper side: finding and trusting Steam's debugger, injecting, and keeping the script injected.
   // ---------------------------------------------------------------------------------------------
 

@@ -101,6 +101,55 @@ TEST(SteamBigPicturePolicy, NamesCodecs) {
   EXPECT_EQ(bpm::policy::codec_name(9), "");
 }
 
+TEST(SteamBigPicturePolicy, ParsesDebugPortRequests) {
+  const auto full = bpm::policy::parse_debug_port_request({{"enabled", true}, {"restart_steam", true}, {"allow_during_stream", true}});
+  ASSERT_TRUE(full);
+  EXPECT_TRUE(full->enabled);
+  EXPECT_TRUE(full->restart_steam);
+  EXPECT_TRUE(full->allow_during_stream);
+
+  const auto minimal = bpm::policy::parse_debug_port_request({{"enabled", false}});
+  ASSERT_TRUE(minimal);
+  EXPECT_FALSE(minimal->enabled);
+  EXPECT_FALSE(minimal->restart_steam);
+  EXPECT_FALSE(minimal->allow_during_stream);
+
+  EXPECT_FALSE(bpm::policy::parse_debug_port_request(nlohmann::json::object()));
+  EXPECT_FALSE(bpm::policy::parse_debug_port_request({{"enabled", "true"}}));
+  EXPECT_FALSE(bpm::policy::parse_debug_port_request({{"enabled", true}, {"restart_steam", 1}}));
+  EXPECT_FALSE(bpm::policy::parse_debug_port_request(nlohmann::json::array()));
+  EXPECT_FALSE(bpm::policy::parse_debug_port_request(nlohmann::json::parse("not json", nullptr, false)));
+}
+
+TEST(SteamBigPicturePolicy, DecidesWhenSteamMayRestart) {
+  using decision = bpm::policy::restart_decision_e;
+  EXPECT_EQ(bpm::policy::restart_decision(true, false, false, false), decision::start);
+  EXPECT_EQ(bpm::policy::restart_decision(false, true, false, false), decision::not_running);
+  EXPECT_EQ(bpm::policy::restart_decision(true, true, false, false), decision::stream_active);
+  EXPECT_EQ(bpm::policy::restart_decision(true, true, true, false), decision::start);
+  // A running restart wins over everything, even a confirmed one.
+  EXPECT_EQ(bpm::policy::restart_decision(true, true, true, true), decision::busy);
+  EXPECT_EQ(bpm::policy::restart_decision(false, false, false, true), decision::busy);
+
+  EXPECT_EQ(bpm::policy::restart_decision_name(decision::start), "started");
+  EXPECT_EQ(bpm::policy::restart_decision_name(decision::stream_active), "stream_active");
+}
+
+TEST(SteamBigPicturePolicy, RecognisesTheBigPictureWindow) {
+  EXPECT_TRUE(bpm::policy::is_big_picture_window_title(L"Steam Big Picture Mode"));
+  EXPECT_FALSE(bpm::policy::is_big_picture_window_title(L"Steam"));
+  EXPECT_FALSE(bpm::policy::is_big_picture_window_title(L"Menu"));
+  EXPECT_FALSE(bpm::policy::is_big_picture_window_title(L""));
+}
+
+TEST(SteamBigPicturePolicy, KeepsBigPictureAcrossQuickRestarts) {
+  EXPECT_TRUE(bpm::policy::restart_into_big_picture(true, std::nullopt));
+  EXPECT_FALSE(bpm::policy::restart_into_big_picture(false, std::nullopt));
+  // Turned off and straight back on: the first restart's Big Picture Steam is still starting.
+  EXPECT_TRUE(bpm::policy::restart_into_big_picture(false, 13s));
+  EXPECT_FALSE(bpm::policy::restart_into_big_picture(false, bpm::policy::big_picture_restart_memory));
+}
+
 TEST(SteamBigPictureHelperPolicy, AcceptsOnlyLocalDebuggerUrls) {
   EXPECT_TRUE(bpm::policy::is_local_debugger_url("ws://127.0.0.1:8080/devtools/page/5253526EF14E486B05E085CA24E0375E"));
   EXPECT_TRUE(bpm::policy::is_local_debugger_url("ws://localhost:8080/devtools/page/A"));

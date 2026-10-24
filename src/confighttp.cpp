@@ -513,6 +513,8 @@ namespace confighttp {
   void postSteamForceSync(resp_https_t response, req_https_t request);
   void postSteamLaunch(resp_https_t response, req_https_t request);
   void getSteamBigPictureStatus(resp_https_t response, req_https_t request);
+  void postSteamBigPictureDebugPort(resp_https_t response, req_https_t request);
+  void postSteamBigPictureCheck(resp_https_t response, req_https_t request);
 
 #ifdef __linux__
   void getLutrisStatus(resp_https_t response, req_https_t request);
@@ -5851,6 +5853,9 @@ namespace confighttp {
     register_blocking_api_route("^/api/reset-display-device-persistence$", "POST", resetDisplayDevicePersistence);
 #if defined(_WIN32) || defined(__linux__)
     register_blocking_api_route("^/api/display/terminate_virtual$", "POST", postTerminateVirtualDisplay);
+    // Both wait on Steam: the process list and file system, or the helper's check (up to 10 s).
+    register_blocking_api_route("^/api/steam/big_picture/debug_port$", "POST", postSteamBigPictureDebugPort);
+    register_blocking_api_route("^/api/steam/big_picture/check$", "POST", postSteamBigPictureCheck);
 #endif
 #ifdef _WIN32
     register_blocking_api_route("^/api/display/export_golden$", "POST", postExportGoldenDisplay);

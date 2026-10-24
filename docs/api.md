@@ -161,6 +161,12 @@ All session metadata is stored hashed and persisted in the same state file as AP
 ## GET /api/steam/big_picture/status
 @copydoc confighttp::getSteamBigPictureStatus()
 
+## POST /api/steam/big_picture/debug_port
+@copydoc confighttp::postSteamBigPictureDebugPort()
+
+## POST /api/steam/big_picture/check
+@copydoc confighttp::postSteamBigPictureCheck()
+
 ## GET /api/vigembus/status
 @copydoc confighttp::getViGEmBusStatus()
 

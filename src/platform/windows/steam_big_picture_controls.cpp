@@ -21,6 +21,7 @@
   #include "src/stream.h"
   #include "src/utility.h"
   #include "src/webrtc_stream.h"
+  #include "steam_big_picture_debug_port.h"
   #include "steam_big_picture_pipe.h"
 
   #include <algorithm>
@@ -69,6 +70,12 @@ namespace {
     std::uint64_t generation;
   };
 
+  struct restart_state_t {
+    std::string state = "idle";  // idle, restarting, done or failed
+    std::string detail;
+    std::optional<std::chrono::steady_clock::time_point> big_picture_restarted;  // Last reopened in Big Picture.
+  };
+
   struct manager_t {
     std::mutex mutex;
     std::condition_variable_any changed;
@@ -80,8 +87,10 @@ namespace {
     std::uint64_t next_check_id = 1;
     std::vector<std::uint64_t> pending_checks;
     std::map<std::uint64_t, json> check_results;
+    restart_state_t restart;
     std::jthread worker;
     std::jthread action_worker;
+    std::jthread restart_worker;
   };
 
   manager_t &state() {
@@ -521,6 +530,45 @@ namespace {
       platf::steam::big_picture::notify_changed();
     }
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // Steam restarts for the web UI's debug-port switch, on their own thread: closing Steam takes a while.
+  // ---------------------------------------------------------------------------------------------
+  bool streaming_now() {
+    return proc::proc.current_app_id() > 0 || rtsp_stream::session_count_no_cleanup() > 0 || webrtc_stream::active_session_count() > 0;
+  }
+
+  // Call with the module lock held.
+  bool restart_running() {
+    return state().restart.state == "restarting";
+  }
+
+  bool start_restart(bool big_picture) {
+    auto &s = state();
+    std::lock_guard lock(s.mutex);
+    if (restart_running()) {
+      return false;
+    }
+    if (s.restart_worker.joinable()) {
+      s.restart_worker.join();  // Finished: it sets the final state as its last step.
+    }
+    s.restart.state = "restarting";
+    s.restart.detail.clear();
+    s.restart_worker = std::jthread([big_picture](std::stop_token stop) {
+      auto error = platf::steam::big_picture::debug_port::restart_steam(stop, big_picture);
+      if (error) {
+        BOOST_LOG(warning) << "Steam Big Picture controls: Steam restart failed: " << *error;
+      }
+      auto &s = state();
+      std::lock_guard lock(s.mutex);
+      s.restart.state = error ? "failed" : "done";
+      s.restart.detail = error ? std::move(*error) : std::string {};
+      if (!error && big_picture) {
+        s.restart.big_picture_restarted = std::chrono::steady_clock::now();
+      }
+    });
+    return true;
+  }
 }  // namespace
 
 namespace platf::steam::big_picture {
@@ -550,6 +598,7 @@ namespace platf::steam::big_picture {
     auto &s = state();
     s.worker.request_stop();
     s.action_worker.request_stop();
+    s.restart_worker.request_stop();
     s.changed.notify_all();
     if (s.worker.joinable()) {
       s.worker.join();
@@ -557,12 +606,26 @@ namespace platf::steam::big_picture {
     if (s.action_worker.joinable()) {
       s.action_worker.join();
     }
+    if (s.restart_worker.joinable()) {
+      s.restart_worker.join();
+    }
   }
 
   nlohmann::json status() {
+    // Looked up outside the lock: it reads the registry and the process list.
+    const auto steam = debug_port::inspect();
     auto &s = state();
     std::lock_guard lock(s.mutex);
     return {
+      {"debug_port",
+       {
+         {"steam_found", steam.root.has_value()},
+         {"steam_root", steam.root ? platf::to_utf8(steam.root->wstring()) : std::string {}},
+         {"steam_running", steam.running},
+         {"big_picture_open", steam.big_picture},
+         {"flag_file", steam.flag_file},
+       }},
+      {"steam_restart", {{"state", s.restart.state}, {"detail", s.restart.detail}}},
       {"status", true},
       {"supported", true},
       {"enabled", s.config.enabled},
@@ -594,6 +657,38 @@ namespace platf::steam::big_picture {
     }
     auto result = std::move(s.check_results[id]);
     s.check_results.erase(id);
+    return result;
+  }
+
+  debug_port_result_t set_debug_port(bool enabled, bool restart_steam, bool allow_during_stream) {
+    debug_port_result_t result;
+    const auto steam = debug_port::inspect();
+    std::optional<policy::restart_decision_e> decision;
+    bool big_picture = steam.big_picture;
+    if (restart_steam) {
+      const bool streaming = streaming_now();
+      auto &s = state();
+      std::lock_guard lock(s.mutex);
+      decision = policy::restart_decision(steam.running, streaming, allow_during_stream, restart_running());
+      if (const auto restarted = s.restart.big_picture_restarted) {
+        big_picture = policy::restart_into_big_picture(steam.big_picture, std::chrono::steady_clock::now() - *restarted);
+      }
+    }
+    result.restart = decision ? std::string(policy::restart_decision_name(*decision)) : "skipped";
+    if (decision == policy::restart_decision_e::stream_active || decision == policy::restart_decision_e::busy) {
+      result.error_code = result.restart;
+      result.error = *decision == policy::restart_decision_e::busy ? "Steam is already restarting." : "A stream or app is running. Restarting Steam closes games running through Steam.";
+      return result;
+    }
+    if (auto error = debug_port::set_flag_file(enabled)) {
+      result.error_code = "failed";
+      result.error = std::move(*error);
+      return result;
+    }
+    if (decision == policy::restart_decision_e::start && !start_restart(big_picture)) {
+      result.restart = policy::restart_decision_name(policy::restart_decision_e::busy);
+    }
+    result.ok = true;
     return result;
   }
 }  // namespace platf::steam::big_picture
