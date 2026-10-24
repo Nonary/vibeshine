@@ -2828,7 +2828,9 @@ namespace nvhttp {
       .supported = power_action::native_sleep_supported,
       .activity = [] {
         return power_action::activity_t {
-          .app = proc::proc.active_session_guard().has_active_app || proc::proc.running() > 0,
+          // This hook already holds the lifecycle gate. Logical ownership
+          // is sufficient for sleep admission; do not recursively poll it.
+          .app = proc::proc.current_app_id() > 0,
           .pending = rtsp_stream::has_pending_launch_or_startup(),
           .rtsp = rtsp_stream::session_count_no_cleanup() > 0,
           .running = stream::session::running_sessions.load(std::memory_order_acquire) != 0,
