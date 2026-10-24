@@ -23,7 +23,7 @@ def between(text, start, end):
     return text[begin:text.index(end, begin)]
 
 
-dolby = between(source, "    if (config.use_ac3 || config.use_eac3) {", "    // Opus encoding")
+dolby = between(source, "    if (config.use_ac3 || config.use_eac3) {", "    opus_t opus {")
 if dolby.count("samples->stop();") != 2:
     raise AssertionError("Both Dolby initialization and encoding failures must stop the session sample queue")
 if "packets->stop();" in dolby:
