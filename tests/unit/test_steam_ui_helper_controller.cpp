@@ -401,6 +401,29 @@ TEST_F(SteamUiHelperController, CheckRunsTheScriptWithoutPatching) {
   EXPECT_THROW(unreachable.check(), std::runtime_error);
 }
 
+TEST_F(SteamUiHelperController, AnswersCheckRequestsOnTheNextStep) {
+  auto &helper = make();
+  helper.step();
+  helper.request_check(7);
+  helper.step();
+  const auto results = of_type("check_result");
+  ASSERT_EQ(results.size(), 1U);
+  EXPECT_EQ(results[0]["id"], 7);
+  EXPECT_EQ(results[0]["report"]["type"], "report");
+  EXPECT_EQ(steam.injections.size(), 2U) << "the real injection plus the check";
+}
+
+TEST_F(SteamUiHelperController, ReportsCheckRequestsItCannotRun) {
+  steam.facts = {.steam_running = true};
+  auto &helper = make();
+  helper.request_check(8);
+  helper.step();
+  const auto results = of_type("check_result");
+  ASSERT_EQ(results.size(), 1U);
+  EXPECT_EQ(results[0]["id"], 8);
+  EXPECT_NE(results[0]["error"].get<std::string>().find("port_closed"), std::string::npos);
+}
+
 TEST_F(SteamUiHelperController, UnpatchRemovesTheScriptsPatches) {
   auto &helper = make();
   helper.step();

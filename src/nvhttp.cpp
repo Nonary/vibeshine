@@ -4139,6 +4139,14 @@ namespace nvhttp {
     response->close_connection_after_response = true;
   }
 
+  std::unordered_map<std::string, std::string> paired_client_names() {
+    std::unordered_map<std::string, std::string> names;
+    for (const auto &named_cert : client_root_snapshot().named_devices) {
+      names.emplace(named_cert.uuid, named_cert.name);
+    }
+    return names;
+  }
+
   nlohmann::json get_all_clients() {
     nlohmann::json named_cert_nodes = nlohmann::json::array();
     const client_t client = client_root_snapshot();

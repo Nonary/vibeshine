@@ -63,6 +63,7 @@ extern "C" {
 #include "rtsp_pending_policy.h"
 #include "send_result_observation.h"
 #include "session_history.h"
+#include "steam_big_picture_notify.h"
 #include "steam_controller_protocol.h"
 #include "stream.h"
 #include "stream_broadcast_runtime.h"
@@ -3898,6 +3899,7 @@ namespace stream {
         !session.secondary_game_client && --frame_limiter_sessions == 0;
       const bool last_rtsp_session = --running_sessions == 0;
       host_stats::rtsp_session_ended();
+      platf::steam::big_picture::notify_changed();
       bool finalized_shared_runtime = false;
 #ifdef _WIN32
       if (last_frame_limiter_session && !last_rtsp_session) {
@@ -4061,6 +4063,7 @@ namespace stream {
       const bool first_frame_limiter_session =
         !session.secondary_game_client && ++frame_limiter_sessions == 1;
       host_stats::rtsp_session_started();
+      platf::steam::big_picture::notify_changed();
       if (first_rtsp_session || first_frame_limiter_session) {
         if (first_rtsp_session) {
           if (!webrtc_stream::has_active_or_pending_sessions()) {

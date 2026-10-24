@@ -178,6 +178,7 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/steam_big_picture_controls_policy.cpp"
         "${CMAKE_SOURCE_DIR}/src/steam_big_picture_controls_policy.h"
         "${CMAKE_SOURCE_DIR}/src/steam_big_picture_controls_protocol.h"
+        "${CMAKE_SOURCE_DIR}/src/steam_big_picture_notify.h"
         "${CMAKE_SOURCE_DIR}/src/managed_app_focus.cpp"
         "${CMAKE_SOURCE_DIR}/src/steam_process_tracker.cpp"
         "${CMAKE_SOURCE_DIR}/src/steam_process_tracker.h"

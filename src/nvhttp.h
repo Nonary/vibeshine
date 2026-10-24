@@ -220,6 +220,12 @@ namespace nvhttp {
    */
   nlohmann::json get_all_clients();
 
+  /**
+   * @brief Paired client names by uuid.
+   * Unlike get_all_clients(), this never touches streaming sessions, so it is safe from any thread.
+   */
+  std::unordered_map<std::string, std::string> paired_client_names();
+
   nlohmann::json get_remote_display_layout();
   bool set_remote_display_layout(const nlohmann::json &layout, std::string &error);
 

@@ -77,6 +77,30 @@ TEST(SteamBigPicturePolicy, RejectsMalformedActions) {
   EXPECT_FALSE(bpm::policy::parse_action({{"action", "disconnect"}, {"client", std::string(bpm::protocol::max_client_id_bytes + 1, 'a')}}).has_value());
 }
 
+TEST(SteamBigPicturePolicy, GatesActionsByTimeAndConnectedClients) {
+  bpm::policy::action_gate_t gate;
+  using verdict = bpm::policy::action_gate_t::verdict_e;
+  const auto now = bpm::policy::action_gate_t::clock::time_point {} + 1h;
+  const std::vector<bpm::policy::client_t> clients {{"deck", "Steam Deck", bpm::policy::client_kind_e::moonlight}, {"web-1", "Browser", bpm::policy::client_kind_e::browser}};
+  const bpm::policy::action_t disconnect_browser {bpm::policy::action_t::kind_e::disconnect, "web-1"};
+  const bpm::policy::action_t disconnect_gone {bpm::policy::action_t::kind_e::disconnect, "left-already"};
+  const bpm::policy::action_t end_stream {bpm::policy::action_t::kind_e::end_stream, {}};
+
+  auto kind = bpm::policy::client_kind_e::moonlight;
+  EXPECT_EQ(gate.check(disconnect_gone, clients, now, kind), verdict::not_connected);
+  EXPECT_EQ(gate.check(disconnect_browser, clients, now, kind), verdict::allowed);
+  EXPECT_EQ(kind, bpm::policy::client_kind_e::browser);
+  EXPECT_EQ(gate.check(end_stream, clients, now + 1s, kind), verdict::too_soon);
+  EXPECT_EQ(gate.check(end_stream, {}, now + 2s, kind), verdict::allowed) << "End Stream needs no connected client";
+}
+
+TEST(SteamBigPicturePolicy, NamesCodecs) {
+  EXPECT_EQ(bpm::policy::codec_name(0), "H.264");
+  EXPECT_EQ(bpm::policy::codec_name(1), "HEVC");
+  EXPECT_EQ(bpm::policy::codec_name(2), "AV1");
+  EXPECT_EQ(bpm::policy::codec_name(9), "");
+}
+
 TEST(SteamBigPictureHelperPolicy, AcceptsOnlyLocalDebuggerUrls) {
   EXPECT_TRUE(bpm::policy::is_local_debugger_url("ws://127.0.0.1:8080/devtools/page/5253526EF14E486B05E085CA24E0375E"));
   EXPECT_TRUE(bpm::policy::is_local_debugger_url("ws://localhost:8080/devtools/page/A"));

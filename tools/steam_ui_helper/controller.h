@@ -83,6 +83,9 @@ namespace steam_ui_helper {
     /** Inject in check-only mode and return the "report" message. Throws when Steam can't be reached. */
     json check();
 
+    /** Run check() on the next step and emit a "check_result" message with this id. Thread-safe. */
+    void request_check(std::uint64_t id);
+
     /** Remove the script's patches from Steam, if injected (best effort). */
     void unpatch();
 
@@ -121,6 +124,7 @@ namespace steam_ui_helper {
     std::mutex mutex_;
     std::condition_variable_any changed_;
     std::deque<std::pair<std::uint64_t, cdp_event_t>> events_;
+    std::deque<std::uint64_t> checks_;
     std::optional<json> status_;
     std::uint64_t status_version_ = 0;
   };

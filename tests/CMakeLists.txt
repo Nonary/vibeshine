@@ -663,6 +663,10 @@ sunshine_register_component(NAME test_component_steam_ui_helper_controller TEST_
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/tools/steam_ui_helper/controller.cpp"
                     "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/steam_big_picture_controls_policy.cpp"
     LINK_LIBRARIES nlohmann_json::nlohmann_json)
+if(WIN32)
+    sunshine_register_component(NAME test_component_steam_big_picture_pipe TEST_SOURCE unit/platform/windows/test_steam_big_picture_pipe.cpp
+        LINK_LIBRARIES nlohmann_json::nlohmann_json)
+endif()
 sunshine_register_component(NAME test_component_steam_sync TEST_SOURCE test_steam_sync.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/steam_sync_policy.cpp"
                     "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/steam_integration.cpp"

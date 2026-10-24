@@ -71,6 +71,30 @@ namespace platf::steam::big_picture::policy {
   /** Parse an action message from the helper. Rejects unknown actions and malformed client ids. */
   std::optional<action_t> parse_action(const nlohmann::json &message);
 
+  /** Decides whether an action from Steam may run: one per two seconds, and Stop Streaming only for a
+   * client that is connected right now. */
+  class action_gate_t {
+  public:
+    using clock = std::chrono::steady_clock;
+    static constexpr auto min_interval = std::chrono::seconds(2);
+
+    enum class verdict_e {
+      allowed,
+      too_soon,
+      not_connected,
+    };
+
+    /** Check an action against the connected clients; allowed actions start the interval. Sets kind
+     * to the client's kind for an allowed disconnect. */
+    verdict_e check(const action_t &action, const std::vector<client_t> &clients, clock::time_point now, client_kind_e &kind);
+
+  private:
+    std::optional<clock::time_point> last_;
+  };
+
+  /** Display name of Vibeshine's video_format (0 H.264, 1 HEVC, 2 AV1). */
+  std::string_view codec_name(int video_format);
+
   // ---------------------------------------------------------------------------------------------
   // Helper side: finding and trusting Steam's debugger, injecting, and keeping the script injected.
   // ---------------------------------------------------------------------------------------------

@@ -15,10 +15,12 @@
  *       are printed as JSON lines, and actions are applied to the fixture status in memory so Steam
  *       shows their effect. Ctrl+C removes the patches from Steam and exits.
  *   Fault options: --simulate-missing=a,b  --simulate-crash=a,b  --max-errors=N
- *
- * The pipe mode the service uses arrives in a later phase.
+ *   sunshine_steam_ui_helper --pipe <name> --host-pid <pid>
+ *       How the service runs it: messages go both ways over the service's pipe, which must be served
+ *       by exactly that process. When the pipe closes the helper removes its patches and exits.
  */
 #include "controller.h"
+#include "src/platform/windows/steam_big_picture_pipe.h"
 #include "src/steam_big_picture_controls_protocol.h"
 #include "steam_link_windows.h"
 
@@ -52,6 +54,8 @@ namespace {
   struct arguments_t {
     bool version = false;
     bool check = false;
+    std::string pipe;
+    DWORD host_pid = 0;
     std::filesystem::path fixture;
     std::filesystem::path script;
     json inject_options = json::object();
@@ -79,6 +83,10 @@ namespace {
         args.version = true;
       } else if (arg == "--check") {
         args.check = true;
+      } else if (arg == "--pipe" && i + 1 < argc) {
+        args.pipe = argv[++i];
+      } else if (arg == "--host-pid" && i + 1 < argc) {
+        args.host_pid = static_cast<DWORD>(std::stoul(argv[++i]));
       } else if (arg == "--fixture" && i + 1 < argc) {
         args.fixture = argv[++i];
       } else if (arg == "--script" && i + 1 < argc) {
@@ -197,6 +205,78 @@ namespace {
     return 0;
   }
 
+  int run_pipe(const arguments_t &args) {
+    // The host launches us into the interactive console session; refuse to run anywhere else.
+    DWORD session = 0;
+    if (args.host_pid == 0 || !ProcessIdToSessionId(GetCurrentProcessId(), &session) || session == 0 || session != WTSGetActiveConsoleSessionId()) {
+      return 2;
+    }
+    const std::wstring name(args.pipe.begin(), args.pipe.end());
+    HANDLE pipe = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+    if (pipe == INVALID_HANDLE_VALUE) {
+      return 2;
+    }
+    ULONG server_pid = 0;
+    if (!GetNamedPipeServerProcessId(pipe, &server_pid) || server_pid != args.host_pid) {
+      CloseHandle(pipe);
+      return 2;
+    }
+    int result = 0;
+    {
+      platf::steam::big_picture::framed_pipe_t channel(pipe);
+      channel.write({{"type", protocol::message::hello}, {"protocol", protocol::version}, {"pid", GetCurrentProcessId()}});
+
+      std::optional<json> config;
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      while (!config && !channel.closed() && std::chrono::steady_clock::now() < deadline) {
+        if (auto message = channel.read(std::chrono::milliseconds(250)); message && message->value("type", std::string {}) == protocol::message::config) {
+          config = std::move(message);
+        }
+      }
+      std::string script;
+      try {
+        if (!config || config->value("protocol", 0) != protocol::version) {
+          throw std::runtime_error("no usable configuration from the host");
+        }
+        script = read_file(std::filesystem::path(config->value("script", std::string {})));
+      } catch (const std::exception &error) {
+        channel.write({{"type", protocol::message::log}, {"level", "error"}, {"message", std::string("the Steam UI helper cannot start: ") + error.what()}});
+        result = 2;
+      }
+      if (result == 0) {
+        auto inject_options = config->value("inject_options", json::object());
+        inject_options["features"] = config->value("features", json::object());
+        steam_ui_helper::windows_steam_link_t link;
+        steam_ui_helper::controller_t controller(link, {
+                                                         .script = script,
+                                                         .inject_options = std::move(inject_options),
+                                                         .emit = [&channel](const json &message) {
+                                                           channel.write(message);
+                                                         },
+                                                       });
+        std::jthread reader([&](std::stop_token stop) {
+          while (!stop.stop_requested() && !channel.closed()) {
+            const auto message = channel.read(std::chrono::milliseconds(250));
+            if (!message) {
+              continue;
+            }
+            const auto type = message->value("type", std::string {});
+            if (type == protocol::message::status) {
+              controller.set_status(message->value("status", json::object()));
+            } else if (type == protocol::message::check) {
+              controller.request_check(message->value("id", std::uint64_t {0}));
+            }
+          }
+          // The host closed the pipe: it is stopping or the feature was turned off.
+          stop_source.request_stop();
+        });
+        controller.run(stop_source.get_token());
+      }
+    }
+    CloseHandle(pipe);
+    return result;
+  }
+
   int run_check(const arguments_t &args, const std::string &script) {
     steam_ui_helper::windows_steam_link_t link;
     steam_ui_helper::controller_t controller(link, {
@@ -229,8 +309,11 @@ int main(int argc, char **argv) {
     std::cout << "sunshine_steam_ui_helper protocol " << protocol::version << std::endl;
     return 0;
   }
+  if (!args->pipe.empty()) {
+    return run_pipe(*args);
+  }
   if (!args->check && args->fixture.empty()) {
-    std::cerr << "sunshine_steam_ui_helper: the service pipe mode is not implemented yet; use --check or --fixture" << std::endl;
+    std::cerr << "sunshine_steam_ui_helper: use --check, --fixture or --pipe" << std::endl;
     return 2;
   }
   const auto script_path = args->script.empty() ? executable_dir().parent_path() / "assets" / "steam" / "big_picture_controls.js" : args->script;

@@ -1,9 +1,10 @@
 # Steam Big Picture controls
 
-> **Status:** under development. The setting, status endpoint, message formats, the injected script
-> (`src_assets/windows/assets/steam/big_picture_controls.js`) and the helper's Steam side
-> (`tools/steam_ui_helper/`) exist. The pipe between the helper and the service, and the service's
-> actions, are not implemented yet, so the status endpoint still reports `"implemented": false`.
+> **Status:** under development. The setting, the service module (helper supervision, pipe, status
+> and actions), the helper and the injected script exist; the status endpoint reports the helper's
+> state and each feature. Turning on Steam's debug port from the web UI and the compatibility check
+> button are not built yet: create the empty `.cef-enable-remote-debugging` file in the Steam folder
+> and restart Steam by hand.
 
 ## Developing
 

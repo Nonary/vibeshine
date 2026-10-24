@@ -45,6 +45,14 @@ namespace steam_ui_helper {
     changed_.notify_all();
   }
 
+  void controller_t::request_check(std::uint64_t id) {
+    {
+      std::lock_guard lock(mutex_);
+      checks_.push_back(id);
+    }
+    changed_.notify_all();
+  }
+
   void controller_t::queue_event(std::uint64_t generation, cdp_event_t event) {
     {
       std::lock_guard lock(mutex_);
@@ -56,9 +64,11 @@ namespace steam_ui_helper {
   void controller_t::step() {
     const auto now = options_.now();
     std::deque<std::pair<std::uint64_t, cdp_event_t>> events;
+    std::deque<std::uint64_t> checks;
     {
       std::lock_guard lock(mutex_);
       events.swap(events_);
+      checks.swap(checks_);
     }
     for (const auto &[generation, event] : events) {
       // Events from a probe or a dropped connection belong to an older generation.
@@ -69,6 +79,14 @@ namespace steam_ui_helper {
         handle(event, now);
       } catch (const std::exception &error) {
         log("warning", std::string("ignored an unexpected event from Steam: ") + error.what());
+      }
+    }
+    // Checks are asked for by a person, so they try to connect even during the reconnect delay.
+    for (const auto id : checks) {
+      try {
+        emit({{"type", protocol::message::check_result}, {"id", id}, {"report", check()}});
+      } catch (const std::exception &error) {
+        emit({{"type", protocol::message::check_result}, {"id", id}, {"error", error.what()}});
       }
     }
 
@@ -108,7 +126,7 @@ namespace steam_ui_helper {
       }
       std::unique_lock lock(mutex_);
       changed_.wait_for(lock, stop, std::chrono::milliseconds(500), [this] {
-        return !events_.empty() || (injected_ && !script_disabled_ && status_version_ != pushed_version_);
+        return !events_.empty() || !checks_.empty() || (injected_ && !script_disabled_ && status_version_ != pushed_version_);
       });
     }
     unpatch();

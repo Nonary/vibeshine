@@ -93,6 +93,36 @@ namespace platf::steam::big_picture::policy {
     return std::nullopt;
   }
 
+  action_gate_t::verdict_e action_gate_t::check(const action_t &action, const std::vector<client_t> &clients, clock::time_point now, client_kind_e &kind) {
+    if (last_ && now - *last_ < min_interval) {
+      return verdict_e::too_soon;
+    }
+    if (action.kind == action_t::kind_e::disconnect) {
+      const auto client = std::find_if(clients.begin(), clients.end(), [&](const client_t &candidate) {
+        return candidate.id == action.client;
+      });
+      if (client == clients.end()) {
+        return verdict_e::not_connected;
+      }
+      kind = client->kind;
+    }
+    last_ = now;
+    return verdict_e::allowed;
+  }
+
+  std::string_view codec_name(int video_format) {
+    switch (video_format) {
+      case 0:
+        return "H.264";
+      case 1:
+        return "HEVC";
+      case 2:
+        return "AV1";
+      default:
+        return "";
+    }
+  }
+
   bool is_local_debugger_url(std::string_view url, int port) {
     for (const std::string_view host : {"127.0.0.1", "localhost", "[::1]"}) {
       const auto prefix = "ws://" + std::string(host) + ":" + std::to_string(port) + "/devtools/";

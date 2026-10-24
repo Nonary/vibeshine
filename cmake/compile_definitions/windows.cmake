@@ -229,6 +229,7 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/end_stream_hotkey.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/steam_big_picture_controls.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/steam_big_picture_controls.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/steam_big_picture_pipe.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_ipc.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_ipc.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_protocol.h"

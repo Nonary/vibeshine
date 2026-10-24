@@ -94,6 +94,7 @@
   #include <unistd.h>
 #endif
 #include "process.h"
+#include "steam_big_picture_notify.h"
 #include "remote_monitor_profile_policy.h"
 #ifdef _WIN32
   #include "platform/windows/virtual_display.h"
@@ -1368,6 +1369,7 @@ namespace proc {
 
     _app = *resolved_app;
     _app_id = (int) util::from_view(_app.id);
+    platf::steam::big_picture::notify_changed();
     audio::app_started();
 #ifdef _WIN32
     platf::dualsense_usbip_gamepad::set_application_active(true);
@@ -2896,6 +2898,7 @@ namespace proc {
     _active_client_vdd_identity_token = 0;
     _app_launch_time = {};
     _app_id = -1;
+    platf::steam::big_picture::notify_changed();
 #ifdef _WIN32
     platf::dualsense_usbip_gamepad::set_application_active(false);
 #endif
