@@ -207,6 +207,7 @@ namespace platf::dxgi {
 
         return capture_e::error;
       }
+      host_cursor::tracker::note_dxgi_pointer_shape(cursor.shape_info, img_data);
     }
 
     if (frame_info.LastMouseUpdateTime.QuadPart) {

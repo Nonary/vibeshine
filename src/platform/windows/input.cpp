@@ -25,6 +25,7 @@
 #include "misc.h"
 #include "src/config.h"
 #include "src/globals.h"
+#include "src/host_cursor.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/steam_controller_protocol.h"
@@ -656,6 +657,8 @@ namespace platf {
     mi.dx = scaled_x;
     mi.dy = scaled_y;
 
+    host_cursor::tracker::note_absolute_injection(std::lround(x + touch_port.offset_x), std::lround(y + touch_port.offset_y));
+
     auto *raw = (input_raw_t *) input.get();
     if (use_vhf_keyboard_mouse(raw)) {
       if (raw->vhf->keyboard_mouse_absolute(
@@ -682,6 +685,7 @@ namespace platf {
     mi.dx = deltaX;
     mi.dy = deltaY;
 
+    host_cursor::tracker::note_relative_injection();
     send_input(i);
   }
 
