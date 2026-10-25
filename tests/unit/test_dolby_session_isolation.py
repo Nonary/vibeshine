@@ -1,136 +1,174 @@
 #!/usr/bin/env python3
-"""Regression test for Dolby encoder failures remaining local to one session.
+"""Behavioral regression tests for the production Dolby session worker.
 
-The fixture compiles the exact failure statements extracted from audio.cpp, then
-runs them against independent per-session sample queues and one shared packet
-queue. It covers both encoder initialization and frame-encoding failure without
-requiring FFmpeg, audio devices, a GPU, or a running host. Source-contract checks
-ensure the extracted statements remain the ones used by the Dolby production
-branch and that neither failure path stops the shared queue.
+The C++ fixture includes and executes the same worker and capture-cleanup
+templates used by audio.cpp. A controllable encoder injects initialization and
+encode failures; a second session verifies shared packet delivery remains alive.
+No FFmpeg library, audio device, GPU, or running host is required.
 """
 import pathlib
 import subprocess
 import sys
 import tempfile
 
-root = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path(__file__).resolve().parents[2]
+root = pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else pathlib.Path(__file__).resolve().parents[2]
 compiler = sys.argv[2] if len(sys.argv) > 2 else "c++"
 source = (root / "src/audio.cpp").read_text()
 
+if '#include "dolby_session_worker.h"' not in source:
+    raise AssertionError("audio.cpp must include the tested production worker helpers")
+if "dolby::run_encoder_worker(" not in source:
+    raise AssertionError("the Dolby production path must use the tested encoder worker")
+dolby_start = source.index("    if (config.use_ac3 || config.use_eac3) {")
+dolby_end = source.index("    opus_t opus {", dolby_start)
+if "packets->stop();" in source[dolby_start:dolby_end]:
+    raise AssertionError("the Dolby production path must not stop the shared audio packet queue")
+if "dolby::finish_capture_session(" not in source:
+    raise AssertionError("capture shutdown must use the tested production cleanup helper")
 
-def between(text, start, end):
-    begin = text.index(start)
-    return text[begin:text.index(end, begin)]
-
-
-dolby = between(source, "    if (config.use_ac3 || config.use_eac3) {", "    opus_t opus {")
-if dolby.count("samples->stop();") != 2:
-    raise AssertionError("Both Dolby initialization and encoding failures must stop the session sample queue")
-if "packets->stop();" in dolby:
-    raise AssertionError("Dolby failure must never stop the shared audio_packets queue")
-
-init_failure = between(
-    dolby,
-    "if (bitrate_kbps <= 0 || !encoder.initialize",
-    "BOOST_LOG(info) << codec_name",
-)
-encode_failure = between(
-    dolby,
-    "if (bytes < 0) {",
-    "if (webrtc_stream::has_active_sessions()",
-)
-for name, failure in (("initialization", init_failure), ("encoding", encode_failure)):
-    if "samples->stop();" not in failure or "return;" not in failure:
-        raise AssertionError(f"Dolby {name} failure no longer terminates only its own encoder worker")
-
-# Compile the actual failure statements in a deterministic two-session fixture.
-# Each failure lambda contains the production queue-stop/return statements, not
-# a reimplementation of their control flow.
 program = r"""
+#include "src/dolby_session_worker.h"
+
+#include <atomic>
 #include <cassert>
-#include <cstddef>
+#include <deque>
 #include <iostream>
+#include <memory>
+#include <optional>
+#include <thread>
+#include <utility>
 #include <vector>
 
-struct Queue {
+struct SampleQueue {
+  bool running = true;
+  std::deque<std::vector<float>> samples;
+
+  void stop() { running = false; }
+  void push(std::vector<float> sample) { samples.push_back(std::move(sample)); }
+  std::optional<std::vector<float>> pop() {
+    if (!running || samples.empty()) return std::nullopt;
+    auto sample = std::move(samples.front());
+    samples.pop_front();
+    return sample;
+  }
+};
+
+struct SharedPacketQueue {
   bool running = true;
   std::vector<int> packets;
+
   void stop() { running = false; }
-  void raise(int packet) { if (running) packets.push_back(packet); }
+  void raise(int packet) {
+    if (running) packets.push_back(packet);
+  }
+};
+
+struct FakeEncoder {
+  bool initialize_ok = true;
+  int encode_result = 1;
+
+  bool initialize() { return initialize_ok; }
+  int encode(const std::vector<float>&, std::vector<int>&) { return encode_result; }
+};
+
+struct CaptureResource {
+  bool active = true;
+  void release() { active = false; }
 };
 
 int main() {
-  Queue shared_audio_packets;
-  Queue dolby_initialization_samples;
-  Queue dolby_encoding_samples;
-  Queue opus_samples;
+  SharedPacketQueue shared_packets;
 
-  auto fail_dolby_initialization = [&]() {
-    Queue *samples = &dolby_initialization_samples;
-    PRODUCTION_INIT_FAILURE
-  };
-  auto fail_dolby_encoding = [&]() {
-    Queue *samples = &dolby_encoding_samples;
-    PRODUCTION_ENCODE_FAILURE
-  };
+  // Session A: encoder initialization fails. The production worker must stop
+  // only A's sample queue and leave the shared packet queue operational.
+  SampleQueue init_failure_samples;
+  FakeEncoder init_failure_encoder;
+  init_failure_encoder.initialize_ok = false;
+  const bool init_result = audio::dolby::run_encoder_worker(
+    init_failure_samples, init_failure_encoder,
+    [](auto& encoder) { return encoder.initialize(); },
+    [](auto& encoder, const auto& sample, auto& packet) { return encoder.encode(sample, packet); },
+    [] { return std::vector<int>{}; },
+    [&](const auto&, auto packet, int bytes) { packet.push_back(bytes); shared_packets.raise(packet.back()); }
+  );
+  assert(!init_result);
+  assert(!init_failure_samples.running);
+  assert(shared_packets.running);
 
-  // A Dolby encoder that cannot initialize must not tear down shared delivery.
-  fail_dolby_initialization();
-  assert(!dolby_initialization_samples.running);
-  assert(shared_audio_packets.running);
+  // Session B: initialization succeeds but encoding fails on its first sample.
+  SampleQueue encode_failure_samples;
+  encode_failure_samples.push({0.25f, -0.25f});
+  FakeEncoder encode_failure_encoder;
+  encode_failure_encoder.encode_result = -1;
+  const bool encode_result = audio::dolby::run_encoder_worker(
+    encode_failure_samples, encode_failure_encoder,
+    [](auto& encoder) { return encoder.initialize(); },
+    [](auto& encoder, const auto& sample, auto& packet) { return encoder.encode(sample, packet); },
+    [] { return std::vector<int>{}; },
+    [&](const auto&, auto packet, int bytes) { packet.push_back(bytes); shared_packets.raise(packet.back()); }
+  );
+  assert(!encode_result);
+  assert(!encode_failure_samples.running);
+  assert(shared_packets.running);
 
-  // The same isolation is required if initialization succeeded but encoding fails.
-  fail_dolby_encoding();
-  assert(!dolby_encoding_samples.running);
-  assert(shared_audio_packets.running);
+  // A healthy unrelated session can still deliver packets after both failures.
+  shared_packets.raise(101);
+  shared_packets.raise(102);
+  assert(shared_packets.running);
+  assert((shared_packets.packets == std::vector<int>{101, 102}));
 
-  // An unrelated Opus session must still deliver packets after either failure.
-  opus_samples.raise(1);
-  shared_audio_packets.raise(101);
-  shared_audio_packets.raise(102);
-  assert(opus_samples.running);
-  assert(opus_samples.packets.size() == 1);
-  assert(shared_audio_packets.running);
-  assert((shared_audio_packets.packets == std::vector<int>{101, 102}));
+  // The successful production path still publishes encoded packets.
+  SampleQueue success_samples;
+  success_samples.push({0.5f, -0.5f});
+  FakeEncoder success_encoder;
+  const bool success_result = audio::dolby::run_encoder_worker(
+    success_samples, success_encoder,
+    [](auto& encoder) { return encoder.initialize(); },
+    [](auto& encoder, const auto& sample, auto& packet) { return encoder.encode(sample, packet); },
+    [] { return std::vector<int>{}; },
+    [&](const auto&, auto packet, int bytes) { packet.push_back(bytes); shared_packets.raise(packet.back()); }
+  );
+  assert(success_result);
+  assert(shared_packets.running);
+  assert((shared_packets.packets == std::vector<int>{101, 102, 1}));
 
-  std::cout << "Dolby initialization/encoding failures stayed session-local; Opus delivery continued\n";
+  // The production cleanup helper must stop the worker queue, join its thread,
+  // wait for shutdown, and only then release the failed session's capture.
+  auto capture_samples = std::make_shared<SampleQueue>();
+  std::atomic<bool> worker_finished {false};
+  std::thread capture_worker([&] { worker_finished.store(true); });
+  CaptureResource capture;
+  bool shutdown_observed = false;
+  audio::dolby::finish_capture_session(
+    capture_samples, capture_worker,
+    [&] { shutdown_observed = true; },
+    [&] { assert(shutdown_observed); capture.release(); }
+  );
+  assert(!capture_samples->running);
+  assert(!capture_worker.joinable());
+  assert(worker_finished.load());
+  assert(shutdown_observed);
+  assert(!capture.active);
+
+  std::cout << "Dolby init/encode failures isolated; unrelated delivery and capture cleanup verified\n";
 }
 """
 
-
-def replace_once(text, marker, replacement):
-    if text.count(marker) != 1:
-        raise AssertionError(f"expected exactly one fixture marker: {marker}")
-    return text.replace(marker, replacement, 1)
-
-
-# Keep only the production queue-stop and return statements, removing logging
-# and surrounding FFmpeg setup which are irrelevant to this isolation contract.
-init_statements = "samples->stop();\n        return;"
-encode_statements = "samples->stop();\n          return;"
-if init_failure.count(init_statements) != 1:
-    raise AssertionError("Could not isolate production initialization failure statements")
-if encode_failure.count(encode_statements) != 1:
-    raise AssertionError("Could not isolate production encoding failure statements")
-program = replace_once(program, "PRODUCTION_INIT_FAILURE", init_statements)
-program = replace_once(program, "PRODUCTION_ENCODE_FAILURE", encode_statements)
-
 with tempfile.TemporaryDirectory(prefix="dolby-session-isolation-") as temporary:
     cpp = pathlib.Path(temporary) / "test.cpp"
-    executable = pathlib.Path(temporary) / "test"
+    executable = pathlib.Path(temporary) / ("test.exe" if pathlib.Path(compiler).name.lower() in {"cl", "cl.exe", "clang-cl", "clang-cl.exe"} else "test")
     cpp.write_text(program)
     compiler_name = pathlib.Path(compiler).name.lower()
     if compiler_name in {"cl", "cl.exe", "clang-cl", "clang-cl.exe"}:
         compile_command = [
             compiler, "/nologo", "/std:c++20", "/O2", "/W4", "/WX", "/EHsc",
-            str(cpp), f"/Fe:{executable}",
+            f"/I{root}", str(cpp), f"/Fe:{executable}",
         ]
     else:
         compile_command = [
             compiler, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
-            str(cpp), "-o", str(executable),
+            f"-I{root}", str(cpp), "-o", str(executable),
         ]
     subprocess.run(compile_command, check=True)
     result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=5, check=True)
     print(result.stdout, end="")
-
