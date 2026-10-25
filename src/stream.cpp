@@ -19,6 +19,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <sstream>
 #include <stdexcept>
 #include <system_error>
 #include <thread>
@@ -72,6 +73,8 @@ extern "C" {
 #include "utility.h"
 #include "uuid.h"
 #include "video_send.h"
+#include "video_adaptive_pacing.h"
+#include "video_fec_status.h"
 #include "video_pacing_policy.h"
 #include "webrtc_stream.h"
 #ifdef _WIN32
@@ -675,6 +678,16 @@ namespace stream {
       // Keep its per-frame pacing input atomic instead of racing on monitor config.
       std::atomic<int> pacing_bitrate_kbps {0};
 
+      // Experimental loss-responsive spacing (host_adaptive_pacing, ordinary video
+      // only). The control thread feeds pings, FEC reports and ticks; the sender
+      // asks for the rate once per frame. The mutex is held only for those short
+      // calls, never across a send or a pacing sleep.
+      bool adaptive_pacing_enabled {false};
+      std::mutex adaptive_pacing_mutex;
+      pacing::adaptive_pacing_t adaptive_pacing;
+      // Control thread only: validates and de-duplicates client FEC block reports.
+      pacing::fec_report_tracker_t fec_reports;
+
       std::unique_ptr<platf::deinit_t> qos;
     } video;
 
@@ -748,6 +761,11 @@ namespace stream {
       std::atomic<std::int64_t> client_reported_losses {0};
       std::atomic<std::uint16_t> last_encode_latency_us10 {0};  // in 1/10 ms units
       std::atomic<std::int64_t> last_frame_index {0};
+      /// Index of the newest frame whose send began, or -1 before the first one.
+      /// Written only with host_adaptive_pacing, which fences client reports on it.
+      std::atomic<std::int64_t> wire_frame_index {-1};
+      /// Frames abandoned by a socket send failure; adaptive pacing treats a rise as loss.
+      std::atomic<std::uint64_t> video_send_failures {0};
       std::chrono::steady_clock::time_point start_time {std::chrono::steady_clock::now()};
     } stats;
 
@@ -1533,9 +1551,127 @@ namespace stream {
     return 0;
   }
 
+  /**
+   * @brief Log adaptive pacing decisions. Called only when something changed, never per frame.
+   * @param events What the controller reports since its last call.
+   * @param snapshot The controller state after the change.
+   * @param old_bps The rate before the change, or zero if unknown.
+   */
+  static void log_adaptive_pacing(const pacing::adaptive_pacing_events_t &events, const pacing::adaptive_pacing_snapshot_t &snapshot, std::uint64_t old_bps) {
+    const auto mbps = [](std::uint64_t kbps) {
+      return kbps / 1000.0;
+    };
+    const auto summary = [&]() {
+      std::ostringstream out;
+      out << mbps(snapshot.current_kbps) << " Mbps (wire floor "sv << mbps(snapshot.wire_floor_kbps)
+          << ", ceiling "sv << mbps(snapshot.ceiling_kbps) << ')';
+      return out.str();
+    };
+    if (events.started) {
+      BOOST_LOG(info) << "Adaptive video pacing: start rate "sv << summary();
+    }
+    if (events.cut) {
+      BOOST_LOG(info) << "Adaptive video pacing: cut from "sv << old_bps / 1'000'000.0 << " to "sv << summary()
+                      << (events.cut_by_failed_frames ? " after repeated failed frames"sv :
+                                                        " after recovered frames missing at least 2% of packets"sv)
+                      << "; encoder bitrate unchanged"sv;
+    }
+    if (events.probe_rejected) {
+      BOOST_LOG(info) << "Adaptive video pacing: probe rejected after reported loss, restored "sv << summary()
+                      << ", next probe after "sv << snapshot.recovery_hold_seconds << " s"sv;
+    }
+    if (events.probe_retracted) {
+      BOOST_LOG(info) << "Adaptive video pacing: probe withdrawn after the wire budget changed, holding "sv << summary();
+    }
+    if (events.probe_accepted) {
+      BOOST_LOG(info) << "Adaptive video pacing: probe accepted at "sv << summary();
+    }
+    if (events.ceiling_confirmed) {
+      BOOST_LOG(info) << "Adaptive video pacing: ceiling confirmed, no further limit below "sv << mbps(snapshot.ceiling_kbps) << " Mbps"sv;
+    }
+    if (events.probe_started) {
+      BOOST_LOG(debug) << "Adaptive video pacing: probing "sv << summary();
+    }
+  }
+
+  /// Index of the newest frame whose send began, or nothing before the first one.
+  static std::optional<std::uint32_t> last_sent_frame(const session_t *session) {
+    const auto index = session->stats.wire_frame_index.load(std::memory_order_relaxed);
+    if (index < 0) {
+      return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(index);
+  }
+
+  /**
+   * @brief Sample the adaptive pacing controller from the control loop.
+   * @note Runs on the control thread, which also receives the pings and FEC reports.
+   */
+  static void tick_adaptive_pacing(session_t *session, std::chrono::steady_clock::time_point now) {
+    if (!session->video.adaptive_pacing_enabled || !session->control.peer) {
+      return;
+    }
+    const auto last_sent = last_sent_frame(session);
+    const pacing::traffic_t traffic {
+      session->stats.frames_sent.load(std::memory_order_relaxed),
+      session->stats.bytes_sent.load(std::memory_order_relaxed),
+      session->stats.packets_sent.load(std::memory_order_relaxed),
+      session->stats.video_send_failures.load(std::memory_order_relaxed),
+    };
+    const auto framerate = std::max(session->config.monitor.framerate, 1);
+    const auto period = std::chrono::nanoseconds {1'000'000'000 / framerate};
+    const auto encoder_kbps = static_cast<std::uint32_t>(std::max(session->video.pacing_bitrate_kbps.load(std::memory_order_relaxed), 0));
+    const auto rtt = std::chrono::milliseconds {session->control.peer->roundTripTime};
+
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> change;
+    pacing::adaptive_pacing_events_t events;
+    pacing::adaptive_pacing_snapshot_t snapshot;
+    {
+      std::lock_guard lg {session->video.adaptive_pacing_mutex};
+      change = session->video.adaptive_pacing.tick(now, traffic, last_sent, period, encoder_kbps, rtt);
+      events = session->video.adaptive_pacing.take_events();
+      snapshot = session->video.adaptive_pacing.snapshot();
+    }
+    // A cut that left the rate unchanged (already at the floor) is not news.
+    auto shown = events;
+    shown.cut = events.cut && change.has_value();
+    if (shown.any()) {
+      log_adaptive_pacing(shown, snapshot, change ? change->first : 0);
+    }
+  }
+
   void controlBroadcastThread(control_server_t *server) {
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
+      if (session->video.adaptive_pacing_enabled) {
+        // Standard pings show the client is alive and sending control traffic.
+        std::lock_guard lg {session->video.adaptive_pacing_mutex};
+        session->video.adaptive_pacing.on_ping(std::chrono::steady_clock::now(), payload);
+      }
+    });
+
+    // Client to host SS_FRAME_FEC_STATUS: one report per FEC block that needed
+    // recovery or was dropped. (Host to client, the same number is Set RGB LED.)
+    server->map(pacing::fec_status_packet_type, [](session_t *session, const std::string_view &payload) {
+      if (!session->video.adaptive_pacing_enabled) {
+        // Off: behave as before this type had a handler.
+        BOOST_LOG(debug)
+          << "type [Unknown] { "sv << util::hex(pacing::fec_status_packet_type).to_string_view() << " }"sv << std::endl
+          << "---data---"sv << std::endl
+          << util::hex_vec(payload) << std::endl
+          << "---end data---"sv;
+        return;
+      }
+      const auto last_sent = last_sent_frame(session);
+      const auto report = session->video.fec_reports.record(payload, last_sent);
+      if (!report) {
+        return;
+      }
+      // record() accepted it, so `last_sent` is set.
+      const auto framerate = std::max(session->config.monitor.framerate, 1);
+      const auto period = std::chrono::nanoseconds {1'000'000'000 / framerate};
+      std::lock_guard lg {session->video.adaptive_pacing_mutex};
+      session->video.adaptive_pacing.on_block(report->frame, *last_sent, period, report->block);
     });
 
     server->map(packetTypes[IDX_START_A], [&](session_t *session, const std::string_view &payload) {
@@ -1946,6 +2082,9 @@ namespace stream {
 
               send_hdr_mode(session, std::move(hdr_info));
             }
+
+            // The sample period (500 ms) is longer than this loop's ENet wait.
+            tick_adaptive_pacing(session, now);
           }
 
           ++pos;
@@ -2249,6 +2388,9 @@ namespace stream {
       // may also protect detail, bounded by unused bitrate and FEC block capacity.
       const bool pyrowave_session = session->config.monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT;
       auto fecPercentage = pyrowave_session ? 0 : config::stream.fec_percentage;
+      if (session->video.adaptive_pacing_enabled) {
+        session->stats.wire_frame_index.store(packet->frame_index(), std::memory_order_relaxed);
+      }
 
       // Insert space for packet headers
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
@@ -2384,6 +2526,8 @@ namespace stream {
 
       try {
         std::size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
+        // Host adaptive pacing replaces this with its exact rate below.
+        std::optional<pacing::packet_pace_t> adaptive_pace;
         if (pyrowave_session) {
           // Refresh the actual route periodically. Socket/interface discovery and
           // sysfs reads must not block the send path on every frame.
@@ -2449,6 +2593,44 @@ namespace stream {
                                   "client-calibrated " + std::to_string(monitor.pyrowave_peer_pace_bps / 1'000'000) + " Mbps" :
                                   std::string("default 80% of link"));
           }
+        } else if (session->video.adaptive_pacing_enabled) {
+          // The ceiling is today's fixed pace, so a stream that settles at it
+          // behaves exactly as with the option off.
+          const auto &monitor = session->config.monitor;
+          const auto stream_kbps = session->video.pacing_bitrate_kbps.load(std::memory_order_relaxed);
+          const auto ip_header_bytes = session->video.peer.address().is_v6() ? 40u : 20u;
+          const auto wire_bytes = blocksize + 38 + ip_header_bytes + 8 +
+                                  (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
+          const std::uint64_t ceiling_bps = std::uint64_t(ratecontrol_packets_in_1ms) * wire_bytes * 8000;
+          const auto needed_bps = pacing::nominal_wire_demand_bps(
+            stream_kbps,
+            monitor.framerate,
+            sizeof(frame_header),
+            payload_blocksize,
+            wire_bytes,
+            // The configured value: oversized frames zero fecPercentage for
+            // themselves only and must not move the controller's wire floor.
+            config::stream.fec_percentage,
+            min_parity_shards
+          );
+          pacing::adaptive_pacing_events_t events;
+          pacing::adaptive_pacing_snapshot_t snapshot;
+          std::uint64_t rate_bps;
+          {
+            std::lock_guard lg {session->video.adaptive_pacing_mutex};
+            rate_bps = session->video.adaptive_pacing.rate(ceiling_bps, needed_bps, std::uint32_t(std::max(stream_kbps, 0)));
+            events = session->video.adaptive_pacing.take_events();
+            if (events.any()) {
+              snapshot = session->video.adaptive_pacing.snapshot();
+            }
+          }
+          if (events.any()) {
+            log_adaptive_pacing(events, snapshot, 0);
+          }
+          // Deadlines follow the exact rate; whole packets per millisecond
+          // only bound the burst between waits.
+          adaptive_pace = pacing::packet_pace_t::at_rate(rate_bps, wire_bytes);
+          ratecontrol_packets_in_1ms = adaptive_pace->packets_per_ms;
         } else if (config::stream.pacing_batch_demand_limit) {
           const auto &monitor = session->config.monitor;
           const auto stream_kbps = session->video.pacing_bitrate_kbps.load(std::memory_order_relaxed);
@@ -2466,6 +2648,8 @@ namespace stream {
           );
         }
 
+        const auto ratecontrol_pace = adaptive_pace.value_or(pacing::packet_pace_t::fixed(ratecontrol_packets_in_1ms));
+
         // Send less than 64K in a single batch.
         // On Windows, batches above 64K seem to bypass SO_SNDBUF regardless of its size,
         // appear in "Other I/O" and begin waiting for interrupts.
@@ -2476,9 +2660,10 @@ namespace stream {
         if (!pyrowave_session) {
           max_batch_size_bytes = std::min<size_t>(max_batch_size_bytes, (size_t) config::stream.video_max_batch_size_kb * 1024);
         }
-        // The optional ordinary-stream demand bound applies to one send call;
-        // it does not cap aggregate sends before the next pacing wait.
-        if (pyrowave_session || config::stream.pacing_batch_demand_limit) {
+        // The optional ordinary-stream demand bound (also used by host adaptive
+        // pacing) applies to one send call; it does not cap aggregate sends
+        // before the next pacing wait.
+        if (pyrowave_session || config::stream.pacing_batch_demand_limit || session->video.adaptive_pacing_enabled) {
           max_batch_size_bytes = pacing::max_batch_bytes(max_batch_size_bytes, ratecontrol_packets_in_1ms, datagram_size);
         }
 
@@ -2626,9 +2811,7 @@ namespace stream {
               // to account for the last send_batch() of the previous frame.
               if (ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms ||
                   ratecontrol_frame_packets_sent == 0) {
-                auto due = ratecontrol_frame_start +
-                           std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                             ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+                auto due = ratecontrol_frame_start + ratecontrol_pace.offset(ratecontrol_frame_packets_sent);
 
                 auto now = std::chrono::steady_clock::now();
                 if (now < due) {
@@ -2682,9 +2865,7 @@ namespace stream {
               ratecontrol_frame_packets_sent += send_result.packets_accepted;
               // Keep pacing debt from accepted batches even if this block or
               // frame aborts before its final shard.
-              ratecontrol_next_frame_start = ratecontrol_frame_start +
-                                             std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                                               ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+              ratecontrol_next_frame_start = ratecontrol_frame_start + ratecontrol_pace.offset(ratecontrol_frame_packets_sent);
               if (!send_result.sent) {
                 throw video_send_failed_t {send_result.cancelled, unsigned(blockIndex), send_result.packets_accepted};
               }
@@ -2699,9 +2880,7 @@ namespace stream {
           }
 
           // remember this in case the next frame comes immediately
-          ratecontrol_next_frame_start = ratecontrol_frame_start +
-                                         std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                                           ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+          ratecontrol_next_frame_start = ratecontrol_frame_start + ratecontrol_pace.offset(ratecontrol_frame_packets_sent);
           ratecontrol_frame_packets_logger.collect_and_log((double) ratecontrol_frame_packets_sent);
 
           frame_network_latency_logger.second_point_now_and_log();
@@ -2729,11 +2908,17 @@ namespace stream {
             const auto now = std::chrono::steady_clock::now();
             if (now >= next_burst_detail_log) {
               next_burst_detail_log = now + 1s;
+              // Under adaptive pacing the packets/ms quantum only bounds bursts;
+              // the deadlines follow the applied rate.
+              const auto pacing_detail = adaptive_pace ?
+                                           std::to_string(ratecontrol_pace.applied_bps() / 1'000) + " kbps, bursts up to " +
+                                             std::to_string(ratecontrol_packets_in_1ms) + " packets" :
+                                           std::to_string(ratecontrol_packets_in_1ms) + " packets/ms";
               BOOST_LOG(debug) << "Network: frame "sv << packet->frame_index() << " send burst "sv << burst_ms << " ms for "sv
                                << ratecontrol_frame_packets_sent << " packets ("sv << burst_bytes << " UDP payload bytes, "sv
                                << burst_mbps << " Mbps); paced sleep "sv << burst_sleep_ms << " ms, in send_batch() "sv
                                << burst_send_ms << " ms (longest "sv << burst_max_send_ms << " ms), fallback batches "sv
-                               << burst_fallback_batches << ", pacing "sv << ratecontrol_packets_in_1ms << " packets/ms"sv;
+                               << burst_fallback_batches << ", pacing "sv << pacing_detail;
             }
           }
         }
@@ -2878,6 +3063,7 @@ namespace stream {
         // sequence reservation, omit frame-success counters and avoid the generic
         // exception path's 100 ms sleep for temporary socket pressure.
         if (!e.cancelled) {
+          session->stats.video_send_failures.fetch_add(1, std::memory_order_relaxed);
           ++failed_video_frames;
           const auto now = std::chrono::steady_clock::now();
           if (now >= next_send_failure_log) {
@@ -3795,6 +3981,9 @@ namespace stream {
                                          (monitor.client_requested_bitrate > 0 ? monitor.client_requested_bitrate : monitor.bitrate) :
                                          (monitor.bitrate > 0 ? monitor.bitrate : monitor.client_requested_bitrate);
       session.video.pacing_bitrate_kbps.store(pacing_bitrate_kbps, std::memory_order_relaxed);
+      // PyroWave keeps its own pacing; the controller only serves ordinary video.
+      session.video.adaptive_pacing_enabled = config::stream.host_adaptive_pacing && !pyrowave_session;
+      session.video.adaptive_pacing = pacing::adaptive_pacing_t {session.video.adaptive_pacing_enabled};
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
