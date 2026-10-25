@@ -2060,6 +2060,8 @@ namespace stream {
       bool has_processless_live_session = false;
       bool haptics_client = false;
       bool has_game_session_pending_or_draining = false;
+      std::size_t cursor_sessions = 0;
+      std::size_t cursor_client_drawing = 0;
 
       {
         auto lg = server->_sessions.lock();
@@ -2137,6 +2139,7 @@ namespace stream {
               game_runtime_active,
               session->remote_role
             );
+          ++cursor_sessions;
 
           // Remember if we have a session that's waiting for a peer to connect to the
           // control stream. This ensures the clients are properly notified even when
@@ -2186,7 +2189,8 @@ namespace stream {
               send_hdr_mode(session, std::move(hdr_info));
             }
 
-            send_cursor_updates(session, display_cursor);
+            send_cursor_updates(session, display_cursor && host_cursor::compositing_required());
+            cursor_client_drawing += session->control.cursor.client_draws;
 
             // The sample period (500 ms) is longer than this loop's ENet wait.
             tick_adaptive_pacing(session, now);
@@ -2195,6 +2199,14 @@ namespace stream {
           ++pos;
         })
       }
+
+      // Frames keep the cursor unless every session, including any still waiting for
+      // its peer, draws it itself.
+      host_cursor::set_compositing_required(host_cursor::compute_compositing_required(
+        cursor_sessions,
+        cursor_client_drawing,
+        !cursor_client_drawing || host_cursor::tracker::latest().available
+      ));
 
 #ifdef _WIN32
       if (session::running_sessions.load(std::memory_order_relaxed) > 0) {
@@ -2219,6 +2231,8 @@ namespace stream {
       // is not moving.
       server->iterate(haptics_client ? 5ms : 150ms);
     }
+
+    host_cursor::set_compositing_required(true);
 
     // Let all remaining connections know the server is shutting down
     // reason: graceful termination
