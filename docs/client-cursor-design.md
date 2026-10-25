@@ -278,8 +278,8 @@ The settings page lists "Automatic mouse mode on supported hosts" above the
 remote-desktop option, which reads "Optimize mouse for remote desktop on hosts
 without automatic mode" while automatic mode is on. `--automatic-mouse` /
 `--no-automatic-mouse` override it from the command line. With the setting off,
-no callback is registered, nothing is subscribed, Ctrl+Alt+Shift+A still reaches
-the host, and the stats overlay has no mouse line.
+no callback is registered, nothing is subscribed, and the stats overlay has no
+mouse line.
 
 #### State machine
 
@@ -312,13 +312,19 @@ the host, and the stats overlay has no mouse line.
   return after 100 ms, and at least 150 ms between automatic switches. A brief
   hide (an MMO click, a loading flicker) never switches; a camera drag that hides
   the cursor for seconds switches once each way.
+- **Typing**: Windows can hide the pointer while the user types. A hide that
+  starts within 1 s of a (non-modifier) key press waits for mouse motion and then
+  120 ms of the cursor staying hidden. The host shows the pointer again on the
+  first move, so typing never switches, while a game resumed with a key press
+  still does once the mouse moves.
 - **RELATIVE → ABSOLUTE** releases relative mode, warps the local cursor to the
   host's last reported position (inverse letterbox mapping), then re-enables
   absolute capture.
 - **Overrides**: Ctrl+Alt+Shift+M in automatic mode switches to the other mode and
   locks it; the new **Ctrl+Alt+Shift+A** locks the current mode, or returns to
   automatic if a mode is locked. A lock lasts until it is released or the session
-  ends. In fallback both keys behave as today (A only logs).
+  ends. In fallback M behaves as today; A is only intercepted once the host
+  supports automatic mode, so on other hosts it reaches the host as before.
 - **Focus and capture**: switches while the window is unfocused or capture is
   released do not warp or grab; a relative switch while unfocused releases
   capture, as game mode does today, and a click recaptures.
