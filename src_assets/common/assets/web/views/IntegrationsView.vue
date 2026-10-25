@@ -1342,6 +1342,7 @@ const steamBigPictureBadge = computed<{ label: string; tone: StatusTone }>(() =>
     script_disabled: 'danger',
     helper_failed: 'danger',
     helper_stopped: 'danger',
+    wrong_session: 'warning',
   };
   const tone = value.state ? tones[value.state] : undefined;
   if (!tone) return { label: t('ui.integrations.steam.bigPictureUnknown'), tone: 'neutral' };
@@ -1350,6 +1351,12 @@ const steamBigPictureBadge = computed<{ label: string; tone: StatusTone }>(() =>
     value.state === 'port_closed' && value.debug_port?.flag_file ? 'needs_restart' : value.state;
   return { label: t(`ui.integrations.steam.bigPictureStates.${state}`), tone };
 });
+
+// Why the controls aren't working, when Vibeshine or the script knows: a helper that couldn't start,
+// Vibeshine running outside the console session, or the script switching itself off.
+const steamBigPictureDetail = computed(() =>
+  steamBigPicture.value?.enabled ? (steamBigPicture.value.detail?.trim() ?? '') : '',
+);
 
 const steamDebugPort = computed(() => steamBigPicture.value?.debug_port ?? null);
 const steamRestarting = computed(
@@ -2010,6 +2017,13 @@ function libraryRequest(
               </div>
               <p v-if="steamBigPictureError" class="integration-notice">
                 {{ steamBigPictureError }}
+              </p>
+              <p
+                v-if="steamBigPictureDetail"
+                class="integration-notice"
+                data-testid="steam-big-picture-detail"
+              >
+                {{ steamBigPictureDetail }}
               </p>
               <div
                 class="integration-settings__rows"

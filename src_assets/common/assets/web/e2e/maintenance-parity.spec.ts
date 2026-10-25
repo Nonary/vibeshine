@@ -14,6 +14,7 @@ interface HostOptions {
     state?: string;
     streaming?: boolean;
     restartFinishes?: boolean;
+    detail?: string;
   };
 }
 
@@ -162,6 +163,7 @@ async function setupHost(page: Page, options: HostOptions = {}) {
         supported: true,
         enabled,
         state: enabled ? bigPicture.state : 'off',
+        detail: enabled ? (bigPicture.detail ?? '') : '',
         features: {},
         debug_port: {
           steam_found: true,
@@ -552,6 +554,22 @@ test('Steam restarts during a stream need a second confirmation', async ({ page 
       { enabled: false, restart_steam: true, allow_during_stream: true },
     ]);
   await expect(debugPort.getByRole('button', { name: 'Turn on', exact: true })).toBeVisible();
+});
+
+test('the Steam card says why the Big Picture controls are not running', async ({ page }) => {
+  await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: {
+      state: 'wrong_session',
+      detail:
+        'Vibeshine is running in Windows session 2, not in the console session 1 (for example over Remote Desktop).',
+    },
+  });
+  await page.goto('/v2/integrations');
+  await expect(page.getByText("Not on the PC's own session", { exact: true })).toBeVisible();
+  await expect(page.getByTestId('steam-big-picture-detail')).toHaveText(
+    /session 2, not in the console session 1/,
+  );
 });
 
 test('leaving the Integrations page stops following a Steam restart', async ({ page }) => {

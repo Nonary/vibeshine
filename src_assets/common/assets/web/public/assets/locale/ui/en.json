@@ -689,6 +689,7 @@
           "script_disabled": "Switched off after errors",
           "helper_failed": "Helper not running",
           "helper_stopped": "Helper not running",
+          "wrong_session": "Not on the PC's own session",
           "restarting": "Restarting Steam"
         },
         "bigPictureFeatures": {

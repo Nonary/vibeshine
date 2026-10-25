@@ -41,6 +41,10 @@ lists each control as working, using a fallback, or off. Run it after a Steam up
   `ready; appears the next time Big Picture opens` until then.
 - **End Stream's log label.** End Stream shares the end-stream hotkey's code, so its display cleanup
   logs `reason=end_stream_hotkey`. The line before it says `End Stream selected in Steam`.
+- **Console session only.** The helper runs in the PC's own (console) session, where Steam is on
+  screen. When Vibeshine runs outside it without its service, for example over Remote Desktop, the
+  Steam card shows **Not on the PC's own session** and explains why. Any other reason the helper
+  can't start is shown there too, and logged once.
 
 ## Tested with
 

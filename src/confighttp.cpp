@@ -5768,6 +5768,10 @@ namespace confighttp {
     // The Steam compatibility check waits up to 10 s for Steam; it must not hold up the routes above.
     thread_pool_util::ThreadPool steam_check_route_pool;
     steam_check_route_pool.start(1);
+    // The Big Picture status looks through running processes and windows, and the page polls it during
+    // a Steam restart: keep it off the request thread, and out of the queue behind slow actions.
+    thread_pool_util::ThreadPool steam_status_route_pool;
+    steam_status_route_pool.start(1);
     clear_token_route_catalog();
     auto register_api_route = [&](const char *pattern, const char *method, const auto &handler, bool stream_start = false) {
       server.resource[pattern][method] = [method, handler, stream_start](resp_https_t response, req_https_t request) {
@@ -5920,7 +5924,7 @@ namespace confighttp {
     register_api_route("^/api/steam/games$", "GET", getSteamGames);
     register_api_route("^/api/steam/force_sync$", "POST", postSteamForceSync);
     register_api_route("^/api/steam/launch$", "POST", postSteamLaunch);
-    register_api_route("^/api/steam/big_picture/status$", "GET", getSteamBigPictureStatus);
+    register_blocking_api_route("^/api/steam/big_picture/status$", "GET", getSteamBigPictureStatus, &steam_status_route_pool);
 #ifdef __linux__
     register_api_route("^/api/lutris/status$", "GET", getLutrisStatus);
     register_api_route("^/api/lutris/games$", "GET", getLutrisGames);
@@ -5999,9 +6003,11 @@ namespace confighttp {
     blocking_route_pool.stop();
     metadata_route_pool.stop();
     steam_check_route_pool.stop();
+    steam_status_route_pool.stop();
     blocking_route_pool.join();
     metadata_route_pool.join();
     steam_check_route_pool.join();
+    steam_status_route_pool.join();
     webrtc_stream::shutdown_all_sessions();
     // std::jthread (cleanup_thread) auto-joins on destruction, no need for joinable/join
   }
