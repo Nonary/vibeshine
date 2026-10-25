@@ -353,11 +353,6 @@ namespace host_cursor::tracker {
     if (tracker.running()) tracker.injections.note_absolute(x, y, clock::now());
   }
 
-  void note_relative_injection() {
-    auto &tracker = instance();
-    if (tracker.running()) tracker.injections.note_relative(clock::now());
-  }
-
   std::shared_ptr<void> dxgi_shape_source() {
     return instance().dxgi_source();
   }

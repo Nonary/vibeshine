@@ -345,7 +345,7 @@ TEST(HostCursorRegistry, DeduplicatesAndEvictsLeastRecentlyUsed) {
   EXPECT_NE(again, second);
 }
 
-TEST(HostCursorInjections, ExplainsRecentTargetsAndRelativeInput) {
+TEST(HostCursorInjections, ExplainsRecentAbsoluteTargetsOnly) {
   host_cursor::injection_history_t history;
   const auto t0 = host_cursor::clock::now();
   EXPECT_FALSE(history.explains(10, 10, t0));
@@ -357,9 +357,6 @@ TEST(HostCursorInjections, ExplainsRecentTargetsAndRelativeInput) {
   EXPECT_FALSE(history.explains(100, 100, t0 + 300ms));
   for (int i = 0; i < 8; ++i) history.note_absolute(i, 0, t0 + 3ms);
   EXPECT_FALSE(history.explains(200, 200, t0 + 4ms));  // pushed out of the history
-  history.note_relative(t0 + 10ms);
-  EXPECT_TRUE(history.explains(5000, 5000, t0 + 40ms));
-  EXPECT_FALSE(history.explains(5000, 5000, t0 + 70ms));
 }
 
 TEST(HostCursorCompositing, OnlyWhenEveryConnectedClientDraws) {

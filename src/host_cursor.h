@@ -87,17 +87,16 @@ namespace host_cursor {
 
   shape_registry_t &shapes();
 
-  // Recent input this host injected, so the tracker can tell a cursor the host
-  // (an application, a local mouse) moved from one the client moved.
+  // Recent absolute positions this host injected, so the tracker can tell a cursor
+  // the client moved from one the host moved (an application, a local mouse, or
+  // relative input such as gamepad mouse emulation, which a drawing client must follow).
   class injection_history_t {
   public:
     static constexpr std::size_t depth = 8;
     static constexpr std::int32_t tolerance_px = 3;
     static constexpr auto absolute_window = std::chrono::milliseconds(250);
-    static constexpr auto relative_quiet = std::chrono::milliseconds(50);
 
     void note_absolute(std::int32_t x, std::int32_t y, clock::time_point now);
-    void note_relative(clock::time_point now);
 
     // True when the injected input explains a cursor at (x, y).
     bool explains(std::int32_t x, std::int32_t y, clock::time_point now) const;
@@ -113,7 +112,6 @@ namespace host_cursor {
     std::array<target_t, depth> _targets {};
     std::size_t _next = 0;
     std::size_t _count = 0;
-    std::optional<clock::time_point> _last_relative;
   };
 
   // Implemented per platform (Windows only today; elsewhere supported() is false).
@@ -127,7 +125,6 @@ namespace host_cursor {
 
     // Desktop coordinates (virtual-desktop relative) of an absolute move the input path injected.
     void note_absolute_injection(std::int32_t x, std::int32_t y);
-    void note_relative_injection();
   }  // namespace tracker
 
   // Whether captured frames must still contain the cursor. True unless every

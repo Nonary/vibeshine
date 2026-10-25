@@ -685,7 +685,6 @@ namespace platf {
     mi.dx = deltaX;
     mi.dy = deltaY;
 
-    host_cursor::tracker::note_relative_injection();
     send_input(i);
   }
 

@@ -916,3 +916,28 @@ target applications before existing AppKit activation; it requests no new
 Accessibility or capture permission. Windows and macOS own cancellable workers
 joined on session destruction. An exhausted confirmation count or exit-on-first
 ends a session even if a later replacement window would otherwise be eligible.
+
+## Client-side cursor
+
+Added 2026-10-25; the design is in [docs/client-cursor-design.md](docs/client-cursor-design.md).
+
+- **Advertising.** Windows hosts set `LI_FF_HOST_CURSOR` (0x00010000) in the
+  DESCRIBE `x-ss-general.featureFlags`.
+- **Subscribing.** A client that sends `CURSOR_CONTROL` (0x5612) with `SUBSCRIBE`
+  gets a full resync, then `CURSOR_STATE`/`CURSOR_SHAPE` (0x5611/0x5610) updates on
+  reliable ENet channel 9.
+- **Per-session state.** It lives in `session_t::control.cursor` and is used only by
+  the control broadcast thread. That thread already owns the session's cipher
+  state and drops its wait to 5 ms while any session is subscribed.
+- **Tracker.**
+  - `src/platform/windows/cursor_tracker.cpp` runs only while a session holds a
+    subscription.
+  - It polls `GetCursorInfo`/`GetClipCursor` at 200 Hz on a thread bound to the input
+    desktop (no helper process: Sunshine already runs inside the console session).
+  - It prefers Desktop Duplication's pointer shapes, falling back to `GetIconInfo`.
+  - The portable policy (`src/host_cursor.cpp`) maps desktop coordinates to the
+    stream with the session's `touch_port`, the exact inverse of absolute input.
+- **Compositing.** Frames keep the cursor unless every session draws it and cursor
+  information is available. `display_base_t::capture` ANDs
+  `host_cursor::compositing_required()` with the Ctrl+Alt+Shift+N toggle. Linux
+  does not advertise the feature.

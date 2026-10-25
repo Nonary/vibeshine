@@ -90,16 +90,8 @@ namespace host_cursor {
     _count = std::min(_count + 1, depth);
   }
 
-  void injection_history_t::note_relative(clock::time_point now) {
-    std::lock_guard lg {_lock};
-    _last_relative = now;
-  }
-
   bool injection_history_t::explains(std::int32_t x, std::int32_t y, clock::time_point now) const {
     std::lock_guard lg {_lock};
-    if (_last_relative && now - *_last_relative < relative_quiet) {
-      return true;
-    }
     for (std::size_t i = 0; i < _count; ++i) {
       const auto &target = _targets[i];
       if (now - target.at <= absolute_window &&
@@ -272,9 +264,6 @@ namespace host_cursor {
     }
 
     void note_absolute_injection(std::int32_t, std::int32_t) {
-    }
-
-    void note_relative_injection() {
     }
   }  // namespace tracker
 #endif

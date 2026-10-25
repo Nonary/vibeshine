@@ -1,6 +1,6 @@
 # Client-side cursor and automatic mouse mode
 
-Status: design for `feature/client-side-cursor` (Vibeshine, moonlight-common-c, moonlight-qt).
+Status: implemented on `feature/client-side-cursor` in Vibeshine, moonlight-common-c and moonlight-qt. Unit tested; manual qualification follows [the checklist](client-cursor-test-checklist.md).
 
 ## Problem
 
@@ -195,18 +195,22 @@ at least one session is subscribed. Every 5 ms (200 Hz) it:
    Converted shapes are deduplicated by a 64-bit content hash in a bounded
    registry (64 shapes); ids are small integers.
 4. Detects host-originated moves: the input path records the last eight absolute
-   positions it injected (`note_absolute_injection`), and relative injections.
-   A new position that matches none of them (3 px tolerance), with no relative
-   injection in the last 50 ms, increments a warp serial. Comparing against a
+   positions it injected (`note_absolute_injection`). A new position that matches
+   none of them (3 px tolerance) increments a warp serial. Comparing against a
    short history rather than only the last target avoids reporting the gap
-   between recording a target and `SendInput` taking effect.
+   between recording a target and `SendInput` taking effect. Relative input
+   (gamepad mouse emulation, a trackpad-mode touchscreen) counts as a host move,
+   so a client drawing the cursor follows it.
 5. Publishes a snapshot when anything changed.
 
-On a failure it re-binds to the input desktop (rate-limited) and reports
+Once a second it re-binds to the input desktop, which catches a switch to the
+secure desktop that does not make `GetCursorInfo` fail. A desktop it cannot open
+(the secure desktop when Sunshine is not SYSTEM), or a failing poll, reports
 `available = false` until a poll succeeds.
 
-The poll is a handful of user32 calls; the tracker logs its average cost at
-debug level every 30 s.
+The poll is a handful of user32 calls: about 0.9 µs on average on a test machine
+(about 0.02% of a core at 200 Hz). The tracker logs its average and maximum cost
+at debug level every 30 s.
 
 ### Per-session state (portable)
 
@@ -235,6 +239,10 @@ tracker is available. `display_base_t::capture` ANDs it with the existing
 the DDA VRAM/RAM paths and WGC (whose helper already toggles
 `IsCursorCaptureEnabled` at runtime, no session restart). Linux capture paths are
 untouched.
+
+With cursor drawing off, a Desktop Duplication pointer-only update (the cursor
+moved, the desktop did not) used to re-encode the last frame unchanged; it now
+returns a timeout, so a moving client-drawn cursor costs no video frames.
 
 ### Linux
 
@@ -267,6 +275,13 @@ main thread.
 new and existing installs: the key is new, so every existing profile reads the
 default and nobody's `absoluteMouseMode` changes. The existing "Optimize mouse
 for remote desktop" option and Ctrl+Alt+Shift+M define the fallback behaviour.
+
+The settings page lists "Automatic mouse mode on supported hosts" above the
+remote-desktop option, which reads "Optimize mouse for remote desktop on hosts
+without automatic mode" while automatic mode is on. `--automatic-mouse` /
+`--no-automatic-mouse` override it from the command line. With the setting off,
+no callback is registered, nothing is subscribed, Ctrl+Alt+Shift+A still reaches
+the host, and the stats overlay has no mouse line.
 
 #### State machine
 
@@ -331,13 +346,15 @@ One line: `Mouse mode: absolute, local cursor (automatic)`, `relative (locked)`,
 | UAC / secure desktop | The tracker binds to Winlogon as SYSTEM; DDA captures it and supplies shapes. If binding fails (Sunshine not running as SYSTEM), `FALLBACK` and host compositing. |
 | Lock screen | Same as secure desktop. |
 | Text I-beam, resize cursors | Monochrome/masked inverting pixels become black with a 1 px white outline. |
-| Software cursor (game draws its own, hides the OS cursor) | Hidden → RELATIVE, which is what a game with a software cursor usually expects; the game's cursor stays in the video. RTS games with software cursors and absolute expectations can be locked absolute with Ctrl+Alt+Shift+A or M. |
+| Software cursor (game draws its own, hides the OS cursor) | Hidden → RELATIVE, which is what a game with a software cursor usually expects; the game's cursor stays in the video. RTS games with software cursors and absolute expectations can be switched to absolute and locked there with Ctrl+Alt+Shift+M. |
 | RTS with confined visible cursor | Large clip → ABSOLUTE_LOCAL confined to the mapped rect. |
 | Multi-monitor host | Positions off the streamed output are reported as-is; absolute input still only reaches the streamed output. |
 | Several clients | The host blends if any client needs it (`COMPOSITED` tells the others). One client's absolute moves are not reported as warps to another (v1 limitation). |
 | Reconnect | A new session subscribes again and gets a full resync; caches are per session. |
 | Pathological cursor churn | Shape sends are budgeted per session; the client keeps its last shape. |
 | Wayland client | Warping is a no-op; the cursor appears where the user left it. |
+| Gamepad mouse emulation, trackpad-mode touch | Relative input moves the host cursor away from the client's last absolute position, which the host reports as a host move, so the local cursor follows. |
+| Capture released (Ctrl+Alt+Shift+Z) or window unfocused in relative mode | The client stops drawing (`CLIENT_DRAWS` off) and the host composites again, so the video shows the cursor. |
 
 ## Testing
 
@@ -349,3 +366,25 @@ One line: `Mouse mode: absolute, local cursor (automatic)`, `relative (locked)`,
 - moonlight-qt: state machine and hysteresis timing, cursor scaling, settings
   defaults and migration.
 - Manual: `docs/client-cursor-test-checklist.md`.
+
+## Known limitations
+
+- Animated cursors show their current frame.
+- With several clients moving one host cursor, one client's absolute moves are
+  not reported to the others as host moves.
+- Shapes are capped at 256x256 on the wire; larger Windows cursors are box-filtered
+  by an integer factor (the scale in `CURSOR_STATE` accounts for it).
+- macOS and Wayland clients draw the cursor at point resolution; Wayland cannot warp.
+- The tight-clip and recentring thresholds are heuristics. A title they misjudge
+  can be locked with Ctrl+Alt+Shift+M or A.
+
+## Follow-ups
+
+- Linux hosts: PipeWire `SPA_META_Cursor` (cursor mode `METADATA`) feeding the same
+  snapshot and shape registry, then advertising the flag.
+- Vibepollo: the host side is self-contained (`host_cursor*`, `cursor_tracker`,
+  and small hooks in `stream.cpp`, `rtsp.cpp` and the Windows capture/input files),
+  so it ports directly.
+- Animated cursors: frame list plus delays in `CURSOR_SHAPE`, using the reserved
+  flags field.
+- High-DPI cursors on macOS/Wayland clients via SDL3 alternate cursor images.
