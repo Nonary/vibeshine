@@ -417,7 +417,7 @@ namespace {
     if (!channel.write({
           {"type", protocol::message::config},
           {"protocol", protocol::version},
-          {"script", script.string()},
+          {"script", platf::to_utf8(script.wstring())},
           {"features", {{"power_menu", true}, {"header_icon", true}}},
           {"inject_options", json::object()},
         })) {

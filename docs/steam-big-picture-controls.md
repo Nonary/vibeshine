@@ -80,6 +80,10 @@ Steam client (user)  <-- CDP over 127.0.0.1:8080 -->  sunshine_steam_ui_helper.e
   `#StopStreamingTo`, property names, CSS keys and method names), and fails per feature: if a lookup
   breaks after a Steam update, that feature switches off or falls back, and Steam's own menus and
   header stay intact.
+- If Steam's UI reloads three times within five minutes, each time within 30 s of an injection, the
+  helper stops injecting until the controls are turned off and on. A lost connection counts only
+  when the same `steam.exe` is still running, meaning its web helper restarted; restarting Steam,
+  including from the Integrations page, never counts.
 
 ## Message formats
 

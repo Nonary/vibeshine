@@ -9,7 +9,12 @@ interface HostOptions {
   golden?: Record<string, unknown>;
   config?: Record<string, unknown>;
   termination?: Record<string, unknown>;
-  bigPicture?: { flagFile?: boolean; state?: string; streaming?: boolean };
+  bigPicture?: {
+    flagFile?: boolean;
+    state?: string;
+    streaming?: boolean;
+    restartFinishes?: boolean;
+  };
 }
 
 async function setupHost(page: Page, options: HostOptions = {}) {
@@ -30,6 +35,7 @@ async function setupHost(page: Page, options: HostOptions = {}) {
     state: 'port_closed',
     restart: 'idle',
     streaming: false,
+    restartFinishes: true,
     ...options.bigPicture,
   };
   const calls = {
@@ -44,6 +50,8 @@ async function setupHost(page: Page, options: HostOptions = {}) {
     configPatches: [] as Record<string, unknown>[],
     playniteStatus: 0,
     bigPictureStatus: 0,
+    // While set, Big Picture status responses wait for it, as if Steam were slow to answer.
+    holdBigPictureStatus: null as Promise<void> | null,
     failGoldenStatus: false,
     goldenStatusReads: 0,
     goldenExports: 0,
@@ -147,6 +155,7 @@ async function setupHost(page: Page, options: HostOptions = {}) {
       body = { enabled: true, available: true, game_count: 0 };
     } else if (path === '/api/steam/big_picture/status') {
       calls.bigPictureStatus += 1;
+      if (calls.holdBigPictureStatus) await calls.holdBigPictureStatus;
       const enabled = currentConfig.steam_big_picture_controls === true;
       body = {
         status: true,
@@ -173,6 +182,12 @@ async function setupHost(page: Page, options: HostOptions = {}) {
           error_code: 'stream_active',
           error: 'A stream or app is running.',
         };
+      } else if (!bigPicture.restartFinishes) {
+        // Steam is still restarting for as long as the test looks.
+        bigPicture.flagFile = payload.enabled === true;
+        bigPicture.restart = 'restarting';
+        bigPicture.state = 'connecting';
+        body = { status: true, restart: 'started' };
       } else {
         // Steam is back and the controls are connected by the next status read.
         bigPicture.flagFile = payload.enabled === true;
@@ -537,6 +552,38 @@ test('Steam restarts during a stream need a second confirmation', async ({ page 
       { enabled: false, restart_steam: true, allow_during_stream: true },
     ]);
   await expect(debugPort.getByRole('button', { name: 'Turn on', exact: true })).toBeVisible();
+});
+
+test('leaving the Integrations page stops following a Steam restart', async ({ page }) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: { restartFinishes: false },
+  });
+  await page.goto('/v2/integrations');
+  await page
+    .getByTestId('steam-debug-port')
+    .getByRole('button', { name: 'Turn on', exact: true })
+    .click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Turn on and restart Steam' }).click();
+  await expect(page.getByRole('dialog')).toBeHidden();
+  // Hold the page's next poll, so it is still in flight when the page closes.
+  let release!: () => void;
+  calls.holdBigPictureStatus = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const before = calls.bigPictureStatus;
+  await expect.poll(() => calls.bigPictureStatus).toBe(before + 1);
+
+  await page
+    .getByRole('complementary', { name: 'Primary navigation' })
+    .getByRole('link', { name: 'Maintenance', exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/v2\/maintenance$/);
+  calls.holdBigPictureStatus = null;
+  release();
+  // The open page polls every 1.5 s; a poll started after leaving would show up in this time.
+  await page.waitForTimeout(4000);
+  expect(calls.bigPictureStatus).toBe(before + 1);
 });
 
 test('Linux virtual display termination requires confirmation and avoids Windows recovery APIs', async ({

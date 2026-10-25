@@ -186,6 +186,7 @@ namespace platf::steam::big_picture::policy {
     bool listening = false;
     bool owner_is_steam_webhelper = false;  ///< Owner image is <Steam root>\bin\cef\cef.win64\steamwebhelper.exe
     bool owner_in_helper_session = false;
+    std::uint64_t steam_instance = 0;  ///< Tells one run of steam.exe from the next (its start time); 0 if unknown.
   };
 
   endpoint_e endpoint_verdict(const endpoint_facts_t &facts);
@@ -212,7 +213,9 @@ namespace platf::steam::big_picture::policy {
    *
    * Failed injections back off 2 s, 4 s, 8 s ... up to 60 s. A Steam UI reload within 30 s of injecting
    * counts as a quick reload; three in five minutes trip the breaker, which stays open until reset()
-   * (a config change or a helper restart), so a script that destabilises Steam stops being re-injected. */
+   * (a config change or a helper restart), so a script that destabilises Steam stops being re-injected.
+   * The controller reports a lost connection as a reload only when the same steam.exe is still running,
+   * so restarting Steam never counts. */
   class injection_tracker_t {
   public:
     using clock = std::chrono::steady_clock;

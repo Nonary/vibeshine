@@ -96,8 +96,13 @@ namespace steam_ui_helper {
     void drop_session();
     void inject(clock::time_point now);
     void push_status();
-    // Steam's UI reloaded, or Steam closed the connection (ui_reloaded false). Both count towards the breaker.
-    void on_reload(clock::time_point now, bool ui_reloaded);
+    void forget_injection();
+    // Steam's UI reloaded in the connected page; counts towards the breaker.
+    void on_reload(clock::time_point now);
+    // Steam closed the connection while injected. Decided at a later connection: it counts towards the
+    // breaker only if the same steam.exe is running again (its web helper restarted, perhaps crashed).
+    // A Steam that exited, including Vibeshine's own restarts, is not counted.
+    void settle_close(const platf::steam::big_picture::policy::endpoint_facts_t &facts, platf::steam::big_picture::policy::endpoint_e verdict);
     json evaluate(std::string_view expression, bool await_promise = false);
     void set_state(std::string_view state, std::string detail = {});
     void log(std::string_view level, std::string message);
@@ -120,6 +125,14 @@ namespace steam_ui_helper {
     std::uint64_t pushed_version_ = 0;
     std::string steam_build_;
     std::string state_;
+    std::uint64_t steam_instance_ = 0;  // The steam.exe run the session belongs to.
+
+    struct pending_close_t {
+      clock::time_point at;
+      std::uint64_t steam_instance;
+    };
+
+    std::optional<pending_close_t> pending_close_;
 
     // Shared with event and status producers.
     std::mutex mutex_;

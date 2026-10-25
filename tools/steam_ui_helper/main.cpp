@@ -113,7 +113,7 @@ namespace {
   std::string read_file(const std::filesystem::path &path) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
-      throw std::runtime_error("cannot read " + path.string());
+      throw std::runtime_error("cannot read " + steam_ui_helper::narrow(path.native()));
     }
     std::stringstream contents;
     contents << in.rdbuf();
@@ -190,7 +190,7 @@ namespace {
               status = loaded;
             }
             controller.set_status(std::move(loaded));
-            print(std::cout, {{"type", "log"}, {"level", "info"}, {"message", "loaded " + args.fixture.string()}});
+            print(std::cout, {{"type", "log"}, {"level", "info"}, {"message", "loaded " + steam_ui_helper::narrow(args.fixture.native())}});
           } catch (const std::exception &failure) {
             print(std::cout, {{"type", "log"}, {"level", "warning"}, {"message", std::string("fixture: ") + failure.what()}});
           }
@@ -238,7 +238,8 @@ namespace {
         if (!config || config->value("protocol", 0) != protocol::version) {
           throw std::runtime_error("no usable configuration from the host");
         }
-        script = read_file(std::filesystem::path(config->value("script", std::string {})));
+        // Sent as UTF-8, like every string in the protocol's JSON.
+        script = read_file(std::filesystem::path(steam_ui_helper::widen(config->value("script", std::string {}))));
       } catch (const std::exception &error) {
         channel.write({{"type", protocol::message::log}, {"level", "error"}, {"message", std::string("the Steam UI helper cannot start: ") + error.what()}});
         result = 2;

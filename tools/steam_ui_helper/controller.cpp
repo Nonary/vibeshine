@@ -17,6 +17,10 @@ namespace steam_ui_helper {
     // Steam reports its build date through SteamClient; a missing value only leaves the report blank.
     constexpr std::string_view steam_build_expression = "SteamClient.System.GetSystemInfo().then((i) => i.sSteamBuildDate).catch(() => '')";
 
+    std::string breaker_message() {
+      return "Steam's UI reloaded or its web helper restarted " + std::to_string(policy::injection_tracker_t::breaker_reloads) + " times right after injection; no longer injecting until the helper restarts";
+    }
+
     std::string exception_text(const json &details) {
       auto text = details.value("/exception/description"_json_pointer, details.value("text", std::string("script error")));
       if (const auto line = text.find('\n'); line != std::string::npos) {
@@ -165,7 +169,11 @@ namespace steam_ui_helper {
     if (event.method == closed_event) {
       log("info", "lost the connection to Steam (Steam closed or restarted); reconnecting");
       drop_session();
-      on_reload(now, false);
+      if (injected_) {
+        forget_injection();
+        pending_close_ = pending_close_t {now, steam_instance_};
+        set_state(protocol::steam_state::connecting);
+      }
       next_connect_ = now + options_.reconnect_delay;
       return;
     }
@@ -194,7 +202,7 @@ namespace steam_ui_helper {
       main_frame_ = frame;
       default_context_ = id;
       contexts_cleared_ = false;
-      on_reload(now, true);
+      on_reload(now);
       return;
     }
     if (event.method == "Runtime.bindingCalled") {
@@ -214,13 +222,18 @@ namespace steam_ui_helper {
   }
 
   void controller_t::connect(clock::time_point now) {
-    const auto verdict = policy::endpoint_verdict(link_.endpoint_facts());
+    const auto facts = link_.endpoint_facts();
+    const auto verdict = policy::endpoint_verdict(facts);
+    settle_close(facts, verdict);
     if (verdict != policy::endpoint_e::ok) {
       set_state(policy::endpoint_state_name(verdict));
       next_connect_ = now + options_.reconnect_delay;
       return;
     }
-    set_state(protocol::steam_state::connecting);
+    steam_instance_ = facts.steam_instance;
+    if (!tracker_.tripped()) {
+      set_state(protocol::steam_state::connecting);
+    }
 
     json targets;
     try {
@@ -311,22 +324,39 @@ namespace steam_ui_helper {
     }
   }
 
-  void controller_t::on_reload(clock::time_point now, bool ui_reloaded) {
-    if (!injected_) {
-      return;
-    }
+  void controller_t::forget_injection() {
     injected_ = false;
     script_disabled_ = false;
     pushed_version_ = 0;
+  }
+
+  void controller_t::on_reload(clock::time_point now) {
+    if (!injected_) {
+      return;
+    }
+    forget_injection();
     if (tracker_.reloaded(now)) {
-      log("warning", "Steam's UI reloaded or closed " + std::to_string(policy::injection_tracker_t::breaker_reloads) + " times right after injection; no longer injecting until the helper restarts");
+      log("warning", breaker_message());
       set_state(protocol::steam_state::breaker_open);
       return;
     }
-    if (ui_reloaded) {
-      log("info", "Steam's UI reloaded; injecting again");
-    }
+    log("info", "Steam's UI reloaded; injecting again");
     set_state(protocol::steam_state::connecting);
+  }
+
+  void controller_t::settle_close(const policy::endpoint_facts_t &facts, policy::endpoint_e verdict) {
+    if (!pending_close_ || (facts.steam_running && verdict != policy::endpoint_e::ok)) {
+      return;  // Nothing to settle, or Steam is still closing or hasn't reopened its port yet.
+    }
+    const auto close = *pending_close_;
+    pending_close_.reset();
+    if (!facts.steam_running || facts.steam_instance != close.steam_instance) {
+      return;  // Steam exited or was restarted, which says nothing about the script.
+    }
+    if (tracker_.reloaded(close.at)) {
+      log("warning", breaker_message());
+      set_state(protocol::steam_state::breaker_open);
+    }
   }
 
   json controller_t::evaluate(std::string_view expression, bool await_promise) {

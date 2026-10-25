@@ -7,8 +7,16 @@
 #include "controller.h"
 
 #include <filesystem>
+#include <string>
+#include <string_view>
 
 namespace steam_ui_helper {
+  /** UTF-8 to UTF-16, for paths and URLs that arrive as JSON. */
+  std::wstring widen(std::string_view text);
+
+  /** UTF-16 to UTF-8, for paths that leave as JSON. */
+  std::string narrow(std::wstring_view text);
+
   class windows_steam_link_t final: public steam_link_t {
   public:
     platf::steam::big_picture::policy::endpoint_facts_t endpoint_facts() override;

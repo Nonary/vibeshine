@@ -22,6 +22,26 @@
 namespace steam_ui_helper {
   namespace policy = platf::steam::big_picture::policy;
 
+  std::wstring widen(std::string_view text) {
+    if (text.empty()) {
+      return {};
+    }
+    const int size = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    std::wstring wide(size, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), size);
+    return wide;
+  }
+
+  std::string narrow(std::wstring_view text) {
+    if (text.empty()) {
+      return {};
+    }
+    const int size = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    std::string utf8(size, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), utf8.data(), size, nullptr, nullptr);
+    return utf8;
+  }
+
   namespace {
     constexpr auto call_timeout = std::chrono::seconds(20);
     constexpr std::size_t max_message_bytes = 16 * 1024 * 1024;
@@ -39,34 +59,46 @@ namespace steam_ui_helper {
       throw std::runtime_error(std::string(what) + " failed (error " + std::to_string(GetLastError()) + ")");
     }
 
-    std::wstring widen(std::string_view text) {
-      if (text.empty()) {
-        return {};
-      }
-      const int size = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
-      std::wstring wide(size, L'\0');
-      MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), size);
-      return wide;
-    }
-
     DWORD session_of(DWORD pid) {
       DWORD session = 0xFFFFFFFF;
       return ProcessIdToSessionId(pid, &session) ? session : 0xFFFFFFFF;
     }
 
-    bool process_running_in_session(const wchar_t *image_name, DWORD session) {
+    struct steam_process_t {
+      bool running = false;
+      std::uint64_t instance = 0;  // Start time of the oldest steam.exe; 0 if unknown.
+    };
+
+    // The oldest steam.exe in the session is the client itself, not a short-lived steam.exe that hands
+    // it a command such as -shutdown or a steam:// link.
+    steam_process_t steam_process(DWORD session) {
+      steam_process_t steam;
       const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
       if (snapshot == INVALID_HANDLE_VALUE) {
-        return false;
+        return steam;
       }
       PROCESSENTRY32W entry {};
       entry.dwSize = sizeof(entry);
-      bool found = false;
-      for (BOOL more = Process32FirstW(snapshot, &entry); more && !found; more = Process32NextW(snapshot, &entry)) {
-        found = _wcsicmp(entry.szExeFile, image_name) == 0 && session_of(entry.th32ProcessID) == session;
+      for (BOOL more = Process32FirstW(snapshot, &entry); more; more = Process32NextW(snapshot, &entry)) {
+        if (_wcsicmp(entry.szExeFile, L"steam.exe") != 0 || session_of(entry.th32ProcessID) != session) {
+          continue;
+        }
+        steam.running = true;
+        const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
+        if (!process) {
+          continue;
+        }
+        FILETIME created {}, exited {}, kernel {}, user {};
+        if (GetProcessTimes(process, &created, &exited, &kernel, &user)) {
+          const auto started = (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+          if (steam.instance == 0 || started < steam.instance) {
+            steam.instance = started;
+          }
+        }
+        CloseHandle(process);
       }
       CloseHandle(snapshot);
-      return found;
+      return steam;
     }
 
     std::optional<std::filesystem::path> process_image(DWORD pid) {
@@ -328,7 +360,9 @@ namespace steam_ui_helper {
   policy::endpoint_facts_t windows_steam_link_t::endpoint_facts() {
     policy::endpoint_facts_t facts;
     const DWORD own_session = session_of(GetCurrentProcessId());
-    facts.steam_running = process_running_in_session(L"steam.exe", own_session);
+    const auto steam = steam_process(own_session);
+    facts.steam_running = steam.running;
+    facts.steam_instance = steam.instance;
     const auto owner = listener_pid(policy::steam_debug_port);
     if (!owner) {
       return facts;

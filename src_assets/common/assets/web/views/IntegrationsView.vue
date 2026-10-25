@@ -1429,11 +1429,16 @@ async function refreshSteamBigPicture(): Promise<void> {
   }
 }
 
+// Set when the page closes: a status request still in flight must not start another poll.
+let unmounted = false;
+
 // Follow a Steam restart until Steam is back and the controls have reconnected, or give up after 90 s.
 function watchSteamRestart(started = Date.now()): void {
   window.clearTimeout(steamRestartTimer);
+  if (unmounted) return;
   steamRestartTimer = window.setTimeout(async () => {
     await refreshSteamBigPicture();
+    if (unmounted) return;
     const value = steamBigPicture.value;
     const restart = value?.steam_restart?.state;
     if (restart === 'failed') {
@@ -1453,7 +1458,10 @@ function watchSteamRestart(started = Date.now()): void {
   }, 1500);
 }
 
-onBeforeUnmount(() => window.clearTimeout(steamRestartTimer));
+onBeforeUnmount(() => {
+  unmounted = true;
+  window.clearTimeout(steamRestartTimer);
+});
 
 async function runSteamDebugPortAction(action: SteamDebugPortAction): Promise<void> {
   actionBusy.value = true;

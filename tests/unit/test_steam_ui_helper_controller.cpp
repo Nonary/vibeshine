@@ -285,6 +285,49 @@ TEST_F(SteamUiHelperController, KeepsInjectingWhenReloadsAreSlow) {
   EXPECT_EQ(states().back(), "injected");
 }
 
+TEST_F(SteamUiHelperController, NeverCountsSteamRestartsTowardsTheBreaker) {
+  const policy::endpoint_facts_t closing {.steam_running = true, .steam_instance = 1};
+  steam.facts.steam_instance = 1;
+  auto &helper = make();
+  helper.step();
+  for (int i = 0; i < 3; ++i) {
+    now += 5s;
+    steam.fire(std::string(steam_ui_helper::closed_event));
+    helper.step();
+    // Steam's port closes before steam.exe exits; nothing is decided until Steam is gone or back.
+    steam.facts = closing;
+    steam.facts.steam_instance = static_cast<std::uint64_t>(i + 1);
+    now += 2s;
+    helper.step();
+    steam.facts = {};
+    now += 2s;
+    helper.step();
+    steam.facts = {.steam_running = true, .listening = true, .owner_is_steam_webhelper = true, .owner_in_helper_session = true, .steam_instance = static_cast<std::uint64_t>(i + 2)};
+    now += 2s;
+    helper.step();
+  }
+  EXPECT_EQ(steam.injections.size(), 4U);
+  EXPECT_EQ(states().back(), "injected");
+}
+
+TEST_F(SteamUiHelperController, CountsQuickWebHelperRestartsUnderTheSameSteam) {
+  steam.facts.steam_instance = 1;
+  auto &helper = make();
+  helper.step();
+  for (int i = 0; i < 3; ++i) {
+    now += 5s;
+    steam.fire(std::string(steam_ui_helper::closed_event));
+    helper.step();
+    now += 2s;
+    helper.step();  // The same steam.exe opened its port again.
+  }
+  EXPECT_EQ(steam.injections.size(), 3U);
+  EXPECT_EQ(states().back(), "breaker_open");
+  now += 1h;
+  helper.step();
+  EXPECT_EQ(steam.injections.size(), 3U);
+}
+
 TEST_F(SteamUiHelperController, BacksOffWhileInjectionFails) {
   steam.failing_injections = 2;
   auto &helper = make();
