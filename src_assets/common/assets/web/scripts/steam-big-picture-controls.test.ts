@@ -57,7 +57,7 @@ test('injects into a healthy Steam and reports every feature', () => {
     header_styles: 'ok',
     power_menu: 'waiting for the Power menu to open',
     header_menu: 'ok (menu parts: search)',
-    header_icon: 'waiting for Big Picture to open',
+    header_icon: 'ready; appears the next time Big Picture opens',
   });
   assert.equal(typeof steam.window.VibeshineBPM.setStatus, 'function');
   assert.equal('__vibeshineOptions' in steam.window, false);

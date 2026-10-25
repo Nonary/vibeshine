@@ -123,6 +123,41 @@ namespace platf::steam::big_picture::policy {
     }
   }
 
+  std::string steam_state_log(std::string_view state) {
+    namespace steam_state = protocol::steam_state;
+    // The helper logs its connection and the injection report itself.
+    if (state == steam_state::injected || state == steam_state::connecting) {
+      return {};
+    }
+    if (state == steam_state::not_running) {
+      return "Steam is not running; waiting for it to start.";
+    }
+    if (state == steam_state::port_closed) {
+      return "Steam's debug port is off; turn it on from the Integrations page.";
+    }
+    if (state == steam_state::port_foreign) {
+      return "the debug port belongs to another program, not Steam; not connecting.";
+    }
+    if (state == steam_state::breaker_open) {
+      return "stopped injecting because Steam's UI kept reloading; turn the controls off and on to try again.";
+    }
+    return "Steam state " + std::string(state) + '.';
+  }
+
+  std::string features_summary(const nlohmann::json &features) {
+    std::string summary;
+    if (!features.is_object()) {
+      return summary;
+    }
+    for (const auto &[name, result] : features.items()) {
+      if (!summary.empty()) {
+        summary += "; ";
+      }
+      summary += name + ": " + (result.is_string() ? result.get<std::string>() : result.dump());
+    }
+    return summary;
+  }
+
   std::optional<debug_port_request_t> parse_debug_port_request(const nlohmann::json &body) {
     if (!body.is_object()) {
       return std::nullopt;

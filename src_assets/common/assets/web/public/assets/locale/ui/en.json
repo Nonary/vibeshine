@@ -674,7 +674,6 @@
         "bigPictureControls": "Show stream controls in Steam Big Picture",
         "bigPictureControlsDescription": "Adds End Stream and Stop Streaming entries to Big Picture's Power menu and a status icon next to the clock. Uses Steam's debug port, which lets any program on this PC control Steam while it is on.",
         "bigPictureDescription": "End or disconnect Vibeshine streams from Steam Big Picture on this PC.",
-        "bigPictureNotImplemented": "Not implemented yet",
         "bigPictureOff": "Off",
         "bigPictureTitle": "Big Picture controls",
         "bigPictureUnknown": "Status unavailable",

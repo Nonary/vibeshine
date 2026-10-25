@@ -95,6 +95,13 @@ namespace platf::steam::big_picture::policy {
   /** Display name of Vibeshine's video_format (0 H.264, 1 HEVC, 2 AV1). */
   std::string_view codec_name(int video_format);
 
+  /** Log line for a Steam state from the helper (protocol::steam_state). Empty for "connecting" and
+   * "injected", which the helper's own messages already cover. */
+  std::string steam_state_log(std::string_view state);
+
+  /** One-line summary of a feature report for the log: "name: result; name: result". */
+  std::string features_summary(const nlohmann::json &features);
+
   // ---------------------------------------------------------------------------------------------
   // Web UI: Steam's debug port and Steam restarts.
   // ---------------------------------------------------------------------------------------------

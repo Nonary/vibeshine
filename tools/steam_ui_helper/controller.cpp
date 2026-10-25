@@ -163,9 +163,9 @@ namespace steam_ui_helper {
 
   void controller_t::handle(const cdp_event_t &event, clock::time_point now) {
     if (event.method == closed_event) {
-      log("info", "Steam connection closed");
+      log("info", "lost the connection to Steam (Steam closed or restarted); reconnecting");
       drop_session();
-      on_reload(now);
+      on_reload(now, false);
       next_connect_ = now + options_.reconnect_delay;
       return;
     }
@@ -194,7 +194,7 @@ namespace steam_ui_helper {
       main_frame_ = frame;
       default_context_ = id;
       contexts_cleared_ = false;
-      on_reload(now);
+      on_reload(now, true);
       return;
     }
     if (event.method == "Runtime.bindingCalled") {
@@ -286,7 +286,9 @@ namespace steam_ui_helper {
       set_state(protocol::steam_state::injected);
     } catch (const std::exception &error) {
       const auto delay = std::chrono::duration_cast<std::chrono::seconds>(tracker_.failed(now));
-      log("warning", std::string("injection failed (") + error.what() + "); retrying in " + std::to_string(delay.count()) + " s");
+      // Right after Steam starts or reloads its UI, the first attempt usually comes too early.
+      const bool first = delay <= policy::injection_tracker_t::initial_backoff;
+      log(first ? "info" : "warning", std::string(first ? "Steam's UI isn't ready yet (" : "injection failed (") + error.what() + "); retrying in " + std::to_string(delay.count()) + " s");
     }
   }
 
@@ -309,7 +311,7 @@ namespace steam_ui_helper {
     }
   }
 
-  void controller_t::on_reload(clock::time_point now) {
+  void controller_t::on_reload(clock::time_point now, bool ui_reloaded) {
     if (!injected_) {
       return;
     }
@@ -317,11 +319,13 @@ namespace steam_ui_helper {
     script_disabled_ = false;
     pushed_version_ = 0;
     if (tracker_.reloaded(now)) {
-      log("warning", "Steam's UI reloaded " + std::to_string(policy::injection_tracker_t::breaker_reloads) + " times right after injection; no longer injecting until the helper restarts");
+      log("warning", "Steam's UI reloaded or closed " + std::to_string(policy::injection_tracker_t::breaker_reloads) + " times right after injection; no longer injecting until the helper restarts");
       set_state(protocol::steam_state::breaker_open);
       return;
     }
-    log("info", "Steam's UI reloaded; injecting again");
+    if (ui_reloaded) {
+      log("info", "Steam's UI reloaded; injecting again");
+    }
     set_state(protocol::steam_state::connecting);
   }
 

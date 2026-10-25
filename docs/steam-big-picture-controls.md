@@ -1,7 +1,7 @@
 # Steam Big Picture controls
 
-> **Status:** under development. Everything below is built; the live acceptance checks and a code
-> review are still to do.
+> **Status:** under development. Everything below is built and passed the live checks in
+> [Tested with](#tested-with) except a browser (WebRTC) stream; a code review is still to do.
 
 When enabled with `steam_big_picture_controls`, Vibeshine shows stream controls inside Steam
 Big Picture on the Windows host:
@@ -29,6 +29,31 @@ debug port the next time it starts. **Turn off** deletes the file and restarts S
 
 **Check compatibility** runs the script's check mode in the running Steam without changing it and
 lists each control as working, using a fallback, or off. Run it after a Steam update.
+
+## Known limits
+
+- **Header icon when Big Picture is already open.** React applies Vibeshine's header patch only when
+  Big Picture creates its header. If Big Picture is already open when Vibeshine connects (for
+  example after Vibeshine restarts), the icon appears the next time Big Picture opens; the Power
+  menu entries work straight away. The header icon reports
+  `ready; appears the next time Big Picture opens` until then.
+- **End Stream's log label.** End Stream shares the end-stream hotkey's code, so its display cleanup
+  logs `reason=end_stream_hotkey`. The line before it says `End Stream selected in Steam`.
+
+## Tested with
+
+Steam client build Oct 22 2026 14:39:25 (React 19.1.1), Windows 11, 2026-10-24. Check compatibility:
+all 5 controls work.
+
+| Check | Result |
+|---|---|
+| Moonlight stream | The icon turns green with the client's name. Stop Streaming drops that client and leaves the app running (the icon turns amber); End Stream ends the app and the icon hides. |
+| Browser (WebRTC) stream | Not tested live; covered by the script and web UI tests. |
+| Fault injection (`--simulate-missing`, `--simulate-crash`, `--max-errors`) | With every lookup missing, nothing is injected. A crashing Power menu entry or header icon disappears on its own. After the error budget the script switches itself off. Steam's own menus and header stay intact every time. |
+| Steam's UI reloaded 3 times right after injection | Re-injected after the first two; the breaker stopped injecting after the third. Restarting the helper re-armed it. |
+| Steam's web helper killed | Steam restarted it; the controls were back after 3.5 s. |
+| Vibeshine's helper killed | Restarted after 5 s and injected again. |
+| Debug-port buttons | Turn off and Turn on restarted Steam (in Big Picture when it was open) and the controls reconnected within 3 s. A stream kept running throughout. |
 
 ## How it works
 
@@ -81,7 +106,7 @@ All formats are defined in `src/steam_big_picture_controls_protocol.h`:
 
 ## API
 
-- `GET /api/steam/big_picture/status` returns `supported`, `enabled`, `implemented`, `state`, a
+- `GET /api/steam/big_picture/status` returns `supported`, `enabled`, `state`, a
   per-feature report (`features`), Steam's folder and whether the flag file exists (`debug_port`),
   and the progress of a Steam restart (`steam_restart`).
 - `POST /api/steam/big_picture/debug_port` with `{"enabled": bool, "restart_steam": bool,

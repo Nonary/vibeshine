@@ -96,7 +96,8 @@ namespace steam_ui_helper {
     void drop_session();
     void inject(clock::time_point now);
     void push_status();
-    void on_reload(clock::time_point now);
+    // Steam's UI reloaded, or Steam closed the connection (ui_reloaded false). Both count towards the breaker.
+    void on_reload(clock::time_point now, bool ui_reloaded);
     json evaluate(std::string_view expression, bool await_promise = false);
     void set_state(std::string_view state, std::string detail = {});
     void log(std::string_view level, std::string message);

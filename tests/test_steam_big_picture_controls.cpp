@@ -101,6 +101,17 @@ TEST(SteamBigPicturePolicy, NamesCodecs) {
   EXPECT_EQ(bpm::policy::codec_name(9), "");
 }
 
+TEST(SteamBigPicturePolicy, DescribesStatesAndFeaturesForTheLog) {
+  EXPECT_EQ(bpm::policy::steam_state_log("injected"), "");
+  EXPECT_EQ(bpm::policy::steam_state_log("connecting"), "");
+  EXPECT_EQ(bpm::policy::steam_state_log("port_closed"), "Steam's debug port is off; turn it on from the Integrations page.");
+  EXPECT_EQ(bpm::policy::steam_state_log("something_new"), "Steam state something_new.");
+
+  EXPECT_EQ(bpm::policy::features_summary({{"focusable", "ok"}, {"power_menu", "waiting for the Power menu to open"}}), "focusable: ok; power_menu: waiting for the Power menu to open");
+  EXPECT_EQ(bpm::policy::features_summary(nlohmann::json::object()), "");
+  EXPECT_EQ(bpm::policy::features_summary(nlohmann::json::array()), "");
+}
+
 TEST(SteamBigPicturePolicy, ParsesDebugPortRequests) {
   const auto full = bpm::policy::parse_debug_port_request({{"enabled", true}, {"restart_steam", true}, {"allow_during_stream", true}});
   ASSERT_TRUE(full);

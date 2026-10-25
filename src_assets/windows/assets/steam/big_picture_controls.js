@@ -516,7 +516,9 @@
     cleanups.push(() => {
       if (HeaderBar.type === patched) HeaderBar.type = original;
     });
-    setFeature('header_icon', 'waiting for Big Picture to open');
+    // React reads a memo component's inner type only when the component is created, so a header that
+    // is already on screen keeps rendering without the icon until Big Picture opens again.
+    setFeature('header_icon', 'ready; appears the next time Big Picture opens');
   }
 
   // ---------------------------------------------------------------------------------------------

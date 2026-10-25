@@ -152,7 +152,6 @@ async function setupHost(page: Page, options: HostOptions = {}) {
         status: true,
         supported: true,
         enabled,
-        implemented: true,
         state: enabled ? bigPicture.state : 'off',
         features: {},
         debug_port: {

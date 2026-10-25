@@ -54,7 +54,6 @@ interface SteamStatus {
 interface SteamBigPictureStatus {
   supported?: boolean;
   enabled?: boolean;
-  implemented?: boolean;
   state?: string;
   detail?: string;
   features?: Record<string, string>;
@@ -1328,9 +1327,6 @@ async function setSteamRecentPolicy(
 const steamBigPictureBadge = computed<{ label: string; tone: StatusTone }>(() => {
   const value = steamBigPicture.value;
   if (!value) return { label: t('ui.integrations.steam.bigPictureUnknown'), tone: 'neutral' };
-  if (value.implemented === false) {
-    return { label: t('ui.integrations.steam.bigPictureNotImplemented'), tone: 'neutral' };
-  }
   if (!value.enabled) return { label: t('ui.integrations.steam.bigPictureOff'), tone: 'neutral' };
   if (value.steam_restart?.state === 'restarting') {
     return { label: t('ui.integrations.steam.bigPictureStates.restarting'), tone: 'info' };
@@ -1387,8 +1383,8 @@ const steamFeatureLabels: Record<string, string> = {
   focusable: 'ui.integrations.steam.bigPictureFeatures.focusable',
 };
 
-// The script reports "off: <why>" and "fallback: <what instead>"; anything else ("ok", "ready" from
-// a check, "waiting for Big Picture to open") means the control was found and works.
+// The script reports "off: <why>" and "fallback: <what instead>"; anything else ("ok", "ready",
+// "waiting for the Power menu to open") means the control was found and works.
 function steamFeatureTone(result: string): StatusTone {
   if (result.startsWith('off')) return 'danger';
   if (result.startsWith('fallback')) return 'warning';

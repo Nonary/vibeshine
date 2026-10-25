@@ -355,7 +355,7 @@ TEST_F(SteamUiHelperController, ReconnectsWhenTheConnectionCloses) {
   EXPECT_EQ(steam.connects, 1) << "waits for the reconnect delay";
   const auto logs = of_type("log");
   EXPECT_TRUE(std::any_of(logs.begin(), logs.end(), [](const json &entry) {
-    return entry["message"] == "Steam connection closed";
+    return entry["message"] == "lost the connection to Steam (Steam closed or restarted); reconnecting";
   }));
   now += 2s;
   helper.step();

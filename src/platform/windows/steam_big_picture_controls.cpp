@@ -68,6 +68,7 @@ namespace {
     policy::action_t action;
     policy::client_kind_e kind;
     std::uint64_t generation;
+    std::string client_name;  // For the log.
   };
 
   struct restart_state_t {
@@ -192,7 +193,10 @@ namespace {
       case policy::action_gate_t::verdict_e::allowed:
         break;
     }
-    s.actions.push_back({*action, kind, generation});
+    const auto client = std::find_if(s.clients.begin(), s.clients.end(), [&](const auto &candidate) {
+      return candidate.id == action->client;
+    });
+    s.actions.push_back({*action, kind, generation, client != s.clients.end() ? client->name : std::string {}});
     s.changed.notify_all();
   }
 
@@ -219,13 +223,15 @@ namespace {
     if (type == protocol::message::state) {
       s.helper.state = message.value("steam", std::string {});
       s.helper.detail = message.value("detail", std::string {});
-      BOOST_LOG(info) << "Steam Big Picture controls: Steam state " << s.helper.state;
+      if (const auto text = policy::steam_state_log(s.helper.state); !text.empty()) {
+        BOOST_LOG(info) << "Steam Big Picture controls: " << text;
+      }
     } else if (type == protocol::message::report) {
       s.helper.features = message.value("features", json::object());
       s.helper.steam_build = message.value("steam_build", std::string {});
       s.helper.script_version = message.value("script_version", 0);
       s.helper.script_errors = message.value("errors", 0);
-      BOOST_LOG(info) << "Steam Big Picture controls: injected into Steam (build " << s.helper.steam_build << "): " << s.helper.features.dump();
+      BOOST_LOG(info) << "Steam Big Picture controls: injected into Steam build " << s.helper.steam_build << " (" << policy::features_summary(s.helper.features) << ").";
     } else if (type == protocol::message::feature) {
       s.helper.features[message.value("name", std::string {"?"})] = message.value("value", std::string {});
       BOOST_LOG(info) << "Steam Big Picture controls: " << message.value("name", std::string {}) << ": " << message.value("value", std::string {});
@@ -512,17 +518,20 @@ namespace {
       }
       try {
         if (request.action.kind == policy::action_t::kind_e::end_stream) {
+          // Shares the end-stream hotkey's path, so its display cleanup logs reason=end_stream_hotkey.
           BOOST_LOG(info) << "Steam Big Picture controls: End Stream selected in Steam.";
           nvhttp::terminate_all_streams_from_host([&] {
             const auto config = snapshot_config();
             return !stop.stop_requested() && config.enabled && config.generation == request.generation;
           });
-        } else if (request.kind == policy::client_kind_e::browser) {
-          BOOST_LOG(info) << "Steam Big Picture controls: Stop Streaming selected for a browser stream.";
-          webrtc_stream::close_session(request.action.client);
         } else {
-          BOOST_LOG(info) << "Steam Big Picture controls: Stop Streaming selected for client " << request.action.client << '.';
-          nvhttp::disconnect_client(request.action.client);
+          BOOST_LOG(info) << "Steam Big Picture controls: Stop Streaming selected for " << (request.client_name.empty() ? "a client" : request.client_name)
+                          << (request.kind == policy::client_kind_e::browser ? " (browser stream " : " (") << request.action.client << ").";
+          if (request.kind == policy::client_kind_e::browser) {
+            webrtc_stream::close_session(request.action.client);
+          } else {
+            nvhttp::disconnect_client(request.action.client);
+          }
         }
       } catch (const std::exception &failure) {
         BOOST_LOG(error) << "Steam Big Picture controls: action failed: " << failure.what();
@@ -629,7 +638,6 @@ namespace platf::steam::big_picture {
       {"status", true},
       {"supported", true},
       {"enabled", s.config.enabled},
-      {"implemented", true},
       {"state", s.helper.state},
       {"detail", s.helper.detail},
       {"helper_connected", s.helper.connected},

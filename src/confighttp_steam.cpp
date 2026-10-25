@@ -231,7 +231,7 @@ namespace confighttp {
 #ifdef _WIN32
     auto out = platf::steam::big_picture::status();
 #else
-    nlohmann::json out {{"status", true}, {"supported", false}, {"enabled", false}, {"implemented", false}, {"state", "unsupported"}, {"features", nlohmann::json::object()}};
+    nlohmann::json out {{"status", true}, {"supported", false}, {"enabled", false}, {"state", "unsupported"}, {"features", nlohmann::json::object()}};
 #endif
     out["enabled"] = config::steam.big_picture_controls;
     send_response(response, out);
