@@ -19,6 +19,7 @@ extern "C" {
 
 // local includes
 #include "audio.h"
+#include "dolby_session_worker.h"
 #include "audio_lifecycle_policy.h"
 #include "audio_lifecycle_state.h"
 #include "audio_policy.h"
@@ -259,34 +260,37 @@ namespace audio {
       const auto codec_name = config.use_eac3 ? "E-AC-3"sv : "AC-3"sv;
       const auto bitrate_kbps = dolby_bitrate_kbps(config.use_eac3, config.high_quality_dolby, config.channels);
       ffmpeg_audio_encoder_t encoder;
-      if (bitrate_kbps <= 0 || !encoder.initialize(codec_id, static_cast<std::int64_t>(bitrate_kbps) * 1000, config.channels)) {
-        BOOST_LOG(error) << "Couldn't initialize the linked FFmpeg "sv << codec_name << " encoder"sv;
-        // This queue belongs to this capture/session. Do not stop the shared audio_packets queue,
-        // which would tear down unrelated RTSP sessions.
-        samples->stop();
-        return;
-      }
 
-      BOOST_LOG(info) << codec_name << " initialized: "sv << config.channels
-                      << " channels, 48 kHz, "sv << bitrate_kbps << " kbit/s"sv;
-      while (auto sample = samples->pop()) {
-        // Reserve enough room for the largest supported 640 kbit/s AC-3 access unit.
-        buffer_t packet {4096};
-        const auto bytes = encoder.encode(*sample, packet);
-        if (bytes < 0) {
-          BOOST_LOG(error) << "Couldn't encode "sv << codec_name << " audio frame"sv;
-          // Keep failure local to this encoder's sample queue.
-          samples->stop();
-          return;
+      // The worker's control flow is shared with the CPU-only regression test.
+      // FFmpeg and packet delivery remain production callbacks.
+      dolby::run_encoder_worker(
+        *samples,
+        encoder,
+        [&](auto &active_encoder) {
+          if (bitrate_kbps <= 0 || !active_encoder.initialize(codec_id, static_cast<std::int64_t>(bitrate_kbps) * 1000, config.channels)) {
+            BOOST_LOG(error) << "Couldn't initialize the linked FFmpeg "sv << codec_name << " encoder"sv;
+            return false;
+          }
+          BOOST_LOG(info) << codec_name << " initialized: "sv << config.channels
+                          << " channels, 48 kHz, "sv << bitrate_kbps << " kbit/s"sv;
+          return true;
+        },
+        [](auto &active_encoder, const auto &sample, buffer_t &packet) {
+          return active_encoder.encode(sample, packet);
+        },
+        [] {
+          // Reserve enough room for the largest supported 640 kbit/s AC-3 access unit.
+          return buffer_t {4096};
+        },
+        [&](const auto &sample, buffer_t packet, int bytes) {
+          if (webrtc_stream::has_active_sessions() && channel_data == nullptr) {
+            // Dolby frame duration is fixed at 1536 samples at 48 kHz (32 ms).
+            webrtc_stream::submit_audio_frame(sample, SAMPLE_RATE, config.channels, 1536);
+          }
+          packet.fake_resize(bytes);
+          packets->raise(channel_data, std::move(packet));
         }
-
-        if (webrtc_stream::has_active_sessions() && channel_data == nullptr) {
-          // Dolby frame duration is fixed at 1536 samples at 48 kHz (32 ms).
-          webrtc_stream::submit_audio_frame(*sample, SAMPLE_RATE, config.channels, 1536);
-        }
-        packet.fake_resize(bytes);
-        packets->raise(channel_data, std::move(packet));
-      }
+      );
       return;
     }
 
@@ -408,14 +412,12 @@ namespace audio {
     }
 
     auto fg = util::fail_guard([&]() {
-      if (samples) {
-        samples->stop();
-        if (thread.joinable()) {
-          thread.join();
-        }
-      }
-
-      shutdown_event->view();
+      dolby::finish_capture_session(
+        samples,
+        thread,
+        [&]() { shutdown_event->view(); },
+        [&]() { mic.reset(); }
+      );
     });
 
     int samples_per_frame = frame_size * stream.channelCount;
