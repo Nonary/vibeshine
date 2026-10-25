@@ -154,4 +154,17 @@ namespace statefile {
   /** Clear retained virtual-display scales when display state is reset. */
   void clear_virtual_display_scales();
 
+  /**
+   * @brief Remember (or forget, with nullopt) the Steam debug-port flag file Vibeshine created.
+   * @param flag_path UTF-8 path of the `.cef-enable-remote-debugging` file.
+   *
+   * The uninstaller removes this file, so Steam's debug port doesn't stay open after Vibeshine is
+   * gone. A flag file that already existed belongs to the user or another Steam mod and is never
+   * remembered.
+   */
+  bool save_steam_debug_port_flag(const std::optional<std::string> &flag_path);
+
+  /** The Steam debug-port flag file Vibeshine created and hasn't removed since, if any. */
+  std::optional<std::string> load_steam_debug_port_flag();
+
 }  // namespace statefile

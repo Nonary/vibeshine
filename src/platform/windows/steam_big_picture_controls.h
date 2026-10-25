@@ -24,9 +24,21 @@ namespace platf::steam::big_picture {
   // State for GET /api/steam/big_picture/status.
   nlohmann::json status();
 
-  // Run the script's check mode in the running Steam and return the helper's "check_result"
-  // message. nullopt when the helper isn't connected or doesn't answer in time.
-  std::optional<nlohmann::json> check(std::chrono::milliseconds timeout = std::chrono::seconds(10));
+  enum class check_outcome_e {
+    answered,  ///< message holds the helper's "check_result".
+    not_connected,  ///< The helper isn't running, or stopped during the check.
+    timed_out,  ///< The helper is connected but didn't answer in time; Steam may be busy.
+  };
+
+  struct check_result_t {
+    check_outcome_e outcome = check_outcome_e::not_connected;
+    nlohmann::json message;
+  };
+
+  constexpr auto check_timeout = std::chrono::seconds(10);
+
+  // Run the script's check mode in the running Steam through the helper.
+  check_result_t check(std::chrono::milliseconds timeout = check_timeout);
 
   struct debug_port_result_t {
     bool ok = false;

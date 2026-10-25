@@ -65,6 +65,17 @@ namespace args {
    * @examples_end
    */
   int restore_nvprefs_undo();
+
+  /**
+   * @brief Remove the Steam debug-port flag file Vibeshine created.
+   * Steam Big Picture controls create `.cef-enable-remote-debugging` in Steam's folder. This
+   * function deletes it, if Vibeshine created it, so Steam's debug port doesn't stay open after
+   * Vibeshine is gone. This function is typically called by the uninstaller.
+   * @examples
+   * remove_steam_debug_port_flag();
+   * @examples_end
+   */
+  int remove_steam_debug_port_flag();
 #endif
 }  // namespace args
 

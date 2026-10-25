@@ -234,7 +234,8 @@
   };
   function label(s, key, ...args) {
     const template = typeof s?.strings?.[key] === 'string' && s.strings[key] ? s.strings[key] : DEFAULT_STRINGS[key];
-    return args.reduce((t, arg, i) => t.replace(`%${i + 1}$s`, arg), template);
+    // A replacer function, so "$&" or "$'" in a client or app name stays literal text.
+    return args.reduce((t, arg, i) => t.replace(`%${i + 1}$s`, () => arg), template);
   }
 
   function describeStream(s) {
@@ -474,10 +475,16 @@
     return out;
   }
   const isClockSlot = (el) => React.isValidElement(el) && [el.type, el.props?.children?.type].some((t) => /\.Clock\b/.test(srcOf(t)));
+  const ICON_KEY = 'vibeshine-indicator';
+  const isOurIcon = (el) => React.isValidElement(el) && el.key === ICON_KEY;
 
   function insertHeaderIcon(bar) {
-    const lists = childArrays(bar).filter((list) => !Object.isFrozen(list));
-    const icon = safe('header-icon', h(HeaderIcon), 'vibeshine-indicator');
+    const arrays = childArrays(bar);
+    // Steam may return the same children array on every render (memoized, or hoisted by its
+    // compiler), so the icon from an earlier render can still be in it.
+    if (arrays.some((list) => list.some(isOurIcon))) return;
+    const lists = arrays.filter((list) => !Object.isFrozen(list));
+    const icon = safe('header-icon', h(HeaderIcon), ICON_KEY);
     for (const list of lists) {
       const i = list.findIndex(isClockSlot);
       if (i >= 0) {

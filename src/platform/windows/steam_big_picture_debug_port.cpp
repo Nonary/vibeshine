@@ -12,6 +12,7 @@
   // misc.h brings in Boost.Asio, which needs winsock2.h before windows.h.
   #include "misc.h"
   #include "src/logging.h"
+  #include "src/state_storage.h"
   #include "src/steam_big_picture_controls_policy.h"
   #include "src/utility.h"
   #include "steam_discovery.h"
@@ -22,6 +23,7 @@
   #include <array>
   #include <chrono>
   #include <condition_variable>
+  #include <cwctype>
   #include <mutex>
   #include <system_error>
   #include <vector>
@@ -35,7 +37,7 @@ namespace {
   constexpr auto steam_close_timeout = 40s;
 
   std::string last_error_text() {
-    return std::system_category().message(static_cast<int>(GetLastError()));
+    return platf::steam::big_picture::debug_port::error_text({static_cast<int>(GetLastError()), std::system_category()});
   }
 
   std::optional<DWORD> console_session() {
@@ -150,7 +152,7 @@ namespace {
                             platf::launch_process_with_impersonation(false, platf::to_utf8(command), root.wstring(), flags, startup, child, error) :
                             platf::launch_process_without_impersonation(platf::to_utf8(command), root.wstring(), flags, startup, child, error);
     if (!launched) {
-      return error ? error.message() : std::string("the process could not be started");
+      return error ? platf::steam::big_picture::debug_port::error_text(error) : std::string("the process could not be started");
     }
     CloseHandle(child.hThread);
     CloseHandle(child.hProcess);
@@ -178,6 +180,28 @@ namespace {
 }  // namespace
 
 namespace platf::steam::big_picture::debug_port {
+  std::string error_text(const std::error_code &error) {
+    if (error.category() == std::system_category()) {
+      wchar_t *buffer = nullptr;
+      const DWORD length = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, static_cast<DWORD>(error.value()), 0, reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
+      if (length == 0 || !buffer) {
+        return "Windows error " + std::to_string(error.value());
+      }
+      std::wstring text(buffer, length);
+      LocalFree(buffer);
+      while (!text.empty() && std::iswspace(text.back())) {
+        text.pop_back();
+      }
+      return platf::to_utf8(text);
+    }
+    // Other categories come from the C runtime, in the ANSI code page.
+    const auto narrow = error.message();
+    const int length = MultiByteToWideChar(CP_ACP, 0, narrow.data(), static_cast<int>(narrow.size()), nullptr, 0);
+    std::wstring wide(std::max(length, 0), L'\0');
+    MultiByteToWideChar(CP_ACP, 0, narrow.data(), static_cast<int>(narrow.size()), wide.data(), length);
+    return platf::to_utf8(wide);
+  }
+
   steam_t inspect() {
     steam_t steam;
     const auto session = console_session();
@@ -204,26 +228,76 @@ namespace platf::steam::big_picture::debug_port {
     if (!session) {
       return "No user is signed in on this PC.";
     }
-    discovery::discovery_scope scope;
-    if (!scope.user_hive()) {
-      return "No user is signed in on this PC.";
-    }
-    const auto root = steam_root(session_processes(L"steam.exe", *session), scope);
-    if (!root) {
-      return "Steam's folder was not found.";
-    }
-    const auto path = *root / policy::debug_port_flag_file;
-    if (enabled) {
-      HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-      if (file == INVALID_HANDLE_VALUE) {
-        return "Could not create " + platf::to_utf8(path.wstring()) + ": " + last_error_text();
+    fs::path path;
+    bool created = false;
+    {
+      // Only the file itself is touched as the console user; the state file below is ours.
+      discovery::discovery_scope scope;
+      if (!scope.user_hive()) {
+        return "No user is signed in on this PC.";
       }
-      CloseHandle(file);
-    } else if (!DeleteFileW(path.c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND) {
-      return "Could not delete " + platf::to_utf8(path.wstring()) + ": " + last_error_text();
+      const auto root = steam_root(session_processes(L"steam.exe", *session), scope);
+      if (!root) {
+        return "Steam's folder was not found.";
+      }
+      path = *root / policy::debug_port_flag_file;
+      if (enabled) {
+        HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) {
+          const auto error = last_error_text();
+          return "Could not create " + platf::to_utf8(path.wstring()) + ": " + error;
+        }
+        // OPEN_ALWAYS reports ERROR_ALREADY_EXISTS when the file was there before us.
+        created = GetLastError() != ERROR_ALREADY_EXISTS;
+        CloseHandle(file);
+      } else if (!DeleteFileW(path.c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND) {
+        const auto error = last_error_text();
+        return "Could not delete " + platf::to_utf8(path.wstring()) + ": " + error;
+      }
     }
-    BOOST_LOG(info) << "Steam Big Picture controls: Steam's debug port turned " << (enabled ? "on" : "off") << " (" << platf::to_utf8(path.wstring()) << ").";
+    const auto path_text = platf::to_utf8(path.wstring());
+    // Remember a file we created so uninstalling Vibeshine removes it. One that was already there
+    // belongs to the user or another Steam mod, and is left alone.
+    if (created) {
+      statefile::save_steam_debug_port_flag(path_text);
+    } else if (const auto remembered = statefile::load_steam_debug_port_flag(); !enabled && remembered && _wcsicmp(platf::from_utf8(*remembered).c_str(), path.c_str()) == 0) {
+      statefile::save_steam_debug_port_flag(std::nullopt);
+    }
+    BOOST_LOG(info) << "Steam Big Picture controls: Steam's debug port turned " << (enabled ? "on" : "off") << " (" << path_text << ").";
     return std::nullopt;
+  }
+
+  void remove_created_flag_file() {
+    const auto remembered = statefile::load_steam_debug_port_flag();
+    if (!remembered) {
+      return;
+    }
+    const fs::path path = platf::from_utf8(*remembered);
+    // Whatever the state file says, never delete anything but the flag file.
+    if (path.filename() != fs::path(policy::debug_port_flag_file)) {
+      statefile::save_steam_debug_port_flag(std::nullopt);
+      return;
+    }
+    std::optional<std::string> error;
+    {
+      discovery::discovery_scope scope;
+      if (!scope.user_hive()) {
+        BOOST_LOG(warning) << "Steam Big Picture controls: no user is signed in, so Steam's debug-port flag file was left in place (" << *remembered << ").";
+        return;
+      }
+      if (!DeleteFileW(path.c_str())) {
+        const DWORD code = GetLastError();
+        if (code != ERROR_FILE_NOT_FOUND && code != ERROR_PATH_NOT_FOUND) {
+          error = error_text({static_cast<int>(code), std::system_category()});
+        }
+      }
+    }
+    if (error) {
+      BOOST_LOG(warning) << "Steam Big Picture controls: could not delete Steam's debug-port flag file (" << *remembered << "): " << *error;
+      return;
+    }
+    statefile::save_steam_debug_port_flag(std::nullopt);
+    BOOST_LOG(info) << "Steam Big Picture controls: removed the debug-port flag file Vibeshine created (" << *remembered << ").";
   }
 
   std::optional<std::string> restart_steam(std::stop_token stop, bool big_picture) {

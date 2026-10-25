@@ -9,8 +9,13 @@
   #include <optional>
   #include <stop_token>
   #include <string>
+  #include <system_error>
 
 namespace platf::steam::big_picture::debug_port {
+  // Windows error text in UTF-8. std::error_code::message() gives the ANSI code page, which
+  // nlohmann::json refuses to serialize on non-English Windows.
+  std::string error_text(const std::error_code &error);
+
   struct steam_t {
     std::optional<std::filesystem::path> root;  ///< Steam's folder: the running steam.exe's, else the registered one.
     bool running = false;  ///< steam.exe runs in the console session.
@@ -22,8 +27,13 @@ namespace platf::steam::big_picture::debug_port {
   steam_t inspect();
 
   // Create (enabled) or delete the empty flag file in Steam's folder, as the console user so it can only
-  // go where that user may write. Returns an error message on failure.
+  // go where that user may write. A file Vibeshine creates is remembered for the uninstaller. Returns an
+  // error message on failure.
   std::optional<std::string> set_flag_file(bool enabled);
+
+  // For the uninstaller: delete the flag file if Vibeshine created it and it is still there, as the
+  // console user. Steam keeps its debug port open until it next restarts.
+  void remove_created_flag_file();
 
   // Close Steam and start it again as the console user, in Big Picture when big_picture is set. Blocks
   // while Steam closes (up to 40 s). Returns an error message on failure.

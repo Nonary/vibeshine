@@ -1311,6 +1311,54 @@ namespace statefile {
              std::nullopt;
   }
 
+  bool save_steam_debug_port_flag(const std::optional<std::string> &flag_path) {
+    if (flag_path && (flag_path->empty() || flag_path->size() > 32768)) {
+      return false;
+    }
+    migrate_recent_state_keys();
+    const auto &path = vibeshine_state_path();
+    if (path.empty()) {
+      return false;
+    }
+    std::lock_guard guard {state_mutex()};
+    pt::ptree tree;
+    if (load_tree_for_update(fs::path {path}, tree) == policy::load_result_e::failed) {
+      return false;
+    }
+    auto &root = ensure_root(tree);
+    const auto current = root.get_optional<std::string>("steam_debug_port_flag");
+    if ((current ? std::make_optional(*current) : std::nullopt) == flag_path) {
+      return true;  // unchanged; avoid rewriting the state file
+    }
+    if (flag_path) {
+      root.put("steam_debug_port_flag", *flag_path);
+    } else {
+      root.erase("steam_debug_port_flag");
+    }
+    try {
+      write_tree(fs::path {path}, tree);
+      return true;
+    } catch (const std::exception &storage_error) {
+      BOOST_LOG(error) << "statefile: failed to persist the Steam debug-port flag file: " << storage_error.what();
+      return false;
+    }
+  }
+
+  std::optional<std::string> load_steam_debug_port_flag() {
+    migrate_recent_state_keys();
+    const auto &path = vibeshine_state_path();
+    if (path.empty()) {
+      return std::nullopt;
+    }
+    std::lock_guard guard {state_mutex()};
+    pt::ptree tree;
+    if (!load_tree_if_exists(fs::path {path}, tree)) {
+      return std::nullopt;
+    }
+    const auto flag_path = tree.get_optional<std::string>("root.steam_debug_port_flag");
+    return flag_path && !flag_path->empty() ? std::make_optional(*flag_path) : std::nullopt;
+  }
+
   void clear_virtual_display_scales() {
     migrate_recent_state_keys();
     const auto &path_str = vibeshine_state_path();

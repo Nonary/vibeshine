@@ -147,6 +147,9 @@ const noop = () => {};
 export interface FakeSteamOptions {
   /** Source text of the clock component; drop ".Clock" to simulate a renamed clock. */
   clockSource?: string;
+  /** Reuse one element for the header's right-hand items on every render, as React compilers do
+   * for static subtrees, so its children array is shared between renders. */
+  hoistHeaderItems?: boolean;
 }
 
 export function createSteam(options: FakeSteamOptions = {}) {
@@ -294,6 +297,15 @@ export function createSteam(options: FakeSteamOptions = {}) {
   );
   const Provider = (props: any) => props.children;
   const HeaderRow = (props: any) => h('div', { id: 'header' }, props.children);
+  const rightItems = () =>
+    h(
+      FRAGMENT,
+      null,
+      h(ItemBoundary, null, h(Notifications)),
+      h(ItemBoundary, null, h(Clock)),
+      h(ItemBoundary, null, h(Account)),
+    );
+  const hoistedRightItems = options.hoistHeaderItems ? rightItems() : undefined;
   const HeaderBar = React.memo(
     withSource(
       (_props: any) =>
@@ -304,13 +316,7 @@ export function createSteam(options: FakeSteamOptions = {}) {
             HeaderRow,
             null,
             h(FRAGMENT, null, h(ItemBoundary, null, h(Search)), h(ItemBoundary, null, h(Network))),
-            h(
-              FRAGMENT,
-              null,
-              h(ItemBoundary, null, h(Notifications)),
-              h(ItemBoundary, null, h(Clock)),
-              h(ItemBoundary, null, h(Account)),
-            ),
+            hoistedRightItems ?? rightItems(),
           ),
         ),
       'function(ni){let Di=ni.quickAccessHeader;(0,r.Qf)();const Pi=(0,$.oH)(),Gi=(0,y.Wx)(),cr=(0,$.we)();return(0,M.q3)(()=>Di?ni.visible:cr.BShowHeader())?(0,e.jsx)(mn.Provider,{value:{region:ni.quickAccessHeader?1:0},children:(0,e.jsxs)(X,{children:[]})}):null}',

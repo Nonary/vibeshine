@@ -34,6 +34,7 @@
   #include <mutex>
   #include <objbase.h>
   #include <sddl.h>
+  #include <set>
   #include <stop_token>
   #include <thread>
   #include <vector>
@@ -86,7 +87,8 @@ namespace {
     policy::action_gate_t gate;
     std::deque<action_request_t> actions;
     std::uint64_t next_check_id = 1;
-    std::vector<std::uint64_t> pending_checks;
+    std::vector<std::uint64_t> pending_checks;  // Not sent to the helper yet.
+    std::set<std::uint64_t> waiting_checks;  // A check() call is still waiting for these.
     std::map<std::uint64_t, json> check_results;
     restart_state_t restart;
     std::jthread worker;
@@ -128,6 +130,7 @@ namespace {
     s.helper.detail = std::move(detail);
     if (connected) {
       s.helper.connected = *connected;
+      s.changed.notify_all();  // A check() waiting on a helper that went away can stop waiting.
     }
   }
 
@@ -244,8 +247,11 @@ namespace {
       s.helper.detail = message.value("reason", std::string {});
       BOOST_LOG(warning) << "Steam Big Picture controls: the script inside Steam switched itself off (" << s.helper.detail << ")";
     } else if (type == protocol::message::check_result) {
-      s.check_results[message.value("id", std::uint64_t {0})] = message;
-      s.changed.notify_all();
+      // Keep only answers someone still waits for; a late one would otherwise stay forever.
+      if (const auto id = message.value("id", std::uint64_t {0}); s.waiting_checks.contains(id)) {
+        s.check_results[id] = message;
+        s.changed.notify_all();
+      }
     }
   }
 
@@ -356,8 +362,9 @@ namespace {
                             platf::launch_process_with_impersonation(false, platf::to_utf8(command), directory.wstring(), flags, startup, child, error) :
                             platf::launch_process_without_impersonation(platf::to_utf8(command), directory.wstring(), flags, startup, child, error);
     if (!launched) {
-      BOOST_LOG(warning) << "Steam Big Picture controls: the helper could not be launched: " << error.message();
-      set_helper("helper_failed", error.message());
+      const auto reason = platf::steam::big_picture::debug_port::error_text(error);
+      BOOST_LOG(warning) << "Steam Big Picture controls: the helper could not be launched: " << reason;
+      set_helper("helper_failed", reason);
       return;
     }
     CloseHandle(child.hThread);
@@ -649,23 +656,27 @@ namespace platf::steam::big_picture {
     };
   }
 
-  std::optional<nlohmann::json> check(std::chrono::milliseconds timeout) {
+  check_result_t check(std::chrono::milliseconds timeout) {
     auto &s = state();
     std::unique_lock lock(s.mutex);
     if (!s.helper.connected) {
-      return std::nullopt;
+      return {check_outcome_e::not_connected, {}};
     }
     const auto id = s.next_check_id++;
     s.pending_checks.push_back(id);
-    if (!s.changed.wait_for(lock, timeout, [&] {
-          return s.check_results.contains(id);
-        })) {
-      std::erase(s.pending_checks, id);
-      return std::nullopt;
+    s.waiting_checks.insert(id);
+    const bool woke = s.changed.wait_for(lock, timeout, [&] {
+      return s.check_results.contains(id) || !s.helper.connected;
+    });
+    s.waiting_checks.erase(id);
+    std::erase(s.pending_checks, id);
+    if (const auto found = s.check_results.find(id); found != s.check_results.end()) {
+      auto message = std::move(found->second);
+      s.check_results.erase(found);
+      return {check_outcome_e::answered, std::move(message)};
     }
-    auto result = std::move(s.check_results[id]);
-    s.check_results.erase(id);
-    return result;
+    // Woken without an answer: the helper went away during the check.
+    return {woke ? check_outcome_e::not_connected : check_outcome_e::timed_out, {}};
   }
 
   debug_port_result_t set_debug_port(bool enabled, bool restart_steam, bool allow_during_stream) {

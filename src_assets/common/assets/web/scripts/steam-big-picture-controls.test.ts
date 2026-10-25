@@ -132,6 +132,38 @@ test('uses the labels from the status payload', () => {
   ]);
 });
 
+test('shows names with $ replacement patterns literally', () => {
+  const steam = createSteam();
+  steam.inject();
+  const name = "Bob$'s $& PC $$";
+  steam.window.VibeshineBPM.setStatus({
+    ...streaming,
+    clients: [{ id: 'webrtc-2', name, kind: 'browser' }],
+  });
+  assert.deepEqual(menuLabels(steam.openPowerMenu()).slice(0, 2), [
+    'End Stream (Vibeshine)',
+    `Stop Streaming To ${name} (Vibeshine)`,
+  ]);
+  const icon = findHost(steam.renderHeader(), isIcon)!;
+  assert.equal(icon.props['aria-label'], `Streaming to ${name} with Vibeshine`);
+});
+
+test('adds the header icon once when Steam reuses the header children between renders', () => {
+  const steam = createSteam({ hoistHeaderItems: true });
+  steam.inject();
+  steam.window.VibeshineBPM.setStatus(streaming);
+  steam.renderHeader();
+  steam.renderHeader();
+  assert.deepEqual(headerOrder(steam.renderHeader()), [
+    'Search',
+    'Internet Settings',
+    'Notifications',
+    'ICON',
+    '4:06 PM',
+    'View Account',
+  ]);
+});
+
 test('places the header icon left of the clock', () => {
   const steam = createSteam();
   steam.inject();

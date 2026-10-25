@@ -26,6 +26,8 @@ On the **Integrations** page, in the Steam card's **Big Picture controls** secti
 Restarting Steam closes games running through it, so while a stream or app is running Vibeshine
 asks a second time before restarting. If Steam isn't running, nothing restarts and Steam uses the
 debug port the next time it starts. **Turn off** deletes the file and restarts Steam the same way.
+Uninstalling Vibeshine also deletes the file if Vibeshine created it; a file that was already there,
+for example for another Steam mod, is left alone. Steam closes the port at its next start.
 
 **Check compatibility** runs the script's check mode in the running Steam without changing it and
 lists each control as working, using a fallback, or off. Run it after a Steam update.

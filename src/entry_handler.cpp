@@ -20,6 +20,9 @@
 #include "logging.h"
 #include "network.h"
 #include "platform/common.h"
+#ifdef _WIN32
+  #include "platform/windows/steam_big_picture_debug_port.h"
+#endif
 
 extern "C" {
 #ifdef _WIN32
@@ -63,6 +66,11 @@ namespace args {
       nvprefs_instance.restore_from_and_delete_undo_file_if_exists();
       nvprefs_instance.unload();
     }
+    return 0;
+  }
+
+  int remove_steam_debug_port_flag() {
+    platf::steam::big_picture::debug_port::remove_created_flag_file();
     return 0;
   }
 #endif

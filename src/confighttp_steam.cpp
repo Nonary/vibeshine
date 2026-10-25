@@ -298,16 +298,23 @@ namespace confighttp {
       return;
     }
 #ifdef _WIN32
-    const auto result = platf::steam::big_picture::check();
-    if (!result) {
+    namespace big_picture = platf::steam::big_picture;
+    const auto result = big_picture::check();
+    if (result.outcome == big_picture::check_outcome_e::not_connected) {
       send_response(response, nlohmann::json {{"status", false}, {"error", "Vibeshine is not connected to Steam. Turn on the controls and Steam's debug port first."}});
       return;
     }
-    if (const auto error = result->find("error"); error != result->end() && error->is_string()) {
+    if (result.outcome == big_picture::check_outcome_e::timed_out) {
+      const auto seconds = std::to_string(big_picture::check_timeout.count());
+      send_response(response, nlohmann::json {{"status", false}, {"error", "Steam didn't answer the check within " + seconds + " seconds. It may be busy; try again in a moment."}});
+      return;
+    }
+    const auto &message = result.message;
+    if (const auto error = message.find("error"); error != message.end() && error->is_string()) {
       send_response(response, nlohmann::json {{"status", false}, {"error", "The check could not run: " + error->get<std::string>()}});
       return;
     }
-    send_response(response, nlohmann::json {{"status", true}, {"report", result->value("report", nlohmann::json::object())}});
+    send_response(response, nlohmann::json {{"status", true}, {"report", message.value("report", nlohmann::json::object())}});
 #else
     bad_request(response, request, "Steam Big Picture controls are only available on Windows");
 #endif
