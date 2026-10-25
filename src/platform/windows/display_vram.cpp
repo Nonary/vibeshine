@@ -2626,10 +2626,6 @@ namespace platf::dxgi {
             // Replace it with an image from pull_free_image_cb copying contents and freeing up the surface memory.
             // Save the shared pointer to the image in case the mouse cursor reappears.
             last_frame_action = lfa::replace_surface_with_img;
-          } else if (!cursor_visible) {
-            // Cursor drawing is off (the client draws it, or Ctrl+Alt+Shift+N) and the last
-            // frame has no cursor in it, so a pointer-only update changes nothing on screen.
-            return capture_e::timeout;
           }
           // Use saved last image shared pointer as output image evading copy.
           out_frame_action = ofa::forward_last_img;

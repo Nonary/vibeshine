@@ -167,15 +167,13 @@ namespace host_cursor::tracker {
       };
 
       void release() {
-        std::jthread stopping;
-        {
-          std::lock_guard lg {_users_lock};
-          if (--_users != 0) return;
-          _running.store(false, std::memory_order_release);
-          stopping = std::move(_thread);
-        }
-        stopping.request_stop();
-        stopping.join();
+        // Join under the lock so a subscription racing this release never starts a
+        // second poller while the old one finishes its last poll (at most one interval).
+        std::lock_guard lg {_users_lock};
+        if (--_users != 0) return;
+        _running.store(false, std::memory_order_release);
+        _thread.request_stop();
+        _thread.join();
         BOOST_LOG(info) << "Client-side cursor: tracker stopped"sv;
       }
 
