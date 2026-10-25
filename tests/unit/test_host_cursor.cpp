@@ -400,6 +400,28 @@ TEST(HostCursorSession, SubscribeResyncsWithShapeAndPosition) {
   EXPECT_TRUE(idle.shapes.empty());
 }
 
+TEST(HostCursorSession, ResyncWaitsForTheSessionGeometry) {
+  // A client can subscribe before the encoder publishes the session's input
+  // geometry. Nothing may be sent until then: a zero reference size is invalid on
+  // the wire, and the resync must not be spent on it.
+  host_cursor::shape_registry_t registry;
+  const auto id = registry.insert(solid(4, 4, 1));
+  host_cursor::session_state_t session;
+  subscribe(session, true);
+  const auto now = host_cursor::clock::now();
+  const host_cursor::geometry_t unpublished;
+  const auto early = host_cursor::plan_update(session, visible_at(2000, 100, id), unpublished, true, now, registry);
+  EXPECT_FALSE(early.state);
+  EXPECT_TRUE(early.shapes.empty());
+  EXPECT_TRUE(session.resync_pending);
+
+  const auto later = host_cursor::plan_update(session, visible_at(2000, 100, id), scaled_geometry(), true, now, registry);
+  ASSERT_TRUE(later.state);
+  EXPECT_TRUE(later.state->flags & proto::state_flags::resync);
+  EXPECT_EQ(later.state->ref_width, 1920);
+  EXPECT_EQ(later.shape_ids, std::vector<std::uint32_t> {id});
+}
+
 TEST(HostCursorSession, DrawingClientOnlyHearsAboutHostMoves) {
   host_cursor::shape_registry_t registry;
   const auto id = registry.insert(solid(4, 4, 1));

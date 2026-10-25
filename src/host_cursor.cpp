@@ -141,6 +141,13 @@ namespace host_cursor {
       return update;
     }
 
+    // Until the session's encoder publishes its input geometry there is no stream
+    // coordinate space; a state now would carry a zero reference size, which the
+    // client rejects. Keep any resync pending until then.
+    if (geometry.stream_width <= 0 || geometry.stream_height <= 0) {
+      return update;
+    }
+
     const bool resync_now = session.resync_pending;
     if (resync_now) {
       session.shapes_sent.clear();

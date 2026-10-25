@@ -143,7 +143,9 @@ client already uses for absolute input, so the client maps it with its existing
 letterbox maths.
 
 - **Sent only on change**, plus a full state with `RESYNC` (and every shape it
-  needs) whenever a session subscribes, including after a reconnect.
+  needs) whenever a session subscribes, including after a reconnect. Nothing is
+  sent until the session's encoder has published its input geometry, so a client
+  that subscribes early still gets its resync.
 - **`HAS_POSITION`** is set on `RESYNC`, when the cursor becomes visible, when the
   clip changes, when the host moved the cursor itself (application warp, a local
   mouse), and, while the client is *not* drawing the cursor, on every position
@@ -239,10 +241,6 @@ tracker is available. `display_base_t::capture` ANDs it with the existing
 the DDA VRAM/RAM paths and WGC (whose helper already toggles
 `IsCursorCaptureEnabled` at runtime, no session restart). Linux capture paths are
 untouched.
-
-With cursor drawing off, a Desktop Duplication pointer-only update (the cursor
-moved, the desktop did not) used to re-encode the last frame unchanged; it now
-returns a timeout, so a moving client-drawn cursor costs no video frames.
 
 ### Linux
 
@@ -388,3 +386,8 @@ One line: `Mouse mode: absolute, local cursor (automatic)`, `relative (locked)`,
 - Animated cursors: frame list plus delays in `CURSOR_SHAPE`, using the reserved
   flags field.
 - High-DPI cursors on macOS/Wayland clients via SDL3 alternate cursor images.
+- Skip re-encoding the unchanged last frame on a Desktop Duplication pointer-only
+  update while the host is not drawing the cursor (today, as with
+  Ctrl+Alt+Shift+N, a moving cursor still produces duplicate frames). Returning a
+  timeout there is not enough: the capture loop sleeps 10 ms after a timeout and
+  busts its pacing group, so this needs its own path.
