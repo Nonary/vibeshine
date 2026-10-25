@@ -37,7 +37,9 @@
  *      "features":{"power_menu":"...","header_icon":"...","header_menu":"...","focusable":"...",
  *                  "header_styles":"..."}}                              values start with ok, fallback or off
  *   The helper must refuse a script whose "protocol" differs from protocol::version.
- *   Status is delivered with window.VibeshineBPM.setStatus(<status payload>). The script sends
+ *   Status is delivered with window.VibeshineBPM.setStatus(<status payload>). While injected the
+ *   helper calls window.VibeshineBPM.heartbeat() every 5 s (a status update counts); after 15 s with
+ *   neither, the script hides its entries, since a helper that is gone can't act on them. The script sends
  *   {"type":"action"|"feature"|"error"|"disabled", ...} through the window.__vibeshineBridge binding,
  *   with the same fields as the helper -> service messages above ("disabled" carries a "reason").
  *

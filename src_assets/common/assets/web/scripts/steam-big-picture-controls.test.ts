@@ -105,6 +105,53 @@ test('selecting the entries sends end_stream and disconnect actions', () => {
   ]);
 });
 
+test('hides its entries while the helper is gone, and shows them when it checks in again', () => {
+  const steam = createSteam();
+  steam.inject();
+  steam.window.VibeshineBPM.setStatus(streaming);
+  steam.advance(14_000);
+  assert.equal(menuLabels(steam.openPowerMenu())[0], 'End Stream (Vibeshine)');
+  assert.ok(findHost(steam.renderHeader(), isIcon));
+
+  steam.advance(2_000);
+  assert.deepEqual(menuLabels(steam.openPowerMenu()), STEAM_POWER_MENU);
+  assert.equal(findHost(steam.renderHeader(), isIcon), undefined);
+
+  steam.window.VibeshineBPM.heartbeat();
+  assert.equal(menuLabels(steam.openPowerMenu())[0], 'End Stream (Vibeshine)');
+  assert.ok(findHost(steam.renderHeader(), isIcon));
+});
+
+test('keeps its entries while the helper checks in without status changes', () => {
+  const steam = createSteam();
+  steam.inject();
+  steam.window.VibeshineBPM.setStatus(streaming);
+  for (let i = 0; i < 6; i += 1) {
+    steam.advance(5_000);
+    steam.window.VibeshineBPM.heartbeat();
+  }
+  assert.equal(menuLabels(steam.openPowerMenu())[0], 'End Stream (Vibeshine)');
+});
+
+test('notices a missing helper when the Power menu opens, even with throttled timers', () => {
+  const steam = createSteam();
+  steam.inject();
+  steam.window.VibeshineBPM.setStatus(streaming);
+  steam.skip(20_000);
+  assert.deepEqual(menuLabels(steam.openPowerMenu()), STEAM_POWER_MENU);
+});
+
+test('runs one staleness timer per injection and stops it when unpatched', () => {
+  const steam = createSteam();
+  steam.inject();
+  steam.inject();
+  assert.equal(steam.timers.size, 1);
+  steam.window.VibeshineBPM.unpatch();
+  assert.equal(steam.timers.size, 0);
+  steam.inject({ checkOnly: true });
+  assert.equal(steam.timers.size, 0);
+});
+
 test('offers only the actions the host allows', () => {
   const steam = createSteam();
   steam.inject();

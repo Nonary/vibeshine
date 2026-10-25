@@ -17,7 +17,8 @@
 //   errors the script switches itself off.
 //
 // Status arrives via window.VibeshineBPM.setStatus(); actions and reports go back through
-// window.__vibeshineBridge, a CDP binding the helper installs.
+// window.__vibeshineBridge, a CDP binding the helper installs. The helper also calls heartbeat() every
+// few seconds: after 15 s without hearing from it, the entries hide until it is back.
 //
 // Options (window.__vibeshineOptions, read once at injection):
 //   checkOnly        find everything, patch nothing, return the report
@@ -201,16 +202,21 @@
   // Status store and labels
   // ---------------------------------------------------------------------------------------------
   let status = null;
+  // The helper checks in every 5 s, with heartbeat() or setStatus(). When it goes quiet it has
+  // stopped, crashed or been uninstalled, and nothing would act on our entries, so they hide (the
+  // store reads as empty) until it checks in again.
+  const STALE_AFTER_MS = 15000;
+  let lastHeard = Date.now();
+  let stale = false;
   const listeners = new Set();
   const store = {
-    get: () => status,
+    get: () => (stale ? null : status),
     subscribe(fn) {
       listeners.add(fn);
       return () => listeners.delete(fn);
     },
   };
-  function setStatus(next) {
-    status = next;
+  function notify() {
     for (const fn of listeners) {
       try {
         fn();
@@ -218,6 +224,26 @@
         recordError('store', e);
       }
     }
+  }
+  function setStatus(next) {
+    status = next;
+    lastHeard = Date.now();
+    stale = false;
+    notify();
+  }
+  function heartbeat() {
+    lastHeard = Date.now();
+    if (stale) {
+      stale = false;
+      notify();
+    }
+  }
+  // Runs once a second, and when a context menu opens: Chromium may throttle timers in Steam's
+  // hidden shared context, but the Power menu must not offer entries nothing will act on.
+  function checkStale() {
+    if (stale || Date.now() - lastHeard < STALE_AFTER_MS) return;
+    stale = true;
+    notify();
   }
 
   const isActive = (s) => !!(s && (s.appRunning || s.clients?.length));
@@ -397,6 +423,7 @@
     const hooked = disguise(function (element, ...rest) {
       if (state.enabled) {
         try {
+          checkStale();
           element = onContextMenuCreated(element);
         } catch (e) {
           recordError('context-menu-hook', e);
@@ -546,10 +573,14 @@
   const report = () => ({ protocol: PROTOCOL, version: VERSION, react: React.version, enabled: state.enabled, errors: state.errors, features: { ...features } });
   if (options.checkOnly) return report();
 
+  const staleTimer = setInterval(safeHandler('stale-check', checkStale), 1000);
+  cleanups.push(() => clearInterval(staleTimer));
+
   const api = {
     protocol: PROTOCOL,
     version: VERSION,
     setStatus,
+    heartbeat,
     report,
     unpatch() {
       disable('replaced', { notify: false });

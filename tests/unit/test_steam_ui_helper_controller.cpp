@@ -41,6 +41,7 @@ namespace {
     std::vector<std::string> probed;
     std::vector<std::string> injections;  // first line of each injection: the options
     std::vector<json> statuses;
+    int heartbeats = 0;
     int unpatches = 0;
     std::function<void(cdp_event_t)> events;  // the latest connection to the shared context
 
@@ -113,6 +114,10 @@ namespace {
       }
       if (expression == policy::unpatch_expression) {
         ++steam_.unpatches;
+        return {{"result", {{"value", true}}}};
+      }
+      if (expression == policy::heartbeat_expression) {
+        ++steam_.heartbeats;
         return {{"result", {{"value", true}}}};
       }
       return {{"result", {{"value", "Oct 22 2026 14:39:25"}}}};  // Steam's build date
@@ -388,6 +393,37 @@ TEST_F(SteamUiHelperController, StopsPushingStatusWhileTheScriptIsOffUntilSteamR
   helper.step();
   EXPECT_EQ(steam.injections.size(), 2U);
   EXPECT_EQ(steam.statuses, (std::vector<json> {streaming, idle}));
+}
+
+TEST_F(SteamUiHelperController, ChecksInWithTheScriptWhileItRuns) {
+  auto &helper = make();
+  helper.set_status(streaming);
+  helper.step();  // Injects and pushes the status.
+  now += 4s;
+  helper.step();
+  EXPECT_EQ(steam.heartbeats, 0);
+  now += 1s;
+  helper.step();
+  EXPECT_EQ(steam.heartbeats, 1);
+
+  // A status update counts as checking in.
+  now += 3s;
+  helper.set_status(idle);
+  helper.step();
+  now += 4s;
+  helper.step();
+  EXPECT_EQ(steam.heartbeats, 1);
+  now += 1s;
+  helper.step();
+  EXPECT_EQ(steam.heartbeats, 2);
+
+  // A script that switched itself off has nothing left to hide.
+  steam.binding({{"type", "disabled"}, {"reason", "8 errors"}});
+  for (int i = 0; i < 6; ++i) {
+    now += 5s;
+    helper.step();
+  }
+  EXPECT_EQ(steam.heartbeats, 2);
 }
 
 TEST_F(SteamUiHelperController, ReconnectsWhenTheConnectionCloses) {

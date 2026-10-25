@@ -385,8 +385,18 @@ export function createSteam(options: FakeSteamOptions = {}) {
     modules.map(([id, source]) => [id, withSource(noop.bind(null), source)]),
   );
 
+  // Steam's clock and timers, moved only by advance() and skip() ------------------------------
+  let clock = 1_000_000;
+  let nextTimer = 1;
+  const timers = new Map<number, { fn: () => void; every: number; due: number }>();
+
   // Steam's shared JS context -----------------------------------------------------------------
   const window: any = vm.createContext({
+    setInterval: (fn: () => void, every: number) => {
+      timers.set(nextTimer, { fn, every, due: clock + every });
+      return nextTimer++;
+    },
+    clearInterval: (id: number) => timers.delete(id),
     webpackChunksteamui: { push: (chunk: any[]) => chunk[2]?.(require) },
     __vibeshineBridge: (json: string) => messages.push(JSON.parse(json)),
     SteamUIStore: {
@@ -398,9 +408,30 @@ export function createSteam(options: FakeSteamOptions = {}) {
     console: { log: noop, error: (...args: unknown[]) => consoleErrors.push(args) },
   });
   window.window = window;
+  vm.runInContext('Date', window).now = () => clock;
 
   return {
     window,
+    timers,
+    /** Move Steam's clock forward, running the timers that come due. */
+    advance(ms: number) {
+      const end = clock + ms;
+      for (;;) {
+        let next: { fn: () => void; every: number; due: number } | undefined;
+        for (const timer of timers.values()) {
+          if (timer.due <= end && (!next || timer.due < next.due)) next = timer;
+        }
+        if (!next) break;
+        clock = next.due;
+        next.due += next.every;
+        next.fn();
+      }
+      clock = end;
+    },
+    /** Move Steam's clock forward without running timers, as when Chromium throttles them. */
+    skip(ms: number) {
+      clock += ms;
+    },
     messages,
     consoleErrors,
     createdMenus,

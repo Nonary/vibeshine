@@ -95,7 +95,9 @@ namespace steam_ui_helper {
     void connect(clock::time_point now);
     void drop_session();
     void inject(clock::time_point now);
-    void push_status();
+    // True when there was a new status to send, whether or not Steam took it.
+    bool push_status();
+    void heartbeat();
     void forget_injection();
     // Steam's UI reloaded in the connected page; counts towards the breaker.
     void on_reload(clock::time_point now);
@@ -123,6 +125,7 @@ namespace steam_ui_helper {
     bool script_disabled_ = false;
     bool script_refused_ = false;
     std::uint64_t pushed_version_ = 0;
+    std::optional<clock::time_point> next_heartbeat_;
     std::string steam_build_;
     std::string state_;
     std::uint64_t steam_instance_ = 0;  // The steam.exe run the session belongs to.

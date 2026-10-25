@@ -201,6 +201,14 @@ namespace platf::steam::big_picture::policy {
   /** Expression that removes the injected script's patches, used when the helper stops. */
   constexpr std::string_view unpatch_expression = "window.VibeshineBPM?.unpatch?.(), true";
 
+  /** Expression that tells the injected script the helper is still there. After 15 s without one (or a
+   * status) the script hides its entries, so a helper that is killed before it can unpatch leaves no
+   * dead entries in Steam. */
+  constexpr std::string_view heartbeat_expression = "window.VibeshineBPM?.heartbeat?.(), true";
+
+  /** How often the helper checks in with the script; a status update counts. Well inside its 15 s. */
+  constexpr auto heartbeat_interval = std::chrono::seconds(5);
+
   /** Validate the script's injection report and turn it into a "report" message for the service.
    * Returns nullopt when it isn't a report or speaks another protocol version. */
   std::optional<nlohmann::json> report_message(const nlohmann::json &report, std::string_view steam_build);

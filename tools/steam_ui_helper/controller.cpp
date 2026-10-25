@@ -117,7 +117,13 @@ namespace steam_ui_helper {
       inject(now);
     }
     if (injected_ && !script_disabled_) {
-      push_status();
+      // A status update counts as checking in; without one, check in every few seconds.
+      if (push_status()) {
+        next_heartbeat_ = now + policy::heartbeat_interval;
+      } else if (!next_heartbeat_ || now >= *next_heartbeat_) {
+        heartbeat();
+        next_heartbeat_ = now + policy::heartbeat_interval;
+      }
     }
   }
 
@@ -294,6 +300,7 @@ namespace steam_ui_helper {
       injected_ = true;
       script_disabled_ = false;
       pushed_version_ = 0;
+      next_heartbeat_ = now + policy::heartbeat_interval;  // The script starts out having just heard from us.
       tracker_.injected(now);
       emit(*report);
       set_state(protocol::steam_state::injected);
@@ -305,13 +312,13 @@ namespace steam_ui_helper {
     }
   }
 
-  void controller_t::push_status() {
+  bool controller_t::push_status() {
     json status;
     std::uint64_t version;
     {
       std::lock_guard lock(mutex_);
       if (!status_ || status_version_ == pushed_version_) {
-        return;
+        return false;
       }
       status = *status_;
       version = status_version_;
@@ -321,6 +328,15 @@ namespace steam_ui_helper {
       pushed_version_ = version;
     } catch (const std::exception &error) {
       log("warning", std::string("could not update the status in Steam: ") + error.what());
+    }
+    return true;
+  }
+
+  void controller_t::heartbeat() {
+    try {
+      evaluate(policy::heartbeat_expression);
+    } catch (const std::exception &error) {
+      log("warning", std::string("could not check in with the script in Steam: ") + error.what());
     }
   }
 
