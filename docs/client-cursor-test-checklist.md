@@ -33,7 +33,9 @@ odd in the logs.
     on both light and dark backgrounds.
   - Window edges show the resize arrows, and the hotspot is accurate (resize grabs
     the border, not a pixel beside it).
-  - Hidden-pointer-while-typing (Windows setting) hides and shows the local cursor.
+  - With "Hide pointer while typing" on (Windows mouse settings), typing in a text
+    field hides the cursor without switching to relative mode, and moving the
+    mouse brings it back in absolute mode.
 - [ ] **Large or high-DPI cursors.**
   - Set the Windows cursor size to a large value, or use a 150–200% scaled host
     monitor.
@@ -140,6 +142,6 @@ odd in the logs.
   - Ctrl+Alt+Shift+M toggles as before.
 - [ ] **This client with automatic mode off.**
   - No `Mouse mode:` overlay line appears.
-  - Ctrl+Alt+Shift+A reaches the host.
+  - Ctrl+Alt+Shift+A reaches the host (also true on stock hosts with the setting on).
   - Behaviour is identical to the base moonlight-qt.
 - [ ] **Linux host.** The feature is not advertised and the client uses the fallback.
