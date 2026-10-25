@@ -252,6 +252,7 @@ namespace platf::dxgi {
       BOOST_LOG(info) << "Requested frame rate [" << display->client_frame_rate << "fps]";
     }
     display->display_refresh_rate_rounded = lround(display_refresh_rate_decimal);
+    cursor_shape_source = host_cursor::tracker::dxgi_shape_source();
     return 0;
   }
 

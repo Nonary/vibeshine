@@ -24,6 +24,7 @@
 #include <wrl/client.h>
 
 // local includes
+#include "cursor_tracker.h"
 #include "gpu_priority.h"
 #include "src/platform/common.h"
 #include "src/platform/windows/ipc/pipes.h"
@@ -371,6 +372,7 @@ namespace platf::dxgi {
   public:
     dup_t dup;
     bool has_frame {};
+    std::shared_ptr<void> cursor_shape_source;  // client-side cursor: prefer DXGI pointer shapes
     std::chrono::steady_clock::time_point last_protected_content_warning_time {};
 
     int init(display_base_t *display, const ::video::config_t &config);
