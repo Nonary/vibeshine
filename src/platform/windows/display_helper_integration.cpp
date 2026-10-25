@@ -8,6 +8,7 @@
 
   // standard
   #include <algorithm>
+  #include <array>
   #include <atomic>
   #include <boost/algorithm/string/predicate.hpp>
   #include <chrono>
@@ -47,6 +48,7 @@
   #include "src/platform/windows/impersonating_display_device.h"
   #include "src/platform/windows/ipc/display_settings_client.h"
   #include "src/platform/windows/ipc/misc_utils.h"
+  #include "src/platform/windows/ipc/pipes.h"
   #include "src/platform/windows/ipc/process_handler.h"
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/virtual_display.h"
@@ -82,6 +84,7 @@ namespace {
 
   void terminate_helper_process() {
     platf::display_helper_client::set_expected_helper_process_id(0);
+    platf::display_helper_client::set_private_control_pipe_name({});
     helper_proc().terminate();
   }
 
@@ -1744,6 +1747,7 @@ namespace {
       } else {
         // Process exited; fall through to restart
         platf::display_helper_client::set_expected_helper_process_id(0);
+        platf::display_helper_client::set_private_control_pipe_name({});
         DWORD exit_code = 0;
         GetExitCodeProcess(h, &exit_code);
         BOOST_LOG(debug) << "Display helper process detected as exited (code=" << exit_code << "); preparing restart.";
@@ -1782,6 +1786,28 @@ namespace {
       return false;
     }
 
+    const std::string endpoint_guid = platf::dxgi::generate_guid();
+    if (endpoint_guid.empty()) {
+      BOOST_LOG(error) << "Failed to generate a private display-helper IPC endpoint name.";
+      note_helper_start_failure("private IPC endpoint name generation failure");
+      return false;
+    }
+    const std::string private_pipe_name = "sunshine_display_helper_" + endpoint_guid;
+    platf::dxgi::NamedPipeFactory endpoint_factory;
+    endpoint_factory.set_first_pipe_instance_only();
+    if (platf::is_running_as_system()) {
+      endpoint_factory.set_system_only_server();
+    }
+    auto endpoint_master = endpoint_factory.create_server_handle(private_pipe_name, true);
+    if (!endpoint_master) {
+      platf::display_helper_client::set_private_control_pipe_name({});
+      BOOST_LOG(error) << "Failed to preclaim a private display-helper IPC endpoint.";
+      note_helper_start_failure("private IPC endpoint creation failure");
+      return false;
+    }
+    platf::display_helper_client::set_private_control_pipe_name(private_pipe_name);
+    const std::array<HANDLE, 1> inherited_handles {endpoint_master.get()};
+
     const bool allow_system_fallback = platf::is_running_as_system() && !user_session_ready();
     // Select the helper engine (legacy fallback vs v2) and propagate the log level.
     std::wstring helper_args = legacy_engine ? L"--engine=legacy" : L"--engine=v2";
@@ -1789,14 +1815,17 @@ namespace {
     helper_args += std::to_wstring(std::clamp(config::sunshine.min_log_level, 0, 6));
     helper_args += L" " + display_helper::restore_state_file_argument(
       std::filesystem::path(platf::from_utf8(config::nvhttp.vibeshine_file_state)));
+    helper_args += L" --ipc-handle=";
+    helper_args += std::to_wstring(reinterpret_cast<std::uintptr_t>(endpoint_master.get()));
     statefile::save_display_helper_engine(legacy_engine ? "legacy" : "v2");
     BOOST_LOG(debug) << "Starting display helper: " << platf::to_utf8(helper.wstring())
                      << " " << platf::to_utf8(helper_args);
     if (cancellation_requested(cancellation_predicate) ||
         operation_deadline_expired(operation_deadline)) {
+      platf::display_helper_client::set_private_control_pipe_name({});
       return false;
     }
-    bool started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback);
+    bool started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, inherited_handles);
     if (!started && force_restart) {
       // If we were asked to hard-restart, tolerate a brief overlap window where the old
       // instance is still tearing down and retry quickly.
@@ -1805,18 +1834,23 @@ namespace {
               std::chrono::milliseconds(150),
               cancellation_predicate,
               operation_deadline)) {
+          platf::display_helper_client::set_private_control_pipe_name({});
           return false;
         }
-        started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback);
+        started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, inherited_handles);
       }
     }
     if (!started) {
+      platf::display_helper_client::set_private_control_pipe_name({});
       BOOST_LOG(error) << "Failed to start display helper: " << platf::to_utf8(helper.wstring());
       note_helper_start_failure("process launch failure");
       return false;
     }
     HANDLE h = helper_proc().get_process_handle();
     if (!h) {
+      platf::display_helper_client::set_expected_helper_process_id(0);
+      platf::display_helper_client::set_private_control_pipe_name({});
+      helper_proc().terminate();
       BOOST_LOG(error) << "Display helper started but no process handle available";
       note_helper_start_failure("missing process handle");
       return false;
@@ -1827,8 +1861,8 @@ namespace {
     platf::display_helper_client::set_expected_helper_process_id(pid);
     BOOST_LOG(info) << "Display helper successfully started (pid=" << pid << ")";
 
-    // Give the helper process time to initialize and create its named pipe server
-    // Check if it exits early (e.g., singleton mutex conflict from incomplete cleanup)
+    // Give the helper process time to initialize its inherited server endpoint
+    // and check whether it exits before accepting IPC.
     for (int check = 0; check < 6; ++check) {
       if (cancellation_requested(cancellation_predicate) ||
           operation_deadline_expired(operation_deadline)) {
@@ -1855,30 +1889,40 @@ namespace {
                 std::chrono::milliseconds(1000),
                 cancellation_predicate,
                 operation_deadline)) {
+            platf::display_helper_client::set_expected_helper_process_id(0);
+            platf::display_helper_client::set_private_control_pipe_name({});
             return false;
           }
 
-          const bool retry_started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback);
+          const bool retry_started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, inherited_handles);
           if (!retry_started) {
+            platf::display_helper_client::set_expected_helper_process_id(0);
+            platf::display_helper_client::set_private_control_pipe_name({});
             BOOST_LOG(error) << "Display helper retry start failed";
             note_helper_start_failure("singleton retry launch failure");
             return false;
           }
           h = helper_proc().get_process_handle();
-          if (h) {
-            pid = GetProcessId(h);
-            platf::display_helper_client::set_expected_helper_process_id(pid);
-            BOOST_LOG(info) << "Display helper retry succeeded (pid=" << pid << ")";
-            if (!sleep_with_cancellation(
-                  std::chrono::milliseconds(300),
-                  cancellation_predicate,
-                  operation_deadline)) {
-              return false;
-            }
+          if (!h) {
+            platf::display_helper_client::set_expected_helper_process_id(0);
+            platf::display_helper_client::set_private_control_pipe_name({});
+            helper_proc().terminate();
+            note_helper_start_failure("singleton retry missing process handle");
+            return false;
+          }
+          pid = GetProcessId(h);
+          platf::display_helper_client::set_expected_helper_process_id(pid);
+          BOOST_LOG(info) << "Display helper retry succeeded (pid=" << pid << ")";
+          if (!sleep_with_cancellation(
+                std::chrono::milliseconds(300),
+                cancellation_predicate,
+                operation_deadline)) {
+            return false;
           }
           break;
         } else {
           platf::display_helper_client::set_expected_helper_process_id(0);
+          platf::display_helper_client::set_private_control_pipe_name({});
           BOOST_LOG(error) << "Display helper exited unexpectedly with code " << exit_code;
           note_helper_start_failure("unexpected process exit");
           return false;
@@ -2824,6 +2868,9 @@ namespace display_helper_integration {
           terminate_helper_process();
           DWORD exit_code {};
           if (!helper_proc().wait_for(exit_code, 5000)) return false;
+        } else if (wait == WAIT_OBJECT_0) {
+          platf::display_helper_client::set_expected_helper_process_id(0);
+          platf::display_helper_client::set_private_control_pipe_name({});
         } else if (wait != WAIT_OBJECT_0) {
           return false;
         }

@@ -1,9 +1,9 @@
-"""Execute production restore admission and client handshake paths with OS fakes.
+"""Execute production restore admission and private IPC launch contracts with OS fakes.
 
 The fixtures compile real function bodies, replacing only the monotonic clock and
 Windows boundary collaborators. --repo permits before/after failure controls.
-This verifies application timeout propagation, not Windows driver scheduling or
-physical TV power transitions.
+This verifies application timeout propagation and the portable inherited-handle
+parser, not Windows process creation, driver scheduling, or physical TV transitions.
 """
 import argparse
 import pathlib
@@ -649,6 +649,75 @@ int main() {
 '''
 
 
+def private_pipe_transport():
+    pipes = (args.pipes_source or root / 'src/platform/windows/ipc/pipes.cpp').read_text()
+    client = (args.client_source or root / 'src/platform/windows/ipc/display_settings_client.cpp').read_text()
+    integration = (root / 'src/platform/windows/display_helper_integration.cpp').read_text()
+    process_handler = (root / 'src/platform/windows/ipc/process_handler.cpp').read_text()
+    legacy = (root / 'tools/display_settings_helper.cpp').read_text()
+    v2 = (root / 'tools/display_settings_helper_v2.cpp').read_text()
+
+    assert 'FILE_FLAG_FIRST_PIPE_INSTANCE' in pipes
+    assert 'set_system_only_server()' in integration
+    assert 'create_server_handle(private_pipe_name, true)' in integration
+    assert 'if (endpoint_guid.empty())' in integration
+    assert 'isSystem && !_system_only_server' not in pipes
+    assert 'PROC_THREAD_ATTRIBUTE_HANDLE_LIST' in process_handler
+    assert 'parent_is_system && !inherited_handles.empty()' in process_handler
+    assert 'O:SYG:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)' in process_handler
+    assert process_handler.count('process_attributes_ptr,') >= 6
+    assert 'const std::array<HANDLE, 1> inherited_handles' in integration
+    assert integration.count('allow_system_fallback, inherited_handles)') >= 3
+    assert '--ipc-handle=' in integration
+    assert 'set_expected_server_process_id' not in client
+    assert 'session->endpoint_generation == endpoint_generation' in client
+    assert 'private_control_pipe_generation().load(std::memory_order_acquire) == session->endpoint_generation' in client
+    assert 'std::lock_guard<std::timed_mutex> write_lock(write_mutex())' in client
+    assert 'duplicate_server_pipe(ipc_master.get())' in legacy
+    assert 'duplicate_server_pipe(ipc_master.get())' in v2
+    assert 'validate_server_pipe_handle(ipc_master.get())' in legacy
+    assert 'validate_server_pipe_handle(ipc_master.get())' in v2
+    assert 'SetHandleInformation(ipc_master.get(), HANDLE_FLAG_INHERIT, 0)' in legacy
+    assert 'SetHandleInformation(ipc_master.get(), HANDLE_FLAG_INHERIT, 0)' in v2
+    assert 'create_server("sunshine_display_helper")' not in legacy
+    assert 'create_server("sunshine_display_helper")' not in v2
+    assert 'AnonymousPipeFactory' not in legacy
+    assert 'AnonymousPipeFactory' not in v2
+    assert 'if (!ensure_single_instance(singleton))' in legacy
+    assert 'if (!display_helper_paths::ensure_single_instance(singleton))' in v2
+
+    header = (root / 'tools/display_helper_ipc.h').as_posix()
+    return common + f'''\n#include "{header}"\n''' + r'''
+int main() {
+  {
+    char program[] = "helper";
+    char option[] = "--ipc-handle=184467";
+    char *argv[] = {program, option};
+    require(display_helper_ipc::inherited_server_handle_from_command_line(2, argv) == 184467,
+            "valid inherited handle was rejected");
+  }
+  for (const char *bad : {"--ipc-handle=", "--ipc-handle=0", "--ipc-handle=-1",
+                          "--ipc-handle=12x", "--ipc-handle=184467440737095516160"}) {
+    char program[] = "helper";
+    char option[96] = {};
+    std::strncpy(option, bad, sizeof(option) - 1);
+    char *argv[] = {program, option};
+    require(!display_helper_ipc::inherited_server_handle_from_command_line(2, argv),
+            "malformed inherited handle was accepted");
+  }
+  {
+    char program[] = "helper";
+    char first[] = "--ipc-handle=12";
+    char second[] = "--ipc-handle=13";
+    char *argv[] = {program, first, second};
+    require(!display_helper_ipc::inherited_server_handle_from_command_line(3, argv),
+            "duplicate inherited handles were accepted");
+  }
+  std::cout << "private pipe launch contracts and handle parser passed\n";
+}
+'''
+
+
 def resume():
     nvhttp = (args.nvhttp_source or root / 'src/nvhttp.cpp').read_text()
     start = nvhttp.index('      if (!allow_display_changes) {')
@@ -761,7 +830,7 @@ int main() {
 
 with tempfile.TemporaryDirectory(prefix='virtual-display-startup-') as temporary:
     directory = pathlib.Path(temporary)
-    for name, factory in [('admission', admission), ('preflight', lambda: admission(True)), ('transport', transport), ('resume', resume)]:
+    for name, factory in [('admission', admission), ('preflight', lambda: admission(True)), ('transport', private_pipe_transport), ('resume', resume)]:
         if args.fixture not in [name, 'all']:
             continue
         source, binary = directory / f'{name}.cpp', directory / name

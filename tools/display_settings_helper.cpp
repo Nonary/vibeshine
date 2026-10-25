@@ -63,6 +63,7 @@
   #include "src/platform/windows/display_restore_task.h"
   #include "src/platform/windows/display_restore_policy.h"
   #include "tools/display_helper_paths.h"
+  #include "tools/display_helper_ipc.h"
   #include "src/platform/windows/legacy_restore_event_policy.h"
   #include "src/platform/windows/recovery_status.h"
 
@@ -6305,6 +6306,20 @@ int run_legacy_helper(int argc, char *argv[]) {
     BOOST_LOG(error) << "Display helper: refusing SYSTEM startup because the shared snapshot directory is not already private.";
     return 2;
   }
+  winrt::file_handle ipc_master;
+  if (!restore_mode) {
+    const auto inherited_handle_value = display_helper_ipc::inherited_server_handle_from_command_line(argc, argv);
+    if (!inherited_handle_value) {
+      BOOST_LOG(error) << "Display helper: missing or invalid --ipc-handle argument.";
+      return 2;
+    }
+    ipc_master = winrt::file_handle {reinterpret_cast<HANDLE>(*inherited_handle_value)};
+    if (!platf::dxgi::validate_server_pipe_handle(ipc_master.get()) ||
+        !SetHandleInformation(ipc_master.get(), HANDLE_FLAG_INHERIT, 0)) {
+      BOOST_LOG(error) << "Display helper: --ipc-handle is not an inherited server endpoint.";
+      return 2;
+    }
+  }
   const auto active_snapshots = make_snapshot_paths(snapshot_dir);
   const auto search_roots = snapshot_search_roots();
 
@@ -6390,9 +6405,6 @@ int run_legacy_helper(int argc, char *argv[]) {
     return 0;
   }
 
-  auto anonymous_pipe_factory = std::make_unique<platf::dxgi::AnonymousPipeFactory>();
-  anonymous_pipe_factory->set_first_pipe_instance_only();
-  platf::dxgi::FramedPipeFactory pipe_factory(std::move(anonymous_pipe_factory));
   dd_log_bridge().install();
   ServiceState state;
   // Suppression of startup restore is deprecated; REVERTs are always allowed.
@@ -6458,17 +6470,11 @@ int run_legacy_helper(int argc, char *argv[]) {
 
   // Outer service loop: keep accepting new client sessions while running
   while (running.load(std::memory_order_acquire)) {
-    auto ctrl_pipe = pipe_factory.create_server("sunshine_display_helper");
+    auto raw_pipe = platf::dxgi::duplicate_server_pipe(ipc_master.get());
+    auto ctrl_pipe = raw_pipe ? std::make_unique<platf::dxgi::FramedPipe>(std::move(raw_pipe)) : nullptr;
     if (!ctrl_pipe) {
-      auto named_pipe_factory = std::make_unique<platf::dxgi::NamedPipeFactory>();
-      named_pipe_factory->set_first_pipe_instance_only();
-      platf::dxgi::FramedPipeFactory fallback_factory(std::move(named_pipe_factory));
-      ctrl_pipe = fallback_factory.create_server("sunshine_display_helper");
-      if (!ctrl_pipe) {
-        BOOST_LOG(error) << "Failed to create control pipe; retrying in 500ms";
-        std::this_thread::sleep_for(500ms);
-        continue;
-      }
+      BOOST_LOG(error) << "Display helper: inherited IPC handle is not a valid server endpoint.";
+      return 2;
     }
 
     platf::dxgi::AsyncNamedPipe async_pipe(std::move(ctrl_pipe));

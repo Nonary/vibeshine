@@ -113,9 +113,11 @@ namespace platf::dxgi {
     PSID raw_user_sid = nullptr;
 
     if (isSystem) {
-      token.reset(platf::dxgi::retrieve_users_token(false));
-      if (!token) {
-        BOOST_LOG(warning) << "No user token available; creating SYSTEM-only pipe ACL.";
+      if (!_system_only_server) {
+        token.reset(platf::dxgi::retrieve_users_token(false));
+        if (!token) {
+          BOOST_LOG(warning) << "No user token available; creating SYSTEM-only pipe ACL.";
+        }
       }
     } else {
       HANDLE raw_token = nullptr;
@@ -223,6 +225,11 @@ namespace platf::dxgi {
   }
 
   std::unique_ptr<INamedPipe> NamedPipeFactory::create_server(const std::string &pipeName) {
+    auto handle = create_server_handle(pipeName, false);
+    return handle ? std::make_unique<WinPipe>(std::move(handle), true) : nullptr;
+  }
+
+  winrt::file_handle NamedPipeFactory::create_server_handle(const std::string &pipeName, const bool inheritable) {
     auto wPipeBase = utf8_to_wide(pipeName);
     std::wstring fullPipeName = (wPipeBase.find(LR"(\\.\pipe\)") == 0) ? wPipeBase : LR"(\\.\pipe\)" + wPipeBase;
 
@@ -243,7 +250,7 @@ namespace platf::dxgi {
       if (_secdesc_builder(secDesc, &rawDacl)) {
         secAttr.nLength = static_cast<DWORD>(sizeof(secAttr));
         secAttr.lpSecurityDescriptor = &secDesc;
-        secAttr.bInheritHandle = FALSE;
+        secAttr.bInheritHandle = inheritable ? TRUE : FALSE;
         pSecAttr = &secAttr;
         security_configured = true;
       } else {
@@ -260,11 +267,11 @@ namespace platf::dxgi {
     if (!security_configured && platf::dxgi::is_running_as_system()) {
       if (!create_security_descriptor(secDesc, &rawDacl)) {
         BOOST_LOG(error) << "Failed to init security descriptor";
-        return nullptr;
+        return {};
       }
       secAttr.nLength = static_cast<DWORD>(sizeof(secAttr));
       secAttr.lpSecurityDescriptor = &secDesc;
-      secAttr.bInheritHandle = FALSE;
+      secAttr.bInheritHandle = inheritable ? TRUE : FALSE;
       pSecAttr = &secAttr;
       security_configured = true;
     }
@@ -285,11 +292,14 @@ namespace platf::dxgi {
     if (!hPipe) {
       DWORD err = GetLastError();
       BOOST_LOG(error) << "CreateNamedPipeW failed (" << err << ")";
-      return nullptr;
+      return {};
     }
 
-    auto pipeObj = std::make_unique<WinPipe>(std::move(hPipe), true);
-    return pipeObj;
+    if (inheritable && !SetHandleInformation(hPipe.get(), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+      BOOST_LOG(error) << "SetHandleInformation(HANDLE_FLAG_INHERIT) failed (" << GetLastError() << ")";
+      return {};
+    }
+    return hPipe;
   }
 
   void NamedPipeFactory::set_security_descriptor_builder(SecurityDescriptorBuilder builder) {
@@ -306,6 +316,42 @@ namespace platf::dxgi {
 
   void NamedPipeFactory::set_first_pipe_instance_only() {
     _first_pipe_instance_only = true;
+  }
+
+  void NamedPipeFactory::set_system_only_server() {
+    _system_only_server = true;
+  }
+
+  bool validate_server_pipe_handle(const HANDLE handle) {
+    if (!handle || handle == INVALID_HANDLE_VALUE || GetFileType(handle) != FILE_TYPE_PIPE) {
+      BOOST_LOG(error) << "Inherited display-helper IPC handle is not a pipe.";
+      return false;
+    }
+    DWORD flags = 0;
+    if (!GetNamedPipeInfo(handle, &flags, nullptr, nullptr, nullptr) || !(flags & PIPE_SERVER_END)) {
+      BOOST_LOG(error) << "Inherited display-helper IPC handle is not a server endpoint.";
+      return false;
+    }
+    return true;
+  }
+
+  std::unique_ptr<INamedPipe> duplicate_server_pipe(const HANDLE master_handle) {
+    if (!validate_server_pipe_handle(master_handle)) {
+      return nullptr;
+    }
+    HANDLE duplicate = nullptr;
+    if (!DuplicateHandle(
+          GetCurrentProcess(),
+          master_handle,
+          GetCurrentProcess(),
+          &duplicate,
+          0,
+          FALSE,
+          DUPLICATE_SAME_ACCESS)) {
+      BOOST_LOG(error) << "Unable to duplicate inherited display-helper IPC handle, error=" << GetLastError();
+      return nullptr;
+    }
+    return std::make_unique<WinPipe>(winrt::file_handle {duplicate}, true);
   }
 
   std::unique_ptr<INamedPipe> NamedPipeFactory::create_client(const std::string &pipeName) {

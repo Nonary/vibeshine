@@ -18,6 +18,10 @@ namespace platf::display_helper_client {
   // integration layer. Zero clears admission until a new helper is started.
   void set_expected_helper_process_id(std::uint32_t process_id);
 
+  // Bind live IPC to the private pipe endpoint preclaimed by the host before
+  // launching the helper. Empty clears the endpoint and disables connection.
+  void set_private_control_pipe_name(std::string pipe_name);
+
   // Independent exact-version handshake; no old APPLY/DISARM capability is
   // accepted. Unknown completion is returned explicitly for the native fence.
   std::optional<::display_helper::borrow::result_t> acquire_borrow_quiescence(
