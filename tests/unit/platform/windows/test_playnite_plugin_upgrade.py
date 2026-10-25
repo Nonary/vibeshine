@@ -7,6 +7,12 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 repo = Path(__file__).resolve().parents[4]
+project = ET.parse(repo / "plugins/playnite/SunshinePlaynite/SunshinePlaynite.csproj")
+packaged_version = project.findtext(".//Version")
+manifest_version = next(line.split(":", 1)[1].strip() for line in
+                        (repo / "plugins/playnite/SunshinePlaynite/extension.yaml").read_text().splitlines()
+                        if line.startswith("Version:"))
+assert packaged_version == manifest_version, "Connector package and manifest versions must agree"
 source = (repo / "cmake/targets/windows.cmake").read_text()
 begin = source.index("if(DEFINED SUNSHINE_DOTNET_EXECUTABLE")
 end = source.index("endif()", source.index("if(NOT SUNSHINE_DOTNET_EXECUTABLE)", begin)) + len("endif()")
@@ -68,6 +74,7 @@ int main() {
   if (update(false, true, true, "0.5.0", "0.5.0")) return 5;
   if (update(false, false, true, "", "0.5.0")) return 6;
   if (update(false, true, false, "", "")) return 7;
+  if (!update(false, true, true, "0.5.2", "''' + packaged_version + '''")) return 8;
 }
 ''')
     executable = directory / ("policy.exe" if os.name == "nt" else "policy")
@@ -82,7 +89,7 @@ int main() {
     query = status[status.index("  struct playnite_install_state_t"):status.index("  // Enhance app JSON")]
     installer = (repo / "src/platform/windows/playnite_integration.cpp").read_text()
     cleanup_start = installer.index("      if (deployed)", installer.index("      cleanup_guard.disable();"))
-    cleanup = installer[cleanup_start:installer.index("      if (!deployed)", cleanup_start)]
+    cleanup = installer[cleanup_start:installer.index("      if (deployed && alternate)", cleanup_start)]
     cpp.write_text('''#include <filesystem>
 #include <fstream>
 #include <optional>
