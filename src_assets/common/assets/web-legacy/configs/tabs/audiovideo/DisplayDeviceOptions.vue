@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
-import PlatformLayout from '@/PlatformLayout.vue';
 import Checkbox from '@/Checkbox.vue';
 import ConfigDurationField from '@/ConfigDurationField.vue';
 import { useConfigStore } from '@/stores/config';
@@ -472,11 +471,11 @@ function clearSnapshotHotkey(): void {
 </script>
 
 <template>
-  <PlatformLayout v-if="config">
-    <template #windows>
+  <div v-if="config">
+    <template v-if="['windows', 'linux'].includes(store.metadata?.platform ?? '')">
       <div class="space-y-4">
         <!-- Step 2 content combined: configuration + snapshot (single card) -->
-        <section v-if="section === 'pre'" class="min-w-0">
+        <section v-if="section === 'pre' && store.metadata?.platform === 'windows'" class="min-w-0">
           <h4 class="mb-3 break-words text-sm font-semibold leading-snug">
             {{ $t('config.dd_step_2') }}: {{ $t('config.dd_pre_stream_setup') }}
           </h4>
@@ -1020,7 +1019,13 @@ function clearSnapshotHotkey(): void {
               </div>
             </section>
 
-            <n-grid :cols="12" x-gap="16" y-gap="16" class="optional-adjustments-grid">
+            <n-grid
+              v-if="store.metadata?.platform === 'windows'"
+              :cols="12"
+              x-gap="16"
+              y-gap="16"
+              class="optional-adjustments-grid"
+            >
               <!-- Resolution option -->
               <n-gi :span="12" :lg="6">
                 <div class="space-y-3">
@@ -1221,10 +1226,7 @@ function clearSnapshotHotkey(): void {
         </section>
       </div>
     </template>
-    <template #freebsd></template>
-    <template #linux></template>
-    <template #macos></template>
-  </PlatformLayout>
+  </div>
 </template>
 
 <style scoped>
