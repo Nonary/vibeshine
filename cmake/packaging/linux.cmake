@@ -85,6 +85,9 @@ if(SUNSHINE_BUILD_STEAMOS)
     return()
 endif()
 
+# SteamOS owns its bundle dependency scan and legacy RPATH above.
+include("${CMAKE_CURRENT_LIST_DIR}/linux_webrtc.cmake")
+
 if(${SUNSHINE_BUILD_APPIMAGE} OR ${SUNSHINE_BUILD_FLATPAK})
     install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/linux/misc/60-sunshine.rules"
             DESTINATION "${SUNSHINE_ASSETS_DIR}/udev/rules.d")
@@ -226,10 +229,14 @@ else()
         # Native package hooks make it root:vibeshine 0750 and attach only
         # cap_sys_admin,cap_sys_nice+p.  With no effective file bit, its loader
         # and the first statement in main() run with E/I/A empty.
-        install(PROGRAMS "$<TARGET_FILE:sunshine>"
-                DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}"
-                RENAME "vibeshine-host"
-                PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE)
+        if(SUNSHINE_ENABLE_WEBRTC AND WEBRTC_RUNTIME_LIB)
+            vibeshine_install_webrtc_host()
+        else()
+            install(PROGRAMS "$<TARGET_FILE:sunshine>"
+                    DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}"
+                    RENAME "vibeshine-host"
+                    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE)
+        endif()
         install(TARGETS vibeshine_vkms_peercred
                 RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
         install(FILES "${LIBVIRTUALDISPLAY_LINUX_ROOT}/packaging/vibeshine-vkms.sysusers"
