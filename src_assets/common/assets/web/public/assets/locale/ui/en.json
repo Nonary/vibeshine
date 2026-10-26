@@ -594,6 +594,7 @@
         "vulkanStatus": "Vulkan HDR layer status is unavailable.",
         "steamDebugPortFailed": "Steam's debug port could not be changed.",
         "steamRestartFailed": "Steam could not be restarted.",
+        "steamRestartSlow": "Steam is taking longer than expected to restart. Refresh this page to check on it.",
         "steamCheckFailed": "The compatibility check could not run."
       },
       "failedCount": {

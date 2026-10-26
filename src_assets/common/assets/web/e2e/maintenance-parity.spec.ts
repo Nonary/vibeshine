@@ -15,7 +15,11 @@ interface HostOptions {
     streaming?: boolean;
     restartFinishes?: boolean;
     detail?: string;
+    // Status reads after the controls are turned on that still say "off", as while the service
+    // is starting the helper.
+    startPolls?: number;
   };
+  failConfigPatch?: boolean;
 }
 
 async function setupHost(page: Page, options: HostOptions = {}) {
@@ -37,6 +41,7 @@ async function setupHost(page: Page, options: HostOptions = {}) {
     restart: 'idle',
     streaming: false,
     restartFinishes: true,
+    startPolls: 0,
     ...options.bigPicture,
   };
   const calls = {
@@ -158,11 +163,13 @@ async function setupHost(page: Page, options: HostOptions = {}) {
       calls.bigPictureStatus += 1;
       if (calls.holdBigPictureStatus) await calls.holdBigPictureStatus;
       const enabled = currentConfig.steam_big_picture_controls === true;
+      const starting = enabled && bigPicture.startPolls > 0;
+      if (starting) bigPicture.startPolls -= 1;
       body = {
         status: true,
         supported: true,
         enabled,
-        state: enabled ? bigPicture.state : 'off',
+        state: enabled && !starting ? bigPicture.state : 'off',
         detail: enabled ? (bigPicture.detail ?? '') : '',
         features: {},
         debug_port: {
@@ -232,6 +239,10 @@ async function setupHost(page: Page, options: HostOptions = {}) {
     } else if (path === '/api/config' && method === 'PATCH') {
       const patch = request.postDataJSON() as Record<string, unknown>;
       calls.configPatches.push(patch);
+      if (options.failConfigPatch) {
+        await route.fulfill({ status: 500, json: { error: 'config could not be saved' } });
+        return;
+      }
       Object.assign(currentConfig, patch);
       if ('dd_configuration_option' in patch || 'virtual_display_mode' in patch) {
         goldenStatus.maintenance_available =
@@ -588,6 +599,46 @@ test('the Steam card says why the Big Picture controls are not running', async (
   await expect(page.getByTestId('steam-big-picture-detail')).toHaveText(
     /session 2, not in the console session 1/,
   );
+});
+
+test('the Steam card follows the helper after the controls are turned on', async ({ page }) => {
+  await setupHost(page, { bigPicture: { flagFile: true, state: 'injected', startPolls: 2 } });
+  await page.goto('/v2/integrations');
+  await page.locator('#steam-big-picture-controls').check({ force: true });
+  // The first read still says "off"; that is the helper starting, not an unknown state.
+  await expect(page.getByText('Connecting to Steam', { exact: true })).toBeVisible();
+  await expect(page.getByText('Status unavailable', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Working', { exact: true })).toBeVisible();
+});
+
+test('the Big Picture switch goes back when saving fails', async ({ page }) => {
+  const calls = await setupHost(page, { failConfigPatch: true });
+  await page.goto('/v2/integrations');
+  const toggle = page.locator('#steam-big-picture-controls');
+  await toggle.check({ force: true });
+  await expect.poll(() => calls.configPatches).toEqual([{ steam_big_picture_controls: true }]);
+  await expect(page.getByText('Unable to update integration settings.')).toBeVisible();
+  await expect(toggle).not.toBeChecked();
+  await expect(toggle).toBeEnabled();
+  await expect(page.getByTestId('steam-debug-port')).toHaveCount(0);
+});
+
+test('a Steam restart that never finishes stops saying "Restarting Steam…"', async ({ page }) => {
+  await page.clock.install();
+  await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: { restartFinishes: false },
+  });
+  await page.goto('/v2/integrations');
+  await page
+    .getByTestId('steam-debug-port')
+    .getByRole('button', { name: 'Turn on', exact: true })
+    .click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Turn on and restart Steam' }).click();
+  await expect(page.getByText('Restarting Steam…', { exact: true })).toBeVisible();
+  await page.clock.runFor(95_000);
+  await expect(page.getByText('Restarting Steam…', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/Steam is taking longer than expected to restart/)).toBeVisible();
 });
 
 test('leaving the Integrations page stops following a Steam restart', async ({ page }) => {

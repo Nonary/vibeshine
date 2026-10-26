@@ -221,10 +221,13 @@ const playniteLaunching = ref(false);
 const steam = ref<SteamStatus | null>(null);
 const steamBigPicture = ref<SteamBigPictureStatus | null>(null);
 const steamBigPictureError = ref('');
+const steamBigPictureSaving = ref(false);
 const steamRestartDuringStream = ref(false);
 const steamCheckBusy = ref(false);
 const steamCheckReport = ref<SteamBigPictureReport | null>(null);
-let steamRestartTimer: number | undefined;
+// Polls the Big Picture status while something is expected to change: a Steam restart, or the
+// helper starting after the controls are turned on.
+let steamStatusTimer: number | undefined;
 const steamGames = ref<SteamGame[]>([]);
 const steamGamesLoading = ref(false);
 const steamGamesError = ref('');
@@ -1344,11 +1347,14 @@ const steamBigPictureBadge = computed<{ label: string; tone: StatusTone }>(() =>
     helper_stopped: 'danger',
     wrong_session: 'warning',
   };
-  const tone = value.state ? tones[value.state] : undefined;
+  // The service starts the helper in the background, so for a moment after the controls are
+  // turned on the status still says "off".
+  const current = value.state === 'off' ? 'connecting' : value.state;
+  const tone = current ? tones[current] : undefined;
   if (!tone) return { label: t('ui.integrations.steam.bigPictureUnknown'), tone: 'neutral' };
   // The flag file is there but Steam was started before it existed.
   const state =
-    value.state === 'port_closed' && value.debug_port?.flag_file ? 'needs_restart' : value.state;
+    current === 'port_closed' && value.debug_port?.flag_file ? 'needs_restart' : current;
   return { label: t(`ui.integrations.steam.bigPictureStates.${state}`), tone };
 });
 
@@ -1417,15 +1423,25 @@ const steamCheckSummary = computed(() => {
   });
 });
 
-async function setSteamBigPictureControls(value: boolean): Promise<void> {
+async function setSteamBigPictureControls(input: HTMLInputElement): Promise<void> {
+  const value = input.checked;
+  steamBigPictureSaving.value = true;
   try {
     await apiPatch('/api/config', { steam_big_picture_controls: value });
-    steamBigPicture.value = await apiGet<SteamBigPictureStatus>('/api/steam/big_picture/status');
-    steamBigPictureError.value = '';
-    notice.value = t('ui.integrations.notices.providerUpdated');
   } catch (cause) {
+    // Nothing was saved. The bound value didn't change either, so Vue won't redraw the switch.
+    input.checked = !value;
     steamBigPictureError.value = message(cause, t('ui.integrations.errors.providerUpdateFailed'));
+    return;
+  } finally {
+    steamBigPictureSaving.value = false;
   }
+  steamBigPictureError.value = '';
+  notice.value = t('ui.integrations.notices.providerUpdated');
+  // Saved, even if the status read below fails.
+  if (steamBigPicture.value) steamBigPicture.value.enabled = value;
+  await refreshSteamBigPicture();
+  if (value) watchSteamBigPictureStart();
 }
 
 async function refreshSteamBigPicture(): Promise<void> {
@@ -1439,11 +1455,26 @@ async function refreshSteamBigPicture(): Promise<void> {
 // Set when the page closes: a status request still in flight must not start another poll.
 let unmounted = false;
 
+// Follow the helper after the controls are turned on, until it gets past starting up and connecting
+// to Steam, or give up after 30 s.
+function watchSteamBigPictureStart(started = Date.now()): void {
+  window.clearTimeout(steamStatusTimer);
+  if (unmounted) return;
+  steamStatusTimer = window.setTimeout(async () => {
+    await refreshSteamBigPicture();
+    if (unmounted) return;
+    const value = steamBigPicture.value;
+    const starting =
+      value?.enabled === true && (value.state === 'off' || value.state === 'connecting');
+    if (starting && Date.now() - started < 30_000) watchSteamBigPictureStart(started);
+  }, 1500);
+}
+
 // Follow a Steam restart until Steam is back and the controls have reconnected, or give up after 90 s.
 function watchSteamRestart(started = Date.now()): void {
-  window.clearTimeout(steamRestartTimer);
+  window.clearTimeout(steamStatusTimer);
   if (unmounted) return;
-  steamRestartTimer = window.setTimeout(async () => {
+  steamStatusTimer = window.setTimeout(async () => {
     await refreshSteamBigPicture();
     if (unmounted) return;
     const value = steamBigPicture.value;
@@ -1461,13 +1492,19 @@ function watchSteamRestart(started = Date.now()): void {
       notice.value = t('ui.integrations.notices.steamRestarted');
     } else if (Date.now() - started < 90_000) {
       watchSteamRestart(started);
+    } else if (restart === 'restarting') {
+      notice.value = '';
+      steamBigPictureError.value = t('ui.integrations.errors.steamRestartSlow');
+    } else {
+      // Steam is back but the controls haven't connected; the badge says why.
+      notice.value = t('ui.integrations.notices.steamRestarted');
     }
   }, 1500);
 }
 
 onBeforeUnmount(() => {
   unmounted = true;
-  window.clearTimeout(steamRestartTimer);
+  window.clearTimeout(steamStatusTimer);
 });
 
 async function runSteamDebugPortAction(action: SteamDebugPortAction): Promise<void> {
@@ -2041,9 +2078,8 @@ function libraryRequest(
                       id="steam-big-picture-controls"
                       type="checkbox"
                       :checked="steamBigPicture?.enabled === true"
-                      @change="
-                        setSteamBigPictureControls(($event.target as HTMLInputElement).checked)
-                      "
+                      :disabled="steamBigPictureSaving || steamRestarting"
+                      @change="setSteamBigPictureControls($event.target as HTMLInputElement)"
                     />
                     <span class="vs-switch__track" aria-hidden="true" />
                     <span class="vs-sr-only">{{
