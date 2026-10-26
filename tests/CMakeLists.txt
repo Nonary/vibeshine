@@ -630,6 +630,10 @@ sunshine_register_component(NAME test_component_display_helper_request_policy TE
 sunshine_register_component(NAME test_component_remote_display_topology TEST_SOURCE unit/test_remote_display_topology.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/remote_display_topology.cpp"
     LINK_LIBRARIES nlohmann_json::nlohmann_json)
+sunshine_register_component(NAME test_component_display_helper_saved_placement TEST_SOURCE unit/test_display_helper_saved_placement.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/remote_display_topology.cpp"
+                    "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/display_helper_builder.cpp"
+    LINK_LIBRARIES sunshine_test_displaydevice_headers nlohmann_json::nlohmann_json)
 sunshine_register_component(NAME test_component_config_parse TEST_SOURCE unit/test_config_parse.cpp
     PRODUCT_SOURCES)
 sunshine_register_component(NAME test_component_managed_app_focus TEST_SOURCE unit/test_managed_app_focus.cpp
