@@ -71,6 +71,8 @@ odd in the logs.
   - A quick click that briefly hides the cursor does not switch modes.
   - Holding right-drag for camera rotation switches to relative once, and releasing
     returns to absolute once, with the cursor where the game restored it.
+  - Starting a drag never jumps the camera, including straight after pressing a key
+    (running with W, then steering with the right button).
   - Releasing the button never swings the camera: nothing switches back to absolute
     while a button is still held, even if the game shows its cursor early or you
     pause mid-drag.
