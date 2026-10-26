@@ -2913,15 +2913,18 @@ async function loadDisplayDevices(force = false): Promise<void> {
   }
 }
 
+const effectiveAppDisplayAction = computed(() =>
+  form.ddConfigurationOption || String(readConfigOverrides().dd_configuration_option || hostDisplayConfig.value?.dd_configuration_option || 'verify_only'),
+);
+
 const virtualDisplayLayoutBlocked = computed(() => {
   const layout =
     form.virtualDisplayLayout || hostDisplayConfig.value?.virtual_display_layout || 'exclusive';
-  const action =
-    form.ddConfigurationOption || hostDisplayConfig.value?.dd_configuration_option || 'verify_only';
+  const action = effectiveAppDisplayAction.value;
   return (
     displaySelection.value === 'virtual' &&
     layout !== 'exclusive' &&
-    (action === 'verify_only' || action === 'disabled')
+    action === 'disabled'
   );
 });
 
@@ -4358,6 +4361,9 @@ onBeforeUnmount(() => {
           </SettingRow>
           <p v-if="displaySelection === 'virtual'" class="vs-field__helper">
             {{ t('config.app_virtual_display_layout_action_hint') }}
+          </p>
+          <p v-if="displaySelection === 'virtual' && effectiveAppDisplayAction === 'verify_only'" class="vs-field__helper">
+            {{ t('config.app_virtual_display_verify_override') }}
           </p>
           <InlineAlert
             v-if="virtualDisplayLayoutBlocked"

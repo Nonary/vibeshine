@@ -73,8 +73,8 @@ namespace proc::display_policy {
    * @param client_virtual Whether the client explicitly requests a virtual target/layout.
    * @param session_virtual Whether the assembled session explicitly requests one.
    * @return Ephemeral preparation and whether a higher virtual choice may lift VerifyOnly.
-   * @note A higher-level virtual choice lifts inherited VerifyOnly to layout preparation.
-   *       An equally or more specific explicit preparation remains authoritative.
+   * @note An application's explicit virtual choice also lifts its own VerifyOnly;
+   *       a client preparation still takes precedence over an application choice.
    */
   inline preparation_t resolve_preparation(
     const preparation_e inherited,
@@ -86,7 +86,9 @@ namespace proc::display_policy {
     const auto explicit_preparation = client ? client : application;
     const int preparation_level = client ? 2 : application ? 1 : 0;
     const int virtual_level = client_virtual ? 2 : session_virtual ? 1 : 0;
-    if (explicit_preparation.value_or(inherited) == preparation_e::verify_only && virtual_level > preparation_level) {
+    const bool virtual_choice_wins = virtual_level > preparation_level ||
+                                     (virtual_level == 1 && preparation_level == 1);
+    if (explicit_preparation.value_or(inherited) == preparation_e::verify_only && virtual_choice_wins) {
       return {explicit_preparation, true};
     }
     return {explicit_preparation, false};
