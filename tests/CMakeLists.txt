@@ -1818,7 +1818,9 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_close_grace.py")
     add_test(NAME regression_playnite_plugin_upgrade
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_plugin_upgrade.py")
-    set_tests_properties(regression_playnite_close_grace regression_playnite_plugin_upgrade
+    add_test(NAME regression_playnite_duplicate_migration
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_duplicate_migration.py")
+    set_tests_properties(regression_playnite_close_grace regression_playnite_plugin_upgrade regression_playnite_duplicate_migration
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
