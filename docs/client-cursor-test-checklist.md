@@ -71,6 +71,9 @@ odd in the logs.
   - A quick click that briefly hides the cursor does not switch modes.
   - Holding right-drag for camera rotation switches to relative once, and releasing
     returns to absolute once, with the cursor where the game restored it.
+  - Releasing the button never swings the camera: nothing switches back to absolute
+    while a button is still held, even if the game shows its cursor early or you
+    pause mid-drag.
   - Hold-and-release repeatedly does not flap.
 - [ ] **Recentring game.** If a title keeps a *visible* cursor pinned to the centre,
   it switches to relative mode. Note the title.
