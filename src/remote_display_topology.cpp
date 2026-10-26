@@ -28,6 +28,10 @@ namespace remote_display_topology {
 
   namespace {
     nlohmann::json empty_layout() { return {{"version", layout_version}, {"placements", nlohmann::json::object()}}; }
+    bool is_automatic_fallback(const nlohmann::json &placement) {
+      return placement.value("automatic_fallback", false) && placement.value("preserve", false) &&
+             placement.value("anchor_kind", "") == "physical" && placement.value("anchor_id", "").empty();
+    }
   }
 
   void coordinator_t::place_relative(node_t &node, const node_t &anchor, const nlohmann::json &placement) {
@@ -80,6 +84,10 @@ namespace remote_display_topology {
         error = "Placement preserve must be a boolean.";
         return false;
       }
+      if (placement.contains("automatic_fallback") && !placement["automatic_fallback"].is_boolean()) {
+        error = "Placement automatic_fallback must be a boolean.";
+        return false;
+      }
       const auto gap = placement["gap_px"].get<int>();
       if ((placement["anchor_kind"].get<std::string>() != "physical" && placement["anchor_kind"].get<std::string>() != "client") || (!placement.value("preserve", false) && placement["anchor_id"].get<std::string>().empty()) || !edges.contains(placement["edge"].get<std::string>()) || !alignments.contains(placement["alignment"].get<std::string>()) || gap < 0 || gap > max_gap_px) {
         error = "Placement has an unsupported anchor, edge, alignment, or gap.";
@@ -91,7 +99,14 @@ namespace remote_display_topology {
 
   nlohmann::json normalize_layout(const nlohmann::json &layout) {
     std::string error;
-    return layout_schema_valid(layout, error) ? layout : empty_layout();
+    if (!layout_schema_valid(layout, error)) return empty_layout();
+    auto normalized = layout;
+    for (auto &placement : normalized["placements"]) {
+      // An older editor can retain the unknown marker while changing the rule.
+      // Do not let that stale marker override a subsequently chosen anchor.
+      if (placement.value("automatic_fallback", false) && !is_automatic_fallback(placement)) placement.erase("automatic_fallback");
+    }
+    return normalized;
   }
 
   nlohmann::json remove_client_from_layout(const nlohmann::json &layout, const std::string &client_uuid) {
@@ -99,12 +114,23 @@ namespace remote_display_topology {
     auto &placements = result["placements"];
     for (auto it = placements.begin(); it != placements.end();) {
       const auto &placement = it.value();
-      const bool references_client = !placement.value("preserve", false) &&
-                                     placement.value("anchor_kind", "") == "client" &&
+      const bool references_client = placement.value("anchor_kind", "") == "client" &&
                                      placement.value("anchor_id", "") == client_uuid;
-      if (it.key() == client_uuid || references_client) {
+      if (it.key() == client_uuid) {
         it = placements.erase(it);
       } else {
+        if (references_client) {
+          // The former anchor cannot return after unpair. Retain independent
+          // primary preference while falling back to automatic positioning.
+          it.value()["anchor_kind"] = "physical";
+          it.value()["anchor_id"] = "";
+          if (!placement.value("preserve", false)) {
+            // Older versions accept this as a manual placement rather than
+            // rejecting the entire saved layout on downgrade.
+            it.value()["preserve"] = true;
+            it.value()["automatic_fallback"] = true;
+          }
+        }
         ++it;
       }
     }
@@ -122,13 +148,14 @@ namespace remote_display_topology {
         error = "Every placement must name a paired client.";
         return false;
       }
-      if (placement.value("preserve", false)) continue;
+      if (placement.value("preserve", false) && !is_automatic_fallback(placement)) continue;
       const auto anchor_kind = placement["anchor_kind"].get<std::string>();
       const auto anchor_id = placement["anchor_id"].get<std::string>();
       if (placement.value("primary", false) && ++primary_count > 1) {
         error = "Only one client display may be primary.";
         return false;
       }
+      if (is_automatic_fallback(placement)) continue;
       if (anchor_kind == "client") {
         if (!contains(known_clients, anchor_id) || anchor_id == client) {
           error = "A client placement cannot anchor to itself or an unknown client.";
@@ -167,6 +194,7 @@ namespace remote_display_topology {
     if (placement == layout_["placements"].end()) {
       return std::nullopt;
     }
+    if (is_automatic_fallback(*placement)) return std::nullopt;
     if (placement->value("preserve", false)) return target;
     const auto anchor_id = placement->value("anchor_id", "");
     const auto physical = placement->value("anchor_kind", "") == "physical";
@@ -891,7 +919,7 @@ namespace remote_display_topology {
       }
 
       const auto placement_it = layout_["placements"].find(uuid);
-      if (placement_it == layout_["placements"].end() || placement_it->value("preserve", false)) {
+      if (placement_it == layout_["placements"].end() || (placement_it->value("preserve", false) && !is_automatic_fallback(*placement_it))) {
         append_right({});
         visiting.erase(uuid);
         return;
@@ -899,6 +927,11 @@ namespace remote_display_topology {
 
       const auto &placement = *placement_it;
       node.primary = placement.value("primary", false);
+      if (is_automatic_fallback(placement)) {
+        append_right({});
+        visiting.erase(uuid);
+        return;
+      }
       const auto anchor_id = placement.value("anchor_id", "");
       if (placement.value("anchor_kind", "") == "client") {
         emit(anchor_id);

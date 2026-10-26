@@ -50,7 +50,7 @@ TEST(RemoteDisplayTopology, NormalizesMalformedPersistenceButKeepsUnavailableTyp
 
 TEST(RemoteDisplayTopology, RemovingClientCleansItsPlacementAndDirectClientAnchors) {
   const auto physical = nlohmann::json {{"anchor_kind", "physical"}, {"anchor_id", "old"}, {"edge", "right"}, {"alignment", "start"}, {"gap_px", 0}};
-  const auto direct = nlohmann::json {{"anchor_kind", "client"}, {"anchor_id", "old"}, {"edge", "below"}, {"alignment", "center"}, {"gap_px", 10}};
+  const auto direct = nlohmann::json {{"anchor_kind", "client"}, {"anchor_id", "old"}, {"edge", "below"}, {"alignment", "center"}, {"gap_px", 10}, {"primary", true}};
   const auto indirect = nlohmann::json {{"anchor_kind", "client"}, {"anchor_id", "direct"}, {"edge", "left"}, {"alignment", "end"}, {"gap_px", 0}};
   auto preserved = direct;
   preserved["preserve"] = true;
@@ -58,10 +58,17 @@ TEST(RemoteDisplayTopology, RemovingClientCleansItsPlacementAndDirectClientAncho
   const auto after = remote_display_topology::remove_client_from_layout(before, "old");
 
   EXPECT_FALSE(after["placements"].contains("old"));
-  EXPECT_FALSE(after["placements"].contains("direct"));
+  ASSERT_TRUE(after["placements"].contains("direct"));
+  EXPECT_EQ(after["placements"]["direct"]["anchor_id"], "");
+  EXPECT_EQ(after["placements"]["direct"]["anchor_kind"], "physical");
+  EXPECT_TRUE(after["placements"]["direct"]["automatic_fallback"]);
+  EXPECT_TRUE(after["placements"]["direct"]["preserve"]);
+  EXPECT_TRUE(after["placements"]["direct"]["primary"]);
   EXPECT_EQ(after["placements"]["indirect"], indirect);
   EXPECT_EQ(after["placements"]["physical"], physical);
-  EXPECT_EQ(after["placements"]["preserved"], preserved);
+  EXPECT_TRUE(after["placements"]["preserved"]["preserve"]);
+  EXPECT_EQ(after["placements"]["preserved"]["anchor_id"], "");
+  EXPECT_FALSE(after["placements"]["preserved"].contains("automatic_fallback"));
   std::string error;
   EXPECT_TRUE(remote_display_topology::validate_layout(after, {"direct", "indirect", "physical", "preserved"}, {"old"}, error)) << error;
 
@@ -73,7 +80,64 @@ TEST(RemoteDisplayTopology, RemovingClientCleansItsPlacementAndDirectClientAncho
   const auto reloaded = remote_display_topology::normalize_layout(nlohmann::json::parse(after.dump()));
   EXPECT_EQ(reloaded, after);
   EXPECT_FALSE(reloaded["placements"].contains("new"));
+  auto legacy = reloaded;
+  legacy["placements"]["direct"].erase("automatic_fallback");
+  EXPECT_TRUE(remote_display_topology::layout_schema_valid(legacy, error));
+  EXPECT_FALSE(coordinator.saved_stream_placement({.id = "direct", .active = true}, {}).has_value());
   EXPECT_EQ(remote_display_topology::remove_client_from_layout(after, "old"), after);
+}
+
+TEST(RemoteDisplayTopology, UnpairRetainsActiveDependentPrimaryAndIndirectAnchor) {
+  remote_display_topology::coordinator_t coordinator;
+  std::vector<remote_display_topology::node_t> applied;
+  coordinator.set_physical_baseline({{.id = "physical", .physical = true, .active = true, .primary = true, .configured_mode = {1920, 1080, 60}}});
+  coordinator.set_runtime_callbacks({
+    .create_or_reclaim = [](const auto &, const auto &, const auto &) { return true; },
+    .apply_composed_topology = [&applied](const auto &nodes) { applied = nodes; return true; },
+    .exact_target_has_current_mode_and_dxgi = [](const auto &id, const auto &) { return std::optional<std::string> {id}; },
+    .remove_owned_display = [](const auto &) { return true; },
+  });
+  const auto before = layout({
+    {"old", {{"anchor_kind", "physical"}, {"anchor_id", "physical"}, {"edge", "right"}, {"alignment", "start"}, {"gap_px", 0}}},
+    {"direct", {{"anchor_kind", "client"}, {"anchor_id", "old"}, {"edge", "below"}, {"alignment", "start"}, {"gap_px", 0}, {"primary", true}}},
+    {"indirect", {{"anchor_kind", "client"}, {"anchor_id", "direct"}, {"edge", "right"}, {"alignment", "start"}, {"gap_px", 0}}},
+  });
+  coordinator.set_layout(before);
+  ASSERT_TRUE(coordinator.activate_or_resume("old", "Old", {}, 1).ready);
+  ASSERT_TRUE(coordinator.activate_or_resume("direct", "Direct", {}, 1).ready);
+  ASSERT_TRUE(coordinator.activate_or_resume("indirect", "Indirect", {}, 1).ready);
+
+  const auto after = remote_display_topology::remove_client_from_layout(before, "old");
+  coordinator.set_layout(after);
+  coordinator.unpair_client("old");
+  const auto direct = std::find_if(applied.begin(), applied.end(), [](const auto &node) { return node.id == "direct"; });
+  const auto indirect = std::find_if(applied.begin(), applied.end(), [](const auto &node) { return node.id == "indirect"; });
+  ASSERT_NE(direct, applied.end());
+  ASSERT_NE(indirect, applied.end());
+  EXPECT_TRUE(direct->primary);
+  EXPECT_EQ(indirect->x, direct->x + direct->configured_mode.width);
+  EXPECT_EQ(coordinator.snapshot({})["layout"], after);
+
+  // Exercise the runtime reset used by erase-all; persistence is not under test here.
+  coordinator.set_layout(nlohmann::json {});
+  EXPECT_EQ(coordinator.snapshot({})["layout"], layout(nlohmann::json::object()));
+}
+
+TEST(RemoteDisplayTopology, DetachedPrimaryCountsForValidation) {
+  const auto detached = nlohmann::json {{"anchor_kind", "physical"}, {"anchor_id", ""}, {"edge", "right"}, {"alignment", "center"}, {"gap_px", 0}, {"primary", true}, {"preserve", true}, {"automatic_fallback", true}};
+  const auto other = nlohmann::json {{"anchor_kind", "physical"}, {"anchor_id", "path"}, {"edge", "right"}, {"alignment", "center"}, {"gap_px", 0}, {"primary", true}};
+  std::string error;
+  EXPECT_FALSE(remote_display_topology::validate_layout(layout({{"one", detached}, {"two", other}}), {"one", "two"}, {"path"}, error));
+  auto legacy_edited = detached;
+  legacy_edited["preserve"] = false;
+  legacy_edited["anchor_id"] = "path";
+  EXPECT_TRUE(remote_display_topology::validate_layout(layout({{"one", legacy_edited}}), {"one"}, {"path"}, error));
+  const auto normalized = remote_display_topology::normalize_layout(layout({{"one", legacy_edited}}));
+  EXPECT_FALSE(normalized["placements"]["one"].contains("automatic_fallback"));
+  EXPECT_TRUE(remote_display_topology::validate_layout(normalized, {"one"}, {"path"}, error));
+  auto malformed = detached;
+  malformed["automatic_fallback"] = "yes";
+  EXPECT_FALSE(remote_display_topology::layout_schema_valid(layout({{"one", malformed}}), error));
 }
 
 TEST(RemoteDisplayTopology, RemovingClientNormalizesMalformedLayout) {

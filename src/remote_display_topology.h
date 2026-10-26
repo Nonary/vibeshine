@@ -95,7 +95,7 @@ namespace remote_display_topology {
   // Validates the persisted wire contract without mutating coordinator state.
   bool layout_schema_valid(const nlohmann::json &layout, std::string &error);
   nlohmann::json normalize_layout(const nlohmann::json &layout);
-  // Remove a deleted client's placement and placements that depend on it.
+  // Remove a deleted client's placement and detach direct dependent anchors.
   nlohmann::json remove_client_from_layout(const nlohmann::json &layout, const std::string &client_uuid);
   bool validate_layout(const nlohmann::json &layout, const std::vector<std::string> &known_clients, const std::vector<std::string> &known_physical_ids, std::string &error);
 
