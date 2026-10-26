@@ -412,10 +412,20 @@ namespace nvhttp {
             client_uuid.c_str(), client_label.c_str(), nullptr,
             static_cast<std::uint32_t>(mode.width), static_cast<std::uint32_t>(mode.height),
             static_cast<std::uint32_t>(mode.refresh_hz * 1000), guid,
-            static_cast<std::uint32_t>(mode.refresh_hz * 1000), false, 1, false, false, true, true
+            static_cast<std::uint32_t>(mode.refresh_hz * 1000), false, 1, mode.hdr, false, true, true
           ).has_value();
         },
         .apply_composed_topology = apply_remote_monitor_composition,
+        .finalize_mode = [](const std::string &client_uuid, remote_display_topology::mode_t &mode, bool allow_mutation) {
+          const auto device = VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(client_uuid, {}, {}, false);
+          const bool verified = device && display_helper_integration::apply_remote_monitor_hdr_state(*device, mode.hdr, allow_mutation);
+          if (!verified) {
+            BOOST_LOG(warning) << "Remote Monitor: requested target HDR state could not be verified.";
+            // Never publish HDR based solely on the request; capture must see
+            // the confirmed effective state and retain its HDR source guard.
+            mode.hdr = false;
+          }
+        },
         .exact_target_has_current_mode_and_dxgi = remote_monitor_exact_capture_output,
         .remove_owned_display = [](const std::string &client_uuid) {
           const auto stable_uuid = VDISPLAY::virtualDisplayUuidFromStableId(client_uuid);
@@ -442,19 +452,20 @@ namespace nvhttp {
         return rtsp_stream::plaintext_route_warning();
       });
       remote_session::register_monitor_runtime_hooks({
-        .activate_or_resume = [](std::string_view uuid, std::string_view label, std::string_view requested_mode, bool, std::uint64_t generation) -> remote_session::monitor_runtime_state_t {
+        .activate_or_resume = [](std::string_view uuid, std::string_view label, std::string_view requested_mode, bool hdr_requested, std::uint64_t generation) -> remote_session::monitor_runtime_state_t {
           remote_display_topology::mode_t mode;
           if (std::sscanf(std::string {requested_mode}.c_str(), "%dx%d@%d", &mode.width, &mode.height, &mode.refresh_hz) != 3 ||
               mode.width <= 0 || mode.height <= 0 || mode.refresh_hz <= 0) {
             return remote_session::monitor_runtime_state_t {.retryable = true, .error = "Remote Monitor requested an invalid display mode."};
           }
+          mode.hdr = hdr_requested;
           refresh_remote_monitor_baseline(has_stream_session_activity());
           const auto state = remote_display_topology::instance().activate_or_resume(std::string {uuid}, std::string {label}, mode, generation);
-          return {.accepted = state.accepted, .ready = state.ready, .retryable = state.retryable, .output = state.output, .error = state.error};
+          return {.accepted = state.accepted, .ready = state.ready, .retryable = state.retryable, .output = state.output, .error = state.error, .hdr_enabled = state.hdr_enabled};
         },
         .snapshot = [](std::string_view uuid, std::uint64_t generation) {
           const auto state = remote_display_topology::instance().snapshot(std::string {uuid}, generation);
-          return remote_session::monitor_runtime_state_t {.accepted = state.accepted, .ready = state.ready, .retryable = state.retryable, .output = state.output, .error = state.error};
+          return remote_session::monitor_runtime_state_t {.accepted = state.accepted, .ready = state.ready, .retryable = state.retryable, .output = state.output, .error = state.error, .hdr_enabled = state.hdr_enabled};
         },
         .explicit_release = [](std::string_view uuid, std::uint64_t generation, std::string_view reason) {
           const bool released = remote_display_topology::instance().explicit_release(std::string {uuid}, generation, std::string {reason});
@@ -4710,15 +4721,21 @@ namespace nvhttp {
         }
 #endif
         const auto mode = std::format("{}x{}@{}", launch_session->width, launch_session->height, launch_session->fps);
+#ifdef _WIN32
+        // RTX HDR needs an SDR source even though the outgoing stream is HDR.
+        const bool monitor_hdr_requested = rtsp_stream::hdr_capture_required(*launch_session, config::video);
+#else
+        const bool monitor_hdr_requested = rtsp_stream::effective_hdr_requested(*launch_session);
+#endif
         auto monitor = monitor_profile && monitor_profile->target ? remote_session::borrow_monitor_target(
           identity.uuid, launch_session->role_generation, *monitor_profile->target,
           {launch_session->width, launch_session->height, launch_session->client_display_refresh_millihz ?
             launch_session->client_display_refresh_millihz : launch_session->exact_requested_refresh_millihz,
-            rtsp_stream::effective_hdr_requested(*launch_session)}, launch_session->output_name_override) : remote_session::activate_or_resume_monitor(
+            monitor_hdr_requested}, launch_session->output_name_override) : remote_session::activate_or_resume_monitor(
           identity.uuid,
           identity.name,
           mode,
-          rtsp_stream::effective_hdr_requested(*launch_session),
+          monitor_hdr_requested,
           launch_session->role_generation
         );
         if (monitor.accepted) {

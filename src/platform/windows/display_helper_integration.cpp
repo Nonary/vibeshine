@@ -3432,6 +3432,34 @@ namespace display_helper_integration {
     return apply_topology_definition(topology, "remote-monitor coordinator");
   }
 
+  bool apply_remote_monitor_hdr_state(const std::string &device_id, bool enabled, bool allow_mutation) {
+    if (device_id.empty()) return false;
+    auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(false);
+    if (!borrowed_output_mutation) return false;
+    auto ctx = make_settings_manager();
+    if (!ctx) return false;
+    const auto desired = enabled ? display_device::HdrState::Enabled : display_device::HdrState::Disabled;
+    try {
+      auto states = ctx->display->getCurrentHdrStates({device_id});
+      auto current = states.find(device_id);
+      if (current == states.end() || current->second != desired) {
+        if (!allow_mutation) return false;
+        if (!ctx->display->setHdrStates({{device_id, desired}})) return false;
+        // Windows may acknowledge the request before advanced color settles.
+        for (int attempt = 0; attempt < 30; ++attempt) {
+          states = ctx->display->getCurrentHdrStates({device_id});
+          current = states.find(device_id);
+          if (current != states.end() && current->second == desired) return true;
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+      }
+      return current != states.end() && current->second == desired;
+    } catch (...) {
+      BOOST_LOG(warning) << "Remote Monitor: unable to apply or verify the target HDR state.";
+      return false;
+    }
+  }
+
   std::string enumerate_devices_json(display_device::DeviceEnumerationDetail detail) {
     auto devices = enumerate_devices(detail);
     if (!devices) {

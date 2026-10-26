@@ -333,15 +333,13 @@ namespace remote_display_topology {
     if (!callbacks_.apply_composed_topology) {
       return false;
     }
-    if (callbacks_.resolve_mode) {
-      for (auto &[uuid, state] : clients_) {
-        if (state.normal_game || state.remote_monitor) {
-          resolve_effective_mode_locked(uuid, state);
-        }
-      }
-    } else {
-      for (auto &[_, state] : clients_) {
-        if (state.normal_game || state.remote_monitor) state.effective_mode = desired_mode(state);
+    for (auto &[uuid, state] : clients_) {
+      if (state.normal_game || state.remote_monitor) {
+        const auto confirmed_hdr = state.effective_mode.hdr;
+        resolve_effective_mode_locked(uuid, state);
+        // A topology-only reapply does not re-run a platform's post-apply
+        // color verification. Do not turn a previous failure into success.
+        if (callbacks_.finalize_mode && state.remote_monitor) state.effective_mode.hdr = confirmed_hdr;
       }
     }
     std::vector<std::string> ignored;
@@ -677,7 +675,12 @@ namespace remote_display_topology {
       state.warning = "Remote Monitor runtime wiring is unavailable; ownership was retained for Resume.";
       return {true, false, state.warning};
     }
-    if (!state.lease_held) {
+    const bool shared_capture = callbacks_.finalize_mode && !state.normal_capture_references.empty();
+    if (!state.lease_held && shared_capture) {
+      // The game capture already owns this exact stable output. Reuse it
+      // without recreating or changing its color state underneath the peer.
+      state.lease_held = true;
+    } else if (!state.lease_held) {
       state.lifecycle = lifecycle_e::leased;
       if (!callbacks_.create_or_reclaim(client_uuid, state.label, desired_mode(state))) {
         state.lifecycle = lifecycle_e::retryable;
@@ -695,6 +698,7 @@ namespace remote_display_topology {
       state.warning = "The composed display topology did not apply; existing owners and their displays were retained.";
       return {true, false, state.warning};
     }
+    if (callbacks_.finalize_mode) callbacks_.finalize_mode(client_uuid, state.effective_mode, !shared_capture);
     if (!warnings.empty()) state.warning = warnings.front();
     const auto exact_output = callbacks_.exact_target_has_current_mode_and_dxgi(client_uuid, state.effective_mode);
     if (!exact_output || exact_output->empty()) {
