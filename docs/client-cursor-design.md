@@ -318,10 +318,15 @@ mouse line.
   because it is the one users feel (the cursor is the remote video cursor until
   it happens), while a game flashing its cursor for a frame or two still stays
   relative.
-- **Held buttons**: the return to absolute waits until every mouse button is up.
-  In an MMO camera drag the game may show its cursor before the button is
-  released; switching then would turn the rest of the drag into a jump. Entering
-  relative mid-drag is allowed, since that is what makes camera drags work.
+- **Held buttons**: once the mouse moves with a button held, a hide or lock
+  switches to RELATIVE at once, without the 60 ms delay, the dwell or the typing
+  rule. Until that switch every motion goes out as an absolute position, and a
+  game holding its hidden cursor in place reads each one as the whole distance
+  moved since the press, so a camera drag would start with a jump. A click that
+  doesn't move keeps the usual delay. The return to absolute waits until every
+  mouse button is up: in an MMO camera drag the game may show its cursor before
+  the button is released, and switching then would turn the rest of the drag into
+  a jump. Together these allow one switch each way per drag, so drags can't flap.
 - **Typing**: Windows can hide the pointer while the user types. A hide that
   starts within 1 s of a (non-modifier) key press waits for mouse motion and then
   120 ms of the cursor staying hidden. The host shows the pointer again on the
