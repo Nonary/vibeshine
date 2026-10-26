@@ -35,6 +35,8 @@ namespace {
   namespace policy = platf::steam::big_picture::policy;
 
   constexpr auto steam_close_timeout = 40s;
+  // How long a restart waits for steam.exe alone, counted from the shutdown request, before giving up.
+  constexpr auto steam_exit_timeout = 3min;
   // How much longer a restart waits for Steam to finish closing once Vibeshine is stopping.
   constexpr auto steam_close_grace_on_stop = 10s;
 
@@ -326,15 +328,24 @@ namespace platf::steam::big_picture::debug_port {
     const auto closed = [&](std::stop_token token, std::chrono::steady_clock::time_point deadline) {
       return wait_for_exit(token, L"steam.exe", *session, deadline) && wait_for_exit(token, L"steamwebhelper.exe", *session, deadline);
     };
-    const auto deadline = std::chrono::steady_clock::now() + steam_close_timeout;
+    const auto requested = std::chrono::steady_clock::now();
+    const auto deadline = requested + steam_close_timeout;
     if (!closed(stop, deadline)) {
       if (!stop.stop_requested()) {
-        return "Steam did not close within 40 seconds.";
+        // The shutdown request can still complete after the initial deadline. Starting Steam while
+        // its old process is closing can hand the launch back to that process and leave it closed.
+        // Keep waiting for steam.exe, but don't let a lingering web helper prevent the restart.
+        BOOST_LOG(warning) << "Steam Big Picture controls: Steam did not finish closing within 40 seconds; waiting up to 3 minutes for Steam to exit before starting it again.";
+        if (!wait_for_exit(stop, L"steam.exe", *session, requested + steam_exit_timeout) && !stop.stop_requested()) {
+          return "Steam did not close within 3 minutes.";
+        }
       }
-      // Steam was already asked to close, so it must not be left closed just because Vibeshine is
-      // stopping. Give it a little longer, then start it either way.
-      BOOST_LOG(info) << "Steam Big Picture controls: Vibeshine is stopping while Steam closes; starting Steam again before exiting.";
-      closed({}, std::min(deadline, std::chrono::steady_clock::now() + steam_close_grace_on_stop));
+      if (stop.stop_requested()) {
+        // Steam was already asked to close, so it must not be left closed just because Vibeshine is
+        // stopping. Give it a little longer, then start it either way.
+        BOOST_LOG(info) << "Steam Big Picture controls: Vibeshine is stopping while Steam closes; starting Steam again before exiting.";
+        wait_for_exit({}, L"steam.exe", *session, std::chrono::steady_clock::now() + steam_close_grace_on_stop);
+      }
     }
     if (auto error = run_steam(*root, big_picture ? L"-gamepadui" : L"")) {
       return "Steam closed but could not be started again: " + *error;
