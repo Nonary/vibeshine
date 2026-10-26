@@ -56,6 +56,17 @@ struct observed_mutex_t {
 };
 
 void set_vulkan_hdr_layer_streaming_active(bool) {}
+std::vector<std::function<void()>> timer_callbacks;
+int timer_delay_ms = 0;
+namespace boost::system { struct error_code { explicit operator bool() const { return false; } }; }
+namespace boost::asio {
+  struct steady_timer {
+    steady_timer(int &, std::chrono::milliseconds delay) { timer_delay_ms = static_cast<int>(delay.count()); }
+    template<class F> void async_wait(F &&fn) {
+      timer_callbacks.emplace_back([fn = std::forward<F>(fn)] { fn(boost::system::error_code {}); });
+    }
+  };
+}
 
 namespace config {
   struct {
@@ -193,17 +204,27 @@ namespace rtsp_stream {
     std::string plaintext_route_warning;
     std::optional<std::array<std::uint8_t, 16>> abandoned_startup_virtual_display_guid_bytes;
     std::vector<std::function<void()>> posted;
-    std::vector<std::function<void(bool)>> startups;
+    std::vector<std::function<void()>> startups;
+    int io_context = 0;
+    std::atomic_bool stopping {false};
+    host_stream_control::startup_dispatch_t startup_dispatch;
 
     template<class F> void post(F &&fn) { posted.emplace_back(std::forward<F>(fn)); }
-    template<class F> void run_startup(F &&fn) { startups.emplace_back(std::forward<F>(fn)); }
+    template<class F> void run_startup(F &&fn) {
+      startup_dispatch.submit([this](auto task) { startups.emplace_back(std::move(task)); }, std::forward<F>(fn), [] {});
+    }
     void drain_monitor_reconciliation() {
       auto posts = std::move(posted);
       posted.clear();
       for (auto &fn : posts) fn();
       auto tasks = std::move(startups);
       startups.clear();
-      for (auto &fn : tasks) fn(true);
+      for (auto &fn : tasks) fn();
+    }
+    void fire_monitor_retries() {
+      auto callbacks = std::move(timer_callbacks);
+      timer_callbacks.clear();
+      for (auto &fn : callbacks) fn();
     }
 
     int startup_count() const {
@@ -324,6 +345,8 @@ void reset() {
   rtsp_stream::server._session_state.sessions.clear();
   rtsp_stream::server.posted.clear();
   rtsp_stream::server.startups.clear();
+  timer_callbacks.clear();
+  timer_delay_ms = 0;
   rtsp_stream::server.abandoned_startup_virtual_display_guid_bytes.reset();
   config_clears = draining = finalizes = 0;
   config::runtime_overrides.clear();
@@ -564,6 +587,23 @@ int main() {
   rtsp_stream::server.notify_expired_pending(monitor_expired);
   rtsp_stream::server.drain_monitor_reconciliation();
   check(monitor_lost == 0, "stale expiry must not retire a newer monitor");
+  // A failed host terminal invalidates the queued ticket without shutting
+  // down the monitor. Retry after the host admission epoch reopens.
+  monitor_generation = 40;
+  rtsp_stream::server.notify_expired_pending(monitor_expired);
+  auto posts = std::move(rtsp_stream::server.posted);
+  rtsp_stream::server.posted.clear();
+  for (auto &fn : posts) fn();
+  int checks = 0;
+  bool terminated = host_stream_control::terminate([&] { return ++checks == 1; }, [] {});
+  check(!terminated && checks == 2, "failed terminal must invalidate startup without shutdown");
+  rtsp_stream::server.drain_monitor_reconciliation();
+  check(monitor_lost == 0 && timer_callbacks.size() == 1 && timer_delay_ms == 100, "invalidated monitor reconciliation must be retained with a bounded delay");
+  rtsp_stream::server.fire_monitor_retries();
+  rtsp_stream::server.drain_monitor_reconciliation();
+  check(monitor_lost == 1, "monitor expiry must reconcile after the failed terminal reopens");
+  monitor_lost = 0;
+  monitor_generation = 41;
   auto canceled = pending("monitor", 41, role_e::monitor);
   check(rtsp_stream::server.session_raise(canceled), "monitor cancellation setup");
   rtsp_stream::server.cancel_pending_launch("test cancellation");

@@ -46,6 +46,7 @@ std::unordered_map<std::string, remote_role_owner_t> remote_role_owners;\n'''
         'void release_pending_runtime_holds(',
         'bool retain_pending_runtime_holds(',
         'void reconcile_abandoned_monitor_locked(',
+        'void retry_abandoned_monitor(',
         'void reconcile_abandoned_monitor(',
         'std::vector<std::shared_ptr<launch_session_t>> take_all_pending_launches()',
         'void cancel_pending_launch(',

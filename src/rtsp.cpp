@@ -921,6 +921,14 @@ namespace rtsp_stream {
       }
     }
 
+    void retry_abandoned_monitor(const std::shared_ptr<launch_session_t> &pending) {
+      if (stopping.load(std::memory_order_acquire)) return;
+      auto timer = std::make_shared<boost::asio::steady_timer>(io_context, std::chrono::milliseconds(100));
+      timer->async_wait([this, pending, timer](const boost::system::error_code &ec) {
+        if (!ec && !stopping.load(std::memory_order_acquire)) reconcile_abandoned_monitor(pending);
+      });
+    }
+
     // An expired launch may already have a startup worker. Queue its
     // reconciliation behind the lifecycle gate instead of racing startup.
     void reconcile_abandoned_monitor(const std::shared_ptr<launch_session_t> &pending) {
@@ -932,7 +940,13 @@ namespace rtsp_stream {
         post([this, pending] {
           try {
             run_startup([this, pending](bool admitted) {
-              if (!admitted) return;
+              if (!admitted) {
+                // A failed terminal action can invalidate the queued ticket
+                // without reaching monitor shutdown. Retain the reconciliation
+                // and retry once the host admission epoch has reopened.
+                retry_abandoned_monitor(pending);
+                return;
+              }
               std::unique_lock<std::mutex> lifecycle_lock(nvhttp::stream_lifecycle_mutex());
               reconcile_abandoned_monitor_locked(pending);
             });
