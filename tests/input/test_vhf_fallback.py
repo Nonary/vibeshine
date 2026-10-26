@@ -53,7 +53,7 @@ constexpr std::uint16_t STEAM_CONTROLLER_CLIENT_CAPS=LI_CCAP_GRIP_SENSE|LI_CCAP_
 IS_STEAM_CLIENT
 SELECT_DESIRED
 SUPPORTS_TOUCH}
-namespace dualsense_usbip_gamepad {bool enabled(){return false;} bool select_composite_dualsense(std::string_view,vhf_profile_e,bool,bool){return false;}}
+namespace dualsense_usbip_gamepad {bool enabled(){return false;} bool select_composite_dualsense(std::string_view,vhf_profile_e,bool){return false;}}
 struct gamepad_id_t {int globalIndex,clientRelativeIndex;};
 struct gamepad_arrival_t {int type;std::uint16_t capabilities=0;};
 using feedback_queue_t=std::shared_ptr<int>;
