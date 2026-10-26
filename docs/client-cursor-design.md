@@ -56,7 +56,7 @@ switches to relative mode on its own when a game hides or locks the cursor.
 - **Compositing is shared.** One captured image feeds every session, so the host
   stops blending only when *every* connected session has asked to draw the
   cursor itself. The `COMPOSITED` state flag tells a client when the host is
-  blending anyway, so it never shows a second cursor.
+  blending anyway, so it does not keep showing a second cursor.
 - **Control stream limits.** A control message carries at most ~65 KB
   (`u16` lengths, `encode_control`), and client→host messages must stay under
   252 bytes (`sendMessageEnet`'s 256-byte buffer). Both sides already ignore
@@ -293,7 +293,7 @@ mouse line.
                     │  RESYNC, wants relative          ▲            │
                     ▼                                  │ visible &  │ hidden or locked
               ┌──────────┐ ───────────────────────────┘ free for   │ for 60 ms
-              │ RELATIVE │   ≥ 100 ms                    100 ms     │
+              │ RELATIVE │   ≥ 50 ms                     50 ms      │
               └──────────┘ ◀──────────────────────────────────────┘
 ```
 
@@ -302,24 +302,35 @@ mouse line.
   (three or more host warps within 300 ms that land within 3 % of the stream of
   each other).
 - **ABSOLUTE_LOCAL**: absolute input; the local OS cursor shows the host shape
-  (unless `COMPOSITED`); a large clip confines the local cursor to the mapped
+  as soon as the client asks the host to stop drawing it, without waiting a round
+  trip for `COMPOSITED` to clear. If the host still composites it 300 ms later
+  (another client needs it in the video), the local cursor is hidden again. A
+  large clip confines the local cursor to the mapped
   rect with `SDL_SetWindowMouseRect`; host warps move the local cursor if it is
   inside the video region.
 - **RELATIVE**: SDL relative mode; local cursor hidden; video cursor shown if the
   host draws one.
 - **FALLBACK**: the user's existing setting, exactly as today.
 - **Hysteresis** (constants in `cursormodepolicy.h`): enter RELATIVE after 60 ms,
-  return after 100 ms, and at least 150 ms between automatic switches. A brief
+  return after 50 ms, and at least 100 ms between automatic switches. A brief
   hide (an MMO click, a loading flicker) never switches; a camera drag that hides
-  the cursor for seconds switches once each way.
+  the cursor for seconds switches once each way. The return is the shorter delay
+  because it is the one users feel (the cursor is the remote video cursor until
+  it happens), while a game flashing its cursor for a frame or two still stays
+  relative.
+- **Held buttons**: the return to absolute waits until every mouse button is up.
+  In an MMO camera drag the game may show its cursor before the button is
+  released; switching then would turn the rest of the drag into a jump. Entering
+  relative mid-drag is allowed, since that is what makes camera drags work.
 - **Typing**: Windows can hide the pointer while the user types. A hide that
   starts within 1 s of a (non-modifier) key press waits for mouse motion and then
   120 ms of the cursor staying hidden. The host shows the pointer again on the
   first move, so typing never switches, while a game resumed with a key press
   still does once the mouse moves.
 - **RELATIVE → ABSOLUTE** releases relative mode, warps the local cursor to the
-  host's last reported position (inverse letterbox mapping), then re-enables
-  absolute capture.
+  host's last reported position (inverse letterbox mapping), drops the mouse
+  motion queued by leaving relative mode (its positions predate the switch), then
+  re-enables absolute capture synced to the warp target.
 - **Overrides**: Ctrl+Alt+Shift+M in automatic mode switches to the other mode and
   locks it; the new **Ctrl+Alt+Shift+A** locks the current mode, or returns to
   automatic if a mode is locked. A lock lasts until it is released or the session
