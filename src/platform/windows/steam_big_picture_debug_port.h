@@ -36,7 +36,8 @@ namespace platf::steam::big_picture::debug_port {
   void remove_created_flag_file();
 
   // Close Steam and start it again as the console user, in Big Picture when big_picture is set. Blocks
-  // while Steam closes (up to 40 s). Returns an error message on failure.
+  // while Steam closes (up to 40 s). A stop request cuts that wait to 10 s more, but Steam is still
+  // started again. Returns an error message on failure.
   std::optional<std::string> restart_steam(std::stop_token stop, bool big_picture);
 }  // namespace platf::steam::big_picture::debug_port
 #endif

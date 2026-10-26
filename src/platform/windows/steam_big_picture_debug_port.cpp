@@ -35,6 +35,8 @@ namespace {
   namespace policy = platf::steam::big_picture::policy;
 
   constexpr auto steam_close_timeout = 40s;
+  // How much longer a restart waits for Steam to finish closing once Vibeshine is stopping.
+  constexpr auto steam_close_grace_on_stop = 10s;
 
   std::string last_error_text() {
     return platf::steam::big_picture::debug_port::error_text({static_cast<int>(GetLastError()), std::system_category()});
@@ -321,9 +323,18 @@ namespace platf::steam::big_picture::debug_port {
       return "Could not ask Steam to close: " + *error;
     }
     // Steam saves its state before it exits. Its web helpers hold the debug port, so wait for them too.
+    const auto closed = [&](std::stop_token token, std::chrono::steady_clock::time_point deadline) {
+      return wait_for_exit(token, L"steam.exe", *session, deadline) && wait_for_exit(token, L"steamwebhelper.exe", *session, deadline);
+    };
     const auto deadline = std::chrono::steady_clock::now() + steam_close_timeout;
-    if (!wait_for_exit(stop, L"steam.exe", *session, deadline) || !wait_for_exit(stop, L"steamwebhelper.exe", *session, deadline)) {
-      return stop.stop_requested() ? "Vibeshine stopped while Steam was closing." : "Steam did not close within 40 seconds.";
+    if (!closed(stop, deadline)) {
+      if (!stop.stop_requested()) {
+        return "Steam did not close within 40 seconds.";
+      }
+      // Steam was already asked to close, so it must not be left closed just because Vibeshine is
+      // stopping. Give it a little longer, then start it either way.
+      BOOST_LOG(info) << "Steam Big Picture controls: Vibeshine is stopping while Steam closes; starting Steam again before exiting.";
+      closed({}, std::min(deadline, std::chrono::steady_clock::now() + steam_close_grace_on_stop));
     }
     if (auto error = run_steam(*root, big_picture ? L"-gamepadui" : L"")) {
       return "Steam closed but could not be started again: " + *error;
