@@ -68,8 +68,6 @@
     "change": "Change"
   },
   "apps": {
-    "dualsense_haptics": "DualSense waveform haptics",
-    "dualsense_haptics_desc": "Requires the optional DualSense USB audio and haptics installer component and a Moonlight client with waveform support. Windows games see a wired USB DualSense with HID and audio interfaces and can send native waveform haptics through its controller audio endpoint. Supports direct executables, Steam, Playnite, and desktop streaming. Missing drivers prevent launch. Start a new stream after changing this option.",
     "actions": "Actions",
     "add_cmds": "Add Commands",
     "add_new": "Add New",

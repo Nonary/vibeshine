@@ -121,7 +121,6 @@ namespace platf {
       void clear_pcm();
     };
 
-    std::atomic<unsigned> session_count {0};
     std::atomic<bool> application_active {false};
     // A reused client-relative slot must not restart sequence zero while a
     // previous stream still has in-flight network packets for that slot.
@@ -238,33 +237,6 @@ namespace platf {
         // Joining transport callbacks must happen outside their mutex.
         controller.reset();
       }
-    }
-
-    session_scope::session_scope() {
-      session_count.fetch_add(1, std::memory_order_acq_rel);
-    }
-
-    session_scope::~session_scope() {
-      if (session_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-        // Registry ownership is independent of callback locks. Never destroy
-        // a USB transport while holding a lock its callback may acquire.
-        for (const auto &slot : live_slots()) {
-          std::lock_guard lock {slot->mutex};
-          slot->clear_pcm();
-        }
-      }
-    }
-
-    std::shared_ptr<session_scope> start_session() {
-      if (!dualsense_usbip::available()) {
-        BOOST_LOG(error) << "DualSense USB/audio requires the optional usbip-win2 driver; install DualSense USB audio and haptics support in the Windows installer";
-        return {};
-      }
-      return std::shared_ptr<session_scope> {new session_scope};
-    }
-
-    bool enabled() {
-      return session_count.load(std::memory_order_acquire) != 0;
     }
 
     bool has_ready_controller() {
@@ -400,7 +372,7 @@ namespace platf {
       slot->submit();
     }
     // This runs after RTSP has admitted the client, on its controller input
-    // worker. start_session() and the launch request never wait for PnP here.
+    // worker, so application launch does not wait for PnP.
     if (!slot->controller->wait_until_ready(5s)) {
       BOOST_LOG(error) << "Composite DualSense " << id.globalIndex << " did not enumerate both HID and a four-channel audio endpoint";
       failed();
@@ -421,9 +393,6 @@ namespace platf {
                      }),
                      registry.end());
       registry.emplace_back(slot);
-    }
-    if (!slot->waveform_capable && dualsense_usbip_gamepad::enabled()) {
-      BOOST_LOG(warning) << "Gamepad " << id.globalIndex << " does not support waveform haptics; waiting for a capable client controller before launching this app";
     }
     BOOST_LOG(debug) << "Gamepad " << id.globalIndex << " created as a composite DualSense with USB audio; client waveform haptics "
                     << (slot->waveform_capable ? "supported" : "unsupported");

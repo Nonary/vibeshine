@@ -1357,7 +1357,6 @@ namespace platf {
     if (dualsense_usbip_gamepad::select_composite_dualsense(
           config::input.gamepad,
           vhf_desired_profile(metadata),
-          dualsense_usbip_gamepad::enabled(),
           raw->usbip != nullptr && raw->usbip->available())) {
       if (raw->usbip && raw->usbip->alloc(id, metadata, feedback_queue) == 0) {
         raw->gamepad_backend[id.globalIndex] = gamepad_backend_e::usbip;

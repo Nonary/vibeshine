@@ -112,17 +112,6 @@
               {{ t('_common.elevated') }}
             </n-checkbox>
             <n-checkbox
-              v-if="isWindows"
-              v-model:checked="form.dualsenseHaptics"
-              size="small"
-              class="md:col-span-2"
-            >
-              <div class="flex flex-col">
-                <span>{{ t('apps.dualsense_haptics') }}</span>
-                <span class="text-[11px] opacity-60">{{ t('apps.dualsense_haptics_desc') }}</span>
-              </div>
-            </n-checkbox>
-            <n-checkbox
               v-if="isWindows && !isRemoteMonitor"
               v-model:checked="displayOverrideEnabled"
               size="small"
@@ -583,7 +572,6 @@ function fresh(): AppForm {
     excludeGlobalPrepCmd: false,
     configOverrides: {},
     elevated: false,
-    dualsenseHaptics: false,
     autoDetach: true,
     waitAll: true,
     frameGenLimiterFix: false,
@@ -909,7 +897,6 @@ function fromServerApp(src?: ServerApp | null): AppForm {
     excludeGlobalPrepCmd: !!src['exclude-global-prep-cmd'],
     configOverrides: rtxHdrOverrides.rest,
     elevated: !!src.elevated,
-    dualsenseHaptics: !!src['dualsense-haptics'],
     autoDetach: src['auto-detach'] !== undefined ? !!src['auto-detach'] : base.autoDetach,
     waitAll: src['wait-all'] !== undefined ? !!src['wait-all'] : base.waitAll,
     frameGenLimiterFix:
@@ -964,7 +951,6 @@ function toServerPayload(f: AppForm): Record<string, any> {
       ? { 'config-overrides': configOverridesPayload }
       : {}),
     elevated: !!f.elevated,
-    'dualsense-haptics': !!f.dualsenseHaptics,
     'auto-detach': !!f.autoDetach,
     'wait-all': !!f.waitAll,
     'gen1-framegen-fix': false,

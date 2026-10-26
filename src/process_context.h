@@ -86,7 +86,6 @@ namespace proc {
     bool playnite_fullscreen;
     bool frame_gen_limiter_fix;
     bool elevated;
-    bool dualsense_haptics {false};
     bool virtual_screen {false};
     // Explicit configured Monitor profile; its UUID is independent of its title.
     bool remote_monitor_profile {false};
