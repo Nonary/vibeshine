@@ -44,10 +44,10 @@ namespace platf::playnite::migration {
 
   // These are the manifests shipped by this integration, not a directory-name
   // heuristic. Unknown/ambiguous YAML is deliberately left alone.
-  inline bool owned_manifest(const fs::path &manifest) {
-    std::error_code ec;
-    if (!plain_path(manifest) || !fs::is_regular_file(manifest, ec) || ec || fs::file_size(manifest, ec) > 65536 || ec) return false;
-    std::ifstream stream(manifest);
+  enum class manifest_inspection { unowned, owned, error };
+
+  inline manifest_inspection read_manifest(std::istream &stream) {
+    if (!stream) return manifest_inspection::error;
     std::map<std::string, std::string> fields;
     std::string line;
     while (std::getline(stream, line)) {
@@ -57,16 +57,67 @@ namespace platf::playnite::migration {
       const auto key = scalar(line.substr(0, colon));
       if (key != "Id" && key != "Module" && key != "Type") continue;
       // Nested keys must never masquerade as the top-level identity.
-      if (line.empty() || line.front() == ' ' || line.front() == '\t' || fields.count(key)) return false;
+      if (line.empty() || line.front() == ' ' || line.front() == '\t' || fields.count(key)) return manifest_inspection::unowned;
       fields[key] = scalar(line.substr(colon + 1));
     }
-    if (stream.bad()) return false;
+    if (stream.bad() || (stream.fail() && !stream.eof())) return manifest_inspection::error;
     const bool script = fields["Id"] == "Sunshine.Playnite.PowerShell" && fields["Type"] == "Script" &&
                         fields["Module"] == "SunshinePlaynite.psm1";
     const bool compiled = fields["Id"] == "Sunshine.Playnite.Integration" && fields["Type"] == "GenericPlugin" &&
                           (fields["Module"] == "SunshinePlaynite.dll" || fields["Module"] == "VibeshinePlaynite.dll" ||
                            fields["Module"] == "VibepolloPlaynite.dll");
-    return script || compiled;
+    return script || compiled ? manifest_inspection::owned : manifest_inspection::unowned;
+  }
+
+  inline manifest_inspection inspect_manifest(const fs::path &manifest) {
+    std::error_code ec;
+    const auto status = fs::symlink_status(manifest, ec);
+    if (ec) return ec == std::errc::no_such_file_or_directory ? manifest_inspection::unowned : manifest_inspection::error;
+    if (status.type() == fs::file_type::not_found) return manifest_inspection::unowned;
+    if (!plain_path(manifest) || !fs::is_regular_file(status)) return manifest_inspection::unowned;
+    const auto size = fs::file_size(manifest, ec);
+    if (ec) return manifest_inspection::error;
+    if (size > 65536) return manifest_inspection::unowned;
+    std::ifstream stream(manifest);
+    return read_manifest(stream);
+  }
+
+  inline fs::path pending_marker(const fs::path &active) {
+    return active / ".vibeshine-playnite-migration-pending";
+  }
+
+  inline bool migration_pending(const fs::path &active) {
+    std::error_code ec;
+    const auto status = fs::symlink_status(pending_marker(active), ec);
+    if (ec) return ec != std::errc::no_such_file_or_directory;
+    return status.type() != fs::file_type::not_found;
+  }
+
+  // A directory marker cannot redirect writes through a pre-existing symlink.
+  // It remains present across crashes and failed retirement attempts.
+  inline bool begin_migration(const fs::path &active, std::string &error) {
+    std::error_code ec;
+    if (!plain_path(active)) {
+      error = "Cannot safely record pending Playnite connector migration";
+      return false;
+    }
+    const auto marker = pending_marker(active);
+    fs::create_directory(marker, ec);
+    if (ec || !plain_path(marker) || !fs::is_directory(marker, ec) || ec) {
+      error = "Cannot record pending Playnite connector migration" + (ec ? ": " + ec.message() : std::string());
+      return false;
+    }
+    return true;
+  }
+
+  inline bool complete_migration(const fs::path &active, std::string &error) {
+    std::error_code ec;
+    fs::remove(pending_marker(active), ec);
+    if (ec) {
+      error = "Cannot clear pending Playnite connector migration: " + ec.message();
+      return false;
+    }
+    return true;
   }
 
   // The caller supplies only roots tied to the selected registry-confirmed
@@ -82,9 +133,15 @@ namespace platf::playnite::migration {
   // Called only after the replacement has been verified and Playnite stopped.
   // A missing manifest is an idempotent success; unowned/linked entries are not
   // touched. A failed rename leaves the original intact and is retryable.
-  inline bool disable_duplicate(const fs::path &active, const fs::path &alternate, std::string &error) {
+  inline bool disable_duplicate(const fs::path &active, const fs::path &alternate, std::string &error,
+                                manifest_inspection (*inspect)(const fs::path &) = inspect_manifest) {
     std::error_code ec;
     if (!fs::exists(alternate, ec)) {
+      if (!ec) return true;
+      error = "Could not inspect alternate Playnite extension: " + ec.message();
+      return false;
+    }
+    if (!fs::is_directory(alternate, ec)) {
       if (!ec) return true;
       error = "Could not inspect alternate Playnite extension: " + ec.message();
       return false;
@@ -92,10 +149,15 @@ namespace platf::playnite::migration {
     if (fs::equivalent(active, alternate, ec) && !ec) return true;
     if (!plain_path(active) || !plain_path(alternate)) return true;
     const auto manifest = alternate / "extension.yaml";
-    if (!owned_manifest(manifest)) return true;
+    const auto alternate_manifest = inspect(manifest);
+    if (alternate_manifest == manifest_inspection::error) {
+      error = "Could not read alternate Playnite connector manifest";
+      return false;
+    }
+    if (alternate_manifest != manifest_inspection::owned) return true;
     // Never disable the old connector if the new activation manifest is absent
     // or unrecognized (including interrupted deployment).
-    if (!owned_manifest(active / "extension.yaml")) {
+    if (inspect(active / "extension.yaml") != manifest_inspection::owned) {
       error = "Replacement Playnite connector manifest could not be verified";
       return false;
     }

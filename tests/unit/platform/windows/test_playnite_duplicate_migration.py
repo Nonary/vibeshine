@@ -28,6 +28,23 @@ int main(int, char **argv) {
   fs::path root = argv[1], active = root / "Roaming/Playnite/Extensions/SunshinePlaynite";
   fs::path old = root / "Local/Playnite/Extensions/SunshinePlaynite";
   manifest(active); manifest(old, true);
+  std::ifstream unreadable(root / "missing-file");
+  assert(read_manifest(unreadable) == manifest_inspection::error);
+  std::string error;
+  assert(begin_migration(active, error));
+  auto read_failure = +[](const fs::path &) { return manifest_inspection::error; };
+  assert(!disable_duplicate(active, old, error, read_failure));
+  assert(fs::exists(old / "extension.yaml") && migration_pending(active));
+  assert(disable_duplicate(active, old, error));
+  assert(complete_migration(active, error) && !migration_pending(active));
+  std::error_code marker_ec;
+  fs::create_directory_symlink(old, pending_marker(active), marker_ec);
+  if (!marker_ec) {
+    assert(!begin_migration(active, error));
+    assert(fs::exists(old / "extension.yaml.vibeshine-disabled"));
+    fs::remove(pending_marker(active));
+  }
+  manifest(old, true);
   assert(alternate_root(active, active, old) == old);
   assert(alternate_root(old, active, old) == active);
   const auto portable = root / "Portable/Extensions/SunshinePlaynite";
@@ -35,7 +52,6 @@ int main(int, char **argv) {
   assert(!alternate_root(portable, active, old));
   assert(!alternate_root(root / "arbitrary-override", active, old));
   std::ofstream(old / "settings.json") << "user settings";
-  std::string error;
   assert(disable_duplicate(active, old, error));
   assert(!fs::exists(old / "extension.yaml"));
   assert(fs::exists(old / "extension.yaml.vibeshine-disabled"));

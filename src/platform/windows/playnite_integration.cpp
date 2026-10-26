@@ -2032,6 +2032,13 @@ namespace platf::playnite {
       // Capture the same running/interactive user's roots before stopping
       // Playnite; token selection may change once its process has exited.
       const auto alternate = alternate_connector_dir(destDir);
+      if (!alternate && migration::migration_pending(destDir)) {
+        error_out = "Could not resolve the alternate Playnite connector for the pending migration.";
+        return false;
+      }
+      // Record the obligation before installing the new version. A failed or
+      // interrupted retirement must remain visible to the normal update path.
+      if (alternate && !migration::begin_migration(destDir, error_out)) return false;
       std::wstring playniteExe;
       if (restart && !resolve_playnite_launch_exe(playniteExe)) {
         error_out = "Could not resolve the Playnite executable before installation.";
@@ -2127,6 +2134,7 @@ namespace platf::playnite {
       }
       if (deployed && alternate) {
         deployed = migration::disable_duplicate(destDir, *alternate, error_out);
+        if (deployed) deployed = migration::complete_migration(destDir, error_out);
       }
       if (!deployed) {
         if (error_out.empty()) error_out = "Failed to deploy and verify plugin files in " + destDir.string();
