@@ -2032,13 +2032,30 @@ namespace platf::playnite {
       // Capture the same running/interactive user's roots before stopping
       // Playnite; token selection may change once its process has exited.
       const auto alternate = alternate_connector_dir(destDir);
-      if (!alternate && migration::migration_pending(destDir)) {
+      std::filesystem::path installed_target;
+      if (!alternate && resolve_extensions_dir_via_per_user_install(installed_target) &&
+          migration::unresolved_installed_target(destDir, installed_target, false)) {
+        error_out = "Could not resolve the installed Playnite connector's alternate root.";
+        return false;
+      }
+      const bool pending_migration = migration::migration_pending(destDir);
+      if (!alternate && pending_migration) {
         error_out = "Could not resolve the alternate Playnite connector for the pending migration.";
         return false;
       }
+      bool alternate_exists = false;
+      if (alternate) {
+        ec.clear();
+        alternate_exists = std::filesystem::exists(*alternate, ec);
+        if (ec) {
+          error_out = "Could not inspect the alternate Playnite connector: " + ec.message();
+          return false;
+        }
+      }
+      const bool manage_migration = alternate && migration::needs_migration(alternate_exists, pending_migration);
       // Record the obligation before installing the new version. A failed or
       // interrupted retirement must remain visible to the normal update path.
-      if (alternate && !migration::begin_migration(destDir, error_out)) return false;
+      if (manage_migration && !migration::begin_migration(destDir, error_out)) return false;
       std::wstring playniteExe;
       if (restart && !resolve_playnite_launch_exe(playniteExe)) {
         error_out = "Could not resolve the Playnite executable before installation.";
@@ -2132,7 +2149,7 @@ namespace platf::playnite {
         std::filesystem::remove(destDir / L"SunshinePlaynite.psm1", ec);
         deployed = !ec;
       }
-      if (deployed && alternate) {
+      if (deployed && manage_migration) {
         deployed = migration::disable_duplicate(destDir, *alternate, error_out);
         if (deployed) deployed = migration::complete_migration(destDir, error_out);
       }

@@ -14,21 +14,29 @@ namespace platf::playnite::migration {
   namespace fs = std::filesystem;
 
   // Do not follow junctions/symlinks to another installation or user's files.
-  inline bool plain_path(const fs::path &path) {
-    if (!path.is_absolute()) return false;
+  enum class path_inspection { safe, unsafe, error };
+
+  inline path_inspection inspect_path(const fs::path &path) {
+    if (!path.is_absolute()) return path_inspection::unsafe;
     fs::path current = path.root_path();
     for (const auto &part : path.relative_path()) {
-      if (part == "..") return false;
+      if (part == "..") return path_inspection::unsafe;
       current /= part;
       std::error_code ec;
       const auto status = fs::symlink_status(current, ec);
-      if (ec || fs::is_symlink(status)) return false;
+      if (ec) return path_inspection::error;
+      if (fs::is_symlink(status)) return path_inspection::unsafe;
 #ifdef _WIN32
       const auto attributes = GetFileAttributesW(current.c_str());
-      if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+      if (attributes == INVALID_FILE_ATTRIBUTES) return path_inspection::error;
+      if (attributes & FILE_ATTRIBUTE_REPARSE_POINT) return path_inspection::unsafe;
 #endif
     }
-    return true;
+    return path_inspection::safe;
+  }
+
+  inline bool plain_path(const fs::path &path) {
+    return inspect_path(path) == path_inspection::safe;
   }
 
   inline std::string scalar(std::string value) {
@@ -74,7 +82,9 @@ namespace platf::playnite::migration {
     const auto status = fs::symlink_status(manifest, ec);
     if (ec) return ec == std::errc::no_such_file_or_directory ? manifest_inspection::unowned : manifest_inspection::error;
     if (status.type() == fs::file_type::not_found) return manifest_inspection::unowned;
-    if (!plain_path(manifest) || !fs::is_regular_file(status)) return manifest_inspection::unowned;
+    const auto path_state = inspect_path(manifest);
+    if (path_state == path_inspection::error) return manifest_inspection::error;
+    if (path_state == path_inspection::unsafe || !fs::is_regular_file(status)) return manifest_inspection::unowned;
     const auto size = fs::file_size(manifest, ec);
     if (ec) return manifest_inspection::error;
     if (size > 65536) return manifest_inspection::unowned;
@@ -130,11 +140,24 @@ namespace platf::playnite::migration {
     return std::nullopt;
   }
 
+  // A resolved installed profile target must not silently deploy a new
+  // version if discovery of its paired executable root failed.
+  inline bool unresolved_installed_target(const fs::path &destination, const fs::path &installed_target, bool alternate_resolved) {
+    if (alternate_resolved || installed_target.empty()) return false;
+    std::error_code ec;
+    return fs::equivalent(destination, installed_target, ec) && !ec;
+  }
+
+  inline bool needs_migration(bool alternate_exists, bool pending) {
+    return alternate_exists || pending;
+  }
+
   // Called only after the replacement has been verified and Playnite stopped.
   // A missing manifest is an idempotent success; unowned/linked entries are not
   // touched. A failed rename leaves the original intact and is retryable.
   inline bool disable_duplicate(const fs::path &active, const fs::path &alternate, std::string &error,
-                                manifest_inspection (*inspect)(const fs::path &) = inspect_manifest) {
+                                manifest_inspection (*inspect)(const fs::path &) = inspect_manifest,
+                                path_inspection (*inspect_safety)(const fs::path &) = inspect_path) {
     std::error_code ec;
     if (!fs::exists(alternate, ec)) {
       if (!ec) return true;
@@ -147,7 +170,13 @@ namespace platf::playnite::migration {
       return false;
     }
     if (fs::equivalent(active, alternate, ec) && !ec) return true;
-    if (!plain_path(active) || !plain_path(alternate)) return true;
+    const auto active_safety = inspect_safety(active);
+    const auto alternate_safety = inspect_safety(alternate);
+    if (active_safety == path_inspection::error || alternate_safety == path_inspection::error) {
+      error = "Could not inspect Playnite connector path metadata";
+      return false;
+    }
+    if (active_safety == path_inspection::unsafe || alternate_safety == path_inspection::unsafe) return true;
     const auto manifest = alternate / "extension.yaml";
     const auto alternate_manifest = inspect(manifest);
     if (alternate_manifest == manifest_inspection::error) {

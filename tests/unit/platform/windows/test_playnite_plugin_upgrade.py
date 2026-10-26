@@ -90,7 +90,7 @@ int main() {
     query = status[status.index("  struct playnite_install_state_t"):status.index("  // Enhance app JSON")]
     installer = (repo / "src/platform/windows/playnite_integration.cpp").read_text()
     cleanup_start = installer.index("      if (deployed)", installer.index("      cleanup_guard.disable();"))
-    cleanup = installer[cleanup_start:installer.index("      if (deployed && alternate)", cleanup_start)]
+    cleanup = installer[cleanup_start:installer.index("      if (deployed && manage_migration)", cleanup_start)]
     cpp.write_text('''#include <filesystem>
 #include <fstream>
 #include <optional>
