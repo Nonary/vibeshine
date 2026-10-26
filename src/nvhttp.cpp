@@ -374,6 +374,23 @@ namespace nvhttp {
       return display_helper_integration::apply_remote_composed_topology(topology);
     }
 
+    std::optional<remote_display_topology::mode_t> remote_monitor_observed_geometry(const std::string &client_uuid) {
+      const auto expected = VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(client_uuid, {}, {}, false);
+      const auto devices = display_helper_integration::enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
+      if (!expected || !devices) return std::nullopt;
+      std::optional<remote_display_topology::mode_t> result;
+      for (const auto &device : *devices) {
+        if (!remote_device_id_equals(device.m_device_id, *expected) || !device.m_info || device.m_display_name.empty()) continue;
+        if (result) return std::nullopt;
+        const auto width = static_cast<int>(device.m_info->m_resolution.m_width);
+        const auto height = static_cast<int>(device.m_info->m_resolution.m_height);
+        const auto refresh = remote_refresh_hz(device.m_info->m_refresh_rate);
+        if (width <= 0 || height <= 0 || refresh <= 0) return std::nullopt;
+        result = remote_display_topology::mode_t {width, height, refresh, false};
+      }
+      return result;
+    }
+
     std::optional<std::string> remote_monitor_exact_capture_output(
       const std::string &client_uuid,
       const remote_display_topology::mode_t &mode
@@ -425,6 +442,7 @@ namespace nvhttp {
           ).has_value();
         },
         .apply_composed_topology = apply_remote_monitor_composition,
+        .observe_shared_mode = remote_monitor_observed_geometry,
         .finalize_mode = [](const std::string &client_uuid, remote_display_topology::mode_t &mode, bool allow_mutation) {
           const auto device = VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(client_uuid, {}, {}, false);
           const bool verified = device && display_helper_integration::apply_remote_monitor_hdr_state(*device, mode.hdr, allow_mutation);

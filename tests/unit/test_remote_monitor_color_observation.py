@@ -139,11 +139,11 @@ int main() {
 namespace remote_display_topology { struct mode_t { int width,height,refresh_hz; bool hdr; }; }
 struct Info { struct { unsigned m_width,m_height; } m_resolution; int m_refresh_rate; };
 struct Device { std::string m_device_id,m_display_name; std::optional<Info> m_info; };
-bool valid_device=true, output_found=true; int queries=0, hdr_after=100; bool observation_unknown=false;
+bool valid_device=true, output_found=true, duplicate_devices=false; int queries=0, hdr_after=100; bool observation_unknown=false;
 namespace VDISPLAY { std::optional<std::string> resolveActiveVirtualDisplayDeviceIdForStableId(const std::string &, int, int, bool) { return valid_device ? std::optional<std::string>{"id"} : std::nullopt; } }
 namespace display_helper_integration {
  enum class DeviceEnumerationDetail { Minimal };
- std::optional<std::vector<Device>> enumerate_devices(DeviceEnumerationDetail) { return std::vector<Device>{{"id","DISPLAY1",Info{{3840,2160},120}}}; }
+ std::optional<std::vector<Device>> enumerate_devices(DeviceEnumerationDetail) { auto result=std::vector<Device>{{"id","DISPLAY1",Info{{3840,2160},120}}}; if(duplicate_devices)result.push_back(result.front());return result; }
 }
 namespace display_device { using DeviceEnumerationDetail=display_helper_integration::DeviceEnumerationDetail; }
 namespace platf { enum class mem_type_e { dxgi }; std::vector<std::string> display_names(mem_type_e) { return output_found ? std::vector<std::string>{"DISPLAY1"} : std::vector<std::string>{}; }
@@ -151,8 +151,10 @@ namespace platf { enum class mem_type_e { dxgi }; std::vector<std::string> displ
 }
 bool remote_device_id_equals(const std::string &a,const std::string &b) { return a==b; }
 int remote_refresh_hz(int v) { return v; }
-''' + function(nvhttp, '    std::optional<std::string> remote_monitor_exact_capture_output(') + r'''
+''' + function(nvhttp, '    std::optional<remote_display_topology::mode_t> remote_monitor_observed_geometry(') + '\n' + function(nvhttp, '    std::optional<std::string> remote_monitor_exact_capture_output(') + r'''
 int main() {
+ auto observed=remote_monitor_observed_geometry("client"); assert(observed && observed->width==3840 && observed->height==2160 && observed->refresh_hz==120);
+ duplicate_devices=true; assert(!remote_monitor_observed_geometry("client")); duplicate_devices=false;
  remote_display_topology::mode_t hdr{3840,2160,120,true};
  hdr_after=3; assert(remote_monitor_exact_capture_output("client",hdr)=="DISPLAY1"); assert(queries==3);
  queries=0; hdr_after=100; assert(!remote_monitor_exact_capture_output("client",hdr));

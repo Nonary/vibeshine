@@ -56,6 +56,8 @@ namespace remote_display_topology {
     // Implementations may safely downgrade requested state such as HDR.
     std::function<void(const std::string &client_uuid, mode_t &mode)> resolve_mode;
     std::function<bool(const std::vector<node_t> &composed)> apply_composed_topology;
+    // Read the exact active shared output's actual geometry, without changing it.
+    std::function<std::optional<mode_t>(const std::string &client_uuid)> observe_shared_mode;
     // Some platforms cannot apply or verify the requested color state until
     // the newly created output is active in the composed topology. Resolve
     // the effective state for this owner before publishing capture readiness.
@@ -198,6 +200,9 @@ namespace remote_display_topology {
       // A shared capture prevented this monitor from configuring its requested
       // mode. Reconfigure after that capture drains, without dropping ownership.
       bool deferred_monitor_reconfiguration = false;
+      // No topology may be composed from this requested mode while a shared
+      // normal owner has not confirmed it on the exact target.
+      bool shared_mode_unverified = false;
       uint64_t generation = 0;
       // Stable first-ownership order keeps existing displays in place when a
       // new owner has no saved layout. UUID ordering must not reshuffle the
@@ -217,6 +222,7 @@ namespace remote_display_topology {
     void release_locked(const std::string &client_uuid, client_state_t &state, const std::string &reason);
     static mode_t desired_mode(const client_state_t &state);
     void resolve_effective_mode_locked(const std::string &client_uuid, client_state_t &state);
+    bool refresh_unverified_shared_geometry_locked(const std::string &except = {});
     std::vector<node_t> compose_locked(std::vector<std::string> &warnings) const;
     static mode_t effective_mode(const node_t &node);
     static void place_relative(node_t &node, const node_t &anchor, const nlohmann::json &placement);
