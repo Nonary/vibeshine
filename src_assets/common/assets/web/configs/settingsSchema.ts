@@ -1354,8 +1354,13 @@ export const settingsDestinations: Array<{
       'steam_auto_sync',
       'steam_exclude_games',
       'steam_include_tools',
-      'steam_big_picture_controls',
     ],
+  },
+  {
+    labelKey: 'ui.integrations.steam.bigPictureTitle',
+    to: '/integrations#steam-big-picture-heading',
+    platform: 'windows',
+    keys: ['steam_big_picture_controls'],
   },
   {
     labelKey: 'ui.integrations.lutris.name',

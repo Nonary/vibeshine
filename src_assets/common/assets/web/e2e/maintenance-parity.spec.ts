@@ -476,6 +476,24 @@ test('Linux integrations do not query or expose Playnite', async ({ page }) => {
   expect(calls.bigPictureStatus).toBe(0);
 });
 
+test('settings search offers the Big Picture controls only on Windows', async ({ page }) => {
+  await setupHost(page, { platform: 'linux' });
+  await page.goto('/v2/settings');
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('big picture');
+  await expect(page.locator('.settings-destinations a')).toHaveCount(0);
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('steam_big_picture_controls');
+  await expect(page.locator('.settings-destinations a')).toHaveCount(0);
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await setupHost(page);
+  await page.goto('/v2/settings');
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('big picture');
+  await expect(page.locator('.settings-destinations a')).toHaveAttribute(
+    'href',
+    '/v2/integrations#steam-big-picture-heading',
+  );
+});
+
 test('Windows Steam card turns on the Big Picture controls and Steam debug port', async ({
   page,
 }, testInfo) => {
