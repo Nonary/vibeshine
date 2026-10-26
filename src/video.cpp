@@ -469,7 +469,7 @@ namespace video {
 
 #endif
 
-    probe_target_t resolve_probe_target() {
+    probe_target_t resolve_probe_target(const bool materialize_capture_output = true) {
 #ifdef _WIN32
       const auto active_output = config::get_active_output_name();
       const auto mapped_output = display_device::map_output_name(active_output);
@@ -504,6 +504,21 @@ namespace video {
       }
       if (pending_virtual_display_adapter_hint) {
         const auto pending_adapter = adapter_id_from_luid(*pending_virtual_display_adapter_hint);
+        // A cache lookup needs only the expected adapter identity. Materializing
+        // a capture output here creates a D3D device even on a positive cache
+        // hit, repeatedly waking the GPU while clients poll /serverinfo.
+        // Actual probes still select a capture target and must observe this
+        // adapter before they can own a successful capability entry.
+        if (!materialize_capture_output) {
+          return probe_target_t {
+            .required_adapter = pending_adapter,
+            .adapter_identity = probe_adapter_identity_t {
+              .identity = luid_cache_identity(*pending_virtual_display_adapter_hint),
+              .source = "pending-virtual-display-adapter-cache-lookup",
+              .resolved = true,
+            },
+          };
+        }
         std::optional<LUID> observed_adapter;
         std::string_view observed_source;
         if (current_wgc_identity) {
@@ -583,6 +598,16 @@ namespace video {
         );
         if (configured_adapter) {
           const auto configured_adapter_id = adapter_id_from_luid(*configured_adapter.luid);
+          if (!materialize_capture_output) {
+            return probe_target_t {
+              .required_adapter = configured_adapter_id,
+              .adapter_identity = probe_adapter_identity_t {
+                .identity = luid_cache_identity(*configured_adapter.luid),
+                .source = "configured-adapter-cache-lookup",
+                .resolved = true,
+              },
+            };
+          }
           const bool preferred_output_matches_adapter =
             mapped_output_matches_adapter(*configured_adapter.luid);
           const bool wgc_mismatches_configured_adapter =
@@ -694,6 +719,7 @@ namespace video {
         },
       };
 #else
+      (void) materialize_capture_output;
       const auto active_output = display_device::map_output_name(config::get_active_output_name());
       return probe_target_t {
         .display_name =
@@ -757,7 +783,7 @@ namespace video {
       oss << "|amf_quarantined=" << (native_amf_lifecycle_gate.is_quarantined() ? 1 : 0);
       const auto adapter_identity = probe_target ?
                                       probe_target->adapter_identity :
-                                      resolve_probe_target().adapter_identity;
+                                      resolve_probe_target(false).adapter_identity;
       return probe_cache_key_t {
         .encoder_configuration = oss.str(),
         .adapter_identity = adapter_identity.identity,
@@ -1172,6 +1198,10 @@ namespace video {
       return device->convert(img);
     }
 
+    platf::converted_frame_t converted_frame() const override {
+      return device ? device->converted_frame : platf::converted_frame_t {};
+    }
+
     void request_idr_frame() override {
       if (device && device->frame) {
         auto &frame = device->frame;
@@ -1188,9 +1218,10 @@ namespace video {
       }
     }
 
-    void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
+    bool invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
       BOOST_LOG(error) << "Encoder doesn't support reference frame invalidation";
       request_idr_frame();
+      return false;
     }
 
     void set_hdr_metadata(const SS_HDR_METADATA &metadata) override {
@@ -1269,6 +1300,10 @@ namespace video {
       return device->convert(img);
     }
 
+    platf::converted_frame_t converted_frame() const override {
+      return device ? device->converted_frame : platf::converted_frame_t {};
+    }
+
     void request_idr_frame() override {
       force_idr = true;
     }
@@ -1277,14 +1312,16 @@ namespace video {
       force_idr = false;
     }
 
-    void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
+    bool invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
       if (!device || !device->nvenc) {
-        return;
+        return false;
       }
 
       if (!device->nvenc->invalidate_ref_frames(first_frame, last_frame)) {
         force_idr = true;
+        return false;
       }
+      return true;
     }
 
     bool set_bitrate(int bitrate_kbps) override {
@@ -1348,10 +1385,14 @@ namespace video {
         return -1;
       }
       const auto result = device->convert(img);
-      if (result == 0) {
+      if (result == 0 && !device->converted_frame.repeats_previous) {
         fresh_conversion_pending = true;
       }
       return result;
+    }
+
+    platf::converted_frame_t converted_frame() const override {
+      return device ? device->converted_frame : platf::converted_frame_t {};
     }
 
     void request_idr_frame() override {
@@ -1364,14 +1405,16 @@ namespace video {
       // backpressure drops, so clearing it here would lose recovery IDRs.
     }
 
-    void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
+    bool invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
       if (!device || !device->amf) {
-        return;
+        return false;
       }
 
       if (!device->amf->invalidate_ref_frames(first_frame, last_frame)) {
         force_idr = true;
+        return false;
       }
+      return true;
     }
 
     bool set_bitrate(int bitrate_kbps) override {
@@ -2745,7 +2788,7 @@ namespace video {
     state.pending_virtual_display_adapter_hint = adapter_luid;
     state.pending_virtual_display_adapter_hint_lease = lease;
     state.pending_virtual_display_adapter_hint_ready_for_verification = false;
-    BOOST_LOG(debug)
+    BOOST_LOG(verbose)
       << "Published pending virtual-display adapter identity "
       << luid_cache_identity(adapter_luid)
       << " for encoder capability matching (lease=" << lease << ").";
@@ -2776,8 +2819,8 @@ namespace video {
     state.pending_virtual_display_adapter_hint.reset();
     state.pending_virtual_display_adapter_hint_lease = 0;
     state.pending_virtual_display_adapter_hint_ready_for_verification = false;
-    BOOST_LOG(debug)
-      << "Cleared pending virtual-display adapter identity after display publication (lease="
+    BOOST_LOG(verbose)
+      << "Cleared pending virtual-display adapter identity (lease="
       << lease << ").";
     return true;
   }
@@ -2786,6 +2829,14 @@ namespace video {
   advertised_encoder_capabilities_t advertised_encoder_capabilities(
     const bool probe_before_negative,
     bool *probe_complete
+  ) {
+    return advertised_encoder_capabilities(probe_before_negative, probe_complete, nullptr);
+  }
+
+  advertised_encoder_capabilities_t advertised_encoder_capabilities(
+    const bool probe_before_negative,
+    bool *probe_complete,
+    std::string *adapter_identity
   ) {
     auto current_key = build_probe_cache_key();
     auto probe_status = encoder_probe_status_for_key(current_key);
@@ -2820,6 +2871,9 @@ namespace video {
     // when the current identity has not produced a successful probe.
     if (probe_complete) {
       *probe_complete = probe_status.successful;
+    }
+    if (adapter_identity) {
+      *adapter_identity = current_key.adapter_identity;
     }
     if (!probe_status.successful) {
       log_probe_cache_miss(current_key);
@@ -3319,8 +3373,7 @@ namespace video {
         }
 
         const auto pacing = capture_pacing_for_display();
-        if (const auto demand = capture_config_for_consumers(capture_ctxs, pacing);
-            demand && !same_capture_pacing(producer_config, *demand, pacing)) {
+        if (const auto demand = capture_config_for_consumers(capture_ctxs, pacing); demand && !same_capture_demand(producer_config, *demand, pacing)) {
           // Reuse the existing serialized teardown: all encoders release the
           // old display before its single replacement is created. This also
           // refreshes WGC admission and the capture loop's pacing state.
@@ -5266,10 +5319,14 @@ namespace video {
       uint64_t pop_timeouts = 0;
       uint64_t gate_skipped = 0;
       uint64_t converted = 0;
+      uint64_t repeated_inputs = 0;
       uint64_t encoded = 0;
       uint64_t dropped_submissions = 0;
       std::chrono::steady_clock::time_point last_log = std::chrono::steady_clock::now();
     } loop_stats;
+
+    // A keyframe request that arrived with an input the conversion then reported as a repeat.
+    bool retry_idr = false;
 
     while (true) {
       raise_touch_port_if_geometry_changed(touch_port_event, disp.get(), config);
@@ -5280,6 +5337,7 @@ namespace video {
                          << " pop_timeouts=" << loop_stats.pop_timeouts
                          << " gate_skipped=" << loop_stats.gate_skipped
                          << " converted=" << loop_stats.converted
+                         << " repeated_inputs=" << loop_stats.repeated_inputs
                          << " encoded=" << loop_stats.encoded
                          << " dropped_submissions=" << loop_stats.dropped_submissions
                          << " frame_nr=" << frame_nr;
@@ -5321,11 +5379,13 @@ namespace video {
         }
       }
 
-      bool requested_idr_frame = false;
+      bool requested_idr_frame = std::exchange(retry_idr, false);
 
       while (invalidate_ref_frames_events->peek()) {
         if (auto frames = invalidate_ref_frames_events->pop(0ms)) {
-          session->invalidate_ref_frames(frames->first, frames->second);
+          // A failed invalidation requests an IDR inside the backend. Carry it
+          // through duplicate-input skips just like an explicit client IDR.
+          requested_idr_frame |= !session->invalidate_ref_frames(frames->first, frames->second);
         }
       }
 
@@ -5434,6 +5494,18 @@ namespace video {
             native_amf_runtime_failed = native_amf_session;
             break;
           }
+
+          // Direct WGC input reads the helper's live frame, so the conversion reports
+          // which frame it actually got. Pixels this session already sent would only
+          // repeat that frame; wait for the next capture instead.
+          const auto converted = policy::resolve_converted_input(session->converted_frame(), img->frame_timestamp, img->host_processing_timestamp);
+          if (!converted.encode) {
+            ++loop_stats.repeated_inputs;
+            // Skipping must not delay a requested keyframe until the next capture: carry
+            // it into the next iteration, which encodes the last input without waiting.
+            retry_idr = policy::retry_idr_after_repeat(converted, requested_idr_frame);
+            continue;
+          }
           ++loop_stats.converted;
 
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
@@ -5452,8 +5524,8 @@ namespace video {
 
           if (!placeholder_input) {
             bootstrap_state.real_frame_seen = true;
-            frame_timestamp = img->frame_timestamp;
-            host_processing_timestamp = img->host_processing_timestamp;
+            frame_timestamp = converted.frame_timestamp;
+            host_processing_timestamp = converted.host_processing_timestamp;
           } else {
             frame_timestamp.reset();
             host_processing_timestamp.reset();
@@ -5949,7 +6021,9 @@ namespace video {
             continue;
           }
 
+          bool idr_requested = false;
           if (ctx->idr_events->peek()) {
+            idr_requested = true;
             pos->session->request_idr_frame();
             ctx->idr_events->pop();
           }
@@ -5992,6 +6066,16 @@ namespace video {
               continue;
             }
 
+            // Direct WGC input: encode the frame the conversion actually read, and
+            // skip pixels this session already sent rather than repeating them.
+            const auto converted = policy::resolve_converted_input(pos->session->converted_frame(), img->frame_timestamp, img->host_processing_timestamp);
+            if (!converted.encode && !policy::retry_idr_after_repeat(converted, idr_requested)) {
+              ++pos;
+              continue;
+            }
+            // Otherwise a requested keyframe is not delayed behind the repeat: the last
+            // input is encoded as the IDR now, unstamped like the no-new-frame path.
+
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
             if (refresh_rtx_hdr_metadata_if_needed(
                   ctx->config,
@@ -6008,8 +6092,8 @@ namespace video {
 
             if (!placeholder_input) {
               pos->bootstrap.real_frame_seen = true;
-              frame_timestamp = img->frame_timestamp;
-              host_processing_timestamp = img->host_processing_timestamp;
+              frame_timestamp = converted.frame_timestamp;
+              host_processing_timestamp = converted.host_processing_timestamp;
             }
           } else {
             placeholder_input = pos->bootstrap.current_input_placeholder;

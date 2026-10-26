@@ -84,6 +84,7 @@ test('gamepad options follow the host platform', () => {
       'vhf_ds5',
       'usbip_ds5',
       'vhf_switch',
+      'vhf_steam',
     ],
   );
   const context = { t: (key: string) => key, platform: 'linux' };
@@ -156,6 +157,7 @@ test('Linux keeps common virtual-display policy and hides Windows display intern
     'dd_snapshot_restore_hotkey',
     'dd_snapshot_restore_hotkey_modifiers',
     'wgc_pacing_smoothing',
+    'wgc_direct_encoder_input',
     'always_send_scancodes',
     'native_pen_touch',
     'install_steam_audio_drivers',

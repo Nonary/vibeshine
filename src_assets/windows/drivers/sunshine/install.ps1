@@ -69,23 +69,23 @@ function Write-DriverRestartRequired {
 # DRIVER_INSTALL_SAFETY_BEGIN
 # Kept inline so pinned producer packages do not need a new runtime file.
 function ConvertTo-DriverComponentVersion {
-    param([string]$Value)
-    if ($Value -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "Unknown driver component version: '$Value'. Driver unchanged." }
+    param([string]$Value, [string]$Source = 'driver metadata')
+    if ($Value -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "Unknown driver component version from ${Source}: '$Value'. Driver unchanged." }
     foreach ($part in $Value.Split('.')) {
-        if ([uint64]$part -gt 65535) { throw "Invalid driver component version: '$Value'. Driver unchanged." }
+        if ([uint64]$part -gt 65535) { throw "Invalid driver component version from ${Source}: '$Value'. Driver unchanged." }
     }
     return [version]$Value
 }
 
 function Get-InfComponentVersion {
-    param([Parameter(Mandatory = $true)][string]$Path)
+    param([Parameter(Mandatory = $true)][string]$Path, [string]$Source = 'INF')
     $inVersion = $false
     $versions = @()
     foreach ($line in (Get-Content -LiteralPath $Path -ErrorAction Stop)) {
         $text = ($line -split ';', 2)[0].Trim()
         if ($text -match '^\[(.+)\]$') { $inVersion = $Matches[1] -ieq 'Version'; continue }
         if ($inVersion -and $text -match '^DriverVer\s*=\s*[^,]+,\s*(\S+)\s*$') {
-            $versions += ConvertTo-DriverComponentVersion $Matches[1]
+            $versions += ConvertTo-DriverComponentVersion $Matches[1] -Source $Source
         }
     }
     if ($versions.Count -ne 1) { throw "Missing or ambiguous INF DriverVer: $Path. Driver unchanged." }
@@ -144,20 +144,31 @@ function Get-DriverInstallSafetyInventory {
     $requestBase64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($requestJson))
     $queryScript = @'
 $ErrorActionPreference = 'Stop'
+$clock = [Diagnostics.Stopwatch]::StartNew()
+function Write-InventoryStage([string]$Stage) {
+    [Console]::Out.WriteLine('DRIVER_INSTALL_SAFETY_STAGE:' + $Stage + ':' + $clock.ElapsedMilliseconds)
+}
+Write-InventoryStage 'started'
 try {
     $requestJson = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('__REQUEST__'))
     $request = ConvertFrom-Json -InputObject $requestJson -ErrorAction Stop
-    $packages = @(Get-WindowsDriver -Online -All -ErrorAction Stop | Where-Object {
+    # These custom display packages cannot be inbox Windows drivers. Including
+    # inbox packages makes this bounded query spend most of its budget on DISM.
+    Write-InventoryStage 'packages-start'
+    $packages = @(Get-WindowsDriver -Online -ErrorAction Stop | Where-Object {
         [IO.Path]::GetFileName([string]$_.OriginalFileName) -ieq [string]$request.InfName
     } | ForEach-Object {
         [pscustomobject]@{ OriginalFileName = [string]$_.OriginalFileName; Driver = [string]$_.Driver }
     })
+    Write-InventoryStage 'packages-done'
+    Write-InventoryStage 'devices-start'
     $devices = @(Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction Stop | Where-Object {
         ([string]$_.DeviceID).StartsWith([string]$request.HardwareId, [StringComparison]::OrdinalIgnoreCase) -or
         ([string]$_.HardwareID).Equals([string]$request.HardwareId, [StringComparison]::OrdinalIgnoreCase)
     } | ForEach-Object {
         [pscustomobject]@{ DeviceID = [string]$_.DeviceID; HardwareID = [string]$_.HardwareID; DriverVersion = [string]$_.DriverVersion }
     })
+    Write-InventoryStage 'devices-done'
     $inventory = [pscustomobject]@{ Packages = @($packages); Devices = @($devices) }
     $json = ConvertTo-Json -InputObject $inventory -Compress -Depth 5
     $encodedJson = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($json))
@@ -170,7 +181,15 @@ try {
 '@
     $queryScript = $queryScript.Replace('__REQUEST__', $requestBase64)
 
-    $output = Invoke-DriverInstallSafetyQuery -ScriptText $queryScript -TimeoutSeconds $TimeoutSeconds
+    try {
+        $output = Invoke-DriverInstallSafetyQuery -ScriptText $queryScript -TimeoutSeconds $TimeoutSeconds
+    } catch [TimeoutException] {
+        # A slow or temporarily busy inventory is not evidence of a missing driver.
+        # Retry the complete read-only snapshot once, with more time, before any
+        # version/trust decision. Never consume partial results from the first child.
+        Write-Host "Driver safety inventory exceeded its initial deadline; retrying once with a 60-second recovery budget. $($_.Exception.Message)"
+        $output = Invoke-DriverInstallSafetyQuery -ScriptText $queryScript -TimeoutSeconds 60
+    }
     return ConvertFrom-DriverInstallSafetyInventoryResult -OutputText $output
 }
 
@@ -182,7 +201,7 @@ function Test-SafeDriverInstall {
         [string]$WarningMarker = 'VIRTUAL_DISPLAY_DRIVER_WARNING',
         [bool]$LocalTestPackage = $false
     )
-    $target = Get-InfComponentVersion $InfPath
+    $target = Get-InfComponentVersion $InfPath -Source 'bundled INF'
     $infName = [IO.Path]::GetFileName($InfPath)
     # Both queries must succeed. An empty successful query means missing;
     # errors, missing active versions, and unreadable store INFs mean unknown.
@@ -192,7 +211,7 @@ function Test-SafeDriverInstall {
     $installed = @()
     foreach ($device in $devices) {
         # CIM reports the active INF's numeric DriverVersion (not DriverDate).
-        $installed += ConvertTo-DriverComponentVersion ([string]$device.DriverVersion)
+        $installed += ConvertTo-DriverComponentVersion ([string]$device.DriverVersion) -Source 'active device'
     }
     foreach ($package in $packages) {
         $path = [string]$package.OriginalFileName
@@ -202,7 +221,7 @@ function Test-SafeDriverInstall {
             }
             $path = Join-Path (Join-Path $env:windir 'INF') ([string]$package.Driver)
         }
-        $installed += Get-InfComponentVersion $path
+        $installed += Get-InfComponentVersion $path -Source 'retained INF'
     }
     if (@($installed | Where-Object { $_ -ge $target }).Count -gt 0) {
         Write-Host "Driver component $target skipped: an equal or newer active/Driver Store component exists; installed driver retained."
@@ -566,11 +585,26 @@ function Invoke-DriverProcessCapture {
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             try {
                 $process.Kill()
-                $process.WaitForExit(5000) | Out-Null
+                [void]$process.WaitForExit(5000)
             } catch {
                 $null = $_
             }
-            throw "[SunshineVirtualDisplay] $FilePath timed out after $TimeoutSeconds seconds."
+            if (-not $process.HasExited) {
+                throw 'Inventory child termination could not be confirmed; refusing recovery. Driver unchanged.'
+            }
+            # Preserve only bounded, non-identifying inventory stage records.
+            # Never include arbitrary partial provider output in the timeout error.
+            $stages = @()
+            try {
+                if ($stdoutTask.Wait(1000)) {
+                    $stages = @($stdoutTask.Result -split '\r?\n' | Where-Object {
+                        $_ -cmatch '^DRIVER_INSTALL_SAFETY_STAGE:(started|packages-start|packages-done|devices-start|devices-done):[0-9]{1,12}$'
+                    } | Select-Object -Last 5)
+                }
+            } catch { $stages = @() }
+            $failure = [TimeoutException]::new("[SunshineVirtualDisplay] $FilePath timed out after $TimeoutSeconds seconds.")
+            $failure.Data['InventoryStages'] = $stages -join '; '
+            throw $failure
         }
 
         $process.WaitForExit()
@@ -610,8 +644,10 @@ function Invoke-DriverInstallSafetyCommand {
         return (@($output) -join [Environment]::NewLine)
     } catch {
         $detail = [string]$_.Exception.Message
-        if ($detail.Contains("timed out after $TimeoutSeconds seconds")) {
-            throw "Driver safety inventory timed out after $TimeoutSeconds seconds; driver unchanged."
+        if ($_.Exception -is [TimeoutException]) {
+            $stages = [string]$_.Exception.Data['InventoryStages']
+            if (-not $stages) { $stages = 'No inventory stage reported.' }
+            throw [TimeoutException]::new("Driver safety inventory timed out after $TimeoutSeconds seconds; driver unchanged. $stages")
         }
         if ($detail -match 'failed with exit code (\d+)') {
             throw "Driver safety inventory failed with exit code $($Matches[1]); driver unchanged. $detail"
@@ -1103,12 +1139,77 @@ function Test-DeviceNodePresent {
     return $false
 }
 
+function Get-RetainedSunshineInventory {
+    param(
+        [ValidateSet('Health', 'Packages')][string]$Kind,
+        [int]$TimeoutSeconds = 15
+    )
+    # Retained-device checks run after the initial safety gate, including after
+    # repair. Keep every CIM/DISM inventory behind the same bounded child edge.
+    $request = [pscustomobject]@{ Kind = $Kind; HardwareId = $hardwareId }
+    $encodedRequest = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes((ConvertTo-Json $request -Compress)))
+    $query = @'
+$ErrorActionPreference = 'Stop'
+try {
+    $request = ConvertFrom-Json ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('__REQUEST__')))
+    $nodes = @(); $signed = @(); $packages = @()
+    if ($request.Kind -eq 'Health') {
+        $nodes = @(Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction Stop | Where-Object {
+            @($_.HardwareID) -icontains $request.HardwareId
+        } | ForEach-Object {
+            [pscustomobject]@{ HardwareID = @($_.HardwareID); DeviceID = $_.DeviceID; Present = $_.Present; ConfigManagerErrorCode = $_.ConfigManagerErrorCode }
+        })
+        $signed = @(Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction Stop | Where-Object {
+            @($_.HardwareID) -icontains $request.HardwareId -or @($nodes.DeviceID) -icontains ([string]$_.DeviceID)
+        } | ForEach-Object {
+            [pscustomobject]@{ HardwareID = $_.HardwareID; DeviceID = $_.DeviceID; DriverVersion = $_.DriverVersion }
+        })
+    } elseif ($request.Kind -eq 'Packages') {
+        # This custom package cannot be an inbox driver; match the initial gate.
+        $packages = @(Get-WindowsDriver -Online -ErrorAction Stop | Where-Object {
+            [IO.Path]::GetFileName([string]$_.OriginalFileName) -ieq 'SunshineVirtualDisplayDriver.inf'
+        } | ForEach-Object {
+            [pscustomobject]@{ OriginalFileName = [string]$_.OriginalFileName; Driver = [string]$_.Driver }
+        })
+    } else { throw 'Unknown retained display inventory request.' }
+    $json = ConvertTo-Json -InputObject ([pscustomobject]@{ Nodes = @($nodes); SignedDrivers = @($signed); Packages = @($packages) }) -Compress -Depth 5
+    [Console]::Out.WriteLine('RETAINED_DISPLAY_INVENTORY:' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($json)))
+    exit 0
+} catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+}
+'@
+    try {
+        $output = Invoke-DriverInstallSafetyQuery -ScriptText $query.Replace('__REQUEST__', $encodedRequest) -TimeoutSeconds $TimeoutSeconds
+    } catch {
+        # The same query also runs after repair. Do not reuse the safety gate's
+        # pre-mutation claim that the driver is unchanged at that point.
+        $detail = $_.Exception.Message -replace '(?i)driver unchanged[.]', 'further driver changes deferred.'
+        throw "Retained display $Kind inventory failed; automatic repair deferred. $detail"
+    }
+    $prefix = 'RETAINED_DISPLAY_INVENTORY:'
+    $markers = @($output -split '\r?\n' | Where-Object { $_.StartsWith($prefix, [StringComparison]::Ordinal) })
+    if ($markers.Count -ne 1) { throw 'Missing or ambiguous retained display inventory; automatic repair deferred.' }
+    try {
+        $encoded = $markers[0].Substring($prefix.Length)
+        if ($encoded -notmatch '^[A-Za-z0-9+/]+={0,2}$') { throw 'Malformed inventory encoding.' }
+        $inventory = ConvertFrom-Json -InputObject ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded))) -ErrorAction Stop
+        foreach ($name in @('Nodes', 'SignedDrivers', 'Packages')) {
+            $property = $inventory.PSObject.Properties[$name]
+            if ($null -eq $property -or $property.Value -isnot [Array]) { throw "Missing or invalid $name inventory." }
+        }
+    } catch {
+        throw "Invalid retained display inventory; automatic repair deferred. $($_.Exception.Message)"
+    }
+    return $inventory
+}
+
 function Get-SunshineDeviceHealth {
     # A signed/staged package is not evidence that a present device can start.
     # Use numeric PnP properties, not localized pnputil labels or registry ghosts.
-    $nodes = @(Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction Stop | Where-Object {
-        @($_.HardwareID) -icontains $hardwareId
-    })
+    $inventory = Get-RetainedSunshineInventory -Kind Health
+    $nodes = @($inventory.Nodes)
     foreach ($node in $nodes) {
         if ($null -eq $node.Present -or $null -eq $node.ConfigManagerErrorCode) {
             throw 'Unknown virtual display device health; retained packages unchanged.'
@@ -1116,10 +1217,7 @@ function Get-SunshineDeviceHealth {
     }
     $present = @($nodes | Where-Object { $_.Present -eq $true })
     if ($present.Count -gt 1) { throw 'Multiple present virtual display devices; automatic repair deferred.' }
-    $signed = @(Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction Stop | Where-Object {
-        @($_.HardwareID) -icontains $hardwareId -or
-        @($nodes.DeviceID) -icontains ([string]$_.DeviceID)
-    })
+    $signed = @($inventory.SignedDrivers)
     $versions = @($signed | ForEach-Object { ConvertTo-DriverComponentVersion ([string]$_.DriverVersion) })
     $active = @($signed | Where-Object { @($present.DeviceID) -icontains ([string]$_.DeviceID) })
     if ($active.Count -gt 1) { throw 'Ambiguous active virtual display driver versions; automatic repair deferred.' }
@@ -1134,7 +1232,7 @@ function Get-RetainedSunshinePackage {
     param([Parameter(Mandatory = $true)][version]$MinimumVersion)
     $storeRoot = [IO.Path]::GetFullPath((Join-Path $env:windir 'System32/DriverStore/FileRepository')) + [IO.Path]::DirectorySeparatorChar
     $candidates = @()
-    foreach ($package in @(Get-WindowsDriver -Online -All -ErrorAction Stop)) {
+    foreach ($package in @((Get-RetainedSunshineInventory -Kind Packages).Packages)) {
         $path = [string]$package.OriginalFileName
         if ([IO.Path]::GetFileName($path) -ine 'SunshineVirtualDisplayDriver.inf') { continue }
         if (-not [IO.Path]::IsPathRooted($path) -or [string]$package.Driver -notmatch '^oem\d+\.inf$') {

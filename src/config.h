@@ -251,6 +251,7 @@ namespace config {
     int max_bitrate;  // Maximum bitrate, sets ceiling in kbps for bitrate requested from client
     double minimum_fps_target;  ///< Lowest framerate that will be used when streaming. Range 0-1000, 0 = half of client's requested framerate.
     bool wgc_pacing_smoothing;  ///< Smooth WGC delivered frame cadence under low-latency (Reflex) source caps by snapping the pacing-group re-anchor back onto the prior grid instead of the jittery arrival phase. Disable for byte-for-byte legacy pacing.
+    bool wgc_direct_encoder_input;  ///< GPU encoders read the WGC helper's shared frame directly instead of a host-side snapshot copy made on the capture device.
   };
 
   struct audio_t {
@@ -259,6 +260,8 @@ namespace config {
     bool stream;
     bool install_steam_drivers;
     bool sink_capture_only;  ///< Capture the selected Windows audio sink without changing default outputs.
+    std::string format {"opus"};  ///< Encoded stream format: Opus, AC-3, or E-AC-3.
+    bool high_quality_audio {false};  ///< Higher bitrate for negotiated Dolby streams; ignored for Opus.
   };
 
   constexpr int ENCRYPTION_MODE_NEVER = 0;  // Never use video encryption, even if the client supports it
@@ -273,6 +276,7 @@ namespace config {
     int fec_percentage;
     int video_max_batch_size_kb;
     bool pacing_batch_demand_limit;  ///< Experimental demand-based ordinary-video pacing quantum and batch sizing (default off).
+    bool host_adaptive_pacing;  ///< Experimental loss-responsive packet spacing for ordinary video, never changing encoder bitrate or FPS (default off).
     int pyrowave_critical_fec_percentage;  ///< Parity on the PyroWave shards holding the coarsest wavelet level (at least 2 shards); 0 = none.
 
     // Video encryption settings for LAN and WAN streams

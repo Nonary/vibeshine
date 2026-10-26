@@ -19,6 +19,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <sstream>
 #include <stdexcept>
 #include <system_error>
 #include <thread>
@@ -62,6 +63,7 @@ extern "C" {
 #include "rtsp_pending_policy.h"
 #include "send_result_observation.h"
 #include "session_history.h"
+#include "steam_controller_protocol.h"
 #include "stream.h"
 #include "stream_broadcast_runtime.h"
 #include "sync.h"
@@ -71,6 +73,8 @@ extern "C" {
 #include "utility.h"
 #include "uuid.h"
 #include "video_send.h"
+#include "video_adaptive_pacing.h"
+#include "video_fec_status.h"
 #include "video_pacing_policy.h"
 #include "webrtc_stream.h"
 #ifdef _WIN32
@@ -106,6 +110,8 @@ extern "C" {
 #define IDX_SET_MOTION_EVENT 13
 #define IDX_SET_RGB_LED 14
 #define IDX_SET_ADAPTIVE_TRIGGERS 15
+#define IDX_STEAM_HAPTIC 16
+#define IDX_STEAM_SETTINGS 17
 
 static const short packetTypes[] = {
   0x0305,  // Start A
@@ -124,6 +130,8 @@ static const short packetTypes[] = {
   0x5501,  // Set motion event (Sunshine protocol extension)
   0x5502,  // Set RGB LED (Sunshine protocol extension)
   0x5503,  // Set Adaptive triggers (Sunshine protocol extension)
+  STEAM_HAPTIC_PACKET_TYPE,  // 0x5504: Steam Controller haptic report (Vibeshine protocol extension)
+  STEAM_SETTINGS_PACKET_TYPE,  // 0x5505: Steam Controller settings write (Vibeshine protocol extension)
 };
 
 namespace asio = boost::asio;
@@ -448,6 +456,32 @@ namespace stream {
     std::uint8_t right[DS_EFFECT_PAYLOAD_SIZE];
   };
 
+  /**
+   * A Steam Controller (2026) haptic output report for a client with the real pads
+   * (LI_CCAP_STEAM_HAPTIC): `report` holds it as the host wrote it, id first, `length` bytes.
+   */
+  struct control_steam_haptic_t {
+    control_header_v2 header;
+
+    std::uint16_t id;
+    std::uint8_t length;
+    std::uint8_t report[STEAM_HAPTIC_REPORT_MAX];
+  };
+
+  /**
+   * A Steam Controller (2026) settings write for a client that drives the real controller
+   * (LI_CCAP_STEAM_SETTINGS): `command` 0x87 with `count` (id, lo, hi) triples, or 0x8E with none.
+   * Fixed size; the client reads the whole triple array and trusts `count`.
+   */
+  struct control_steam_settings_t {
+    control_header_v2 header;
+
+    std::uint16_t id;
+    std::uint8_t command;
+    std::uint8_t count;
+    std::uint8_t triples[STEAM_SETTINGS_PAYLOAD_SIZE];
+  };
+
   struct control_hdr_mode_t {
     control_header_v2 header;
 
@@ -482,7 +516,7 @@ namespace stream {
     return ((size + 15) / 16) * 16;
   }
 
-  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = 1400;
+  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = 4096;
 
   using audio_aes_t = std::array<char, round_to_pkcs7_padded(MAX_AUDIO_PACKET_SIZE)>;
 
@@ -644,6 +678,16 @@ namespace stream {
       // Keep its per-frame pacing input atomic instead of racing on monitor config.
       std::atomic<int> pacing_bitrate_kbps {0};
 
+      // Experimental loss-responsive spacing (host_adaptive_pacing, ordinary video
+      // only). The control thread feeds pings, FEC reports and ticks; the sender
+      // asks for the rate once per frame. The mutex is held only for those short
+      // calls, never across a send or a pacing sleep.
+      bool adaptive_pacing_enabled {false};
+      std::mutex adaptive_pacing_mutex;
+      pacing::adaptive_pacing_t adaptive_pacing;
+      // Control thread only: validates and de-duplicates client FEC block reports.
+      pacing::fec_report_tracker_t fec_reports;
+
       std::unique_ptr<platf::deinit_t> qos;
     } video;
 
@@ -717,6 +761,11 @@ namespace stream {
       std::atomic<std::int64_t> client_reported_losses {0};
       std::atomic<std::uint16_t> last_encode_latency_us10 {0};  // in 1/10 ms units
       std::atomic<std::int64_t> last_frame_index {0};
+      /// Index of the newest frame whose send began, or -1 before the first one.
+      /// Written only with host_adaptive_pacing, which fences client reports on it.
+      std::atomic<std::int64_t> wire_frame_index {-1};
+      /// Frames abandoned by a socket send failure; adaptive pacing treats a rise as loss.
+      std::atomic<std::uint64_t> video_send_failures {0};
       std::chrono::steady_clock::time_point start_time {std::chrono::steady_clock::now()};
     } stats;
 
@@ -1267,7 +1316,14 @@ namespace stream {
     }
 
     std::string payload;
-    if (msg.type == platf::gamepad_feedback_e::haptics_pcm) {
+    if (msg.type == platf::gamepad_feedback_e::speaker_pcm) {
+      const auto plaintext = controller_speaker_pcm::encode(session->config.mlFeatureFlags, session->config.controlProtocolType, msg.id, msg.data.speaker, msg.speaker_epoch);
+      if (!plaintext) {
+        return 0;
+      }
+      std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(controller_speaker_pcm::payload_size + 4) + crypto::cipher::tag_size> encrypted_payload;
+      payload = encode_control(session, std::string_view(reinterpret_cast<const char *>(plaintext->data()), plaintext->size()), encrypted_payload);
+    } else if (msg.type == platf::gamepad_feedback_e::haptics_pcm) {
       if (!(session->config.mlFeatureFlags & ML_FF_HAPTICS_PCM)) {
         // PCM arrives in frequent chunks; report missing negotiation once per session.
         if (!session->control.pcm_negotiation_warning_logged.exchange(true, std::memory_order_relaxed)) {
@@ -1378,6 +1434,33 @@ namespace stream {
         encrypted_payload;
 
       payload = encode_control(session, util::view(plaintext), encrypted_payload);
+    } else if (msg.type == platf::gamepad_feedback_e::steam_haptic) {
+      control_steam_haptic_t plaintext {};
+      plaintext.header.type = packetTypes[IDX_STEAM_HAPTIC];
+      plaintext.header.payloadLength = sizeof(plaintext) - sizeof(control_header_v2);
+
+      plaintext.id = util::endian::little(msg.id);
+      plaintext.length = msg.data.steam_haptic.length;
+      std::ranges::copy(msg.data.steam_haptic.report, plaintext.report);
+
+      std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
+        encrypted_payload;
+
+      payload = encode_control(session, util::view(plaintext), encrypted_payload);
+    } else if (msg.type == platf::gamepad_feedback_e::steam_settings) {
+      control_steam_settings_t plaintext {};
+      plaintext.header.type = packetTypes[IDX_STEAM_SETTINGS];
+      plaintext.header.payloadLength = sizeof(plaintext) - sizeof(control_header_v2);
+
+      plaintext.id = util::endian::little(msg.id);
+      plaintext.command = msg.data.steam_settings.command;
+      plaintext.count = msg.data.steam_settings.count;
+      std::ranges::copy(msg.data.steam_settings.triples, plaintext.triples);
+
+      std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
+        encrypted_payload;
+
+      payload = encode_control(session, util::view(plaintext), encrypted_payload);
     } else {
       BOOST_LOG(error) << "Unknown gamepad feedback message type"sv;
       return -1;
@@ -1385,6 +1468,13 @@ namespace stream {
 
     const auto send_result = detail::send_and_observe_result(
       [&] {
+        if (msg.type == platf::gamepad_feedback_e::speaker_pcm) {
+          // Encryption is complete. Serialize only ENet queue admission with
+          // epoch reset, not network flushing or the producer slot mutex.
+          return controller_speaker_pcm::enqueue_if_current(msg.speaker_epoch, msg.data.speaker.generation, [&] {
+            return session->broadcast_ref->control_server.send(payload, session->control.peer, true);
+          });
+        }
         return session->broadcast_ref->control_server.send(payload, session->control.peer, msg.type == platf::gamepad_feedback_e::haptics_pcm);
       },
       [&](const int result) {
@@ -1461,9 +1551,127 @@ namespace stream {
     return 0;
   }
 
+  /**
+   * @brief Log adaptive pacing decisions. Called only when something changed, never per frame.
+   * @param events What the controller reports since its last call.
+   * @param snapshot The controller state after the change.
+   * @param old_bps The rate before the change, or zero if unknown.
+   */
+  static void log_adaptive_pacing(const pacing::adaptive_pacing_events_t &events, const pacing::adaptive_pacing_snapshot_t &snapshot, std::uint64_t old_bps) {
+    const auto mbps = [](std::uint64_t kbps) {
+      return kbps / 1000.0;
+    };
+    const auto summary = [&]() {
+      std::ostringstream out;
+      out << mbps(snapshot.current_kbps) << " Mbps (wire floor "sv << mbps(snapshot.wire_floor_kbps)
+          << ", ceiling "sv << mbps(snapshot.ceiling_kbps) << ')';
+      return out.str();
+    };
+    if (events.started) {
+      BOOST_LOG(info) << "Adaptive video pacing: start rate "sv << summary();
+    }
+    if (events.cut) {
+      BOOST_LOG(info) << "Adaptive video pacing: cut from "sv << old_bps / 1'000'000.0 << " to "sv << summary()
+                      << (events.cut_by_failed_frames ? " after repeated failed frames"sv :
+                                                        " after recovered frames missing at least 2% of packets"sv)
+                      << "; encoder bitrate unchanged"sv;
+    }
+    if (events.probe_rejected) {
+      BOOST_LOG(info) << "Adaptive video pacing: probe rejected after reported loss, restored "sv << summary()
+                      << ", next probe after "sv << snapshot.recovery_hold_seconds << " s"sv;
+    }
+    if (events.probe_retracted) {
+      BOOST_LOG(info) << "Adaptive video pacing: probe withdrawn after the wire budget changed, holding "sv << summary();
+    }
+    if (events.probe_accepted) {
+      BOOST_LOG(info) << "Adaptive video pacing: probe accepted at "sv << summary();
+    }
+    if (events.ceiling_confirmed) {
+      BOOST_LOG(info) << "Adaptive video pacing: ceiling confirmed, no further limit below "sv << mbps(snapshot.ceiling_kbps) << " Mbps"sv;
+    }
+    if (events.probe_started) {
+      BOOST_LOG(debug) << "Adaptive video pacing: probing "sv << summary();
+    }
+  }
+
+  /// Index of the newest frame whose send began, or nothing before the first one.
+  static std::optional<std::uint32_t> last_sent_frame(const session_t *session) {
+    const auto index = session->stats.wire_frame_index.load(std::memory_order_relaxed);
+    if (index < 0) {
+      return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(index);
+  }
+
+  /**
+   * @brief Sample the adaptive pacing controller from the control loop.
+   * @note Runs on the control thread, which also receives the pings and FEC reports.
+   */
+  static void tick_adaptive_pacing(session_t *session, std::chrono::steady_clock::time_point now) {
+    if (!session->video.adaptive_pacing_enabled || !session->control.peer) {
+      return;
+    }
+    const auto last_sent = last_sent_frame(session);
+    const pacing::traffic_t traffic {
+      session->stats.frames_sent.load(std::memory_order_relaxed),
+      session->stats.bytes_sent.load(std::memory_order_relaxed),
+      session->stats.packets_sent.load(std::memory_order_relaxed),
+      session->stats.video_send_failures.load(std::memory_order_relaxed),
+    };
+    const auto framerate = std::max(session->config.monitor.framerate, 1);
+    const auto period = std::chrono::nanoseconds {1'000'000'000 / framerate};
+    const auto encoder_kbps = static_cast<std::uint32_t>(std::max(session->video.pacing_bitrate_kbps.load(std::memory_order_relaxed), 0));
+    const auto rtt = std::chrono::milliseconds {session->control.peer->roundTripTime};
+
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> change;
+    pacing::adaptive_pacing_events_t events;
+    pacing::adaptive_pacing_snapshot_t snapshot;
+    {
+      std::lock_guard lg {session->video.adaptive_pacing_mutex};
+      change = session->video.adaptive_pacing.tick(now, traffic, last_sent, period, encoder_kbps, rtt);
+      events = session->video.adaptive_pacing.take_events();
+      snapshot = session->video.adaptive_pacing.snapshot();
+    }
+    // A cut that left the rate unchanged (already at the floor) is not news.
+    auto shown = events;
+    shown.cut = events.cut && change.has_value();
+    if (shown.any()) {
+      log_adaptive_pacing(shown, snapshot, change ? change->first : 0);
+    }
+  }
+
   void controlBroadcastThread(control_server_t *server) {
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
+      if (session->video.adaptive_pacing_enabled) {
+        // Standard pings show the client is alive and sending control traffic.
+        std::lock_guard lg {session->video.adaptive_pacing_mutex};
+        session->video.adaptive_pacing.on_ping(std::chrono::steady_clock::now(), payload);
+      }
+    });
+
+    // Client to host SS_FRAME_FEC_STATUS: one report per FEC block that needed
+    // recovery or was dropped. (Host to client, the same number is Set RGB LED.)
+    server->map(pacing::fec_status_packet_type, [](session_t *session, const std::string_view &payload) {
+      if (!session->video.adaptive_pacing_enabled) {
+        // Off: behave as before this type had a handler.
+        BOOST_LOG(debug)
+          << "type [Unknown] { "sv << util::hex(pacing::fec_status_packet_type).to_string_view() << " }"sv << std::endl
+          << "---data---"sv << std::endl
+          << util::hex_vec(payload) << std::endl
+          << "---end data---"sv;
+        return;
+      }
+      const auto last_sent = last_sent_frame(session);
+      const auto report = session->video.fec_reports.record(payload, last_sent);
+      if (!report) {
+        return;
+      }
+      // record() accepted it, so `last_sent` is set.
+      const auto framerate = std::max(session->config.monitor.framerate, 1);
+      const auto period = std::chrono::nanoseconds {1'000'000'000 / framerate};
+      std::lock_guard lg {session->video.adaptive_pacing_mutex};
+      session->video.adaptive_pacing.on_block(report->frame, *last_sent, period, report->block);
     });
 
     server->map(packetTypes[IDX_START_A], [&](session_t *session, const std::string_view &payload) {
@@ -1769,7 +1977,11 @@ namespace stream {
           }
 
           auto session = *pos;
-          haptics_client |= (session->config.mlFeatureFlags & ML_FF_HAPTICS_PCM) != 0;
+          // The gamepad feedback queues below are drained only by this loop, so a
+          // session with a controller attached needs the short wait too: a Steam
+          // haptic click or a rumble stop must not sit for up to 150 ms.
+          haptics_client |= (session->config.mlFeatureFlags & ML_FF_HAPTICS_PCM) != 0 ||
+                            input::has_gamepad(session->input);
 
           if (now > session->pingTimeout) {
             auto address = session->control.peer ? platf::from_sockaddr((sockaddr *) &session->control.peer->address.address) : session->control.expected_peer_address;
@@ -1855,9 +2067,12 @@ namespace stream {
               has_processless_live_session = true;
             }
             auto &feedback_queue = session->control.feedback_queue;
-            while (feedback_queue->peek()) {
-              auto feedback_msg = feedback_queue->pop();
-
+            // A retiring controller discards its queued output from another
+            // thread without waking consumers, so a peek() followed by a
+            // blocking pop() could wait forever on an item that is gone.
+            // Dequeue atomically instead; the loop ends when the mailbox is
+            // empty or stopped.
+            while (auto feedback_msg = feedback_queue->try_pop()) {
               send_feedback_msg(session, *feedback_msg);
             }
 
@@ -1867,6 +2082,9 @@ namespace stream {
 
               send_hdr_mode(session, std::move(hdr_info));
             }
+
+            // The sample period (500 ms) is longer than this loop's ENet wait.
+            tick_adaptive_pacing(session, now);
           }
 
           ++pos;
@@ -1892,7 +2110,8 @@ namespace stream {
         break;
       }
 
-      // Haptic samples must keep flowing even when the player is not moving.
+      // Haptic samples and gamepad feedback must keep flowing even when the player
+      // is not moving.
       server->iterate(haptics_client ? 5ms : 150ms);
     }
 
@@ -1925,7 +2144,9 @@ namespace stream {
 
     auto &io = ctx.io_context;
 
-    udp::endpoint peer;
+    // Each outstanding receive writes its sender endpoint. Give the video and
+    // audio sockets separate storage so one cannot replace the other's peer.
+    std::array<udp::endpoint, 2> peers;
 
     std::array<char, 2048> buf[2];
     std::function<void(const boost::system::error_code, size_t)> recv_func[2];
@@ -1958,8 +2179,10 @@ namespace stream {
 
     auto recv_func_init = [&](udp::socket &sock, int buf_elem, std::map<av_session_id_t, message_queue_t> &peer_to_session) {
       recv_func[buf_elem] = [&, buf_elem](const boost::system::error_code &ec, size_t bytes) {
+        // Snapshot this sender before rearming the socket's receive.
+        const auto peer = peers[buf_elem];
         auto fg = util::fail_guard([&]() {
-          sock.async_receive_from(asio::buffer(buf[buf_elem]), peer, 0, recv_func[buf_elem]);
+          sock.async_receive_from(asio::buffer(buf[buf_elem]), peers[buf_elem], 0, recv_func[buf_elem]);
         });
 
         auto type_str = buf_elem ? "AUDIO"sv : "VIDEO"sv;
@@ -2000,8 +2223,8 @@ namespace stream {
     recv_func_init(video_sock, 0, peer_to_video_session);
     recv_func_init(audio_sock, 1, peer_to_audio_session);
 
-    video_sock.async_receive_from(asio::buffer(buf[0]), peer, 0, recv_func[0]);
-    audio_sock.async_receive_from(asio::buffer(buf[1]), peer, 0, recv_func[1]);
+    video_sock.async_receive_from(asio::buffer(buf[0]), peers[0], 0, recv_func[0]);
+    audio_sock.async_receive_from(asio::buffer(buf[1]), peers[1], 0, recv_func[1]);
 
     while (!broadcast_shutdown_event->peek()) {
       io.run();
@@ -2165,6 +2388,9 @@ namespace stream {
       // may also protect detail, bounded by unused bitrate and FEC block capacity.
       const bool pyrowave_session = session->config.monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT;
       auto fecPercentage = pyrowave_session ? 0 : config::stream.fec_percentage;
+      if (session->video.adaptive_pacing_enabled) {
+        session->stats.wire_frame_index.store(packet->frame_index(), std::memory_order_relaxed);
+      }
 
       // Insert space for packet headers
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
@@ -2300,6 +2526,8 @@ namespace stream {
 
       try {
         std::size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
+        // Host adaptive pacing replaces this with its exact rate below.
+        std::optional<pacing::packet_pace_t> adaptive_pace;
         if (pyrowave_session) {
           // Refresh the actual route periodically. Socket/interface discovery and
           // sysfs reads must not block the send path on every frame.
@@ -2365,6 +2593,44 @@ namespace stream {
                                   "client-calibrated " + std::to_string(monitor.pyrowave_peer_pace_bps / 1'000'000) + " Mbps" :
                                   std::string("default 80% of link"));
           }
+        } else if (session->video.adaptive_pacing_enabled) {
+          // The ceiling is today's fixed pace, so a stream that settles at it
+          // behaves exactly as with the option off.
+          const auto &monitor = session->config.monitor;
+          const auto stream_kbps = session->video.pacing_bitrate_kbps.load(std::memory_order_relaxed);
+          const auto ip_header_bytes = session->video.peer.address().is_v6() ? 40u : 20u;
+          const auto wire_bytes = blocksize + 38 + ip_header_bytes + 8 +
+                                  (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
+          const std::uint64_t ceiling_bps = std::uint64_t(ratecontrol_packets_in_1ms) * wire_bytes * 8000;
+          const auto needed_bps = pacing::nominal_wire_demand_bps(
+            stream_kbps,
+            monitor.framerate,
+            sizeof(frame_header),
+            payload_blocksize,
+            wire_bytes,
+            // The configured value: oversized frames zero fecPercentage for
+            // themselves only and must not move the controller's wire floor.
+            config::stream.fec_percentage,
+            min_parity_shards
+          );
+          pacing::adaptive_pacing_events_t events;
+          pacing::adaptive_pacing_snapshot_t snapshot;
+          std::uint64_t rate_bps;
+          {
+            std::lock_guard lg {session->video.adaptive_pacing_mutex};
+            rate_bps = session->video.adaptive_pacing.rate(ceiling_bps, needed_bps, std::uint32_t(std::max(stream_kbps, 0)));
+            events = session->video.adaptive_pacing.take_events();
+            if (events.any()) {
+              snapshot = session->video.adaptive_pacing.snapshot();
+            }
+          }
+          if (events.any()) {
+            log_adaptive_pacing(events, snapshot, 0);
+          }
+          // Deadlines follow the exact rate; whole packets per millisecond
+          // only bound the burst between waits.
+          adaptive_pace = pacing::packet_pace_t::at_rate(rate_bps, wire_bytes);
+          ratecontrol_packets_in_1ms = adaptive_pace->packets_per_ms;
         } else if (config::stream.pacing_batch_demand_limit) {
           const auto &monitor = session->config.monitor;
           const auto stream_kbps = session->video.pacing_bitrate_kbps.load(std::memory_order_relaxed);
@@ -2382,6 +2648,8 @@ namespace stream {
           );
         }
 
+        const auto ratecontrol_pace = adaptive_pace.value_or(pacing::packet_pace_t::fixed(ratecontrol_packets_in_1ms));
+
         // Send less than 64K in a single batch.
         // On Windows, batches above 64K seem to bypass SO_SNDBUF regardless of its size,
         // appear in "Other I/O" and begin waiting for interrupts.
@@ -2392,9 +2660,10 @@ namespace stream {
         if (!pyrowave_session) {
           max_batch_size_bytes = std::min<size_t>(max_batch_size_bytes, (size_t) config::stream.video_max_batch_size_kb * 1024);
         }
-        // The optional ordinary-stream demand bound applies to one send call;
-        // it does not cap aggregate sends before the next pacing wait.
-        if (pyrowave_session || config::stream.pacing_batch_demand_limit) {
+        // The optional ordinary-stream demand bound (also used by host adaptive
+        // pacing) applies to one send call; it does not cap aggregate sends
+        // before the next pacing wait.
+        if (pyrowave_session || config::stream.pacing_batch_demand_limit || session->video.adaptive_pacing_enabled) {
           max_batch_size_bytes = pacing::max_batch_bytes(max_batch_size_bytes, ratecontrol_packets_in_1ms, datagram_size);
         }
 
@@ -2542,9 +2811,7 @@ namespace stream {
               // to account for the last send_batch() of the previous frame.
               if (ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms ||
                   ratecontrol_frame_packets_sent == 0) {
-                auto due = ratecontrol_frame_start +
-                           std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                             ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+                auto due = ratecontrol_frame_start + ratecontrol_pace.offset(ratecontrol_frame_packets_sent);
 
                 auto now = std::chrono::steady_clock::now();
                 if (now < due) {
@@ -2598,9 +2865,7 @@ namespace stream {
               ratecontrol_frame_packets_sent += send_result.packets_accepted;
               // Keep pacing debt from accepted batches even if this block or
               // frame aborts before its final shard.
-              ratecontrol_next_frame_start = ratecontrol_frame_start +
-                                             std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                                               ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+              ratecontrol_next_frame_start = ratecontrol_frame_start + ratecontrol_pace.offset(ratecontrol_frame_packets_sent);
               if (!send_result.sent) {
                 throw video_send_failed_t {send_result.cancelled, unsigned(blockIndex), send_result.packets_accepted};
               }
@@ -2615,9 +2880,7 @@ namespace stream {
           }
 
           // remember this in case the next frame comes immediately
-          ratecontrol_next_frame_start = ratecontrol_frame_start +
-                                         std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                                           ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+          ratecontrol_next_frame_start = ratecontrol_frame_start + ratecontrol_pace.offset(ratecontrol_frame_packets_sent);
           ratecontrol_frame_packets_logger.collect_and_log((double) ratecontrol_frame_packets_sent);
 
           frame_network_latency_logger.second_point_now_and_log();
@@ -2645,11 +2908,17 @@ namespace stream {
             const auto now = std::chrono::steady_clock::now();
             if (now >= next_burst_detail_log) {
               next_burst_detail_log = now + 1s;
+              // Under adaptive pacing the packets/ms quantum only bounds bursts;
+              // the deadlines follow the applied rate.
+              const auto pacing_detail = adaptive_pace ?
+                                           std::to_string(ratecontrol_pace.applied_bps() / 1'000) + " kbps, bursts up to " +
+                                             std::to_string(ratecontrol_packets_in_1ms) + " packets" :
+                                           std::to_string(ratecontrol_packets_in_1ms) + " packets/ms";
               BOOST_LOG(debug) << "Network: frame "sv << packet->frame_index() << " send burst "sv << burst_ms << " ms for "sv
                                << ratecontrol_frame_packets_sent << " packets ("sv << burst_bytes << " UDP payload bytes, "sv
                                << burst_mbps << " Mbps); paced sleep "sv << burst_sleep_ms << " ms, in send_batch() "sv
                                << burst_send_ms << " ms (longest "sv << burst_max_send_ms << " ms), fallback batches "sv
-                               << burst_fallback_batches << ", pacing "sv << ratecontrol_packets_in_1ms << " packets/ms"sv;
+                               << burst_fallback_batches << ", pacing "sv << pacing_detail;
             }
           }
         }
@@ -2794,6 +3063,7 @@ namespace stream {
         // sequence reservation, omit frame-success counters and avoid the generic
         // exception path's 100 ms sleep for temporary socket pressure.
         if (!e.cancelled) {
+          session->stats.video_send_failures.fetch_add(1, std::memory_order_relaxed);
           ++failed_video_frames;
           const auto now = std::chrono::steady_clock::now();
           if (now >= next_send_failure_log) {
@@ -3711,6 +3981,9 @@ namespace stream {
                                          (monitor.client_requested_bitrate > 0 ? monitor.client_requested_bitrate : monitor.bitrate) :
                                          (monitor.bitrate > 0 ? monitor.bitrate : monitor.client_requested_bitrate);
       session.video.pacing_bitrate_kbps.store(pacing_bitrate_kbps, std::memory_order_relaxed);
+      // PyroWave keeps its own pacing; the controller only serves ordinary video.
+      session.video.adaptive_pacing_enabled = config::stream.host_adaptive_pacing && !pyrowave_session;
+      session.video.adaptive_pacing = pacing::adaptive_pacing_t {session.video.adaptive_pacing_enabled};
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
@@ -4008,7 +4281,7 @@ namespace stream {
 #endif
 
       session->control.connect_data = launch_session.control_connect_data;
-      session->control.feedback_queue = mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback);
+      session->control.feedback_queue = mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback, platf::GAMEPAD_FEEDBACK_QUEUE_CAPACITY, false);
       session->control.hdr_queue = mail->event<video::hdr_info_t>(mail::hdr);
       session->control.legacy_input_enc_iv = launch_session.iv;
       session->control.cipher = crypto::cipher::gcm_t {
@@ -4031,7 +4304,7 @@ namespace stream {
       }
 
       if (!session->audio_disabled) {
-        constexpr auto max_block_size = crypto::cipher::round_to_pkcs7_padded(2048);
+        constexpr auto max_block_size = crypto::cipher::round_to_pkcs7_padded(MAX_AUDIO_PACKET_SIZE);
         util::buffer_t<char> shards {RTPA_TOTAL_SHARDS * max_block_size};
         util::buffer_t<uint8_t *> shards_p {RTPA_TOTAL_SHARDS};
         for (auto x = 0; x < RTPA_TOTAL_SHARDS; ++x) shards_p[x] = (uint8_t *) &shards[x * max_block_size];

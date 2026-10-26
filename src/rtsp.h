@@ -70,6 +70,7 @@ namespace rtsp_stream {
     std::string unique_id;
     std::string client_uuid;
     std::string client_name;
+    std::string audio_codec_offered;  ///< Dolby codec offered during DESCRIBE, or empty when using Opus.
     std::string device_name;
     std::optional<std::string> hdr_profile;
     int width;
@@ -315,8 +316,9 @@ namespace rtsp_stream {
 
   /**
    * @brief Whether an RTSP launch or asynchronous session startup is pending.
+   * @param expire_pending False requests a conservative snapshot without expiry callbacks.
    */
-  bool has_pending_launch_or_startup();
+  bool has_pending_launch_or_startup(bool expire_pending = true);
 
   /**
    * @brief Publish whether an HDR stream launch is pending before the RTSP session is active.

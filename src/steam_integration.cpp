@@ -353,9 +353,9 @@ namespace {
     }
     if (out.portrait.empty()) {
       // Current Steam clients key cached store assets by their content hash:
-      // <appid>/<hash>/library_capsule.jpg. The capsule is the same portrait
-      // cover as the legacy library_600x900 asset (normally 300x450 locally).
-      out.portrait = first_hashed_nested_existing(cache_dirs, app_id, {"library_capsule.jpg", "library_capsule.png", "library_capsule.webp"});
+      // <appid>/<hash>/library_capsule.jpg, or library_600x900.jpg for newer
+      // apps. Both are the portrait cover (normally 300x450 locally).
+      out.portrait = first_hashed_nested_existing(cache_dirs, app_id, {"library_capsule.jpg", "library_capsule.png", "library_capsule.webp", "library_600x900.jpg", "library_600x900.png", "library_600x900.webp"});
     }
     if (out.portrait.empty()) {
       out.portrait = first_existing(grid_dirs, app_id, {"p.png", "p.jpg", "_p.png", "_p.jpg"});
@@ -489,6 +489,14 @@ namespace {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
       return static_cast<char>(std::tolower(ch));
     });
+#ifdef _WIN32
+    // Windows installs do not contain Linux-only depots. Selecting their paths
+    // can make even the Steam broker fail before launch (ERROR_DIRECTORY).
+    if (value.empty() || value.find("windows") != std::string::npos) {
+      return "windows";
+    }
+    return {};
+#else
     if (value.find("linux") != std::string::npos) {
       return "linux";
     }
@@ -496,6 +504,7 @@ namespace {
       return "windows";
     }
     return {};
+#endif
   }
 
   void apply_launch_node(platf::steam::game_t &game, const vdf_node &appinfo, std::string_view required_os = {}) {

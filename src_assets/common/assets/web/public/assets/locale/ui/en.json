@@ -1771,6 +1771,10 @@
           "description": "Choose whether Vibeshine captures a physical monitor or creates a display sized for the client.",
           "label": "Streaming display"
         },
+        "wgc_direct_encoder_input": {
+          "description": "Encode each Windows capture frame directly instead of copying it first. This lowers encode latency. Turn it off to use the previous copy path.",
+          "label": "Direct Windows capture input"
+        },
         "wgc_pacing_smoothing": {
           "description": "Reduce visible pacing changes when Windows Graphics Capture is active.",
           "label": "Smooth Windows capture cadence"
@@ -2323,7 +2327,8 @@
           "unknown": "Unknown driver"
         },
         "states": {
-          "failed": "Unavailable"
+          "failed": "Unavailable",
+          "uninitialized": "No driver result"
         },
         "messages": {
           "ready": {
@@ -2335,8 +2340,8 @@
             "description": "{driver} did not respond to the latest runtime check. Repair or reinstall the selected driver before using a virtual display."
           },
           "uninitialized": {
-            "title": "Driver has not been initialized",
-            "description": "The host has not initialized a virtual-display driver yet. Start a stream or restart Vibeshine, then check this status again."
+            "title": "No driver result available",
+            "description": "Vibeshine opens the virtual-display connection when needed. No current driver result is available. This status alone does not indicate a failure."
           },
           "version_incompatible": {
             "title": "Driver version mismatch",

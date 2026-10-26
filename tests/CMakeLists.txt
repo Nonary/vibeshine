@@ -16,6 +16,13 @@ if(WIN32)
     # tests that link the static FFmpeg archives must provide the system import
     # library because they do not inherit the application's platform libraries.
     list(APPEND SUNSHINE_TEST_FFMPEG_PLATFORM_LIBRARIES bcrypt)
+elseif(APPLE)
+    list(APPEND SUNSHINE_TEST_FFMPEG_PLATFORM_LIBRARIES
+        "-framework CoreFoundation"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework VideoToolbox"
+        "-framework AudioToolbox")
 endif()
 
 # Test categories make the dependency scope of a target visible at configuration
@@ -209,10 +216,14 @@ set(_sunshine_test_boost_components
     log
     log_setup
     property_tree
+    regex
     system
     uuid)
 if(SUNSHINE_TEST_ENABLE_COMPONENT)
     list(APPEND _sunshine_test_boost_components process)
+    if(UNIX)
+        list(APPEND _sunshine_test_boost_components filesystem program_options)
+    endif()
 endif()
 set(_sunshine_test_missing_boost_target FALSE)
 foreach(_sunshine_test_boost_component IN LISTS _sunshine_test_boost_components)
@@ -310,6 +321,21 @@ if(SUNSHINE_TEST_PYTHON_EXECUTABLE AND NOT WIN32)
                 "${CMAKE_CXX_COMPILER}")
         set_tests_properties(test_component_hardware_metrics_${_metrics_boundary} PROPERTIES LABELS "component" TIMEOUT 30)
     endforeach()
+endif()
+
+# Dolby encoder failure isolation is a source-driven, CPU-only regression test.
+# It runs on Windows and Unix hosts and needs neither FFmpeg nor audio hardware.
+if(SUNSHINE_TEST_PYTHON_EXECUTABLE)
+    add_test(NAME test_component_dolby_session_isolation
+        COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/test_dolby_session_isolation.py"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+    set_tests_properties(test_component_dolby_session_isolation PROPERTIES LABELS "component" TIMEOUT 30)
+
+    add_test(NAME test_component_ffmpeg_package_pin
+        COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/test_ffmpeg_package_pin.py")
+    set_tests_properties(test_component_ffmpeg_package_pin PROPERTIES LABELS "component" TIMEOUT 60)
 endif()
 
 if(WIN32)
@@ -596,11 +622,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 sunshine_register_component(NAME test_component_hdr_request_policy TEST_SOURCE unit/test_hdr_request_policy.cpp)
 sunshine_register_component(NAME test_component_single_flight TEST_SOURCE unit/test_single_flight.cpp)
+sunshine_register_component(NAME test_component_paused_app_monitor TEST_SOURCE unit/test_paused_app_monitor.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/power_action.cpp"
+    LINK_LIBRARIES Threads::Threads Boost::property_tree OpenSSL::Crypto)
 sunshine_register_component(NAME test_component_display_helper_request_policy TEST_SOURCE unit/test_display_helper_request_policy.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_request_policy.cpp")
 sunshine_register_component(NAME test_component_remote_display_topology TEST_SOURCE unit/test_remote_display_topology.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/remote_display_topology.cpp"
     LINK_LIBRARIES nlohmann_json::nlohmann_json)
+sunshine_register_component(NAME test_component_display_helper_saved_placement TEST_SOURCE unit/test_display_helper_saved_placement.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/remote_display_topology.cpp"
+                    "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/display_helper_builder.cpp"
+    LINK_LIBRARIES sunshine_test_displaydevice_headers nlohmann_json::nlohmann_json)
 sunshine_register_component(NAME test_component_config_parse TEST_SOURCE unit/test_config_parse.cpp
     PRODUCT_SOURCES)
 sunshine_register_component(NAME test_component_managed_app_focus TEST_SOURCE unit/test_managed_app_focus.cpp
@@ -1138,12 +1171,14 @@ if(NOT WIN32)
 endif()
 
 find_package(ZLIB REQUIRED)
+sunshine_register_component(NAME test_component_log_export_sanitizer TEST_SOURCE unit/test_log_export_sanitizer.cpp
+    LINK_LIBRARIES Boost::asio Boost::crc Boost::regex ZLIB::ZLIB ${SUNSHINE_TEST_SOCKET_LIBRARIES})
 sunshine_register_component(NAME test_component_log_export_reader TEST_SOURCE unit/test_log_export_reader.cpp
-    LINK_LIBRARIES Boost::asio Boost::crc ZLIB::ZLIB ${SUNSHINE_TEST_SOCKET_LIBRARIES})
+    LINK_LIBRARIES Boost::asio Boost::crc Boost::regex ZLIB::ZLIB ${SUNSHINE_TEST_SOCKET_LIBRARIES})
 sunshine_register_component(NAME test_component_log_sessions TEST_SOURCE unit/test_log_sessions.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/logging.cpp" "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/logging_policy.cpp"
     DEFINITIONS SUNSHINE_TESTS
-    LINK_LIBRARIES Boost::log Boost::asio Boost::crc Boost::format ZLIB::ZLIB ${SUNSHINE_TEST_SOCKET_LIBRARIES})
+    LINK_LIBRARIES Boost::log Boost::asio Boost::crc Boost::format Boost::regex ZLIB::ZLIB ${SUNSHINE_TEST_SOCKET_LIBRARIES})
 sunshine_register_component(NAME test_component_logging_policy TEST_SOURCE unit/test_logging.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/logging_policy.cpp")
 # Exercise the Windows SCM calls with a narrow API shim on non-Windows hosts.
@@ -1243,6 +1278,8 @@ if(SUNSHINE_TEST_ENABLE_COMPONENT AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     endif()
 endif()
 sunshine_register_component(NAME test_component_present_timing_policy TEST_SOURCE unit/test_present_timing_policy.cpp)
+sunshine_register_component(NAME test_component_video_adaptive_pacing TEST_SOURCE unit/test_video_adaptive_pacing.cpp)
+sunshine_register_component(NAME test_component_video_fec_status TEST_SOURCE unit/test_video_fec_status.cpp)
 sunshine_register_component(NAME test_component_encoder_probe_policy TEST_SOURCE unit/test_encoder_probe_policy.cpp)
 sunshine_register_component(NAME test_component_gpu_priority_lifetime
     TEST_SOURCE unit/platform/windows/test_gpu_priority_lifetime.cpp)
@@ -1365,6 +1402,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND SUNSHINE_TEST_ENABLE_COMPONENT)
     add_executable(test_linux_hyprland_broker
         "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_hyprland_broker.c")
     target_include_directories(test_linux_hyprland_broker PRIVATE "${LIBCAP_INCLUDE_DIRS}")
+    # The fixture asserts the production dispatch boundary; keep it in release builds.
+    target_compile_options(test_linux_hyprland_broker PRIVATE -UNDEBUG)
     target_link_libraries(test_linux_hyprland_broker PRIVATE "${LIBCAP_LIBRARIES}")
     add_test(NAME test_component_linux_hyprland_broker COMMAND test_linux_hyprland_broker)
     set_tests_properties(test_component_linux_hyprland_broker PROPERTIES LABELS "component")
@@ -1678,7 +1717,49 @@ endif()
 
 # Compile production connector classes and Windows lifecycle policies on the host.
 find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND AND UNIX AND SUNSHINE_TEST_ENABLE_COMPONENT)
+    add_test(NAME regression_macos_link_dependencies
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/platform/macos/test_link_dependencies.py"
+            --cmake "${CMAKE_COMMAND}")
+    set_tests_properties(regression_macos_link_dependencies PROPERTIES LABELS "component" TIMEOUT 60)
+    add_test(NAME regression_file_clock_compatibility
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/platform/macos/test_file_clock_compatibility.py"
+            --compiler "${CMAKE_CXX_COMPILER}")
+    set_tests_properties(regression_file_clock_compatibility PROPERTIES LABELS "component" TIMEOUT 60)
+    add_library(sunshine_test_macos_build_api_dependencies INTERFACE)
+    target_link_libraries(sunshine_test_macos_build_api_dependencies INTERFACE
+        Boost::process Boost::program_options Boost::filesystem Boost::algorithm)
+    add_test(NAME regression_macos_build_api_compatibility
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/platform/macos/test_build_api_compatibility.py"
+            --compiler "${CMAKE_CXX_COMPILER}"
+            --process-library "$<TARGET_FILE:Boost::process>"
+            --include-dir "$<TARGET_PROPERTY:sunshine_test_macos_build_api_dependencies,INTERFACE_INCLUDE_DIRECTORIES>")
+    set_tests_properties(regression_macos_build_api_compatibility PROPERTIES LABELS "component" TIMEOUT 60)
+endif()
 if(Python3_Interpreter_FOUND)
+    if(UNIX AND SUNSHINE_TEST_ENABLE_COMPONENT)
+        find_program(SUNSHINE_TEST_WEB_MAKE NAMES gmake make)
+        find_program(SUNSHINE_TEST_WEB_NINJA NAMES ninja ninja-build)
+        foreach(generator IN ITEMS "Unix Makefiles" "Ninja")
+            if(generator STREQUAL "Ninja")
+                set(_web_build_tool "${SUNSHINE_TEST_WEB_NINJA}")
+                set(_web_build_test regression_web_build_ninja)
+            else()
+                set(_web_build_tool "${SUNSHINE_TEST_WEB_MAKE}")
+                set(_web_build_test regression_web_build_makefiles)
+            endif()
+            if(_web_build_tool)
+                add_test(NAME ${_web_build_test}
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/integration/test_web_build.py"
+                        --repository "${SUNSHINE_TEST_REPOSITORY_ROOT}" --cmake "${CMAKE_COMMAND}"
+                        --generator "${generator}" --make-program "${_web_build_tool}")
+                set_tests_properties(${_web_build_test} PROPERTIES LABELS "component" TIMEOUT 120)
+            endif()
+        endforeach()
+    endif()
     find_program(SUNSHINE_TEST_DOTNET NAMES dotnet dotnet.exe)
     add_test(NAME regression_playnite_connector_lifecycle
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/playnite_connector/test_lifecycle.py"
@@ -1687,6 +1768,15 @@ if(Python3_Interpreter_FOUND)
 endif()
 find_program(SUNSHINE_TEST_GXX NAMES g++)
 if(Python3_Interpreter_FOUND AND SUNSHINE_TEST_GXX)
+    add_test(NAME regression_encoder_probe_lookup_behavior
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_encoder_probe_lookup_behavior.py"
+            --compiler "${SUNSHINE_TEST_GXX}")
+    set_tests_properties(regression_encoder_probe_lookup_behavior PROPERTIES LABELS "component" TIMEOUT 120)
+    add_test(NAME regression_remote_input_reconnect
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_remote_input_reconnect.py"
+            --compiler "${SUNSHINE_TEST_GXX}"
+            --build-dir "${CMAKE_CURRENT_BINARY_DIR}/remote_input_reconnect")
+    set_tests_properties(regression_remote_input_reconnect PROPERTIES LABELS "component" TIMEOUT 120)
     add_test(NAME regression_stream_disconnect_lifecycle
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_stream_disconnect_lifecycle.py"
             --compiler "${SUNSHINE_TEST_GXX}")
@@ -1700,6 +1790,10 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 --compiler "${CMAKE_CXX_COMPILER}" --node "${SUNSHINE_TEST_FOCUS_NODE}")
         set_tests_properties(regression_managed_app_focus_adapters PROPERTIES LABELS "component" TIMEOUT 60)
     endif()
+    add_test(NAME regression_windows_autofocus_foreground
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_windows_autofocus_foreground.py"
+            --repo "${SUNSHINE_TEST_REPOSITORY_ROOT}" --compiler "${CMAKE_CXX_COMPILER}")
+    set_tests_properties(regression_windows_autofocus_foreground PROPERTIES LABELS "component" TIMEOUT 60)
     add_test(NAME regression_windows_color_profile
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_windows_color_profile.py")
     add_test(NAME regression_display_policy_adapter
@@ -1728,13 +1822,19 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_close_grace.py")
     add_test(NAME regression_playnite_plugin_upgrade
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_plugin_upgrade.py")
-    set_tests_properties(regression_playnite_close_grace regression_playnite_plugin_upgrade
+    add_test(NAME regression_playnite_duplicate_migration
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_duplicate_migration.py")
+    set_tests_properties(regression_playnite_close_grace regression_playnite_plugin_upgrade regression_playnite_duplicate_migration
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # Compile extracted production AMF submission and delivery without a GPU.
 find_program(SUNSHINE_TEST_AMF_CXX NAMES g++)
 if(Python3_Interpreter_FOUND AND SUNSHINE_TEST_AMF_CXX)
+    add_test(NAME regression_video_rfi_retry
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_video_rfi_retry.py"
+            --compiler "${SUNSHINE_TEST_AMF_CXX}")
+    set_tests_properties(regression_video_rfi_retry PROPERTIES LABELS "component" TIMEOUT 60)
     add_test(NAME regression_amf_output_first_retry
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_amf_output_first_retry.py"
@@ -1759,6 +1859,8 @@ if(SUNSHINE_TEST_POWERSHELL)
     set_tests_properties(regression_windows_usbip_package PROPERTIES LABELS "component")
 endif()
 
+sunshine_register_component(NAME test_component_controller_speaker_pcm TEST_SOURCE unit/test_controller_speaker_pcm.cpp)
+
 sunshine_register_component(NAME test_component_dualsense_audio_pcm TEST_SOURCE unit/test_dualsense_audio_pcm.cpp)
 set(_dualsense_protocol_test_adapter "")
 if(NOT WIN32)
@@ -1773,6 +1875,7 @@ sunshine_register_component(NAME test_component_dualsense_usbip_gamepad_policy T
 sunshine_register_component(NAME test_component_dualsense_usbip_gamepad TEST_SOURCE unit/platform/windows/test_dualsense_usbip_gamepad.cpp
     PRODUCT_SOURCES
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/dualsense_usbip_gamepad.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/dualsense_usbip_protocol.cpp"
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/vhf_gamepad_policy.cpp"
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libvirtualgamepad/driver/src/dualsense.cpp"
     INCLUDE_DIRECTORIES ${_dualsense_protocol_test_adapter}
@@ -1907,6 +2010,14 @@ if(WIN32)
                 -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/bootstrap-migration")
         set_tests_properties(test_script_bootstrap_migration PROPERTIES LABELS "installer;component")
     endif()
+endif()
+
+if(SUNSHINE_TEST_ENABLE_COMPONENT AND SUNSHINE_TEST_PYTHON_EXECUTABLE)
+    add_test(NAME test_component_common_assets
+        COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/integration/test_common_assets.py"
+            --repository "${SUNSHINE_TEST_REPOSITORY_ROOT}" --cmake "${CMAKE_COMMAND}")
+    set_tests_properties(test_component_common_assets PROPERTIES LABELS "component;packaging" TIMEOUT 60)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/WindowsPortablePackagingTest.cmake")
