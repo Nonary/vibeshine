@@ -636,6 +636,11 @@ namespace remote_display_topology {
       // unable to protect that output from a later HDR transition.
       return {false, false, true, {}, "The previous Remote Monitor transport has not drained."};
     }
+    if (callbacks_.finalize_mode && state.lease_held &&
+        (!state.monitor_requested_mode || state.monitor_requested_mode->width != mode.width ||
+         state.monitor_requested_mode->height != mode.height || state.monitor_requested_mode->refresh_hz != mode.refresh_hz)) {
+      state.deferred_monitor_reconfiguration = true;
+    }
     state.generation = generation;
     state.label = label;
     state.monitor_requested_mode = mode;
@@ -681,16 +686,16 @@ namespace remote_display_topology {
       state.warning = "Remote Monitor runtime wiring is unavailable; ownership was retained for Resume.";
       return {true, false, state.warning};
     }
-    // A ready monitor can still have an active or pending transport when its
-    // owner retries launch. Treat its output as captured until transport loss
-    // changes the lifecycle, just as for an owned normal-game capture.
+    // A normal role may have capture active, pending, or paused. Do not
+    // reconfigure its shared output until that role has released ownership.
+    // A ready monitor can likewise have an active or pending transport.
     const bool shared_capture = callbacks_.finalize_mode &&
-                                (!state.normal_capture_references.empty() || state.lifecycle == lifecycle_e::ready);
+                                (state.normal_game || state.lifecycle == lifecycle_e::ready);
     if (!state.lease_held && shared_capture) {
       // The game capture already owns this exact stable output. Reuse it
       // without recreating or changing its color state underneath the peer.
       state.lease_held = true;
-    } else if (!state.lease_held) {
+    } else if (!state.lease_held || (!shared_capture && state.deferred_monitor_reconfiguration)) {
       state.lifecycle = lifecycle_e::leased;
       if (!callbacks_.create_or_reclaim(client_uuid, state.label, desired_mode(state))) {
         state.lifecycle = lifecycle_e::retryable;
@@ -698,17 +703,20 @@ namespace remote_display_topology {
         return {true, false, state.warning};
       }
       state.lease_held = true;
+      state.deferred_monitor_reconfiguration = false;
     }
     resolve_effective_mode_locked(client_uuid, state);
     state.lifecycle = lifecycle_e::applying;
     std::vector<std::string> warnings;
     const auto composed = compose_locked(warnings);
     if (!callbacks_.apply_composed_topology(composed)) {
+      if (shared_capture) state.deferred_monitor_reconfiguration = true;
       state.lifecycle = lifecycle_e::retryable;
       state.warning = "The composed display topology did not apply; existing owners and their displays were retained.";
       return {true, false, state.warning};
     }
     if (callbacks_.finalize_mode && !callbacks_.finalize_mode(client_uuid, state.effective_mode, !shared_capture)) {
+      if (shared_capture) state.deferred_monitor_reconfiguration = true;
       state.lifecycle = lifecycle_e::retryable;
       state.warning = "The requested client display color state could not be verified; Resume will retry.";
       return {true, false, state.warning};
@@ -716,11 +724,13 @@ namespace remote_display_topology {
     if (!warnings.empty()) state.warning = warnings.front();
     const auto exact_output = callbacks_.exact_target_has_current_mode_and_dxgi(client_uuid, state.effective_mode);
     if (!exact_output || exact_output->empty()) {
+      if (shared_capture) state.deferred_monitor_reconfiguration = true;
       state.lifecycle = lifecycle_e::retryable;
       state.warning = "The requested client display is not yet capture-ready. Existing streamed physical or virtual displays remain topology anchors, but capture will wait rather than mirror another screen.";
       return {true, false, state.warning};
     }
     state.exact_output = *exact_output;
+    state.deferred_monitor_reconfiguration = false;
     state.lifecycle = lifecycle_e::ready;
     state.warning.clear();
     return {true, true, {}};
@@ -815,6 +825,7 @@ namespace remote_display_topology {
     // capture reference drains. Drop monitor ownership now, but defer every
     // topology/native display mutation to the normal-role finalizer.
     if (state.normal_release_pending && !state.normal_capture_references.empty()) {
+      state.deferred_monitor_reconfiguration = false;
       return;
     }
 
@@ -867,6 +878,7 @@ namespace remote_display_topology {
     }
     state.monitor_release_pending = false;
     state.monitor_release_reason.clear();
+    state.deferred_monitor_reconfiguration = false;
     if (state.generation != 0) {
       auto &released_generation = released_monitor_generations_[client_uuid];
       released_generation = std::max(released_generation, state.generation);

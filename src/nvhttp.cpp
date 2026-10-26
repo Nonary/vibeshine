@@ -393,7 +393,16 @@ namespace nvhttp {
         const auto output = std::find_if(capture_outputs.begin(), capture_outputs.end(), [&](const auto &candidate) {
           return remote_device_id_equals(candidate, device.m_display_name);
         });
-        if (output != capture_outputs.end()) return *output;
+        if (output != capture_outputs.end()) {
+          // A user HDR preference is not proof of the effective DXGI capture
+          // color state. Wait briefly for the exact target to settle.
+          for (int attempt = 0; attempt < 30; ++attempt) {
+            const auto hdr = platf::dxgi::capture_output_hdr_state(*output);
+            if (hdr && *hdr == mode.hdr) return *output;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          }
+          return std::nullopt;
+        }
         return std::nullopt;
       }
       return std::nullopt;

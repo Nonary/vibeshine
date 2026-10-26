@@ -59,7 +59,7 @@ namespace remote_display_topology {
     // Some platforms cannot apply or verify the requested color state until
     // the newly created output is active in the composed topology. Resolve
     // the effective state for this owner before publishing capture readiness.
-    // `allow_mutation` is false while a normal capture owns this same output.
+    // `allow_mutation` is false while a normal role owns this same output.
     std::function<bool(const std::string &client_uuid, mode_t &mode, bool allow_mutation)> finalize_mode;
     // The output is accepted only after this exact client identity has both the
     // requested mode and a capture-enumerated DXGI name.  Passing the mode here
@@ -195,6 +195,9 @@ namespace remote_display_topology {
       bool monitor_release_pending = false;
       std::string monitor_release_reason;
       bool lease_held = false;
+      // A shared capture prevented this monitor from configuring its requested
+      // mode. Reconfigure after that capture drains, without dropping ownership.
+      bool deferred_monitor_reconfiguration = false;
       uint64_t generation = 0;
       // Stable first-ownership order keeps existing displays in place when a
       // new owner has no saved layout. UUID ordering must not reshuffle the

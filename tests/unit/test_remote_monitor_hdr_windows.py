@@ -67,6 +67,8 @@ struct Display {
 struct Context { std::shared_ptr<Display> display; };
 std::shared_ptr<Display> display;
 auto make_settings_manager() -> std::optional<Context> { return Context{display}; }
+std::optional<bool> unsupported;
+std::optional<bool> remote_monitor_hdr_unsupported(const std::string &) { return unsupported; }
 ''' + function(integration, '  bool apply_remote_monitor_hdr_state(') + r'''
 int main() {
  using S = display_device::HdrState;
@@ -88,6 +90,17 @@ int main() {
  display->set_ok = false;
  assert(!apply_remote_monitor_hdr_state("target", false, true));
  assert(display->states["target"] == S::Enabled);
+ display->states["target"] = std::nullopt;
+ unsupported = true;
+ assert(apply_remote_monitor_hdr_state("target", false, false));
+ unsupported = false;
+ assert(!apply_remote_monitor_hdr_state("target", false, false));
+ unsupported = std::nullopt;
+ assert(!apply_remote_monitor_hdr_state("target", false, false));
+ assert(!apply_remote_monitor_hdr_state("target", true, true));
+ display->states.erase("target");
+ unsupported = true;
+ assert(!apply_remote_monitor_hdr_state("target", false, false));
  assert(!apply_remote_monitor_hdr_state("", true, true));
 }
 '''

@@ -363,6 +363,76 @@ TEST(RemoteDisplayTopology, UnverifiedSdrOnSharedHdrCaptureIsNotReady) {
   EXPECT_FALSE(capture_checked);
 }
 
+TEST(RemoteDisplayTopology, SharedModeMismatchIsConfiguredAfterCaptureDrains) {
+  remote_display_topology::coordinator_t coordinator;
+  int creates = 0;
+  remote_display_topology::mode_t actual {1920, 1080, 60, false};
+  coordinator.set_runtime_callbacks({
+    .create_or_reclaim = [&](const auto &, const auto &, const auto &requested) {
+      ++creates;
+      actual = requested;
+      return true;
+    },
+    .apply_composed_topology = [](const auto &) { return true; },
+    .finalize_mode = [](const auto &, auto &, bool) { return true; },
+    .exact_target_has_current_mode_and_dxgi = [&](const auto &, const auto &requested) -> std::optional<std::string> {
+      if (requested.width != actual.width || requested.height != actual.height || requested.refresh_hz != actual.refresh_hz) return std::nullopt;
+      return "Virtual-1";
+    },
+  });
+  const auto game = coordinator.reserve_normal_game_identity("client", "Game", actual);
+  auto capture = coordinator.retain_normal_game_capture("client", game.token);
+  ASSERT_TRUE(capture);
+  const auto first = coordinator.activate_or_resume("client", "Monitor", {3840, 2160, 120, false}, 1);
+  EXPECT_TRUE(first.accepted);
+  EXPECT_FALSE(first.ready);
+  EXPECT_EQ(creates, 0);
+  coordinator.release_normal_game_identity("client", game.token);
+  capture.reset();
+  coordinator.release_drained_normal_game_identities();
+  const auto retry = coordinator.activate_or_resume("client", "Monitor", {3840, 2160, 120, false}, 2);
+  EXPECT_TRUE(retry.ready);
+  EXPECT_EQ(creates, 1);
+  EXPECT_EQ(actual.width, 3840);
+  EXPECT_EQ(actual.refresh_hz, 120);
+}
+
+TEST(RemoteDisplayTopology, PendingOrPausedNormalOwnerIsNotReconfigured) {
+  remote_display_topology::coordinator_t coordinator;
+  int creates = 0;
+  bool allow_mutation = true;
+  coordinator.set_runtime_callbacks({
+    .create_or_reclaim = [&](const auto &, const auto &, const auto &) { ++creates; return true; },
+    .apply_composed_topology = [](const auto &) { return true; },
+    .finalize_mode = [&](const auto &, auto &, bool allowed) { allow_mutation = allowed; return true; },
+    .exact_target_has_current_mode_and_dxgi = [](const auto &, const auto &) { return std::optional<std::string> {"Virtual-1"}; },
+  });
+  ASSERT_TRUE(coordinator.reserve_normal_game_identity("client", "Game", {1920, 1080, 60, false}).accepted);
+  ASSERT_TRUE(coordinator.activate_or_resume("client", "Monitor", {1920, 1080, 60, false}, 1).ready);
+  EXPECT_FALSE(allow_mutation);
+  EXPECT_EQ(creates, 0);
+}
+
+TEST(RemoteDisplayTopology, RetainedMonitorChangedModeIsReconfiguredAfterTransportLoss) {
+  remote_display_topology::coordinator_t coordinator;
+  int creates = 0;
+  remote_display_topology::mode_t actual {};
+  coordinator.set_runtime_callbacks({
+    .create_or_reclaim = [&](const auto &, const auto &, const auto &requested) { ++creates; actual = requested; return true; },
+    .apply_composed_topology = [](const auto &) { return true; },
+    .finalize_mode = [](const auto &, auto &, bool) { return true; },
+    .exact_target_has_current_mode_and_dxgi = [&](const auto &, const auto &requested) -> std::optional<std::string> {
+      if (requested.width != actual.width || requested.refresh_hz != actual.refresh_hz) return std::nullopt;
+      return "Virtual-1";
+    },
+  });
+  ASSERT_TRUE(coordinator.activate_or_resume("client", "Monitor", {1920, 1080, 60, false}, 1).ready);
+  coordinator.transport_lost("client", 1);
+  EXPECT_TRUE(coordinator.activate_or_resume("client", "Monitor", {3840, 2160, 120, false}, 2).ready);
+  EXPECT_EQ(creates, 2);
+  EXPECT_EQ(actual.width, 3840);
+}
+
 TEST(RemoteDisplayTopology, PlatformModeFallbackDoesNotReplaceRetainedClientRequest) {
   remote_display_topology::coordinator_t coordinator;
   remote_display_topology::mode_t applied;
