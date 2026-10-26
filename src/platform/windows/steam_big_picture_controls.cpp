@@ -275,9 +275,14 @@ namespace {
   // ---------------------------------------------------------------------------------------------
   // Helper process and pipe
   // ---------------------------------------------------------------------------------------------
+  enum class helper_run_e {
+    no_user,  ///< No one is signed in yet (the sign-in screen), so there was no one to run it as.
+    failed,  ///< It never connected; report_failure() said why, unless it was turned off or stopped.
+    connected,  ///< It connected, then stopped.
+  };
+
   // Runs one helper until it exits, the pipe breaks, or the configuration or console session changes.
-  // Returns true once the helper connected; a failure before that is reported with report_failure().
-  bool run_helper(std::stop_token stop, const configuration_t &config, DWORD session) {
+  helper_run_e run_helper(std::stop_token stop, const configuration_t &config, DWORD session) {
     // Same identity rules as the end-stream hotkey helper: the console user's limited token when
     // running as SYSTEM, otherwise our own.
     HANDLE token = nullptr;
@@ -289,7 +294,7 @@ namespace {
     }
     if (!token) {
       set_helper("no_console_user");
-      return false;
+      return helper_run_e::no_user;
     }
     auto close_token = util::fail_guard([&] {
       CloseHandle(token);
@@ -297,7 +302,7 @@ namespace {
     DWORD token_session = 0, needed = 0;
     if (!GetTokenInformation(token, TokenSessionId, &token_session, sizeof(token_session), &needed)) {
       report_failure("helper_failed", api_failure("Reading the signed-in user's session"));
-      return false;
+      return helper_run_e::failed;
     }
     if (token_session != session) {
       if (system) {
@@ -306,18 +311,18 @@ namespace {
         // The helper must run where Steam is on screen, and it can only run as us.
         report_failure("wrong_session", "Vibeshine is running in Windows session " + std::to_string(token_session) + ", not in the console session " + std::to_string(session) + " (for example over Remote Desktop). The Big Picture controls need Vibeshine running as its service, or signed in at the PC itself.");
       }
-      return false;
+      return helper_run_e::failed;
     }
     GetTokenInformation(token, TokenUser, nullptr, 0, &needed);
     std::vector<std::uint8_t> token_user(needed);
     if (!GetTokenInformation(token, TokenUser, token_user.data(), needed, &needed)) {
       report_failure("helper_failed", api_failure("Reading the signed-in user"));
-      return false;
+      return helper_run_e::failed;
     }
     LPWSTR sid_text = nullptr;
     if (!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER *>(token_user.data())->User.Sid, &sid_text)) {
       report_failure("helper_failed", api_failure("Reading the signed-in user's SID"));
-      return false;
+      return helper_run_e::failed;
     }
     auto free_sid = util::fail_guard([&] {
       LocalFree(sid_text);
@@ -327,7 +332,7 @@ namespace {
     PSECURITY_DESCRIPTOR security = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &security, nullptr)) {
       report_failure("helper_failed", api_failure("Building the helper pipe's permissions"));
-      return false;
+      return helper_run_e::failed;
     }
     auto free_security = util::fail_guard([&] {
       LocalFree(security);
@@ -337,13 +342,13 @@ namespace {
     wchar_t guid_text[40] {};
     if (FAILED(CoCreateGuid(&guid)) || StringFromGUID2(guid, guid_text, 40) == 0) {
       report_failure("helper_failed", "Could not create a name for the helper's pipe.");
-      return false;
+      return helper_run_e::failed;
     }
     const std::wstring pipe_name = L"\\\\.\\pipe\\vibeshine_steam_ui_" + std::wstring(guid_text);
     HANDLE pipe = CreateNamedPipeW(pipe_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 64 * 1024, 64 * 1024, 0, &attributes);
     if (pipe == INVALID_HANDLE_VALUE) {
       report_failure("helper_failed", api_failure("Creating the helper's pipe"));
-      return false;
+      return helper_run_e::failed;
     }
     auto close_pipe = util::fail_guard([&] {
       CancelIoEx(pipe, nullptr);
@@ -352,7 +357,7 @@ namespace {
     HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!event) {
       report_failure("helper_failed", api_failure("Creating an event for the helper's pipe"));
-      return false;
+      return helper_run_e::failed;
     }
     auto close_event = util::fail_guard([&] {
       CloseHandle(event);
@@ -363,7 +368,7 @@ namespace {
     const DWORD connection_error = immediate ? ERROR_SUCCESS : GetLastError();
     if (!immediate && connection_error != ERROR_IO_PENDING && connection_error != ERROR_PIPE_CONNECTED) {
       report_failure("helper_failed", api_failure("Opening the helper's pipe", connection_error));
-      return false;
+      return helper_run_e::failed;
     }
     auto cancel_connection = util::fail_guard([&] {
       if (connection_error == ERROR_IO_PENDING) {
@@ -377,7 +382,7 @@ namespace {
     const DWORD length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
     if (length == 0 || length >= executable.size()) {
       report_failure("helper_failed", api_failure("Finding Vibeshine's folder"));
-      return false;
+      return helper_run_e::failed;
     }
     const auto directory = std::filesystem::path(executable.data()).parent_path();
     const auto helper = directory / L"tools" / L"sunshine_steam_ui_helper.exe";
@@ -386,7 +391,7 @@ namespace {
     auto startup = platf::create_startup_info(nullptr, nullptr, error);
     if (error) {
       report_failure("helper_failed", "Preparing to start the helper failed: " + platf::steam::big_picture::debug_port::error_text(error));
-      return false;
+      return helper_run_e::failed;
     }
     auto free_startup = util::fail_guard([&] {
       platf::free_proc_thread_attr_list(startup.lpAttributeList);
@@ -400,7 +405,7 @@ namespace {
                             platf::launch_process_without_impersonation(platf::to_utf8(command), directory.wstring(), flags, startup, child, error);
     if (!launched) {
       report_failure("helper_failed", "The helper could not be started: " + platf::steam::big_picture::debug_port::error_text(error));
-      return false;
+      return helper_run_e::failed;
     }
     CloseHandle(child.hThread);
     auto retire_child = util::fail_guard([&] {
@@ -416,27 +421,27 @@ namespace {
     DWORD child_session = 0;
     if (!ProcessIdToSessionId(child.dwProcessId, &child_session) || child_session != session) {
       report_failure("helper_failed", "The helper started outside the console session " + std::to_string(session) + '.');
-      return false;
+      return helper_run_e::failed;
     }
     const auto connect_deadline = std::chrono::steady_clock::now() + 5s;
     if (connection_error == ERROR_IO_PENDING) {
       while (WaitForSingleObject(event, 100) == WAIT_TIMEOUT) {
         if (!current(stop, config, session)) {
-          return false;  // Turned off, reconfigured or stopping: not a failure.
+          return helper_run_e::failed;  // Turned off, reconfigured or stopping: not a failure.
         }
         if (DWORD code = 0; WaitForSingleObject(child.hProcess, 0) != WAIT_TIMEOUT && GetExitCodeProcess(child.hProcess, &code)) {
           report_failure("helper_failed", "The helper exited before it connected (exit code " + std::to_string(code) + ").");
-          return false;
+          return helper_run_e::failed;
         }
         if (std::chrono::steady_clock::now() >= connect_deadline) {
           report_failure("helper_failed", "The helper didn't connect within 5 seconds.");
-          return false;
+          return helper_run_e::failed;
         }
       }
       DWORD ignored = 0;
       if (!GetOverlappedResult(pipe, &connection, &ignored, FALSE)) {
         report_failure("helper_failed", api_failure("Connecting to the helper"));
-        return false;
+        return helper_run_e::failed;
       }
     }
     cancel_connection.disable();
@@ -444,7 +449,7 @@ namespace {
     if (!GetNamedPipeClientProcessId(pipe, &client_pid) || !GetNamedPipeClientSessionId(pipe, &client_session) ||
         !platf::hotkey::end_stream::authorized_sender(child.dwProcessId, client_pid, session, client_session, WTSGetActiveConsoleSessionId())) {
       report_failure("helper_failed", "Refused a pipe client that isn't the helper Vibeshine started.");
-      return false;
+      return helper_run_e::failed;
     }
 
     platf::steam::big_picture::framed_pipe_t channel(pipe);
@@ -456,7 +461,7 @@ namespace {
     }
     if (!hello || hello->value("protocol", 0) != protocol::version || hello->value("pid", 0UL) != child.dwProcessId) {
       report_failure("helper_failed", "The helper didn't introduce itself correctly, so it was stopped.");
-      return false;
+      return helper_run_e::failed;
     }
     const auto script = std::filesystem::absolute(std::filesystem::path(SUNSHINE_ASSETS_DIR) / "steam" / "big_picture_controls.js");
     if (!channel.write({
@@ -467,7 +472,7 @@ namespace {
           {"inject_options", json::object()},
         })) {
       report_failure("helper_failed", "Could not send the helper its configuration.");
-      return false;
+      return helper_run_e::failed;
     }
     set_helper("connecting", {}, true);
     BOOST_LOG(info) << "Steam Big Picture controls: helper started in console session " << session << '.';
@@ -519,7 +524,7 @@ namespace {
         }
       }
     }
-    return true;
+    return helper_run_e::connected;
   }
 
   void supervise(std::stop_token stop) {
@@ -538,9 +543,9 @@ namespace {
         continue;
       }
       const auto started = std::chrono::steady_clock::now();
-      bool connected = false;
+      auto result = helper_run_e::failed;
       try {
-        connected = run_helper(stop, config, session);
+        result = run_helper(stop, config, session);
       } catch (const std::exception &failure) {
         BOOST_LOG(error) << "Steam Big Picture controls: helper failed: " << failure.what();
         // The exception text may not be UTF-8, so the page gets a fixed message.
@@ -549,6 +554,14 @@ namespace {
       if (!current(stop, config, session)) {
         continue;  // Turned off, reconfigured or stopping: act on that right away.
       }
+      if (result == helper_run_e::no_user) {
+        // The sign-in screen: check again soon, like for a missing console session, so the controls
+        // start right after someone signs in instead of after a grown backoff.
+        backoff = 5s;
+        pause(stop, config.generation, 2s);
+        continue;
+      }
+      const bool connected = result == helper_run_e::connected;
       // Restart a helper that exits, backing off while it keeps exiting quickly.
       if (std::chrono::steady_clock::now() - started > 60s) {
         backoff = 5s;
