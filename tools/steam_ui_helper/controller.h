@@ -95,8 +95,9 @@ namespace steam_ui_helper {
     void connect(clock::time_point now);
     void drop_session();
     void inject(clock::time_point now);
-    // True when there was a new status to send, whether or not Steam took it.
-    bool push_status();
+    // True when there was a new status to send, whether or not Steam took it. One Steam refused is
+    // offered again only after a short delay.
+    bool push_status(clock::time_point now);
     void heartbeat();
     void forget_injection();
     // Steam's UI reloaded in the connected page; counts towards the breaker.
@@ -125,6 +126,9 @@ namespace steam_ui_helper {
     bool script_disabled_ = false;
     bool script_refused_ = false;
     std::uint64_t pushed_version_ = 0;
+    // The status Steam last refused and when to offer it again; a newer status is sent right away.
+    std::uint64_t refused_version_ = 0;
+    clock::time_point retry_status_at_ {};
     std::optional<clock::time_point> next_heartbeat_;
     std::string steam_build_;
     std::string state_;

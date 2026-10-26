@@ -17,6 +17,10 @@ namespace steam_ui_helper {
     // Steam reports its build date through SteamClient; a missing value only leaves the report blank.
     constexpr std::string_view steam_build_expression = "SteamClient.System.GetSystemInfo().then((i) => i.sSteamBuildDate).catch(() => '')";
 
+    // How long a status Steam refused waits before it is offered again, for example while Steam's UI
+    // is between pages and has no context to run it in.
+    constexpr auto status_retry_delay = std::chrono::seconds(2);
+
     std::string breaker_message() {
       return "Steam's UI reloaded or its web helper restarted " + std::to_string(policy::injection_tracker_t::breaker_reloads) + " times right after injection; no longer injecting until the helper restarts";
     }
@@ -118,7 +122,7 @@ namespace steam_ui_helper {
     }
     if (injected_ && !script_disabled_) {
       // A status update counts as checking in; without one, check in every few seconds.
-      if (push_status()) {
+      if (push_status(now)) {
         next_heartbeat_ = now + policy::heartbeat_interval;
       } else if (!next_heartbeat_ || now >= *next_heartbeat_) {
         heartbeat();
@@ -136,7 +140,9 @@ namespace steam_ui_helper {
       }
       std::unique_lock lock(mutex_);
       changed_.wait_for(lock, stop, std::chrono::milliseconds(500), [this] {
-        return !events_.empty() || !checks_.empty() || (injected_ && !script_disabled_ && status_version_ != pushed_version_);
+        // A refused status is retried on the regular wake-ups, not straight away.
+        return !events_.empty() || !checks_.empty() ||
+               (injected_ && !script_disabled_ && status_version_ != pushed_version_ && status_version_ != refused_version_);
       });
     }
     unpatch();
@@ -300,6 +306,7 @@ namespace steam_ui_helper {
       injected_ = true;
       script_disabled_ = false;
       pushed_version_ = 0;
+      refused_version_ = 0;
       next_heartbeat_ = now + policy::heartbeat_interval;  // The script starts out having just heard from us.
       tracker_.injected(now);
       emit(*report);
@@ -312,7 +319,7 @@ namespace steam_ui_helper {
     }
   }
 
-  bool controller_t::push_status() {
+  bool controller_t::push_status(clock::time_point now) {
     json status;
     std::uint64_t version;
     {
@@ -323,11 +330,16 @@ namespace steam_ui_helper {
       status = *status_;
       version = status_version_;
     }
+    if (version == refused_version_ && now < retry_status_at_) {
+      return false;
+    }
     try {
       evaluate(policy::set_status_expression(status));
       pushed_version_ = version;
     } catch (const std::exception &error) {
       log("warning", std::string("could not update the status in Steam: ") + error.what());
+      refused_version_ = version;
+      retry_status_at_ = now + status_retry_delay;
     }
     return true;
   }
@@ -344,6 +356,7 @@ namespace steam_ui_helper {
     injected_ = false;
     script_disabled_ = false;
     pushed_version_ = 0;
+    refused_version_ = 0;
   }
 
   void controller_t::on_reload(clock::time_point now) {

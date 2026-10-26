@@ -35,6 +35,8 @@ namespace {
     };
     json report = {{"protocol", 1}, {"version", 1}, {"react", "19.1.1"}, {"enabled", true}, {"errors", 0}, {"features", {{"power_menu", "waiting for the Power menu to open"}}}};
     int failing_injections = 0;
+    int failing_statuses = 0;
+    int status_attempts = 0;
     std::int64_t context_id = 1;
 
     int connects = 0;
@@ -108,6 +110,11 @@ namespace {
         return {{"result", {{"value", steam_.report}}}};
       }
       if (expression.starts_with(set_status_prefix)) {
+        ++steam_.status_attempts;
+        if (steam_.failing_statuses > 0) {
+          --steam_.failing_statuses;
+          return {{"exceptionDetails", {{"text", "Cannot find default execution context"}}}};
+        }
         const auto payload = expression.substr(set_status_prefix.size(), expression.rfind("), true") - set_status_prefix.size());
         steam_.statuses.push_back(json::parse(payload));
         return {{"result", {{"value", true}}}};
@@ -393,6 +400,28 @@ TEST_F(SteamUiHelperController, StopsPushingStatusWhileTheScriptIsOffUntilSteamR
   helper.step();
   EXPECT_EQ(steam.injections.size(), 2U);
   EXPECT_EQ(steam.statuses, (std::vector<json> {streaming, idle}));
+}
+
+TEST_F(SteamUiHelperController, WaitsBeforeOfferingARefusedStatusAgain) {
+  auto &helper = make();
+  steam.failing_statuses = 2;
+  helper.set_status(streaming);
+  helper.step();  // Injects; Steam refuses the status.
+  EXPECT_EQ(steam.status_attempts, 1);
+  helper.step();
+  now += 1s;
+  helper.step();
+  EXPECT_EQ(steam.status_attempts, 1);
+  now += 1s;
+  helper.step();  // Refused again.
+  EXPECT_EQ(steam.status_attempts, 2);
+  EXPECT_TRUE(steam.statuses.empty());
+
+  // A newer status doesn't wait for the old one's retry.
+  helper.set_status(idle);
+  helper.step();
+  EXPECT_EQ(steam.status_attempts, 3);
+  EXPECT_EQ(steam.statuses, std::vector<json> {idle});
 }
 
 TEST_F(SteamUiHelperController, ChecksInWithTheScriptWhileItRuns) {
