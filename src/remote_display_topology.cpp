@@ -94,6 +94,23 @@ namespace remote_display_topology {
     return layout_schema_valid(layout, error) ? layout : empty_layout();
   }
 
+  nlohmann::json remove_client_from_layout(const nlohmann::json &layout, const std::string &client_uuid) {
+    auto result = normalize_layout(layout);
+    auto &placements = result["placements"];
+    for (auto it = placements.begin(); it != placements.end();) {
+      const auto &placement = it.value();
+      const bool references_client = !placement.value("preserve", false) &&
+                                     placement.value("anchor_kind", "") == "client" &&
+                                     placement.value("anchor_id", "") == client_uuid;
+      if (it.key() == client_uuid || references_client) {
+        it = placements.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    return result;
+  }
+
   bool validate_layout(const nlohmann::json &layout, const std::vector<std::string> &known_clients, const std::vector<std::string> &known_physical_ids, std::string &error) {
     if (!layout_schema_valid(layout, error)) return false;
     unsigned int primary_count = 0;

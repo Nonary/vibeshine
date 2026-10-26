@@ -48,6 +48,38 @@ TEST(RemoteDisplayTopology, NormalizesMalformedPersistenceButKeepsUnavailableTyp
   EXPECT_EQ(remote_display_topology::normalize_layout(saved), saved);
 }
 
+TEST(RemoteDisplayTopology, RemovingClientCleansItsPlacementAndDirectClientAnchors) {
+  const auto physical = nlohmann::json {{"anchor_kind", "physical"}, {"anchor_id", "old"}, {"edge", "right"}, {"alignment", "start"}, {"gap_px", 0}};
+  const auto direct = nlohmann::json {{"anchor_kind", "client"}, {"anchor_id", "old"}, {"edge", "below"}, {"alignment", "center"}, {"gap_px", 10}};
+  const auto indirect = nlohmann::json {{"anchor_kind", "client"}, {"anchor_id", "direct"}, {"edge", "left"}, {"alignment", "end"}, {"gap_px", 0}};
+  auto preserved = direct;
+  preserved["preserve"] = true;
+  const auto before = layout({{"old", physical}, {"direct", direct}, {"indirect", indirect}, {"physical", physical}, {"preserved", preserved}});
+  const auto after = remote_display_topology::remove_client_from_layout(before, "old");
+
+  EXPECT_FALSE(after["placements"].contains("old"));
+  EXPECT_FALSE(after["placements"].contains("direct"));
+  EXPECT_EQ(after["placements"]["indirect"], indirect);
+  EXPECT_EQ(after["placements"]["physical"], physical);
+  EXPECT_EQ(after["placements"]["preserved"], preserved);
+  std::string error;
+  EXPECT_TRUE(remote_display_topology::validate_layout(after, {"direct", "indirect", "physical", "preserved"}, {"old"}, error)) << error;
+
+  remote_display_topology::coordinator_t coordinator;
+  coordinator.set_layout(after);
+  EXPECT_EQ(coordinator.snapshot({})["layout"], after);
+  // The saved JSON round-trip must not restore the old UUID or transfer its
+  // placement to a newly paired identity.
+  const auto reloaded = remote_display_topology::normalize_layout(nlohmann::json::parse(after.dump()));
+  EXPECT_EQ(reloaded, after);
+  EXPECT_FALSE(reloaded["placements"].contains("new"));
+  EXPECT_EQ(remote_display_topology::remove_client_from_layout(after, "old"), after);
+}
+
+TEST(RemoteDisplayTopology, RemovingClientNormalizesMalformedLayout) {
+  EXPECT_EQ(remote_display_topology::remove_client_from_layout(nlohmann::json {}, "old"), layout(nlohmann::json::object()));
+}
+
 TEST(RemoteDisplayTopology, SupportsEveryEdgeAndAlignment) {
   for (const auto &edge : {"left", "right", "above", "below"}) for (const auto &alignment : {"start", "center", "end"}) {
     std::string error;
