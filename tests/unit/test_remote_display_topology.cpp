@@ -83,7 +83,9 @@ TEST(RemoteDisplayTopology, RemovingClientCleansItsPlacementAndDirectClientAncho
   auto legacy = reloaded;
   legacy["placements"]["direct"].erase("automatic_fallback");
   EXPECT_TRUE(remote_display_topology::layout_schema_valid(legacy, error));
-  EXPECT_FALSE(coordinator.saved_stream_placement({.id = "direct", .active = true}, {}).has_value());
+  const auto saved_stream = coordinator.saved_stream_placement({.id = "direct", .active = true}, {});
+  EXPECT_FALSE(saved_stream.position.has_value());
+  EXPECT_TRUE(saved_stream.primary_requested);
   EXPECT_EQ(remote_display_topology::remove_client_from_layout(after, "old"), after);
 }
 
@@ -2122,7 +2124,7 @@ TEST(RemoteDisplayTopology, NormalStreamUsesSavedBelowCenterWithoutRecomposingPe
   const remote_display_topology::node_t primary {.id = "primary", .physical = true, .active = true, .primary = true, .configured_mode = {3840, 2160, 60}};
   const remote_display_topology::node_t target {.id = "one", .active = true, .x = 3840, .configured_mode = {2732, 2048, 60}};
   const remote_display_topology::node_t peer {.id = "two", .active = true, .x = -1920, .y = 100};
-  const auto placed = coordinator.saved_stream_placement(target, {primary, peer});
+  const auto placed = coordinator.saved_stream_placement(target, {primary, peer}).position;
   ASSERT_TRUE(placed);
   EXPECT_EQ(placed->x, 554);
   EXPECT_EQ(placed->y, 2160);
@@ -2134,11 +2136,11 @@ TEST(RemoteDisplayTopology, NormalStreamUsesSavedBelowCenterWithoutRecomposingPe
 TEST(RemoteDisplayTopology, NormalStreamManualAndUnavailableAnchorsPreserveWindowsPosition) {
   remote_display_topology::coordinator_t coordinator;
   const remote_display_topology::node_t target {.id = "one", .active = true, .x = 554, .y = 2160};
-  EXPECT_FALSE(coordinator.saved_stream_placement(target, {}));
+  EXPECT_FALSE(coordinator.saved_stream_placement(target, {}).position);
   coordinator.set_layout(layout({{"one", {{"anchor_kind", "physical"}, {"anchor_id", "absent"}, {"edge", "right"}, {"alignment", "start"}, {"gap_px", 0}}}}));
-  EXPECT_FALSE(coordinator.saved_stream_placement(target, {}));
+  EXPECT_FALSE(coordinator.saved_stream_placement(target, {}).position);
   const remote_display_topology::node_t inactive {.id = "absent", .physical = true};
-  EXPECT_FALSE(coordinator.saved_stream_placement(target, {inactive}));
+  EXPECT_FALSE(coordinator.saved_stream_placement(target, {inactive}).position);
   EXPECT_EQ(target.x, 554);
   EXPECT_EQ(target.y, 2160);
 }
@@ -2150,7 +2152,7 @@ TEST(RemoteDisplayTopology, NormalStreamUsesLiveClientAnchorAndRequestedTargetDi
   for (const auto &edge : {"left", "right", "above", "below"}) {
     for (const auto &alignment : {"start", "center", "end"}) {
       coordinator.set_layout(layout({{"one", {{"anchor_kind", "client"}, {"anchor_id", "two"}, {"edge", edge}, {"alignment", alignment}, {"gap_px", 8}, {"primary", true}}}}));
-      const auto placed = coordinator.saved_stream_placement(target, {anchor});
+      const auto placed = coordinator.saved_stream_placement(target, {anchor}).position;
       ASSERT_TRUE(placed);
       EXPECT_TRUE(placed->primary);
       if (std::string(edge) == "left") {
@@ -2183,7 +2185,7 @@ TEST(RemoteDisplayTopology, ExplicitManualRulePreservesIsolatedTargetWithoutAnAn
   ASSERT_TRUE(remote_display_topology::validate_layout(manual, clients, {}, error)) << error;
   coordinator.set_layout(manual);
   const remote_display_topology::node_t target {.id = "one", .active = true, .x = 554, .y = 2160};
-  const auto placed = coordinator.saved_stream_placement(target, {});
+  const auto placed = coordinator.saved_stream_placement(target, {}).position;
   ASSERT_TRUE(placed);
   EXPECT_EQ(placed->x, 554);
   EXPECT_EQ(placed->y, 2160);

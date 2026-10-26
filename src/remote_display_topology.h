@@ -92,6 +92,11 @@ namespace remote_display_topology {
     std::uint64_t token = 0;
   };
 
+  struct saved_stream_layout_t {
+    std::optional<node_t> position;
+    bool primary_requested = false;
+  };
+
   // Validates the persisted wire contract without mutating coordinator state.
   bool layout_schema_valid(const nlohmann::json &layout, std::string &error);
   nlohmann::json normalize_layout(const nlohmann::json &layout);
@@ -105,8 +110,9 @@ namespace remote_display_topology {
     void set_layout(nlohmann::json layout);
     // Resolve only this normal stream's saved placement against live anchors.
     // Missing placement/anchor preserves Windows' current arrangement, and
-    // never recomposes or moves a peer owned by another session.
-    std::optional<node_t> saved_stream_placement(const node_t &target, const std::vector<node_t> &active_nodes) const;
+    // never recomposes or moves a peer owned by another session. Detached
+    // automatic fallback may request primary without overriding a position.
+    saved_stream_layout_t saved_stream_placement(const node_t &target, const std::vector<node_t> &active_nodes) const;
     void set_physical_baseline(std::vector<node_t> nodes);
     // Inventory reads must not replace a baseline while managed displays own it.
     void refresh_idle_physical_baseline(std::vector<node_t> nodes);

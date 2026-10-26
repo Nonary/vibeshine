@@ -188,26 +188,26 @@ namespace remote_display_topology {
     return std::min(max_client_identities, callbacks_.client_identity_capacity ? callbacks_.client_identity_capacity() : default_client_identities);
   }
   void coordinator_t::set_layout(nlohmann::json layout) { std::lock_guard lock(mutex_); layout_ = normalize_layout(layout); }
-  std::optional<node_t> coordinator_t::saved_stream_placement(const node_t &target, const std::vector<node_t> &active_nodes) const {
+  saved_stream_layout_t coordinator_t::saved_stream_placement(const node_t &target, const std::vector<node_t> &active_nodes) const {
     std::lock_guard lock(mutex_);
     const auto placement = layout_["placements"].find(target.id);
     if (placement == layout_["placements"].end()) {
-      return std::nullopt;
+      return {};
     }
-    if (is_automatic_fallback(*placement)) return std::nullopt;
-    if (placement->value("preserve", false)) return target;
+    if (is_automatic_fallback(*placement)) return {.position = std::nullopt, .primary_requested = placement->value("primary", false)};
+    if (placement->value("preserve", false)) return {.position = target, .primary_requested = target.primary};
     const auto anchor_id = placement->value("anchor_id", "");
     const auto physical = placement->value("anchor_kind", "") == "physical";
     const auto anchor = std::find_if(active_nodes.begin(), active_nodes.end(), [&](const node_t &candidate) {
       return candidate.active && candidate.id == anchor_id && candidate.physical == physical;
     });
     if (anchor == active_nodes.end()) {
-      return std::nullopt;
+      return {};
     }
     auto node = target;
     node.primary = placement->value("primary", false);
     place_relative(node, *anchor, *placement);
-    return node;
+    return {.position = node, .primary_requested = node.primary};
   }
 
   void coordinator_t::set_physical_baseline(std::vector<node_t> nodes) {

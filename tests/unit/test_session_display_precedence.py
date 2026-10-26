@@ -20,6 +20,8 @@ dependency_includes = [flag for group in args.include_dir for path in group.spli
 source = args.source_dir
 launch = (source / 'nvhttp.cpp').read_text()
 helpers = (source / 'platform/windows/display_helper_request_helpers.cpp').read_text()
+# Wiring guard: the builder behavior is exercised by test_component_display_helper_saved_placement.
+assert 'apply_saved_stream_layout(builder, saved, target->device_id, layout_flags.isolated)' in helpers
 webrtc = (source / 'webrtc_stream.cpp').read_text()
 linux = (source / 'platform/linux/private_display.cpp').read_text()
 start = linux.index('    auto effective_video = config::video;')
