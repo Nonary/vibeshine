@@ -421,10 +421,10 @@ namespace nvhttp {
           const bool verified = device && display_helper_integration::apply_remote_monitor_hdr_state(*device, mode.hdr, allow_mutation);
           if (!verified) {
             BOOST_LOG(warning) << "Remote Monitor: requested target HDR state could not be verified.";
-            // Never publish HDR based solely on the request; capture must see
-            // the confirmed effective state and retain its HDR source guard.
-            mode.hdr = false;
+            // Neither HDR nor SDR may be published from an unverified state.
+            return false;
           }
+          return true;
         },
         .exact_target_has_current_mode_and_dxgi = remote_monitor_exact_capture_output,
         .remove_owned_display = [](const std::string &client_uuid) {

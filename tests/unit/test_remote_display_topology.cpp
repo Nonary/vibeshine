@@ -255,7 +255,7 @@ TEST(RemoteDisplayTopology, PostTopologyHdrConfirmationControlsCaptureAndRetaine
       EXPECT_TRUE(topology_applied);
       EXPECT_TRUE(allow_mutation);
       requested.push_back(mode.hdr);
-      mode.hdr = mode.hdr && hdr_available;
+      return !mode.hdr || hdr_available;
     },
     .exact_target_has_current_mode_and_dxgi = [&](const auto &, const auto &mode) {
       capture_modes.push_back(mode.hdr);
@@ -264,14 +264,13 @@ TEST(RemoteDisplayTopology, PostTopologyHdrConfirmationControlsCaptureAndRetaine
   });
 
   auto result = coordinator.activate_or_resume("client", "Display", {3840, 2160, 120, true}, 1);
-  ASSERT_TRUE(result.ready);
-  EXPECT_FALSE(result.hdr_enabled);
-  EXPECT_FALSE(capture_modes.back());
+  ASSERT_FALSE(result.ready);
+  EXPECT_TRUE(result.retryable);
+  EXPECT_TRUE(capture_modes.empty());
   ASSERT_TRUE(coordinator.reapply_composed_topology());
-  EXPECT_FALSE(coordinator.snapshot("client", 1).hdr_enabled);
+  EXPECT_FALSE(coordinator.snapshot("client", 1).ready);
 
   // A retained output must retry color setup on resume, even without creation.
-  coordinator.transport_lost("client", 1);
   hdr_available = true;
   topology_applied = false;
   result = coordinator.activate_or_resume("client", "Display", {3840, 2160, 120, true}, 2);
@@ -299,6 +298,7 @@ TEST(RemoteDisplayTopology, ReadyMonitorRetryWaitsForTransportLossBeforeColorCha
       mutations.push_back(allow_mutation);
       // The retained source is SDR, so an HDR retry must not claim success.
       mode.hdr = false;
+      return true;
     },
     .exact_target_has_current_mode_and_dxgi = [](const auto &, const auto &) { return std::optional<std::string> {"Virtual-1"}; },
   });
@@ -323,6 +323,7 @@ TEST(RemoteDisplayTopology, SharedNormalCaptureIsNotRecreatedOrColorMutated) {
       EXPECT_FALSE(allow_mutation);
       // Read-only verification finds the shared source SDR.
       mode.hdr = false;
+      return true;
     },
     .exact_target_has_current_mode_and_dxgi = [](const auto &, const auto &) { return std::optional<std::string> {"Virtual-1"}; },
   });
@@ -334,6 +335,32 @@ TEST(RemoteDisplayTopology, SharedNormalCaptureIsNotRecreatedOrColorMutated) {
   EXPECT_FALSE(result.hdr_enabled);
   EXPECT_EQ(creations, 0);
   EXPECT_EQ(finalizations, 1);
+}
+
+TEST(RemoteDisplayTopology, UnverifiedSdrOnSharedHdrCaptureIsNotReady) {
+  remote_display_topology::coordinator_t coordinator;
+  bool capture_checked = false;
+  coordinator.set_runtime_callbacks({
+    .create_or_reclaim = [](const auto &, const auto &, const auto &) { return true; },
+    .apply_composed_topology = [](const auto &) { return true; },
+    .finalize_mode = [](const auto &, auto &mode, bool allow_mutation) {
+      EXPECT_FALSE(mode.hdr);  // Also the source request for RTX HDR.
+      EXPECT_FALSE(allow_mutation);
+      return false;  // The shared source remains HDR.
+    },
+    .exact_target_has_current_mode_and_dxgi = [&](const auto &, const auto &) {
+      capture_checked = true;
+      return std::optional<std::string> {"Virtual-1"};
+    },
+  });
+  const auto game = coordinator.reserve_normal_game_identity("client", "Game", {3840, 2160, 120, true});
+  auto capture = coordinator.retain_normal_game_capture("client", game.token);
+  ASSERT_TRUE(capture);
+  const auto result = coordinator.activate_or_resume("client", "Monitor", {3840, 2160, 120, false}, 1);
+  EXPECT_TRUE(result.accepted);
+  EXPECT_FALSE(result.ready);
+  EXPECT_TRUE(result.retryable);
+  EXPECT_FALSE(capture_checked);
 }
 
 TEST(RemoteDisplayTopology, PlatformModeFallbackDoesNotReplaceRetainedClientRequest) {

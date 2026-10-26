@@ -708,7 +708,11 @@ namespace remote_display_topology {
       state.warning = "The composed display topology did not apply; existing owners and their displays were retained.";
       return {true, false, state.warning};
     }
-    if (callbacks_.finalize_mode) callbacks_.finalize_mode(client_uuid, state.effective_mode, !shared_capture);
+    if (callbacks_.finalize_mode && !callbacks_.finalize_mode(client_uuid, state.effective_mode, !shared_capture)) {
+      state.lifecycle = lifecycle_e::retryable;
+      state.warning = "The requested client display color state could not be verified; Resume will retry.";
+      return {true, false, state.warning};
+    }
     if (!warnings.empty()) state.warning = warnings.front();
     const auto exact_output = callbacks_.exact_target_has_current_mode_and_dxgi(client_uuid, state.effective_mode);
     if (!exact_output || exact_output->empty()) {
