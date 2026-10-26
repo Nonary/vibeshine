@@ -630,6 +630,12 @@ namespace remote_display_topology {
     if (generation < state.generation) {
       return {false, false, true, {}, "A newer Remote Monitor generation is already active."};
     }
+    if (callbacks_.finalize_mode && state.remote_monitor && state.lifecycle == lifecycle_e::ready) {
+      // A retry must not advance ownership while the previous capture may
+      // still be active: a stale transport-loss callback would otherwise be
+      // unable to protect that output from a later HDR transition.
+      return {false, false, true, {}, "The previous Remote Monitor transport has not drained."};
+    }
     state.generation = generation;
     state.label = label;
     state.monitor_requested_mode = mode;
@@ -675,7 +681,11 @@ namespace remote_display_topology {
       state.warning = "Remote Monitor runtime wiring is unavailable; ownership was retained for Resume.";
       return {true, false, state.warning};
     }
-    const bool shared_capture = callbacks_.finalize_mode && !state.normal_capture_references.empty();
+    // A ready monitor can still have an active or pending transport when its
+    // owner retries launch. Treat its output as captured until transport loss
+    // changes the lifecycle, just as for an owned normal-game capture.
+    const bool shared_capture = callbacks_.finalize_mode &&
+                                (!state.normal_capture_references.empty() || state.lifecycle == lifecycle_e::ready);
     if (!state.lease_held && shared_capture) {
       // The game capture already owns this exact stable output. Reuse it
       // without recreating or changing its color state underneath the peer.
