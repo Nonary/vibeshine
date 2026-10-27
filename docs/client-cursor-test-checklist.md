@@ -75,6 +75,8 @@ odd in the logs.
   - Releasing the button never swings the camera: nothing switches back to absolute
     while a button is still held, even if the game shows its cursor early or you
     pause mid-drag.
+  - In a game that locks its cursor to one point for the drag (the MSFS cockpit),
+    the drag switches to relative and the view turns smoothly, without fighting.
   - A click on something the game hides the cursor for (an MSFS knob) switches
     only if the mouse moves during it, and the cursor comes back where the game
     left it.
