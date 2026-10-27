@@ -4,6 +4,7 @@
 #include "host_cursor_protocol.h"
 
 #include <algorithm>
+#include <bit>
 
 namespace host_cursor_bitmap {
   namespace {
@@ -224,14 +225,21 @@ namespace host_cursor_bitmap {
     return finish(std::move(canvas), hotspot_x, hotspot_y);
   }
 
+  double gdi_display_scale(std::uint32_t width, std::uint32_t height, std::uint32_t read_standard, std::uint32_t display_standard) {
+    if (!read_standard || !display_standard || width != read_standard || height != read_standard) {
+      return 1;
+    }
+    return double(display_standard) / read_standard;
+  }
+
   std::uint64_t content_hash(const image_t &image) {
     std::uint64_t hash = 0xcbf29ce484222325ULL;
     const auto mix = [&](std::uint8_t byte) {
       hash ^= byte;
       hash *= 0x100000001b3ULL;
     };
-    for (const std::uint32_t v : {std::uint32_t(image.width), std::uint32_t(image.height), std::uint32_t(image.hotspot_x), std::uint32_t(image.hotspot_y), image.pixel_scale}) {
-      for (int i = 0; i < 4; ++i) mix(std::uint8_t(v >> (i * 8)));
+    for (const std::uint64_t v : {std::uint64_t(image.width), std::uint64_t(image.height), std::uint64_t(image.hotspot_x), std::uint64_t(image.hotspot_y), std::bit_cast<std::uint64_t>(image.pixel_scale)}) {
+      for (int i = 0; i < 8; ++i) mix(std::uint8_t(v >> (i * 8)));
     }
     for (const auto byte : image.bgra) mix(byte);
     return hash;

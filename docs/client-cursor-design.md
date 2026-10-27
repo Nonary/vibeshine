@@ -52,7 +52,12 @@ switches to relative mode on its own when a game hides or locks the cursor.
   copies the raw buffer; conversion happens on the tracker thread. WGC never sees
   pointer shapes, so on that path (and before the first DXGI shape arrives) the
   tracker reads the `HCURSOR` from `GetCursorInfo` with `GetIconInfo` +
-  `GetDIBits`.
+  `GetDIBits`. `GetIconInfo` returns a standard-size cursor (`SM_CXCURSOR`) at
+  the size for Sunshine's system DPI, the primary display's when Sunshine
+  started, while Windows draws it at the size for the DPI of the display it is
+  on. Those differ when Sunshine started at another scale (at boot, before the
+  virtual display existed), so such a shape carries the ratio of the two
+  standard sizes as its scale. Cursors of any other size keep their own.
 - **Compositing is shared.** One captured image feeds every session, so the host
   stops blending only when *every* connected session has asked to draw the
   cursor itself. The `COMPOSITED` state flag tells a client when the host is
@@ -193,7 +198,8 @@ at least one session is subscribed. Every 5 ms (200 Hz) it:
    virtual screen means "not clipped".
 3. Resolves the shape: the latest DXGI shape while Desktop Duplication is
    capturing, otherwise `GetIconInfo`/`GetDIBits` when the `HCURSOR` changes or
-   once a second (handles can be reused and the cursor-size setting can change).
+   once a second (handles can be reused, the cursor-size setting can change, and
+   the cursor can move to a display with another DPI).
    Converted shapes are deduplicated by a 64-bit content hash in a bounded
    registry (64 shapes); ids are small integers.
 4. Detects host-originated moves: the input path records the last eight absolute

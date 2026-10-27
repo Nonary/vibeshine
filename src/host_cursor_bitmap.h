@@ -14,7 +14,7 @@ namespace host_cursor_bitmap {
     std::uint16_t height = 0;
     std::uint16_t hotspot_x = 0;
     std::uint16_t hotspot_y = 0;
-    std::uint32_t pixel_scale = 1;  // source pixels per shape pixel (> 1 after downscaling a huge cursor)
+    double pixel_scale = 1;  // display pixels per shape pixel (> 1 after downscaling a huge cursor)
     std::vector<std::uint8_t> bgra;  // width * height * 4, straight alpha, top-down
 
     bool operator==(const image_t &) const = default;
@@ -70,6 +70,13 @@ namespace host_cursor_bitmap {
     std::uint32_t hotspot_y
   );
 
-  // 64-bit FNV-1a over dimensions, hotspot and pixels.
+  // Display pixels per pixel of a cursor bitmap read with GetIconInfo(). Windows
+  // draws a cursor of the standard size at the standard size for the DPI of the
+  // display it is on, but GetIconInfo() returns it at the standard size for the
+  // reading process's system DPI. The standard sizes are SM_CXCURSOR at each DPI.
+  // A cursor of any other size is drawn as it is.
+  double gdi_display_scale(std::uint32_t width, std::uint32_t height, std::uint32_t read_standard, std::uint32_t display_standard);
+
+  // 64-bit FNV-1a over dimensions, hotspot, scale and pixels.
   std::uint64_t content_hash(const image_t &image);
 }  // namespace host_cursor_bitmap

@@ -7,6 +7,7 @@
 // platform includes first: winsock2.h must precede windows.h
 #include <winsock2.h>
 #include <windows.h>
+#include <shellscalingapi.h>
 
 #include "cursor_tracker.h"
 
@@ -56,9 +57,23 @@ namespace host_cursor::tracker {
       return bits;
     }
 
+    // Sunshine's system DPI is the primary display's when it started, which differs
+    // from the streamed display's when it started at another scale (at boot, say,
+    // before the virtual display existed). GetIconInfo() returns standard-size
+    // cursors at the size for the system DPI.
+    double gdi_display_scale(std::uint32_t width, std::uint32_t height, POINT position) {
+      UINT dpi_x = 0, dpi_y = 0;
+      if (FAILED(GetDpiForMonitor(MonitorFromPoint(position, MONITOR_DEFAULTTONEAREST), MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y))) {
+        return 1;
+      }
+      const auto read_standard = GetSystemMetricsForDpi(SM_CXCURSOR, GetDpiForSystem());
+      const auto display_standard = GetSystemMetricsForDpi(SM_CXCURSOR, dpi_x);
+      return host_cursor_bitmap::gdi_display_scale(width, height, std::uint32_t(std::max(read_standard, 0)), std::uint32_t(std::max(display_standard, 0)));
+    }
+
     // GetIconInfo() + raw bitmap bits, as drawn by GDI. Masks are WORD-aligned 1 bpp
     // rows; a monochrome cursor stacks its AND and XOR masks in one bitmap.
-    std::optional<host_cursor_bitmap::image_t> convert_hcursor(HCURSOR cursor) {
+    std::optional<host_cursor_bitmap::image_t> convert_hcursor(HCURSOR cursor, POINT position) {
       ICONINFO info {};
       if (!GetIconInfo(cursor, &info)) {
         return std::nullopt;
@@ -67,6 +82,12 @@ namespace host_cursor::tracker {
         if (info.hbmColor) DeleteObject(info.hbmColor);
         if (info.hbmMask) DeleteObject(info.hbmMask);
       });
+      const auto at_display_size = [&](std::optional<host_cursor_bitmap::image_t> image, LONG width, LONG height) {
+        if (image) {
+          image->pixel_scale *= gdi_display_scale(std::uint32_t(width), std::uint32_t(height), position);
+        }
+        return image;
+      };
 
       BITMAP mask_bm {};
       if (!info.hbmMask || !GetObject(info.hbmMask, sizeof(mask_bm), &mask_bm) || mask_bm.bmBitsPixel != 1) {
@@ -78,7 +99,11 @@ namespace host_cursor::tracker {
       }
 
       if (!info.hbmColor) {
-        return host_cursor_bitmap::from_monochrome(mask_bm.bmWidth, mask_bm.bmHeight / 2, mask_bm.bmWidthBytes, *mask, info.xHotspot, info.yHotspot);
+        return at_display_size(
+          host_cursor_bitmap::from_monochrome(mask_bm.bmWidth, mask_bm.bmHeight / 2, mask_bm.bmWidthBytes, *mask, info.xHotspot, info.yHotspot),
+          mask_bm.bmWidth,
+          mask_bm.bmHeight / 2
+        );
       }
 
       BITMAP color_bm {};
@@ -110,9 +135,17 @@ namespace host_cursor::tracker {
       bool has_alpha = false;
       for (std::size_t i = 3; i < color.size() && !has_alpha; i += 4) has_alpha = color[i] != 0;
       if (has_alpha) {
-        return host_cursor_bitmap::from_color(color_bm.bmWidth, color_bm.bmHeight, color_bm.bmWidthBytes, color, info.xHotspot, info.yHotspot);
+        return at_display_size(
+          host_cursor_bitmap::from_color(color_bm.bmWidth, color_bm.bmHeight, color_bm.bmWidthBytes, color, info.xHotspot, info.yHotspot),
+          color_bm.bmWidth,
+          color_bm.bmHeight
+        );
       }
-      return host_cursor_bitmap::from_color_and_mask(color_bm.bmWidth, color_bm.bmHeight, color_bm.bmWidthBytes, color, mask_bm.bmWidthBytes, *mask, info.xHotspot, info.yHotspot);
+      return at_display_size(
+        host_cursor_bitmap::from_color_and_mask(color_bm.bmWidth, color_bm.bmHeight, color_bm.bmWidthBytes, color, mask_bm.bmWidthBytes, *mask, info.xHotspot, info.yHotspot),
+        color_bm.bmWidth,
+        color_bm.bmHeight
+      );
     }
 
     class tracker_t {
@@ -224,6 +257,8 @@ namespace host_cursor::tracker {
       }
 
       void run(std::stop_token stop) {
+        // Physical coordinates, and the display's real DPI from GetDpiForMonitor().
+        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         _last_bind_attempt.reset();
         bind_desktop(clock::now(), true);
 
@@ -271,7 +306,7 @@ namespace host_cursor::tracker {
               if (next.visible && (cursor_info.hCursor != last_cursor || now - last_gdi_read >= shape_revalidate_interval)) {
                 last_cursor = cursor_info.hCursor;
                 last_gdi_read = now;
-                auto image = convert_hcursor(cursor_info.hCursor);
+                auto image = convert_hcursor(cursor_info.hCursor, cursor_info.ptScreenPos);
                 gdi_shape_id = image ? std::optional {shapes().insert(std::move(*image))} : std::nullopt;
               }
               next.shape_id = gdi_shape_id.value_or(0);
