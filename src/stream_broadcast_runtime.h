@@ -101,6 +101,8 @@ namespace stream::broadcast_runtime {
     std::reference_wrapper<std::atomic<int>> pacing_bitrate_kbps;
     safe::mail_raw_t::event_t<bool> idr_events;
     safe::mail_raw_t::event_t<int> bitrate_events;
+    /// Set when the client sets the bitrate, so host link rate adaptation steps aside.
+    std::atomic<bool> *client_bitrate_owned = nullptr;
   };
 
   using sessions_t = std::span<session_control_t>;

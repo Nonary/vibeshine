@@ -1331,6 +1331,10 @@ namespace video {
       return device->nvenc->set_bitrate(bitrate_kbps);
     }
 
+    bool applies_bitrate_live() const override {
+      return device && device->nvenc;
+    }
+
     void set_hdr_metadata(const SS_HDR_METADATA &metadata) override {
       if (!device || !device->nvenc) {
         return;
@@ -1419,6 +1423,10 @@ namespace video {
 
     bool set_bitrate(int bitrate_kbps) override {
       return device && device->amf && device->amf->set_bitrate(bitrate_kbps);
+    }
+
+    bool applies_bitrate_live() const override {
+      return device && device->amf;
     }
 
     // Without this the live RTX-HDR refresh path is a no-op on native AMF: the
@@ -1601,6 +1609,7 @@ namespace video {
     safe::mail_raw_t::event_t<hdr_info_t> hdr_events;
     safe::mail_raw_t::event_t<input::touch_port_t> touch_port_events;
     safe::mail_raw_t::event_t<int> bitrate_events;
+    safe::mail_raw_t::event_t<int> live_bitrate_events;
 
     config_t config;
     int frame_nr;
@@ -5004,6 +5013,18 @@ namespace video {
     initialization_failed,
   };
 
+  /**
+   * @brief Tell the stream whether this encoder applies a runtime bitrate in place.
+   * @note Only ever falls: once an encoder had to rebuild to apply one, host link
+   *       rate adaptation stays off rather than cost a keyframe with every change.
+   */
+  static void publish_live_bitrate(safe::mail_raw_t::event_t<int> &events, bool live) {
+    // An int, not a bool: a bool event cannot carry `false`.
+    events->raise_monotonic(live ? 1 : 0, [](int candidate, int last) {
+      return candidate > last;
+    });
+  }
+
   encode_run_result_e encode_run(
     int &frame_nr,  // Store progress of the frame number
     safe::mail_t mail,
@@ -5277,6 +5298,8 @@ namespace video {
     auto hdr_event = mail->event<hdr_info_t>(mail::hdr);
     auto invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
     auto bitrate_events = mail->event<int>(mail::dynamic_bitrate);
+    auto live_bitrate_events = mail->event<int>(mail::live_bitrate);
+    publish_live_bitrate(live_bitrate_events, session->applies_bitrate_live());
 
     {
       // Load a dummy image into the AVFrame to ensure we have something to encode
@@ -5375,6 +5398,7 @@ namespace video {
           BOOST_LOG(info) << "Applied runtime bitrate "sv << *latest_bitrate << " kbps (live)"sv;
         } else if (frame_nr > 1) {
           BOOST_LOG(info) << "Rebuilding encoder to apply runtime bitrate "sv << *latest_bitrate << " kbps"sv;
+          publish_live_bitrate(live_bitrate_events, false);
           break;
         }
       }
@@ -5839,6 +5863,9 @@ namespace video {
     }
     raise_hdr_info_if_changed(ctx.hdr_events, ctx.last_hdr_info, std::move(hdr_info));
 
+    if (ctx.live_bitrate_events) {
+      publish_live_bitrate(ctx.live_bitrate_events, session->applies_bitrate_live());
+    }
     encode_session.bootstrap.allow_placeholder_before_first_real = ctx.frame_nr <= 1;
     encode_session.session = std::move(session);
 
@@ -6043,6 +6070,9 @@ namespace video {
               } else {
                 // avcodec encoder: rebuild synced sessions from their (now-updated) ctx config.
                 BOOST_LOG(info) << "Rebuilding encoder to apply runtime bitrate "sv << *latest_bitrate << " kbps (sync)"sv;
+                if (ctx->live_bitrate_events) {
+                  publish_live_bitrate(ctx->live_bitrate_events, false);
+                }
                 ec = platf::capture_e::reinit;
                 return false;
               }
@@ -6747,6 +6777,7 @@ namespace video {
         mail->event<hdr_info_t>(mail::hdr),
         mail->event<input::touch_port_t>(mail::touch_port),
         mail->event<int>(mail::dynamic_bitrate),
+        mail->event<int>(mail::live_bitrate),
         config,
         1,
         channel_data,

@@ -6126,9 +6126,11 @@ launch_session->exact_target_hold.reset();
   void getAbrCapabilities(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
-    // Server-side adaptive bitrate decisioning is not implemented. Reporting it unsupported makes
-    // Foundation-compatible clients (e.g. Moonlight V+) drive their own local ABR controller, which
-    // applies decisions through the runtime /bitrate endpoint above.
+    // Foundation's server-side adaptive bitrate protocol is not implemented. Reporting it unsupported
+    // makes Foundation-compatible clients (e.g. Moonlight V+) drive their own local ABR controller,
+    // which applies decisions through the runtime /bitrate endpoint above. The optional host link rate
+    // controller (host_link_rate_adaptation) needs no client support and steps aside for the rest of
+    // the stream at the client's first /bitrate change.
     const std::string body = R"({"supported":false,"version":1,"features":["runtime_bitrate"]})";
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "application/json");

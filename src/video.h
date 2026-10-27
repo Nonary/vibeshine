@@ -307,6 +307,14 @@ namespace video {
     }
 
     /**
+     * @brief Whether set_bitrate() reconfigures this encoder in place.
+     * @return `true` for encoders that change bitrate without a rebuild (and the keyframe it costs).
+     */
+    virtual bool applies_bitrate_live() const {
+      return false;
+    }
+
+    /**
      * @brief Replace static HDR mastering metadata used for subsequent encoded frames.
      * @param metadata New mastering-display and content-light metadata.
      */
