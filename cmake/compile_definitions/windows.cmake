@@ -355,6 +355,7 @@ list(PREPEND PLATFORM_LIBRARIES
         pdh
         powrprof
         setupapi
+        shcore
         shlwapi
         shell32
         crypt32

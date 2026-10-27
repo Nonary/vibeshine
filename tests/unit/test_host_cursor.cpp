@@ -230,7 +230,7 @@ TEST(HostCursorBitmap, ColorKeepsStraightAlphaAndHonoursPitch) {
   ASSERT_TRUE(image);
   const std::vector<std::uint8_t> expected {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 13, 14, 15, 255};
   EXPECT_EQ(image->bgra, expected);
-  EXPECT_EQ(image->pixel_scale, 1u);
+  EXPECT_EQ(image->pixel_scale, 1.0);
 }
 
 TEST(HostCursorBitmap, MaskedColorUsesAlphaAsXorMask) {
@@ -269,7 +269,7 @@ TEST(HostCursorBitmap, HugeCursorsAreBoxFilteredToTheWireLimit) {
   }
   const auto image = bitmap::from_color(600, 300, 600 * 4, bgra, 599, 10);
   ASSERT_TRUE(image);
-  EXPECT_EQ(image->pixel_scale, 3u);
+  EXPECT_EQ(image->pixel_scale, 3.0);
   EXPECT_EQ(image->width, 200);
   EXPECT_EQ(image->height, 100);
   EXPECT_EQ(image->hotspot_x, 199);
@@ -278,6 +278,18 @@ TEST(HostCursorBitmap, HugeCursorsAreBoxFilteredToTheWireLimit) {
   const auto p = px(*image, 0, 0);
   EXPECT_EQ(p[0], 0x40);
   EXPECT_NEAR(p[3], 0xFF / 3, 1);
+}
+
+TEST(HostCursorBitmap, StandardSizeGdiCursorsAreDrawnAtTheDisplaysStandardSize) {
+  // Sunshine started at 250% (standard 64 px), streaming a 100% display (32 px).
+  EXPECT_EQ(bitmap::gdi_display_scale(64, 64, 64, 32), 0.5);
+  // Started at 100%, streaming a 150% display (48 px).
+  EXPECT_EQ(bitmap::gdi_display_scale(32, 32, 32, 48), 1.5);
+  EXPECT_EQ(bitmap::gdi_display_scale(32, 32, 32, 32), 1.0);
+  // An application's own size is kept.
+  EXPECT_EQ(bitmap::gdi_display_scale(32, 32, 64, 32), 1.0);
+  EXPECT_EQ(bitmap::gdi_display_scale(64, 32, 64, 32), 1.0);
+  EXPECT_EQ(bitmap::gdi_display_scale(64, 64, 0, 32), 1.0);
 }
 
 TEST(HostCursorBitmap, MalformedInputIsRejected) {
@@ -298,6 +310,9 @@ TEST(HostCursorBitmap, HashTracksContentAndGeometry) {
   EXPECT_NE(bitmap::content_hash(a), bitmap::content_hash(b));
   b = a;
   b.bgra[5] = 2;
+  EXPECT_NE(bitmap::content_hash(a), bitmap::content_hash(b));
+  b = a;
+  b.pixel_scale = 0.5;
   EXPECT_NE(bitmap::content_hash(a), bitmap::content_hash(b));
 }
 
