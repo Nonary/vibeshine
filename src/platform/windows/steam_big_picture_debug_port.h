@@ -20,6 +20,7 @@ namespace platf::steam::big_picture::debug_port {
     std::optional<std::filesystem::path> root;  ///< Steam's folder: the running steam.exe's, else the registered one.
     bool running = false;  ///< steam.exe runs in the console session.
     bool flag_file = false;  ///< The debug-port flag file exists in root.
+    bool flag_file_created = false;  ///< Vibeshine created that file, so turning the controls off may delete it.
     bool big_picture = false;  ///< Steam's Big Picture window is open.
   };
 

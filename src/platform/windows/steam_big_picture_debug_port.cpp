@@ -222,6 +222,10 @@ namespace platf::steam::big_picture::debug_port {
     if (steam.root) {
       std::error_code error;
       steam.flag_file = fs::is_regular_file(*steam.root / policy::debug_port_flag_file, error);
+      if (steam.flag_file) {
+        const auto remembered = statefile::load_steam_debug_port_flag();
+        steam.flag_file_created = remembered && _wcsicmp(platf::from_utf8(*remembered).c_str(), (*steam.root / policy::debug_port_flag_file).c_str()) == 0;
+      }
     }
     steam.big_picture = steam.running && big_picture_open(*session);
     return steam;

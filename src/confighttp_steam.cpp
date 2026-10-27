@@ -220,7 +220,8 @@ namespace confighttp {
    * @param request The HTTP request object.
    *
    * Includes the helper's `state`, each feature's result, Steam's folder and whether its debug-port
-   * flag file exists (`debug_port`), and the progress of a Steam restart (`steam_restart`).
+   * flag file exists and whether Vibeshine created it (`debug_port`), and the progress of a Steam
+   * restart (`steam_restart`).
    *
    * @api_examples{/api/steam/big_picture/status| GET| null}
    */

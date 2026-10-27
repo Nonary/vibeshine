@@ -708,6 +708,7 @@ namespace platf::steam::big_picture {
          {"steam_running", steam.running},
          {"big_picture_open", steam.big_picture},
          {"flag_file", steam.flag_file},
+         {"flag_file_created", steam.flag_file_created},
        }},
       {"steam_restart", {{"state", s.restart.state}, {"detail", s.restart.detail}}},
       {"status", true},

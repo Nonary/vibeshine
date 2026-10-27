@@ -18,19 +18,25 @@ Big Picture on the Windows host:
 
 On the **Integrations** page, in the Steam card's **Big Picture controls** section:
 
-1. Turn on **Show stream controls in Steam Big Picture**.
-2. Under **Steam debug port**, select **Turn on** and confirm. Vibeshine adds the empty
-   `.cef-enable-remote-debugging` file to the Steam folder and restarts Steam, reopening Big Picture
-   if it was open. The status changes to **Working** once Vibeshine is connected to Steam again.
+Turn on **Show stream controls in Steam Big Picture** and confirm. Vibeshine adds the empty
+`.cef-enable-remote-debugging` file to the Steam folder and restarts Steam, reopening Big Picture if
+it was open. The status changes to **Working** once Vibeshine connects. If the file is already there,
+for example for another Steam mod, the switch turns on without restarting Steam.
+
+Turning the switch off deletes the file and restarts Steam again, but only if Vibeshine added the
+file. A file that was already there is left alone, and the switch turns off without a restart. The
+controls turn off even if the file can't be deleted; the card then says why.
 
 Restarting Steam closes games running through it, so while a stream or app is running Vibeshine
 asks a second time before restarting. If Steam isn't running, nothing restarts and Steam uses the
-debug port the next time it starts. **Turn off** deletes the file and restarts Steam the same way.
-Uninstalling Vibeshine also deletes the file if Vibeshine created it; a file that was already there,
-for example for another Steam mod, is left alone. Steam closes the port at its next start.
+change the next time it starts. When the controls are on but can't reach Steam yet, a **Steam debug
+port** row appears with the fix: **Turn on** when the file is missing, or **Restart Steam** when
+Steam was already running when the file was added. Uninstalling Vibeshine also deletes the file if
+Vibeshine created it. Steam closes the port at its next start.
 
-**Check compatibility** runs the script's check mode in the running Steam without changing it and
-lists each control as working, using a fallback, or off. Run it after a Steam update.
+Expand **Compatibility with this Steam version** and select **Check compatibility** to run the
+script's check mode in the running Steam without changing it. It lists each control as working,
+using a fallback, or off. Run it after a Steam update.
 
 ## Known limits
 
