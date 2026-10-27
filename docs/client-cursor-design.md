@@ -305,9 +305,11 @@ mouse line.
   as soon as the client asks the host to stop drawing it, without waiting a round
   trip for `COMPOSITED` to clear. If the host still composites it 300 ms later
   (another client needs it in the video), the local cursor is hidden again. A
-  large clip confines the local cursor to the mapped
-  rect with `SDL_SetWindowMouseRect`; host warps move the local cursor if it is
-  inside the video region.
+  large clip around a visible cursor confines the local cursor to the mapped
+  rect with `SDL_SetWindowMouseRect`; a lock or a hidden cursor is never
+  confined, since pinning the local cursor would stop the mouse motion that
+  switches to RELATIVE. Host warps move the local cursor if it is inside the
+  video region.
 - **RELATIVE**: SDL relative mode; local cursor hidden; video cursor shown if the
   host draws one.
 - **FALLBACK**: the user's existing setting, exactly as today.
