@@ -1370,6 +1370,9 @@ namespace amf {
     accepted_input_count = 0;
     completed_output_count = 0;
     low_latency_pipeline_depth.reset();
+    adaptive_backlog = decltype(adaptive_backlog)(config.adaptive_backlog, encoder_input_queue_size);
+    prepared_input_reserved_at.reset();
+    pending_input_preparation.reset();
     accepted_frame_indices.clear();
     consecutive_submit_failures = 0;
     consecutive_surface_failures = 0;
@@ -1403,6 +1406,7 @@ namespace amf {
                     << ", PA=" << (preanalysis_enabled ? "on" : "off")
                     << ", lookahead=" << preanalysis_lookahead_depth
                     << ", input_queue=" << encoder_input_queue_size
+                    << ", adaptive_backlog=" << (config.adaptive_backlog ? "on" : "off")
                     << ", input_surfaces=" << active_input_surface_count
                     << ", client_slices=" << client_config.slicesPerFrame << ")";
     initialization_failure = lifecycle::initialization_failure_e::none;
@@ -1447,6 +1451,9 @@ namespace amf {
       accepted_input_count = 0;
       completed_output_count = 0;
       low_latency_pipeline_depth.reset();
+      adaptive_backlog = {};
+      prepared_input_reserved_at.reset();
+      pending_input_preparation.reset();
       accepted_frame_indices.clear();
       last_completed_frame_index = 0;
       last_submitted_frame_index = 0;
@@ -1599,11 +1606,14 @@ namespace amf {
           }
           consecutive_output_failures = 0;
           ++completed_output_count;
+          const auto previous_pipeline_depth = low_latency_pipeline_depth;
           low_latency_pipeline_depth = lifecycle::refine_low_latency_pipeline_depth(
             low_latency_pipeline_depth,
             accepted_input_count,
             completed_output_count,
             preanalysis_enabled ? preanalysis_lookahead_depth : 0);
+          adaptive_backlog.output(encoded_frame.frame_index, std::chrono::steady_clock::now(), previous_pipeline_depth,
+                                  *low_latency_pipeline_depth, preanalysis_enabled ? preanalysis_lookahead_depth : 0);
           last_completed_frame_index = std::max(last_completed_frame_index, encoded_frame.frame_index);
           last_output_progress = std::chrono::steady_clock::now();
           consecutive_query_failures = 0;
@@ -1834,8 +1844,8 @@ namespace amf {
     amf_encode_result result;
     auto &results = result.frames;
     const int effective_lookahead_depth = preanalysis_enabled ? preanalysis_lookahead_depth : 0;
-    const auto encode_deadline = std::chrono::steady_clock::now() +
-                                 lifecycle::output_coalesce_budget(current_config.framerate);
+    const auto encode_started = std::chrono::steady_clock::now();
+    const auto encode_deadline = encode_started + lifecycle::output_coalesce_budget(current_config.framerate);
     auto drain_completed_outputs_locked = [&]() {
       while (!completed_outputs.empty()) {
         results.emplace_back(std::move(completed_outputs.front()));
@@ -1858,6 +1868,10 @@ namespace amf {
     uint64_t completed_before_submission = 0;
     {
       std::unique_lock lock(state_mutex);
+      if (prepared_input_surface_slot && prepared_input_reserved_at) {
+        // Conversion time for adaptive claims; a retry of this capture keeps it.
+        pending_input_preparation = encode_started - *std::exchange(prepared_input_reserved_at, std::nullopt);
+      }
       drain_completed_outputs_locked();
       if (output_fatal) {
         result.fatal = true;
@@ -1879,7 +1893,7 @@ namespace amf {
           completed_output_count,
           effective_lookahead_depth,
           cold_start_submission_limit,
-          low_latency_pipeline_depth);
+          adaptive_backlog.admitted_depth(std::chrono::steady_clock::now(), low_latency_pipeline_depth));
       };
       if (!low_latency_capacity_available()) {
         // If a ready packet was found, return it immediately instead of holding
@@ -1889,9 +1903,17 @@ namespace amf {
           ++active_output_poll_waiters;
           output_poll_requested = true;
           state_cv.notify_all();
-          state_cv.wait_until(lock, encode_deadline, [&]() {
+          auto capacity_wait_finished = [&]() {
             return output_fatal || !completed_outputs.empty() || low_latency_capacity_available();
-          });
+          };
+          // An adaptive probe or overlap relaxes the depth at a known time,
+          // which holds this input until then rather than dropping it.
+          auto capacity_deadline = encode_deadline;
+          if (const auto relaxed = adaptive_backlog.next_relaxation(std::chrono::steady_clock::now(), low_latency_pipeline_depth)) {
+            state_cv.wait_until(lock, *relaxed, capacity_wait_finished);
+            capacity_deadline = std::max(capacity_deadline, *relaxed);
+          }
+          state_cv.wait_until(lock, capacity_deadline, capacity_wait_finished);
           --active_output_poll_waiters;
           state_cv.notify_all();
           drain_completed_outputs_locked();
@@ -2148,6 +2170,7 @@ namespace amf {
              check(surface->SetProperty(AMF_VIDEO_ENCODER_AV1_FORCE_INSERT_SEQUENCE_HEADER, true), "AV1 sequence header insertion");
     };
 
+    bool submitted_keyframe = force_idr;
     if (force_idr) {
       if (!set_forced_idr_properties()) {
         result.fatal = true;
@@ -2181,6 +2204,7 @@ namespace amf {
           result.fatal = true;
           return result;
         }
+        submitted_keyframe = true;
       }
     }
     else if (ltr_slot_to_commit >= 0) {
@@ -2423,6 +2447,8 @@ namespace amf {
     const bool synchronously_released = lifecycle::on_input_accepted(input_slot, frame_index);
     last_submitted_frame_index = std::max(last_submitted_frame_index, frame_index);
     ++accepted_input_count;
+    // IDR periods are disabled, so the forced IDRs above are the only keyframes.
+    adaptive_backlog.accepted(frame_index, input_accepted_at, std::exchange(pending_input_preparation, std::nullopt), submitted_keyframe);
     const auto required_output_frame_index = lifecycle::record_accepted_frame(
       accepted_frame_indices,
       frame_index,
@@ -2471,6 +2497,13 @@ namespace amf {
     // output_query_mutex. If another query already owns AMF, the dedicated pump
     // retains ownership for the bounded follow-up wait.
     drain_completed_outputs_locked();
+    // amd_adaptive_backlog: stop coalescing when the next capture should be
+    // claimed. The pump and the capture loop deliver this packet instead.
+    auto output_deadline = encode_deadline;
+    if (const auto claim = adaptive_backlog.claim_at(low_latency_pipeline_depth, accepted_input_count - completed_output_count);
+        claim && *claim < output_deadline) {
+      output_deadline = *claim;
+    }
     bool coalesce_target_reached = required_output_frame_index && lifecycle::output_coalesce_target_reached(
       *required_output_frame_index,
       completed_before_submission,
@@ -2483,7 +2516,7 @@ namespace amf {
       ++active_output_poll_waiters;
       poll_lease_held = true;
       state_lock.unlock();
-      (void) try_query_output_until(*required_output_frame_index, encode_deadline);
+      (void) try_query_output_until(*required_output_frame_index, output_deadline);
       state_lock.lock();
       drain_completed_outputs_locked();
       coalesce_target_reached = lifecycle::output_coalesce_target_reached(
@@ -2509,7 +2542,7 @@ namespace amf {
         poll_lease_held = true;
         state_cv.notify_all();
       }
-      state_cv.wait_until(state_lock, encode_deadline, [&]() {
+      state_cv.wait_until(state_lock, output_deadline, [&]() {
         return output_fatal || !completed_outputs.empty() || lifecycle::output_coalesce_target_reached(
                                  *required_output_frame_index,
                                  completed_before_submission,
@@ -2534,7 +2567,7 @@ namespace amf {
       result.fatal = true;
     }
 
-    if (!output_is_expected || coalesce_target_reached) {
+    if (!output_is_expected || coalesce_target_reached || output_deadline != encode_deadline) {
       consecutive_catchup_misses = 0;
     } else if (++consecutive_catchup_misses % max_consecutive_failures == 0) {
       BOOST_LOG(warning) << "AMF: encoder output has not caught up for " << consecutive_catchup_misses
@@ -2616,6 +2649,35 @@ namespace amf {
       accepted_input_count,
       completed_output_count,
       preanalysis_lookahead_depth);
+  }
+
+  amf_encode_result
+  amf_d3d11::wait_for_input_claim(std::chrono::nanoseconds limit) {
+    amf_encode_result result;
+    std::unique_lock lock(state_mutex);
+    const auto claim = adaptive_backlog.claim_at(low_latency_pipeline_depth, accepted_input_count - completed_output_count);
+    if (!claim) {
+      return result;  // Claim now, exactly as without adaptive backlog.
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const auto deadline = std::min<decltype(now)>(*claim, now + limit);
+    if (!output_fatal && completed_outputs.empty() && now < deadline) {
+      // Hold a polling lease so the pump reports output that frees VCN first.
+      ++active_output_poll_waiters;
+      output_poll_requested = true;
+      state_cv.notify_all();
+      state_cv.wait_until(lock, deadline, [&]() {
+        return output_fatal || !completed_outputs.empty();
+      });
+      --active_output_poll_waiters;
+      state_cv.notify_all();
+    }
+    while (!completed_outputs.empty()) {
+      result.frames.emplace_back(std::move(completed_outputs.front()));
+      completed_outputs.pop_front();
+    }
+    result.fatal = output_fatal;
+    return result;
   }
 
   bool
@@ -2882,6 +2944,7 @@ namespace amf {
     input_surface_ring[*slot].release_notified = false;
     ++input_surface_ring[*slot].generation;
     prepared_input_surface_slot = *slot;
+    prepared_input_reserved_at = std::chrono::steady_clock::now();
     next_input_surface_slot = (*slot + 1) % active_input_surface_count;
     return input_surface_ring[*slot].texture.Get();
   }

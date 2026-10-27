@@ -1491,6 +1491,13 @@ namespace video {
       return device->amf->drain_output(timeout);
     }
 
+    amf::amf_encode_result wait_for_input_claim(std::chrono::nanoseconds limit) {
+      if (!device || !device->amf) {
+        return {};
+      }
+      return device->amf->wait_for_input_claim(limit);
+    }
+
     bool has_output_due() {
       return device && device->amf && device->amf->has_output_due();
     }
@@ -5467,6 +5474,42 @@ namespace video {
                                                tail_flush_budget - elapsed :
                                                decltype(image_wait_budget)::zero();
           image_wait_budget = std::min(image_wait_budget, remaining_tail_budget);
+        }
+
+        if (auto *amf_session = native_session;
+            amf_session && image_wait_budget > decltype(max_frametime)::zero()) {
+          // amd_adaptive_backlog: claim the next capture one conversion before
+          // the in-flight picture's predicted completion, so it is queued when
+          // VCN frees, but no earlier. Output that frees VCN first is
+          // delivered at once. The wait stays within the image wait budget.
+          const auto claim_wait_started = std::chrono::steady_clock::now();
+          bool claim_wait_failed = false;
+          for (;;) {
+            const auto elapsed = std::chrono::steady_clock::now() - claim_wait_started;
+            if (elapsed >= image_wait_budget) {
+              break;
+            }
+            auto ready = amf_session->wait_for_input_claim(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(image_wait_budget - elapsed));
+            if (ready.fatal || std::any_of(ready.frames.begin(), ready.frames.end(), [](const auto &frame) { return frame.fatal; })) {
+              BOOST_LOG(error) << "AMF failed while timing the next capture"sv;
+              claim_wait_failed = true;
+              break;
+            }
+            if (ready.frames.empty()) {
+              break;
+            }
+            deliver_amf_frames(frame_nr, *amf_session, ready.frames, packets, channel_data);
+          }
+          if (claim_wait_failed) {
+            native_amf_runtime_failed = true;
+            break;
+          }
+          const auto waited = std::chrono::duration_cast<decltype(image_wait_budget)>(
+            std::chrono::steady_clock::now() - claim_wait_started);
+          image_wait_budget = waited < image_wait_budget ?
+                                image_wait_budget - waited :
+                                decltype(max_frametime)::zero();
         }
 
         auto img = images->pop(image_wait_budget);
