@@ -921,6 +921,27 @@ namespace rtsp_stream {
       }
     }
 
+    // Caller holds the lifecycle gate. Retire only the same unpublished
+    // monitor launch whose start returned before control registration.
+    void retire_failed_monitor_start_locked(const std::shared_ptr<launch_session_t> &expected) {
+      if (!expected || expected->role != remote_session::role_e::monitor) return;
+      std::shared_ptr<launch_session_t> retired;
+      {
+        std::lock_guard lock {pending_launches_mutex};
+        const auto it = pending_launches.find(expected->id);
+        if (it == pending_launches.end()) return;
+        const auto &pending = it->second.session;
+        if (pending->unique_id != expected->unique_id || pending->client_uuid != expected->client_uuid ||
+            pending->role != expected->role || pending->role_generation != expected->role_generation ||
+            pending->monitor_stream_published) return;
+        retired = std::move(it->second.session);
+        pending_launches.erase(it);
+      }
+      release_pending_runtime_holds(retired);
+      reconcile_abandoned_monitor_locked(retired);
+      abandoned_startup_virtual_display_guid_bytes = retired->virtual_display_guid_bytes;
+    }
+
     void retry_abandoned_monitor(const std::shared_ptr<launch_session_t> &pending) {
       if (stopping.load(std::memory_order_acquire)) return;
       auto timer = std::make_shared<boost::asio::steady_timer>(io_context, std::chrono::milliseconds(100));
@@ -2368,11 +2389,16 @@ namespace rtsp_stream {
 
         std::shared_ptr<stream::session_t> stream_session;
         bool startup_failed = true;
+        bool failed_before_control_registration = false;
         std::string startup_error;
 
         try {
           stream_session = stream::session::alloc(config, *launch_session);
-          startup_failed = stream::session::start(*stream_session, remote_address) != 0;
+          const int start_result = stream::session::start(*stream_session, remote_address);
+          startup_failed = start_result != 0;
+          // The explicit -1 return is before control registration. Exceptions
+          // may occur later and must not retire a potentially started session.
+          failed_before_control_registration = start_result == -1;
         } catch (const std::exception &e) {
           startup_error = e.what();
         } catch (...) {
@@ -2387,6 +2413,7 @@ namespace rtsp_stream {
           server->insert(stream_session, client_uuid, stream_session && stream_hdr_enabled);
           if (pending_launch->role == remote_session::role_e::monitor) pending_launch->monitor_stream_published = true;
         }
+        if (failed_before_control_registration) server->retire_failed_monitor_start_locked(launch_session);
         if (startup_failed) server->set_pending_vulkan_hdr_layer_stream(false);
         server->post([server, socket = std::move(socket), session = std::move(session), sequence_number, startup_failed, startup_error = std::move(startup_error),
                       audio_codec_name = std::string(audio::dolby_codec_name(selected_audio_codec))]() mutable {

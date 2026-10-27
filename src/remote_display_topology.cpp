@@ -728,7 +728,8 @@ namespace remote_display_topology {
       // has taken effect; preserve any deferred reconfiguration obligation.
     }
     resolve_effective_mode_locked(client_uuid, state);
-    if (shared_capture || state.shared_mode_unverified) {
+    if (shared_capture || state.shared_mode_unverified ||
+        (callbacks_.finalize_mode && state.deferred_monitor_reconfiguration)) {
       // Geometry is separate from color: a producer may need the composed
       // topology before its HDR state can be applied and verified.
       const auto observed = callbacks_.observe_shared_mode ? callbacks_.observe_shared_mode(client_uuid) : std::nullopt;

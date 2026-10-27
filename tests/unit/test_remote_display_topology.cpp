@@ -624,6 +624,7 @@ TEST(RemoteDisplayTopology, RetainedMonitorChangedModeIsReconfiguredAfterTranspo
   coordinator.set_runtime_callbacks({
     .create_or_reclaim = [&](const auto &, const auto &, const auto &requested) { ++creates; actual = requested; return true; },
     .apply_composed_topology = [](const auto &) { return true; },
+    .observe_shared_mode = [&](const auto &) { return std::optional {actual}; },
     .finalize_mode = [](const auto &, auto &, bool) { return true; },
     .exact_target_has_current_mode_and_dxgi = [&](const auto &, const auto &requested) -> std::optional<std::string> {
       if (requested.width != actual.width || requested.refresh_hz != actual.refresh_hz) return std::nullopt;
@@ -635,6 +636,39 @@ TEST(RemoteDisplayTopology, RetainedMonitorChangedModeIsReconfiguredAfterTranspo
   EXPECT_TRUE(coordinator.activate_or_resume("client", "Monitor", {3840, 2160, 120, false}, 2).ready);
   EXPECT_EQ(creates, 2);
   EXPECT_EQ(actual.width, 3840);
+}
+
+TEST(RemoteDisplayTopology, ExclusiveModeChangeDoesNotRecreateAfterColorFailure) {
+  remote_display_topology::coordinator_t coordinator;
+  int creates = 0, color_checks = 0;
+  remote_display_topology::mode_t actual {};
+  coordinator.set_runtime_callbacks({
+    .create_or_reclaim = [&](const auto &, const auto &, const auto &requested) {
+      ++creates;
+      if (creates == 1 || creates == 4) actual = requested;
+      return true;
+    },
+    .apply_composed_topology = [](const auto &) { return true; },
+    .observe_shared_mode = [&](const auto &) -> std::optional<remote_display_topology::mode_t> {
+      return creates == 3 ? std::nullopt : std::optional {actual};
+    },
+    .finalize_mode = [&](const auto &, auto &, bool) { return ++color_checks != 2; },
+    .exact_target_has_current_mode_and_dxgi = [&](const auto &, const auto &requested) -> std::optional<std::string> {
+      if (requested.width != actual.width || requested.height != actual.height || requested.refresh_hz != actual.refresh_hz) return std::nullopt;
+      return "Virtual-1";
+    },
+  });
+  ASSERT_TRUE(coordinator.activate_or_resume("client", "Monitor", {1920, 1080, 60, false}, 1).ready);
+  coordinator.transport_lost("client", 1);
+  const remote_display_topology::mode_t desired {3840, 2160, 120, true};
+  EXPECT_FALSE(coordinator.activate_or_resume("client", "Monitor", desired, 2).ready);
+  EXPECT_EQ(creates, 2);
+  EXPECT_FALSE(coordinator.activate_or_resume("client", "Monitor", desired, 3).ready);
+  EXPECT_EQ(creates, 3);
+  EXPECT_FALSE(coordinator.activate_or_resume("client", "Monitor", desired, 4).ready);  // Geometry matches, color does not yet.
+  EXPECT_EQ(creates, 4);
+  EXPECT_TRUE(coordinator.activate_or_resume("client", "Monitor", desired, 5).ready);
+  EXPECT_EQ(creates, 4);  // The observed mode did not need a destructive replacement.
 }
 
 TEST(RemoteDisplayTopology, PlatformModeFallbackDoesNotReplaceRetainedClientRequest) {
