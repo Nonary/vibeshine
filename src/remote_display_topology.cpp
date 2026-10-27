@@ -724,7 +724,8 @@ namespace remote_display_topology {
         return {true, false, state.warning};
       }
       state.lease_held = true;
-      state.deferred_monitor_reconfiguration = false;
+      // A successful create/reclaim does not prove the requested geometry
+      // has taken effect; preserve any deferred reconfiguration obligation.
     }
     resolve_effective_mode_locked(client_uuid, state);
     if (shared_capture || state.shared_mode_unverified) {
@@ -745,6 +746,9 @@ namespace remote_display_topology {
         return {true, false, state.warning};
       }
       state.shared_mode_unverified = false;
+      // Once the exclusive output's geometry is observed, a later color or
+      // topology failure need not recreate it again on Resume.
+      if (!shared_capture) state.deferred_monitor_reconfiguration = false;
     }
     if (!refresh_unverified_shared_geometry_locked(client_uuid)) {
       state.lifecycle = lifecycle_e::retryable;

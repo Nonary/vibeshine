@@ -518,6 +518,53 @@ TEST(RemoteDisplayTopology, SharedModeMismatchIsConfiguredAfterCaptureDrains) {
   EXPECT_EQ(actual.refresh_hz, 120);
 }
 
+TEST(RemoteDisplayTopology, DeferredReconfigurationRetriesUntilGeometryIsObserved) {
+  remote_display_topology::coordinator_t coordinator;
+  int creates = 0, applies = 0, color_checks = 0;
+  remote_display_topology::mode_t actual {1920, 1080, 60, false};
+  coordinator.set_runtime_callbacks({
+    .create_or_reclaim = [&](const auto &, const auto &, const auto &requested) {
+      ++creates;
+      // A successful producer call may not yet have applied the geometry.
+      if (creates == 3) actual = requested;
+      return true;
+    },
+    .apply_composed_topology = [&](const auto &) { ++applies; return true; },
+    .observe_shared_mode = [&](const auto &) -> std::optional<remote_display_topology::mode_t> {
+      if (creates == 2) return std::nullopt;
+      return actual;
+    },
+    .finalize_mode = [&](const auto &, auto &, bool) { return ++color_checks > 1; },
+    .exact_target_has_current_mode_and_dxgi = [&](const auto &, const auto &requested) -> std::optional<std::string> {
+      if (requested.width != actual.width || requested.height != actual.height || requested.refresh_hz != actual.refresh_hz) return std::nullopt;
+      return "Virtual-1";
+    },
+  });
+  const auto game = coordinator.reserve_normal_game_identity("client", "Game", actual);
+  auto capture = coordinator.retain_normal_game_capture("client", game.token);
+  ASSERT_TRUE(capture);
+  const remote_display_topology::mode_t desired {3840, 2160, 120, false};
+  ASSERT_FALSE(coordinator.activate_or_resume("client", "Monitor", desired, 1).ready);
+  EXPECT_EQ(creates, 0);
+  coordinator.release_normal_game_identity("client", game.token);
+  capture.reset();
+  coordinator.release_drained_normal_game_identities();
+  const int before = applies;
+  EXPECT_FALSE(coordinator.activate_or_resume("client", "Monitor", desired, 2).ready);
+  EXPECT_EQ(creates, 1);
+  EXPECT_FALSE(coordinator.activate_or_resume("client", "Monitor", desired, 3).ready);
+  EXPECT_EQ(creates, 2);
+  EXPECT_EQ(applies, before);
+  EXPECT_FALSE(coordinator.activate_or_resume("client", "Monitor", desired, 4).ready);  // Geometry matches, but color does not yet.
+  EXPECT_EQ(creates, 3);
+  EXPECT_EQ(applies, before + 1);
+  EXPECT_TRUE(coordinator.activate_or_resume("client", "Monitor", desired, 5).ready);
+  EXPECT_EQ(creates, 3);  // Verified geometry clears the retry obligation.
+  coordinator.transport_lost("client", 5);
+  EXPECT_TRUE(coordinator.activate_or_resume("client", "Monitor", desired, 6).ready);
+  EXPECT_EQ(creates, 3);
+}
+
 TEST(RemoteDisplayTopology, PendingOrPausedNormalOwnerIsNotReconfigured) {
   remote_display_topology::coordinator_t coordinator;
   int creates = 0;
