@@ -291,16 +291,16 @@ mouse line.
               │ FALLBACK │ ─────────────────────────▶ │ ABSOLUTE_LOCAL │
               └──────────┘                            └────────────────┘
                     │  RESYNC, wants relative          ▲            │
-                    ▼                                  │ visible &  │ hidden or locked
-              ┌──────────┐ ───────────────────────────┘ free for   │ for 60 ms
-              │ RELATIVE │   ≥ 50 ms                     50 ms      │
+                    ▼                                  │ visible &  │ hidden or locked,
+              ┌──────────┐ ───────────────────────────┘ free, no   │ first mouse motion
+              │ RELATIVE │                               button held│
               └──────────┘ ◀──────────────────────────────────────┘
 ```
 
 - **Wants relative** when the host cursor is hidden, clipped to a tiny rect
   (both sides < 10 % of the stream or < 32 stream pixels), or being recentred
-  (three or more host warps within 300 ms that land within 3 % of the stream of
-  each other).
+  (three or more host warps within 300 ms that land within 0.2 % of the stream,
+  and at least 2 pixels, of each other).
 - **ABSOLUTE_LOCAL**: absolute input; the local OS cursor shows the host shape
   as soon as the client asks the host to stop drawing it, without waiting a round
   trip for `COMPOSITED` to clear. If the host still composites it 300 ms later
@@ -311,27 +311,21 @@ mouse line.
 - **RELATIVE**: SDL relative mode; local cursor hidden; video cursor shown if the
   host draws one.
 - **FALLBACK**: the user's existing setting, exactly as today.
-- **Hysteresis** (constants in `cursormodepolicy.h`): enter RELATIVE after 60 ms,
-  return after 50 ms, and at least 100 ms between automatic switches. A brief
-  hide (an MMO click, a loading flicker) never switches; a camera drag that hides
-  the cursor for seconds switches once each way. The return is the shorter delay
-  because it is the one users feel (the cursor is the remote video cursor until
-  it happens), while a game flashing its cursor for a frame or two still stays
-  relative.
-- **Held buttons**: once the mouse moves with a button held, a hide or lock
-  switches to RELATIVE at once, without the 60 ms delay, the dwell or the typing
-  rule. Until that switch every motion goes out as an absolute position, and a
-  game holding its hidden cursor in place reads each one as the whole distance
-  moved since the press, so a camera drag would start with a jump. A click that
-  doesn't move keeps the usual delay. The return to absolute waits until every
-  mouse button is up: in an MMO camera drag the game may show its cursor before
-  the button is released, and switching then would turn the rest of the drag into
-  a jump. Together these allow one switch each way per drag, so drags can't flap.
-- **Typing**: Windows can hide the pointer while the user types. A hide that
-  starts within 1 s of a (non-modifier) key press waits for mouse motion and then
-  120 ms of the cursor staying hidden. The host shows the pointer again on the
-  first move, so typing never switches, while a game resumed with a key press
-  still does once the mouse moves.
+- **No delays**: the client follows the host as a local mouse would, with no
+  hysteresis or minimum time between switches. A cursor the host flashes for a
+  single poll is followed both ways.
+- **ABSOLUTE → RELATIVE on the first motion**: when the host starts wanting
+  relative, the client switches on the next mouse motion, before sending it, so
+  the game receives that motion as relative. Until the mouse moves both modes
+  send the same thing (clicks and the wheel are unaffected), so this costs
+  nothing, and an app that only hides the cursor doesn't grab the pointer:
+  Windows hiding it while the user types, or a video player hiding it while the
+  pointer rests outside a windowed stream.
+- **Held buttons**: the return to absolute waits until every mouse button is up.
+  In an MMO camera drag the game may show its cursor before the button is
+  released, and switching then would turn the rest of the drag into a jump.
+  Entering relative mid-drag is not held, since that is what makes camera drags
+  work.
 - **RELATIVE → ABSOLUTE** releases relative mode, warps the local cursor to the
   host's last reported position (inverse letterbox mapping), drops the mouse
   motion queued by leaving relative mode (its positions predate the switch), then
@@ -383,8 +377,8 @@ One line: `Mouse mode: absolute, local cursor (automatic)`, `relative (locked)`,
   session diff/resync/warp rules, compositing aggregate.
 - common-c: shape reassembly (chunking, reordering, oversize, truncation at every
   byte), state parsing, dispatch through `ControlStream.c`.
-- moonlight-qt: state machine and hysteresis timing, cursor scaling, settings
-  defaults and migration.
+- moonlight-qt: state machine (switching on first motion, held buttons, clips,
+  recentring, locks), cursor scaling, settings defaults and migration.
 - Manual: `docs/client-cursor-test-checklist.md`.
 
 ## Known limitations

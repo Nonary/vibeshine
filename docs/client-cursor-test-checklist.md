@@ -34,8 +34,8 @@ odd in the logs.
   - Window edges show the resize arrows, and the hotspot is accurate (resize grabs
     the border, not a pixel beside it).
   - With "Hide pointer while typing" on (Windows mouse settings), typing in a text
-    field hides the cursor without switching to relative mode, and moving the
-    mouse brings it back in absolute mode.
+    field hides the cursor without grabbing the Mac/PC pointer, and moving the
+    mouse brings it back in absolute mode where you left it.
 - [ ] **Large or high-DPI cursors.**
   - Set the Windows cursor size to a large value, or use a 150–200% scaled host
     monitor.
@@ -68,7 +68,6 @@ odd in the logs.
   - If the game expects absolute input, Ctrl+Alt+Shift+M switches to absolute and
     locks it, and Ctrl+Alt+Shift+A returns to automatic.
 - [ ] **MMO/ARPG camera drag.**
-  - A quick click that briefly hides the cursor does not switch modes.
   - Holding right-drag for camera rotation switches to relative once, and releasing
     returns to absolute once, with the cursor where the game restored it.
   - Starting a drag never jumps the camera, including straight after pressing a key
@@ -76,7 +75,9 @@ odd in the logs.
   - Releasing the button never swings the camera: nothing switches back to absolute
     while a button is still held, even if the game shows its cursor early or you
     pause mid-drag.
-  - Hold-and-release repeatedly does not flap.
+  - A click on something the game hides the cursor for (an MSFS knob) switches
+    only if the mouse moves during it, and the cursor comes back where the game
+    left it.
 - [ ] **Recentring game.** If a title keeps a *visible* cursor pinned to the centre,
   it switches to relative mode. Note the title.
 
