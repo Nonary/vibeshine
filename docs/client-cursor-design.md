@@ -319,10 +319,15 @@ mouse line.
 - **ABSOLUTE → RELATIVE on the first motion**: when the host starts wanting
   relative, the client switches on the next mouse motion, before sending it, so
   the game receives that motion as relative. Until the mouse moves both modes
-  send the same thing (clicks and the wheel are unaffected), so this costs
-  nothing, and an app that only hides the cursor doesn't grab the pointer:
-  Windows hiding it while the user types, or a video player hiding it while the
-  pointer rests outside a windowed stream.
+  send the same thing (clicks and the wheel are sent even with the local cursor
+  in the letterbox), so this costs nothing. An app that only hides the cursor
+  doesn't grab the pointer until the mouse moves over the stream: Windows hiding
+  it while the user types, or a video player hiding it while the pointer rests
+  outside a windowed stream. Such an app shows its cursor again on that motion,
+  and absolute input returns a round trip later. The switch needs input focus
+  (unfocused, relative input would wait for a click), and host warps of a
+  visible cursor are not followed while it is pending, since the warp's own
+  motion would trigger it.
 - **Held buttons**: the return to absolute waits until every mouse button is up.
   In an MMO camera drag the game may show its cursor before the button is
   released, and switching then would turn the rest of the drag into a jump.
