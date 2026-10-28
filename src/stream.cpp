@@ -700,6 +700,8 @@ namespace stream {
       std::atomic<bool> client_bitrate_owned {false};
       // The encoder reports whether it applies a bitrate without rebuilding.
       safe::mail_raw_t::event_t<int> live_bitrate_events;
+      // The controller's bitrate steps, applied without forcing a keyframe.
+      safe::mail_raw_t::event_t<int> link_rate_bitrate_events;
       // Control thread only.
       link_rate::busy_meter_t link_rate_busy;
       std::optional<bool> live_bitrate;
@@ -1674,7 +1676,7 @@ namespace stream {
       if (std::string_view {change.reason} == "unrecoverable_frames"sv) {
         out << ": "sv << change.evidence.unrecoverable_frames << " frames in 2 s"sv;
       } else if (std::string_view {change.reason} == "fec_loss_share"sv) {
-        out << ": "sv << change.evidence.loss_windows << " windows at 5% or more"sv;
+        out << ": "sv << unsigned(change.evidence.loss_windows) << " windows at 5% or more"sv;
       } else if (std::string_view {change.reason} == "send_losses"sv) {
         out << ": "sv << change.evidence.send_losses << " frames in 2 s"sv;
       }
@@ -1721,7 +1723,7 @@ namespace stream {
   static void apply_link_rate_bitrate(session_t *session, int kbps) {
     session->config.monitor.bitrate = kbps;
     session->video.pacing_bitrate_kbps.store(kbps, std::memory_order_relaxed);
-    session->video.bitrate_events->raise(kbps);
+    session->video.link_rate_bitrate_events->raise(kbps);
   }
 
   /**
@@ -2700,6 +2702,19 @@ namespace stream {
 
       std::size_t frame_packets_accepted = 0;
       const auto bytes_per_packet = blocksize + (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
+      if (session->video.link_rate_enabled) {
+        // Recorded before the first packet leaves: on a short path the report
+        // for a frame's first FEC block can arrive before its last block is sent.
+        std::size_t frame_packets = 0;
+        for (std::size_t x = 0; x < fec_blocks_needed; ++x) {
+          const auto data_shards = (fec_blocks[x].size() + blocksize - 1) / blocksize;
+          frame_packets += pacing::fec_expanded_packets(data_shards, fec_block_percentages[x], min_parity_shards);
+        }
+        // Link bytes per packet: Ethernet framing, IP and UDP headers.
+        const auto link_bytes = bytes_per_packet + 38 + (session->video.peer.address().is_v6() ? 40 : 20) + 8;
+        std::lock_guard lg {session->video.link_rate_mutex};
+        session->video.link_rate_controller.on_sent(static_cast<std::uint32_t>(packet->frame_index()), std::uint32_t(frame_packets), std::uint64_t(frame_packets) * link_bytes, std::chrono::steady_clock::now());
+      }
       // A socket send failure abandoned this frame part way.
       bool frame_send_lost = false;
       auto account_accepted_packets = util::fail_guard([&] {
@@ -2707,16 +2722,9 @@ namespace stream {
         // traffic even when only a prefix of the frame was accepted.
         session->stats.packets_sent.fetch_add(frame_packets_accepted, std::memory_order_relaxed);
         session->stats.bytes_sent.fetch_add(frame_packets_accepted * bytes_per_packet, std::memory_order_relaxed);
-        if (session->video.link_rate_enabled) {
-          // Link time per packet: Ethernet framing, IP and UDP headers.
-          const auto link_bytes = bytes_per_packet + 38 + (session->video.peer.address().is_v6() ? 40 : 20) + 8;
-          const auto now = std::chrono::steady_clock::now();
-          const auto frame = static_cast<std::uint32_t>(packet->frame_index());
+        if (session->video.link_rate_enabled && frame_send_lost) {
           std::lock_guard lg {session->video.link_rate_mutex};
-          session->video.link_rate_controller.on_sent(frame, std::uint32_t(frame_packets_accepted), std::uint64_t(frame_packets_accepted) * link_bytes, now);
-          if (frame_send_lost) {
-            session->video.link_rate_controller.on_send_loss(frame, now);
-          }
+          session->video.link_rate_controller.on_send_loss(static_cast<std::uint32_t>(packet->frame_index()), std::chrono::steady_clock::now());
         }
       });
 
@@ -4186,11 +4194,14 @@ namespace stream {
       session.video.link_rate_enabled = config::stream.host_link_rate_adaptation && !pyrowave_session;
       if (session.video.link_rate_enabled) {
         const std::size_t blocksize = std::size_t(std::max(session.config.packetsize, 0)) + MAX_RTP_HEADER_SIZE;
+        boost::system::error_code address_error;
+        const auto peer_address = boost::asio::ip::make_address(addr_string, address_error);
+        // Ethernet framing, IP and UDP headers, as the sender counts them.
+        const std::size_t ip_header_bytes = !address_error && !peer_address.is_v6() ? 20 : 40;
         const link_rate::wire_budget_t budget {
           sizeof(video_short_frame_header_t),
           blocksize - sizeof(video_packet_raw_t),
-          // The peer's address family is not known yet: count the larger IPv6 header.
-          blocksize + (session.video.cipher ? sizeof(video_packet_enc_prefix_t) : 0) + 38 + 40 + 8,
+          blocksize + (session.video.cipher ? sizeof(video_packet_enc_prefix_t) : 0) + 38 + ip_header_bytes + 8,
           std::size_t(std::max(session.config.minRequiredFecPackets, 0)),
           link_rate::wire_budget_t::audio_reserve_bps(session.audio_disabled ? 0 : session.config.audio.channels, session.config.audio.flags[audio::config_t::HIGH_QUALITY]),
         };
@@ -4508,6 +4519,7 @@ namespace stream {
       session->video.invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
       session->video.bitrate_events = mail->event<int>(mail::dynamic_bitrate);
       session->video.live_bitrate_events = mail->event<int>(mail::live_bitrate);
+      session->video.link_rate_bitrate_events = mail->event<int>(mail::link_rate_bitrate);
       session->video.lowseq = 0;
       session->video.ping_payload = launch_session.av_ping_payload;
       if (config.encryptionFlagsEnabled & SS_ENC_VIDEO) {

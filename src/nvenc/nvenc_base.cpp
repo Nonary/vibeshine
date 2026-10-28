@@ -1121,7 +1121,7 @@ namespace nvenc {
     return true;
   }
 
-  bool nvenc_base::set_bitrate(int bitrate_kbps) {
+  bool nvenc_base::set_bitrate(int bitrate_kbps, bool reset_on_raise) {
     context_guard_t context_guard {*this};
     if (!context_guard) {
       return false;
@@ -1159,8 +1159,9 @@ namespace nvenc {
     reconfigure_params.reInitEncodeParams.encodeConfig = &enc_config;
 
     // When raising the ceiling, reset the rate controller and force an IDR so the higher bitrate
-    // takes effect immediately instead of draining the old VBV first.
-    if (new_bitrate_bps > prev_bitrate_bps) {
+    // takes effect immediately instead of draining the old VBV first. Host link rate steps are
+    // small and frequent, so they skip the keyframe.
+    if (reset_on_raise && new_bitrate_bps > prev_bitrate_bps) {
       reconfigure_params.resetEncoder = 1;
       reconfigure_params.forceIDR = 1;
     }

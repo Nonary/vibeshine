@@ -57,6 +57,7 @@ namespace mail {
   MAIL(hdr);
   MAIL(dynamic_bitrate);  // Runtime encoder bitrate change (kbps), posted from the HTTP /bitrate handler
   MAIL(live_bitrate);  // 1 while the encoder applies a runtime bitrate without rebuilding, 0 once it cannot; only ever falls
+  MAIL(link_rate_bitrate);  // Host link rate adaptation bitrate step (kbps), applied without forcing a keyframe
 #undef MAIL
 
 }  // namespace mail
