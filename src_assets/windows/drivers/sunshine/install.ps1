@@ -1193,7 +1193,7 @@ try {
     if ($markers.Count -ne 1) { throw 'Missing or ambiguous retained display inventory; automatic repair deferred.' }
     try {
         $encoded = $markers[0].Substring($prefix.Length)
-        if ($encoded -notmatch '^[A-Za-z0-9+/]+={0,2}$') { throw 'Malformed inventory encoding.' }
+        if ($encoded -cnotmatch '^[A-Za-z0-9+/]+={0,2}$') { throw 'Malformed inventory encoding.' }
         $inventory = ConvertFrom-Json -InputObject ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded))) -ErrorAction Stop
         foreach ($name in @('Nodes', 'SignedDrivers', 'Packages')) {
             $property = $inventory.PSObject.Properties[$name]
