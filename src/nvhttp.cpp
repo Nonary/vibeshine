@@ -2790,7 +2790,9 @@ namespace nvhttp {
       // Existing natural reapers/closes/expiry notifications have drained.
       // Joins acquire lifecycle themselves; admission is closed without holding
       // lifecycle, so terminal-owned nested cleanup cannot deadlock on it.
-      rtsp_stream::terminate_sessions(false);
+      // Graceful, so Moonlight returns to its app list instead of reporting
+      // a lost connection.
+      rtsp_stream::terminate_sessions(false, true);
       webrtc_stream::shutdown_all_sessions();
       proc::proc.terminate();
       remote_session::notify_monitor_shutdown();

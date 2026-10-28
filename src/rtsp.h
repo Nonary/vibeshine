@@ -353,8 +353,9 @@ namespace rtsp_stream {
 
   /**
    * @brief Terminates all running streaming sessions.
+   * @param graceful Send connected clients the normal-close code before dropping them.
    */
-  void terminate_sessions(bool preserve_pending_launch = false);
+  void terminate_sessions(bool preserve_pending_launch = false, bool graceful = false);
   void terminate_sessions_by_cert(std::string_view cert);
 
   /**
