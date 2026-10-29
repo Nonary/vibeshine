@@ -267,18 +267,21 @@ namespace remote_session {
     const game_t &game,
     const owner_t &owner,
     const bool remote_sessions_active,
-    const bool replacement_confirmation_active
+    const bool replacement_confirmation_active,
+    const bool resume_terminate
   ) {
     if (!game.running) return false;
     if (replacement_confirmation_active) return true;
-    return owner.role == role_e::none && owns_game(caller, game);
+    // Every client sees the busy game when Resume/Terminate is off, unless
+    // remote sessions are active and Moonlight's Quit would be refused.
+    return owner.role == role_e::none && (!resume_terminate_enabled(resume_terminate, remote_sessions_active) || owns_game(caller, game));
   }
 
   bool allows_normal_game_cancel(const caller_t &caller, const game_t &game, const bool remote_sessions_active) {
     return game.running && caller.paired && caller.may_terminate && (!remote_sessions_active || owns_game(caller, game));
   }
 
-  projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured, const bool remote_sessions_active) {
+  projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured, const bool remote_sessions_active, const bool resume_terminate) {
     projection_t result;
     std::vector<app_t> visible_configured;
     std::copy_if(configured.begin(), configured.end(), std::back_inserter(visible_configured), [&](const app_t &app) {
@@ -304,7 +307,9 @@ namespace remote_session {
       result.catalogue.push_back(synthetic(control_e::monitor));
       return result;
     }
-    if (owns_game(caller, game)) {
+    if (owns_game(caller, game) || (game.running && !resume_terminate_enabled(resume_terminate, remote_sessions_active))) {
+      // With Resume/Terminate off, other clients see the real busy game, as
+      // its owner does, and resume or quit it through Moonlight's own controls.
       result.free = false;
       result.current_game = game.app.id;
       result.catalogue = visible_configured;
@@ -379,6 +384,18 @@ namespace remote_session {
       default: break;
     }
     return result;
+  }
+
+  bool resume_terminate_enabled(const bool resume_terminate, const bool remote_sessions_active) {
+    return resume_terminate || remote_sessions_active;
+  }
+
+  bool control_enabled(const control_e control, const role_e owner_role, const bool resume_terminate, const bool remote_sessions_active) {
+    switch (control) {
+      case control_e::resume: return resume_terminate_enabled(resume_terminate, remote_sessions_active) || owner_role == role_e::monitor;
+      case control_e::terminate: return resume_terminate_enabled(resume_terminate, remote_sessions_active);
+      default: return true;
+    }
   }
 
   bool joins_existing_game_output(

@@ -263,6 +263,8 @@ int main() {
   assert(can_hot_apply_during_session({"realtime_stats_enabled"}));
   assert(can_hot_apply_during_session({"realtime_stats_poll_interval_ms"}));
   assert(!can_hot_apply_during_session({"control_peer_timeout"}));
+  assert(can_hot_apply_during_session({"app_resume_terminate"}));
+  assert(!can_hot_apply_during_session({"app_resume_terminate", "control_peer_timeout"}));
   // Unrelated hot applies must never temporarily reset a positive policy.
   for (int stage : {1, 2, 3, 4}) overlap(stage, "60000", 60000ms, 60000ms);
   // Before publication, even a newly parsed policy is still pending.
