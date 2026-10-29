@@ -39,10 +39,12 @@
 
   // sunshine
   #include "display_helper_integration.h"
-  #include "src/platform/windows/display_helper_reactivation.h"
   #include "src/globals.h"
   #include "src/logging.h"
+  #include "src/nvhttp.h"
+  #include "src/platform/windows/display_coordinator_restore.h"
   #include "src/platform/windows/display_helper_coordinator.h"
+  #include "src/platform/windows/display_helper_reactivation.h"
   #include "src/platform/windows/display_helper_request_helpers.h"
   #include "src/platform/windows/frame_limiter_nvcp.h"
   #include "src/platform/windows/impersonating_display_device.h"
@@ -53,13 +55,12 @@
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/virtual_display.h"
   #include "src/platform/windows/virtual_display_cleanup.h"
+  #include "src/platform/windows/wake_recovery_cleanup_policy.h"
   #include "src/process.h"
   #include "src/remote_display_topology.h"
   #include "src/state_storage.h"
   #include "src/stream.h"
   #include "src/webrtc_stream.h"
-  #include "src/nvhttp.h"
-  #include "src/platform/windows/wake_recovery_cleanup_policy.h"
 
   #include <display_device/noop_audio_context.h>
   #include <display_device/noop_settings_persistence.h>
@@ -3486,7 +3487,24 @@ namespace display_helper_integration {
   bool apply_remote_composed_topology(const DisplayTopologyDefinition &topology) {
     auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(false);
     if (!borrowed_output_mutation) return false;
-    return apply_topology_definition(topology, "remote-monitor coordinator");
+    if (topology.topology.empty() && topology.monitor_positions.empty() && !topology.primary_device && topology.device_refresh_rate_overrides.empty()) {
+      return true;
+    }
+    auto ctx = make_settings_manager();
+    if (!ctx) {
+      BOOST_LOG(warning) << "Display helper: unable to initialize coordinator restore context.";
+      return false;
+    }
+    try {
+      return display_helper::restore_composed_topology(*ctx->display, topology, [&](const auto &stage, const auto &id) {
+        BOOST_LOG(warning) << "Display helper: coordinator restore failed " << stage << " for " << id << ".";
+      });
+    } catch (const std::exception &ex) {
+      BOOST_LOG(warning) << "Display helper: coordinator geometry restore failed: " << ex.what();
+    } catch (...) {
+      BOOST_LOG(warning) << "Display helper: coordinator geometry restore failed.";
+    }
+    return false;
   }
 
   std::string enumerate_devices_json(display_device::DeviceEnumerationDetail detail) {
