@@ -180,6 +180,9 @@ namespace confighttp {
     bool changed = false;
     for (const auto control : {remote_session::control_e::input, remote_session::control_e::monitor}) {
       const auto synthetic = remote_session::synthetic(control);
+      const auto key = control == remote_session::control_e::input ? "input" : "monitor";
+      if (file_tree.contains("removed-system-apps") && file_tree["removed-system-apps"].is_object() &&
+          file_tree["removed-system-apps"].contains(key)) continue;
       const auto artwork = remote_session::synthetic_artwork_filename(control);
       if (!artwork) {
         continue;
@@ -1774,6 +1777,18 @@ namespace confighttp {
         }
       }
 
+      nlohmann::json restorable = nlohmann::json::array();
+      const auto &apps = file_tree["apps"];
+      for (const auto &[key, name] : std::array<std::pair<const char *, const char *>, 3> {{{"desktop", "Desktop"}, {"monitor", "Remote Monitor"}, {"input", "Remote Input"}}}) {
+        bool present = std::any_of(apps.begin(), apps.end(), [&](const auto &app) {
+          if (!app.is_object()) return false;
+          if (std::string_view {key} == "desktop") return app.value("name", std::string {}) == "Desktop";
+          const auto control = std::string_view {key} == "input" ? remote_session::control_e::input : remote_session::control_e::monitor;
+          return app.value("uuid", std::string {}) == remote_session::synthetic_uuid(control);
+        });
+        if (!present) restorable.push_back({{"id", key}, {"name", name}});
+      }
+      file_tree["restorable-system-apps"] = std::move(restorable);
       send_response(response, file_tree, "no-store");
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "GetApps: "sv << e.what();
@@ -2191,9 +2206,17 @@ namespace confighttp {
         return;
       }
 
-      if (!provider_maintenance && configurable_remote_session(apps_node[*index].value("uuid", "")) != remote_session::control_e::none) {
-        bad_request(response, request, "Remote session applications cannot be deleted");
-        return;
+      if (!provider_maintenance) {
+        const auto &app = apps_node[*index];
+        const auto control = configurable_remote_session(app.value("uuid", std::string {}));
+        const char *key = control == remote_session::control_e::input ? "input" :
+                          control == remote_session::control_e::monitor ? "monitor" :
+                          app.value("name", std::string {}) == "Desktop" ? "desktop" : nullptr;
+        if (key) {
+          if (!file_tree.contains("removed-system-apps") || !file_tree["removed-system-apps"].is_object())
+            file_tree["removed-system-apps"] = nlohmann::json::object();
+          file_tree["removed-system-apps"][key] = app;
+        }
       }
 
 #ifdef _WIN32
@@ -2284,6 +2307,40 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "DeleteApp: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  void restoreSystemApp(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) return;
+    try {
+      std::lock_guard lock {apps_file_mutex()};
+      const auto key = request->path_match[1].str();
+      auto file_tree = nlohmann::json::parse(file_handler::read_file(config::stream.file_apps.c_str()));
+      auto &apps = file_tree["apps"];
+      if (!apps.is_array()) throw std::invalid_argument("Apps configuration missing or invalid");
+      const auto control = key == "input" ? remote_session::control_e::input : remote_session::control_e::monitor;
+      const auto uuid = key == "desktop" ? std::string {} : remote_session::synthetic_uuid(control);
+      for (const auto &app : apps) {
+        if (app.is_object() && (key == "desktop" ? app.value("name", std::string {}) == "Desktop" : app.value("uuid", std::string {}) == uuid)) {
+          bad_request(response, request, "System application already exists");
+          return;
+        }
+      }
+      nlohmann::json restored;
+      if (file_tree.contains("removed-system-apps") && file_tree["removed-system-apps"].is_object() && file_tree["removed-system-apps"].contains(key)) {
+        restored = file_tree["removed-system-apps"][key];
+        file_tree["removed-system-apps"].erase(key);
+      } else if (key == "desktop") {
+        restored = {{"name", "Desktop"}, {"image-path", "desktop.png"}, {"uuid", uuid_util::uuid_t::generate().string()}};
+      } else {
+        restored = {{"name", key == "input" ? "Remote Input" : "Remote Monitor"}, {"uuid", uuid},
+                    {"image-path", std::string {"remote-session/"} + std::string {*remote_session::synthetic_artwork_filename(control)}}};
+      }
+      apps.push_back(std::move(restored));
+      if (!refresh_client_apps_cache(file_tree)) throw std::runtime_error("Could not restore system application");
+      send_response(response, nlohmann::json {{"status", true}});
+    } catch (const std::exception &e) {
       bad_request(response, request, e.what());
     }
   }
@@ -5844,6 +5901,7 @@ namespace confighttp {
     register_api_route("^/api/browse$", "GET", browseDirectory);
     register_api_route("^/api/csrf-token$", "GET", getCSRFToken);
     register_api_route("^/api/apps$", "POST", saveApp);
+    register_api_route("^/api/apps/system/(desktop|monitor|input)/restore$", "POST", restoreSystemApp);
 #if defined(_WIN32) || defined(__linux__)
     register_api_route("^/api/apps/rtx_hdr/live$", "POST", updateAppRtxHdrLive);
 #endif

@@ -44,6 +44,7 @@
 #include "app_display_policy.h"
 #include "audio.h"
 #include "config.h"
+#include "confighttp.h"
 #include "host_stream_control.h"
 #ifdef _WIN32
   #include "platform/windows/hotkey_manager.h"
@@ -3005,6 +3006,20 @@ namespace nvhttp {
     tree.put("root.clientWarning", "virtual_display_disabled_by_client");
   }
 
+  bool system_remote_app_removed(remote_session::control_e control) {
+    if (control != remote_session::control_e::input && control != remote_session::control_e::monitor) return false;
+    try {
+      std::lock_guard lock {confighttp::apps_file_mutex()};
+      const auto apps_file = nlohmann::json::parse(file_handler::read_file(config::stream.file_apps.c_str()));
+      const auto key = control == remote_session::control_e::input ? "input" : "monitor";
+      return apps_file.contains("removed-system-apps") && apps_file["removed-system-apps"].is_object() &&
+             apps_file["removed-system-apps"].contains(key);
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Unable to read system app visibility: " << e.what();
+      return false;
+    }
+  }
+
   std::vector<remote_session::app_t> remote_configured_catalogue(const std::vector<proc::ctx_t> &configured_apps) {
     std::vector<remote_session::app_t> result;
     result.reserve(configured_apps.size());
@@ -4304,7 +4319,17 @@ namespace nvhttp {
       .app = current_app ? remote_session::app_t {static_cast<std::int32_t>(util::from_view(current_app->id)), current_app->uuid, current_app->name, false} : remote_session::app_t {},
     };
     const auto remote_gate = remote_role_gate_snapshot_for_client(identity.uuid);
-    const auto projection = remote_session::project(caller, game, remote_gate.owner, remote_configured_apps, remote_gate.active);
+    auto projection = remote_session::project(caller, game, remote_gate.owner, remote_configured_apps, remote_gate.active);
+    // An existing input owner retains its reconnect tile; disconnect and
+    // resume controls remain independent of launch tile visibility.
+    const bool input_removed = system_remote_app_removed(remote_session::control_e::input);
+    const bool monitor_removed = system_remote_app_removed(remote_session::control_e::monitor);
+    std::erase_if(projection.catalogue, [&](const auto &entry) {
+      const auto control = remote_session::identify(entry.id, entry.uuid);
+      if (control == remote_session::control_e::input) return input_removed && remote_gate.owner.role != remote_session::role_e::input;
+      if (control == remote_session::control_e::monitor) return monitor_removed;
+      return false;
+    });
 
     for (const auto &entry : projection.catalogue) {
       pt::ptree app;
@@ -4398,6 +4423,9 @@ namespace nvhttp {
       proc::proc.resolve_app(appid_str, appuuid_str) : std::nullopt;
     const bool selected_monitor_profile = selected_app && selected_app->remote_monitor_profile;
     if (selected_monitor_profile) synthetic_control = remote_session::control_e::monitor;
+    // A cached Moonlight tile must not start a removed built-in. Explicit
+    // monitor profiles remain independent, as do reconnecting owners.
+    const bool removed_builtin = !selected_monitor_profile && system_remote_app_removed(synthetic_control);
     // A secondary Moonlight client sees the running game in its projected
     // catalogue even though serverinfo is deliberately presented as free.
     // Launching that advertised entry is therefore a Resume request, not an
@@ -4434,6 +4462,14 @@ namespace nvhttp {
         .may_terminate = !identity.uuid.empty(),
       };
       const auto owner = remote_role_gate_snapshot_for_client(identity.uuid).owner;
+      if (removed_builtin && !((synthetic_control == remote_session::control_e::input && owner.role == remote_session::role_e::input) ||
+                               (synthetic_control == remote_session::control_e::monitor && owner.role == remote_session::role_e::monitor))) {
+        tree.put("root.resume", 0);
+        tree.put("root.gamesession", 0);
+        tree.put("root.<xmlattr>.status_code", 404);
+        tree.put("root.<xmlattr>.status_message", "This system application has been removed");
+        return;
+      }
       const auto decision = remote_session::dispatch(caller, game, owner, synthetic_control);
       if (!decision.allowed) {
         tree.put("root.resume", 0);
