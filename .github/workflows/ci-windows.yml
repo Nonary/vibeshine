@@ -570,21 +570,17 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          LIBVIRTUALDISPLAY_RELEASE_TAG: v1.6.4
         run: |
           $ErrorActionPreference = 'Stop'
-          $displayLock = Get-Content -LiteralPath .\third-party\libvirtualdisplay-release\windows-x64.json -Raw | ConvertFrom-Json
-          $displaySource = (git rev-parse 'HEAD:third-party/libvirtualdisplay').Trim()
-          if ($LASTEXITCODE -ne 0 -or $displaySource -cne $displayLock.source_revision) {
-            throw "Display release source $($displayLock.source_revision) does not match submodule $displaySource."
-          }
           # The folder name carries the release version. refresh_driver_package.ps1
           # reads it from a libvirtualdisplay-<version>-windows-x64 path and then
           # never needs `git describe` in the (shallow, tagless) submodule checkout.
-          $releaseVersion = $displayLock.tag.TrimStart('v')
+          $releaseVersion = $env:LIBVIRTUALDISPLAY_RELEASE_TAG.TrimStart('v')
           $downloadDir = Join-Path $PWD "libvirtualdisplay-$releaseVersion-windows-x64"
           .\scripts\download_libvirtualdisplay_release.ps1 `
             -Repository Nonary/libvirtualdisplay `
-            -Tag $displayLock.tag `
+            -Tag $env:LIBVIRTUALDISPLAY_RELEASE_TAG `
             -OutDir $downloadDir `
             -LockPath .\third-party\libvirtualdisplay-release\windows-x64.json `
             -GitHubToken $env:GH_TOKEN

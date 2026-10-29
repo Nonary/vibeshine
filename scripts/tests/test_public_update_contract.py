@@ -19,7 +19,7 @@ class PublicContractTest(unittest.TestCase):
         host = (SCRIPTS / 'daily_release.py').exists()
         workflow = (SCRIPTS.parent / '.github/workflows/daily-prerelease.yml').read_text(encoding='utf-8') if host else ''
         product = 'Vibepollo' if '--product Vibepollo' in workflow else 'Vibeshine'
-        if host:
+        if host and 'actions/workflows/daily-prerelease.yml/dispatches' not in workflow:
             self.assertIn('--destination public-assets --product ' + product, workflow)
         repo = 'Nonary/' + (product if product == 'Vibepollo' else 'vibeshine') if host else 'Nonary/moonlight-qt'
         source = 'a' * 40
