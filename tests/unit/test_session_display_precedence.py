@@ -195,7 +195,7 @@ int main() {
  client = {}; client.config_overrides["dd_configuration_option"] = "verify_only";
  check("client generic beats dedicated app", client, app, Prep::verify_only);
  app = {}; app.virtual_screen = true; app.dd_config_option_override = Prep::verify_only;
- check("explicit app VerifyOnly", {}, app, Prep::verify_only);
+ check("app virtual choice beats app VerifyOnly", {}, app, Prep::ensure_active);
  client = {}; client.output_name_override = "physical";
  check("physical target keeps VerifyOnly", client, {}, Prep::verify_only);
  client = {}; client.virtual_display_mode_override = "disabled";
@@ -208,7 +208,9 @@ int main() {
  client.config_overrides["dd_configuration_option"] = "ensure_primary";
  check("client generic activating policy beats dedicated app VerifyOnly", client, app, Prep::ensure_primary);
  app = {}; app.virtual_screen = true; app.config_overrides["dd_configuration_option"] = "verify_only";
- check("app generic VerifyOnly remains explicit", {}, app, Prep::verify_only);
+ check("app virtual choice beats app generic VerifyOnly", {}, app, Prep::ensure_active);
+ client = {}; client.config_overrides["dd_configuration_option"] = "verify_only";
+ check("client VerifyOnly beats app virtual choice", client, app, Prep::verify_only);
  client = {}; client.virtual_display_mode_override = "per_client";
  check("client virtual choice beats lower app generic VerifyOnly", client, app, Prep::ensure_active);
  client.config_overrides["dd_configuration_option"] = "verify_only";

@@ -198,7 +198,6 @@ namespace proc {
 
 #ifdef _WIN32
     std::atomic_bool _deferred_launch {false};
-    std::chrono::steady_clock::time_point _dualsense_ready_deadline {};
     bool _lossless_should_start_support {false};
     playnite_launcher::lossless::lossless_scaling_app_metadata _lossless_metadata {};
 #endif
@@ -207,7 +206,6 @@ namespace proc {
     bp::group _process_group;
 
 #ifdef _WIN32
-    std::shared_ptr<platf::dualsense_usbip_gamepad::session_scope> _dualsense_usbip_session;
     GUID _virtual_display_guid {};
     bool _virtual_display_active {false};
 #endif

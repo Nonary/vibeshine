@@ -61,6 +61,30 @@ namespace platf::dxgi {
                                .count();
       return static_cast<int>(std::clamp<long long>(remaining, 0, stage_limit_ms));
     }
+
+    std::wstring validated_data_pipe_name(const wchar_t *name, const size_t capacity) {
+      constexpr size_t guid_len = 38;
+      const auto terminator = std::find(name, name + capacity, L'\0');
+      const size_t len = static_cast<size_t>(terminator - name);
+      if (len != guid_len) {
+        return {};
+      }
+
+      for (size_t i = 0; i < len; ++i) {
+        const wchar_t ch = name[i];
+        const bool dash = i == 9 || i == 14 || i == 19 || i == 24;
+        if ((i == 0 && ch != L'{') ||
+            (i == len - 1 && ch != L'}') ||
+            (dash && ch != L'-') ||
+            (i != 0 && i != len - 1 && !dash &&
+             !((ch >= L'0' && ch <= L'9') ||
+               (ch >= L'a' && ch <= L'f') ||
+               (ch >= L'A' && ch <= L'F')))) {
+          return {};
+        }
+      }
+      return std::wstring(name, len);
+    }
   }  // namespace
 
   // Helper functions for proper string conversion
@@ -89,9 +113,11 @@ namespace platf::dxgi {
     PSID raw_user_sid = nullptr;
 
     if (isSystem) {
-      token.reset(platf::dxgi::retrieve_users_token(false));
-      if (!token) {
-        BOOST_LOG(warning) << "No user token available; creating SYSTEM-only pipe ACL.";
+      if (!_system_only_server) {
+        token.reset(platf::dxgi::retrieve_users_token(false));
+        if (!token) {
+          BOOST_LOG(warning) << "No user token available; creating SYSTEM-only pipe ACL.";
+        }
       }
     } else {
       HANDLE raw_token = nullptr;
@@ -199,6 +225,11 @@ namespace platf::dxgi {
   }
 
   std::unique_ptr<INamedPipe> NamedPipeFactory::create_server(const std::string &pipeName) {
+    auto handle = create_server_handle(pipeName, false);
+    return handle ? std::make_unique<WinPipe>(std::move(handle), true) : nullptr;
+  }
+
+  winrt::file_handle NamedPipeFactory::create_server_handle(const std::string &pipeName, const bool inheritable) {
     auto wPipeBase = utf8_to_wide(pipeName);
     std::wstring fullPipeName = (wPipeBase.find(LR"(\\.\pipe\)") == 0) ? wPipeBase : LR"(\\.\pipe\)" + wPipeBase;
 
@@ -219,7 +250,7 @@ namespace platf::dxgi {
       if (_secdesc_builder(secDesc, &rawDacl)) {
         secAttr.nLength = static_cast<DWORD>(sizeof(secAttr));
         secAttr.lpSecurityDescriptor = &secDesc;
-        secAttr.bInheritHandle = FALSE;
+        secAttr.bInheritHandle = inheritable ? TRUE : FALSE;
         pSecAttr = &secAttr;
         security_configured = true;
       } else {
@@ -236,11 +267,11 @@ namespace platf::dxgi {
     if (!security_configured && platf::dxgi::is_running_as_system()) {
       if (!create_security_descriptor(secDesc, &rawDacl)) {
         BOOST_LOG(error) << "Failed to init security descriptor";
-        return nullptr;
+        return {};
       }
       secAttr.nLength = static_cast<DWORD>(sizeof(secAttr));
       secAttr.lpSecurityDescriptor = &secDesc;
-      secAttr.bInheritHandle = FALSE;
+      secAttr.bInheritHandle = inheritable ? TRUE : FALSE;
       pSecAttr = &secAttr;
       security_configured = true;
     }
@@ -248,7 +279,8 @@ namespace platf::dxgi {
     winrt::file_handle hPipe {
       CreateNamedPipeW(
         fullPipeName.c_str(),
-        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED |
+          (_first_pipe_instance_only ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0),
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
         1,
         65536,
@@ -260,11 +292,14 @@ namespace platf::dxgi {
     if (!hPipe) {
       DWORD err = GetLastError();
       BOOST_LOG(error) << "CreateNamedPipeW failed (" << err << ")";
-      return nullptr;
+      return {};
     }
 
-    auto pipeObj = std::make_unique<WinPipe>(std::move(hPipe), true);
-    return pipeObj;
+    if (inheritable && !SetHandleInformation(hPipe.get(), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+      BOOST_LOG(error) << "SetHandleInformation(HANDLE_FLAG_INHERIT) failed (" << GetLastError() << ")";
+      return {};
+    }
+    return hPipe;
   }
 
   void NamedPipeFactory::set_security_descriptor_builder(SecurityDescriptorBuilder builder) {
@@ -273,6 +308,50 @@ namespace platf::dxgi {
 
   void NamedPipeFactory::set_client_identification_only() {
     _client_security_flags = SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION;
+  }
+
+  void NamedPipeFactory::set_expected_server_process_id(const DWORD process_id) {
+    _expected_server_process_id = process_id;
+  }
+
+  void NamedPipeFactory::set_first_pipe_instance_only() {
+    _first_pipe_instance_only = true;
+  }
+
+  void NamedPipeFactory::set_system_only_server() {
+    _system_only_server = true;
+  }
+
+  bool validate_server_pipe_handle(const HANDLE handle) {
+    if (!handle || handle == INVALID_HANDLE_VALUE || GetFileType(handle) != FILE_TYPE_PIPE) {
+      BOOST_LOG(error) << "Inherited display-helper IPC handle is not a pipe.";
+      return false;
+    }
+    DWORD flags = 0;
+    if (!GetNamedPipeInfo(handle, &flags, nullptr, nullptr, nullptr) || !(flags & PIPE_SERVER_END)) {
+      BOOST_LOG(error) << "Inherited display-helper IPC handle is not a server endpoint.";
+      return false;
+    }
+    return true;
+  }
+
+  std::unique_ptr<INamedPipe> duplicate_server_pipe(const HANDLE master_handle) {
+    if (!validate_server_pipe_handle(master_handle)) {
+      return nullptr;
+    }
+    HANDLE duplicate = nullptr;
+    if (!DuplicateHandle(
+          GetCurrentProcess(),
+          master_handle,
+          GetCurrentProcess(),
+          &duplicate,
+          0,
+          FALSE,
+          DUPLICATE_SAME_ACCESS)) {
+      BOOST_LOG(error) << "Unable to duplicate inherited display-helper IPC handle, error=" << GetLastError();
+      return nullptr;
+    }
+    return std::make_unique<WinPipe>(winrt::file_handle {duplicate}, true);
   }
 
   std::unique_ptr<INamedPipe> NamedPipeFactory::create_client(const std::string &pipeName) {
@@ -295,6 +374,19 @@ namespace platf::dxgi {
       DWORD err = GetLastError();
       BOOST_LOG(error) << "CreateFileW failed (" << err << ")";
       return nullptr;
+    }
+
+    if (_expected_server_process_id != 0) {
+      ULONG server_pid = 0;
+      const bool server_pid_available = GetNamedPipeServerProcessId(hPipe.get(), &server_pid) != FALSE;
+      const DWORD identity_error = server_pid_available ? ERROR_SUCCESS : GetLastError();
+      if (!server_pid_available || server_pid != _expected_server_process_id) {
+        BOOST_LOG(error) << "Rejecting pipe server identity for '" << pipeName
+                         << "' (expected pid=" << _expected_server_process_id
+                         << ", actual pid=" << server_pid
+                         << ", winerr=" << identity_error << ')';
+        return nullptr;
+      }
     }
 
     auto pipeObj = std::make_unique<WinPipe>(std::move(hPipe), false);
@@ -423,6 +515,14 @@ namespace platf::dxgi {
 
   void AnonymousPipeFactory::set_client_identification_only() {
     _pipe_factory.set_client_identification_only();
+  }
+
+  void AnonymousPipeFactory::set_expected_server_process_id(const DWORD process_id) {
+    _pipe_factory.set_expected_server_process_id(process_id);
+  }
+
+  void AnonymousPipeFactory::set_first_pipe_instance_only() {
+    _pipe_factory.set_first_pipe_instance_only();
   }
 
   class PrefetchedPipe: public INamedPipe {
@@ -904,7 +1004,12 @@ namespace platf::dxgi {
       return nullptr;
     }
 
-    std::wstring wpipeName(msg.pipe_name);
+    const std::wstring wpipeName = validated_data_pipe_name(msg.pipe_name, std::size(msg.pipe_name));
+    if (wpipeName.empty()) {
+      BOOST_LOG(error) << "Anonymous handshake: rejected malformed data-pipe name.";
+      pipe->disconnect();
+      return nullptr;
+    }
     std::string pipeNameStr = wide_to_utf8(wpipeName);
     auto data_pipe = connect_to_data_pipe(pipeNameStr, cancelled, operation_deadline);
     if (client_wait_ms(operation_deadline, 5000, cancelled) <= 0) {

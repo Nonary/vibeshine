@@ -14,6 +14,7 @@
 #include <UserEnv.h>
 #include <windows.h>
 #include <WtsApi32.h>
+#include <sddl.h>
 
 // standard includes
 #include "src/logging.h"
@@ -21,6 +22,7 @@
 #include "src/utility.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <system_error>
 #include <vector>
 
@@ -34,6 +36,8 @@ namespace {
     const std::wstring &working_dir,
     DWORD creation_flags,
     STARTUPINFOEXW &si,
+    bool inherit_handles,
+    SECURITY_ATTRIBUTES *process_attributes,
     PROCESS_INFORMATION &pi
   ) {
     const DWORD session_id = WTSGetActiveConsoleSessionId();
@@ -96,9 +100,9 @@ namespace {
         raw_primary_token,
         nullptr,
         (LPWSTR) cmd_line.c_str(),
-        nullptr,
-        nullptr,
-        FALSE,
+        process_attributes,
+        process_attributes,
+        inherit_handles,
         creation_flags,
         env_block,
         working_dir.empty() ? nullptr : working_dir.c_str(),
@@ -140,7 +144,8 @@ ProcessHandler::ProcessHandler(bool use_job):
 bool ProcessHandler::start(
   const std::wstring &application_path,
   std::wstring_view arguments,
-  bool allow_system_fallback
+  bool allow_system_fallback,
+  std::span<const HANDLE> inherited_handles
 ) {
   if (running_) {
     // Check if the previously started process has already exited. If so, clear stale state.
@@ -185,6 +190,69 @@ bool ProcessHandler::start(
   STARTUPINFOEXW si = {};
   si.StartupInfo.cb = sizeof(si);
 
+  std::vector<std::byte> attribute_storage;
+  if (!inherited_handles.empty()) {
+    SIZE_T attribute_size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attribute_size);
+    if (attribute_size == 0) {
+      BOOST_LOG(error) << "Unable to size process handle inheritance list, error=" << GetLastError();
+      return false;
+    }
+    attribute_storage.resize(attribute_size);
+    si.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attribute_storage.data());
+    if (!InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &attribute_size)) {
+      BOOST_LOG(error) << "Unable to initialize process handle inheritance list, error=" << GetLastError();
+      si.lpAttributeList = nullptr;
+      return false;
+    }
+    if (!UpdateProcThreadAttribute(
+          si.lpAttributeList,
+          0,
+          PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+          const_cast<HANDLE *>(inherited_handles.data()),
+          inherited_handles.size_bytes(),
+          nullptr,
+          nullptr)) {
+      BOOST_LOG(error) << "Unable to restrict inherited process handles, error=" << GetLastError();
+      DeleteProcThreadAttributeList(si.lpAttributeList);
+      si.lpAttributeList = nullptr;
+      return false;
+    }
+  }
+  auto release_attributes = util::fail_guard([&]() {
+    if (si.lpAttributeList) {
+      DeleteProcThreadAttributeList(si.lpAttributeList);
+      si.lpAttributeList = nullptr;
+    }
+  });
+  const BOOL inherit_handles = inherited_handles.empty() ? FALSE : TRUE;
+  const bool parent_is_system = platf::is_running_as_system();
+
+  // A helper receiving privileged capabilities runs with the interactive
+  // user's token, so its process object must not grant that user
+  // PROCESS_DUP_HANDLE. The parent keeps its creation-time process handle;
+  // only SYSTEM and Administrators may open another one.
+  PSECURITY_DESCRIPTOR process_descriptor = nullptr;
+  SECURITY_ATTRIBUTES process_attributes {sizeof(process_attributes), nullptr, FALSE};
+  SECURITY_ATTRIBUTES *process_attributes_ptr = nullptr;
+  if (parent_is_system && !inherited_handles.empty()) {
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+          L"O:SYG:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)",
+          SDDL_REVISION_1,
+          &process_descriptor,
+          nullptr)) {
+      BOOST_LOG(error) << "Unable to build restricted child process security descriptor, error=" << GetLastError();
+      return false;
+    }
+    process_attributes.lpSecurityDescriptor = process_descriptor;
+    process_attributes_ptr = &process_attributes;
+  }
+  auto release_process_descriptor = util::fail_guard([&]() {
+    if (process_descriptor) {
+      LocalFree(process_descriptor);
+    }
+  });
+
   DWORD creation_flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT;
   // When not using a job (keep-alive child), prefer to break away from any existing job to avoid kill-on-close
   if (!use_job_) {
@@ -201,7 +269,7 @@ bool ProcessHandler::start(
 
   BOOL ret = FALSE;
 
-  if (platf::is_running_as_system()) {
+  if (parent_is_system) {
     HANDLE user_token = platf::retrieve_users_token(false);
     if (user_token) {
       auto close_token = util::fail_guard([&]() {
@@ -225,9 +293,9 @@ bool ProcessHandler::start(
         user_token,
         nullptr,
         (LPWSTR) cmd_line.c_str(),
-        nullptr,
-        nullptr,
-        FALSE,
+        process_attributes_ptr,
+        process_attributes_ptr,
+        inherit_handles,
         creation_flags,
         env_block,
         working_dir.empty() ? nullptr : working_dir.c_str(),
@@ -239,15 +307,22 @@ bool ProcessHandler::start(
 
       // Prefer launching into the active console session so display APIs (e.g., SetDisplayConfig)
       // have a better chance of working while Sunshine runs as a service.
-      if (start_as_system_in_active_console_session(cmd_line, working_dir, creation_flags, si, pi_)) {
+      if (start_as_system_in_active_console_session(
+            cmd_line,
+            working_dir,
+            creation_flags,
+            si,
+            inherit_handles != FALSE,
+            process_attributes_ptr,
+            pi_)) {
         ret = TRUE;
       } else {
         ret = CreateProcessW(
           nullptr,
           (LPWSTR) cmd_line.c_str(),
-          nullptr,
-          nullptr,
-          FALSE,
+          process_attributes_ptr,
+          process_attributes_ptr,
+          inherit_handles,
           creation_flags,
           nullptr,
           working_dir.empty() ? nullptr : working_dir.c_str(),
@@ -264,9 +339,9 @@ bool ProcessHandler::start(
     ret = CreateProcessW(
       nullptr,
       (LPWSTR) cmd_line.c_str(),
-      nullptr,
-      nullptr,
-      FALSE,
+      process_attributes_ptr,
+      process_attributes_ptr,
+      inherit_handles,
       creation_flags,
       nullptr,
       working_dir.empty() ? nullptr : working_dir.c_str(),

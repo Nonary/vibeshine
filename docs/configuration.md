@@ -3672,7 +3672,10 @@ are detected during the stream. The host log reports hook readiness or failure.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Full path to the RTSS install directory. If empty, Sunshine will attempt to auto-detect it.
+            Full path to the RTSS install directory under Program Files. If empty, Sunshine will
+            attempt to auto-detect it. Paths outside Program Files and paths containing reparse
+            points are ignored because the Windows service loads signed RTSS integration code in
+            its privileged host process; Vibeshine falls back to the default Program Files location.
         </td>
     </tr>
     <tr>

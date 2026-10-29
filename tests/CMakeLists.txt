@@ -892,6 +892,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(test_component_linux_steamos_replace_sunshine PROPERTIES LABELS "component")
     find_program(SUNSHINE_TEST_PYTHON_EXECUTABLE NAMES python3)
     if(SUNSHINE_TEST_PYTHON_EXECUTABLE)
+        add_test(NAME test_component_cached_game_launch_composition
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/scripts/test_cached_game_launch_composition.py"
+                --source "${SUNSHINE_TEST_REPOSITORY_ROOT}"
+                --compiler "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_cached_game_launch_composition PROPERTIES LABELS "component" TIMEOUT 60)
         if(TEST_PYROWAVE_IMPORT_DRM_FOUND)
             add_test(NAME test_component_linux_kmsgrab_hdr_worker
                 COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
@@ -913,6 +919,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 --json-include "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
                 --boost-include "$<TARGET_PROPERTY:Boost::property_tree,INTERFACE_INCLUDE_DIRECTORIES>")
         set_tests_properties(test_component_host_stream_route_composition PROPERTIES LABELS "component" TIMEOUT 60)
+        add_test(NAME test_component_linux_nvhttp_handoff_route_composition
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/scripts/test_linux_nvhttp_handoff_route_composition.py"
+                --source "${SUNSHINE_TEST_REPOSITORY_ROOT}"
+                --build-dir "${CMAKE_CURRENT_BINARY_DIR}/linux-nvhttp-handoff-route-composition"
+                --compiler "${CMAKE_CXX_COMPILER}"
+                --json-include "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+                --boost-include "$<TARGET_PROPERTY:Boost::property_tree,INTERFACE_INCLUDE_DIRECTORIES>")
+        set_tests_properties(test_component_linux_nvhttp_handoff_route_composition PROPERTIES LABELS "component" TIMEOUT 60)
         add_test(NAME test_component_host_stream_terminal_composition
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/scripts/test_host_stream_terminal_composition.py"
@@ -1201,6 +1216,10 @@ sunshine_register_component(NAME test_component_tls_client_identity TEST_SOURCE 
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/http_pairing_policy.cpp"
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/crypto.cpp"
     LINK_LIBRARIES sunshine_test_simple_web_headers ${SUNSHINE_TEST_SOCKET_LIBRARIES})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET test_component_tls_client_identity)
+    target_sources(test_component_tls_client_identity PRIVATE unit/test_nvhttp_handoff_tls.cpp)
+    target_link_libraries(test_component_tls_client_identity PRIVATE Boost::property_tree)
+endif()
 sunshine_register_component(NAME test_component_power_action TEST_SOURCE unit/test_power_action.cpp
     PRODUCT_SOURCES
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/power_action.cpp"
@@ -1794,6 +1813,9 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_windows_autofocus_foreground.py"
             --repo "${SUNSHINE_TEST_REPOSITORY_ROOT}" --compiler "${CMAKE_CXX_COMPILER}")
     set_tests_properties(regression_windows_autofocus_foreground PROPERTIES LABELS "component" TIMEOUT 60)
+    add_test(NAME regression_rtss_trust_call_sites
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_rtss_trust_compile.py"
+            --compiler "${CMAKE_CXX_COMPILER}")
     add_test(NAME regression_windows_color_profile
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_windows_color_profile.py")
     add_test(NAME regression_display_policy_adapter
@@ -1868,7 +1890,6 @@ endif()
 sunshine_register_component(NAME test_component_controller_speaker_pcm TEST_SOURCE unit/test_controller_speaker_pcm.cpp)
 
 sunshine_register_component(NAME test_component_dualsense_audio_pcm TEST_SOURCE unit/test_dualsense_audio_pcm.cpp)
-sunshine_register_component(NAME test_component_dualsense_launch_policy TEST_SOURCE unit/test_dualsense_launch_policy.cpp)
 set(_dualsense_protocol_test_adapter "")
 if(NOT WIN32)
     # Only the public GUID/IOCTL declarations are needed for the portable Sony

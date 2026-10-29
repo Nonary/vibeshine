@@ -179,7 +179,6 @@ namespace {
   class DualSenseUsbipGamepadTests: public testing::Test {
   protected:
     void SetUp() override {
-      ASSERT_FALSE(sessions::enabled());
       ASSERT_FALSE(sessions::has_ready_controller());
       fake_transport::reset();
       config::input.gamepad = "auto";
@@ -187,7 +186,6 @@ namespace {
 
     void TearDown() override {
       sessions::set_application_active(false);
-      EXPECT_FALSE(sessions::enabled());
       EXPECT_FALSE(sessions::has_ready_controller());
       fake_transport::reset();
     }
@@ -197,48 +195,28 @@ namespace {
 TEST(DualSenseUsbipSelectionTests, DualSenseUsesUsbAudioWithoutApplicationOptIn) {
   for (const auto setting : {"auto", "vhf", "vhf_ds5"}) {
     const auto profile = platf::vhf_gamepad::select_desired_profile(setting, LI_CTYPE_PS, LI_CCAP_HAPTICS_PCM, true, true);
-    EXPECT_TRUE(sessions::select_composite_dualsense(setting, profile, false, true)) << setting;
-    EXPECT_FALSE(sessions::select_composite_dualsense(setting, profile, false, false)) << setting;
+    EXPECT_TRUE(sessions::select_composite_dualsense(setting, profile, true)) << setting;
+    EXPECT_FALSE(sessions::select_composite_dualsense(setting, profile, false)) << setting;
   }
 }
 
 TEST(DualSenseUsbipSelectionTests, ExplicitOtherProfilesAndOtherControllersKeepTheirBackend) {
   for (const auto setting : {"x360", "ds4", "vhf_xbox", "vhf_xbox_one", "vhf_ds4", "vhf_switch"}) {
     const auto profile = platf::vhf_gamepad::select_desired_profile(setting, LI_CTYPE_PS, LI_CCAP_HAPTICS_PCM, true, true);
-    EXPECT_FALSE(sessions::select_composite_dualsense(setting, profile, false, true)) << setting;
+    EXPECT_FALSE(sessions::select_composite_dualsense(setting, profile, true)) << setting;
   }
   for (const auto type : {LI_CTYPE_XBOX, LI_CTYPE_NINTENDO, LI_CTYPE_UNKNOWN}) {
     const auto profile = platf::vhf_gamepad::select_desired_profile("auto", type, 0, true, true);
-    EXPECT_FALSE(sessions::select_composite_dualsense("auto", profile, false, true)) << type;
+    EXPECT_FALSE(sessions::select_composite_dualsense("auto", profile, true)) << type;
   }
 }
 
 TEST(DualSenseUsbipSelectionTests, ExplicitUsbAudioRequestsNeverFallBackWhenTransportIsMissing) {
-  EXPECT_TRUE(sessions::select_composite_dualsense("usbip_ds5", platf::vhf_profile_e::automatic, false, false));
-  EXPECT_TRUE(sessions::select_composite_dualsense("x360", platf::vhf_profile_e::automatic, true, false));
-}
-
-TEST_F(DualSenseUsbipGamepadTests, ScopeRequiresInstalledTransportWithoutCreatingHardware) {
-  fake_transport::installed = false;
-  EXPECT_FALSE(sessions::start_session());
-  EXPECT_FALSE(sessions::enabled());
-  EXPECT_EQ(fake_transport::create_count, 0);
-
-  fake_transport::installed = true;
-  auto first = sessions::start_session();
-  auto second = sessions::start_session();
-  ASSERT_TRUE(first);
-  ASSERT_TRUE(second);
-  EXPECT_TRUE(sessions::enabled());
-  EXPECT_EQ(fake_transport::create_count, 0);
-  first.reset();
-  EXPECT_TRUE(sessions::enabled());
-  second.reset();
-  EXPECT_FALSE(sessions::enabled());
+  EXPECT_TRUE(sessions::select_composite_dualsense("usbip_ds5", platf::vhf_profile_e::automatic, false));
+  EXPECT_FALSE(sessions::select_composite_dualsense("x360", platf::vhf_profile_e::automatic, false));
 }
 
 TEST_F(DualSenseUsbipGamepadTests, ReadinessAndPcmCapabilityBelongToEachArrivingController) {
-  auto scope = sessions::start_session();
   platf::usbip_gamepad_t backend;
   auto feedback = queue();
   ASSERT_TRUE(backend.probe());
@@ -274,7 +252,6 @@ TEST_F(DualSenseUsbipGamepadTests, ReadinessAndPcmCapabilityBelongToEachArriving
 }
 
 TEST_F(DualSenseUsbipGamepadTests, FailedEnumerationDetachesAndAllowsSlotReuse) {
-  auto scope = sessions::start_session();
   platf::usbip_gamepad_t backend;
   auto feedback = queue();
   fake_transport::enumeration_succeeds[4] = false;
@@ -296,7 +273,6 @@ TEST_F(DualSenseUsbipGamepadTests, FailedEnumerationDetachesAndAllowsSlotReuse) 
 }
 
 TEST_F(DualSenseUsbipGamepadTests, EnumeratingOneControllerDoesNotBlockAnotherControllersInput) {
-  auto scope = sessions::start_session();
   platf::usbip_gamepad_t backend;
   auto feedback = queue();
   ASSERT_EQ(backend.alloc({0, 0}, arrival(0), feedback), 0);
@@ -377,7 +353,6 @@ TEST_F(DualSenseUsbipGamepadTests, GlobalSelectionForwardsPcmWithoutApplicationS
   platf::usbip_gamepad_t backend;
   auto feedback = queue();
   ASSERT_EQ(backend.alloc({2, 4}, arrival(), feedback), 0);
-  ASSERT_FALSE(sessions::enabled());
   fake_transport::current[2]->pcm(samples(44));
   auto messages = drain(feedback);
   ASSERT_EQ(messages.size(), 1);
@@ -391,7 +366,6 @@ TEST_F(DualSenseUsbipGamepadTests, AutomaticDualSenseForwardsPcmWithoutApplicati
     platf::usbip_gamepad_t backend;
     auto feedback = queue();
     ASSERT_EQ(backend.alloc({2, 4}, arrival(), feedback), 0);
-    ASSERT_FALSE(sessions::enabled());
     fake_transport::current[2]->pcm(samples(45));
     auto messages = drain(feedback);
     ASSERT_EQ(messages.size(), 1) << setting;
@@ -414,7 +388,6 @@ TEST_F(DualSenseUsbipGamepadTests, AutomaticDualSenseStillRequiresClientWaveform
 }
 
 TEST_F(DualSenseUsbipGamepadTests, StalledFeedbackQueueDropsOnlyThisControllersOldPcm) {
-  auto scope = sessions::start_session();
   platf::usbip_gamepad_t backend;
   auto feedback = queue(3);
   ASSERT_EQ(backend.alloc({6, 2}, arrival(), feedback), 0);
@@ -517,7 +490,6 @@ TEST_F(DualSenseUsbipGamepadTests, IndependentTriggerCommandsKeepEnablesAndOrder
 }
 
 TEST_F(DualSenseUsbipGamepadTests, PausePreservesAudioEndpointAndResumeRebindsFeedback) {
-  auto scope = sessions::start_session();
   sessions::set_application_active(true);
   platf::usbip_gamepad_t backend;
   auto old_feedback = queue();
@@ -586,7 +558,6 @@ TEST_F(DualSenseUsbipGamepadTests, ResumeRefreshesCapabilitiesAndCanDisablePersi
 }
 
 TEST_F(DualSenseUsbipGamepadTests, TeardownRejectsInFlightCallbacksAndCannotReachReusedSlot) {
-  auto scope = sessions::start_session();
   platf::usbip_gamepad_t backend;
   auto feedback = queue();
   ASSERT_EQ(backend.alloc({9, 6}, arrival(), feedback), 0);
@@ -623,38 +594,6 @@ TEST_F(DualSenseUsbipGamepadTests, TeardownRejectsInFlightCallbacksAndCannotReac
   EXPECT_EQ(messages[0].id, 6);
   EXPECT_GT(messages[0].data.haptics.sequence, old_sequence);
   EXPECT_EQ(messages[0].data.haptics.samples, samples(75));
-}
-
-TEST_F(DualSenseUsbipGamepadTests, FinalApplicationScopeClearsOldPcmWithoutDisablingControllerHaptics) {
-  auto scope = sessions::start_session();
-  auto other_scope = sessions::start_session();
-  platf::usbip_gamepad_t backend;
-  auto feedback = queue();
-  ASSERT_EQ(backend.alloc({10, 0}, arrival(), feedback), 0);
-  auto endpoint = fake_transport::current[10];
-  endpoint->pcm(samples(81));
-  scope.reset();
-  EXPECT_TRUE(sessions::enabled());
-  EXPECT_EQ(drain(feedback).size(), 1);
-  endpoint->pcm(samples(82));
-  const auto partial = samples(83);
-  endpoint->pcm(std::span {partial}.first(480));
-  other_scope.reset();
-  EXPECT_FALSE(sessions::enabled());
-  EXPECT_TRUE(drain(feedback).empty());
-  endpoint->pcm(samples(84));
-  auto outside_scope = drain(feedback);
-  ASSERT_EQ(outside_scope.size(), 1);
-  EXPECT_EQ(outside_scope[0].data.haptics.samples, samples(84));
-
-  auto resumed_scope = sessions::start_session();
-  const auto fresh = samples(85);
-  endpoint->pcm(std::span {fresh}.first(480));
-  EXPECT_TRUE(drain(feedback).empty());
-  endpoint->pcm(std::span {fresh}.last(480));
-  auto messages = drain(feedback);
-  ASSERT_EQ(messages.size(), 1);
-  EXPECT_EQ(messages[0].data.haptics.samples, fresh);
 }
 
 TEST_F(DualSenseUsbipGamepadTests, SpeakerQueueIsBoundedIndependentAndEpochInvalidated) {
@@ -780,7 +719,6 @@ TEST_F(DualSenseUsbipGamepadTests, SpeakerRequiresExplicitOwnerAndEchoesItAcross
 TEST_F(DualSenseUsbipGamepadTests, PendingAudioUrbCannotAcquireRetainedRebindOwner) {
   for (int ingress = 0; ingress < 3; ++ingress) {
     SCOPED_TRACE(ingress);
-    auto scope = sessions::start_session();
     sessions::set_application_active(true);
     platf::usbip_gamepad_t backend;
     auto feedback = queue();
@@ -849,7 +787,6 @@ TEST_F(DualSenseUsbipGamepadTests, PendingAudioUrbCannotAcquireRetainedRebindOwn
 }
 
 TEST_F(DualSenseUsbipGamepadTests, SubmissionIncarnationRejectsSameOwnerRebindAndReallocation) {
-  auto scope = sessions::start_session();
   sessions::set_application_active(true);
   for (bool retain : {true, false}) {
     platf::usbip_gamepad_t backend;

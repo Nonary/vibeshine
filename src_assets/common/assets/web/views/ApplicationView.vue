@@ -112,7 +112,6 @@ interface EditorForm {
   lutrisService: string;
   lutrisServiceId: string;
   elevated: boolean;
-  dualsenseHaptics: boolean;
   autoDetach: boolean;
   waitAll: boolean;
   excludeGlobalPrepCmd: boolean;
@@ -1329,7 +1328,6 @@ function emptyForm(): EditorForm {
     lutrisService: '',
     lutrisServiceId: '',
     elevated: false,
-    dualsenseHaptics: false,
     autoDetach: true,
     waitAll: true,
     excludeGlobalPrepCmd: false,
@@ -1776,7 +1774,6 @@ function hydrate(app: AppRecord): void {
     lutrisService: asString(app['lutris-service']),
     lutrisServiceId: asString(app['lutris-service-id']),
     elevated: asBoolean(app.elevated),
-    dualsenseHaptics: asBoolean(app['dualsense-haptics']),
     autoDetach: hasExplicitAutoDetach ? asBoolean(app['auto-detach']) : true,
     waitAll: hasExplicitWaitAll ? asBoolean(app['wait-all']) : true,
     excludeGlobalPrepCmd: asBoolean(app['exclude-global-prep-cmd']),
@@ -1967,7 +1964,6 @@ function buildPayload(): AppRecord {
       ? form.cmd.split(/\r?\n/).filter((line) => line.length > 0)
       : form.cmd,
     elevated: form.elevated,
-    'dualsense-haptics': form.dualsenseHaptics,
     'auto-detach': form.autoDetach,
     'wait-all': form.waitAll,
     'exclude-global-prep-cmd': form.excludeGlobalPrepCmd,
@@ -2917,15 +2913,18 @@ async function loadDisplayDevices(force = false): Promise<void> {
   }
 }
 
+const effectiveAppDisplayAction = computed(() =>
+  form.ddConfigurationOption || String(readConfigOverrides().dd_configuration_option || hostDisplayConfig.value?.dd_configuration_option || 'verify_only'),
+);
+
 const virtualDisplayLayoutBlocked = computed(() => {
   const layout =
     form.virtualDisplayLayout || hostDisplayConfig.value?.virtual_display_layout || 'exclusive';
-  const action =
-    form.ddConfigurationOption || hostDisplayConfig.value?.dd_configuration_option || 'verify_only';
+  const action = effectiveAppDisplayAction.value;
   return (
     displaySelection.value === 'virtual' &&
     layout !== 'exclusive' &&
-    (action === 'verify_only' || action === 'disabled')
+    action === 'disabled'
   );
 });
 
@@ -3616,17 +3615,6 @@ onBeforeUnmount(() => {
             </select>
           </label>
 
-          <SettingRow
-            v-if="isWindowsHost"
-            :label="t('apps.dualsense_haptics')"
-            :description="t('apps.dualsense_haptics_desc')"
-            control-id="app-dualsense-haptics"
-          >
-            <label class="vs-checkbox">
-              <input id="app-dualsense-haptics" v-model="form.dualsenseHaptics" type="checkbox" />
-              <span>{{ t('apps.dualsense_haptics') }}</span>
-            </label>
-          </SettingRow>
           <div v-if="isWindowsHost" class="lossless-editor editor-field--full">
             <div class="lossless-editor__heading">
               <div>
@@ -4374,6 +4362,9 @@ onBeforeUnmount(() => {
           <p v-if="displaySelection === 'virtual'" class="vs-field__helper">
             {{ t('config.app_virtual_display_layout_action_hint') }}
           </p>
+          <p v-if="displaySelection === 'virtual' && effectiveAppDisplayAction === 'verify_only'" class="vs-field__helper">
+            {{ t('config.app_virtual_display_verify_override') }}
+          </p>
           <InlineAlert
             v-if="virtualDisplayLayoutBlocked"
             tone="warning"
@@ -4680,7 +4671,7 @@ onBeforeUnmount(() => {
       </section>
 
       <section
-        v-if="!isNew && !isRemoteSession"
+        v-if="!isNew"
         class="editor-danger"
         aria-labelledby="danger-heading"
       >

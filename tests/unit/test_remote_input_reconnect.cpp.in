@@ -325,7 +325,7 @@ struct tree_t {
 std::function<void()> before_admission;
 std::unordered_map<std::string, std::string> launch_overrides;
 
-int launch(std::string client, std::uint32_t generation, control_e synthetic_control = control_e::input, bool may_launch = true) {
+int launch(std::string client, std::uint32_t generation, control_e synthetic_control = control_e::input, bool may_launch = true, bool removed_builtin = false) {
   std::unique_lock lifecycle_lock {lifecycle};
   std::unique_lock remote_transition_lock {remote_http_control_transition_mutex};
 
@@ -541,7 +541,8 @@ int main() {
   auto newer_input = active("a", 7);
   remember_remote_owner("b", role_e::input, 4);
   remember_remote_owner("c", role_e::monitor, 5);
-  check(launch("a", 8) == 200, "active input retry must succeed");
+  check(launch("a", 8, control_e::input, true, true) == 200, "removed input retains its existing owner reconnect");
+  check(launch("new", 18, control_e::input, true, true) == 404, "removed input rejects a cached tile for a new owner");
   check(old_active->stops == 1 && old_active->joins == 1, "old input transport must be retired");
   check(peer_input->stops == 0 && peer_monitor->stops == 0 && own_game->stops == 0 && newer_input->stops == 0, "replacement must match client, role, and generation");
   check(remote_role_owners.size() == 3, "unrelated owners must survive");

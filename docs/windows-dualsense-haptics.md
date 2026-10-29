@@ -17,9 +17,8 @@ that connection does not change the wired USB identity exposed to Windows games.
    selection chooses DualSense and the optional transport is available. This includes
    Automatic with a PlayStation controller and the saved `vhf_ds5` profile; desktop
    and Steam Big Picture streams do not need an application opt-in. Explicit Xbox,
-   DualShock 4, and Switch profiles keep their selected identity. The application
-   **DualSense waveform haptics** option (`dualsense-haptics` in `apps.json`) can
-   still force DualSense and delay game launch until its audio endpoint is ready.
+   DualShock 4, and Switch profiles keep their selected identity. No per-application
+   haptics setting is needed; older `dualsense-haptics` entries are ignored.
    **DualSense with waveform haptics** (`gamepad = usbip_ds5`) also forces this backend.
 3. Start a new stream so controllers are allocated on the composite backend.
    Use a Moonlight client with waveform support and a compatible DualSense renderer.
@@ -110,7 +109,7 @@ The source tree retains the earlier `tools/vibeshine_dualsense_haptics.exe` and
 hardware-free integration probes. That implementation creates process-local WASAPI
 endpoints through injected COM hooks and pairs them with a VHF DualSense. Its launch
 and interception restrictions do not apply to the installed composite controller.
-The `dualsense-haptics` application option now selects the USB/audio route and does
+Automatic DualSense selection uses the USB/audio route when installed and does
 not fall back to these hooks when the optional driver is missing.
 
 ## Validation

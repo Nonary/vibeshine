@@ -1353,7 +1353,6 @@ namespace platf {
     if (dualsense_usbip_gamepad::select_composite_dualsense(
           config::input.gamepad,
           vhf_desired_profile(metadata),
-          dualsense_usbip_gamepad::enabled(),
           raw->usbip != nullptr && raw->usbip->available())) {
       if (raw->usbip && raw->usbip->alloc(id, metadata, feedback_queue) == 0) {
         raw->gamepad_backend[id.globalIndex] = gamepad_backend_e::usbip;
@@ -2179,7 +2178,7 @@ namespace platf {
     // motion_as_ds4/touchpad_as_ds4 say, so only x360 and the explicit Xbox and Switch
     // selections rule a touchpad out. Withholding the flag silences both Steam Controller
     // trackpads: the client never sends a touch packet without it.
-    const bool composite_dualsense = config::input.gamepad == "usbip_ds5"sv || dualsense_usbip_gamepad::enabled();
+    const bool composite_dualsense = config::input.gamepad == "usbip_ds5"sv;
     if (vhf_gamepad::supports_controller_touch(config::input.gamepad, composite_dualsense)) {
       caps |= platform_caps::controller_touch;
     }
