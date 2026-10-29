@@ -913,6 +913,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 --json-include "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
                 --boost-include "$<TARGET_PROPERTY:Boost::property_tree,INTERFACE_INCLUDE_DIRECTORIES>")
         set_tests_properties(test_component_host_stream_route_composition PROPERTIES LABELS "component" TIMEOUT 60)
+        add_test(NAME test_component_linux_nvhttp_handoff_route_composition
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/scripts/test_linux_nvhttp_handoff_route_composition.py"
+                --source "${SUNSHINE_TEST_REPOSITORY_ROOT}"
+                --build-dir "${CMAKE_CURRENT_BINARY_DIR}/linux-nvhttp-handoff-route-composition"
+                --compiler "${CMAKE_CXX_COMPILER}"
+                --json-include "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+                --boost-include "$<TARGET_PROPERTY:Boost::property_tree,INTERFACE_INCLUDE_DIRECTORIES>")
+        set_tests_properties(test_component_linux_nvhttp_handoff_route_composition PROPERTIES LABELS "component" TIMEOUT 60)
         add_test(NAME test_component_host_stream_terminal_composition
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/scripts/test_host_stream_terminal_composition.py"
@@ -1201,6 +1210,9 @@ sunshine_register_component(NAME test_component_tls_client_identity TEST_SOURCE 
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/http_pairing_policy.cpp"
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/crypto.cpp"
     LINK_LIBRARIES sunshine_test_simple_web_headers ${SUNSHINE_TEST_SOCKET_LIBRARIES})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET test_component_tls_client_identity)
+    target_sources(test_component_tls_client_identity PRIVATE unit/test_nvhttp_handoff_tls.cpp)
+endif()
 sunshine_register_component(NAME test_component_power_action TEST_SOURCE unit/test_power_action.cpp
     PRODUCT_SOURCES
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/power_action.cpp"

@@ -405,10 +405,10 @@ namespace {
     server.config.timeout_request = 3;
     std::atomic_uint handshakes {0};
     std::vector<request_t> route_requests;
-    server.verify = [&](request_t request, SSL *ssl) {
+    server.verify = [&](request_t request, SSL *ssl, pending_peer_factory_t pending_peer) {
       ++handshakes;
       std::lock_guard lock(client_mutex);
-      return store.authenticate(request, ssl, chain, clients).identity.has_value();
+      return store.authenticate(request, ssl, chain, clients, std::move(pending_peer)).identity.has_value();
     };
     server.on_verify_failed = [](auto response, auto) {
       response->close_connection_after_response = true;
