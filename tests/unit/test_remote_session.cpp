@@ -306,6 +306,81 @@ TEST(RemoteSession, PrioritizedIdentitiesPreserveActionsAndArtwork) {
   }
 }
 
+TEST(RemoteSession, CachedRunningGameTileSurvivesIdleCatalogueAndArtworkChanges) {
+  remote_session::cached_game_tiles_t cached;
+  auto active = game();
+  std::vector<remote_session::app_t> configured {active.app, {77, "other-game", "Other game", false}};
+  const auto secondary = remote_session::project(caller("other"), active, {}, configured, false);
+  const auto tile = secondary.catalogue.front();
+  cached.remember("other", tile.id, active.app);
+
+  const auto idle = remote_session::project(caller("other"), {}, {}, configured, false);
+  EXPECT_EQ(std::count_if(idle.catalogue.begin(), idle.catalogue.end(), [&](const auto &app) { return app.id == tile.id; }), 0);
+  for (const auto &uuid : {std::string {}, tile.uuid}) {
+    const auto result = cached.resolve("other", tile.id, uuid, configured);
+    ASSERT_EQ(result.status, remote_session::cached_game_status_e::resolved);
+    ASSERT_TRUE(result.app);
+    EXPECT_EQ(result.app->id, active.app.id);
+    EXPECT_EQ(result.app->uuid, active.app.uuid);
+  }
+  const auto uuid_only = cached.resolve("other", 0, tile.uuid, configured);
+  ASSERT_TRUE(uuid_only.app);
+  EXPECT_EQ(uuid_only.app->uuid, active.app.uuid);
+
+  // Artwork refresh can change the numeric ID while keeping the app UUID.
+  configured[0].id = 84;
+  configured[0].id_aliases.push_back("42");
+  const auto refreshed = cached.resolve("other", tile.id, {}, configured);
+  ASSERT_EQ(refreshed.status, remote_session::cached_game_status_e::resolved);
+  ASSERT_TRUE(refreshed.app);
+  EXPECT_EQ(refreshed.app->id, 84);
+  EXPECT_EQ(refreshed.app->uuid, active.app.uuid);
+  EXPECT_EQ(cached.resolve("another-client", tile.id, {}, configured).status, remote_session::cached_game_status_e::unknown);
+}
+
+TEST(RemoteSession, CachedRunningGameTileDoesNotShadowControlsOrConfiguredApps) {
+  remote_session::cached_game_tiles_t cached;
+  const auto active = game();
+  const auto tile = remote_session::synthetic_running_game(active.app);
+  cached.remember("other", tile.id, active.app);
+  const std::vector<remote_session::app_t> configured {active.app, {tile.id, "new-app", "New app", false}};
+
+  EXPECT_EQ(cached.resolve("other", tile.id, {}, configured).status, remote_session::cached_game_status_e::unknown);
+  EXPECT_EQ(cached.resolve("other", tile.id, tile.uuid, configured).status, remote_session::cached_game_status_e::unavailable);
+  EXPECT_EQ(cached.resolve("other", tile.id, "new-app", configured).status, remote_session::cached_game_status_e::unknown);
+  EXPECT_EQ(cached.resolve("other", remote_session::secondary_monitor_id, {}, configured).status, remote_session::cached_game_status_e::unknown);
+  EXPECT_EQ(remote_session::identify(remote_session::secondary_monitor_id), remote_session::control_e::monitor);
+  EXPECT_TRUE(remote_session::dispatch(caller("other"), {}, {}, remote_session::identify(remote_session::secondary_monitor_id)).allowed);
+  EXPECT_TRUE(remote_session::dispatch(caller("other"), {}, {}, remote_session::identify(remote_session::secondary_input_id)).allowed);
+
+  auto alias_conflict = configured;
+  alias_conflict[1].id = 77;
+  alias_conflict[1].id_aliases.push_back(std::to_string(tile.id));
+  EXPECT_EQ(cached.resolve("other", tile.id, {}, alias_conflict).status, remote_session::cached_game_status_e::unknown);
+  EXPECT_EQ(cached.resolve("other", tile.id, tile.uuid, alias_conflict).status, remote_session::cached_game_status_e::unavailable);
+}
+
+TEST(RemoteSession, CachedRunningGameTileRejectsDeletedOrAmbiguousTargets) {
+  remote_session::cached_game_tiles_t cached;
+  const auto active = game();
+  const auto tile = remote_session::synthetic_running_game(active.app);
+  cached.remember("other", tile.id, active.app);
+
+  EXPECT_EQ(cached.resolve("other", tile.id, {}, {}).status, remote_session::cached_game_status_e::unavailable);
+  const remote_session::app_t same_uuid {77, active.app.uuid, "Duplicate", false};
+  EXPECT_EQ(cached.resolve("other", tile.id, {}, {active.app, same_uuid}).status, remote_session::cached_game_status_e::unavailable);
+  auto converted_to_profile = active.app;
+  converted_to_profile.monitor_profile = true;
+  EXPECT_EQ(cached.resolve("other", tile.id, {}, {converted_to_profile}).status, remote_session::cached_game_status_e::unavailable);
+
+  const remote_session::app_t later {43, "later-game", "Later game", false};
+  cached.remember("other", tile.id, later);
+  EXPECT_EQ(cached.resolve("other", tile.id, {}, {active.app, later}).status, remote_session::cached_game_status_e::unavailable);
+  EXPECT_EQ(cached.resolve("other", 0, tile.uuid, {active.app, later}).status, remote_session::cached_game_status_e::unavailable);
+  const remote_session::app_t occupying_app {tile.id, "occupying-app", "Occupying app", false};
+  EXPECT_EQ(cached.resolve("other", tile.id, {}, {active.app, later, occupying_app}).status, remote_session::cached_game_status_e::unknown);
+}
+
 TEST(RemoteSession, DispatchEnforcesCallerPermissionsAndRetention) {
   const auto active_game = game();
   const auto game_resume = remote_session::dispatch(caller("other"), active_game, {}, remote_session::control_e::resume);
