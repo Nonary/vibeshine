@@ -333,17 +333,16 @@ namespace remote_display_topology {
     if (!callbacks_.apply_composed_topology) {
       return false;
     }
-    if (callbacks_.resolve_mode) {
-      for (auto &[uuid, state] : clients_) {
-        if (state.normal_game || state.remote_monitor) {
-          resolve_effective_mode_locked(uuid, state);
-        }
-      }
-    } else {
-      for (auto &[_, state] : clients_) {
-        if (state.normal_game || state.remote_monitor) state.effective_mode = desired_mode(state);
+    for (auto &[uuid, state] : clients_) {
+      if (state.normal_game || state.remote_monitor) {
+        const auto confirmed_hdr = state.effective_mode.hdr;
+        resolve_effective_mode_locked(uuid, state);
+        // A topology-only reapply does not re-run a platform's post-apply
+        // color verification. Do not turn a previous failure into success.
+        if (callbacks_.finalize_mode && state.remote_monitor) state.effective_mode.hdr = confirmed_hdr;
       }
     }
+    if (!refresh_unverified_shared_geometry_locked()) return false;
     std::vector<std::string> ignored;
     return callbacks_.apply_composed_topology(compose_locked(ignored));
   }
@@ -528,6 +527,18 @@ namespace remote_display_topology {
     // compositor with zero outputs and force a physical-link retrain.
     if (callbacks_.apply_composed_topology) {
       std::vector<std::string> ignored;
+      if (!refresh_unverified_shared_geometry_locked()) {
+        // The exact target can be retired without composing guessed peer
+        // positions once its own normal capture has drained.
+        if (callbacks_.terminate_owned_display && callbacks_.terminate_owned_display(client_uuid)) {
+          clients_.erase(client_uuid);
+          return;
+        }
+        state.normal_game = true;
+        state.normal_requested_mode = requested_mode;
+        state.normal_game_token = token;
+        return;
+      }
       if (!callbacks_.apply_composed_topology(compose_locked(ignored))) {
         state.normal_game = true;
         state.normal_requested_mode = requested_mode;
@@ -545,7 +556,7 @@ namespace remote_display_topology {
       state.normal_requested_mode = requested_mode;
       state.normal_game_token = token;
       std::vector<std::string> ignored;
-      (void) callbacks_.apply_composed_topology(compose_locked(ignored));
+      if (refresh_unverified_shared_geometry_locked()) (void) callbacks_.apply_composed_topology(compose_locked(ignored));
       return;
     }
     clients_.erase(client_uuid);
@@ -603,6 +614,9 @@ namespace remote_display_topology {
     auto target_mutation = display_target::leases().begin_mutation();
     if (!target_mutation) return {false, false, true, {}, "Existing target borrowers hold display leases."};
     std::lock_guard lock(mutex_);
+    if (!refresh_unverified_shared_geometry_locked(client_uuid)) {
+      return {false, false, true, {}, "A shared display mode is awaiting verification; topology changes are deferred."};
+    }
     auto &observed_generation = observed_monitor_generations_[client_uuid];
     if (generation < observed_generation) {
       return {false, false, true, {}, "A newer Remote Monitor generation was already observed."};
@@ -631,6 +645,17 @@ namespace remote_display_topology {
     }
     if (generation < state.generation) {
       return {false, false, true, {}, "A newer Remote Monitor generation is already active."};
+    }
+    if (callbacks_.finalize_mode && state.remote_monitor && state.lifecycle == lifecycle_e::ready) {
+      // A retry must not advance ownership while the previous capture may
+      // still be active: a stale transport-loss callback would otherwise be
+      // unable to protect that output from a later HDR transition.
+      return {false, false, true, {}, "The previous Remote Monitor transport has not drained."};
+    }
+    if (callbacks_.finalize_mode && state.lease_held &&
+        (!state.monitor_requested_mode || state.monitor_requested_mode->width != mode.width ||
+         state.monitor_requested_mode->height != mode.height || state.monitor_requested_mode->refresh_hz != mode.refresh_hz)) {
+      state.deferred_monitor_reconfiguration = true;
     }
     state.generation = generation;
     state.label = label;
@@ -677,7 +702,21 @@ namespace remote_display_topology {
       state.warning = "Remote Monitor runtime wiring is unavailable; ownership was retained for Resume.";
       return {true, false, state.warning};
     }
-    if (!state.lease_held) {
+    // A normal role may have capture active, pending, or paused. Do not
+    // reconfigure its shared output until that role has released ownership.
+    // A ready monitor can likewise have an active or pending transport.
+    const bool shared_capture = callbacks_.finalize_mode &&
+                                (state.normal_game || state.lifecycle == lifecycle_e::ready);
+    if (!refresh_unverified_shared_geometry_locked(client_uuid)) {
+      state.lifecycle = lifecycle_e::retryable;
+      state.warning = "A shared display mode is awaiting verification; topology changes are deferred.";
+      return {true, false, state.warning};
+    }
+    if (!state.lease_held && shared_capture) {
+      // The game capture already owns this exact stable output. Reuse it
+      // without recreating or changing its color state underneath the peer.
+      state.lease_held = true;
+    } else if (!state.lease_held || (!shared_capture && state.deferred_monitor_reconfiguration)) {
       state.lifecycle = lifecycle_e::leased;
       if (!callbacks_.create_or_reclaim(client_uuid, state.label, desired_mode(state))) {
         state.lifecycle = lifecycle_e::retryable;
@@ -685,24 +724,73 @@ namespace remote_display_topology {
         return {true, false, state.warning};
       }
       state.lease_held = true;
+      // A successful create/reclaim does not prove the requested geometry
+      // has taken effect; preserve any deferred reconfiguration obligation.
     }
     resolve_effective_mode_locked(client_uuid, state);
+    if (shared_capture || state.shared_mode_unverified ||
+        (callbacks_.finalize_mode && state.deferred_monitor_reconfiguration)) {
+      // Geometry is separate from color: a producer may need the composed
+      // topology before its HDR state can be applied and verified.
+      const auto observed = callbacks_.observe_shared_mode ? callbacks_.observe_shared_mode(client_uuid) : std::nullopt;
+      if (!observed || observed->width != state.effective_mode.width || observed->height != state.effective_mode.height ||
+          observed->refresh_hz != state.effective_mode.refresh_hz) {
+        if (shared_capture) state.deferred_monitor_reconfiguration = true;
+        state.shared_mode_unverified = true;
+        if (observed) {
+          state.effective_mode.width = observed->width;
+          state.effective_mode.height = observed->height;
+          state.effective_mode.refresh_hz = observed->refresh_hz;
+        }
+        state.lifecycle = lifecycle_e::retryable;
+        state.warning = "The shared display does not yet match the requested geometry; Resume will retry.";
+        return {true, false, state.warning};
+      }
+      state.shared_mode_unverified = false;
+      // Once the exclusive output's geometry is observed, a later color or
+      // topology failure need not recreate it again on Resume.
+      if (!shared_capture) state.deferred_monitor_reconfiguration = false;
+    }
+    if (!refresh_unverified_shared_geometry_locked(client_uuid)) {
+      state.lifecycle = lifecycle_e::retryable;
+      state.warning = "A shared display geometry could not be observed; topology changes are deferred.";
+      return {true, false, state.warning};
+    }
     state.lifecycle = lifecycle_e::applying;
     std::vector<std::string> warnings;
     const auto composed = compose_locked(warnings);
     if (!callbacks_.apply_composed_topology(composed)) {
+      if (shared_capture) {
+        state.deferred_monitor_reconfiguration = true;
+        state.shared_mode_unverified = true;
+      }
       state.lifecycle = lifecycle_e::retryable;
       state.warning = "The composed display topology did not apply; existing owners and their displays were retained.";
+      return {true, false, state.warning};
+    }
+    if (callbacks_.finalize_mode && !callbacks_.finalize_mode(client_uuid, state.effective_mode, !shared_capture)) {
+      if (shared_capture) {
+        state.deferred_monitor_reconfiguration = true;
+        state.shared_mode_unverified = true;
+      }
+      state.lifecycle = lifecycle_e::retryable;
+      state.warning = "The requested client display color state could not be verified; Resume will retry.";
       return {true, false, state.warning};
     }
     if (!warnings.empty()) state.warning = warnings.front();
     const auto exact_output = callbacks_.exact_target_has_current_mode_and_dxgi(client_uuid, state.effective_mode);
     if (!exact_output || exact_output->empty()) {
+      if (shared_capture) {
+        state.deferred_monitor_reconfiguration = true;
+        state.shared_mode_unverified = true;
+      }
       state.lifecycle = lifecycle_e::retryable;
       state.warning = "The requested client display is not yet capture-ready. Existing streamed physical or virtual displays remain topology anchors, but capture will wait rather than mirror another screen.";
       return {true, false, state.warning};
     }
     state.exact_output = *exact_output;
+    state.deferred_monitor_reconfiguration = false;
+    state.shared_mode_unverified = false;
     state.lifecycle = lifecycle_e::ready;
     state.warning.clear();
     return {true, true, {}};
@@ -778,6 +866,7 @@ namespace remote_display_topology {
     const auto previous_lease = state.lease_held;
     const auto previous_lifecycle = state.lifecycle;
     const auto previous_warning = state.warning;
+    const bool preserve_shared_topology = state.normal_game && state.shared_mode_unverified;
     // A normal game and Remote Monitor for one paired client share the same
     // deterministic VDD. Ending either role cannot remove the other's display.
     const bool remove_display = !state.normal_game;
@@ -797,6 +886,8 @@ namespace remote_display_topology {
     // capture reference drains. Drop monitor ownership now, but defer every
     // topology/native display mutation to the normal-role finalizer.
     if (state.normal_release_pending && !state.normal_capture_references.empty()) {
+      state.deferred_monitor_reconfiguration = false;
+      state.shared_mode_unverified = preserve_shared_topology;
       return;
     }
 
@@ -805,11 +896,12 @@ namespace remote_display_topology {
     // must not keep the caller's screen connected.
     if (callbacks_.apply_composed_topology) {
       std::vector<std::string> ignored;
-      const bool applied = callbacks_.apply_composed_topology(compose_locked(ignored));
-      if (!applied) {
+      const bool geometry_known = refresh_unverified_shared_geometry_locked();
+      const bool applied = geometry_known && callbacks_.apply_composed_topology(compose_locked(ignored));
+      if (!applied && geometry_known) {
         physical_restore_pending_ = true;
       }
-      if (!applied && !callbacks_.terminate_owned_display) {
+      if (!applied && !callbacks_.terminate_owned_display && (geometry_known || remove_display)) {
         state.remote_monitor = true;
         state.monitor_requested_mode = monitor_mode;
         state.lease_held = previous_lease;
@@ -843,12 +935,14 @@ namespace remote_display_topology {
       resolve_effective_mode_locked(client_uuid, state);
       if (!callbacks_.terminate_owned_display && callbacks_.apply_composed_topology) {
         std::vector<std::string> ignored;
-        (void) callbacks_.apply_composed_topology(compose_locked(ignored));
+        if (refresh_unverified_shared_geometry_locked()) (void) callbacks_.apply_composed_topology(compose_locked(ignored));
       }
       return;
     }
     state.monitor_release_pending = false;
     state.monitor_release_reason.clear();
+    state.deferred_monitor_reconfiguration = false;
+    state.shared_mode_unverified = preserve_shared_topology;
     if (state.generation != 0) {
       auto &released_generation = released_monitor_generations_[client_uuid];
       released_generation = std::max(released_generation, state.generation);
@@ -874,6 +968,18 @@ namespace remote_display_topology {
   void coordinator_t::resolve_effective_mode_locked(const std::string &client_uuid, client_state_t &state) {
     state.effective_mode = desired_mode(state);
     if (callbacks_.resolve_mode) callbacks_.resolve_mode(client_uuid, state.effective_mode);
+  }
+
+  bool coordinator_t::refresh_unverified_shared_geometry_locked(const std::string &except) {
+    for (auto &[uuid, state] : clients_) {
+      if (uuid == except || (!state.normal_game && !state.remote_monitor) || !state.shared_mode_unverified) continue;
+      const auto observed = callbacks_.observe_shared_mode ? callbacks_.observe_shared_mode(uuid) : std::nullopt;
+      if (!observed || observed->width <= 0 || observed->height <= 0 || observed->refresh_hz <= 0) return false;
+      state.effective_mode.width = observed->width;
+      state.effective_mode.height = observed->height;
+      state.effective_mode.refresh_hz = observed->refresh_hz;
+    }
+    return true;
   }
 
   std::vector<node_t> coordinator_t::compose_locked(std::vector<std::string> &warnings) const {

@@ -56,6 +56,17 @@ struct observed_mutex_t {
 };
 
 void set_vulkan_hdr_layer_streaming_active(bool) {}
+std::vector<std::function<void()>> timer_callbacks;
+int timer_delay_ms = 0;
+namespace boost::system { struct error_code { explicit operator bool() const { return false; } }; }
+namespace boost::asio {
+  struct steady_timer {
+    steady_timer(int &, std::chrono::milliseconds delay) { timer_delay_ms = static_cast<int>(delay.count()); }
+    template<class F> void async_wait(F &&fn) {
+      timer_callbacks.emplace_back([fn = std::forward<F>(fn)] { fn(boost::system::error_code {}); });
+    }
+  };
+}
 
 namespace config {
   struct {
@@ -126,6 +137,8 @@ namespace nvhttp {
 }  // namespace nvhttp
 
 namespace stream {
+  int fake_start_result = 0;
+  bool fake_start_exception = false, fake_partial_registration = false;
   struct session_t {
     std::string device_uuid, history_uuid;
     role_e remote_role;
@@ -134,7 +147,18 @@ namespace stream {
   };
 
   namespace session {
+    struct cleanup_reservation_t {};
     /* @MATCHES@ */
+    template<class Config, class Launch> std::shared_ptr<session_t> alloc(const Config &, const Launch &) {
+      return std::make_shared<session_t>();
+    }
+    int start(session_t &, const std::string &) {
+      if (fake_start_exception) {
+        fake_partial_registration = true;
+        throw std::runtime_error("simulated exception after partial registration");
+      }
+      return fake_start_result;
+    }
     void stop(session_t &session) {
       ++session.stops;
     }
@@ -150,7 +174,7 @@ namespace stream {
       std::optional<std::array<std::uint8_t, 16>> virtual_display_guid_bytes;
     };
 
-    bool finalize_shared_runtime_if_idle(const char *, const shared_runtime_finalize_context_t &) {
+    bool finalize_shared_runtime_if_idle(std::string_view, const shared_runtime_finalize_context_t &) {
       ++finalizes;
       return true;
     }
@@ -163,6 +187,7 @@ namespace rtsp_stream {
     std::string unique_id, client_uuid, rtsp_source_address;
     role_e role;
     std::uint64_t role_generation;
+    bool monitor_stream_published = false;
     bool rtsp_cipher = false;
     std::array<std::uint8_t, 16> virtual_display_guid_bytes {};
     std::shared_ptr<void> audio_context_guard, display_power_guard, exact_target_hold;
@@ -189,6 +214,30 @@ namespace rtsp_stream {
     std::unordered_map<std::uint32_t, pending_launch_t> pending_launches;
     sessions_t _session_state;
     std::string plaintext_route_warning;
+    std::optional<std::array<std::uint8_t, 16>> abandoned_startup_virtual_display_guid_bytes;
+    std::vector<std::function<void()>> posted;
+    std::vector<std::function<void()>> startups;
+    int io_context = 0;
+    std::atomic_bool stopping {false};
+    host_stream_control::startup_dispatch_t startup_dispatch;
+
+    template<class F> void post(F &&fn) { posted.emplace_back(std::forward<F>(fn)); }
+    template<class F> void run_startup(F &&fn) {
+      startup_dispatch.submit([this](auto task) { startups.emplace_back(std::move(task)); }, std::forward<F>(fn), [] {});
+    }
+    void drain_monitor_reconciliation() {
+      auto posts = std::move(posted);
+      posted.clear();
+      for (auto &fn : posts) fn();
+      auto tasks = std::move(startups);
+      startups.clear();
+      for (auto &fn : tasks) fn();
+    }
+    void fire_monitor_retries() {
+      auto callbacks = std::move(timer_callbacks);
+      timer_callbacks.clear();
+      for (auto &fn : callbacks) fn();
+    }
 
     int startup_count() const {
       return 0;
@@ -201,6 +250,8 @@ namespace rtsp_stream {
     bool pending_hdr_active() {
       return false;
     }
+
+    void insert(const std::shared_ptr<stream::session_t> &, const std::string &, bool) {}
 
     bool vulkan_hdr_layer_active_locked() {
       return false;
@@ -215,6 +266,20 @@ namespace rtsp_stream {
     return disconnected;
   }
 }  // namespace rtsp_stream
+
+bool activates_vulkan_hdr_layer_for_stream(int) { return false; }
+
+// Execute the unchanged production startup result gate using fake stream
+// edges. In particular, a late exception must never be classified as the
+// known pre-control return value.
+void exercise_startup_gate(const std::shared_ptr<rtsp_stream::launch_session_t> &launch_session) {
+  auto *server = &rtsp_stream::server;
+  const auto pending_launch = launch_session;
+  const auto client_uuid = launch_session->client_uuid;
+  const std::string remote_address = "fake";
+  struct { int monitor = 0; } config;
+  /* @STARTUP_GATE@ */
+}
 
 bool nvhttp::has_stream_session_activity(bool expire_pending) {
   if (expiry_worker && during_activity_check) {
@@ -306,6 +371,13 @@ void reset() {
   remote_role_owners.clear();
   rtsp_stream::server.pending_launches.clear();
   rtsp_stream::server._session_state.sessions.clear();
+  rtsp_stream::server.posted.clear();
+  rtsp_stream::server.startups.clear();
+  timer_callbacks.clear();
+  timer_delay_ms = 0;
+  rtsp_stream::server.abandoned_startup_virtual_display_guid_bytes.reset();
+  stream::fake_start_result = 0;
+  stream::fake_start_exception = stream::fake_partial_registration = false;
   config_clears = draining = finalizes = 0;
   config::runtime_overrides.clear();
   config::sets = config::applies = proc::proc.app_id = 0;
@@ -517,5 +589,183 @@ int main() {
   check(launch("a", 21) == 409, "new admission collision must remain a failure");
   check(!remote_owner_generation("a", role_e::input) && !rtsp_stream::server.pending_launches.contains(20), "failed replacement must not leave stale ownership");
   check(rtsp_stream::server.pending_launches.at(21).session->client_uuid == "b", "failed retry must not consume peer pending launch");
-  std::cout << "PASS: pending/active/draining replacement, generation and client isolation, stale startup/completion, permissions, cancellation, delayed expiry and paused-game overrides, failure accounting\n";
+  // Pending monitor expiry must reconcile only after admitted startup has had
+  // the chance to publish, and must never retire a newer generation.
+  reset();
+  std::uint64_t monitor_generation = 40;
+  int monitor_lost = 0;
+  remote_session::register_monitor_runtime_hooks({
+    .transport_lost = [&](std::string_view client, std::uint64_t generation) {
+      if (client == "monitor" && generation == monitor_generation) ++monitor_lost;
+    },
+  });
+  auto monitor_pending = pending("monitor", 40, role_e::monitor);
+  check(rtsp_stream::server.session_raise(monitor_pending), "monitor expiry setup");
+  std::vector<std::shared_ptr<rtsp_stream::launch_session_t>> monitor_expired;
+  rtsp_stream::server.expire_pending_locked(std::chrono::steady_clock::now() + std::chrono::minutes(1), &monitor_expired);
+  rtsp_stream::server.notify_expired_pending(monitor_expired);
+  check(monitor_lost == 0, "expiry reconciliation must wait for startup");
+  rtsp_stream::server.drain_monitor_reconciliation();
+  check(monitor_lost == 1, "unconnected monitor expiry must release the ready gate");
+
+  monitor_lost = 0;
+  rtsp_stream::server.notify_expired_pending(monitor_expired);
+  monitor_pending->monitor_stream_published = true;
+  rtsp_stream::server.drain_monitor_reconciliation();
+  check(monitor_lost == 0, "published startup must retain its monitor gate");
+  monitor_pending->monitor_stream_published = false;
+  monitor_generation = 41;
+  rtsp_stream::server.notify_expired_pending(monitor_expired);
+  rtsp_stream::server.drain_monitor_reconciliation();
+  check(monitor_lost == 0, "stale expiry must not retire a newer monitor");
+  // A failed host terminal invalidates the queued ticket without shutting
+  // down the monitor. Retry after the host admission epoch reopens.
+  monitor_generation = 40;
+  rtsp_stream::server.notify_expired_pending(monitor_expired);
+  auto posts = std::move(rtsp_stream::server.posted);
+  rtsp_stream::server.posted.clear();
+  for (auto &fn : posts) fn();
+  int checks = 0;
+  bool terminated = host_stream_control::terminate([&] { return ++checks == 1; }, [] {});
+  check(!terminated && checks == 2, "failed terminal must invalidate startup without shutdown");
+  rtsp_stream::server.drain_monitor_reconciliation();
+  check(monitor_lost == 0 && timer_callbacks.size() == 1 && timer_delay_ms == 100, "invalidated monitor reconciliation must be retained with a bounded delay");
+  rtsp_stream::server.fire_monitor_retries();
+  rtsp_stream::server.drain_monitor_reconciliation();
+  check(monitor_lost == 1, "monitor expiry must reconcile after the failed terminal reopens");
+  monitor_lost = 0;
+  monitor_generation = 41;
+  auto canceled = pending("monitor", 41, role_e::monitor);
+  check(rtsp_stream::server.session_raise(canceled), "monitor cancellation setup");
+  rtsp_stream::server.cancel_pending_launch("test cancellation");
+  check(monitor_lost == 1, "unconnected canceled monitor must release the ready gate");
+
+  // A proven pre-registration start failure retires only its own pending
+  // monitor. The lifecycle gate prevents a startup from publishing while the
+  // pending record is retired; the callback makes the existing owner
+  // retryable immediately without waiting for the pending timer.
+  reset();
+  monitor_generation = 60;
+  monitor_lost = 0;
+  auto failed = pending("monitor", 60, role_e::monitor);
+  auto failed_hold = std::make_shared<int>(1);
+  failed->audio_context_guard = failed_hold;
+  failed->display_power_guard = failed_hold;
+  failed->exact_target_hold = failed_hold;
+  failed->virtual_display_guid_bytes[0] = 42;
+  check(rtsp_stream::server.session_raise(failed), "early monitor failure setup");
+  stream::fake_start_result = -1;
+  {
+    std::lock_guard lock {lifecycle};
+    exercise_startup_gate(failed);
+  }
+  check(!rtsp_stream::server.pending_launches.contains(60), "failed unpublished launch must be retired");
+  check(!rtsp_stream::server.retain_pending_runtime_holds(failed), "retired launch cannot regain startup admission");
+  check(!failed->audio_context_guard && !failed->display_power_guard && !failed->exact_target_hold && failed_hold.use_count() == 1,
+        "retired launch must release pending runtime holds");
+  check(monitor_lost == 1, "failed unpublished launch must immediately make the monitor retryable");
+  check(rtsp_stream::server.abandoned_startup_virtual_display_guid_bytes &&
+          (*rtsp_stream::server.abandoned_startup_virtual_display_guid_bytes)[0] == 42,
+        "shared runtime cleanup must retain the abandoned display identity");
+  check(rtsp_stream::server.session_raise(pending("monitor", 61, role_e::monitor)), "fresh pending launch can be admitted immediately");
+
+  // The same worker catches exceptions that may follow control registration.
+  // Such a failure is not the known early -1 return and must not drop its gate.
+  reset();
+  monitor_generation = 66;
+  monitor_lost = 0;
+  auto partial = pending("monitor", 66, role_e::monitor);
+  check(rtsp_stream::server.session_raise(partial), "partial startup setup");
+  stream::fake_start_exception = true;
+  {
+    std::lock_guard lock {lifecycle};
+    exercise_startup_gate(partial);
+  }
+  check(stream::fake_partial_registration && rtsp_stream::server.pending_launches.contains(66) && monitor_lost == 0,
+        "late startup exception must retain the pending monitor gate");
+  stream::fake_start_exception = false;
+  {
+    std::lock_guard lock {lifecycle};
+    exercise_startup_gate(partial);
+  }
+  check(partial->monitor_stream_published && rtsp_stream::server.pending_launches.contains(66) && monitor_lost == 0,
+        "successful startup must publish and retain the monitor gate");
+
+  // A published stream, another role, or an already-removed launch must not
+  // be treated as a proven unpublished failure.
+  reset();
+  monitor_generation = 62;
+  monitor_lost = 0;
+  auto published = pending("monitor", 62, role_e::monitor);
+  published->monitor_stream_published = true;
+  check(rtsp_stream::server.session_raise(published), "published monitor setup");
+  {
+    std::lock_guard lock {lifecycle};
+    rtsp_stream::server.retire_failed_monitor_start_locked(published);
+  }
+  check(rtsp_stream::server.pending_launches.contains(62) && monitor_lost == 0, "published monitor must retain its gate");
+  auto input = pending("input", 63, role_e::input);
+  check(rtsp_stream::server.session_raise(input), "other role setup");
+  {
+    std::lock_guard lock {lifecycle};
+    rtsp_stream::server.retire_failed_monitor_start_locked(input);
+  }
+  check(rtsp_stream::server.pending_launches.contains(63) && monitor_lost == 0, "early failure helper must not retire another role");
+  auto absent = pending("monitor", 64, role_e::monitor);
+  {
+    std::lock_guard lock {lifecycle};
+    rtsp_stream::server.retire_failed_monitor_start_locked(absent);
+  }
+  check(monitor_lost == 0, "already removed pending launch must not notify twice");
+
+  auto guarded = pending("monitor", 67, role_e::monitor);
+  guarded->rtsp_source_address = "identity-mismatch-test";
+  check(rtsp_stream::server.session_raise(guarded), "identity mismatch setup");
+  auto wrong_client = std::make_shared<rtsp_stream::launch_session_t>(*guarded);
+  wrong_client->client_uuid = "different-client";
+  auto wrong_generation = std::make_shared<rtsp_stream::launch_session_t>(*guarded);
+  ++wrong_generation->role_generation;
+  {
+    std::lock_guard lock {lifecycle};
+    rtsp_stream::server.retire_failed_monitor_start_locked(wrong_client);
+    rtsp_stream::server.retire_failed_monitor_start_locked(wrong_generation);
+  }
+  check(rtsp_stream::server.pending_launches.at(67).session == guarded && monitor_lost == 0,
+        "client and role-generation mismatches must not retire another owner");
+
+  // Queue an old startup behind the lifecycle gate, replace its map entry,
+  // then let it resume. Identity matching must preserve the replacement.
+  reset();
+  monitor_generation = 65;
+  auto stale = pending("monitor", 65, role_e::monitor);
+  check(rtsp_stream::server.session_raise(stale), "stale startup setup");
+  auto replacement = pending("monitor", 65, role_e::monitor);
+  replacement->unique_id = "new-unique-id";
+  std::mutex race_mutex;
+  std::condition_variable race_cv;
+  bool attempted = false;
+  std::unique_lock lifecycle_guard {lifecycle};
+  std::thread old_startup([&] {
+    {
+      std::lock_guard lock {race_mutex};
+      attempted = true;
+    }
+    race_cv.notify_all();
+    std::lock_guard lock {lifecycle};
+    rtsp_stream::server.retire_failed_monitor_start_locked(stale);
+  });
+  {
+    std::unique_lock lock {race_mutex};
+    check(race_cv.wait_for(lock, std::chrono::seconds(5), [&] { return attempted; }), "old startup reaches lifecycle gate");
+  }
+  {
+    std::lock_guard lock {rtsp_stream::server.pending_launches_mutex};
+    rtsp_stream::server.pending_launches.at(65).session = replacement;
+  }
+  lifecycle_guard.unlock();
+  old_startup.join();
+  check(rtsp_stream::server.pending_launches.at(65).session == replacement && monitor_lost == 0,
+        "stale startup must not retire or signal a replacement pending generation");
+  remote_session::register_monitor_runtime_hooks({});
+  std::cout << "PASS: pending/active/draining replacement, generation and client isolation, stale startup/completion, permissions, cancellation, delayed expiry and paused-game overrides, failure accounting, monitor expiry and early-start reconciliation\n";
 }
