@@ -1218,6 +1218,7 @@ sunshine_register_component(NAME test_component_tls_client_identity TEST_SOURCE 
     LINK_LIBRARIES sunshine_test_simple_web_headers ${SUNSHINE_TEST_SOCKET_LIBRARIES})
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET test_component_tls_client_identity)
     target_sources(test_component_tls_client_identity PRIVATE unit/test_nvhttp_handoff_tls.cpp)
+    target_link_libraries(test_component_tls_client_identity PRIVATE Boost::property_tree)
 endif()
 sunshine_register_component(NAME test_component_power_action TEST_SOURCE unit/test_power_action.cpp
     PRODUCT_SOURCES
