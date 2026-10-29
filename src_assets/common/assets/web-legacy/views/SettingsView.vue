@@ -226,6 +226,7 @@ import Playnite from '@/configs/tabs/Playnite.vue';
 import AudioVideo from '@/configs/tabs/AudioVideo.vue';
 import Capture from '@/configs/tabs/Capture.vue';
 import RealtimeStats from '@/configs/tabs/RealtimeStats.vue';
+import SteamBigPicture from '@/configs/tabs/SteamBigPicture.vue';
 import { useConfigStore } from '@/stores/config';
 import { useAuthStore } from '@/stores/auth';
 import { http } from '@/http';
@@ -282,10 +283,12 @@ const tabs = [
   { id: 'advanced', name: 'settings.tabs.advanced', component: markRaw(Advanced) },
   { id: 'stats', name: 'navbar.stats', component: markRaw(RealtimeStats) },
   { id: 'playnite', name: 'navbar.playnite', component: markRaw(Playnite) },
+  { id: 'steam', name: 'steam_big_picture.tab', component: markRaw(SteamBigPicture) },
 ];
 
+const windowsOnlyTabs = new Set(['rtss', 'steam']);
 const tabsFiltered = computed(() =>
-  tabs.filter((t) => (t.id === 'rtss' ? platform.value === 'windows' : true)),
+  tabs.filter((t) => (windowsOnlyTabs.has(t.id) ? platform.value === 'windows' : true)),
 );
 
 const openSections = ref(new Set(['general']));
