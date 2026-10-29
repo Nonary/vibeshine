@@ -1888,6 +1888,8 @@ if(SUNSHINE_TEST_POWERSHELL)
 endif()
 
 sunshine_register_component(NAME test_component_controller_speaker_pcm TEST_SOURCE unit/test_controller_speaker_pcm.cpp)
+sunshine_register_component(NAME test_component_host_cursor TEST_SOURCE unit/test_host_cursor.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/host_cursor.cpp" "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/host_cursor_bitmap.cpp")
 
 sunshine_register_component(NAME test_component_dualsense_audio_pcm TEST_SOURCE unit/test_dualsense_audio_pcm.cpp)
 set(_dualsense_protocol_test_adapter "")

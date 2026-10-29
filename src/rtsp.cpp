@@ -32,6 +32,7 @@ extern "C" {
 
 // local includes
 #include "config.h"
+#include "host_cursor.h"
 #include "host_stream_control.h"
 #include "globals.h"
 #include "input.h"
@@ -1804,7 +1805,11 @@ namespace rtsp_stream {
     }
 
     // Tell the client about our supported features
-    ss << "a=x-ss-general.featureFlags:" << (uint32_t) platf::get_capabilities() << std::endl;
+    auto feature_flags = (uint32_t) platf::get_capabilities();
+    if (host_cursor::tracker::supported()) {
+      feature_flags |= host_cursor_protocol::feature_flag;
+    }
+    ss << "a=x-ss-general.featureFlags:" << feature_flags << std::endl;
 
     // Always request new control stream encryption if the client supports it
     uint32_t encryption_flags_supported = SS_ENC_CONTROL_V2 | SS_ENC_AUDIO;
