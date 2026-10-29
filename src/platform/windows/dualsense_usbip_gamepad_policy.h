@@ -14,14 +14,12 @@
 
 namespace platf::dualsense_usbip_gamepad {
   // A DualSense needs its matching USB audio function for native haptics.
-  // Application opt-in only forces that profile and delays launch until ready;
-  // it is not required when normal controller selection already chose DualSense.
+  // Controller selection alone determines whether to use the composite device.
   [[nodiscard]] inline bool select_composite_dualsense(
     std::string_view configured_gamepad,
     vhf_profile_e selected_profile,
-    bool application_requested,
     bool transport_available) {
-    return configured_gamepad == "usbip_ds5" || application_requested ||
+    return configured_gamepad == "usbip_ds5" ||
            (transport_available && selected_profile == vhf_profile_e::dualsense &&
             configured_gamepad != "x360" && configured_gamepad != "ds4");
   }

@@ -45,11 +45,13 @@ export interface App {
 
 interface AppsResponse {
   apps?: App[];
+  'restorable-system-apps'?: { id: string; name: string }[];
 }
 
 // Centralized store for applications list
 export const useAppsStore = defineStore('apps', () => {
   const apps: Ref<App[]> = ref([]);
+  const restorableSystemApps = ref<{ id: string; name: string }[]>([]);
 
   function setApps(list: App[]): void {
     apps.value = Array.isArray(list) ? list : [];
@@ -65,6 +67,7 @@ export const useAppsStore = defineStore('apps', () => {
         return apps.value;
       }
       setApps((r.data && r.data.apps) || []);
+      restorableSystemApps.value = r.data?.['restorable-system-apps'] || [];
     } catch (e) {
       setApps([]);
     }
@@ -73,6 +76,7 @@ export const useAppsStore = defineStore('apps', () => {
 
   return {
     apps,
+    restorableSystemApps,
     setApps,
     loadApps,
   };

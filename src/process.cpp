@@ -63,7 +63,6 @@
 #include "platform/common.h"
 #ifdef _WIN32
   #include "config_playnite.h"
-  #include "platform/windows/dualsense_launch_policy.h"
   #include "platform/windows/display.h"
   #include "platform/windows/frame_limiter.h"
   #include "platform/windows/ipc/misc_utils.h"
@@ -1009,7 +1008,6 @@ namespace proc {
       _process(std::move(other._process)),
       _process_group(std::move(other._process_group)),
 #ifdef _WIN32
-      _dualsense_usbip_session(std::move(other._dualsense_usbip_session)),
       _virtual_display_guid(other._virtual_display_guid),
       _virtual_display_active(other._virtual_display_active),
 #endif
@@ -1028,7 +1026,6 @@ namespace proc {
 #ifdef _WIN32
     _lossless_stop_requested.store(other._lossless_stop_requested.load(std::memory_order_acquire), std::memory_order_release);
     _deferred_launch = other._deferred_launch.load(std::memory_order_acquire);
-    _dualsense_ready_deadline = other._dualsense_ready_deadline;
     other._lossless_profile_applied = false;
 #endif
   }
@@ -1057,8 +1054,6 @@ namespace proc {
       _app_prep_it = other._app_prep_it;
       _app_prep_begin = other._app_prep_begin;
 #ifdef _WIN32
-      _dualsense_usbip_session = std::move(other._dualsense_usbip_session);
-      _dualsense_ready_deadline = other._dualsense_ready_deadline;
       _deferred_launch = other._deferred_launch.load(std::memory_order_acquire);
       _lossless_thread = std::move(other._lossless_thread);
       _lossless_stop_requested.store(other._lossless_stop_requested.load(std::memory_order_acquire), std::memory_order_release);
@@ -1352,8 +1347,6 @@ namespace proc {
     std::string resolved_lossless_exe_utf8;
     _virtual_display_active = false;
     _virtual_display_guid = GUID {};
-    _dualsense_usbip_session.reset();
-    _dualsense_ready_deadline = {};
     _env["VIBESHINE_DUALSENSE_HAPTICS_MAPPING"] = "";
     _env["VIBESHINE_DUALSENSE_HAPTICS_DLL"] = "";
     _deferred_launch = false;
@@ -2029,25 +2022,6 @@ namespace proc {
     });
 
 #ifdef _WIN32
-    if (_app.dualsense_haptics) {
-      if (!_dualsense_usbip_session) {
-        _dualsense_usbip_session = platf::dualsense_usbip_gamepad::start_session();
-        if (!_dualsense_usbip_session) {
-          BOOST_LOG(error) << "DualSense waveform haptics requires the optional DualSense USB audio and haptics driver component. Modify the Windows installation to enable it.";
-          return -1;
-        }
-      }
-      // Input arrives after the application request, through the new RTSP
-      // session. Return a live deferred application while USB/HID/audio
-      // enumerate; waiting here would prevent the client from connecting.
-      if (!platf::dualsense_usbip_gamepad::has_ready_controller()) {
-        _dualsense_ready_deadline = std::chrono::steady_clock::now() + 30s;
-        _deferred_launch = true;
-        BOOST_LOG(info) << "Waiting for the streamed DualSense controller and its Windows haptic audio endpoint before launching '" << _app.name << "'.";
-        fg.disable();
-        return 0;
-      }
-    }
     std::unordered_set<DWORD> lossless_baseline_pids;
     bool lossless_monitor_started = false;
     std::string lossless_install_dir_hint;
@@ -2412,21 +2386,6 @@ namespace proc {
         }
         CloseHandle(user_token);
       }
-      const bool waiting_for_controller = static_cast<bool>(_dualsense_usbip_session);
-      const auto readiness = dualsense_launch::evaluate(
-        waiting_for_controller,
-        waiting_for_controller && platf::dualsense_usbip_gamepad::has_ready_controller(),
-        _dualsense_ready_deadline,
-        std::chrono::steady_clock::now()
-      );
-      if (readiness == dualsense_launch::decision::wait) {
-        return _app_id;
-      }
-      if (readiness == dualsense_launch::decision::timed_out) {
-        BOOST_LOG(error) << "DualSense launch timed out waiting for the streamed controller and its Windows haptic audio endpoint. Check the optional driver installation and use a compatible Moonlight client with a waveform-capable DualSense.";
-        terminate(false, true);
-        return 0;
-      }
       std::optional<int> rtss_warmup_limit;
       if (_lossless_metadata.enabled && _lossless_metadata.rtss_limit && *_lossless_metadata.rtss_limit > 0) {
         rtss_warmup_limit = *_lossless_metadata.rtss_limit;
@@ -2688,8 +2647,6 @@ namespace proc {
     placebo = false;
     std::chrono::seconds remaining_timeout = _app.exit_timeout;
 #ifdef _WIN32
-    _dualsense_usbip_session.reset();
-    _dualsense_ready_deadline = {};
     _env["VIBESHINE_DUALSENSE_HAPTICS_MAPPING"] = "";
     _env["VIBESHINE_DUALSENSE_HAPTICS_DLL"] = "";
     _deferred_launch = false;
@@ -3821,7 +3778,6 @@ namespace proc {
           // ignore overrides parse errors; continue without them
         }
 
-        ctx.dualsense_haptics = app_node.get<bool>("dualsense-haptics", false);
         ctx.lossless_scaling_enabled = lossless_scaling_enabled.value_or(false);
         ctx.lossless_scaling_framegen = lossless_scaling_framegen.value_or(false);
         if (!lossless_scaling_enabled) {

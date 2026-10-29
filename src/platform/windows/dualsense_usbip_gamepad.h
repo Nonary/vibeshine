@@ -6,22 +6,6 @@
 #include <memory>
 
 namespace platf::dualsense_usbip_gamepad {
-  // An application owns this preference through its full deferred-launch
-  // lifecycle. Opening a scope does not create or enumerate USB hardware.
-  class session_scope {
-  public:
-    ~session_scope();
-    session_scope(const session_scope &) = delete;
-    session_scope &operator=(const session_scope &) = delete;
-
-  private:
-    session_scope();
-    friend std::shared_ptr<session_scope> start_session();
-  };
-
-  // Returns empty when the optional signed transport is not installed.
-  std::shared_ptr<session_scope> start_session();
-  bool enabled();
   // End the lifetime of idle endpoints retained at the client's request.
   void set_application_active(bool active);
   // A USB/IP import alone is insufficient: both this controller's HID child

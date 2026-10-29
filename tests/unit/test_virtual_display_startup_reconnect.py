@@ -1,9 +1,9 @@
-"""Execute production restore admission and client handshake paths with OS fakes.
+"""Execute production restore admission and private IPC launch contracts with OS fakes.
 
 The fixtures compile real function bodies, replacing only the monotonic clock and
 Windows boundary collaborators. --repo permits before/after failure controls.
-This verifies application timeout propagation, not Windows driver scheduling or
-physical TV power transitions.
+This verifies application timeout propagation and the portable inherited-handle
+parser, not Windows process creation, driver scheduling, or physical TV transitions.
 """
 import argparse
 import pathlib
@@ -250,6 +250,7 @@ namespace mail {
 std::mutex &helper_mutex() { static std::mutex m; return m; }
 struct Process { void terminate() { ++killed; } } process;
 Process &helper_proc() { return process; }
+void terminate_helper_process() { helper_proc().terminate(); }
 bool sleep_with_cancellation(std::chrono::milliseconds wait, const std::function<bool()> &c, Time d) {
   fake_now += wait; return !cancellation_requested(c) && fake_now < d;
 }
@@ -431,8 +432,16 @@ int main() {
 def transport():
     pipes = (args.pipes_source or root / 'src/platform/windows/ipc/pipes.cpp').read_text()
     client = (args.client_source or root / 'src/platform/windows/ipc/display_settings_client.cpp').read_text()
+    integration = (root / 'src/platform/windows/display_helper_integration.cpp').read_text()
+    helpers = '\n'.join((root / path).read_text() for path in (
+        'tools/display_settings_helper.cpp', 'tools/display_settings_helper_v2.cpp'))
+    assert 'FILE_FLAG_FIRST_PIPE_INSTANCE' in pipes
+    assert 'GetNamedPipeServerProcessId' in pipes
+    assert 'set_expected_helper_process_id(pid)' in integration
+    assert helpers.count('set_first_pipe_instance_only()') >= 4
     methods = '\n'.join(function(pipes, signature) for signature in [
         'int client_wait_ms(',
+        'std::wstring validated_data_pipe_name(',
         'std::unique_ptr<INamedPipe> NamedPipeFactory::create_client(\n',
         'winrt::file_handle NamedPipeFactory::create_client_pipe(',
         'std::unique_ptr<INamedPipe> AnonymousPipeFactory::create_client(\n',
@@ -449,8 +458,10 @@ def transport():
     return common + r'''
 void fake_sleep(std::chrono::milliseconds delay) { fake_now += delay; }
 using DWORD = unsigned long;
+using ULONG = unsigned long;
 using ULONGLONG = unsigned long long;
-constexpr DWORD ERROR_PIPE_BUSY = 231, ERROR_FILE_NOT_FOUND = 2;
+constexpr bool FALSE = false;
+constexpr DWORD ERROR_SUCCESS = 0, ERROR_PIPE_BUSY = 231, ERROR_FILE_NOT_FOUND = 2;
 constexpr int GENERIC_READ = 1, GENERIC_WRITE = 2, OPEN_EXISTING = 3, FILE_FLAG_OVERLAPPED = 4;
 namespace winrt {
   struct file_handle {
@@ -458,9 +469,10 @@ namespace winrt {
     file_handle() = default;
     explicit file_handle(int v) : value(v) {}
     explicit operator bool() const { return value > 0; }
+    int get() const { return value; }
   };
 }
-enum class Scenario { Success, NoControl, BusyControl, NoHandshake, SlowAck, MissingData, Inline };
+enum class Scenario { Success, NoControl, BusyControl, NoHandshake, SlowAck, MissingData, Inline, WrongPeer, MalformedHandshake };
 Scenario scenario = Scenario::Success;
 DWORD last_error = 0;
 int opens = 0, ack_sends = 0, receives = 0, ping_sends = 0;
@@ -469,12 +481,16 @@ ULONGLONG GetTickCount64() { return static_cast<ULONGLONG>(std::chrono::duration
 DWORD GetLastError() { return last_error; }
 int CreateFileW(const wchar_t *name, int, int, void *, int, DWORD, void *) {
   ++opens;
-  const bool data = std::wstring(name).find(L"data") != std::wstring::npos;
+  const bool data = std::wstring(name).find(L"{") != std::wstring::npos;
   if (scenario == Scenario::NoControl || (scenario == Scenario::MissingData && data)) {
     last_error = ERROR_FILE_NOT_FOUND; return 0;
   }
   if (scenario == Scenario::BusyControl) { last_error = ERROR_PIPE_BUSY; return 0; }
   return data ? 2 : 1;
+}
+bool GetNamedPipeServerProcessId(int, unsigned long *pid) {
+  *pid = scenario == Scenario::WrongPeer ? 88 : 77;
+  return true;
 }
 void WaitNamedPipeW(const wchar_t *, DWORD timeout) {
   max_named_wait = std::max(max_named_wait, static_cast<int>(timeout)); advance(static_cast<int>(timeout));
@@ -493,6 +509,7 @@ namespace platf::dxgi {
     virtual void disconnect() = 0;
     virtual bool is_connected() = 0;
     virtual void wait_for_client_connection(int) {}
+    virtual std::optional<DWORD> peer_process_id() { return 77; }
   };
   struct WinPipe : INamedPipe {
     bool connected = true;
@@ -508,7 +525,12 @@ namespace platf::dxgi {
       if (scenario == Scenario::Inline) {
         uint32_t size = 2; std::memcpy(bytes.data(), &size, sizeof(size)); count = sizeof(size);
       } else {
-        AnonConnectMsg message {}; std::wcscpy(message.pipe_name, L"data");
+        AnonConnectMsg message {};
+        if (scenario == Scenario::MalformedHandshake) {
+          std::fill(std::begin(message.pipe_name), std::end(message.pipe_name), L'X');
+        } else {
+          std::wcscpy(message.pipe_name, L"{01234567-89AB-CDEF-0123-456789ABCDEF}");
+        }
         std::memcpy(bytes.data(), &message, sizeof(message)); count = sizeof(message);
       }
       advance(1); return PipeResult::Success;
@@ -524,16 +546,22 @@ namespace platf::dxgi {
     PipeResult receive(std::span<uint8_t> b, size_t &c, int t) override { return inner->receive(b,c,t); }
     void disconnect() override { inner->disconnect(); }
     bool is_connected() override { return inner && inner->is_connected(); }
+    std::optional<DWORD> peer_process_id() override { return inner ? inner->peer_process_id() : std::nullopt; }
   };
   using FramedPipe = PrefetchedPipe;
   struct NamedPipeFactory {
     DWORD _client_security_flags = 0;
+    DWORD _expected_server_process_id = 0;
+    void set_client_identification_only() {}
+    void set_expected_server_process_id(DWORD pid) { _expected_server_process_id = pid; }
     std::unique_ptr<INamedPipe> create_client(const std::string &, const std::function<bool()> &, Time);
     winrt::file_handle create_client_pipe(const std::wstring &, const std::function<bool()> &, Time) const;
   };
   struct AnonymousPipeFactory {
     enum class HandshakeMessageResult { Message, Inline, Failed };
     NamedPipeFactory _pipe_factory;
+    void set_client_identification_only() { _pipe_factory.set_client_identification_only(); }
+    void set_expected_server_process_id(DWORD pid) { _pipe_factory.set_expected_server_process_id(pid); }
     std::unique_ptr<INamedPipe> create_client(const std::string &, const std::function<bool()> &, Time);
     std::unique_ptr<INamedPipe> handshake_client(std::unique_ptr<INamedPipe>, const std::function<bool()> &, Time);
     HandshakeMessageResult receive_handshake_message(std::unique_ptr<INamedPipe> &, AnonConnectMsg &, std::vector<uint8_t> &, const std::function<bool()> &, Time) const;
@@ -547,6 +575,7 @@ namespace platf::dxgi {
     explicit SelfHealingPipe(std::function<std::unique_ptr<INamedPipe>()> c) : creator(std::move(c)) {}
     void wait_for_client_connection(int t) { inner = creator(); if (inner) inner->wait_for_client_connection(t); }
     bool is_connected() { return inner && inner->is_connected(); }
+    std::optional<DWORD> peer_process_id() { return inner ? inner->peer_process_id() : std::nullopt; }
   };
 }
 namespace platf::display_helper_client {
@@ -557,6 +586,7 @@ namespace platf::display_helper_client {
   };
   using SessionPtr = std::shared_ptr<ConnectionSession>;
   SessionPtr &session_singleton() { static SessionPtr p; return p; }
+  std::atomic<std::uint32_t> &expected_helper_process_id() { static std::atomic<std::uint32_t> p{77}; return p; }
   std::atomic<std::uint64_t> &connection_generation() { static std::atomic<std::uint64_t> g{1}; return g; }
   std::uint64_t allocate_connection_generation() { return connection_generation().load() + 1; }
   SessionPtr retire_session_locked() { auto old = session_singleton(); session_singleton().reset(); return old; }
@@ -576,6 +606,7 @@ void reset_transport(Scenario value) {
   scenario = value; fake_now = Time{} + 100s;
   opens = ack_sends = receives = ping_sends = max_receive_wait = max_named_wait = 0;
   platf::display_helper_client::session_singleton().reset();
+  platf::display_helper_client::expected_helper_process_id().store(77);
 }
 int main() {
   for (auto mode : {Scenario::NoControl, Scenario::BusyControl, Scenario::NoHandshake, Scenario::SlowAck, Scenario::MissingData}) {
@@ -591,6 +622,16 @@ int main() {
   reset_transport(Scenario::Inline);
   require(platf::display_helper_client::send_ping_cancellable(750, [] { return false; }, fake_now + 10s) &&
           ack_sends == 0 && ping_sends == 1, "legacy inline connection failed");
+  reset_transport(Scenario::WrongPeer);
+  require(!platf::display_helper_client::send_ping_cancellable(750, [] { return false; }, fake_now + 10s) &&
+          ping_sends == 0, "unauthenticated helper reached PING");
+  reset_transport(Scenario::MalformedHandshake);
+  {
+    platf::dxgi::AnonymousPipeFactory factory;
+    factory.set_expected_server_process_id(77);
+    require(!factory.create_client("sunshine_display_helper", [] { return false; }, fake_now + 750ms),
+            "malformed anonymous handshake was accepted");
+  }
   for (auto mode : {Scenario::NoControl, Scenario::BusyControl, Scenario::NoHandshake, Scenario::MissingData}) {
     reset_transport(mode); const auto start = fake_now; const auto cancel_at = fake_now + 75ms;
     require(!platf::display_helper_client::send_ping_cancellable(750, [=] { return fake_now >= cancel_at; }, fake_now + 10s),
@@ -604,6 +645,75 @@ int main() {
   require(!platf::display_helper_client::send_ping_cancellable(750, [] { return true; }, fake_now + 10s) && opens == 0,
           "already cancelled transport opened a pipe");
   std::cout << "13 production transport scenarios passed\n";
+}
+'''
+
+
+def private_pipe_transport():
+    pipes = (args.pipes_source or root / 'src/platform/windows/ipc/pipes.cpp').read_text()
+    client = (args.client_source or root / 'src/platform/windows/ipc/display_settings_client.cpp').read_text()
+    integration = (root / 'src/platform/windows/display_helper_integration.cpp').read_text()
+    process_handler = (root / 'src/platform/windows/ipc/process_handler.cpp').read_text()
+    legacy = (root / 'tools/display_settings_helper.cpp').read_text()
+    v2 = (root / 'tools/display_settings_helper_v2.cpp').read_text()
+
+    assert 'FILE_FLAG_FIRST_PIPE_INSTANCE' in pipes
+    assert 'set_system_only_server()' in integration
+    assert 'create_server_handle(private_pipe_name, true)' in integration
+    assert 'if (endpoint_guid.empty())' in integration
+    assert 'isSystem && !_system_only_server' not in pipes
+    assert 'PROC_THREAD_ATTRIBUTE_HANDLE_LIST' in process_handler
+    assert 'parent_is_system && !inherited_handles.empty()' in process_handler
+    assert 'O:SYG:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)' in process_handler
+    assert process_handler.count('process_attributes_ptr,') >= 6
+    assert 'const std::array<HANDLE, 1> inherited_handles' in integration
+    assert integration.count('allow_system_fallback, inherited_handles)') >= 3
+    assert '--ipc-handle=' in integration
+    assert 'set_expected_server_process_id' not in client
+    assert 'session->endpoint_generation == endpoint_generation' in client
+    assert 'private_control_pipe_generation().load(std::memory_order_acquire) == session->endpoint_generation' in client
+    assert 'std::lock_guard<std::timed_mutex> write_lock(write_mutex())' in client
+    assert 'duplicate_server_pipe(ipc_master.get())' in legacy
+    assert 'duplicate_server_pipe(ipc_master.get())' in v2
+    assert 'validate_server_pipe_handle(ipc_master.get())' in legacy
+    assert 'validate_server_pipe_handle(ipc_master.get())' in v2
+    assert 'SetHandleInformation(ipc_master.get(), HANDLE_FLAG_INHERIT, 0)' in legacy
+    assert 'SetHandleInformation(ipc_master.get(), HANDLE_FLAG_INHERIT, 0)' in v2
+    assert 'create_server("sunshine_display_helper")' not in legacy
+    assert 'create_server("sunshine_display_helper")' not in v2
+    assert 'AnonymousPipeFactory' not in legacy
+    assert 'AnonymousPipeFactory' not in v2
+    assert 'if (!ensure_single_instance(singleton))' in legacy
+    assert 'if (!display_helper_paths::ensure_single_instance(singleton))' in v2
+
+    header = (root / 'tools/display_helper_ipc.h').as_posix()
+    return common + f'''\n#include "{header}"\n''' + r'''
+int main() {
+  {
+    char program[] = "helper";
+    char option[] = "--ipc-handle=184467";
+    char *argv[] = {program, option};
+    require(display_helper_ipc::inherited_server_handle_from_command_line(2, argv) == 184467,
+            "valid inherited handle was rejected");
+  }
+  for (const char *bad : {"--ipc-handle=", "--ipc-handle=0", "--ipc-handle=-1",
+                          "--ipc-handle=12x", "--ipc-handle=184467440737095516160"}) {
+    char program[] = "helper";
+    char option[96] = {};
+    std::strncpy(option, bad, sizeof(option) - 1);
+    char *argv[] = {program, option};
+    require(!display_helper_ipc::inherited_server_handle_from_command_line(2, argv),
+            "malformed inherited handle was accepted");
+  }
+  {
+    char program[] = "helper";
+    char first[] = "--ipc-handle=12";
+    char second[] = "--ipc-handle=13";
+    char *argv[] = {program, first, second};
+    require(!display_helper_ipc::inherited_server_handle_from_command_line(3, argv),
+            "duplicate inherited handles were accepted");
+  }
+  std::cout << "private pipe launch contracts and handle parser passed\n";
 }
 '''
 
@@ -720,7 +830,7 @@ int main() {
 
 with tempfile.TemporaryDirectory(prefix='virtual-display-startup-') as temporary:
     directory = pathlib.Path(temporary)
-    for name, factory in [('admission', admission), ('preflight', lambda: admission(True)), ('transport', transport), ('resume', resume)]:
+    for name, factory in [('admission', admission), ('preflight', lambda: admission(True)), ('transport', private_pipe_transport), ('resume', resume)]:
         if args.fixture not in [name, 'all']:
             continue
         source, binary = directory / f'{name}.cpp', directory / name

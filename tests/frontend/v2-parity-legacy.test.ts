@@ -5,6 +5,8 @@ import { createI18n } from 'vue-i18n';
 import { NCheckbox } from 'naive-ui';
 import messagesEn from '@/public/assets/locale/en.json';
 import AudioVideo from '@/configs/tabs/AudioVideo.vue';
+import DisplayDeviceOptions from '@/configs/tabs/audiovideo/DisplayDeviceOptions.vue';
+import { NInput, NButton } from 'naive-ui';
 import FrameLimiterStep from '@/configs/tabs/audiovideo/FrameLimiterStep.vue';
 import ConfigFieldRenderer from '@/ConfigFieldRenderer.vue';
 import PlatformLayout from '@/PlatformLayout.vue';
@@ -127,4 +129,40 @@ describe('legacy configuration behavior', () => {
     expect(store.config.mangohud_limiter_method).toBe('early');
     await wrapper.unmount();
   });
+});
+
+
+describe('legacy display overrides', () => {
+  for (const platform of ['linux', 'windows']) {
+    it(`renders, edits and removes display overrides on ${platform}`, async () => {
+      const { store, pinia } = setupConfig({ dd_configuration_option: 'verify_only' }, platform);
+      const wrapper = mount(DisplayDeviceOptions, {
+        props: { section: 'options' },
+        global: { plugins: plugins(pinia) },
+      });
+      expect(wrapper.text()).toContain('Display overrides');
+      const add = wrapper.findAllComponents(NButton).find((button) => button.text().includes('Add'));
+      expect(add).toBeDefined();
+      await add!.trigger('click');
+      const inputs = wrapper.find('.remap-row').findAllComponents(NInput);
+      expect(inputs).toHaveLength(4);
+      await inputs[0].vm.$emit('update:value', '1920x1080');
+      await inputs[2].vm.$emit('update:value', '3840x2160');
+      await inputs[3].vm.$emit('update:value', '120');
+      expect(store.config.dd_mode_remapping.mixed).toEqual([{
+        requested_resolution: '1920x1080', requested_fps: '',
+        final_resolution: '3840x2160', final_refresh_rate: '120',
+      }]);
+      expect(wrapper.find('#dd_resolution_option').exists()).toBe(platform === 'windows');
+      await wrapper.find('.remap-row').findComponent(NButton).trigger('click');
+      expect(store.config.dd_mode_remapping.mixed).toEqual([]);
+      await wrapper.setProps({ section: 'pre' });
+      expect(wrapper.find('.remap-row').exists()).toBe(false);
+      await wrapper.setProps({ section: 'options' });
+      store.config.dd_configuration_option = 'disabled';
+      await wrapper.vm.$nextTick();
+      expect(wrapper.text()).not.toContain('Display overrides');
+      wrapper.unmount();
+    });
+  }
 });
