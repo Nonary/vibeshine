@@ -138,6 +138,12 @@ namespace amf {
     // driver. Users can opt-in to 1 for absolute lowest latency or larger
     // values (4/8/16) as a workaround for driver freezes.
     std::optional<int> input_queue_size;
+
+    // --- Adaptive backlog (opt-in) ---
+    // Time the learned application depth: probe a depth-two start once and
+    // admit the next input near the in-flight picture's predicted completion.
+    // The driver queue above stays as configured.
+    bool adaptive_backlog = false;
   };
 
 }  // namespace amf

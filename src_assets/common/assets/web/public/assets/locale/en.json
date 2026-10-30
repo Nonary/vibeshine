@@ -409,6 +409,8 @@
     "amd_high_motion_quality_boost_desc": "Improves native AMF quality for high-motion content when supported by the driver. Auto leaves the driver default unchanged.",
     "amd_input_queue_size": "AMF Input Queue Size",
     "amd_input_queue_size_desc": "Sets the native AMF input queue depth. Leave at 0 to use automatic low-latency queue selection.",
+    "amd_adaptive_backlog": "AMF Adaptive Backlog",
+    "amd_adaptive_backlog_desc": "Experimental opt-in for the native AMF encoder without PreAnalysis. Probes a two-input startup once, then converts the next capture shortly before the in-flight picture's predicted completion instead of after its output. Needs an input queue size of 0 or at least 2 for overlap.",
     "amd_lowlatency_mode": "AMF Low-Latency Mode",
     "amd_lowlatency_mode_desc": "Controls the native AMF low-latency mode. Auto leaves the driver default unchanged.",
     "amd_ltr_frames": "AMF Long-Term Reference Frames",
