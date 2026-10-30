@@ -630,6 +630,15 @@ endif()
 sunshine_register_component(NAME test_component_hdr_request_policy TEST_SOURCE unit/test_hdr_request_policy.cpp)
 sunshine_register_component(NAME test_component_hdr_dynamic_metadata TEST_SOURCE unit/test_hdr_dynamic_metadata.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/hdr_dynamic_metadata.cpp")
+if(WIN32)
+    # The statistics shader and its readback ring on the WARP software rasterizer.
+    sunshine_register_component(NAME test_component_hdr_stats_d3d11
+        TEST_SOURCE unit/platform/windows/test_hdr_stats_d3d11.cpp
+        PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/hdr_stats_d3d11.cpp"
+                        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/hdr_dynamic_metadata.cpp"
+        LINK_LIBRARIES d3d11 d3dcompiler
+        DEFINITIONS "HDR_STATS_TEST_SHADER_PATH=L\"${SUNSHINE_TEST_REPOSITORY_ROOT}/src_assets/windows/assets/shaders/directx/hdr_stats_cs.hlsl\"")
+endif()
 sunshine_register_component(NAME test_component_single_flight TEST_SOURCE unit/test_single_flight.cpp)
 sunshine_register_component(NAME test_component_paused_app_monitor TEST_SOURCE unit/test_paused_app_monitor.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/power_action.cpp"

@@ -142,6 +142,33 @@ namespace video::hdr_dynamic {
   std::optional<codec_e> codec_for(int video_format);
 
   /**
+   * @brief How a stream's encoder gets its frames, as far as the statistics pass cares.
+   */
+  enum class encoder_e {
+    hardware,  ///< A hardware encoder; its encode device decides whether it has the pass.
+    software,  ///< Frames converted on the CPU, out of the pass's reach.
+    pyrowave,  ///< PyroWave: its own codec, neither HEVC nor AV1.
+  };
+
+  /**
+   * @brief What a stream does about HDR10+ dynamic metadata.
+   */
+  enum class gate_e {
+    off,  ///< The setting is off.
+    not_hdr10,  ///< H.264, SDR or 10-bit SDR: no dynamic metadata, by design.
+    unsupported,  ///< An HDR10 stream whose encoder cannot carry it: say so.
+    carry,  ///< Measure the frames and splice the units.
+  };
+
+  /**
+   * @param enabled The hdr_dynamic_metadata setting.
+   * @param video_format `config_t::videoFormat`: 0 H.264, 1 HEVC, 2 AV1.
+   * @param pq The stream is Rec. 2100 PQ, not SDR in Rec. 709 or Rec. 2020.
+   * @param bit_depth The stream's bit depth.
+   */
+  gate_e gate(bool enabled, int video_format, bool pq, unsigned bit_depth, encoder_e encoder);
+
+  /**
    * @brief An Annex B prefix SEI NAL unit (four-byte start code, layer 0, TemporalId 0)
    *        holding one user_data_registered_itu_t_t35 message, emulation prevention applied.
    */

@@ -361,6 +361,23 @@ namespace video::hdr_dynamic {
     }
   }
 
+  gate_e gate(bool enabled, int video_format, bool pq, unsigned bit_depth, encoder_e encoder) {
+    if (!enabled) {
+      return gate_e::off;
+    }
+    if (!pq || bit_depth != 10) {
+      return gate_e::not_hdr10;
+    }
+    // PyroWave's frames are its own codec, whatever the client's HEVC or AV1 choice says.
+    if (encoder == encoder_e::pyrowave) {
+      return gate_e::unsupported;
+    }
+    if (!codec_for(video_format)) {
+      return gate_e::not_hdr10;
+    }
+    return encoder == encoder_e::software ? gate_e::unsupported : gate_e::carry;
+  }
+
   void escape(std::span<const std::uint8_t> rbsp, std::vector<std::uint8_t> &out) {
     int zeros = 0;
     for (const auto byte : rbsp) {

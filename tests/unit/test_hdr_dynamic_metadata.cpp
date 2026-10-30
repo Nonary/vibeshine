@@ -840,6 +840,40 @@ TEST(HdrDynamicMetadata, SampleGridHasAtMost240By135Cells) {
   EXPECT_EQ(hdr::sample_grid(0, 0), (std::pair<std::uint32_t, std::uint32_t> {1, 1}));
 }
 
+TEST(HdrDynamicMetadataGate, OnlyPq10BitHevcAndAv1FromHardwareEncodersCarryIt) {
+  using enum hdr::gate_e;
+  using hdr::encoder_e;
+  constexpr int h264 = 0;
+  constexpr int hevc = 1;
+  constexpr int av1 = 2;
+
+  EXPECT_EQ(hdr::gate(true, hevc, true, 10, encoder_e::hardware), carry);
+  EXPECT_EQ(hdr::gate(true, av1, true, 10, encoder_e::hardware), carry);
+
+  // The setting is off by default and then nothing else matters.
+  for (const auto encoder : {encoder_e::hardware, encoder_e::software, encoder_e::pyrowave}) {
+    EXPECT_EQ(hdr::gate(false, hevc, true, 10, encoder), off);
+    EXPECT_EQ(hdr::gate(false, av1, true, 10, encoder), off);
+  }
+
+  // H.264, SDR and 10-bit SDR never carry it, without a warning.
+  EXPECT_EQ(hdr::gate(true, h264, true, 10, encoder_e::hardware), not_hdr10);
+  EXPECT_EQ(hdr::gate(true, h264, true, 10, encoder_e::software), not_hdr10);
+  for (const auto format : {h264, hevc, av1}) {
+    EXPECT_EQ(hdr::gate(true, format, false, 8, encoder_e::hardware), not_hdr10);
+    EXPECT_EQ(hdr::gate(true, format, false, 10, encoder_e::hardware), not_hdr10);
+    EXPECT_EQ(hdr::gate(true, format, false, 10, encoder_e::pyrowave), not_hdr10);
+  }
+  EXPECT_EQ(hdr::gate(true, hevc, true, 8, encoder_e::hardware), not_hdr10);
+
+  // An HDR10 stream that should carry it but cannot is reported.
+  EXPECT_EQ(hdr::gate(true, hevc, true, 10, encoder_e::software), unsupported);
+  EXPECT_EQ(hdr::gate(true, av1, true, 10, encoder_e::software), unsupported);
+  for (const auto format : {h264, hevc, av1, 3}) {
+    EXPECT_EQ(hdr::gate(true, format, true, 10, encoder_e::pyrowave), unsupported);
+  }
+}
+
 namespace {
   /// An AUD and a P slice, as encoders emit inter frames.
   bytes_t hevc_frame() {
