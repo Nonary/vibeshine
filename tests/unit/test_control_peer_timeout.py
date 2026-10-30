@@ -65,6 +65,7 @@ program = r'''
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <condition_variable>
 #include <functional>
@@ -126,7 +127,7 @@ constexpr int ENET_TIME_OVERFLOW = 86400000;
 using enet_uint32 = std::uint32_t;
 struct sockaddr {};
 struct address_t { sockaddr address; };
-struct ENetPeer { address_t address; int calls = 0; bool connected = true; std::uint32_t limit = 32, minimum = 5000, maximum = 30000; };
+struct ENetPeer { address_t address; int calls = 0; bool connected = true, retiring = false; std::uint32_t limit = 32, minimum = 5000, maximum = 30000; };
 struct ENetPacket { unsigned char *data; std::size_t dataLength; };
 enum { ENET_EVENT_TYPE_NONE, ENET_EVENT_TYPE_CONNECT, ENET_EVENT_TYPE_DISCONNECT, ENET_EVENT_TYPE_RECEIVE };
 struct ENetEvent { int type; ENetPeer *peer; std::uint32_t data; ENetPacket *packet; };
@@ -139,6 +140,8 @@ void enet_peer_timeout(ENetPeer *peer, enet_uint32 limit, enet_uint32 minimum, e
   ++peer->calls; peer->limit = limit; peer->minimum = minimum; peer->maximum = maximum;
 }
 void enet_peer_disconnect_now(ENetPeer *peer, enet_uint32) { ++disconnects; peer->connected = false; }
+void enet_peer_disconnect_later(ENetPeer *peer, enet_uint32) { peer->retiring = true; }
+void enet_packet_destroy(ENetPacket *packet) { delete packet; }
 namespace platf { std::string from_sockaddr(sockaddr *) { return "peer"; } }
 namespace net { using packet_t = std::unique_ptr<ENetPacket>; int map_port(int port) { return port; } }
 constexpr int CONTROL_PORT = 47999;
@@ -175,6 +178,7 @@ struct control_server_t {
   std::unique_ptr<host_t> _host = std::make_unique<host_t>();
   std::unique_ptr<std::vector<session_t *>> _sessions = std::make_unique<std::vector<session_t *>>();
   lockable_t<std::unordered_map<ENetPeer *, session_t *>> _peer_to_session;
+  std::unordered_set<ENetPeer *> _retiring_peers;
   session_t *get_session(ENetPeer *peer, std::uint32_t) {
     auto it = _peer_to_session->find(peer); return it == _peer_to_session->end() ? nullptr : it->second;
   }
@@ -362,7 +366,18 @@ int main() {
   stream::session::graceful_stop(graceful);
   stream::reap_sessions(&server, deadline);
   assert(termination_messages == 1 && flush_calls == 1);
-  assert(!graceful_peer.connected && graceful.controlEnd.value);
+  // The peer stays up until the client has the termination, with default timeouts.
+  assert(graceful_peer.connected && graceful_peer.retiring && graceful.controlEnd.value);
+  assert(graceful_peer.limit == 0 && graceful_peer.minimum == 0 && graceful_peer.maximum == 0);
+  assert(!server._peer_to_session->contains(&graceful_peer) && server._retiring_peers.contains(&graceful_peer));
+  // Its late traffic and hang-up belong to no session.
+  const int before_retired = callbacks;
+  next_event = {ENET_EVENT_TYPE_RECEIVE, &graceful_peer, 0, new ENetPacket {nullptr, 0}};
+  server.iterate(0ms);
+  assert(callbacks == before_retired && server._retiring_peers.contains(&graceful_peer));
+  next_event = {ENET_EVENT_TYPE_DISCONNECT, &graceful_peer, 0, nullptr};
+  server.iterate(0ms);
+  assert(server._retiring_peers.empty() && first.state == stream::session::state_e::RUNNING);
   // A peer's explicit disconnect also stops immediately rather than waiting.
   next_event = {ENET_EVENT_TYPE_DISCONNECT, &p1, 0, nullptr};
   server.iterate(0ms);

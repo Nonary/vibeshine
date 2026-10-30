@@ -25,6 +25,7 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 
 // lib includes
 #include <boost/algorithm/string/predicate.hpp>
@@ -601,6 +602,11 @@ namespace stream {
     // ENet peer to session mapping for sessions with a peer connected
     sync_util::sync_t<std::map<net::peer_t, session_t *>> _peer_to_session;
 
+    // Peers sent a graceful termination whose session is gone, kept until the
+    // client hangs up. Their events must never bind to another session.
+    // Only the control thread touches this.
+    std::unordered_set<net::peer_t> _retiring_peers;
+
     ENetAddress _addr;
     net::host_t _host;
   };
@@ -1116,6 +1122,19 @@ namespace stream {
     auto res = enet_host_service(_host.get(), &event, (enet_uint32) timeout.count());
 
     if (res > 0) {
+      if (_retiring_peers.contains(event.peer)) {
+        if (event.type != ENET_EVENT_TYPE_CONNECT) {
+          if (event.type == ENET_EVENT_TYPE_RECEIVE) {
+            enet_packet_destroy(event.packet);
+          } else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
+            _retiring_peers.erase(event.peer);
+          }
+          return;
+        }
+        // ENet reused the slot for a new connection.
+        _retiring_peers.erase(event.peer);
+      }
+
       auto session = get_session(event.peer, event.data);
       if (!session) {
         BOOST_LOG(warning) << "Rejected connection from ["sv << platf::from_sockaddr((sockaddr *) &event.peer->address.address) << "]: it's not properly set up"sv;
@@ -2011,9 +2030,8 @@ namespace stream {
 
             if (session->control.peer) {
               // The control owner alone touches the peer and encryption state.
-              // ENet's disconnect_now clears queued packets, so flush the
-              // graceful reason before detaching the peer.
-              if (session->stop_reason.load(std::memory_order_relaxed) == stop_reason_e::graceful) {
+              const bool graceful = session->stop_reason.load(std::memory_order_relaxed) == stop_reason_e::graceful;
+              if (graceful) {
                 send_termination(session);
                 server->flush();
               }
@@ -2022,7 +2040,18 @@ namespace stream {
                 server->_peer_to_session->erase(session->control.peer);
               }
 
-              enet_peer_disconnect_now(session->control.peer, 0);
+              if (graceful) {
+                // A client's ENet discards received packets it hasn't read yet
+                // when a disconnect arrives, so hanging up now loses the
+                // termination. Hang up once it is acknowledged; the client
+                // normally hangs up first. Drop any long configured retry
+                // window so an unresponsive client can't hold the peer.
+                enet_peer_timeout(session->control.peer, 0, 0, 0);
+                enet_peer_disconnect_later(session->control.peer, 0);
+                server->_retiring_peers.insert(session->control.peer);
+              } else {
+                enet_peer_disconnect_now(session->control.peer, 0);
+              }
               session->control.peer = nullptr;
             }
 
@@ -2057,8 +2086,8 @@ namespace stream {
           } else {
             if (game_session_requires_shutdown) {
               BOOST_LOG(info) << "Stopping game control session because the app terminated."sv;
-              send_termination(session);
-              session::stop(*session);
+              // The STOPPING pass sends the termination and waits for delivery.
+              session::graceful_stop(*session);
               has_game_session_pending_or_draining = true;
               ++pos;
               continue;
