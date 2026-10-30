@@ -37,9 +37,9 @@ $localTestCertificate = 'driver/VibeshineVhfGamepad.cer'
 $releaseLockFile = 'release-lock.json'
 $consumerReleaseLockFile = 'consumer-release-lock.json'
 
-# A package that ships unsigned because SignPath is not available on
-# jlobue10/libvirtualgamepad. Its catalogue is signed later, by the consumer MSI
-# signing request. At ingest every manifest/fresh-Inf2Cat hash is checked and
+# The producer package ships unsigned for downstream consumer MSI signing.
+# Its catalogue is signed later, by that signing request. At ingest every
+# manifest/fresh-Inf2Cat hash is checked and
 # CAT, DLL, and setup tool must explicitly report NotSigned with no signer.
 $msiRequestChannel = 'msi-request-signing'
 
@@ -416,7 +416,7 @@ function Assert-ConsumerReleaseLock {
     Assert-File -Path $path
     $lock = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     if ($lock.schema_version -ne 1 -or
-        $lock.repository -cne 'jlobue10/libvirtualgamepad' -or
+        $lock.repository -cne 'Nonary/libvirtualgamepad' -or
         $lock.tag -cne $ReleaseTag -or
         $lock.tag_target.ToLowerInvariant() -ne $ExpectedSourceRevision.ToLowerInvariant() -or
         $lock.asset_name -cne "libvirtualgamepad-$($ReleaseTag.Substring(1))-windows-x64.zip" -or
@@ -470,7 +470,7 @@ function Write-ReleaseLock {
     $lock = [ordered]@{
         schema_version = 2
         channel = if ($AllowLocalTest) { 'self-signed-local-test' } else { 'production' }
-        repository = if ($AllowLocalTest) { '' } else { 'jlobue10/libvirtualgamepad' }
+        repository = if ($AllowLocalTest) { '' } else { 'Nonary/libvirtualgamepad' }
         release_tag = if ($AllowLocalTest -and [string]::IsNullOrWhiteSpace($ReleaseTag)) { 'local' } else { $ReleaseTag }
         release_asset_name = if ($AllowLocalTest) { '' } else { "libvirtualgamepad-$($ReleaseTag.Substring(1))-windows-x64.zip" }
         release_asset_sha256 = if ($AllowLocalTest) { '' } else { $ExpectedReleaseAssetSha256.ToLowerInvariant() }
@@ -554,7 +554,7 @@ function Assert-ReleaseLock {
     }
 
     if ($lockChannel -ne 'production' -or
-        (Get-RequiredStringProperty -Object $lock -Name 'repository' -Context 'Release lock') -cne 'jlobue10/libvirtualgamepad' -or
+        (Get-RequiredStringProperty -Object $lock -Name 'repository' -Context 'Release lock') -cne 'Nonary/libvirtualgamepad' -or
         (Get-RequiredStringProperty -Object $lock -Name 'release_tag' -Context 'Release lock') -ne $ReleaseTag -or
         (Get-RequiredStringProperty -Object $lock -Name 'release_asset_name' -Context 'Release lock') -cne "libvirtualgamepad-$($ReleaseTag.Substring(1))-windows-x64.zip" -or
         (Normalize-Hex -Value (Get-RequiredStringProperty -Object $lock -Name 'release_asset_sha256' -Context 'Release lock') -Length 64 -Name 'release-lock archive SHA-256') -ne $ExpectedReleaseAssetSha256 -or

@@ -8,6 +8,7 @@ include("${repository_root}/cmake/packaging/windows_virtual_gamepad_contract.cma
 file(READ "${repository_root}/src_assets/windows/drivers/vhf-gamepad/install.ps1" installer_script)
 string(REGEX REPLACE "^v" "" producer_version "${SUNSHINE_VHF_GAMEPAD_RELEASE_TAG}")
 foreach(expected_assignment IN ITEMS
+    "$expectedProducerRepository = '${SUNSHINE_VHF_GAMEPAD_REPOSITORY}'"
     "$expectedProducerTag = '${SUNSHINE_VHF_GAMEPAD_RELEASE_TAG}'"
     "$expectedProducerAsset = 'libvirtualgamepad-${producer_version}-windows-x64.zip'"
     "$expectedProducerArchiveSha256 = '${SUNSHINE_VHF_GAMEPAD_RELEASE_ASSET_SHA256}'"

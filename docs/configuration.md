@@ -774,7 +774,7 @@ controller of another client. This option does not create or redirect controller
             and Vibeshine running as SYSTEM or an elevated administrator. If the driver is missing,
             lacks the capability, or access is denied, Vibeshine uses SendInput. Auto logs this normal
             fallback as informational; an explicitly selected VHF backend logs a warning.
-            The currently pinned driver package predates this capability and will use that fallback.
+            The bundled driver supports VHF keyboard and mouse input.
             VHF keyboard repeat follows Windows settings; a modifier sent only as a temporary
             packet flag may not remain active during a repeated key. Mouse scrolling uses whole detents.
             Unicode text, unsupported keys, and absolute pointer positions outside the primary display

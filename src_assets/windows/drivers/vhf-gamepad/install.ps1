@@ -71,19 +71,17 @@ $manifestPayload = @(
     'tools/VibeshineVhfGamepadDeviceSetup.exe'
 )
 $localTestCertificate = 'driver/VibeshineVhfGamepad.cer'
-$expectedProducerRepository = 'jlobue10/libvirtualgamepad'
-$expectedProducerTag = 'v0.1.0-beta.155'
-$expectedProducerAsset = 'libvirtualgamepad-0.1.0-beta.155-windows-x64.zip'
-$expectedProducerArchiveSha256 = '56be2b6c18162f88c38db65b062c86d6d7eb596b6eb77dd19da721a24cb19b08'
-$expectedProducerSourceRevision = '09e635cc3570268e7cd2cbda2a6a39d4efa6e174'
-$expectedDriverVer = '10/24/2026,0.1.0.86'
+$expectedProducerRepository = 'Nonary/libvirtualgamepad'
+$expectedProducerTag = 'v0.1.0-beta.10'
+$expectedProducerAsset = 'libvirtualgamepad-0.1.0-beta.10-windows-x64.zip'
+$expectedProducerArchiveSha256 = '650cf8281d95d1fb9388f8117cadeab195727e3dcb4105607df45080b15d312c'
+$expectedProducerSourceRevision = '5a3e4d222dd0b87556d4c564eb58b450ab579fb0'
+$expectedDriverVer = '10/29/2026,0.1.0.92'
 $expectedProtocolVersion = 2
 $expectedSignPathFoundationSignerSubject = 'CN=SignPath Foundation, O=SignPath Foundation, L=Lewes, S=Delaware, C=US'
 
-# Signing channel for a package that ships unsigned and is signed by the
-# consumer MSI signing request instead. SignPath is not available on
-# jlobue10/libvirtualgamepad, so its releases cannot carry a production
-# signature; the catalogue is signed downstream, inside the MSI.
+# The producer package ships unsigned for downstream consumer MSI signing.
+# The catalogue is signed inside the consumer MSI signing request.
 $msiRequestChannel = 'msi-request-signing'
 
 # Under that channel these two files are re-signed after the manifest was
