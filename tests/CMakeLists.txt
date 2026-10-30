@@ -1316,6 +1316,15 @@ sunshine_register_component(NAME test_component_video_colorspace TEST_SOURCE uni
     INCLUDE_DIRECTORIES ${FFMPEG_INCLUDE_DIRS}
     LINK_LIBRARIES Boost::log Boost::asio Boost::crc Boost::format Boost::process ZLIB::ZLIB ${FFMPEG_LIBRARIES}
                    ${SUNSHINE_TEST_FFMPEG_PLATFORM_LIBRARIES} ${SUNSHINE_TEST_SOCKET_LIBRARIES})
+sunshine_register_component(NAME test_component_video_hdr_dynamic TEST_SOURCE unit/test_video_hdr_dynamic.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_hdr_dynamic.cpp"
+                    "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/hdr_dynamic_metadata.cpp"
+                    "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_colorspace.cpp"
+                    "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/logging.cpp"
+                    "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/logging_policy.cpp"
+    INCLUDE_DIRECTORIES ${FFMPEG_INCLUDE_DIRS}
+    LINK_LIBRARIES Boost::log Boost::asio Boost::crc Boost::format Boost::process ZLIB::ZLIB ${FFMPEG_LIBRARIES}
+                   ${SUNSHINE_TEST_FFMPEG_PLATFORM_LIBRARIES} ${SUNSHINE_TEST_SOCKET_LIBRARIES})
 sunshine_register_component(NAME test_component_wgc_monitor_selection TEST_SOURCE unit/test_wgc_monitor_selection.cpp)
 sunshine_register_component(NAME test_component_input_geometry_transport TEST_SOURCE unit/test_input_geometry_transport.cpp)
 if(SUNSHINE_TEST_ENABLE_COMPONENT AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
