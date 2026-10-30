@@ -3,6 +3,7 @@
 Usage: python3 tests/unit/test_display_recovery_confirmation.py [repo]
        [--compiler CXX] [--windows-source before.cpp]
        [--display-device-root PATH] [--include DEPENDENCY_INCLUDE ...]
+       [--generate-only --output generated.cpp]
 
 The Windows-source override is a negative control: it exercises the unchanged
 final backend predicate against the same partial-snapshot regression cases.
@@ -13,6 +14,7 @@ production sources; no Windows display APIs or physical monitor claims are made.
 import argparse
 import pathlib
 import subprocess
+import sys
 import tempfile
 
 parser = argparse.ArgumentParser()
@@ -23,7 +25,13 @@ parser.add_argument("--windows-source", type=pathlib.Path)
 parser.add_argument("--display-device-root", type=pathlib.Path)
 parser.add_argument("--include", type=pathlib.Path, action="append", default=[],
                     help="Dependency include directory (JSON and Boost); repeat as needed")
+parser.add_argument("--generate-only", action="store_true",
+                    help="Write the production-wrapper fixture without compiling or running it")
+parser.add_argument("--output", type=pathlib.Path,
+                    help="Generated C++ output path (requires --generate-only)")
 args = parser.parse_args()
+if args.generate_only != (args.output is not None):
+    parser.error("--generate-only and --output must be supplied together")
 display_device = args.display_device_root or args.repo / "third-party/libdisplaydevice"
 core = args.repo / "src/platform/windows/display_helper_v2"
 
@@ -188,6 +196,10 @@ int main() {
 }
 '''
 program = program.replace("WINDOWS", function(windows, "bool WinDisplaySettings::snapshot_matches_current("))
+if args.generate_only:
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(program)
+    sys.exit(0)
 with tempfile.TemporaryDirectory(prefix="recovery-confirmation-") as temp:
     source = pathlib.Path(temp) / "test.cpp"
     binary = pathlib.Path(temp) / "test"

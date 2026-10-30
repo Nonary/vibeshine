@@ -1162,6 +1162,50 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     sunshine_register_component(NAME test_component_linux_private_display_resume_policy TEST_SOURCE unit/platform/linux/test_private_display_resume_policy.cpp)
 endif()
 
+# Compile the actual Windows recovery wrapper with the portable display core.
+# Keep dependency usage requirements on the native target (including modular
+# Boost headers), rather than launching an unconfigured compiler from CTest.
+if(NOT WIN32 AND SUNSHINE_TEST_ENABLE_COMPONENT)
+    if(NOT SUNSHINE_TEST_PYTHON_EXECUTABLE)
+        message(FATAL_ERROR "Python 3 is required for the display recovery confirmation component")
+    endif()
+    set(_recovery_confirmation_fixture "${CMAKE_CURRENT_BINARY_DIR}/display-recovery-confirmation/test.cpp")
+    add_custom_command(
+        OUTPUT "${_recovery_confirmation_fixture}"
+        COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_recovery_confirmation.py"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}" --generate-only --output "${_recovery_confirmation_fixture}"
+        DEPENDS
+            "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_recovery_confirmation.py"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/win_display_settings.cpp"
+        VERBATIM)
+    add_executable(test_component_display_recovery_confirmation
+        "${_recovery_confirmation_fixture}"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/diagnostics.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/text_storage.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/topology_policy.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/golden_health.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/operations.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/snapshot.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_v2/snapshot_codec.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/windows/types.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/common/types.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/common/json.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/common/json_serializer.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libdisplaydevice/src/common/logging.cpp")
+    target_include_directories(test_component_display_recovery_confirmation PRIVATE
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}"
+        "${CMAKE_CURRENT_LIST_DIR}/support/display_helper_core")
+    target_compile_definitions(test_component_display_recovery_confirmation PRIVATE SUNSHINE_TEST_PORTABLE_WINDOWS_TYPES)
+    target_compile_options(test_component_display_recovery_confirmation PRIVATE -UNDEBUG)
+    target_link_libraries(test_component_display_recovery_confirmation PRIVATE
+        sunshine_test_displaydevice_headers Boost::algorithm nlohmann_json::nlohmann_json Threads::Threads)
+    set_target_properties(test_component_display_recovery_confirmation PROPERTIES
+        CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF FOLDER "tests/component")
+    add_test(NAME test_component_display_recovery_confirmation COMMAND test_component_display_recovery_confirmation)
+    set_tests_properties(test_component_display_recovery_confirmation PROPERTIES LABELS "component" TIMEOUT 30)
+endif()
+
 if(NOT WIN32)
     sunshine_register_component(NAME test_component_windows_display_recovery
         TEST_SOURCE unit/test_display_helper_v2_state_machine.cpp
