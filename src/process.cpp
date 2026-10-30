@@ -3932,6 +3932,10 @@ namespace proc {
         }
 
         ctx.uuid = configured_app_uuid(this_env, app_node);
+        if (const auto control = remote_session::identify(0, ctx.uuid);
+            control == remote_session::control_e::input || control == remote_session::control_e::monitor) {
+          ctx.hidden = app_node.get_optional<bool>("hidden"s).value_or(false);
+        }
 
         if (playnite_id) {
           ctx.playnite_id = parse_env_val(this_env, *playnite_id);

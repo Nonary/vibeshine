@@ -1570,6 +1570,15 @@ or safely reprovision the pool with the host and compositor stopped before
 requesting more than four clients. The topology editor reports the effective
 limit. Arbitrarily many displays are not supported.
 
+### Hiding Remote Input and Remote Monitor
+
+Each built-in entry can be removed from the app list sent to clients. In the web
+UI, open it from the library and turn on **Hide from client app lists**; turn the
+option off to show it again. In `apps.json` this is stored as `"hidden": true` on
+the entry, and is ignored on any other application. A client that still has the
+tile cached can launch it until its list refreshes. An active Remote Input keeps
+its tile for that client until the session ends.
+
 ### Remote Monitor display policy
 
 Remote Monitor uses one stable private virtual display per paired client on

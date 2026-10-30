@@ -13,6 +13,46 @@ namespace {
   remote_session::game_t game() { return {.running = true, .owner_uuid = "owner", .generation = 7, .app = {42, "game", "Running game", false}}; }
 }
 
+TEST(RemoteSession, HiddenBuiltInsLeaveTheCatalogueButStayLaunchable) {
+  const auto hidden = [](remote_session::control_e control) {
+    auto app = remote_session::synthetic(control);
+    app.catalogue_visible = false;
+    return app;
+  };
+  const auto has = [](const remote_session::projection_t &projection, std::int32_t id) {
+    return std::ranges::any_of(projection.catalogue, [id](const auto &app) { return app.id == id; });
+  };
+  const std::vector<remote_session::app_t> configured {
+    {1, "one", "One", false},
+    hidden(remote_session::control_e::input),
+    hidden(remote_session::control_e::monitor),
+  };
+
+  const auto idle = remote_session::project(caller("other"), {}, {}, configured, false);
+  ASSERT_EQ(idle.catalogue.size(), 1);
+  EXPECT_EQ(idle.catalogue[0].title, "One");
+
+  const auto owner = remote_session::project(caller("owner"), game(), {}, configured, false);
+  EXPECT_FALSE(has(owner, remote_session::input_id));
+  EXPECT_FALSE(has(owner, remote_session::monitor_id));
+
+  const auto observer = remote_session::project(caller("other"), game(), {}, configured, false);
+  EXPECT_FALSE(has(observer, remote_session::secondary_input_id));
+  EXPECT_FALSE(has(observer, remote_session::secondary_monitor_id));
+  EXPECT_TRUE(has(observer, remote_session::secondary_terminate_id));
+
+  const auto active_input = remote_session::project(caller("input"), {}, {.role = remote_session::role_e::input}, configured, true);
+  EXPECT_TRUE(has(active_input, remote_session::input_id));
+  EXPECT_FALSE(has(active_input, remote_session::monitor_id));
+
+  const auto visible_monitor = remote_session::project(caller("other"), {}, {}, {hidden(remote_session::control_e::input)}, false);
+  EXPECT_FALSE(has(visible_monitor, remote_session::input_id));
+  EXPECT_TRUE(has(visible_monitor, remote_session::monitor_id));
+
+  EXPECT_EQ(remote_session::identify(remote_session::input_id), remote_session::control_e::input);
+  EXPECT_TRUE(remote_session::dispatch(caller("other"), {}, {}, remote_session::control_e::input).allowed);
+}
+
 TEST(RemoteSession, SyntheticIdsAndLegacyIdsNeverFallThrough) {
   EXPECT_EQ(remote_session::identify(remote_session::monitor_id), remote_session::control_e::monitor);
   EXPECT_EQ(remote_session::identify(2147483605), remote_session::control_e::monitor);

@@ -295,21 +295,30 @@ namespace remote_session {
       result.catalogue = {synthetic(control_e::resume), synthetic(control_e::disconnect_monitor)};
       return result;
     }
+    const auto control_visible = [&](const control_e control) {
+      return std::none_of(configured.begin(), configured.end(), [&](const app_t &app) {
+        return identify(0, app.uuid) == control && !app.catalogue_visible;
+      });
+    };
+    // Hiding a tile never strands its owner: an active Remote Input keeps its
+    // reconnect entry until that session ends.
+    const auto show_input = owner.role == role_e::input || control_visible(control_e::input);
+    const auto show_monitor = control_visible(control_e::monitor);
     // Moonlight refreshes the catalogue before asynchronous input teardown
     // completes, then caches it. Keep the owner's Remote Input tile visible
     // so leaving a stream does not remove its reconnect entry.
     if (!game.running && !remote_sessions_active && owner.role == role_e::none) {
       result.catalogue = std::move(visible_configured);
-      result.catalogue.push_back(synthetic(control_e::input));
-      result.catalogue.push_back(synthetic(control_e::monitor));
+      if (show_input) result.catalogue.push_back(synthetic(control_e::input));
+      if (show_monitor) result.catalogue.push_back(synthetic(control_e::monitor));
       return result;
     }
     if (owns_game(caller, game)) {
       result.free = false;
       result.current_game = game.app.id;
       result.catalogue = visible_configured;
-      result.catalogue.push_back(synthetic(control_e::input));
-      result.catalogue.push_back(synthetic(control_e::monitor));
+      if (show_input) result.catalogue.push_back(synthetic(control_e::input));
+      if (show_monitor) result.catalogue.push_back(synthetic(control_e::monitor));
       return result;
     }
     if (game.running) {
@@ -323,13 +332,13 @@ namespace remote_session {
         prioritized_secondary_control(control_e::terminate),
       };
       result.catalogue.insert(result.catalogue.end(), visible_configured.begin(), visible_configured.end());
-      result.catalogue.push_back(prioritized_secondary_control(control_e::input));
-      result.catalogue.push_back(prioritized_secondary_control(control_e::monitor));
+      if (show_input) result.catalogue.push_back(prioritized_secondary_control(control_e::input));
+      if (show_monitor) result.catalogue.push_back(prioritized_secondary_control(control_e::monitor));
       return result;
     }
     result.catalogue = visible_configured;
-    result.catalogue.push_back(synthetic(control_e::input));
-    result.catalogue.push_back(synthetic(control_e::monitor));
+    if (show_input) result.catalogue.push_back(synthetic(control_e::input));
+    if (show_monitor) result.catalogue.push_back(synthetic(control_e::monitor));
     return result;
   }
 

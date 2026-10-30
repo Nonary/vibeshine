@@ -24,7 +24,7 @@ std::optional<settings_t> get_client_snapshot_by_uuid(const std::string&) { retu
 int fixture_current_app = 0;
 namespace proc {
 int input_only_app_id = -1, terminate_app_id = -2;
-struct ctx_t { std::string uuid; bool remote_monitor_profile{}; overrides_t config_overrides; std::string id; std::string name; std::vector<std::string> id_aliases; std::optional<std::size_t> configured_index; std::optional<display_target::descriptor_t> monitor_target; };
+struct ctx_t { std::string uuid; bool remote_monitor_profile{}; overrides_t config_overrides; std::string id; std::string name; std::vector<std::string> id_aliases; std::optional<std::size_t> configured_index; std::optional<display_target::descriptor_t> monitor_target; bool hidden{}; };
 struct process_t { std::vector<ctx_t> apps; std::vector<ctx_t> get_apps() const {return apps;} int current_app_id() const {return fixture_current_app;} bool update_active_app_live_rtx_hdr_overrides(const std::string&) {return true;} std::optional<ctx_t> resolve_app(const std::string& id,const std::string& uuid) {
  std::vector<catalog::app_identity_t> identities;
  for(auto& app:apps)identities.push_back({.uuid=app.uuid,.id=app.id,.aliases=app.id_aliases});

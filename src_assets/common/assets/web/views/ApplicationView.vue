@@ -120,6 +120,7 @@ interface EditorForm {
   virtualDisplayMode: string;
   virtualDisplayLayout: string;
   prefer10BitSdr: boolean | null;
+  hidden: boolean;
   ddConfigurationOption: string;
   frameGenerationProvider: string;
   frameGenerationMode: string;
@@ -1247,6 +1248,7 @@ const editableKeys = new Set([
   'virtual-display-mode',
   'virtual-display-layout',
   'prefer-10bit-sdr',
+  'hidden',
   'dd-configuration-option',
   'frame-generation-provider',
   'frame-generation-mode',
@@ -1337,6 +1339,7 @@ function emptyForm(): EditorForm {
     virtualDisplayLayout: '',
     ddConfigurationOption: '',
     prefer10BitSdr: null,
+    hidden: false,
     frameGenerationProvider: '',
     frameGenerationMode: '',
     gen1FramegenFix: false,
@@ -1786,6 +1789,7 @@ function hydrate(app: AppRecord): void {
     virtualDisplayMode: asString(app['virtual-display-mode']),
     virtualDisplayLayout: asString(app['virtual-display-layout']),
     prefer10BitSdr: app['prefer-10bit-sdr'] == null ? null : asBoolean(app['prefer-10bit-sdr']),
+    hidden: asBoolean(app.hidden),
     ddConfigurationOption: asString(app['dd-configuration-option']),
     frameGenerationProvider: asString(app['frame-generation-provider']),
     frameGenerationMode,
@@ -2031,6 +2035,7 @@ function buildPayload(): AppRecord {
   setOptionalString(payload, 'virtual-display-mode', form.virtualDisplayMode);
   setOptionalString(payload, 'virtual-display-layout', form.virtualDisplayLayout);
   setOptionalBoolean(payload, 'prefer-10bit-sdr', form.prefer10BitSdr);
+  if (isRemoteSession.value && form.hidden) payload.hidden = true;
   setOptionalString(payload, 'dd-configuration-option', form.ddConfigurationOption);
   setOptionalString(payload, 'frame-generation-provider', form.frameGenerationProvider);
   setOptionalString(payload, 'frame-generation-mode', form.frameGenerationMode);
@@ -3514,6 +3519,19 @@ onBeforeUnmount(() => {
               {{ t('ui.application.lutris.editNotice') }}
             </InlineAlert>
           </div>
+        </div>
+        <div v-if="isRemoteSession" class="vs-settings-group">
+          <SettingRow
+            :label="t('ui.application.fields.hidden.label')"
+            :description="t('ui.application.fields.hidden.description')"
+            control-id="app-hidden"
+          >
+            <label class="vs-switch">
+              <input id="app-hidden" v-model="form.hidden" type="checkbox" />
+              <span class="vs-switch__track" aria-hidden="true" />
+              <span class="vs-sr-only">{{ t('ui.application.fields.hidden.label') }}</span>
+            </label>
+          </SettingRow>
         </div>
         <div v-if="!isRemoteSession" class="vs-settings-group application-launch-settings">
           <SettingRow

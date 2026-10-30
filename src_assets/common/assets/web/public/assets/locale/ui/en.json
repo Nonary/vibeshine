@@ -157,6 +157,10 @@
         "losslessTarget": {
           "label": "Target frame rate"
         },
+        "hidden": {
+          "description": "Remove this entry from the app list that Moonlight and other clients receive. Turn this off to show it again.",
+          "label": "Hide from client app lists"
+        },
         "name": {
           "help": "Type a custom name or browse games from an available library provider.",
           "label": "Application or integrated game"

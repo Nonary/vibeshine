@@ -978,6 +978,7 @@ function toServerPayload(f: AppForm): Record<string, any> {
     payload['virtual-display-layout'] = f.virtualDisplayLayout;
   }
   Object.assign(payload, f.providerFields ?? {});
+  if (props.app?.['hidden'] === true) payload['hidden'] = true;
   if (f.playniteId) payload['playnite-id'] = f.playniteId;
   if (f.playniteManaged) payload['playnite-managed'] = f.playniteManaged;
   if (f.playniteIconPath) payload['playnite-icon-path'] = f.playniteIconPath;

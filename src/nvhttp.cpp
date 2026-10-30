@@ -3063,7 +3063,7 @@ namespace nvhttp {
     std::vector<remote_session::app_t> result;
     result.reserve(configured_apps.size());
     for (const auto &configured : configured_apps) {
-      result.push_back({static_cast<std::int32_t>(util::from_view(configured.id)), configured.uuid, configured.name, false, configured.remote_monitor_profile, configured.id_aliases});
+      result.push_back({static_cast<std::int32_t>(util::from_view(configured.id)), configured.uuid, configured.name, false, configured.remote_monitor_profile, configured.id_aliases, !configured.hidden});
     }
     return result;
   }
