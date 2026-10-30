@@ -1,5 +1,18 @@
 include_guard(GLOBAL)
 
+function(sunshine_vhf_prepare_package_stage output_variable local_test source_dir binary_dir)
+    if(local_test)
+        # A local test driver must not replace the checked-in release payload.
+        set(_stage "${binary_dir}/local-vhf-gamepad")
+        file(MAKE_DIRECTORY "${_stage}")
+        configure_file("${source_dir}/install.ps1" "${_stage}/install.ps1" COPYONLY)
+        configure_file("${source_dir}/cleanup.ps1" "${_stage}/cleanup.ps1" COPYONLY)
+    else()
+        set(_stage "${source_dir}")
+    endif()
+    set(${output_variable} "${_stage}" PARENT_SCOPE)
+endfunction()
+
 function(sunshine_vhf_is_fixed_length_hex output_variable value expected_length)
     if(NOT expected_length MATCHES "^[0-9]+$" OR expected_length LESS 1)
         message(FATAL_ERROR "VHF hexadecimal validation requires a positive expected length.")

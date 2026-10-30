@@ -343,8 +343,10 @@ if(SUNSHINE_BUNDLE_VHF_GAMEPAD_DRIVER)
         unset(_vhf_gamepad_signer)
     endif()
 
-    set(SUNSHINE_VIRTUAL_GAMEPAD_DRIVER_SOURCE_DIR
-        "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/vhf-gamepad")
+    sunshine_vhf_prepare_package_stage(SUNSHINE_VIRTUAL_GAMEPAD_DRIVER_SOURCE_DIR
+        "${SUNSHINE_ALLOW_LOCAL_VHF_GAMEPAD_TEST_PACKAGE}"
+        "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/vhf-gamepad"
+        "${CMAKE_BINARY_DIR}")
     set(SUNSHINE_VIRTUAL_GAMEPAD_DRIVER_REFRESH_SCRIPT
         "${CMAKE_SOURCE_DIR}/packaging/windows/virtual_gamepad_driver/refresh_driver_package.ps1")
     set(SUNSHINE_VIRTUAL_GAMEPAD_DRIVER_DOWNLOAD_SCRIPT

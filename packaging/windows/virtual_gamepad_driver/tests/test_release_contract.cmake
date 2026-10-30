@@ -59,3 +59,4 @@ assert_fixed_hex_rejected("long SHA-1" "${sha1_long}" 40)
 assert_fixed_hex_rejected("nonhex SHA-1" "${sha1_nonhex_prefix}z" 40)
 
 message(STATUS "VHF fixed-length hexadecimal release contract checks passed.")
+include("${CMAKE_CURRENT_LIST_DIR}/test_stage_path.cmake")

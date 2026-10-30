@@ -324,6 +324,7 @@ namespace config {
 
     bool keyboard;
     bool mouse;
+    std::string keyboard_mouse_backend;
     bool controller;
 
     bool always_send_scancodes;

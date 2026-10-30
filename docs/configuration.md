@@ -640,7 +640,7 @@ controller of another client. This option does not create or redirect controller
         <td>Description</td>
         <td colspan="2">
             The initial delay, in milliseconds, before repeating keys. Controls how fast keys will
-            repeat themselves.
+            repeat themselves. When VHF is active for keyboard input, Windows controls key repeat.
         </td>
     </tr>
     <tr>
@@ -663,7 +663,8 @@ controller of another client. This option does not create or redirect controller
     <tr>
         <td>Description</td>
         <td colspan="2">
-            How often keys repeat every second.
+            How often keys repeat every second. When VHF is active for keyboard input, Windows
+            controls key repeat.
             @tip{This configurable option supports decimals.}
         </td>
     </tr>
@@ -758,6 +759,45 @@ controller of another client. This option does not create or redirect controller
     </tr>
 </table>
 
+### keyboard_mouse_backend
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Select how Vibeshine sends keyboard and mouse input on Windows. `auto` (the default)
+            prefers VHF when a compatible driver is available at input initialization and otherwise
+            uses Windows SendInput. `sendinput` always uses Windows SendInput; `vhf` explicitly
+            prefers virtual HID devices. Existing explicit settings are preserved. Backend selection
+            does not switch automatically just because a game starts or stops.
+            VHF requires a compatible virtual input driver
+            and Vibeshine running as SYSTEM or an elevated administrator. If the driver is missing,
+            lacks the capability, or access is denied, Vibeshine uses SendInput. Auto logs this normal
+            fallback as informational; an explicitly selected VHF backend logs a warning.
+            The currently pinned driver package predates this capability and will use that fallback.
+            VHF keyboard repeat follows Windows settings; a modifier sent only as a temporary
+            packet flag may not remain active during a repeated key. Mouse scrolling uses whole detents.
+            Unicode text, unsupported keys, and absolute pointer positions outside the primary display
+            use SendInput. Mixed VHF and SendInput events may be processed in a different order, which
+            can affect absolute dragging on secondary displays. The keyboard and mouse enable settings
+            still apply. Restart Vibeshine after changing this setting.
+            @caution{Applies to Windows only. VHF requires a compatible virtual input driver.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            auto
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            keyboard_mouse_backend = vhf
+            @endcode</td>
+    </tr>
+</table>
+
 ### high_resolution_scrolling
 
 <table>
@@ -767,7 +807,7 @@ controller of another client. This option does not create or redirect controller
             When enabled, Sunshine will pass through high resolution scroll events from Moonlight clients.
             <br>
             This can be useful to disable for older applications that scroll too fast with high resolution scroll
-            events.
+            events. When VHF is active for mouse input, scrolling uses whole detents.
         </td>
     </tr>
     <tr>
