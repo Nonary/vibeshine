@@ -160,6 +160,19 @@ test('legacy global configuration is covered by v2 fields or a dedicated integra
   }
 });
 
+test('Steam Big Picture controls are only reachable from settings search on Windows', async () => {
+  const { matchesPlatform, settingsDestinations } = await import('../configs/settingsSchema.ts');
+  const destinations = settingsDestinations.filter((destination) =>
+    destination.keys.includes('steam_big_picture_controls'),
+  );
+  assert.equal(destinations.length, 1);
+  assert.deepEqual(destinations[0].keys, ['steam_big_picture_controls']);
+  assert.equal(destinations[0].to, '/integrations#steam-big-picture-heading');
+  assert.ok(matchesPlatform(destinations[0], 'windows'));
+  assert.ok(!matchesPlatform(destinations[0], 'linux'));
+  assert.ok(!matchesPlatform(destinations[0], 'macos'));
+});
+
 test('managed application focus settings are shared across platforms and separate from Playnite', async () => {
   const { settingsCategories, settingsDestinations } = await import('../configs/settingsSchema.ts');
   const focus = settingsCategories.flatMap((category) => category.groups).find((group) => group.id === 'app_focus');

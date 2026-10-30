@@ -2122,5 +2122,85 @@
       "files": "Files",
       "advanced": "Advanced"
     }
+  },
+  "steam_big_picture": {
+    "tab": "Steam",
+    "title": "Big Picture controls",
+    "desc": "End or disconnect Vibeshine streams from Steam Big Picture on this PC.",
+    "controls": "Show stream controls in Steam Big Picture",
+    "controls_desc": "Adds End Stream and Stop Streaming entries to Big Picture's Power menu and a status icon next to the clock. Uses Steam's debug port, which lets any program on this PC control Steam while it is on.",
+    "status_off": "Off",
+    "status_unknown": "Status unavailable",
+    "states": {
+      "injected": "Working",
+      "connecting": "Connecting to Steam",
+      "not_running": "Steam not running",
+      "no_console_user": "No one signed in",
+      "port_closed": "Steam debug port off",
+      "needs_restart": "Restart Steam to finish",
+      "breaker_open": "Paused: Steam kept reloading",
+      "port_foreign": "Port used by another program",
+      "script_disabled": "Switched off after errors",
+      "helper_failed": "Helper not running",
+      "helper_stopped": "Helper not running",
+      "wrong_session": "Not on the PC's own session",
+      "restarting": "Restarting Steam"
+    },
+    "debug_port": "Steam debug port",
+    "debug_port_off_desc": "Off. The controls reach Steam through its debug port. Turning it on adds an empty file to your Steam folder and restarts Steam.",
+    "debug_port_needs_restart": "On, but Steam was already running when it was turned on. Restart Steam to start using it.",
+    "debug_port_left_on": "Still on. The Big Picture controls are off, but the file Vibeshine added is still in your Steam folder, so Steam keeps opening its debug port. Turning it off deletes the file and restarts Steam.",
+    "debug_port_steam_missing": "Steam's folder wasn't found. Install Steam or start it once, then refresh.",
+    "turn_on_debug_port": "Turn on",
+    "turn_off_debug_port": "Turn off",
+    "restart_steam": "Restart Steam",
+    "compatibility": "Compatibility with this Steam version",
+    "compatibility_desc": "Checks which controls work in the running Steam without changing anything. Run it after a Steam update.",
+    "check_compatibility": "Check compatibility",
+    "checking": "Checking…",
+    "check_summary": "{working} of {total} controls work with Steam build {build}.",
+    "check_unknown_build": "unknown",
+    "check_results": {
+      "success": "Works",
+      "warning": "Fallback",
+      "danger": "Off"
+    },
+    "features": {
+      "power_menu": "Power menu entries",
+      "header_icon": "Header status icon",
+      "header_menu": "Header icon menu",
+      "header_styles": "Header icon styling",
+      "focusable": "Controller navigation"
+    },
+    "confirm": {
+      "controls_enable_title": "Turn on Big Picture controls?",
+      "enable_title": "Turn on Steam's debug port?",
+      "enable_desc": "Vibeshine adds an empty .cef-enable-remote-debugging file to your Steam folder and restarts Steam so the Big Picture controls can reach it. While the debug port is on, any program on this PC can control Steam. Restarting Steam closes games running through it.",
+      "enable_button": "Turn on and restart Steam",
+      "restart_title": "Restart Steam?",
+      "restart_desc": "Steam closes and opens again so it turns on its debug port. Restarting Steam closes games running through it.",
+      "restart_button": "Restart Steam",
+      "disable_title": "Turn off Big Picture controls?",
+      "port_off_title": "Turn off Steam's debug port?",
+      "disable_desc": "Vibeshine deletes the .cef-enable-remote-debugging file it added to your Steam folder and restarts Steam, which closes the debug port. Restarting Steam closes games running through it.",
+      "disable_button": "Turn off and restart Steam",
+      "during_stream_title": "A stream is running",
+      "during_stream_desc": "An app or stream is running right now. Restarting Steam closes games running through Steam, including one you're streaming.",
+      "restart_anyway": "Restart Steam anyway"
+    },
+    "errors": {
+      "status": "Steam Big Picture controls status is unavailable.",
+      "save": "Unable to save the Big Picture controls setting.",
+      "debug_port": "Steam's debug port could not be changed.",
+      "restart_failed": "Steam could not be restarted.",
+      "restart_slow": "Steam is taking longer than expected to restart. Refresh this page to check on it.",
+      "check": "The compatibility check could not run."
+    },
+    "notices": {
+      "saved": "Big Picture controls setting saved.",
+      "restarting": "Restarting Steam…",
+      "restarted": "Steam restarted.",
+      "next_start": "Saved. Steam picks this up the next time it starts."
+    }
   }
 }

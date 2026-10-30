@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -50,6 +51,8 @@ struct ENetPacket { std::string bytes; };
 struct peer_t {
   bool connected = true;
   bool send_failure = false;
+  bool retiring = false;
+  bool default_timeout = false;
   std::vector<ENetPacket *> queued;
   std::vector<std::string> wire;
 };
@@ -87,6 +90,15 @@ void enet_peer_disconnect_now(peer_t *peer, int) {
   for (auto packet : peer->queued) enet_packet_destroy(packet);
   peer->queued.clear();
   peer->connected = false;
+}
+void enet_peer_timeout(peer_t *peer, int limit, int minimum, int maximum) {
+  transport_effect("timeout");
+  peer->default_timeout = limit == 0 && minimum == 0 && maximum == 0;
+}
+void enet_peer_disconnect_later(peer_t *peer, int) {
+  transport_effect("disconnect_later");
+  // ENet hangs up only once queued packets are acknowledged; nothing is dropped.
+  peer->retiring = true;
 }
 
 namespace net { using peer_t = ::peer_t *; }
@@ -178,6 +190,7 @@ namespace stream {
   struct control_server_t {
     collection_t<std::vector<session_t *>> _sessions;
     collection_t<std::map<peer_t *, session_t *>> _peer_to_session;
+    std::unordered_set<peer_t *> _retiring_peers;
     std::shared_ptr<host_t> _host = std::make_shared<host_t>();
     /* PRODUCTION_SEND_METHOD */
     /* PRODUCTION_FLUSH_METHOD */
@@ -362,8 +375,13 @@ struct fixture_t {
               p[4] == 0x80 && p[5] == 0x03 && p[6] == 0x00 && p[7] == 0x23,
               "termination must retain 0x0109 and big-endian 0x80030023");
       auto at = [](const char *name) { return std::find(effects.begin(), effects.end(), name); };
-      require(at("send") < at("flush") && at("flush") < at("disconnect") &&
-              at("disconnect") < at("control_end"), "send/flush/disconnect/completion order violated");
+      require(at("send") < at("flush") && at("flush") < at("disconnect_later") &&
+              at("disconnect_later") < at("control_end"), "send/flush/disconnect/completion order violated");
+      // A client's ENet discards unread packets when a disconnect arrives, so
+      // an immediate hang-up would lose the termination on the client.
+      require(at("disconnect") == effects.end(), "graceful stop must not hang up before delivery");
+      require(peer.retiring && peer.default_timeout && server._retiring_peers.contains(&peer),
+              "graceful stop must retire the peer with default timeouts until the client hangs up");
     } else {
       require(peer.wire.empty(), "transport failure must not masquerade as graceful termination");
     }
@@ -399,6 +417,8 @@ int main(int argc, char **argv) {
       if (name == "failure_wins") stream::session::graceful_stop(session);
       f.drain();
       f.completed(false);
+      require(!f.peer.connected && !f.peer.retiring && f.server._retiring_peers.empty(),
+              "abrupt stop must hang up at once");
     } else if (name == "racing_failure_wins" || name == "racing_graceful_wins") {
       const bool graceful_first = name == "racing_graceful_wins";
       during_input_reset = [&] {

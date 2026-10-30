@@ -517,6 +517,9 @@ namespace confighttp {
   void getSteamGames(resp_https_t response, req_https_t request);
   void postSteamForceSync(resp_https_t response, req_https_t request);
   void postSteamLaunch(resp_https_t response, req_https_t request);
+  void getSteamBigPictureStatus(resp_https_t response, req_https_t request);
+  void postSteamBigPictureDebugPort(resp_https_t response, req_https_t request);
+  void postSteamBigPictureCheck(resp_https_t response, req_https_t request);
 
 #ifdef __linux__
   void getLutrisStatus(resp_https_t response, req_https_t request);
@@ -5837,6 +5840,13 @@ namespace confighttp {
     blocking_route_pool.start(1);
     thread_pool_util::ThreadPool metadata_route_pool;
     metadata_route_pool.start(1);
+    // The Steam compatibility check waits up to 10 s for Steam; it must not hold up the routes above.
+    thread_pool_util::ThreadPool steam_check_route_pool;
+    steam_check_route_pool.start(1);
+    // The Big Picture status looks through running processes and windows, and the page polls it during
+    // a Steam restart: keep it off the request thread, and out of the queue behind slow actions.
+    thread_pool_util::ThreadPool steam_status_route_pool;
+    steam_status_route_pool.start(1);
     clear_token_route_catalog();
     auto register_api_route = [&](const char *pattern, const char *method, const auto &handler, bool stream_start = false) {
       server.resource[pattern][method] = [method, handler, stream_start](resp_https_t response, req_https_t request) {
@@ -5926,6 +5936,9 @@ namespace confighttp {
     register_blocking_api_route("^/api/reset-display-device-persistence$", "POST", resetDisplayDevicePersistence);
 #if defined(_WIN32) || defined(__linux__)
     register_blocking_api_route("^/api/display/terminate_virtual$", "POST", postTerminateVirtualDisplay);
+    // Both wait on Steam: the process list and file system, or the helper's check (up to 10 s).
+    register_blocking_api_route("^/api/steam/big_picture/debug_port$", "POST", postSteamBigPictureDebugPort);
+    register_blocking_api_route("^/api/steam/big_picture/check$", "POST", postSteamBigPictureCheck, &steam_check_route_pool);
 #endif
 #ifdef _WIN32
     register_blocking_api_route("^/api/display/export_golden$", "POST", postExportGoldenDisplay);
@@ -5987,6 +6000,7 @@ namespace confighttp {
     register_api_route("^/api/steam/games$", "GET", getSteamGames);
     register_api_route("^/api/steam/force_sync$", "POST", postSteamForceSync);
     register_api_route("^/api/steam/launch$", "POST", postSteamLaunch);
+    register_blocking_api_route("^/api/steam/big_picture/status$", "GET", getSteamBigPictureStatus, &steam_status_route_pool);
 #ifdef __linux__
     register_api_route("^/api/lutris/status$", "GET", getLutrisStatus);
     register_api_route("^/api/lutris/games$", "GET", getLutrisGames);
@@ -6064,8 +6078,12 @@ namespace confighttp {
     tcp.join();
     blocking_route_pool.stop();
     metadata_route_pool.stop();
+    steam_check_route_pool.stop();
+    steam_status_route_pool.stop();
     blocking_route_pool.join();
     metadata_route_pool.join();
+    steam_check_route_pool.join();
+    steam_status_route_pool.join();
     webrtc_stream::shutdown_all_sessions();
     // std::jthread (cleanup_thread) auto-joins on destruction, no need for joinable/join
   }

@@ -61,7 +61,7 @@ void service_unavailable(resp_https_t r,const char*){r->status=503;}
 void send_response(resp_https_t r,const nlohmann::json&){if(response_endpoint)response_endpoint();r->ok=true;r->status=200;}
 namespace crypto {enum class PERM{_all};struct named_cert_t{std::string name,uuid;PERM perm;};}
 namespace http {const std::string unique_id="host";}
-namespace rtsp_stream {struct launch_session_t{};void terminate_sessions(bool){}}
+namespace rtsp_stream {struct launch_session_t{};void terminate_sessions(bool,bool){}}
 namespace webrtc_stream {void shutdown_all_sessions(){}}
 namespace remote_session {void notify_monitor_shutdown(){}}
 namespace stream::session {struct cleanup_reservation_t{~cleanup_reservation_t(){}};bool finalize_shared_runtime_if_idle(const char*){return true;}bool has_shared_runtime_owner(){return false;}}

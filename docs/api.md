@@ -158,6 +158,15 @@ The token grants access only to the specified paths and HTTP methods.
 
 All session metadata is stored hashed and persisted in the same state file as API tokens so Sunshine can validate cookies across service restarts.
 
+## GET /api/steam/big_picture/status
+@copydoc confighttp::getSteamBigPictureStatus()
+
+## POST /api/steam/big_picture/debug_port
+@copydoc confighttp::postSteamBigPictureDebugPort()
+
+## POST /api/steam/big_picture/check
+@copydoc confighttp::postSteamBigPictureCheck()
+
 ## GET /api/vigembus/status
 @copydoc confighttp::getViGEmBusStatus()
 

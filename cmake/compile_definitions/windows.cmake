@@ -159,6 +159,7 @@ foreach(_sunshine_versioned_tool IN ITEMS
         playnite-launcher
         sunshine_wgc_capture
         sunshine_end_stream_hotkey
+        sunshine_steam_ui_helper
         sunshine_display_helper)
     if(TARGET "${_sunshine_versioned_tool}")
         sunshine_add_windows_versioninfo("${_sunshine_versioned_tool}")
@@ -226,6 +227,11 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/hotkey_manager.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/hotkey_manager.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/end_stream_hotkey.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/steam_big_picture_controls.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/steam_big_picture_controls.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/steam_big_picture_debug_port.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/steam_big_picture_debug_port.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/steam_big_picture_pipe.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_ipc.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_ipc.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/playnite_protocol.h"

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import GameLibrarySetup from '../../web-legacy/components/GameLibrarySetup.vue';
 import { useUnsavedChanges } from '@/composables/useUnsavedChanges';
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 
@@ -49,6 +49,36 @@ interface SteamStatus {
   remove_uninstalled?: boolean;
   include_tools?: boolean;
   exclude_games?: Array<{ id?: string; name?: string }> | string[] | number;
+}
+
+interface SteamBigPictureStatus {
+  supported?: boolean;
+  enabled?: boolean;
+  state?: string;
+  detail?: string;
+  features?: Record<string, string>;
+  steam_build?: string;
+  debug_port?: {
+    steam_found?: boolean;
+    steam_root?: string;
+    steam_running?: boolean;
+    big_picture_open?: boolean;
+    flag_file?: boolean;
+    flag_file_created?: boolean;
+  };
+  steam_restart?: { state?: string; detail?: string };
+}
+
+interface SteamBigPictureReport {
+  steam_build?: string;
+  script_version?: number;
+  errors?: number;
+  features?: Record<string, string>;
+}
+
+interface SteamDebugPortResult extends MutationResult {
+  restart?: string;
+  error_code?: string;
 }
 
 interface MangoHudStatus {
@@ -166,7 +196,13 @@ type PendingAction =
   | 'playnite-uninstall'
   | 'playnite-purge-autosync'
   | 'vigem-install'
-  | 'vulkan-register';
+  | 'vulkan-register'
+  | SteamDebugPortAction;
+
+type SteamDebugPortAction =
+  | 'steam-debug-port-enable'
+  | 'steam-debug-port-restart'
+  | 'steam-debug-port-disable';
 
 interface IntegrationSummary {
   id: IntegrationId;
@@ -184,6 +220,15 @@ const libraryApps = ref<LibraryApp[]>([]);
 const libraryAppsLoaded = ref(false);
 const playniteLaunching = ref(false);
 const steam = ref<SteamStatus | null>(null);
+const steamBigPicture = ref<SteamBigPictureStatus | null>(null);
+const steamBigPictureError = ref('');
+const steamBigPictureSaving = ref(false);
+const steamRestartDuringStream = ref(false);
+const steamCheckBusy = ref(false);
+const steamCheckReport = ref<SteamBigPictureReport | null>(null);
+// Polls the Big Picture status while something is expected to change: a Steam restart, or the
+// helper starting after the controls are turned on.
+let steamStatusTimer: number | undefined;
 const steamGames = ref<SteamGame[]>([]);
 const steamGamesLoading = ref(false);
 const steamGamesError = ref('');
@@ -226,7 +271,10 @@ const confirmOpen = ref(false);
 const pendingAction = ref<PendingAction | null>(null);
 
 const playniteAutoSyncCount = computed(
-  () => libraryApps.value.filter((app) => app['playnite-managed'] === 'auto' && app['remote-monitor-profile'] !== true).length,
+  () =>
+    libraryApps.value.filter(
+      (app) => app['playnite-managed'] === 'auto' && app['remote-monitor-profile'] !== true,
+    ).length,
 );
 
 const isWindows = computed(() =>
@@ -500,6 +548,11 @@ async function load(preserveNotice = false): Promise<void> {
   if (!system.metadata) await system.refreshHost();
 
   const steamResult = (await Promise.allSettled([apiGet<SteamStatus>('/api/steam/status')]))[0];
+  const bigPictureResult = isWindows.value
+    ? (
+        await Promise.allSettled([apiGet<SteamBigPictureStatus>('/api/steam/big_picture/status')])
+      )[0]
+    : undefined;
   const lutrisResult = isLinux.value
     ? (await Promise.allSettled([apiGet<LutrisStatus>('/api/lutris/status')]))[0]
     : undefined;
@@ -521,6 +574,16 @@ async function load(preserveNotice = false): Promise<void> {
 
   if (steamResult.status === 'fulfilled') steam.value = steamResult.value;
   else nextErrors.steam = message(steamResult.reason, t('ui.integrations.errors.steamStatus'));
+
+  if (bigPictureResult?.status === 'fulfilled') {
+    steamBigPicture.value = bigPictureResult.value;
+    steamBigPictureError.value = '';
+  } else if (bigPictureResult) {
+    steamBigPictureError.value = message(
+      bigPictureResult.reason,
+      t('ui.integrations.errors.steamBigPictureStatus'),
+    );
+  }
 
   if (lutrisResult?.status === 'fulfilled') lutris.value = lutrisResult.value;
   else if (lutrisResult)
@@ -909,13 +972,15 @@ const dialogCopy = computed(() => {
   switch (pendingAction.value) {
     case 'playnite-install':
       return {
-        title: playnite.value?.installed || playnite.value?.legacy_plugin
-          ? t('ui.integrations.confirm.playniteUpdateTitle')
-          : t('ui.integrations.confirm.playniteInstallTitle'),
+        title:
+          playnite.value?.installed || playnite.value?.legacy_plugin
+            ? t('ui.integrations.confirm.playniteUpdateTitle')
+            : t('ui.integrations.confirm.playniteInstallTitle'),
         description: t('ui.integrations.confirm.playniteInstallDescription'),
-        confirm: playnite.value?.installed || playnite.value?.legacy_plugin
-          ? t('ui.integrations.actions.updateExtension')
-          : t('ui.integrations.actions.installExtension'),
+        confirm:
+          playnite.value?.installed || playnite.value?.legacy_plugin
+            ? t('ui.integrations.actions.updateExtension')
+            : t('ui.integrations.actions.installExtension'),
         tone: 'default' as const,
       };
     case 'playnite-uninstall':
@@ -957,6 +1022,38 @@ const dialogCopy = computed(() => {
         confirm: t('ui.integrations.actions.registerLayer'),
         tone: 'default' as const,
       };
+    case 'steam-debug-port-enable':
+    case 'steam-debug-port-restart':
+    case 'steam-debug-port-disable': {
+      if (steamRestartDuringStream.value) {
+        return {
+          title: t('ui.integrations.confirm.steamRestartDuringStreamTitle'),
+          description: t('ui.integrations.confirm.steamRestartDuringStreamDescription'),
+          confirm: t('ui.integrations.actions.restartSteamAnyway'),
+          tone: 'danger' as const,
+        };
+      }
+      const key = {
+        'steam-debug-port-enable': 'steamDebugPortEnable',
+        'steam-debug-port-restart': 'steamDebugPortRestart',
+        'steam-debug-port-disable': 'steamDebugPortDisable',
+      }[pendingAction.value];
+      // From the switch, turning the port on also turns the controls on, and turning it off turns
+      // them off. With the controls already off, the debug-port row turns off only the port.
+      const controlsOn = steamBigPicture.value?.enabled === true;
+      let title = key;
+      if (pendingAction.value === 'steam-debug-port-enable' && !controlsOn) {
+        title = 'steamControlsEnable';
+      } else if (pendingAction.value === 'steam-debug-port-disable' && !controlsOn) {
+        title = 'steamDebugPortOff';
+      }
+      return {
+        title: t(`ui.integrations.confirm.${title}Title`),
+        description: t(`ui.integrations.confirm.${key}Description`),
+        confirm: t(`ui.integrations.actions.${key}`),
+        tone: 'default' as const,
+      };
+    }
     default:
       return {
         title: t('ui.integrations.confirm.defaultTitle'),
@@ -974,12 +1071,23 @@ function requestAction(action: PendingAction): void {
 
 function updateConfirmOpen(value: boolean): void {
   confirmOpen.value = value;
-  if (!value && !actionBusy.value) pendingAction.value = null;
+  if (!value && !actionBusy.value) {
+    pendingAction.value = null;
+    steamRestartDuringStream.value = false;
+  }
+}
+
+function isSteamDebugPortAction(action: PendingAction): action is SteamDebugPortAction {
+  return action.startsWith('steam-debug-port-');
 }
 
 async function runConfirmedAction(): Promise<void> {
   const action = pendingAction.value;
   if (!action || actionBusy.value) return;
+  if (isSteamDebugPortAction(action)) {
+    await runSteamDebugPortAction(action);
+    return;
+  }
   actionBusy.value = true;
   notice.value = '';
   try {
@@ -1231,6 +1339,314 @@ async function setSteamRecentPolicy(
       ...errors.value,
       steam: message(cause, t('ui.integrations.errors.providerUpdateFailed')),
     };
+  }
+}
+
+const steamBigPictureBadge = computed<{ label: string; tone: StatusTone }>(() => {
+  const value = steamBigPicture.value;
+  if (!value) return { label: t('ui.integrations.steam.bigPictureUnknown'), tone: 'neutral' };
+  if (!value.enabled) return { label: t('ui.integrations.steam.bigPictureOff'), tone: 'neutral' };
+  if (value.steam_restart?.state === 'restarting') {
+    return { label: t('ui.integrations.steam.bigPictureStates.restarting'), tone: 'info' };
+  }
+  const tones: Record<string, StatusTone> = {
+    injected: 'success',
+    connecting: 'info',
+    not_running: 'neutral',
+    no_console_user: 'neutral',
+    port_closed: 'warning',
+    breaker_open: 'warning',
+    port_foreign: 'danger',
+    script_disabled: 'danger',
+    helper_failed: 'danger',
+    helper_stopped: 'danger',
+    wrong_session: 'warning',
+  };
+  // The service starts the helper in the background, so for a moment after the controls are
+  // turned on the status still says "off".
+  const current = value.state === 'off' ? 'connecting' : value.state;
+  const tone = current ? tones[current] : undefined;
+  if (!tone) return { label: t('ui.integrations.steam.bigPictureUnknown'), tone: 'neutral' };
+  // The flag file is there but Steam was started before it existed.
+  const state =
+    current === 'port_closed' && value.debug_port?.flag_file ? 'needs_restart' : current;
+  return { label: t(`ui.integrations.steam.bigPictureStates.${state}`), tone };
+});
+
+// Why the controls aren't working, when Vibeshine or the script knows: a helper that couldn't start,
+// Vibeshine running outside the console session, or the script switching itself off.
+const steamBigPictureDetail = computed(() =>
+  steamBigPicture.value?.enabled ? (steamBigPicture.value.detail?.trim() ?? '') : '',
+);
+
+const steamDebugPort = computed(() => steamBigPicture.value?.debug_port ?? null);
+const steamRestarting = computed(
+  () => steamBigPicture.value?.steam_restart?.state === 'restarting',
+);
+// Steam has the flag file but was started before it existed, so its debug port is still closed.
+const steamNeedsRestart = computed(
+  () =>
+    steamDebugPort.value?.flag_file === true &&
+    steamDebugPort.value.steam_running === true &&
+    steamBigPicture.value?.state === 'port_closed',
+);
+// The controls are off but the flag file Vibeshine added is still there, so Steam keeps opening its
+// debug port: deleting the file failed when they were turned off, or saving the setting failed after
+// it was added.
+const steamDebugPortLeftOn = computed(
+  () =>
+    steamBigPicture.value?.enabled === false &&
+    steamDebugPort.value?.flag_file === true &&
+    steamDebugPort.value.flag_file_created === true,
+);
+// Shown when the controls are on but can't reach Steam yet: the flag file is missing, for example
+// after turning them on while Steam wasn't found, or Steam needs a restart to read it. Also shown
+// while the port is left on with the controls off.
+const showSteamDebugPort = computed(
+  () =>
+    steamDebugPortLeftOn.value ||
+    (steamBigPicture.value?.enabled === true &&
+      steamDebugPort.value !== null &&
+      (!steamDebugPort.value.flag_file || steamNeedsRestart.value)),
+);
+
+const steamDebugPortDescription = computed(() => {
+  if (steamDebugPortLeftOn.value) return t('ui.integrations.steam.debugPortLeftOn');
+  if (!steamDebugPort.value?.steam_found) return t('ui.integrations.steam.debugPortSteamMissing');
+  if (steamNeedsRestart.value) return t('ui.integrations.steam.debugPortNeedsRestart');
+  return t('ui.integrations.steam.debugPortOffDescription');
+});
+
+const steamFeatureLabels: Record<string, string> = {
+  power_menu: 'ui.integrations.steam.bigPictureFeatures.powerMenu',
+  header_icon: 'ui.integrations.steam.bigPictureFeatures.headerIcon',
+  header_menu: 'ui.integrations.steam.bigPictureFeatures.headerMenu',
+  header_styles: 'ui.integrations.steam.bigPictureFeatures.headerStyles',
+  focusable: 'ui.integrations.steam.bigPictureFeatures.focusable',
+};
+
+// The script reports "off: <why>" and "fallback: <what instead>"; anything else ("ok", "ready",
+// "waiting for the Power menu to open") means the control was found and works.
+function steamFeatureTone(result: string): StatusTone {
+  if (result.startsWith('off')) return 'danger';
+  if (result.startsWith('fallback')) return 'warning';
+  return 'success';
+}
+
+const steamCheckRows = computed(() =>
+  Object.entries(steamCheckReport.value?.features ?? {}).map(([name, result]) => ({
+    name,
+    label: steamFeatureLabels[name] ? t(steamFeatureLabels[name]) : name.replaceAll('_', ' '),
+    result,
+    tone: steamFeatureTone(result),
+  })),
+);
+
+const steamCheckSummary = computed(() => {
+  const rows = steamCheckRows.value;
+  const working = rows.filter((row) => row.tone !== 'danger').length;
+  return t('ui.integrations.steam.checkSummary', {
+    working,
+    total: rows.length,
+    build: steamCheckReport.value?.steam_build || t('ui.integrations.steam.checkUnknownBuild'),
+  });
+});
+
+function setSteamBigPictureControls(input: HTMLInputElement): void {
+  const value = input.checked;
+  const port = steamDebugPort.value;
+  // Turning the controls on adds the flag file when Steam is there to take it, and turning them off
+  // removes it only if Vibeshine added it. Both restart Steam, so they ask first. A file another
+  // Steam mod added stays, and when Steam can't be reached the setting is saved on its own.
+  const changesPort = value
+    ? port?.steam_found === true && !port.flag_file
+    : port?.flag_file_created === true;
+  if (!changesPort) {
+    void saveSteamBigPictureControls(input, value);
+    return;
+  }
+  // Keep the switch in its saved state until the restart has been confirmed.
+  input.checked = !value;
+  requestAction(value ? 'steam-debug-port-enable' : 'steam-debug-port-disable');
+}
+
+async function saveSteamBigPictureControls(input: HTMLInputElement, value: boolean): Promise<void> {
+  steamBigPictureSaving.value = true;
+  try {
+    await apiPatch('/api/config', { steam_big_picture_controls: value });
+  } catch (cause) {
+    // Nothing was saved. The bound value didn't change either, so Vue won't redraw the switch.
+    input.checked = !value;
+    steamBigPictureError.value = message(cause, t('ui.integrations.errors.providerUpdateFailed'));
+    return;
+  } finally {
+    steamBigPictureSaving.value = false;
+  }
+  steamBigPictureError.value = '';
+  notice.value = t('ui.integrations.notices.providerUpdated');
+  // Saved, even if the status read below fails.
+  if (steamBigPicture.value) steamBigPicture.value.enabled = value;
+  await refreshSteamBigPicture();
+  if (value) watchSteamBigPictureStart();
+}
+
+async function refreshSteamBigPicture(): Promise<void> {
+  try {
+    steamBigPicture.value = await apiGet<SteamBigPictureStatus>('/api/steam/big_picture/status');
+  } catch (cause) {
+    steamBigPictureError.value = message(cause, t('ui.integrations.errors.steamBigPictureStatus'));
+  }
+}
+
+// Set when the page closes: a status request still in flight must not start another poll.
+let unmounted = false;
+
+// Follow the helper after the controls are turned on, until it gets past starting up and connecting
+// to Steam, or give up after 30 s.
+function watchSteamBigPictureStart(started = Date.now()): void {
+  window.clearTimeout(steamStatusTimer);
+  if (unmounted) return;
+  steamStatusTimer = window.setTimeout(async () => {
+    await refreshSteamBigPicture();
+    if (unmounted) return;
+    const value = steamBigPicture.value;
+    const starting =
+      value?.enabled === true && (value.state === 'off' || value.state === 'connecting');
+    if (starting && Date.now() - started < 30_000) watchSteamBigPictureStart(started);
+  }, 1500);
+}
+
+// Follow a Steam restart until Steam is back and the controls have reconnected, or give up after 90 s.
+function watchSteamRestart(started = Date.now()): void {
+  window.clearTimeout(steamStatusTimer);
+  if (unmounted) return;
+  steamStatusTimer = window.setTimeout(async () => {
+    await refreshSteamBigPicture();
+    if (unmounted) return;
+    const value = steamBigPicture.value;
+    const restart = value?.steam_restart?.state;
+    if (restart === 'failed') {
+      notice.value = '';
+      steamBigPictureError.value =
+        value?.steam_restart?.detail || t('ui.integrations.errors.steamRestartFailed');
+      return;
+    }
+    const settled =
+      restart !== 'restarting' &&
+      (value?.state === 'injected' || !value?.enabled || !value?.debug_port?.flag_file);
+    if (settled) {
+      notice.value = t('ui.integrations.notices.steamRestarted');
+    } else if (Date.now() - started < 90_000) {
+      watchSteamRestart(started);
+    } else if (restart === 'restarting') {
+      notice.value = '';
+      steamBigPictureError.value = t('ui.integrations.errors.steamRestartSlow');
+    } else {
+      // Steam is back but the controls haven't connected; the badge says why.
+      notice.value = t('ui.integrations.notices.steamRestarted');
+    }
+  }, 1500);
+}
+
+onBeforeUnmount(() => {
+  unmounted = true;
+  window.clearTimeout(steamStatusTimer);
+});
+
+async function runSteamDebugPortAction(action: SteamDebugPortAction): Promise<void> {
+  actionBusy.value = true;
+  notice.value = '';
+  steamBigPictureError.value = '';
+  let confirmDuringStream = false;
+  const enabled = action !== 'steam-debug-port-disable';
+  // From the switch the controls change with the port; the debug-port row only fixes the port.
+  const changesControls =
+    action !== 'steam-debug-port-restart' && steamBigPicture.value?.enabled !== enabled;
+  let result: SteamDebugPortResult | null = null;
+  let saving = false;
+  try {
+    let portError: unknown = null;
+    try {
+      result = await apiPost<SteamDebugPortResult>('/api/steam/big_picture/debug_port', {
+        enabled,
+        restart_steam: true,
+        allow_during_stream: steamRestartDuringStream.value,
+      });
+      if (result.status === false && result.error_code === 'stream_active') {
+        // Nothing changed yet: ask again, this time about the running stream.
+        confirmDuringStream = !steamRestartDuringStream.value;
+        if (confirmDuringStream) return;
+      }
+      if (result.status === false) {
+        throw new Error(result.error || t('ui.integrations.errors.actionIncomplete'));
+      }
+    } catch (cause) {
+      // The controls need the port to turn on, but turning them off doesn't wait for it.
+      if (enabled || !changesControls) throw cause;
+      result = null;
+      portError = cause;
+    }
+    // Saved after the port, so a refused restart leaves the controls as they were.
+    if (changesControls) {
+      saving = true;
+      await apiPatch('/api/config', { steam_big_picture_controls: enabled });
+      saving = false;
+      if (steamBigPicture.value) steamBigPicture.value.enabled = enabled;
+    }
+    if (portError) {
+      steamBigPictureError.value = message(
+        portError,
+        t('ui.integrations.errors.steamDebugPortFailed'),
+      );
+    } else {
+      notice.value =
+        result?.restart === 'started'
+          ? t('ui.integrations.notices.steamRestarting')
+          : t('ui.integrations.notices.steamDebugPortNextStart');
+    }
+    await refreshSteamBigPicture();
+    if (result?.restart === 'started') watchSteamRestart();
+    else if (enabled && changesControls) watchSteamBigPictureStart();
+  } catch (cause) {
+    steamBigPictureError.value = message(
+      cause,
+      t(
+        saving
+          ? 'ui.integrations.errors.providerUpdateFailed'
+          : 'ui.integrations.errors.steamDebugPortFailed',
+      ),
+    );
+    // The port changed even though the setting didn't; keep following Steam's restart.
+    if (result?.restart === 'started') {
+      await refreshSteamBigPicture();
+      watchSteamRestart();
+    }
+  } finally {
+    actionBusy.value = false;
+    steamRestartDuringStream.value = confirmDuringStream;
+    pendingAction.value = confirmDuringStream ? action : null;
+    confirmOpen.value = confirmDuringStream;
+  }
+}
+
+async function checkSteamCompatibility(): Promise<void> {
+  if (steamCheckBusy.value) return;
+  steamCheckBusy.value = true;
+  steamBigPictureError.value = '';
+  steamCheckReport.value = null;
+  try {
+    const result = await apiPost<MutationResult & { report?: SteamBigPictureReport }>(
+      '/api/steam/big_picture/check',
+      {},
+    );
+    if (result.status === false || !result.report) {
+      throw new Error(result.error || t('ui.integrations.errors.steamCheckFailed'));
+    }
+    steamCheckReport.value = result.report;
+  } catch (cause) {
+    steamBigPictureError.value = message(cause, t('ui.integrations.errors.steamCheckFailed'));
+  } finally {
+    steamCheckBusy.value = false;
   }
 }
 
@@ -1708,6 +2124,132 @@ function libraryRequest(
                 </div>
               </div>
             </details>
+
+            <template v-if="isWindows">
+              <div class="integration-settings__heading steam-big-picture__heading">
+                <div>
+                  <h3 id="steam-big-picture-heading">
+                    {{ t('ui.integrations.steam.bigPictureTitle') }}
+                  </h3>
+                  <small>{{ t('ui.integrations.steam.bigPictureDescription') }}</small>
+                </div>
+                <StatusBadge
+                  :label="steamBigPictureBadge.label"
+                  :tone="steamBigPictureBadge.tone"
+                  compact
+                />
+              </div>
+              <p v-if="steamBigPictureError" class="integration-notice">
+                {{ steamBigPictureError }}
+              </p>
+              <p
+                v-if="steamBigPictureDetail"
+                class="integration-notice"
+                data-testid="steam-big-picture-detail"
+              >
+                {{ steamBigPictureDetail }}
+              </p>
+              <div
+                class="integration-settings__rows"
+                role="group"
+                aria-labelledby="steam-big-picture-heading"
+              >
+                <SettingRow
+                  class="steam-setting-row"
+                  :label="t('ui.integrations.steam.bigPictureControls')"
+                  :description="t('ui.integrations.steam.bigPictureControlsDescription')"
+                  control-id="steam-big-picture-controls"
+                >
+                  <label class="vs-switch">
+                    <input
+                      id="steam-big-picture-controls"
+                      type="checkbox"
+                      :checked="steamBigPicture?.enabled === true"
+                      :disabled="
+                        !steamBigPicture || steamBigPictureSaving || actionBusy || steamRestarting
+                      "
+                      @change="setSteamBigPictureControls($event.target as HTMLInputElement)"
+                    />
+                    <span class="vs-switch__track" aria-hidden="true" />
+                    <span class="vs-sr-only">{{
+                      t('ui.integrations.steam.bigPictureControls')
+                    }}</span>
+                  </label>
+                </SettingRow>
+                <SettingRow
+                  v-if="showSteamDebugPort"
+                  class="steam-setting-row"
+                  data-testid="steam-debug-port"
+                  :label="t('ui.integrations.steam.debugPort')"
+                  :description="steamDebugPortDescription"
+                >
+                  <AppButton
+                    v-if="steamDebugPortLeftOn"
+                    :label="t('ui.integrations.actions.turnOffDebugPort')"
+                    variant="primary"
+                    size="compact"
+                    :disabled="actionBusy || steamRestarting"
+                    @click="requestAction('steam-debug-port-disable')"
+                  />
+                  <AppButton
+                    v-else-if="steamNeedsRestart"
+                    :label="t('ui.integrations.actions.restartSteam')"
+                    variant="primary"
+                    size="compact"
+                    :disabled="actionBusy || steamRestarting"
+                    @click="requestAction('steam-debug-port-restart')"
+                  />
+                  <AppButton
+                    v-else
+                    :label="t('ui.integrations.actions.turnOnDebugPort')"
+                    variant="primary"
+                    size="compact"
+                    :disabled="actionBusy || steamRestarting || !steamDebugPort?.steam_found"
+                    @click="requestAction('steam-debug-port-enable')"
+                  />
+                </SettingRow>
+                <details
+                  v-if="steamBigPicture?.enabled"
+                  class="integration-advanced"
+                  data-testid="steam-compatibility"
+                >
+                  <summary>{{ t('ui.integrations.steam.compatibility') }}</summary>
+                  <SettingRow
+                    class="steam-setting-row"
+                    :label="t('ui.integrations.steam.compatibility')"
+                    :description="t('ui.integrations.steam.compatibilityDescription')"
+                  >
+                    <AppButton
+                      :label="t('ui.integrations.actions.checkCompatibility')"
+                      variant="secondary"
+                      size="compact"
+                      :busy="steamCheckBusy"
+                      :busy-label="t('ui.integrations.steam.checking')"
+                      @click="checkSteamCompatibility"
+                    />
+                  </SettingRow>
+                  <div
+                    v-if="steamCheckReport"
+                    class="steam-big-picture__report"
+                    data-testid="steam-compatibility-report"
+                    role="status"
+                  >
+                    <p>{{ steamCheckSummary }}</p>
+                    <ul>
+                      <li v-for="row in steamCheckRows" :key="row.name">
+                        <StatusBadge
+                          :label="t(`ui.integrations.steam.checkResults.${row.tone}`)"
+                          :tone="row.tone"
+                          compact
+                        />
+                        <span>{{ row.label }}</span>
+                        <small v-if="row.tone !== 'success'">{{ row.result }}</small>
+                      </li>
+                    </ul>
+                  </div>
+                </details>
+              </div>
+            </template>
           </section>
 
           <section
@@ -2376,6 +2918,44 @@ function libraryRequest(
 
 .integration-row--steam .integration-details {
   margin-top: 0;
+}
+
+.steam-big-picture__heading {
+  margin-top: var(--vs-space-8);
+  padding-top: var(--vs-space-12);
+  border-top: var(--vs-border-width) solid var(--vs-color-border-subtle);
+}
+
+.steam-big-picture__report {
+  display: grid;
+  gap: var(--vs-space-8);
+  padding-bottom: var(--vs-space-12);
+  color: var(--vs-color-text-secondary);
+  font-size: var(--vs-type-size-metadata);
+}
+
+.steam-big-picture__report p {
+  margin: 0;
+}
+
+.steam-big-picture__report ul {
+  display: grid;
+  gap: var(--vs-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steam-big-picture__report li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--vs-space-8);
+  align-items: baseline;
+}
+
+.steam-big-picture__report small {
+  color: var(--vs-color-text-tertiary);
+  overflow-wrap: anywhere;
 }
 
 .integration-notice {

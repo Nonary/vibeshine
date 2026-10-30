@@ -9,6 +9,21 @@ interface HostOptions {
   golden?: Record<string, unknown>;
   config?: Record<string, unknown>;
   termination?: Record<string, unknown>;
+  bigPicture?: {
+    flagFile?: boolean;
+    // Whether Vibeshine added the flag file, rather than another Steam mod.
+    flagFileCreated?: boolean;
+    // Debug-port requests fail, as when the flag file can't be deleted.
+    failDebugPort?: boolean;
+    state?: string;
+    streaming?: boolean;
+    restartFinishes?: boolean;
+    detail?: string;
+    // Status reads after the controls are turned on that still say "off", as while the service
+    // is starting the helper.
+    startPolls?: number;
+  };
+  failConfigPatch?: boolean;
 }
 
 async function setupHost(page: Page, options: HostOptions = {}) {
@@ -24,6 +39,17 @@ async function setupHost(page: Page, options: HostOptions = {}) {
     ...options.config,
   };
   const goldenStatus: Record<string, unknown> = { exists: false, ...options.golden };
+  const bigPicture = {
+    flagFile: false,
+    flagFileCreated: true,
+    failDebugPort: false,
+    state: 'port_closed',
+    restart: 'idle',
+    streaming: false,
+    restartFinishes: true,
+    startPolls: 0,
+    ...options.bigPicture,
+  };
   const calls = {
     crashManifest: 0,
     crashParts: [] as number[],
@@ -35,12 +61,17 @@ async function setupHost(page: Page, options: HostOptions = {}) {
     browse: [] as string[],
     configPatches: [] as Record<string, unknown>[],
     playniteStatus: 0,
+    bigPictureStatus: 0,
+    // While set, Big Picture status responses wait for it, as if Steam were slow to answer.
+    holdBigPictureStatus: null as Promise<void> | null,
     failGoldenStatus: false,
     goldenStatusReads: 0,
     goldenExports: 0,
     goldenDeletes: 0,
     displayResets: 0,
     displayTerminations: 0,
+    debugPortRequests: [] as Record<string, unknown>[],
+    compatibilityChecks: 0,
   };
   let failedPartTwo = true;
 
@@ -126,14 +157,92 @@ async function setupHost(page: Page, options: HostOptions = {}) {
       calls.appDeleteBodies.push(payload);
       calls.appDeleteHeaders.push(request.headers());
       if (options.markBeforeDelete) {
-        currentApps = currentApps.map((app) => app.uuid === uuid ? { ...app, 'remote-monitor-profile': true } : app);
+        currentApps = currentApps.map((app) =>
+          app.uuid === uuid ? { ...app, 'remote-monitor-profile': true } : app,
+        );
       }
       const beforeCount = currentApps.length;
-      currentApps = currentApps.filter((app) => app.uuid !== uuid ||
-        (payload?.['provider-maintenance'] === true && app['remote-monitor-profile'] === true));
+      currentApps = currentApps.filter(
+        (app) =>
+          app.uuid !== uuid ||
+          (payload?.['provider-maintenance'] === true && app['remote-monitor-profile'] === true),
+      );
       body = { status: true, removed: beforeCount - currentApps.length };
     } else if (path === '/api/steam/status') {
       body = { enabled: true, available: true, game_count: 0 };
+    } else if (path === '/api/steam/big_picture/status') {
+      calls.bigPictureStatus += 1;
+      if (calls.holdBigPictureStatus) await calls.holdBigPictureStatus;
+      const enabled = currentConfig.steam_big_picture_controls === true;
+      const starting = enabled && bigPicture.startPolls > 0;
+      if (starting) bigPicture.startPolls -= 1;
+      body = {
+        status: true,
+        supported: true,
+        enabled,
+        state: enabled && !starting ? bigPicture.state : 'off',
+        detail: enabled ? (bigPicture.detail ?? '') : '',
+        features: {},
+        debug_port: {
+          steam_found: true,
+          steam_root: 'C:\\Program Files (x86)\\Steam',
+          steam_running: true,
+          big_picture_open: false,
+          flag_file: bigPicture.flagFile,
+          flag_file_created: bigPicture.flagFile && bigPicture.flagFileCreated,
+        },
+        steam_restart: { state: bigPicture.restart, detail: '' },
+      };
+    } else if (path === '/api/steam/big_picture/debug_port' && method === 'POST') {
+      const payload = request.postDataJSON() as Record<string, unknown>;
+      calls.debugPortRequests.push(payload);
+      if (bigPicture.failDebugPort) {
+        body = {
+          status: false,
+          restart: 'skipped',
+          error_code: 'failed',
+          error: 'Could not delete the flag file.',
+        };
+      } else if (bigPicture.streaming && payload.allow_during_stream !== true) {
+        body = {
+          status: false,
+          restart: 'stream_active',
+          error_code: 'stream_active',
+          error: 'A stream or app is running.',
+        };
+      } else if (!bigPicture.restartFinishes) {
+        // Steam is still restarting for as long as the test looks.
+        bigPicture.flagFile = payload.enabled === true;
+        bigPicture.flagFileCreated = true;
+        bigPicture.restart = 'restarting';
+        bigPicture.state = 'connecting';
+        body = { status: true, restart: 'started' };
+      } else {
+        // Steam is back and the controls are connected by the next status read.
+        bigPicture.flagFile = payload.enabled === true;
+        bigPicture.flagFileCreated = true;
+        bigPicture.restart = 'done';
+        bigPicture.state = bigPicture.flagFile ? 'injected' : 'port_closed';
+        body = { status: true, restart: 'started' };
+      }
+    } else if (path === '/api/steam/big_picture/check' && method === 'POST') {
+      calls.compatibilityChecks += 1;
+      body = {
+        status: true,
+        report: {
+          steam_build: 'Oct 22 2026 14:39:25',
+          script_version: 1,
+          errors: 0,
+          // A check patches nothing, so found controls report "ready" rather than "ok".
+          features: {
+            focusable: 'ok',
+            header_icon: 'off: header component not found',
+            header_menu: 'ok (menu parts: learned)',
+            header_styles: 'fallback: inline styles',
+            power_menu: 'ready',
+          },
+        },
+      };
     } else if (path === '/api/steam/games') {
       body = [];
     } else if (path === '/api/rtss/status') {
@@ -151,6 +260,10 @@ async function setupHost(page: Page, options: HostOptions = {}) {
     } else if (path === '/api/config' && method === 'PATCH') {
       const patch = request.postDataJSON() as Record<string, unknown>;
       calls.configPatches.push(patch);
+      if (options.failConfigPatch) {
+        await route.fulfill({ status: 500, json: { error: 'config could not be saved' } });
+        return;
+      }
       Object.assign(currentConfig, patch);
       if ('dd_configuration_option' in patch || 'virtual_display_mode' in patch) {
         goldenStatus.maintenance_available =
@@ -343,7 +456,9 @@ test('Lossless picker browses host roots and UNC directories without saving unti
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
-test('Windows library provider purge keeps explicit Monitor profiles and other providers', async ({ page }) => {
+test('Windows library provider purge keeps explicit Monitor profiles and other providers', async ({
+  page,
+}) => {
   const calls = await setupHost(page, {
     apps: [
       {
@@ -352,7 +467,13 @@ test('Windows library provider purge keeps explicit Monitor profiles and other p
         'playnite-id': 'p1',
         'playnite-managed': 'auto',
       },
-      { uuid: 'a1234567-1234-4234-8234-123456789abc', name: 'Retained Monitor profile', 'playnite-id': 'profile', 'playnite-managed': 'auto', 'remote-monitor-profile': true },
+      {
+        uuid: 'a1234567-1234-4234-8234-123456789abc',
+        name: 'Retained Monitor profile',
+        'playnite-id': 'profile',
+        'playnite-managed': 'auto',
+        'remote-monitor-profile': true,
+      },
       { uuid: 'manual-playnite', name: 'Manual game', 'playnite-id': 'p2' },
       { uuid: 'fullscreen-playnite', name: 'Playnite (Fullscreen)', cmd: ['--fullscreen'] },
       { uuid: 'steam-game', name: 'Steam game', 'steam-id': 's1' },
@@ -391,6 +512,328 @@ test('Linux integrations do not query or expose Playnite', async ({ page }) => {
   await expect(page.locator('.integrations-page')).toBeVisible();
   await expect(page.getByText('Playnite', { exact: true })).toHaveCount(0);
   expect(calls.playniteStatus).toBe(0);
+  await expect(page.getByRole('heading', { name: 'Big Picture controls' })).toHaveCount(0);
+  expect(calls.bigPictureStatus).toBe(0);
+});
+
+test('settings search offers the Big Picture controls only on Windows', async ({ page }) => {
+  await setupHost(page, { platform: 'linux' });
+  await page.goto('/v2/settings');
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('big picture');
+  await expect(page.locator('.settings-destinations a')).toHaveCount(0);
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('steam_big_picture_controls');
+  await expect(page.locator('.settings-destinations a')).toHaveCount(0);
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await setupHost(page);
+  await page.goto('/v2/settings');
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('big picture');
+  await expect(page.locator('.settings-destinations a')).toHaveAttribute(
+    'href',
+    '/v2/integrations#steam-big-picture-heading',
+  );
+});
+
+test('Windows Steam card turns on the Big Picture controls and Steam debug port', async ({
+  page,
+}, testInfo) => {
+  const calls = await setupHost(page);
+  await page.goto('/v2/integrations');
+  await expect(page.getByRole('heading', { name: 'Big Picture controls' })).toBeVisible();
+  const toggle = page.locator('#steam-big-picture-controls');
+  await expect(toggle).not.toBeChecked();
+  // The switch stays disabled until the page has read the controls' status.
+  await expect(toggle).toBeEnabled();
+  // The switch waits for the dialog, so it doesn't flip yet.
+  await toggle.click({ force: true });
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('Turn on Big Picture controls?')).toBeVisible();
+  await expect(dialog.getByText(/any program on this PC can control Steam/)).toBeVisible();
+  expect(calls.debugPortRequests).toEqual([]);
+  await dialog.getByRole('button', { name: 'Turn on and restart Steam' }).click();
+  await expect.poll(() => calls.configPatches).toContainEqual({ steam_big_picture_controls: true });
+  await expect(toggle).toBeChecked();
+  await expect
+    .poll(() => calls.debugPortRequests)
+    .toEqual([{ enabled: true, restart_steam: true, allow_during_stream: false }]);
+  await expect(page.getByText('Steam restarted.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Working', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('steam-debug-port')).toHaveCount(0);
+  const compatibility = page.getByTestId('steam-compatibility');
+  await expect(compatibility.getByRole('button', { name: 'Check compatibility' })).toBeHidden();
+  await compatibility.locator('summary').click();
+  await page.getByRole('button', { name: 'Check compatibility' }).click();
+  await expect(
+    page.getByText('4 of 5 controls work with Steam build Oct 22 2026 14:39:25.'),
+  ).toBeVisible();
+  const report = page.getByTestId('steam-compatibility-report');
+  await expect(
+    report.getByRole('listitem').filter({ hasText: 'Power menu entries' }),
+  ).toContainText('Works');
+  await expect(report.getByText('ready')).toHaveCount(0);
+  await expect(
+    report.getByRole('listitem').filter({ hasText: 'Header icon styling' }),
+  ).toContainText('Fallback');
+  await expect(report.getByText('off: header component not found')).toBeVisible();
+  expect(calls.compatibilityChecks).toBe(1);
+
+  await page
+    .getByRole('heading', { name: 'Big Picture controls' })
+    .evaluate((heading) => heading.scrollIntoView({ block: 'start' }));
+  await page.screenshot({
+    path: testInfo.outputPath('steam-big-picture-controls.png'),
+    animations: 'disabled',
+    fullPage: false,
+  });
+});
+
+test('Steam restarts during a stream need a second confirmation', async ({ page }) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: { flagFile: true, state: 'injected', streaming: true },
+  });
+  await page.goto('/v2/integrations');
+  const toggle = page.locator('#steam-big-picture-controls');
+  // The switch stays disabled until the page has read the controls' status.
+  await expect(toggle).toBeEnabled();
+  // The switch waits for the dialog, so it doesn't flip yet.
+  await toggle.click({ force: true });
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Turn off and restart Steam' }).click();
+
+  await expect(dialog.getByText('A stream is running')).toBeVisible();
+  expect(calls.debugPortRequests).toEqual([
+    { enabled: false, restart_steam: true, allow_during_stream: false },
+  ]);
+  // Refused before anything changed, so the setting isn't touched yet.
+  expect(calls.configPatches).toEqual([]);
+  await dialog.getByRole('button', { name: 'Restart Steam anyway' }).click();
+  await expect
+    .poll(() => calls.debugPortRequests)
+    .toEqual([
+      { enabled: false, restart_steam: true, allow_during_stream: false },
+      { enabled: false, restart_steam: true, allow_during_stream: true },
+    ]);
+  await expect(toggle).not.toBeChecked();
+  await expect
+    .poll(() => calls.configPatches)
+    .toContainEqual({ steam_big_picture_controls: false });
+});
+
+test('the Steam card says why the Big Picture controls are not running', async ({ page }) => {
+  await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: {
+      state: 'wrong_session',
+      detail:
+        'Vibeshine is running in Windows session 2, not in the console session 1 (for example over Remote Desktop).',
+    },
+  });
+  await page.goto('/v2/integrations');
+  await expect(page.getByText("Not on the PC's own session", { exact: true })).toBeVisible();
+  await expect(page.getByTestId('steam-big-picture-detail')).toHaveText(
+    /session 2, not in the console session 1/,
+  );
+});
+
+test('the Steam card follows the helper after the controls are turned on', async ({ page }) => {
+  const calls = await setupHost(page, {
+    bigPicture: { flagFile: true, state: 'injected', startPolls: 2 },
+  });
+  await page.goto('/v2/integrations');
+  // The flag file is already there, so turning the controls on saves the setting without a restart.
+  const toggle = page.locator('#steam-big-picture-controls');
+  // The switch stays disabled until the page has read the controls' status.
+  await expect(toggle).toBeEnabled();
+  await toggle.check({ force: true });
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  // The first read still says "off"; that is the helper starting, not an unknown state.
+  await expect(page.getByText('Connecting to Steam', { exact: true })).toBeVisible();
+  await expect(page.getByText('Status unavailable', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Working', { exact: true })).toBeVisible();
+  expect(calls.configPatches).toEqual([{ steam_big_picture_controls: true }]);
+  expect(calls.debugPortRequests).toEqual([]);
+});
+
+test('turning the Big Picture controls off keeps a debug-port file another program added', async ({
+  page,
+}) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: { flagFile: true, flagFileCreated: false, state: 'injected' },
+  });
+  await page.goto('/v2/integrations');
+  const toggle = page.locator('#steam-big-picture-controls');
+  // The switch stays disabled until the page has read the controls' status.
+  await expect(toggle).toBeEnabled();
+  await toggle.uncheck({ force: true });
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect.poll(() => calls.configPatches).toEqual([{ steam_big_picture_controls: false }]);
+  await expect(toggle).not.toBeChecked();
+  expect(calls.debugPortRequests).toEqual([]);
+});
+
+test('the Big Picture controls turn off even when the debug port cannot be closed', async ({
+  page,
+}) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: { flagFile: true, state: 'injected', failDebugPort: true },
+  });
+  await page.goto('/v2/integrations');
+  const toggle = page.locator('#steam-big-picture-controls');
+  // The switch stays disabled until the page has read the controls' status.
+  await expect(toggle).toBeEnabled();
+  // The switch waits for the dialog, so it doesn't flip yet.
+  await toggle.click({ force: true });
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Turn off and restart Steam' })
+    .click();
+  await expect(page.getByText('Could not delete the flag file.')).toBeVisible();
+  await expect.poll(() => calls.configPatches).toEqual([{ steam_big_picture_controls: false }]);
+  await expect(toggle).not.toBeChecked();
+  // The file Vibeshine added is still there, so the card keeps saying the port is on.
+  const row = page.getByTestId('steam-debug-port');
+  await expect(row).toContainText('Still on.');
+  // Trying again from the row changes only the port, and a failure stays on screen.
+  await row.getByRole('button', { name: 'Turn off', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText("Turn off Steam's debug port?")).toBeVisible();
+  await dialog.getByRole('button', { name: 'Turn off and restart Steam' }).click();
+  await expect.poll(() => calls.debugPortRequests.length).toBe(2);
+  await expect(page.getByText('Could not delete the flag file.')).toBeVisible();
+  await expect(row).toContainText('Still on.');
+  expect(calls.configPatches).toEqual([{ steam_big_picture_controls: false }]);
+});
+
+test('the Steam card turns off a debug port left on after the controls were turned off', async ({
+  page,
+}) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: false },
+    bigPicture: { flagFile: true, state: 'injected' },
+  });
+  await page.goto('/v2/integrations');
+  const row = page.getByTestId('steam-debug-port');
+  await expect(row).toContainText('Still on.');
+  await row.getByRole('button', { name: 'Turn off', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText("Turn off Steam's debug port?")).toBeVisible();
+  await dialog.getByRole('button', { name: 'Turn off and restart Steam' }).click();
+  await expect
+    .poll(() => calls.debugPortRequests)
+    .toEqual([{ enabled: false, restart_steam: true, allow_during_stream: false }]);
+  await expect(page.getByText('Steam restarted.', { exact: true })).toBeVisible();
+  await expect(row).toHaveCount(0);
+  await expect(page.locator('#steam-big-picture-controls')).not.toBeChecked();
+  expect(calls.configPatches).toEqual([]);
+});
+
+test('the Steam card shows no debug-port row for a file another program added', async ({
+  page,
+}) => {
+  await setupHost(page, {
+    config: { steam_big_picture_controls: false },
+    bigPicture: { flagFile: true, flagFileCreated: false, state: 'injected' },
+  });
+  await page.goto('/v2/integrations');
+  await expect(page.locator('#steam-big-picture-controls')).toBeEnabled();
+  await expect(page.getByTestId('steam-debug-port')).toHaveCount(0);
+});
+
+test('the Steam card restarts Steam when it started before the debug port was on', async ({
+  page,
+}) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: { flagFile: true, state: 'port_closed' },
+  });
+  await page.goto('/v2/integrations');
+  await expect(page.getByText('Restart Steam to finish', { exact: true })).toBeVisible();
+  await page
+    .getByTestId('steam-debug-port')
+    .getByRole('button', { name: 'Restart Steam', exact: true })
+    .click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('Restart Steam?')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Restart Steam', exact: true }).click();
+  await expect
+    .poll(() => calls.debugPortRequests)
+    .toEqual([{ enabled: true, restart_steam: true, allow_during_stream: false }]);
+  await expect(page.getByText('Working', { exact: true })).toBeVisible();
+  expect(calls.configPatches).toEqual([]);
+});
+
+test('the Big Picture switch goes back when saving fails', async ({ page }) => {
+  const calls = await setupHost(page, { failConfigPatch: true });
+  await page.goto('/v2/integrations');
+  const toggle = page.locator('#steam-big-picture-controls');
+  // The switch stays disabled until the page has read the controls' status.
+  await expect(toggle).toBeEnabled();
+  // The switch waits for the dialog, so it doesn't flip yet.
+  await toggle.click({ force: true });
+  await page.getByRole('dialog').getByRole('button', { name: 'Turn on and restart Steam' }).click();
+  await expect.poll(() => calls.configPatches).toEqual([{ steam_big_picture_controls: true }]);
+  await expect(page.getByText('Unable to update integration settings.')).toBeVisible();
+  await expect(toggle).not.toBeChecked();
+  await expect(toggle).toBeEnabled();
+  // The port was turned on before saving failed, so the card offers to turn it off again.
+  const row = page.getByTestId('steam-debug-port');
+  await expect(row).toContainText('Still on.');
+  await expect(row.getByRole('button', { name: 'Turn off', exact: true })).toBeVisible();
+});
+
+test('a Steam restart that never finishes stops saying "Restarting Steam…"', async ({ page }) => {
+  await page.clock.install();
+  await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: { restartFinishes: false },
+  });
+  await page.goto('/v2/integrations');
+  // The controls are on but the flag file is missing, so the card offers to turn the port on.
+  await page
+    .getByTestId('steam-debug-port')
+    .getByRole('button', { name: 'Turn on', exact: true })
+    .click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Turn on and restart Steam' }).click();
+  await expect(page.getByText('Restarting Steam…', { exact: true })).toBeVisible();
+  await page.clock.runFor(95_000);
+  await expect(page.getByText('Restarting Steam…', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/Steam is taking longer than expected to restart/)).toBeVisible();
+});
+
+test('leaving the Integrations page stops following a Steam restart', async ({ page }) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: { restartFinishes: false },
+  });
+  await page.goto('/v2/integrations');
+  // The controls are on but the flag file is missing, so the card offers to turn the port on.
+  await page
+    .getByTestId('steam-debug-port')
+    .getByRole('button', { name: 'Turn on', exact: true })
+    .click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Turn on and restart Steam' }).click();
+  await expect(page.getByRole('dialog')).toBeHidden();
+  // Hold the page's next poll, so it is still in flight when the page closes.
+  let release!: () => void;
+  calls.holdBigPictureStatus = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const before = calls.bigPictureStatus;
+  await expect.poll(() => calls.bigPictureStatus).toBe(before + 1);
+
+  await page
+    .getByRole('complementary', { name: 'Primary navigation' })
+    .getByRole('link', { name: 'Maintenance', exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/v2\/maintenance$/);
+  calls.holdBigPictureStatus = null;
+  release();
+  // The open page polls every 1.5 s; a poll started after leaving would show up in this time.
+  await page.waitForTimeout(4000);
+  expect(calls.bigPictureStatus).toBe(before + 1);
 });
 
 test('Linux virtual display termination requires confirmation and avoids Windows recovery APIs', async ({
@@ -713,11 +1156,18 @@ for (const initiallyAvailable of [false, true]) {
   });
 }
 
-
 test('maintenance cleanup reports zero after latest row becomes marked', async ({ page }) => {
-  const calls = await setupHost(page, { markBeforeDelete: true, apps: [
-    { uuid: 'a1234567-1234-4234-8234-123456789abc', name: 'Intervening profile', 'playnite-id': 'p1', 'playnite-managed': 'auto' },
-  ] });
+  const calls = await setupHost(page, {
+    markBeforeDelete: true,
+    apps: [
+      {
+        uuid: 'a1234567-1234-4234-8234-123456789abc',
+        name: 'Intervening profile',
+        'playnite-id': 'p1',
+        'playnite-managed': 'auto',
+      },
+    ],
+  });
   await page.goto('/v2/library');
   await page.getByRole('button', { name: 'Remove Playnite entries' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Remove Playnite entries' }).click();
@@ -728,14 +1178,23 @@ test('maintenance cleanup reports zero after latest row becomes marked', async (
 });
 
 test('deliberate Library row deletion keeps empty request body', async ({ page }) => {
-  const calls = await setupHost(page, { apps: [
-    { uuid: 'a1234567-1234-4234-8234-123456789abc', name: 'Deliberate profile', 'remote-monitor-profile': true },
-  ] });
+  const calls = await setupHost(page, {
+    apps: [
+      {
+        uuid: 'a1234567-1234-4234-8234-123456789abc',
+        name: 'Deliberate profile',
+        'remote-monitor-profile': true,
+      },
+    ],
+  });
   await page.goto('/v2/library');
   await page.getByRole('button', { name: 'More actions for Deliberate profile' }).focus();
   await page.getByRole('button', { name: 'More actions for Deliberate profile' }).press('Enter');
   await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Delete application', exact: true }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Delete application', exact: true })
+    .click();
   await expect.poll(() => calls.appDeletes.length).toBe(1);
   expect(calls.appDeleteBodies).toEqual([null]);
   expect(calls.appDeleteHeaders[0]['x-csrf-token']).toBe('test-token');

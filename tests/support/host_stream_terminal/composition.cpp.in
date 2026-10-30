@@ -1,4 +1,5 @@
 #include "src/host_stream_control.h"
+#include "src/steam_big_picture_notify.h"
 #include "src/display_target_lease.h"
 #include "src/remote_display_topology.h"
 #include <algorithm>
@@ -34,7 +35,7 @@ struct Pause {
  void resume() { {std::lock_guard lock(mutex); release=true;} cv.notify_all(); }
 } join_pause, expiry_pause, parser_pause, peer_pause;
 std::atomic_bool physical=false, late_ordinary=false, armed=false;
-std::atomic_int running=0, finalizer_calls=0, config_applies=0;
+std::atomic_int running=0, finalizer_calls=0, config_applies=0, abrupt_stops=0, graceful_stops=0;
 int failures=0;
 void check(bool ok,const char *name) { std::cout<<(ok?"PASS ":"FAIL ")<<name<<'\n'; if(!ok) ++failures; }
 auto &topology = remote_display_topology::instance();
@@ -76,8 +77,8 @@ struct session_t {std::shared_ptr<void> audio_context_guard,display_power_guard;
 namespace session {
 enum class state_e { STOPPING };
 state_e state(session_t &) {return state_e::STOPPING;}
-void stop(session_t &) {}
-void graceful_stop(session_t &) {}
+void stop(session_t &) {++abrupt_stops;}
+void graceful_stop(session_t &) {++graceful_stops;}
 void mark_client_disconnected(session_t &) {}
 bool uuid_match(session_t &,std::string_view){return false;}
 template<class Role> bool remote_role_match(session_t &,Role,std::optional<std::uint64_t>){return false;}
@@ -170,7 +171,7 @@ struct rtsp_server_t {
 };
 rtsp_server_t server;
 @ANNOUNCE@
-namespace rtsp_stream {void terminate_sessions(bool p){server.clear(true,p);}}
+namespace rtsp_stream {void terminate_sessions(bool p,bool g){server.clear(true,p,g);}}
 // The non-WEBRTC branch of the unchanged real close body still executes map
 // removal, teardown publication, history and capture-finalizer ordering.
 namespace webrtc_stream {
@@ -191,7 +192,7 @@ namespace nvhttp {
 @TERMINAL@
 }
 void reset() {
- physical=false;late_ordinary=false;armed=true;running=0;finalizer_calls=0;config_applies=0;
+ physical=false;late_ordinary=false;armed=true;running=0;finalizer_calls=0;config_applies=0;abrupt_stops=0;graceful_stops=0;
  audio::ac3_encoder=true;audio::eac3_encoder=true;config::audio={};stream::session::allocated_audio={};response_status=0;response_audio_codec.clear();
  join_pause.reset(false);expiry_pause.reset(false);parser_pause.reset(false);peer_pause.reset(false);
  server._session_state->sessions.clear();server.pending_launches.clear();server.startup_pool.queue.clear();server.io_context.queue.clear();
@@ -267,6 +268,9 @@ int main() {
  check(topology.managed_client_identity_count()==0 && !topology.shutdown_complete(),"removed display retains pending physical restore");
  terminal();check(!physical,"empty-map pending restore failure prevents final physical cleanup");
  fail=false;terminal();check(physical && topology.shutdown_complete(),"empty-map pending restore succeeds on retry");
+ // Host End Stream must hand Moonlight the normal-close code, not a dropped link.
+ reset();running=1;server._session_state->sessions.insert(std::make_shared<stream::session_t>());terminal();
+ check(graceful_stops==1 && abrupt_stops==0,"actual terminal stops live sessions gracefully");
  // Exercise the unchanged ANNOUNCE parser and production negotiation helper,
  // controlling only FFmpeg encoder discovery. Each accepted session must still
  // transfer and retire its resource owner through the real terminal path.

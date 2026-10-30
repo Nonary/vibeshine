@@ -523,7 +523,15 @@
         "repairRegistration": "Repair registration",
         "rescan": "Rescan",
         "update": "Update",
-        "updateExtension": "Update extension"
+        "updateExtension": "Update extension",
+        "turnOnDebugPort": "Turn on",
+        "turnOffDebugPort": "Turn off",
+        "restartSteam": "Restart Steam",
+        "steamDebugPortEnable": "Turn on and restart Steam",
+        "steamDebugPortRestart": "Restart Steam",
+        "steamDebugPortDisable": "Turn off and restart Steam",
+        "restartSteamAnyway": "Restart Steam anyway",
+        "checkCompatibility": "Check compatibility"
       },
       "applying": "Applying",
       "checksFailed": "Some integration checks failed",
@@ -541,7 +549,17 @@
         "vigemInstallTitle": "Install ViGEmBus?",
         "vigemRepairTitle": "Repair ViGEmBus?",
         "vulkanRegisterDescription": "Vibeshine will repair the system registration for its bundled implicit Vulkan layer.",
-        "vulkanRegisterTitle": "Register the Vulkan HDR layer?"
+        "vulkanRegisterTitle": "Register the Vulkan HDR layer?",
+        "steamControlsEnableTitle": "Turn on Big Picture controls?",
+        "steamDebugPortEnableTitle": "Turn on Steam's debug port?",
+        "steamDebugPortEnableDescription": "Vibeshine adds an empty .cef-enable-remote-debugging file to your Steam folder and restarts Steam so the Big Picture controls can reach it. While the debug port is on, any program on this PC can control Steam. Restarting Steam closes games running through it.",
+        "steamDebugPortRestartTitle": "Restart Steam?",
+        "steamDebugPortRestartDescription": "Steam closes and opens again so it turns on its debug port. Restarting Steam closes games running through it.",
+        "steamDebugPortDisableTitle": "Turn off Big Picture controls?",
+        "steamDebugPortOffTitle": "Turn off Steam's debug port?",
+        "steamDebugPortDisableDescription": "Vibeshine deletes the .cef-enable-remote-debugging file it added to your Steam folder and restarts Steam, which closes the debug port. Restarting Steam closes games running through it.",
+        "steamRestartDuringStreamTitle": "A stream is running",
+        "steamRestartDuringStreamDescription": "An app or stream is running right now. Restarting Steam closes games running through Steam, including one you're streaming."
       },
       "description": "Optional host components and their current operational state.",
       "details": {
@@ -567,6 +585,7 @@
         "playniteSyncRejected": "Playnite did not accept the synchronization request.",
         "providerUpdateFailed": "Unable to update integration settings.",
         "steamStatus": "Steam status is unavailable.",
+        "steamBigPictureStatus": "Steam Big Picture controls status is unavailable.",
         "steamGames": "Steam games are unavailable.",
         "exclusionsUpdateFailed": "Unable to update Steam game exclusions.",
         "steamSyncFailed": "Unable to synchronize Steam.",
@@ -574,7 +593,11 @@
         "rtssStatus": "RTSS status is unavailable.",
         "statusLoad": "Status could not be loaded.",
         "vigemStatus": "ViGEmBus status is unavailable.",
-        "vulkanStatus": "Vulkan HDR layer status is unavailable."
+        "vulkanStatus": "Vulkan HDR layer status is unavailable.",
+        "steamDebugPortFailed": "Steam's debug port could not be changed.",
+        "steamRestartFailed": "Steam could not be restarted.",
+        "steamRestartSlow": "Steam is taking longer than expected to restart. Refresh this page to check on it.",
+        "steamCheckFailed": "The compatibility check could not run."
       },
       "failedCount": {
         "one": "{count} integration is showing the last known or unavailable state.",
@@ -603,7 +626,10 @@
         "exclusionsUpdated": "Steam game exclusions updated.",
         "steamSynced": "Steam synchronization completed.",
         "vigemCompleted": "The ViGEmBus installer completed.",
-        "vulkanRefreshed": "The Vulkan HDR layer registration was refreshed."
+        "vulkanRefreshed": "The Vulkan HDR layer registration was refreshed.",
+        "steamRestarting": "Restarting Steam…",
+        "steamRestarted": "Steam restarted.",
+        "steamDebugPortNextStart": "Saved. Steam picks this up the next time it starts."
       },
       "playnite": {
         "description": "Synchronizes installed games and metadata through the Vibeshine extension.",
@@ -648,6 +674,49 @@
         "appId": "Steam app {id}",
         "autoSync": "Synchronize installed games automatically",
         "autoSyncDescription": "Keep installed Steam games synchronized with the streaming library.",
+        "bigPictureControls": "Show stream controls in Steam Big Picture",
+        "bigPictureControlsDescription": "Adds End Stream and Stop Streaming entries to Big Picture's Power menu and a status icon next to the clock. Uses Steam's debug port, which lets any program on this PC control Steam while it is on.",
+        "bigPictureDescription": "End or disconnect Vibeshine streams from Steam Big Picture on this PC.",
+        "bigPictureOff": "Off",
+        "bigPictureTitle": "Big Picture controls",
+        "bigPictureUnknown": "Status unavailable",
+        "bigPictureStates": {
+          "injected": "Working",
+          "connecting": "Connecting to Steam",
+          "not_running": "Steam not running",
+          "no_console_user": "No one signed in",
+          "port_closed": "Steam debug port off",
+          "needs_restart": "Restart Steam to finish",
+          "breaker_open": "Paused: Steam kept reloading",
+          "port_foreign": "Port used by another program",
+          "script_disabled": "Switched off after errors",
+          "helper_failed": "Helper not running",
+          "helper_stopped": "Helper not running",
+          "wrong_session": "Not on the PC's own session",
+          "restarting": "Restarting Steam"
+        },
+        "bigPictureFeatures": {
+          "powerMenu": "Power menu entries",
+          "headerIcon": "Header status icon",
+          "headerMenu": "Header icon menu",
+          "headerStyles": "Header icon styling",
+          "focusable": "Controller navigation"
+        },
+        "debugPort": "Steam debug port",
+        "debugPortOffDescription": "Off. The controls reach Steam through its debug port. Turning it on adds an empty file to your Steam folder and restarts Steam.",
+        "debugPortNeedsRestart": "On, but Steam was already running when it was turned on. Restart Steam to start using it.",
+        "debugPortLeftOn": "Still on. The Big Picture controls are off, but the file Vibeshine added is still in your Steam folder, so Steam keeps opening its debug port. Turning it off deletes the file and restarts Steam.",
+        "debugPortSteamMissing": "Steam's folder wasn't found. Install Steam or start it once, then refresh.",
+        "compatibility": "Compatibility with this Steam version",
+        "compatibilityDescription": "Checks which controls work in the running Steam without changing anything. Run it after a Steam update.",
+        "checking": "Checking…",
+        "checkSummary": "{working} of {total} controls work with Steam build {build}.",
+        "checkUnknownBuild": "unknown",
+        "checkResults": {
+          "success": "Works",
+          "warning": "Fallback",
+          "danger": "Off"
+        },
         "syncAllInstalled": "Synchronize all installed games",
         "syncAllInstalledDescription": "When disabled, synchronize only the most recently played installed games.",
         "recentGames": "Recently played games",
