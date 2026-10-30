@@ -693,6 +693,53 @@ test('the Big Picture controls turn off even when the debug port cannot be close
   await expect(page.getByText('Could not delete the flag file.')).toBeVisible();
   await expect.poll(() => calls.configPatches).toEqual([{ steam_big_picture_controls: false }]);
   await expect(toggle).not.toBeChecked();
+  // The file Vibeshine added is still there, so the card keeps saying the port is on.
+  const row = page.getByTestId('steam-debug-port');
+  await expect(row).toContainText('Still on.');
+  // Trying again from the row changes only the port, and a failure stays on screen.
+  await row.getByRole('button', { name: 'Turn off', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText("Turn off Steam's debug port?")).toBeVisible();
+  await dialog.getByRole('button', { name: 'Turn off and restart Steam' }).click();
+  await expect.poll(() => calls.debugPortRequests.length).toBe(2);
+  await expect(page.getByText('Could not delete the flag file.')).toBeVisible();
+  await expect(row).toContainText('Still on.');
+  expect(calls.configPatches).toEqual([{ steam_big_picture_controls: false }]);
+});
+
+test('the Steam card turns off a debug port left on after the controls were turned off', async ({
+  page,
+}) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: false },
+    bigPicture: { flagFile: true, state: 'injected' },
+  });
+  await page.goto('/v2/integrations');
+  const row = page.getByTestId('steam-debug-port');
+  await expect(row).toContainText('Still on.');
+  await row.getByRole('button', { name: 'Turn off', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText("Turn off Steam's debug port?")).toBeVisible();
+  await dialog.getByRole('button', { name: 'Turn off and restart Steam' }).click();
+  await expect
+    .poll(() => calls.debugPortRequests)
+    .toEqual([{ enabled: false, restart_steam: true, allow_during_stream: false }]);
+  await expect(page.getByText('Steam restarted.', { exact: true })).toBeVisible();
+  await expect(row).toHaveCount(0);
+  await expect(page.locator('#steam-big-picture-controls')).not.toBeChecked();
+  expect(calls.configPatches).toEqual([]);
+});
+
+test('the Steam card shows no debug-port row for a file another program added', async ({
+  page,
+}) => {
+  await setupHost(page, {
+    config: { steam_big_picture_controls: false },
+    bigPicture: { flagFile: true, flagFileCreated: false, state: 'injected' },
+  });
+  await page.goto('/v2/integrations');
+  await expect(page.locator('#steam-big-picture-controls')).toBeEnabled();
+  await expect(page.getByTestId('steam-debug-port')).toHaveCount(0);
 });
 
 test('the Steam card restarts Steam when it started before the debug port was on', async ({
@@ -731,7 +778,10 @@ test('the Big Picture switch goes back when saving fails', async ({ page }) => {
   await expect(page.getByText('Unable to update integration settings.')).toBeVisible();
   await expect(toggle).not.toBeChecked();
   await expect(toggle).toBeEnabled();
-  await expect(page.getByTestId('steam-debug-port')).toHaveCount(0);
+  // The port was turned on before saving failed, so the card offers to turn it off again.
+  const row = page.getByTestId('steam-debug-port');
+  await expect(row).toContainText('Still on.');
+  await expect(row.getByRole('button', { name: 'Turn off', exact: true })).toBeVisible();
 });
 
 test('a Steam restart that never finishes stops saying "Restarting Steam…"', async ({ page }) => {

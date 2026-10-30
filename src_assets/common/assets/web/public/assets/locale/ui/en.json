@@ -525,6 +525,7 @@
         "update": "Update",
         "updateExtension": "Update extension",
         "turnOnDebugPort": "Turn on",
+        "turnOffDebugPort": "Turn off",
         "restartSteam": "Restart Steam",
         "steamDebugPortEnable": "Turn on and restart Steam",
         "steamDebugPortRestart": "Restart Steam",
@@ -555,6 +556,7 @@
         "steamDebugPortRestartTitle": "Restart Steam?",
         "steamDebugPortRestartDescription": "Steam closes and opens again so it turns on its debug port. Restarting Steam closes games running through it.",
         "steamDebugPortDisableTitle": "Turn off Big Picture controls?",
+        "steamDebugPortOffTitle": "Turn off Steam's debug port?",
         "steamDebugPortDisableDescription": "Vibeshine deletes the .cef-enable-remote-debugging file it added to your Steam folder and restarts Steam, which closes the debug port. Restarting Steam closes games running through it.",
         "steamRestartDuringStreamTitle": "A stream is running",
         "steamRestartDuringStreamDescription": "An app or stream is running right now. Restarting Steam closes games running through Steam, including one you're streaming."
@@ -703,6 +705,7 @@
         "debugPort": "Steam debug port",
         "debugPortOffDescription": "Off. The controls reach Steam through its debug port. Turning it on adds an empty file to your Steam folder and restarts Steam.",
         "debugPortNeedsRestart": "On, but Steam was already running when it was turned on. Restart Steam to start using it.",
+        "debugPortLeftOn": "Still on. The Big Picture controls are off, but the file Vibeshine added is still in your Steam folder, so Steam keeps opening its debug port. Turning it off deletes the file and restarts Steam.",
         "debugPortSteamMissing": "Steam's folder wasn't found. Install Steam or start it once, then refresh.",
         "compatibility": "Compatibility with this Steam version",
         "compatibilityDescription": "Checks which controls work in the running Steam without changing anything. Run it after a Steam update.",

@@ -1038,11 +1038,15 @@ const dialogCopy = computed(() => {
         'steam-debug-port-restart': 'steamDebugPortRestart',
         'steam-debug-port-disable': 'steamDebugPortDisable',
       }[pendingAction.value];
-      // From the switch, turning the port on also turns the controls on.
-      const title =
-        pendingAction.value === 'steam-debug-port-enable' && !steamBigPicture.value?.enabled
-          ? 'steamControlsEnable'
-          : key;
+      // From the switch, turning the port on also turns the controls on, and turning it off turns
+      // them off. With the controls already off, the debug-port row turns off only the port.
+      const controlsOn = steamBigPicture.value?.enabled === true;
+      let title = key;
+      if (pendingAction.value === 'steam-debug-port-enable' && !controlsOn) {
+        title = 'steamControlsEnable';
+      } else if (pendingAction.value === 'steam-debug-port-disable' && !controlsOn) {
+        title = 'steamDebugPortOff';
+      }
       return {
         title: t(`ui.integrations.confirm.${title}Title`),
         description: t(`ui.integrations.confirm.${key}Description`),
@@ -1386,16 +1390,28 @@ const steamNeedsRestart = computed(
     steamDebugPort.value.steam_running === true &&
     steamBigPicture.value?.state === 'port_closed',
 );
-// Shown only when the controls are on but can't reach Steam yet: the flag file is missing, for
-// example after turning them on while Steam wasn't found, or Steam needs a restart to read it.
+// The controls are off but the flag file Vibeshine added is still there, so Steam keeps opening its
+// debug port: deleting the file failed when they were turned off, or saving the setting failed after
+// it was added.
+const steamDebugPortLeftOn = computed(
+  () =>
+    steamBigPicture.value?.enabled === false &&
+    steamDebugPort.value?.flag_file === true &&
+    steamDebugPort.value.flag_file_created === true,
+);
+// Shown when the controls are on but can't reach Steam yet: the flag file is missing, for example
+// after turning them on while Steam wasn't found, or Steam needs a restart to read it. Also shown
+// while the port is left on with the controls off.
 const showSteamDebugPort = computed(
   () =>
-    steamBigPicture.value?.enabled === true &&
-    steamDebugPort.value !== null &&
-    (!steamDebugPort.value.flag_file || steamNeedsRestart.value),
+    steamDebugPortLeftOn.value ||
+    (steamBigPicture.value?.enabled === true &&
+      steamDebugPort.value !== null &&
+      (!steamDebugPort.value.flag_file || steamNeedsRestart.value)),
 );
 
 const steamDebugPortDescription = computed(() => {
+  if (steamDebugPortLeftOn.value) return t('ui.integrations.steam.debugPortLeftOn');
   if (!steamDebugPort.value?.steam_found) return t('ui.integrations.steam.debugPortSteamMissing');
   if (steamNeedsRestart.value) return t('ui.integrations.steam.debugPortNeedsRestart');
   return t('ui.integrations.steam.debugPortOffDescription');
@@ -2168,7 +2184,15 @@ function libraryRequest(
                   :description="steamDebugPortDescription"
                 >
                   <AppButton
-                    v-if="steamNeedsRestart"
+                    v-if="steamDebugPortLeftOn"
+                    :label="t('ui.integrations.actions.turnOffDebugPort')"
+                    variant="primary"
+                    size="compact"
+                    :disabled="actionBusy || steamRestarting"
+                    @click="requestAction('steam-debug-port-disable')"
+                  />
+                  <AppButton
+                    v-else-if="steamNeedsRestart"
                     :label="t('ui.integrations.actions.restartSteam')"
                     variant="primary"
                     size="compact"

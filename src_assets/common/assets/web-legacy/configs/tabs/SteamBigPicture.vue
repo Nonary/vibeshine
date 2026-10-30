@@ -45,7 +45,18 @@
         <div class="text-[11px] opacity-70 leading-5">{{ debugPortDescription }}</div>
       </div>
       <n-button
-        v-if="needsRestart"
+        v-if="portLeftOn"
+        size="small"
+        type="primary"
+        strong
+        class="shrink-0"
+        :disabled="busy || restarting"
+        @click="confirmAction('disable')"
+      >
+        {{ $t('steam_big_picture.turn_off_debug_port') }}
+      </n-button>
+      <n-button
+        v-else-if="needsRestart"
         size="small"
         type="primary"
         strong
@@ -194,15 +205,27 @@ const needsRestart = computed(
     debugPort.value.steam_running === true &&
     status.value?.state === 'port_closed',
 );
-// Shown only when the controls are on but can't reach Steam yet: the flag file is missing, for
-// example after turning them on while Steam wasn't found, or Steam needs a restart to read it.
+// The controls are off but the flag file Vibeshine added is still there, so Steam keeps opening its
+// debug port: deleting the file failed when they were turned off, or saving the setting failed after
+// it was added.
+const portLeftOn = computed(
+  () =>
+    status.value?.enabled === false &&
+    debugPort.value?.flag_file === true &&
+    debugPort.value.flag_file_created === true,
+);
+// Shown when the controls are on but can't reach Steam yet: the flag file is missing, for example
+// after turning them on while Steam wasn't found, or Steam needs a restart to read it. Also shown
+// while the port is left on with the controls off.
 const showDebugPort = computed(
   () =>
-    status.value?.enabled === true &&
-    debugPort.value !== null &&
-    (!debugPort.value.flag_file || needsRestart.value),
+    portLeftOn.value ||
+    (status.value?.enabled === true &&
+      debugPort.value !== null &&
+      (!debugPort.value.flag_file || needsRestart.value)),
 );
 const debugPortDescription = computed(() => {
+  if (portLeftOn.value) return t('steam_big_picture.debug_port_left_on');
   if (!debugPort.value?.steam_found) return t('steam_big_picture.debug_port_steam_missing');
   if (needsRestart.value) return t('steam_big_picture.debug_port_needs_restart');
   return t('steam_big_picture.debug_port_off_desc');
@@ -326,8 +349,12 @@ function setControls(value: boolean): void {
 }
 
 function confirmAction(action: DebugPortAction, duringStream = false): void {
-  // From the switch, turning the port on also turns the controls on.
-  const titleKey = action === 'enable' && !status.value?.enabled ? 'controls_enable' : action;
+  // From the switch, turning the port on also turns the controls on, and turning it off turns them
+  // off. With the controls already off, the debug-port row turns off only the port.
+  const controlsOn = status.value?.enabled === true;
+  let titleKey: string = action;
+  if (action === 'enable' && !controlsOn) titleKey = 'controls_enable';
+  else if (action === 'disable' && !controlsOn) titleKey = 'port_off';
   const options = duringStream
     ? {
         title: t('steam_big_picture.confirm.during_stream_title'),
