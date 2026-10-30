@@ -57,6 +57,7 @@ namespace proc {
   struct vdisplay_driver_status_snapshot_t {
     VDISPLAY::DRIVER_STATUS status;
     VDISPLAY::DRIVER_SELECTION selection;
+    bool initialization_attempted;
   };
   vdisplay_driver_status_snapshot_t vDisplayDriverStatusSnapshot();
   void setVDisplayDriverStatus(VDISPLAY::DRIVER_STATUS status);
