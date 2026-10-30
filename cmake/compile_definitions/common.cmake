@@ -137,6 +137,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/video.h"
         "${CMAKE_SOURCE_DIR}/src/video_colorspace.cpp"
         "${CMAKE_SOURCE_DIR}/src/video_colorspace.h"
+        "${CMAKE_SOURCE_DIR}/src/hdr_dynamic_metadata.cpp"
+        "${CMAKE_SOURCE_DIR}/src/hdr_dynamic_metadata.h"
         "${CMAKE_SOURCE_DIR}/src/pyrowave_host.cpp"
         "${CMAKE_SOURCE_DIR}/src/pyrowave_host.h"
         "${CMAKE_SOURCE_DIR}/src/pyrowave_policy.cpp"
