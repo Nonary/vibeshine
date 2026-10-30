@@ -91,6 +91,7 @@ namespace {
     std::set<std::uint64_t> waiting_checks;  // A check() call is still waiting for these.
     std::map<std::uint64_t, json> check_results;
     restart_state_t restart;
+    bool stopping = false;  // stop() has begun: no new Steam restarts.
     std::jthread worker;
     std::jthread action_worker;
     std::jthread restart_worker;
@@ -630,7 +631,7 @@ namespace {
   bool start_restart(bool big_picture) {
     auto &s = state();
     std::lock_guard lock(s.mutex);
-    if (restart_running()) {
+    if (s.stopping || restart_running()) {
       return false;
     }
     if (s.restart_worker.joinable()) {
@@ -639,7 +640,13 @@ namespace {
     s.restart.state = "restarting";
     s.restart.detail.clear();
     s.restart_worker = std::jthread([big_picture](std::stop_token stop) {
-      auto error = platf::steam::big_picture::debug_port::restart_steam(stop, big_picture);
+      std::optional<std::string> error;
+      try {
+        error = platf::steam::big_picture::debug_port::restart_steam(stop, big_picture);
+      } catch (const std::exception &failure) {
+        // Like the other workers: an exception escaping a thread would end Vibeshine.
+        error = std::string("unexpected error: ") + failure.what();
+      }
       if (error) {
         BOOST_LOG(warning) << "Steam Big Picture controls: Steam restart failed: " << *error;
       }
@@ -674,15 +681,27 @@ namespace platf::steam::big_picture {
 
   void start() {
     auto &s = state();
+    {
+      std::lock_guard lock(s.mutex);
+      s.stopping = false;
+    }
     s.worker = std::jthread(supervise);
     s.action_worker = std::jthread(run_actions);
   }
 
   void stop() {
     auto &s = state();
+    std::jthread restart_worker;
+    {
+      // The web UI keeps serving while nvhttp stops, and start_restart() replaces the restart thread
+      // under this lock. Take it out here so the two never touch it at once, and start no more.
+      std::lock_guard lock(s.mutex);
+      s.stopping = true;
+      restart_worker = std::move(s.restart_worker);
+    }
     s.worker.request_stop();
     s.action_worker.request_stop();
-    s.restart_worker.request_stop();
+    restart_worker.request_stop();
     s.changed.notify_all();
     if (s.worker.joinable()) {
       s.worker.join();
@@ -690,8 +709,8 @@ namespace platf::steam::big_picture {
     if (s.action_worker.joinable()) {
       s.action_worker.join();
     }
-    if (s.restart_worker.joinable()) {
-      s.restart_worker.join();
+    if (restart_worker.joinable()) {
+      restart_worker.join();
     }
   }
 

@@ -109,6 +109,16 @@ namespace platf::steam::big_picture::policy {
   /** Name of the empty file in the Steam folder that turns on Steam's debug port at its next start. */
   constexpr std::string_view debug_port_flag_file = ".cef-enable-remote-debugging";
 
+  /** Whether two Windows paths name the same file or folder, ignoring case, `/` versus `\`, and
+   * trailing separators. Lexical only: links are not followed. */
+  bool same_windows_path(std::wstring_view a, std::wstring_view b);
+
+  /** Whether the flag file at path is the one Vibeshine recorded creating: the same path, and the same
+   * file ID when the record has one. A file deleted and created again there, by the user or another
+   * Steam mod, has a new ID, so it is never mistaken for Vibeshine's. Records without an ID match on
+   * the path alone. */
+  bool is_recorded_flag_file(std::wstring_view recorded_path, std::string_view recorded_id, std::wstring_view path, const std::optional<std::string> &file_id);
+
   /** Body of POST /api/steam/big_picture/debug_port. */
   struct debug_port_request_t {
     bool enabled = false;

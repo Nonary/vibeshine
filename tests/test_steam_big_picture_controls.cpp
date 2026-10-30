@@ -153,6 +153,26 @@ TEST(SteamBigPicturePolicy, RecognisesTheBigPictureWindow) {
   EXPECT_FALSE(bpm::policy::is_big_picture_window_title(L""));
 }
 
+TEST(SteamBigPicturePolicy, ComparesWindowsPathsLikeWindows) {
+  EXPECT_TRUE(bpm::policy::same_windows_path(L"C:\\Program Files (x86)\\Steam", L"c:/program files (x86)/steam/"));
+  EXPECT_TRUE(bpm::policy::same_windows_path(L"C:\\", L"c:\\"));
+  EXPECT_FALSE(bpm::policy::same_windows_path(L"C:\\", L"C:"));
+  EXPECT_FALSE(bpm::policy::same_windows_path(L"C:\\Steam", L"C:\\Steam2"));
+  EXPECT_FALSE(bpm::policy::same_windows_path(L"C:\\Steam", L"D:\\Steam"));
+}
+
+TEST(SteamBigPicturePolicy, RecognisesOnlyTheFlagFileVibeshineCreated) {
+  constexpr std::wstring_view recorded = L"C:\\Steam\\.cef-enable-remote-debugging";
+  EXPECT_TRUE(bpm::policy::is_recorded_flag_file(recorded, "7:00ab", L"c:/steam/.cef-enable-remote-debugging", std::string("7:00ab")));
+  // Deleted and created again by the user or another Steam mod: a new file ID.
+  EXPECT_FALSE(bpm::policy::is_recorded_flag_file(recorded, "7:00ab", recorded, std::string("7:00ac")));
+  EXPECT_FALSE(bpm::policy::is_recorded_flag_file(recorded, "7:00ab", recorded, std::nullopt));
+  // Steam now runs from another folder.
+  EXPECT_FALSE(bpm::policy::is_recorded_flag_file(recorded, "7:00ab", L"D:\\Steam\\.cef-enable-remote-debugging", std::string("7:00ab")));
+  // A record without a file ID matches on the path alone.
+  EXPECT_TRUE(bpm::policy::is_recorded_flag_file(recorded, "", recorded, std::nullopt));
+}
+
 TEST(SteamBigPicturePolicy, KeepsBigPictureAcrossQuickRestarts) {
   EXPECT_TRUE(bpm::policy::restart_into_big_picture(true, std::nullopt));
   EXPECT_FALSE(bpm::policy::restart_into_big_picture(false, std::nullopt));

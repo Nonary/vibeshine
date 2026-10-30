@@ -4,6 +4,7 @@
 #include "steam_big_picture_controls_protocol.h"
 
 #include <algorithm>
+#include <cwctype>
 #include <iterator>
 
 namespace platf::steam::big_picture::policy {
@@ -210,6 +211,26 @@ namespace platf::steam::big_picture::policy {
   bool is_big_picture_window_title(std::wstring_view title) {
     // "Steam Big Picture Mode" in English; Steam keeps the "Big Picture" name in most languages.
     return title.find(L"Big Picture") != std::wstring_view::npos;
+  }
+
+  bool same_windows_path(std::wstring_view a, std::wstring_view b) {
+    const auto normal = [](std::wstring_view path) {
+      std::wstring text;
+      text.reserve(path.size());
+      for (const auto c : path) {
+        text.push_back(c == L'/' ? L'\\' : static_cast<wchar_t>(std::towlower(c)));
+      }
+      // Keep the separator of a drive root ("c:\").
+      while (text.size() > 1 && text.back() == L'\\' && !(text.size() == 3 && text[1] == L':')) {
+        text.pop_back();
+      }
+      return text;
+    };
+    return normal(a) == normal(b);
+  }
+
+  bool is_recorded_flag_file(std::wstring_view recorded_path, std::string_view recorded_id, std::wstring_view path, const std::optional<std::string> &file_id) {
+    return same_windows_path(recorded_path, path) && (recorded_id.empty() || (file_id && *file_id == recorded_id));
   }
 
   bool restart_into_big_picture(bool big_picture_open, std::optional<std::chrono::steady_clock::duration> since_big_picture_restart) {

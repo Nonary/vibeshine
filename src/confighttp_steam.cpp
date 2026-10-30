@@ -244,8 +244,9 @@ namespace confighttp {
    * @param request The HTTP request object.
    *
    * The Big Picture controls reach Steam through its debug port, which Steam opens at start when an
-   * empty `.cef-enable-remote-debugging` file is in its folder. This creates or deletes that file as
-   * the signed-in user. With `restart_steam`, Steam closes and starts again in the background, in Big
+   * empty `.cef-enable-remote-debugging` file is in its folder. This creates that file, or deletes it
+   * if it is the one Vibeshine created, as the signed-in user; a file the user or another Steam mod
+   * added is left in place. With `restart_steam`, Steam closes and starts again in the background, in Big
    * Picture if it was open; `steam_restart` in the status endpoint reports the progress. `restart` in
    * the response is `started`, `not_running` (the change applies when Steam next starts) or `skipped`.
    * While a stream or app runs the restart is refused with `error_code` `stream_active`, leaving the

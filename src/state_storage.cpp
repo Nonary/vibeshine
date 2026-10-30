@@ -1311,8 +1311,8 @@ namespace statefile {
              std::nullopt;
   }
 
-  bool save_steam_debug_port_flag(const std::optional<std::string> &flag_path) {
-    if (flag_path && (flag_path->empty() || flag_path->size() > 32768)) {
+  bool save_steam_debug_port_flag(const std::optional<steam_debug_port_flag_t> &flag) {
+    if (flag && (flag->path.empty() || flag->path.size() > 32768 || flag->file_id.size() > 128)) {
       return false;
     }
     migrate_recent_state_keys();
@@ -1326,12 +1326,17 @@ namespace statefile {
       return false;
     }
     auto &root = ensure_root(tree);
-    const auto current = root.get_optional<std::string>("steam_debug_port_flag");
-    if ((current ? std::make_optional(*current) : std::nullopt) == flag_path) {
+    const auto current_path = root.get_optional<std::string>("steam_debug_port_flag");
+    const auto current_id = root.get<std::string>("steam_debug_port_flag_id", "");
+    if (flag ? current_path && *current_path == flag->path && current_id == flag->file_id : !current_path) {
       return true;  // unchanged; avoid rewriting the state file
     }
-    if (flag_path) {
-      root.put("steam_debug_port_flag", *flag_path);
+    root.erase("steam_debug_port_flag_id");
+    if (flag) {
+      root.put("steam_debug_port_flag", flag->path);
+      if (!flag->file_id.empty()) {
+        root.put("steam_debug_port_flag_id", flag->file_id);
+      }
     } else {
       root.erase("steam_debug_port_flag");
     }
@@ -1344,7 +1349,7 @@ namespace statefile {
     }
   }
 
-  std::optional<std::string> load_steam_debug_port_flag() {
+  std::optional<steam_debug_port_flag_t> load_steam_debug_port_flag() {
     migrate_recent_state_keys();
     const auto &path = vibeshine_state_path();
     if (path.empty()) {
@@ -1356,7 +1361,10 @@ namespace statefile {
       return std::nullopt;
     }
     const auto flag_path = tree.get_optional<std::string>("root.steam_debug_port_flag");
-    return flag_path && !flag_path->empty() ? std::make_optional(*flag_path) : std::nullopt;
+    if (!flag_path || flag_path->empty()) {
+      return std::nullopt;
+    }
+    return steam_debug_port_flag_t {*flag_path, tree.get<std::string>("root.steam_debug_port_flag_id", "")};
   }
 
   void clear_virtual_display_scales() {
