@@ -534,6 +534,15 @@ namespace platf::dxgi {
     // selected child without making the pipe namespace public to that user.
     void set_system_only_server();
 
+    // Log expected connect failures (server absent or busy) at debug level.
+    // For callers that retry with their own rate-limited reporting.
+    void set_quiet_connect_failures();
+
+    // Win32 error from the most recent failed create_client, or 0.
+    DWORD last_connect_error() const {
+      return _last_connect_error;
+    }
+
   private:
     /**
      * @brief Creates a security descriptor for the pipe.
@@ -593,6 +602,8 @@ namespace platf::dxgi {
     DWORD _expected_server_process_id = 0;
     bool _first_pipe_instance_only = false;
     bool _system_only_server = false;
+    bool _quiet_connect_failures = false;
+    mutable DWORD _last_connect_error = 0;
     SecurityDescriptorBuilder _secdesc_builder;  // optional custom SD builder (Playnite can override)
   };
 
@@ -653,6 +664,11 @@ namespace platf::dxgi {
     void set_client_identification_only();
     void set_expected_server_process_id(DWORD process_id);
     void set_first_pipe_instance_only();
+    void set_quiet_connect_failures();
+
+    DWORD last_connect_error() const {
+      return _pipe_factory.last_connect_error();
+    }
 
   private:
     std::unique_ptr<INamedPipe> handshake_server(std::unique_ptr<INamedPipe> pipe);

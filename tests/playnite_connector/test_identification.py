@@ -24,12 +24,17 @@ def function(text, marker):
 named_setter = function(source, '  void NamedPipeFactory::set_client_identification_only()')
 data_setter = function(source, '  void NamedPipeFactory::set_client_data_access_only()')
 anonymous_setter = function(source, '  void AnonymousPipeFactory::set_client_identification_only()')
+named_quiet = function(source, '  void NamedPipeFactory::set_quiet_connect_failures()')
+anonymous_quiet = function(source, '  void AnonymousPipeFactory::set_quiet_connect_failures()')
 pipe_open = function(source, '  winrt::file_handle NamedPipeFactory::create_client_pipe(')
 client_wait = function(source, '    int client_wait_ms(')
-connect = function(ipc, '  std::unique_ptr<platf::dxgi::INamedPipe> IpcClient::connect_to_plugin()')
+backoff = function(ipc, '  void IpcClient::wait_before_retry()')
+connect = function(ipc, '  std::unique_ptr<platf::dxgi::INamedPipe> IpcClient::connect_to_plugin(unsigned long &error_out)')
 field = '\n    '.join(re.search(pattern, header).group() for pattern in [
     r'DWORD _client_security_flags\s*=\s*[^;]+;',
     r'bool _client_data_access_only\s*=\s*[^;]+;',
+    r'bool _quiet_connect_failures\s*=\s*[^;]+;',
+    r'mutable DWORD _last_connect_error\s*=\s*[^;]+;',
 ])
 fixture = r'''
 #include <algorithm>
@@ -37,6 +42,7 @@ fixture = r'''
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 #include <iostream>
@@ -72,6 +78,8 @@ public:
     FIELD
     void set_client_identification_only();
     void set_client_data_access_only();
+    void set_quiet_connect_failures();
+    DWORD last_connect_error() const { return _last_connect_error; }
     winrt::file_handle create_client_pipe(const std::wstring &, const std::function<bool()> &,
                                           std::chrono::steady_clock::time_point) const;
 };
@@ -79,6 +87,8 @@ class AnonymousPipeFactory {
 public:
     NamedPipeFactory _pipe_factory;
     void set_client_identification_only();
+    void set_quiet_connect_failures();
+    DWORD last_connect_error() const { return _pipe_factory.last_connect_error(); }
     std::unique_ptr<INamedPipe> create_client(const char *) {
         const auto deadline = std::chrono::steady_clock::time_point::max();
         if (!_pipe_factory.create_client_pipe(L"control", {}, deadline)) return nullptr;
@@ -89,22 +99,46 @@ public:
 NAMED_SETTER
 DATA_SETTER
 ANONYMOUS_SETTER
+NAMED_QUIET
+ANONYMOUS_QUIET
 PIPE_OPEN
 }
+using namespace std::chrono_literals;
+constexpr auto kRetryInitialDelay = 250ms;
+constexpr auto kRetryMaxDelay = 10000ms;
 class IpcClient {
 public:
+    std::chrono::milliseconds retry_delay_ {0};
+    std::chrono::milliseconds observed_delay_ {0};
+    void sleep_while_running(std::chrono::milliseconds delay) { observed_delay_ = delay; }
+    void wait_before_retry();
     std::string control_name_;
+    bool failing_ = false;
     static constexpr auto kControlPipeName = "Sunshine.PlayniteExtension";
-    std::unique_ptr<platf::dxgi::INamedPipe> connect_to_plugin();
+    std::unique_ptr<platf::dxgi::INamedPipe> connect_to_plugin(unsigned long &error_out);
 };
 CONNECT
+BACKOFF
 int main() {
     platf::dxgi::NamedPipeFactory other;
     const auto deadline = std::chrono::steady_clock::time_point::max();
     assert(other.create_client_pipe(L"other", {}, deadline));
     assert(opens.back() == FILE_FLAG_OVERLAPPED);
     IpcClient playnite;
-    assert(playnite.connect_to_plugin());
+    auto expected_delay = kRetryInitialDelay;
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        playnite.wait_before_retry();
+        assert(playnite.observed_delay_ >= expected_delay / 2);
+        assert(playnite.observed_delay_ <= expected_delay);
+        expected_delay = std::min(expected_delay * 2, kRetryMaxDelay);
+        assert(playnite.retry_delay_ == expected_delay);
+    }
+    playnite.retry_delay_ = 0ms;
+    playnite.wait_before_retry();
+    assert(playnite.observed_delay_ >= 125ms && playnite.observed_delay_ <= 250ms);
+    unsigned long error = 0;
+    assert(playnite.connect_to_plugin(error));
+    assert(error == 0);
     assert(opens.size() == 3);
     assert(opens[1] == (FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION));
     assert(opens[2] == opens[1]);
@@ -119,17 +153,19 @@ int main() {
     assert(other.create_client_pipe(L"default-after-data-only", {}, deadline));
     assert(accesses.back() == (GENERIC_READ | GENERIC_WRITE));
     failure = 5;
-    assert(!playnite.connect_to_plugin());
+    assert(!playnite.connect_to_plugin(error));
     assert(opens.back() == (FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION));
-    std::cout << "\nPASS: Playnite control/data identification-only, helper default preserved, open failure rejected\n";
+    assert(error == failure);
+    std::cout << "\nPASS: Playnite control/data identification-only, helper default preserved, open failure rejected and reported\n";
 }
 '''
 for marker, value in [('FIELD', field), ('NAMED_SETTER', named_setter),
                       ('PIPE_ACCESS_POLICY', access_policy),
                       ('DATA_SETTER', data_setter),
                       ('ANONYMOUS_SETTER', anonymous_setter), ('PIPE_OPEN', pipe_open),
+                      ('NAMED_QUIET', named_quiet), ('ANONYMOUS_QUIET', anonymous_quiet),
                       ('CLIENT_WAIT', client_wait),
-                      ('CONNECT', connect)]:
+                      ('BACKOFF', backoff), ('CONNECT', connect)]:
     fixture = fixture.replace(marker, value)
 with tempfile.TemporaryDirectory(prefix='playnite-identification-') as directory:
     cpp = Path(directory) / 'test.cpp'
