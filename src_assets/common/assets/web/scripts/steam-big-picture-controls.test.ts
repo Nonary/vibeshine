@@ -387,13 +387,44 @@ test('opens the Vibeshine menu from the header icon', () => {
   assert.equal(steam.calls.openPowerMenu, 0);
 });
 
+// In a game the header sits in the Quick Access Menu, a narrow panel over the game's overlay that
+// keeps its own menus inside it. A menu opened in the main Big Picture window brings Steam to the
+// front and leaves it there once the menu closes.
+const gameOverlay = { name: 'Game overlay' };
+const quickAccessMenu = { name: 'Quick Access Menu' };
+const overlayWindow = { BrowserWindow: { document: { documentElement: { ownerDocument: { defaultView: gameOverlay } } } } };
+const iconElement = { ownerDocument: { defaultView: quickAccessMenu } };
+const selectIcon = { currentTarget: iconElement, target: { ownerDocument: iconElement.ownerDocument } };
+
+test("opens the Vibeshine menu over the whole game, like Steam's Power menu", () => {
+  const steam = createSteam();
+  steam.inject();
+  steam.window.VibeshineBPM.setStatus(streaming);
+  findHost(steam.renderHeader(overlayWindow), isIcon)!.props.onActivate(selectIcon);
+  assert.equal(steam.createdMenus.at(-1)!.window, gameOverlay);
+});
+
+test("keeps the Vibeshine menu over the game without Steam's window", () => {
+  const steam = createSteam();
+  const report = steam.inject({ simulateMissing: ['windowContext'] });
+  assert.equal(
+    report.features.header_menu,
+    'ok (menu parts: search; in games it opens inside the Quick Access Menu)',
+  );
+  steam.window.VibeshineBPM.setStatus(streaming);
+  findHost(steam.renderHeader(overlayWindow), isIcon)!.props.onActivate(selectIcon);
+  assert.equal(steam.createdMenus.at(-1)!.target, iconElement);
+  assert.equal(steam.createdMenus.at(-1)!.window, quickAccessMenu);
+});
+
 test("opens Steam's Power menu from the icon when Steam's menu helper is missing", () => {
   const steam = createSteam();
   const report = steam.inject({ simulateMissing: ['showContextMenu'] });
   assert.equal(report.features.header_menu, 'fallback: icon opens the Power menu');
   steam.window.VibeshineBPM.setStatus(streaming);
-  findHost(steam.renderHeader(), isIcon)!.props.onActivate();
+  findHost(steam.renderHeader(overlayWindow), isIcon)!.props.onActivate(selectIcon);
   assert.equal(steam.calls.openPowerMenu, 1);
+  assert.equal(steam.createdMenus.at(-1)!.window, gameOverlay);
   assert.equal(menuLabels(render(steam.createdMenus.at(-1)!.element))[0], 'End Stream (Vibeshine)');
 });
 

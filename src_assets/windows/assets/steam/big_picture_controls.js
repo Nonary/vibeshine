@@ -164,6 +164,7 @@
   const h = React.createElement;
   const MEMO = Symbol.for('react.memo');
   const FORWARD_REF = Symbol.for('react.forward_ref');
+  const CONTEXT = Symbol.for('react.context');
 
   // Steam UI building blocks. Each is optional: features fall back when one is missing.
   const inMenuModule = (s) => has(s, 'onSelected', 'contextMenuItem');
@@ -188,6 +189,13 @@
       'showContextMenu',
       (s) => s.includes('GetContextMenuManagerFromWindow'),
       (v) => typeof v === 'function' && has(srcOf(v), 'GetContextMenuManagerFromWindow', 'CreateContextMenuInstance'),
+    ),
+    // The Steam window a component is drawn for: in a game, the game's overlay, even for the Quick
+    // Access Menu drawn over it. Its value has the window as BrowserWindow.
+    windowContext: findExport(
+      'windowContext',
+      (s) => has(s, 'createContext', 'VirtualKeyboardManager', '.instance'),
+      (v) => v?.$$typeof === CONTEXT,
     ),
   };
   const ContextMenuManager = findExport(
@@ -451,7 +459,8 @@
 
   const canShowOwnMenu = () => !!(ui.showContextMenu && parts.Menu && parts.MenuItem && parts.MenuSeparator) && !simulateMissing.has('headerMenu');
   function updateHeaderMenuFeature() {
-    setFeature('header_menu', canShowOwnMenu() ? `ok (menu parts: ${parts.source})` : 'fallback: icon opens the Power menu');
+    const inGames = ui.windowContext ? '' : '; in games it opens inside the Quick Access Menu';
+    setFeature('header_menu', canShowOwnMenu() ? `ok (menu parts: ${parts.source}${inGames})` : 'fallback: icon opens the Power menu');
   }
 
   function HeaderMenuItems({ MenuItem, MenuSeparator }) {
@@ -462,25 +471,38 @@
     return h(React.Fragment, null, h(MenuItem, { key: 'info', disabled: true }, describeStream(s) || label(s, 'idle')), h(MenuSeparator, { key: 'sep' }), ...actionItems(s, MenuItem));
   }
 
-  function openPowerMenu() {
+  function openPowerMenu(anchor) {
     const open = window.SteamUIStore?.OpenPowerMenu;
     if (typeof open !== 'function') throw new Error('SteamUIStore.OpenPowerMenu not available');
-    open.call(window.SteamUIStore, null);
+    open.call(window.SteamUIStore, anchor);
   }
 
-  const openVibeshineMenu = safeHandler('header-menu', (evt) => {
+  // Steam opens a menu in the window of the element it is given, and in the main Big Picture window
+  // for anything else, a window included. In a game that window would come to the front and stay
+  // there once the menu closes. The header then sits in the Quick Access Menu over the game, which
+  // keeps its own menus inside its narrow panel, so the menu opens on the root of the game's overlay
+  // and covers the screen like the Power menu; Steam's VR Power button does the same. Without that
+  // window, the icon itself still keeps the menu over the game.
+  function menuAnchor(evt, steamWindow) {
+    const root = steamWindow?.BrowserWindow?.document?.documentElement;
+    return [root, evt?.currentTarget, evt?.target].find((node) => node?.ownerDocument?.defaultView) ?? null;
+  }
+
+  const openVibeshineMenu = safeHandler('header-menu', (evt, steamWindow) => {
     if (!state.enabled) return;
-    if (!canShowOwnMenu()) return openPowerMenu();
-    const win = evt?.currentTarget?.ownerDocument?.defaultView ?? evt?.target?.ownerDocument?.defaultView ?? window;
+    const anchor = menuAnchor(evt, steamWindow);
+    if (!canShowOwnMenu()) return openPowerMenu(anchor);
     const s = store.get();
     const title = s?.clients?.length ? label(s, 'menuTitleStreaming', clientNames(s)) : label(s, 'menuTitlePaused');
     const { Menu, MenuItem, MenuSeparator } = parts;
-    ui.showContextMenu(h(Menu, { label: title }, safe('header-menu-items', h(HeaderMenuItems, { MenuItem, MenuSeparator }))), win);
+    ui.showContextMenu(h(Menu, { label: title }, safe('header-menu-items', h(HeaderMenuItems, { MenuItem, MenuSeparator }))), anchor);
   });
 
   const FALLBACK_ICON_STYLE = { display: 'flex', alignItems: 'center', padding: '0 10px', height: '100%', cursor: 'pointer' };
+  const NO_WINDOW_CONTEXT = React.createContext(null);
   function HeaderIcon() {
     const s = useStatus();
+    const steamWindow = React.useContext(ui.windowContext ?? NO_WINDOW_CONTEXT);
     crashIfSimulated('header-icon');
     if (!state.enabled || !isActive(s)) return null;
     const live = s.clients?.length > 0;
@@ -493,8 +515,9 @@
       title: text,
       style: { ...(css ? null : FALLBACK_ICON_STYLE), color: live ? '#5ad45a' : '#f0b03c' },
     };
-    if (ui.Focusable) return h(ui.Focusable, { ...common, noFocusRing: true, onActivate: openVibeshineMenu, onOKActionDescription: 'Vibeshine' }, streamIcon());
-    return h('div', { ...common, tabIndex: 0, onClick: openVibeshineMenu }, streamIcon());
+    const open = (evt) => openVibeshineMenu(evt, steamWindow);
+    if (ui.Focusable) return h(ui.Focusable, { ...common, noFocusRing: true, onActivate: open, onOKActionDescription: 'Vibeshine' }, streamIcon());
+    return h('div', { ...common, tabIndex: 0, onClick: open }, streamIcon());
   }
 
   // Arrays of children reachable from an element (depth-limited), in tree order.

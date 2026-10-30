@@ -18,6 +18,7 @@ const ELEMENT = Symbol.for('react.transitional.element');
 const FRAGMENT = Symbol.for('react.fragment');
 const MEMO = Symbol.for('react.memo');
 const FORWARD_REF = Symbol.for('react.forward_ref');
+const CONTEXT = Symbol.for('react.context');
 
 class Component {
   props: any;
@@ -68,6 +69,7 @@ export interface HostNode {
 // previous one is skipped (so a list Steam keeps between renders is never looked at again), a memo
 // component keeps the inner type it was created with, and error boundaries catch what throws below
 // them. Updates run synchronously, and store subscriptions start once a render has finished.
+// A context value is read when a component draws; a new value doesn't redraw what reads it.
 // ---------------------------------------------------------------------------------------------
 type Tag =
   | 'empty'
@@ -75,6 +77,7 @@ type Tag =
   | 'host'
   | 'list'
   | 'fragment'
+  | 'provider'
   | 'function'
   | 'memo'
   | 'forward'
@@ -116,6 +119,7 @@ function describe(node: any): { tag: Tag; kind: unknown; key: string | null } {
   if (!isValidElement(node)) throw new Error(`not renderable: ${String(node)}`);
   const { type, key } = node;
   if (type === FRAGMENT) return { tag: 'fragment', kind: FRAGMENT, key };
+  if (type?.$$typeof === CONTEXT) return { tag: 'provider', kind: type, key };
   if (typeof type === 'string') return { tag: 'host', kind: type, key };
   if (type?.$$typeof === MEMO) return { tag: 'memo', kind: type, key };
   if (type?.$$typeof === FORWARD_REF) return { tag: 'forward', kind: type, key };
@@ -183,6 +187,7 @@ function update(fiber: Fiber, node: any, force: boolean): void {
       return;
     case 'host':
     case 'fragment':
+    case 'provider':
       fiber.props = node.props;
       fiber.children = reconcile(fiber, fiber.children, childList(node.props.children));
       return;
@@ -322,6 +327,20 @@ function useSyncExternalStore(
   return hook.value;
 }
 
+// As in React 19, a context is its own provider.
+function createContext(defaultValue: unknown) {
+  const context: any = { $$typeof: CONTEXT, defaultValue };
+  context.Provider = context;
+  return context;
+}
+
+function useContext(context: any): unknown {
+  for (let fiber = currentFiber; fiber; fiber = fiber.parent) {
+    if (fiber.tag === 'provider' && fiber.kind === context) return fiber.props.value;
+  }
+  return context.defaultValue;
+}
+
 const output = (fiber: Fiber): Array<HostNode | string> => {
   if (fiber.tag === 'text') return [String(fiber.node)];
   if (fiber.tag === 'host')
@@ -386,6 +405,8 @@ export const React = {
   Component,
   memo: (type: any) => ({ $$typeof: MEMO, type, compare: null }),
   forwardRef: (render: any) => ({ $$typeof: FORWARD_REF, render }),
+  createContext,
+  useContext,
   useSyncExternalStore,
   useId: () => ':r0:',
   version: '19.1.1',
@@ -446,7 +467,7 @@ export interface FakeSteamOptions {
 export function createSteam(options: FakeSteamOptions = {}) {
   const messages: any[] = [];
   const consoleErrors: unknown[][] = [];
-  const createdMenus: Array<{ element: any; target: unknown }> = [];
+  const createdMenus: Array<{ element: any; target: any; window: unknown }> = [];
   const calls = { openPowerMenu: 0 };
 
   // Menus -------------------------------------------------------------------------------------
@@ -512,8 +533,10 @@ export function createSteam(options: FakeSteamOptions = {}) {
   );
 
   class CContextMenuManager {
-    CreateContextMenuInstance(element: any, target: unknown) {
-      createdMenus.push({ element, target });
+    CreateContextMenuInstance(element: any, target: any) {
+      // Steam shows a menu in the window of the element it is opened on, and in the main Big
+      // Picture window (Steam's shared context) for anything else.
+      createdMenus.push({ element, target, window: target?.ownerDocument?.defaultView || window });
       return { Show: noop, Hide: noop };
     }
   }
@@ -614,6 +637,10 @@ export function createSteam(options: FakeSteamOptions = {}) {
     ),
   );
 
+  // The Steam window everything below it is drawn for. In a game that is the game's overlay, also
+  // for the Quick Access Menu drawn over it.
+  const WindowContext = React.createContext(null);
+
   // Webpack registry --------------------------------------------------------------------------
   // Decoys first, so the lookups have to skip near misses and a module that throws when required.
   const modules: Array<[string, string, () => unknown]> = [
@@ -662,6 +689,11 @@ export function createSteam(options: FakeSteamOptions = {}) {
       () => ({ hB: HeaderBar }),
     ],
     [
+      '29827',
+      '(xe,$,t)=>{"use strict";t.d($,{$2:()=>n,ER:()=>i,mA:()=>s});var e=t(62540),a=t(63696),r=t(91974);const s=a.createContext(null);function i(l){return(0,e.jsx)(s.Provider,{value:l.instance,children:(0,e.jsx)(r.F6,{factory:l.instance.VirtualKeyboardManager,children:l.children})})}const n=()=>a.useContext(s)}',
+      () => ({ $2: () => React.useContext(WindowContext), ER: noop, mA: WindowContext }),
+    ],
+    [
       '79100',
       'function(e,t,n){n.d(t,{d4:()=>Te});(0,We.we)("#StopStreamingTo",Se.clientName);isPowerChord:kt}',
       () => ({ d4: noop }),
@@ -691,9 +723,9 @@ export function createSteam(options: FakeSteamOptions = {}) {
     webpackChunksteamui: { push: (chunk: any[]) => chunk[2]?.(require) },
     __vibeshineBridge: (json: string) => messages.push(JSON.parse(json)),
     SteamUIStore: {
-      OpenPowerMenu() {
+      OpenPowerMenu(target: unknown) {
         calls.openPowerMenu += 1;
-        showContextMenu(h(PowerMenu, { onCancel: noop, isPowerChord: false }), window);
+        showContextMenu(h(PowerMenu, { onCancel: noop, isPowerChord: false }), target);
       },
     },
     console: { log: noop, error: (...args: unknown[]) => consoleErrors.push(args) },
@@ -742,8 +774,10 @@ export function createSteam(options: FakeSteamOptions = {}) {
       window.SteamUIStore.OpenPowerMenu();
       return render(createdMenus.at(-1)!.element);
     },
-    renderHeader() {
-      return render(h(HeaderBar, { quickAccessHeader: false }));
+    /** Draw the header, for the given Steam window when there is one. */
+    renderHeader(steamWindow?: unknown) {
+      const header = h(HeaderBar, { quickAccessHeader: false });
+      return render(steamWindow ? h(WindowContext, { value: steamWindow }, header) : header);
     },
     /** Keep the header on screen, as Big Picture does while it is open. */
     mountHeader() {
