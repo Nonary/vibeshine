@@ -2832,6 +2832,46 @@ These settings are host-wide and are not application runtime overrides.
     </tr>
 </table>
 
+### host_link_rate_adaptation
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Experimental opt-in for ordinary H.264, HEVC and AV1 streams on encoders that change bitrate in place
+            (NVENC and native AMF). When the network cannot carry the stream, Vibeshine lowers the encoder bitrate
+            toward the rate the link delivered, then probes back up in small steps and returns to the requested
+            bitrate after 10 clean seconds at it. A healthy link changes nothing.
+            <br><br>
+            A cut needs one of: three unrecoverable frames within two seconds; at least 5% of the packets sent
+            reported missing in two consecutive half-second windows of at least 100 packets (in blocks FEC rebuilt,
+            missing data packets count only while the control round trip time is raised, and only above what the
+            path reorders while it is flat); three frames the host could not send whole; or a round trip time
+            15 ms above its 30-second low for two seconds that starts right after a probe. A cut aims at 85% of the
+            delivered rate and lowers the bitrate by 15% to 50%; reports for frames sent before a change are ignored
+            until the bottleneck has had time to drain. Probes step by an eighth (a twentieth near a rate that
+            failed before), only while video is busy, standard client pings arrive and the round trip time is
+            stable. The bitrate never drops below 2 Mbps, or the requested bitrate if that is lower.
+            <br><br>
+            The controller steps aside for the rest of the stream once the client sets the bitrate itself through
+            <code>/bitrate</code>, and stays off for PyroWave and for encoders that would rebuild, with a keyframe,
+            for every change. Loss reports (<code>SS_FRAME_FEC_STATUS</code>) come from Moonlight clients that send
+            them; without them only failed sends can start a cut. With <code>host_adaptive_pacing</code> on as well,
+            the pacing follows the lowered bitrate. The first cut is logged as a warning, later changes at info level.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}false@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            host_link_rate_adaptation = true
+            @endcode</td>
+    </tr>
+</table>
+
 ## Config Files
 
 ### file_apps
