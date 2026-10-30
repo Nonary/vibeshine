@@ -1379,7 +1379,8 @@ namespace VibeshineInstaller {
         throw new InvalidOperationException("The drive " + root.TrimEnd('\\') + " does not exist. Choose an install folder on an available local drive.");
       }
 
-      return InstallerRunner.ValidateInstallRootPath(fullPath);
+      // The full filesystem safety scan runs after elevation in the installer runner.
+      return fullPath;
     }
 
     /// <summary>
@@ -3693,15 +3694,6 @@ namespace VibeshineInstaller {
       bool installUsbIpTransport,
       bool saveInstallLogs,
       bool allowSelfElevation = true) {
-      try {
-        installDirectory = ValidateInstallRootPath(installDirectory);
-      } catch (Exception ex) {
-        return new InstallerResult {
-          Operation = InstallerOperation.Install,
-          ExitCode = 1603,
-          Message = "The install folder is not safe to use: " + ex.Message
-        };
-      }
       if (allowSelfElevation && !IsProcessElevated()) {
         return RunElevatedBootstrapperInstall(
           arguments,
@@ -3710,6 +3702,16 @@ namespace VibeshineInstaller {
           installVirtualGamepadDriver,
           installUsbIpTransport,
           saveInstallLogs);
+      }
+
+      try {
+        installDirectory = ValidateInstallRootPath(installDirectory);
+      } catch (Exception ex) {
+        return new InstallerResult {
+          Operation = InstallerOperation.Install,
+          ExitCode = 1603,
+          Message = "The install folder is not safe to use: " + ex.Message
+        };
       }
 
       SweepStaleInstallerRecoveryDirectories();
@@ -6003,6 +6005,9 @@ namespace VibeshineInstaller {
       var isInstallOperation = IsMsiInstallOperation(cliArgs);
       var isUninstallOperation = IsMsiUninstallOperation(cliArgs);
       PreserveCliInstallDirectory(cliArgs);
+      if (!IsProcessElevated() && (isInstallOperation || isUninstallOperation)) {
+        return RunElevatedBootstrapperCli(arguments, cliArgs);
+      }
       string installRootFailure;
       if (isInstallOperation && !TryNormalizeAndValidateCliInstallRoot(cliArgs, out installRootFailure)) {
         return new InstallerResult {
@@ -6014,10 +6019,6 @@ namespace VibeshineInstaller {
       var cliUninstallRecoveryProduct = isUninstallOperation
         ? TryResolveCliMsiUninstallRecoveryProduct(cliArgs)
         : null;
-      if (!IsProcessElevated() && (isInstallOperation || isUninstallOperation)) {
-        return RunElevatedBootstrapperCli(arguments, cliArgs);
-      }
-
       if (!HasRestartBehavior(cliArgs)) {
         cliArgs.Add("/norestart");
       }

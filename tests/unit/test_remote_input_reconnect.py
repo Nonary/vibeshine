@@ -7,6 +7,7 @@ runtime cleanup are deterministic adapters, not real streaming integration.
 """
 import argparse
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
@@ -26,6 +27,12 @@ def fixture(root):
     nv = (root / 'src/nvhttp.cpp').read_text()
     rtsp = (root / 'src/rtsp.cpp').read_text()
     stream = (root / 'src/stream.cpp').read_text()
+    start_body = function(stream, 'int start(session_t &session, const std::string &addr_string)')
+    # The RTSP failure gate relies on -1 being the sole early explicit return,
+    # before a control pointer or streaming thread can be registered.
+    assert re.findall(r'\breturn\s+(-?\d+)\s*;', start_body) == ['-1', '0']
+    assert start_body.index('return -1;') < start_body.index('_sessions->push_back(&session)')
+    assert start_body.index('return -1;') < start_body.index('session.videoThread =')
     template = (Path(__file__).with_suffix('.cpp.in')).read_text()
     owners = function(nv, 'struct remote_role_owner_t {') + ';\n'
     owners += function(nv, 'struct remote_role_gate_snapshot_t {') + ';\n'
@@ -45,6 +52,12 @@ std::unordered_map<std::string, remote_role_owner_t> remote_role_owners;\n'''
         'bool session_raise(',
         'void release_pending_runtime_holds(',
         'bool retain_pending_runtime_holds(',
+        'void reconcile_abandoned_monitor_locked(',
+        'void retire_failed_monitor_start_locked(',
+        'void retry_abandoned_monitor(',
+        'void reconcile_abandoned_monitor(',
+        'std::vector<std::shared_ptr<launch_session_t>> take_all_pending_launches()',
+        'void cancel_pending_launch(',
         'void expire_pending_locked(',
         'void notify_expired_pending(',
         'void expire_pending()',
@@ -63,10 +76,12 @@ std::unordered_map<std::string, remote_role_owner_t> remote_role_owners;\n'''
     matches = '\n'.join(function(stream, signature) for signature in (
         'bool uuid_match(', 'bool remote_role_match(',
     ))
+    start = rtsp.index('        std::shared_ptr<stream::session_t> stream_session;')
+    startup_gate = rtsp[start:rtsp.index('        server->post([server, socket', start)]
     return (template.replace('/* @OWNERS@ */', owners).replace('/* @RTSP_METHODS@ */', methods)
             .replace('/* @DISPATCH@ */', dispatch).replace('/* @REPLACEMENT@ */', replacement)
             .replace('/* @RUNTIME_IDLE@ */', runtime_idle).replace('/* @RUNTIME_APPLY@ */', runtime_apply)
-            .replace('/* @MATCHES@ */', matches))
+            .replace('/* @MATCHES@ */', matches).replace('/* @STARTUP_GATE@ */', startup_gate))
 
 
 def main():

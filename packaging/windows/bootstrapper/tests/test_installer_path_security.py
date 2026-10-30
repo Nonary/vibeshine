@@ -82,10 +82,22 @@ class InstallerPathSecurityContract(unittest.TestCase):
         self.assertNotIn("FileSystemRights.Modify", mask_source)
         self.assertNotIn("FileSystemRights.FullControl", mask_source)
 
-    def test_direct_msi_uses_native_program_files_policy_without_shell_interpolation(self):
+    def test_install_root_filesystem_scan_runs_after_elevation(self):
         normalize_install = self.source.split("private static string NormalizeInstallPath", 1)[1]
         normalize_install = normalize_install.split("private static string CheckDiskSpace", 1)[0]
-        self.assertIn("InstallerRunner.ValidateInstallRootPath(fullPath)", normalize_install)
+        self.assertNotIn("ValidateInstallRootPath", normalize_install)
+
+        interactive = self.source.split("public static InstallerResult RunInteractiveInstall(", 1)[1]
+        interactive = interactive.split("SweepStaleInstallerRecoveryDirectories();", 1)[0]
+        self.assertLess(interactive.index("RunElevatedBootstrapperInstall("),
+                        interactive.index("ValidateInstallRootPath(installDirectory)"))
+
+        cli = self.source.split("public static InstallerResult RunCli(", 1)[1]
+        cli = cli.split("if (!HasRestartBehavior(cliArgs))", 1)[0]
+        self.assertLess(cli.index("return RunElevatedBootstrapperCli(arguments, cliArgs);"),
+                        cli.index("TryNormalizeAndValidateCliInstallRoot(cliArgs"))
+
+    def test_direct_msi_uses_native_program_files_policy_without_shell_interpolation(self):
 
         actions = {
             node.attrib.get("Id"): node

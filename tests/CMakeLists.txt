@@ -1176,6 +1176,7 @@ endif()
 if(NOT WIN32)
     sunshine_register_component(NAME test_component_windows_display_recovery
         TEST_SOURCE unit/test_display_helper_v2_state_machine.cpp
+        EXTRA_TEST_SOURCES "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_helper_v2_restore_engine.cpp"
         DEFINITIONS SUNSHINE_TEST_PORTABLE_WINDOWS_TYPES
         INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/support/display_helper_core"
         PRODUCT_SOURCES
@@ -1837,6 +1838,12 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_session_display_precedence.py"
             --compiler "${CMAKE_CXX_COMPILER}"
             --include-dir "$<TARGET_PROPERTY:sunshine_test_session_display_precedence_dependencies,INTERFACE_INCLUDE_DIRECTORIES>")
+    add_test(NAME regression_remote_monitor_hdr_windows
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_remote_monitor_hdr_windows.py"
+            --compiler "${CMAKE_CXX_COMPILER}")
+    add_test(NAME regression_remote_monitor_color_observation
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_remote_monitor_color_observation.py"
+            --compiler "${CMAKE_CXX_COMPILER}")
     add_test(NAME regression_touch_mapping_environment
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_touch_mapping_environment.py")
     add_test(NAME regression_selected_output_fallback
