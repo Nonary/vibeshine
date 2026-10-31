@@ -30,6 +30,7 @@
 #include <synchapi.h>
 
 // local includes
+#include "audio_continuous_buffer.h"
 #include "audio_visibility_recovery.h"
 #include "src/audio_role_control.h"
 #include "src/config.h"
@@ -621,16 +622,41 @@ namespace platf::audio {
   class mic_wasapi_t: public mic_t {
   public:
     capture_e sample(std::vector<float> &sample_out) override {
+      if (continuous_buffer) {
+        while (true) {
+          auto now = qpc_time();
+          if (now < 0) {
+            return capture_e::error;
+          }
+          continuous_buffer->advance(now);
+          // Drain before synthesizing silence, even after a timeout: an event
+          // may be late or coalesced while a packet is already available.
+          auto result = _fill_buffer(0);
+          if (result != capture_e::ok && result != capture_e::timeout) {
+            return result;
+          }
+          now = qpc_time();
+          if (now < 0) {
+            return capture_e::error;
+          }
+          continuous_buffer->advance(now);
+          if (continuous_buffer->take(now, sample_out)) {
+            return capture_e::ok;
+          }
+          auto wait = std::min<DWORD>(default_latency_ms, continuous_buffer->wait_ms(now));
+          result = _fill_buffer(wait);
+          if (result != capture_e::ok && result != capture_e::timeout) {
+            return result;
+          }
+        }
+      }
+
       auto sample_size = sample_out.size();
 
       // Refill the sample buffer if needed
-      while (sample_buf_pos - std::begin(sample_buf) < sample_size) {
-        auto capture_result = _fill_buffer();
-        if (capture_result == capture_e::timeout && continuous_audio) {
-          // Write silence to sample_buf
-          std::fill_n(sample_buf_pos, sample_size, 0.0f);
-          sample_buf_pos += sample_size;
-        } else if (capture_result != capture_e::ok) {
+      while (static_cast<std::size_t>(sample_buf_pos - std::begin(sample_buf)) < sample_size) {
+        auto capture_result = _fill_buffer(default_latency_ms);
+        if (capture_result != capture_e::ok) {
           return capture_result;
         }
       }
@@ -713,10 +739,13 @@ namespace platf::audio {
         return -1;
       }
 
-      REFERENCE_TIME default_latency;
-      audio_client->GetDevicePeriod(&default_latency, nullptr);
-      default_latency_ms = default_latency / 1000;
-      continuous_audio = continuous;
+      REFERENCE_TIME default_latency = 100000;
+      status = audio_client->GetDevicePeriod(&default_latency, nullptr);
+      if (FAILED(status) || default_latency <= 0) {
+        BOOST_LOG(error) << "Couldn't acquire the audio device period";
+        return -1;
+      }
+      default_latency_ms = static_cast<DWORD>(std::clamp<REFERENCE_TIME>((default_latency + 9999) / 10000, 1, 1000));
 
       std::uint32_t frames;
       status = audio_client->GetBufferSize(&frames);
@@ -752,6 +781,15 @@ namespace platf::audio {
         }
       }
 
+      if (continuous) {
+        auto origin = qpc_time();
+        if (origin < 0) {
+          return -1;
+        }
+        auto device_frames = static_cast<std::uint32_t>((default_latency * sample_rate + 9999999) / 10000000);
+        continuous_buffer.emplace(sample_rate, channels_out, frame_size, device_frames, origin);
+      }
+
       status = audio_client->Start();
       if (FAILED(status)) {
         BOOST_LOG(error) << "Couldn't start recording [0x"sv << util::hex(status).to_string_view() << ']';
@@ -777,7 +815,16 @@ namespace platf::audio {
     }
 
   private:
-    capture_e _fill_buffer() {
+    static std::int64_t qpc_time() {
+      LARGE_INTEGER counter, frequency;
+      if (!QueryPerformanceCounter(&counter) || !QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0) {
+        return -1;
+      }
+      return (counter.QuadPart / frequency.QuadPart) * 10000000 +
+             (counter.QuadPart % frequency.QuadPart) * 10000000 / frequency.QuadPart;
+    }
+
+    capture_e _fill_buffer(DWORD timeout_ms) {
       HRESULT status;
 
       // Total number of samples
@@ -802,30 +849,33 @@ namespace platf::audio {
         return capture_e::reinit;
       }
 
-      status = WaitForSingleObjectEx(audio_event.get(), default_latency_ms, FALSE);
+      status = WaitForSingleObjectEx(audio_event.get(), timeout_ms, FALSE);
       switch (status) {
         case WAIT_OBJECT_0:
           break;
         case WAIT_TIMEOUT:
-          return capture_e::timeout;
+          // A timed-out event does not prove the capture queue is empty.
+          break;
         default:
           BOOST_LOG(error) << "Couldn't wait for audio event: [0x"sv << util::hex(status).to_string_view() << ']';
           return capture_e::error;
       }
 
       std::uint32_t packet_size {};
+      bool captured = false;
       for (
         status = audio_capture->GetNextPacketSize(&packet_size);
         SUCCEEDED(status) && packet_size > 0;
         status = audio_capture->GetNextPacketSize(&packet_size)
       ) {
         DWORD buffer_flags;
+        UINT64 packet_qpc = 0;
         status = audio_capture->GetBuffer(
           (BYTE **) &sample_aligned.samples,
           &block_aligned.audio_sample_size,
           &buffer_flags,
           nullptr,
-          nullptr
+          &packet_qpc
         );
 
         switch (status) {
@@ -838,8 +888,25 @@ namespace platf::audio {
             return capture_e::error;
         }
 
+        captured = true;
         if (buffer_flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) {
           BOOST_LOG(debug) << "Audio capture signaled buffer discontinuity";
+        }
+
+        if (continuous_buffer) {
+          auto valid = !(buffer_flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) &&
+                       packet_qpc <= static_cast<UINT64>(INT64_MAX) &&
+                       continuous_buffer->put(static_cast<std::int64_t>(packet_qpc), block_aligned.audio_sample_size,
+                                              sample_aligned.samples, buffer_flags & AUDCLNT_BUFFERFLAGS_SILENT);
+          audio_capture->ReleaseBuffer(block_aligned.audio_sample_size);
+          if (!valid && !timestamp_warning_logged) {
+            // An uncertain timestamp is not endpoint invalidation. Keep the
+            // output clock running with silence until a locatable packet
+            // arrives, rather than repeatedly restarting a healthy endpoint.
+            BOOST_LOG(warning) << "Ignoring audio packets with invalid capture timestamps";
+            timestamp_warning_logged = true;
+          }
+          continue;
         }
 
         sample_aligned.uninitialized = std::end(sample_buf) - sample_buf_pos;
@@ -868,7 +935,7 @@ namespace platf::audio {
         return capture_e::error;
       }
 
-      return capture_e::ok;
+      return captured ? capture_e::ok : capture_e::timeout;
     }
 
   public:
@@ -882,12 +949,13 @@ namespace platf::audio {
     audio_notification_t endpt_notification;
     std::optional<std::function<void()>> default_endpt_changed_cb;
 
-    REFERENCE_TIME default_latency_ms;
+    DWORD default_latency_ms = 10;
 
     util::buffer_t<float> sample_buf;
     float *sample_buf_pos;
     int channels;
-    bool continuous_audio;
+    std::optional<audio_detail::continuous_buffer_t> continuous_buffer;
+    bool timestamp_warning_logged = false;
     bool follow_default_device = true;
 
     HANDLE mmcss_task_handle = nullptr;

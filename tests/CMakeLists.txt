@@ -2101,3 +2101,18 @@ if(SUNSHINE_TEST_ENABLE_COMPONENT AND SUNSHINE_TEST_PYTHON_EXECUTABLE)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/WindowsPortablePackagingTest.cmake")
+
+# The production Windows loopback timeline is platform independent, so its
+# pacing and late-packet behavior can also be qualified on non-Windows hosts.
+sunshine_add_test_target(
+    NAME test_component_audio_continuous_buffer
+    CATEGORY COMPONENT
+    TEST_SOURCES "${CMAKE_CURRENT_LIST_DIR}/unit/test_audio_continuous_buffer.cpp")
+if(SUNSHINE_TEST_PYTHON_EXECUTABLE AND NOT WIN32)
+    add_test(NAME test_component_windows_audio_continuous_adapter
+        COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/test_windows_audio_continuous_adapter.py"
+            --compiler "${CMAKE_CXX_COMPILER}")
+    set_tests_properties(test_component_windows_audio_continuous_adapter
+        PROPERTIES LABELS "component" TIMEOUT 60)
+endif()
