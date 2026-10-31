@@ -161,8 +161,37 @@ describe('legacy display overrides', () => {
       await wrapper.setProps({ section: 'options' });
       store.config.dd_configuration_option = 'disabled';
       await wrapper.vm.$nextTick();
-      expect(wrapper.text()).not.toContain('Display overrides');
+      expect(wrapper.text()).toContain('Display overrides will not apply while display automation is disabled');
+      expect(wrapper.findAllComponents(NButton).some((button) => button.text().includes('Add'))).toBe(true);
+      if (platform === 'linux') {
+        const enable = wrapper.findAllComponents(NButton).find((button) => button.text().includes('Enable display automation'))!;
+        await enable.trigger('click');
+        expect(store.config.dd_configuration_option).toBe('verify_only');
+      }
       wrapper.unmount();
     });
   }
+
+  it('edits the policy used when refresh is fixed', async () => {
+    const { store, pinia } = setupConfig({
+      dd_configuration_option: 'verify_only',
+      dd_resolution_option: 'auto',
+      dd_refresh_rate_option: 'manual',
+    });
+    const wrapper = mount(DisplayDeviceOptions, {
+      props: { section: 'options' },
+      global: { plugins: plugins(pinia) },
+    });
+    const add = wrapper.findAllComponents(NButton).find((button) => button.text().includes('Add'))!;
+    await add.trigger('click');
+    const inputs = wrapper.find('.remap-row').findAllComponents(NInput);
+    expect(inputs).toHaveLength(2);
+    await inputs[0].vm.$emit('update:value', '2560x1440');
+    await inputs[1].vm.$emit('update:value', '3840x2160');
+    expect(store.config.dd_mode_remapping.resolution_only).toEqual([
+      { requested_resolution: '2560x1440', final_resolution: '3840x2160' },
+    ]);
+    expect(store.config.dd_mode_remapping.mixed).toEqual([]);
+    wrapper.unmount();
+  });
 });
