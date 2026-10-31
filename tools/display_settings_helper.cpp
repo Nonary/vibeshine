@@ -6306,17 +6306,11 @@ int run_legacy_helper(int argc, char *argv[]) {
     BOOST_LOG(error) << "Display helper: refusing SYSTEM startup because the shared snapshot directory is not already private.";
     return 2;
   }
-  winrt::file_handle ipc_master;
+  std::optional<display_helper_ipc::endpoint_t> ipc_endpoint;
   if (!restore_mode) {
-    const auto inherited_handle_value = display_helper_ipc::inherited_server_handle_from_command_line(argc, argv);
-    if (!inherited_handle_value) {
-      BOOST_LOG(error) << "Display helper: missing or invalid --ipc-handle argument.";
-      return 2;
-    }
-    ipc_master = winrt::file_handle {reinterpret_cast<HANDLE>(*inherited_handle_value)};
-    if (!platf::dxgi::validate_server_pipe_handle(ipc_master.get()) ||
-        !SetHandleInformation(ipc_master.get(), HANDLE_FLAG_INHERIT, 0)) {
-      BOOST_LOG(error) << "Display helper: --ipc-handle is not an inherited server endpoint.";
+    ipc_endpoint = display_helper_ipc::endpoint_from_command_line(argc, argv);
+    if (!ipc_endpoint) {
+      BOOST_LOG(error) << "Display helper: missing or invalid private IPC endpoint.";
       return 2;
     }
   }
@@ -6470,10 +6464,20 @@ int run_legacy_helper(int argc, char *argv[]) {
 
   // Outer service loop: keep accepting new client sessions while running
   while (running.load(std::memory_order_acquire)) {
-    auto raw_pipe = platf::dxgi::duplicate_server_pipe(ipc_master.get());
+    platf::dxgi::NamedPipeFactory factory;
+    factory.set_client_identification_only();
+    factory.set_client_data_access_only();
+    factory.set_expected_server_process_id(ipc_endpoint->parent_pid);
+    auto raw_pipe = factory.create_client(ipc_endpoint->pipe_name);
+    if (!raw_pipe) {
+      (void) state.poll_disconnect_settlement();
+      if (state.reconnect_exit_grace_expired()) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      continue;
+    }
     auto ctrl_pipe = raw_pipe ? std::make_unique<platf::dxgi::FramedPipe>(std::move(raw_pipe)) : nullptr;
     if (!ctrl_pipe) {
-      BOOST_LOG(error) << "Display helper: inherited IPC handle is not a valid server endpoint.";
+      BOOST_LOG(error) << "Display helper: authenticated IPC client could not be created.";
       return 2;
     }
 

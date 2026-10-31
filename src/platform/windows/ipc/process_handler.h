@@ -6,7 +6,6 @@
 
 // standard includes
 #include <string>
-#include <span>
 
 // local includes
 #include "src/platform/windows/ipc/misc_utils.h"
@@ -48,7 +47,7 @@ public:
     const std::wstring &application_path,
     std::wstring_view arguments,
     bool allow_system_fallback = false,
-    std::span<const HANDLE> inherited_handles = {}
+    bool restrict_process_access = false
   );
 
   /**

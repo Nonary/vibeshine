@@ -518,6 +518,7 @@ namespace platf::dxgi {
 
     // Permit peer identity checks without granting the server impersonation rights.
     void set_client_identification_only();
+    void set_client_data_access_only();
 
     // Require client connections to terminate at the named-pipe server process
     // launched by the caller. A non-pipe handle or a different server PID is
@@ -587,6 +588,7 @@ namespace platf::dxgi {
       std::chrono::steady_clock::time_point operation_deadline
     ) const;
 
+    bool _client_data_access_only = false;
     DWORD _client_security_flags = 0;
     DWORD _expected_server_process_id = 0;
     bool _first_pipe_instance_only = false;
@@ -597,6 +599,9 @@ namespace platf::dxgi {
   // Validate and duplicate a preclaimed named-pipe server handle. The caller
   // retains the master handle so the pipe name never becomes unowned between
   // reconnects; each returned wrapper owns only its duplicate.
+  std::unique_ptr<INamedPipe> accept_server_pipe_client(HANDLE server, DWORD expected_pid,
+    const std::function<bool()> &cancelled, std::chrono::steady_clock::time_point deadline);
+  bool authorize_server_pipe_client(HANDLE server, HANDLE child_process);
   bool validate_server_pipe_handle(HANDLE handle);
   std::unique_ptr<INamedPipe> duplicate_server_pipe(HANDLE master_handle);
 

@@ -279,9 +279,9 @@ namespace platf::dxgi {
     winrt::file_handle hPipe {
       CreateNamedPipeW(
         fullPipeName.c_str(),
-        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED |
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | (_first_pipe_instance_only ? WRITE_DAC : 0) |
           (_first_pipe_instance_only ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0),
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | (_first_pipe_instance_only ? PIPE_REJECT_REMOTE_CLIENTS : 0),
         1,
         65536,
         65536,
@@ -310,6 +310,10 @@ namespace platf::dxgi {
     _client_security_flags = SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION;
   }
 
+  void NamedPipeFactory::set_client_data_access_only() {
+    _client_data_access_only = true;
+  }
+
   void NamedPipeFactory::set_expected_server_process_id(const DWORD process_id) {
     _expected_server_process_id = process_id;
   }
@@ -322,14 +326,38 @@ namespace platf::dxgi {
     _system_only_server = true;
   }
 
+  bool authorize_server_pipe_client(HANDLE server, HANDLE child_process) {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(child_process, TOKEN_QUERY, &token)) return false;
+    auto close_token = util::fail_guard([&] { CloseHandle(token); });
+    DWORD size = 0;
+    GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+    if (!size || GetLastError() != ERROR_INSUFFICIENT_BUFFER) return false;
+    std::vector<std::byte> storage(size);
+    if (!GetTokenInformation(token, TokenUser, storage.data(), size, &size)) return false;
+    auto user = reinterpret_cast<const TOKEN_USER *>(storage.data());
+    LPWSTR sid_text = nullptr;
+    if (!ConvertSidToStringSidW(user->User.Sid, &sid_text)) return false;
+    auto free_sid = util::fail_guard([&] { LocalFree(sid_text); });
+    const std::wstring sddl = std::wstring(L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00100003;;;") + sid_text + L")";
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)) return false;
+    auto free_descriptor = util::fail_guard([&] { LocalFree(descriptor); });
+    BOOL present = FALSE, defaulted = FALSE;
+    PACL dacl = nullptr;
+    if (!GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted) || !present || !dacl) return false;
+    return SetSecurityInfo(server, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                           nullptr, nullptr, dacl, nullptr) == ERROR_SUCCESS;
+  }
+
   bool validate_server_pipe_handle(const HANDLE handle) {
     if (!handle || handle == INVALID_HANDLE_VALUE || GetFileType(handle) != FILE_TYPE_PIPE) {
-      BOOST_LOG(error) << "Inherited display-helper IPC handle is not a pipe.";
+      BOOST_LOG(error) << "Preclaimed display-helper IPC handle is not a pipe.";
       return false;
     }
     DWORD flags = 0;
     if (!GetNamedPipeInfo(handle, &flags, nullptr, nullptr, nullptr) || !(flags & PIPE_SERVER_END)) {
-      BOOST_LOG(error) << "Inherited display-helper IPC handle is not a server endpoint.";
+      BOOST_LOG(error) << "Preclaimed display-helper IPC handle is not a server endpoint.";
       return false;
     }
     return true;
@@ -348,10 +376,24 @@ namespace platf::dxgi {
           0,
           FALSE,
           DUPLICATE_SAME_ACCESS)) {
-      BOOST_LOG(error) << "Unable to duplicate inherited display-helper IPC handle, error=" << GetLastError();
+      BOOST_LOG(error) << "Unable to duplicate preclaimed display-helper IPC handle, error=" << GetLastError();
       return nullptr;
     }
     return std::make_unique<WinPipe>(winrt::file_handle {duplicate}, true);
+  }
+
+  std::unique_ptr<INamedPipe> accept_server_pipe_client(HANDLE server, DWORD expected_pid,
+    const std::function<bool()> &cancelled, std::chrono::steady_clock::time_point deadline) {
+    if (!expected_pid) return nullptr;
+    while ((!cancelled || !cancelled()) && std::chrono::steady_clock::now() < deadline) {
+      auto pipe = duplicate_server_pipe(server);
+      if (!pipe) return nullptr;
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+      pipe->wait_for_client_connection(static_cast<int>(std::clamp<std::int64_t>(remaining, 1, 100)));
+      if (pipe->is_connected() && pipe->peer_process_id() == expected_pid) return pipe;
+      pipe->disconnect();
+    }
+    return nullptr;
   }
 
   std::unique_ptr<INamedPipe> NamedPipeFactory::create_client(const std::string &pipeName) {
@@ -405,7 +447,7 @@ namespace platf::dxgi {
 
     while (client_wait_ms(deadline, 500, cancelled) > 0) {
       winrt::file_handle pipe {
-        CreateFileW(fullPipeName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED | _client_security_flags, nullptr)
+        CreateFileW(fullPipeName.c_str(), _client_data_access_only ? (FILE_READ_DATA | FILE_WRITE_DATA | SYNCHRONIZE) : (GENERIC_READ | GENERIC_WRITE), 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED | _client_security_flags, nullptr)
       };
 
       if (pipe) {

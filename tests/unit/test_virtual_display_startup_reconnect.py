@@ -653,67 +653,49 @@ def private_pipe_transport():
     pipes = (args.pipes_source or root / 'src/platform/windows/ipc/pipes.cpp').read_text()
     client = (args.client_source or root / 'src/platform/windows/ipc/display_settings_client.cpp').read_text()
     integration = (root / 'src/platform/windows/display_helper_integration.cpp').read_text()
-    process_handler = (root / 'src/platform/windows/ipc/process_handler.cpp').read_text()
-    legacy = (root / 'tools/display_settings_helper.cpp').read_text()
-    v2 = (root / 'tools/display_settings_helper_v2.cpp').read_text()
-
-    assert 'FILE_FLAG_FIRST_PIPE_INSTANCE' in pipes
-    assert 'set_system_only_server()' in integration
-    assert 'create_server_handle(private_pipe_name, true)' in integration
-    assert 'if (endpoint_guid.empty())' in integration
-    assert 'isSystem && !_system_only_server' not in pipes
-    assert 'PROC_THREAD_ATTRIBUTE_HANDLE_LIST' in process_handler
-    assert 'parent_is_system && !inherited_handles.empty()' in process_handler
-    assert 'O:SYG:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)' in process_handler
-    assert process_handler.count('process_attributes_ptr,') >= 6
-    assert 'const std::array<HANDLE, 1> inherited_handles' in integration
-    assert integration.count('allow_system_fallback, inherited_handles)') >= 3
-    assert '--ipc-handle=' in integration
-    assert 'set_expected_server_process_id' not in client
+    process = (root / 'src/platform/windows/ipc/process_handler.cpp').read_text()
+    assert 'FILE_FLAG_FIRST_PIPE_INSTANCE' in pipes and 'PIPE_REJECT_REMOTE_CLIENTS' in pipes
+    assert 'create_server_handle(private_pipe_name, false)' in integration
+    assert 'authorize_server_pipe_client(endpoint_master.get(), h)' in integration
+    assert 'const BOOL inherit_handles = FALSE;' in process
+    assert 'PROC_THREAD_ATTRIBUTE_HANDLE_LIST' not in process
+    assert 'parent_is_system && restrict_process_access' in process
+    assert process.count('process_attributes_ptr,') >= 6
+    assert 'O:SYG:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)' in process
+    assert 'pipe->peer_process_id() == expected_pid' in pipes
+    assert 'private_control_server() = std::move(server)' in client
     assert 'session->endpoint_generation == endpoint_generation' in client
-    assert 'private_control_pipe_generation().load(std::memory_order_acquire) == session->endpoint_generation' in client
     assert 'std::lock_guard<std::timed_mutex> write_lock(write_mutex())' in client
-    assert 'duplicate_server_pipe(ipc_master.get())' in legacy
-    assert 'duplicate_server_pipe(ipc_master.get())' in v2
-    assert 'validate_server_pipe_handle(ipc_master.get())' in legacy
-    assert 'validate_server_pipe_handle(ipc_master.get())' in v2
-    assert 'SetHandleInformation(ipc_master.get(), HANDLE_FLAG_INHERIT, 0)' in legacy
-    assert 'SetHandleInformation(ipc_master.get(), HANDLE_FLAG_INHERIT, 0)' in v2
-    assert 'create_server("sunshine_display_helper")' not in legacy
-    assert 'create_server("sunshine_display_helper")' not in v2
-    assert 'AnonymousPipeFactory' not in legacy
-    assert 'AnonymousPipeFactory' not in v2
-    assert 'if (!ensure_single_instance(singleton))' in legacy
-    assert 'if (!display_helper_paths::ensure_single_instance(singleton))' in v2
-
+    assert '(A;;0x00100003;;;' in pipes
+    for name in ('tools/display_settings_helper.cpp', 'tools/display_settings_helper_v2.cpp'):
+        helper = (root / name).read_text()
+        assert 'factory.set_expected_server_process_id(ipc_endpoint->parent_pid)' in helper
+        assert 'factory.set_client_data_access_only()' in helper
+        assert 'duplicate_server_pipe' not in helper
     header = (root / 'tools/display_helper_ipc.h').as_posix()
-    return common + f'''\n#include "{header}"\n''' + r'''
+    return common + f'\n#include "{header}"\n' + r'''
 int main() {
-  {
-    char program[] = "helper";
-    char option[] = "--ipc-handle=184467";
-    char *argv[] = {program, option};
-    require(display_helper_ipc::inherited_server_handle_from_command_line(2, argv) == 184467,
-            "valid inherited handle was rejected");
+  char program[] = "helper";
+  char endpoint[] = "--ipc-pipe=sunshine_display_helper_01234567-89ab-cdef-0123-456789abcdef";
+  char parent[] = "--ipc-parent=1234";
+  char *valid[] = {program, endpoint, parent};
+  auto parsed = display_helper_ipc::endpoint_from_command_line(3, valid);
+  require(parsed && parsed->parent_pid == 1234, "valid authenticated endpoint rejected");
+  require(parsed->pipe_name == "sunshine_display_helper_01234567-89ab-cdef-0123-456789abcdef", "endpoint changed");
+  for (const char *bad : {"--ipc-parent=", "--ipc-parent=0", "--ipc-parent=-1", "--ipc-parent=4294967296", "--ipc-parent=3x"}) {
+    char option[96] = {}; std::strncpy(option, bad, sizeof(option)-1);
+    char *argv[] = {program,endpoint,option};
+    require(!display_helper_ipc::endpoint_from_command_line(3,argv), "invalid parent accepted");
   }
-  for (const char *bad : {"--ipc-handle=", "--ipc-handle=0", "--ipc-handle=-1",
-                          "--ipc-handle=12x", "--ipc-handle=184467440737095516160"}) {
-    char program[] = "helper";
-    char option[96] = {};
-    std::strncpy(option, bad, sizeof(option) - 1);
-    char *argv[] = {program, option};
-    require(!display_helper_ipc::inherited_server_handle_from_command_line(2, argv),
-            "malformed inherited handle was accepted");
+  for (const char *bad : {"--ipc-pipe=other", "--ipc-pipe=\\\\remote\\pipe\\name", "--ipc-pipe=sunshine_display_helper_01234567-89ab-cdef-0123-456789abcdez", "--ipc-handle=123"}) {
+    char option[128] = {}; std::strncpy(option,bad,sizeof(option)-1);
+    char *argv[] = {program,option,parent};
+    require(!display_helper_ipc::endpoint_from_command_line(3,argv), "invalid endpoint accepted");
   }
-  {
-    char program[] = "helper";
-    char first[] = "--ipc-handle=12";
-    char second[] = "--ipc-handle=13";
-    char *argv[] = {program, first, second};
-    require(!display_helper_ipc::inherited_server_handle_from_command_line(3, argv),
-            "duplicate inherited handles were accepted");
-  }
-  std::cout << "private pipe launch contracts and handle parser passed\n";
+  char *duplicate[] = {program,endpoint,parent,parent};
+  require(!display_helper_ipc::endpoint_from_command_line(4,duplicate), "duplicate parent accepted");
+  require(!display_helper_ipc::endpoint_from_command_line(2,valid), "missing parent accepted");
+  std::cout << "host-owned endpoint contracts and authenticated endpoint parser passed\n";
 }
 '''
 

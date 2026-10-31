@@ -78,8 +78,14 @@ namespace platf::display_helper_client {
       return generation;
     }
 
+    std::shared_ptr<winrt::file_handle> &private_control_server() {
+      static std::shared_ptr<winrt::file_handle> server;
+      return server;
+    }
+
     struct PrivateControlEndpoint {
       std::string pipe_name;
+      std::shared_ptr<winrt::file_handle> server;
       std::uint64_t generation;
     };
 
@@ -87,6 +93,7 @@ namespace platf::display_helper_client {
       std::lock_guard lock(private_control_pipe_mutex());
       return {
         private_control_pipe_name(),
+        private_control_server(),
         private_control_pipe_generation().load(std::memory_order_relaxed),
       };
     }
@@ -843,7 +850,11 @@ namespace platf::display_helper_client {
     return m;
   }
 
-  void set_private_control_pipe_name(std::string pipe_name) {
+  void set_private_control_pipe_name(std::string pipe_name, void *server_handle) {
+    HANDLE duplicate = nullptr;
+    if (server_handle && !DuplicateHandle(GetCurrentProcess(), server_handle, GetCurrentProcess(), &duplicate,
+                                         0, FALSE, DUPLICATE_SAME_ACCESS)) pipe_name.clear();
+    auto server = duplicate ? std::make_shared<winrt::file_handle>(duplicate) : nullptr;
     // Endpoint rotation follows the command path's write -> connection lock
     // order, so a frame cannot be written after the old endpoint is retired.
     std::lock_guard<std::timed_mutex> write_lock(write_mutex());
@@ -851,6 +862,7 @@ namespace platf::display_helper_client {
     {
       std::lock_guard endpoint_lock(private_control_pipe_mutex());
       private_control_pipe_name() = std::move(pipe_name);
+      private_control_server() = std::move(server);
       private_control_pipe_generation().fetch_add(1, std::memory_order_release);
     }
     expected_helper_process_id().store(0, std::memory_order_release);
@@ -931,7 +943,7 @@ namespace platf::display_helper_client {
     }
 
     const std::string &pipe_name = endpoint.pipe_name;
-    if (pipe_name.empty()) {
+    if (pipe_name.empty() || !endpoint.server) {
       BOOST_LOG(error) << "Display helper IPC: refusing a connection without a preclaimed private endpoint.";
       return false;
     }
@@ -959,7 +971,7 @@ namespace platf::display_helper_client {
           !pipe->is_connected()) {
         return false;
       }
-      if (expected_helper_process_id().load(std::memory_order_acquire) == 0 ||
+      if (expected_helper_process_id().load(std::memory_order_acquire) != expected_pid ||
           private_control_pipe_generation().load(std::memory_order_acquire) != endpoint_generation) {
         return false;
       }
@@ -969,17 +981,15 @@ namespace platf::display_helper_client {
       return true;
     };
 
-    // The helper owns an inherited server handle that the host preclaimed
-    // before launch. Use that framed control pipe directly: no public control
-    // name, negotiated data pipe, or legacy fixed-name fallback is permitted.
-    if (remaining_ms() > 0 && create_session([cancelled, connect_deadline, pipe_name]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
-          platf::dxgi::NamedPipeFactory factory;
-          factory.set_client_identification_only();
-          auto pipe = factory.create_client(pipe_name, cancelled, connect_deadline);
+    // The privileged host retains the preclaimed server. Authenticate the exact
+    // launched child before constructing a framed pipe or exchanging any bytes.
+    if (remaining_ms() > 0 && create_session([cancelled, connect_deadline, server = endpoint.server, expected_pid]() -> std::unique_ptr<platf::dxgi::INamedPipe> {
+          auto current = [&] {
+            return (cancelled && cancelled()) || expected_helper_process_id().load(std::memory_order_acquire) != expected_pid;
+          };
+          auto pipe = platf::dxgi::accept_server_pipe_client(server->get(), expected_pid, current, connect_deadline);
           return pipe ? std::make_unique<platf::dxgi::FramedPipe>(std::move(pipe)) : nullptr;
-        })) {
-      return true;
-    }
+        })) return true;
     BOOST_LOG(warning) << "Display helper IPC: connection failed";
     return false;
   }

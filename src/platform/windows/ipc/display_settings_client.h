@@ -20,7 +20,7 @@ namespace platf::display_helper_client {
 
   // Bind live IPC to the private pipe endpoint preclaimed by the host before
   // launching the helper. Empty clears the endpoint and disables connection.
-  void set_private_control_pipe_name(std::string pipe_name);
+  void set_private_control_pipe_name(std::string pipe_name, void *server_handle = nullptr);
 
   // Independent exact-version handshake; no old APPLY/DISARM capability is
   // accepted. Unknown completion is returned explicitly for the native fence.

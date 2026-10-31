@@ -1792,21 +1792,20 @@ namespace {
       note_helper_start_failure("private IPC endpoint name generation failure");
       return false;
     }
-    const std::string private_pipe_name = "sunshine_display_helper_" + endpoint_guid;
+    const std::string private_pipe_name = "sunshine_display_helper_" + endpoint_guid.substr(1, 36);
     platf::dxgi::NamedPipeFactory endpoint_factory;
     endpoint_factory.set_first_pipe_instance_only();
     if (platf::is_running_as_system()) {
       endpoint_factory.set_system_only_server();
     }
-    auto endpoint_master = endpoint_factory.create_server_handle(private_pipe_name, true);
+    auto endpoint_master = endpoint_factory.create_server_handle(private_pipe_name, false);
     if (!endpoint_master) {
       platf::display_helper_client::set_private_control_pipe_name({});
       BOOST_LOG(error) << "Failed to preclaim a private display-helper IPC endpoint.";
       note_helper_start_failure("private IPC endpoint creation failure");
       return false;
     }
-    platf::display_helper_client::set_private_control_pipe_name(private_pipe_name);
-    const std::array<HANDLE, 1> inherited_handles {endpoint_master.get()};
+    platf::display_helper_client::set_private_control_pipe_name(private_pipe_name, endpoint_master.get());
 
     const bool allow_system_fallback = platf::is_running_as_system() && !user_session_ready();
     // Select the helper engine (legacy fallback vs v2) and propagate the log level.
@@ -1815,8 +1814,8 @@ namespace {
     helper_args += std::to_wstring(std::clamp(config::sunshine.min_log_level, 0, 6));
     helper_args += L" " + display_helper::restore_state_file_argument(
       std::filesystem::path(platf::from_utf8(config::nvhttp.vibeshine_file_state)));
-    helper_args += L" --ipc-handle=";
-    helper_args += std::to_wstring(reinterpret_cast<std::uintptr_t>(endpoint_master.get()));
+    helper_args += L" --ipc-pipe=" + platf::from_utf8(private_pipe_name);
+    helper_args += L" --ipc-parent=" + std::to_wstring(GetCurrentProcessId());
     statefile::save_display_helper_engine(legacy_engine ? "legacy" : "v2");
     BOOST_LOG(debug) << "Starting display helper: " << platf::to_utf8(helper.wstring())
                      << " " << platf::to_utf8(helper_args);
@@ -1825,7 +1824,7 @@ namespace {
       platf::display_helper_client::set_private_control_pipe_name({});
       return false;
     }
-    bool started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, inherited_handles);
+    bool started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, true);
     if (!started && force_restart) {
       // If we were asked to hard-restart, tolerate a brief overlap window where the old
       // instance is still tearing down and retry quickly.
@@ -1837,7 +1836,7 @@ namespace {
           platf::display_helper_client::set_private_control_pipe_name({});
           return false;
         }
-        started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, inherited_handles);
+        started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, true);
       }
     }
     if (!started) {
@@ -1858,10 +1857,16 @@ namespace {
     g_running_helper_legacy = legacy_engine;
 
     DWORD pid = GetProcessId(h);
+    if (!platf::dxgi::authorize_server_pipe_client(endpoint_master.get(), h)) {
+      terminate_helper_process();
+      platf::display_helper_client::set_private_control_pipe_name({});
+      note_helper_start_failure("private IPC account authorization failure");
+      return false;
+    }
     platf::display_helper_client::set_expected_helper_process_id(pid);
     BOOST_LOG(info) << "Display helper successfully started (pid=" << pid << ")";
 
-    // Give the helper process time to initialize its inherited server endpoint
+    // Give the helper process time to connect to its authenticated host endpoint
     // and check whether it exits before accepting IPC.
     for (int check = 0; check < 6; ++check) {
       if (cancellation_requested(cancellation_predicate) ||
@@ -1894,7 +1899,7 @@ namespace {
             return false;
           }
 
-          const bool retry_started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, inherited_handles);
+          const bool retry_started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, true);
           if (!retry_started) {
             platf::display_helper_client::set_expected_helper_process_id(0);
             platf::display_helper_client::set_private_control_pipe_name({});
@@ -1911,6 +1916,11 @@ namespace {
             return false;
           }
           pid = GetProcessId(h);
+          if (!platf::dxgi::authorize_server_pipe_client(endpoint_master.get(), helper_proc().get_process_handle())) {
+            terminate_helper_process();
+            platf::display_helper_client::set_private_control_pipe_name({});
+            return false;
+          }
           platf::display_helper_client::set_expected_helper_process_id(pid);
           BOOST_LOG(info) << "Display helper retry succeeded (pid=" << pid << ")";
           if (!sleep_with_cancellation(
