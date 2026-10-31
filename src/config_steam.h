@@ -18,6 +18,9 @@ namespace config {
     // Compatibility/runtime manifests are excluded by default. This opt-in
     // exists for users who intentionally expose Steam tools in their catalog.
     bool include_tools = false;
+    // Show stream controls inside Steam Big Picture (Windows). Opt-in because it needs Steam's
+    // CEF debug port, which any local program can use while it is on.
+    bool big_picture_controls = false;
     std::vector<std::string> exclude_games;
     std::vector<id_name_t> exclude_games_meta;
   };

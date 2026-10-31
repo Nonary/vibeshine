@@ -48,6 +48,7 @@
 #include "host_stream_control.h"
 #ifdef _WIN32
   #include "platform/windows/hotkey_manager.h"
+  #include "platform/windows/steam_big_picture_controls.h"
 #endif
 #include "display_device.h"
 #include "display_helper_integration.h"
@@ -2833,7 +2834,9 @@ namespace nvhttp {
       // Existing natural reapers/closes/expiry notifications have drained.
       // Joins acquire lifecycle themselves; admission is closed without holding
       // lifecycle, so terminal-owned nested cleanup cannot deadlock on it.
-      rtsp_stream::terminate_sessions(false);
+      // Graceful, so Moonlight returns to its app list instead of reporting
+      // a lost connection.
+      rtsp_stream::terminate_sessions(false, true);
       webrtc_stream::shutdown_all_sessions();
       proc::proc.terminate();
       remote_session::notify_monitor_shutdown();
@@ -4194,6 +4197,14 @@ namespace nvhttp {
     headers.emplace("Pragma", "no-cache");
     response->write(SimpleWeb::StatusCode::success_ok, data.str(), headers);
     response->close_connection_after_response = true;
+  }
+
+  std::unordered_map<std::string, std::string> paired_client_names() {
+    std::unordered_map<std::string, std::string> names;
+    for (const auto &named_cert : client_root_snapshot().named_devices) {
+      names.emplace(named_cert.uuid, named_cert.name);
+    }
+    return names;
   }
 
   nlohmann::json get_all_clients() {
@@ -6742,6 +6753,9 @@ launch_session->exact_target_hold.reset();
 #ifdef _WIN32
     platf::hotkey::start_end_stream_hotkey();
     auto stop_hotkey = util::fail_guard([] { platf::hotkey::stop_end_stream_hotkey(); });
+    // Its actions end streams through nvhttp, so it lives for exactly as long as nvhttp does.
+    platf::steam::big_picture::start();
+    auto stop_big_picture = util::fail_guard([] { platf::steam::big_picture::stop(); });
 #endif
     std::thread ssl {accept_and_run, &https_server};
     std::thread tcp {accept_and_run, &http_server};
@@ -6774,6 +6788,8 @@ launch_session->exact_target_hold.reset();
 #endif
 
 #ifdef _WIN32
+    platf::steam::big_picture::stop();
+    stop_big_picture.disable();
     platf::hotkey::stop_end_stream_hotkey();
     stop_hotkey.disable();
 #endif

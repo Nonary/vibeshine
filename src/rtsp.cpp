@@ -1238,7 +1238,7 @@ namespace rtsp_stream {
      * clear(false);
      * @examples_end
      */
-    void clear(bool all = true, bool preserve_pending_launch = false) {
+    void clear(bool all = true, bool preserve_pending_launch = false, bool graceful = false) {
       host_stream_control::activity_guard_t activity;
       if (!activity) return;
       if (all && !preserve_pending_launch) {
@@ -1280,7 +1280,11 @@ namespace rtsp_stream {
 
       // Stop and join outside the lock
       for (auto &slot : to_cleanup) {
-        stream::session::stop(*slot);
+        if (graceful) {
+          stream::session::graceful_stop(*slot);
+        } else {
+          stream::session::stop(*slot);
+        }
         stream::session::join(*slot);
       }
     }
@@ -1639,8 +1643,8 @@ namespace rtsp_stream {
     return server.get_sessions_snapshot();
   }
 
-  void terminate_sessions(bool preserve_pending_launch) {
-    server.clear(true, preserve_pending_launch);
+  void terminate_sessions(bool preserve_pending_launch, bool graceful) {
+    server.clear(true, preserve_pending_launch, graceful);
   }
 
   bool has_running_video_for_client(std::string_view client_uuid) {

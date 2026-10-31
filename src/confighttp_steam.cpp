@@ -8,6 +8,10 @@
 #include "steam_artwork.h"
 #include "steam_integration.h"
 #include "steam_sync_policy.h"
+#ifdef _WIN32
+  #include "platform/windows/steam_big_picture_controls.h"
+  #include "steam_big_picture_controls_policy.h"
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -208,5 +212,113 @@ namespace confighttp {
     } catch (const std::exception &error) {
       bad_request(response, request, error.what());
     }
+  }
+
+  /**
+   * @brief Report the state of the stream controls shown inside Steam Big Picture.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * Includes the helper's `state`, each feature's result, Steam's folder and whether its debug-port
+   * flag file exists and whether Vibeshine created it (`debug_port`), and the progress of a Steam
+   * restart (`steam_restart`).
+   *
+   * @api_examples{/api/steam/big_picture/status| GET| null}
+   */
+  void getSteamBigPictureStatus(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+#ifdef _WIN32
+    auto out = platf::steam::big_picture::status();
+#else
+    nlohmann::json out {{"status", true}, {"supported", false}, {"enabled", false}, {"state", "unsupported"}, {"features", nlohmann::json::object()}};
+#endif
+    out["enabled"] = config::steam.big_picture_controls;
+    send_response(response, out);
+  }
+
+  /**
+   * @brief Turn Steam's debug port on or off, optionally restarting Steam so the change takes effect.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * The Big Picture controls reach Steam through its debug port, which Steam opens at start when an
+   * empty `.cef-enable-remote-debugging` file is in its folder. This creates that file, or deletes it
+   * if it is the one Vibeshine created, as the signed-in user; a file the user or another Steam mod
+   * added is left in place. With `restart_steam`, Steam closes and starts again in the background, in Big
+   * Picture if it was open; `steam_restart` in the status endpoint reports the progress. `restart` in
+   * the response is `started`, `not_running` (the change applies when Steam next starts) or `skipped`.
+   * While a stream or app runs the restart is refused with `error_code` `stream_active`, leaving the
+   * file unchanged, unless `allow_during_stream` is set.
+   *
+   * @api_examples{/api/steam/big_picture/debug_port| POST| {"enabled":true,"restart_steam":true}}
+   */
+  void postSteamBigPictureDebugPort(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+#ifdef _WIN32
+    std::stringstream stream;
+    stream << request->content.rdbuf();
+    const auto input = platf::steam::big_picture::policy::parse_debug_port_request(nlohmann::json::parse(stream.str(), nullptr, false));
+    if (!input) {
+      bad_request(response, request, "Expected {\"enabled\": boolean, \"restart_steam\": boolean, \"allow_during_stream\": boolean}");
+      return;
+    }
+    const auto result = platf::steam::big_picture::set_debug_port(input->enabled, input->restart_steam, input->allow_during_stream);
+    nlohmann::json out {{"status", result.ok}, {"restart", result.restart}};
+    if (!result.ok) {
+      out["error"] = result.error;
+      out["error_code"] = result.error_code;
+    }
+    send_response(response, out);
+#else
+    bad_request(response, request, "Steam Big Picture controls are only available on Windows");
+#endif
+  }
+
+  /**
+   * @brief Check which Big Picture controls work in the running Steam, without changing Steam.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * Runs the injected script's check mode through the Steam UI helper and returns its report: the
+   * Steam build and each feature's result (`ok`, `fallback: ...` or `off: ...`). Needs the controls to
+   * be on and connected to Steam. Use it after a Steam update.
+   *
+   * @api_examples{/api/steam/big_picture/check| POST| {}}
+   */
+  void postSteamBigPictureCheck(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+#ifdef _WIN32
+    namespace big_picture = platf::steam::big_picture;
+    const auto result = big_picture::check();
+    if (result.outcome == big_picture::check_outcome_e::not_connected) {
+      send_response(response, nlohmann::json {{"status", false}, {"error", "Vibeshine is not connected to Steam. Turn on the controls and Steam's debug port first."}});
+      return;
+    }
+    if (result.outcome == big_picture::check_outcome_e::timed_out) {
+      const auto seconds = std::to_string(big_picture::check_timeout.count());
+      send_response(response, nlohmann::json {{"status", false}, {"error", "Steam didn't answer the check within " + seconds + " seconds. It may be busy; try again in a moment."}});
+      return;
+    }
+    const auto &message = result.message;
+    if (const auto error = message.find("error"); error != message.end() && error->is_string()) {
+      send_response(response, nlohmann::json {{"status", false}, {"error", "The check could not run: " + error->get<std::string>()}});
+      return;
+    }
+    send_response(response, nlohmann::json {{"status", true}, {"report", message.value("report", nlohmann::json::object())}});
+#else
+    bad_request(response, request, "Steam Big Picture controls are only available on Windows");
+#endif
   }
 }  // namespace confighttp

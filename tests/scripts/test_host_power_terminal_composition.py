@@ -46,7 +46,7 @@ using resp_https_t=std::shared_ptr<Response>;using req_https_t=std::shared_ptr<R
 using Handler=std::function<void(resp_https_t,req_https_t)>;
 namespace thread_pool_util {struct ThreadPool{std::vector<std::function<void()>>tasks;template<class T>void push(T t){tasks.emplace_back(std::move(t));}void run(){auto ready=std::move(tasks);tasks.clear();for(auto&t:ready)t();}};}
 struct Server {std::map<std::string,std::map<std::string,Handler>>resource;};
-namespace rtsp_stream {void terminate_sessions(bool){}}
+namespace rtsp_stream {void terminate_sessions(bool,bool){}}
 namespace webrtc_stream {void shutdown_all_sessions(){}}
 namespace remote_session {void notify_monitor_shutdown(){}}
 namespace proc {struct Proc{void terminate(){}}proc;}

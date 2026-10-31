@@ -11,6 +11,9 @@
   #include "steam_sync_policy.h"
 
   #include <nlohmann/json.hpp>
+  #ifdef _WIN32
+    #include "platform/windows/steam_big_picture_controls.h"
+  #endif
 #endif
 
 #include <algorithm>
@@ -123,6 +126,7 @@ namespace config {
     consume(vars, "steam_recent_max_age_days", result.recent_max_age_days);
     consume(vars, "steam_autosync_remove_uninstalled", result.autosync_remove_uninstalled);
     consume(vars, "steam_include_tools", result.include_tools);
+    consume(vars, "steam_big_picture_controls", result.big_picture_controls);
     parse_exclusions(vars, result);
 #if defined(__linux__)
     return normalize_steam_policy(result, true);
@@ -144,6 +148,10 @@ namespace config {
       .include_tools = steam.include_tools,
       .exclusions = steam.exclude_games_meta,
     });
+  #ifdef _WIN32
+    // Independent of library sync: the controls only need Steam to be running.
+    platf::steam::big_picture::configure(steam.big_picture_controls);
+  #endif
     if (!steam.enabled || !steam.auto_sync) {
       return;
     }

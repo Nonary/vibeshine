@@ -56,6 +56,7 @@
 #include "file_handler.h"
 #include "globals.h"
 #include "host_stats.h"
+#include "steam_big_picture_notify.h"
 #include "hdr_request_policy.h"
 #include "httpcommon.h"
 #include "input.h"
@@ -5819,6 +5820,7 @@ namespace webrtc_stream {
         sessions.emplace(snapshot.id, std::move(session));
         first_session = active_sessions.fetch_add(1, std::memory_order_relaxed) == 0;
         host_stats::webrtc_session_started();
+        platf::steam::big_picture::notify_changed();
       }
       webrtc_capture.pending_session_creations.fetch_sub(1, std::memory_order_release);
       reservation_guard.disable();
@@ -5908,6 +5910,7 @@ namespace webrtc_stream {
         // the preceding teardown_sessions increment.
         last_session = active_sessions.fetch_sub(1, std::memory_order_acq_rel) == 1;
         host_stats::webrtc_session_ended();
+        platf::steam::big_picture::notify_changed();
       }
     }
     if (removed) {

@@ -1311,6 +1311,62 @@ namespace statefile {
              std::nullopt;
   }
 
+  bool save_steam_debug_port_flag(const std::optional<steam_debug_port_flag_t> &flag) {
+    if (flag && (flag->path.empty() || flag->path.size() > 32768 || flag->file_id.size() > 128)) {
+      return false;
+    }
+    migrate_recent_state_keys();
+    const auto &path = vibeshine_state_path();
+    if (path.empty()) {
+      return false;
+    }
+    std::lock_guard guard {state_mutex()};
+    pt::ptree tree;
+    if (load_tree_for_update(fs::path {path}, tree) == policy::load_result_e::failed) {
+      return false;
+    }
+    auto &root = ensure_root(tree);
+    const auto current_path = root.get_optional<std::string>("steam_debug_port_flag");
+    const auto current_id = root.get<std::string>("steam_debug_port_flag_id", "");
+    if (flag ? current_path && *current_path == flag->path && current_id == flag->file_id : !current_path) {
+      return true;  // unchanged; avoid rewriting the state file
+    }
+    root.erase("steam_debug_port_flag_id");
+    if (flag) {
+      root.put("steam_debug_port_flag", flag->path);
+      if (!flag->file_id.empty()) {
+        root.put("steam_debug_port_flag_id", flag->file_id);
+      }
+    } else {
+      root.erase("steam_debug_port_flag");
+    }
+    try {
+      write_tree(fs::path {path}, tree);
+      return true;
+    } catch (const std::exception &storage_error) {
+      BOOST_LOG(error) << "statefile: failed to persist the Steam debug-port flag file: " << storage_error.what();
+      return false;
+    }
+  }
+
+  std::optional<steam_debug_port_flag_t> load_steam_debug_port_flag() {
+    migrate_recent_state_keys();
+    const auto &path = vibeshine_state_path();
+    if (path.empty()) {
+      return std::nullopt;
+    }
+    std::lock_guard guard {state_mutex()};
+    pt::ptree tree;
+    if (!load_tree_if_exists(fs::path {path}, tree)) {
+      return std::nullopt;
+    }
+    const auto flag_path = tree.get_optional<std::string>("root.steam_debug_port_flag");
+    if (!flag_path || flag_path->empty()) {
+      return std::nullopt;
+    }
+    return steam_debug_port_flag_t {*flag_path, tree.get<std::string>("root.steam_debug_port_flag_id", "")};
+  }
+
   void clear_virtual_display_scales() {
     migrate_recent_state_keys();
     const auto &path_str = vibeshine_state_path();

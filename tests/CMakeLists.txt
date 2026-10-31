@@ -619,6 +619,8 @@ sunshine_register_component(NAME test_component_rtsp_pending_policy TEST_SOURCE 
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/rtsp_pending_policy.cpp")
 sunshine_register_component(NAME test_component_pyrowave_udp_probe TEST_SOURCE unit/test_pyrowave_udp_probe.cpp
     LINK_LIBRARIES Boost::asio Boost::system ${SUNSHINE_TEST_SOCKET_LIBRARIES})
+sunshine_register_component(NAME test_component_enet_termination_delivery TEST_SOURCE unit/test_enet_termination_delivery.cpp
+    LINK_LIBRARIES enet ${SUNSHINE_TEST_SOCKET_LIBRARIES})
 sunshine_register_component(NAME test_component_pyrowave_policy TEST_SOURCE unit/test_pyrowave_policy.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/pyrowave_policy.cpp")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -682,6 +684,17 @@ sunshine_register_component(NAME test_component_steam_artwork TEST_SOURCE test_s
 sunshine_register_component(NAME test_component_config_steam TEST_SOURCE test_config_steam.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/config_steam.cpp"
     LINK_LIBRARIES nlohmann_json::nlohmann_json)
+sunshine_register_component(NAME test_component_steam_big_picture_controls TEST_SOURCE test_steam_big_picture_controls.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/steam_big_picture_controls_policy.cpp"
+    LINK_LIBRARIES nlohmann_json::nlohmann_json)
+sunshine_register_component(NAME test_component_steam_ui_helper_controller TEST_SOURCE unit/test_steam_ui_helper_controller.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/tools/steam_ui_helper/controller.cpp"
+                    "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/steam_big_picture_controls_policy.cpp"
+    LINK_LIBRARIES nlohmann_json::nlohmann_json)
+if(WIN32)
+    sunshine_register_component(NAME test_component_steam_big_picture_pipe TEST_SOURCE unit/platform/windows/test_steam_big_picture_pipe.cpp
+        LINK_LIBRARIES nlohmann_json::nlohmann_json)
+endif()
 sunshine_register_component(NAME test_component_steam_sync TEST_SOURCE test_steam_sync.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/steam_sync_policy.cpp"
                     "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/steam_integration.cpp"

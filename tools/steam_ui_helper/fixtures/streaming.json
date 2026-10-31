@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "appRunning": true,
+  "appName": "Factorio",
+  "clients": [
+    { "id": "fixture-steam-deck", "name": "Steam Deck", "kind": "moonlight" },
+    { "id": "fixture-browser", "name": "Browser", "kind": "browser" }
+  ],
+  "streams": [{ "width": 1280, "height": 800, "fps": 90, "codec": "HEVC", "hdr": false }],
+  "can": { "endStream": true, "disconnect": true },
+  "strings": {}
+}

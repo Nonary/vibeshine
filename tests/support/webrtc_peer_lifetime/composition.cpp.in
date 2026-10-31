@@ -1,4 +1,5 @@
 #include "src/host_stream_control.h"
+#include "src/steam_big_picture_notify.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -80,7 +81,7 @@ void lwrtc_peer_set_local_description(lwrtc_peer_t *p,const char*,const char*,vo
 void lwrtc_constraints_release(lwrtc_constraints_t *p){++constraints_releases;delete p;}
 namespace nvhttp {std::mutex lifecycle,launch_request_mutex;std::mutex &stream_lifecycle_mutex(){return lifecycle;}}
 namespace stream::session {struct cleanup_reservation_t {~cleanup_reservation_t(){}};bool has_shared_runtime_owner(){return false;}bool finalize_shared_runtime_if_idle(const char*){return true;}}
-namespace rtsp_stream {void terminate_sessions(bool){}}
+namespace rtsp_stream {void terminate_sessions(bool,bool){}}
 namespace proc {struct Proc{void terminate(){}} proc;}
 namespace remote_session {void notify_monitor_shutdown(){}}
 namespace remote_display_topology {struct Topology{bool shutdown_complete(){return true;}} topology;Topology &instance(){return topology;}}

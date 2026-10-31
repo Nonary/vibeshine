@@ -221,6 +221,9 @@ std::map<std::string_view, std::function<int(const char *name, int argc, char **
   {"restore-nvprefs-undo"sv, [](const char *name, int argc, char **argv) {
      return args::restore_nvprefs_undo();
    }},
+  {"remove-steam-debug-port-flag"sv, [](const char *name, int argc, char **argv) {
+     return args::remove_steam_debug_port_flag();
+   }},
 #endif
 };
 
