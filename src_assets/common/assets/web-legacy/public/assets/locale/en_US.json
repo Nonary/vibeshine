@@ -553,6 +553,8 @@
     "dd_optional_adjustments": "Optional adjustments",
     "dd_advanced_remapping_title": "Advanced: Mode remapping",
     "dd_display_overrides": "Display overrides",
+    "dd_overrides_configuration_disabled": "Display overrides will not apply while display automation is disabled. Enable display preparation to use them.",
+    "dd_enable_overrides": "Enable display automation",
     "output_name_default": "Primary display (default)",
     "dd_refresh_rate_option": "Refresh rate",
     "dd_refresh_rate_option_auto": "Use FPS value provided by the client (default)",
