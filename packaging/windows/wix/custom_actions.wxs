@@ -2,7 +2,7 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <!--
     Custom actions to implement the Windows installer behavior:
-    - Reset ACLs on install dir
+    - Validate the install directory without repairing untrusted ACLs
     - Update PATH (add/remove)
     - Migrate config files
     - Add/remove firewall rules
@@ -35,9 +35,6 @@
     
     <!-- VBScript to show a final repair-complete notification (full UI only) -->
     <Binary Id="RepairCompleteVbs" SourceFile="$(sys.SOURCEFILEDIR)repair_complete.vbs"/>
-    <!-- VBScripts for legacy Sunshine handling -->
-    <Binary Id="AskUninstallLegacySunshineVbs" SourceFile="$(sys.SOURCEFILEDIR)ask_uninstall_legacy_sunshine.vbs"/>
-    <Binary Id="WaitForLegacyUninstallVbs" SourceFile="$(sys.SOURCEFILEDIR)wait_for_legacy_uninstall.vbs"/>
     <Binary Id="RemoveConflictingProductsVbs" SourceFile="$(sys.SOURCEFILEDIR)remove_conflicting_products.vbs"/>
 
   </Fragment>
@@ -127,9 +124,12 @@
   </Fragment>
 
   <Fragment>
-    <!-- Native MSI policy: direct MSI and bootstrapper installs are restricted
-         to descendants of ProgramFilesFolder. No INSTALL_ROOT value is ever
-         interpolated into command source. -->
+    <!-- The embedded native validator examines no-follow handles and owner/ACLs
+         before any action executes files from INSTALL_ROOT. The prefix check
+         below is only an early diagnostic, not the security boundary. -->
+    <Binary Id="InstallRootGuard" SourceFile="$(var.BinDir)\sunshine_install_guard.dll" />
+    <CustomAction Id="ValidateInstallRootPreview" BinaryKey="InstallRootGuard" DllEntry="ValidateInstallRootPreview" Execute="immediate" Return="check" />
+    <CustomAction Id="ValidateInstallRoot" BinaryKey="InstallRootGuard" DllEntry="ValidateInstallRoot" Execute="immediate" Return="check" />
     <CustomAction Id="BlockUnsafeInstallRoot"
                   Error="Vibeshine must be installed in a folder beneath Program Files." />
 
@@ -251,12 +251,9 @@
                  Property="RemoveServiceQuiet"
                  Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete VibeshineService | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>
 
-    <!-- Legacy Sunshine handling actions -->
-    <CustomAction Id="AskUninstallLegacySunshine" BinaryKey="AskUninstallLegacySunshineVbs" VBScriptCall="AskUninstallLegacySunshine" Execute="immediate" Return="check" />
-    <CustomAction Id="WaitForLegacyUninstall" BinaryKey="WaitForLegacyUninstallVbs" VBScriptCall="WaitForLegacyUninstall" Execute="immediate" Return="check" />
-    
-    <CustomAction Id="BlockLegacySunshineStillPresent" Error="Legacy Sunshine is still installed. In order to install Vibeshine it must be uninstalled first, click OK to start the uninstallation." />
-    <CustomAction Id="BlockUserCancelledLegacy" Error="Installation cancelled. Legacy Sunshine must be removed before installing Vibeshine." />
+    <!-- A direct MSI never elevates an executable from an opaque registry
+         command. The bootstrapper handles validated machine replacements. -->
+    <CustomAction Id="BlockLegacySunshine" Error="Legacy Sunshine is installed. Run the Vibeshine setup bootstrapper to replace it, or remove it using its trusted uninstaller before retrying this MSI." />
 
     <!-- UI-only prompt at end of a successful Repair to inform no reboot is required -->
     <CustomAction Id="RepairCompletePrompt" BinaryKey="RepairCompleteVbs" VBScriptCall="ShowRepairComplete" Execute="immediate" Return="ignore" />

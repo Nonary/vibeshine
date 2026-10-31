@@ -2598,7 +2598,6 @@ namespace VibeshineInstaller {
       }
 
       var current = fullPath;
-      var aclChecksRemaining = Directory.Exists(fullPath) ? 2 : 1;
       while (!string.IsNullOrWhiteSpace(current)) {
         if (Directory.Exists(current)) {
           var info = new DirectoryInfo(current);
@@ -2608,9 +2607,9 @@ namespace VibeshineInstaller {
               "The install folder or one of its parent folders is a reparse point. "
               + "Choose a direct local path so the installer can secure it safely.");
           }
-          if (aclChecksRemaining > 0) {
+          if (programFilesRoots.Any(root =>
+              string.Equals(current, root, StringComparison.OrdinalIgnoreCase) || PathIsUnderDirectory(current, root))) {
             RejectUntrustedWritableInstallAncestor(info);
-            aclChecksRemaining--;
           }
         }
         var parent = Path.GetDirectoryName(current);
@@ -6867,6 +6866,18 @@ namespace VibeshineInstaller {
         };
       }
 
+      // This dispatcher runs after self-elevation. Disabling a later UAC
+      // prompt cannot lower its inherited token. HKCU MSI flags/GUIDs are
+      // equally untrusted; reject all per-user rows before any recovery work.
+      var perUserProduct = installedProducts.FirstOrDefault(product => product.IsPerUser);
+      if (perUserProduct != null) {
+        return new InstallerResult {
+          Operation = InstallerOperation.Uninstall, ExitCode = 1612,
+          Message = "Remove the per-user installation from your normal user account before retrying. Its user-writable registration cannot authorize an elevated uninstall.",
+          ProductCode = perUserProduct.ProductCode, ProductKind = perUserProduct.Kind, ProductDisplayName = perUserProduct.DisplayName
+        };
+      }
+
       // Preflight every known identity before dispatching any competing
       // uninstaller. Inventory order must not remove another product before
       // a later catalogued row reveals ambiguous ownership or bad metadata.
@@ -6963,10 +6974,8 @@ namespace VibeshineInstaller {
             ScheduleSelfDeleteAndEmptyInstallRootCleanup(product.InstallLocation, logPath);
           }
         } else {
-          // Never elevate non-MSI uninstall commands sourced from HKCU since
-          // those registry values are user-writable and could be tampered with.
-          var allowElevation = requestElevationIfNeeded && !product.IsPerUser;
-          code = RunUninstallCommand(product, hiddenWindow, allowElevation);
+          // Per-user commands were rejected before any uninstall side effect.
+          code = RunUninstallCommand(product, hiddenWindow, requestElevationIfNeeded);
         }
 
         if (code == 3010) {

@@ -106,8 +106,10 @@ class InstallerPathSecurityContract(unittest.TestCase):
         }
         self.assertIn("BlockUnsafeInstallRoot", actions)
         self.assertNotIn("Value", actions["BlockUnsafeInstallRoot"].attrib)
+        self.assertEqual("InstallRootGuard", actions["ValidateInstallRoot"].get("BinaryKey"))
+        self.assertEqual("ValidateInstallRoot", actions["ValidateInstallRoot"].get("DllEntry"))
         for removed in (
-            "ValidateInstallRoot", "SetValidateInstallRoot", "SecureInstallRoot",
+            "SetValidateInstallRoot", "SecureInstallRoot",
             "SetSecureInstallRoot", "ValidateInstalledPayload", "SetValidateInstalledPayload",
         ):
             self.assertNotIn(removed, actions)

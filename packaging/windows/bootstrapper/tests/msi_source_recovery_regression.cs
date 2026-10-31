@@ -161,6 +161,23 @@ namespace PRODUCT_NAMESPACE {
     }
     private static void Cleanup() { Directory.Delete(Root, true); }
     public static void Main() {
+      foreach (var kind in new[] { InstalledProductKind.Sunshine, InstalledProductKind.Apollo, InstalledProductKind.Vibepollo }) {
+        foreach (var msi in new[] { false, true }) {
+          foreach (var userFirst in new[] { false, true }) {
+            Reset();
+            try {
+              var machine = FixtureProducts[0];
+              var user = new InstalledProductInfo { ProductCode = "{33333333-3333-3333-3333-333333333333}",
+                Kind = kind, IsPerUser = true, IsWindowsInstaller = msi, RegistryPath = "HKCU\\fixture", UninstallString = "untrusted.exe /S" };
+              FixtureProducts = userFirst ? new List<InstalledProductInfo> { user, machine } : new List<InstalledProductInfo> { machine, user };
+              StashedVibeshinePayload stash;
+              var result = UninstallCompetingProducts("install_remove_competing", true, true, out stash);
+              Check(result.ExitCode == 1612 && Runs == 0 && GenericCalls == 0 && Downloads == 0 && Registrations == 0 && stash == null,
+                "HKCU command and spoofed MSI registrations fail before recovery or any uninstall, independent of inventory order");
+            } finally { Cleanup(); }
+          }
+        }
+      }
       foreach (var mode in new[] {"missing", "corrupt-local", "wrong-version-local", "offline", "corrupt-download", "signature-failure", "metadata-failure", "directory-failure", "registration-failure", "retry-failure", "retry-reboot", "identity-change", "good-local-offline"}) {
         Reset(mode);
         try {
