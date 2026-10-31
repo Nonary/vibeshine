@@ -81,6 +81,7 @@ jobs:
             --requirements-file=./third-party/glad/requirements.txt
 
           # Copy generated pip sources into build dir alongside the manifest
+          mkdir -p build
           cp glad-dependencies.json build/
 
       - name: Cache Flatpak build

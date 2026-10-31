@@ -60,7 +60,7 @@ foreach(_truehdr_runtime_file IN ITEMS
 endforeach()
 ]=])
     string(CONFIGURE "${_truehdr_stage_code}" _truehdr_stage_code @ONLY)
-    install(CODE "${_truehdr_stage_code}")
+    install(CODE "${_truehdr_stage_code}" COMPONENT application)
     unset(_truehdr_stage_code)
     install(FILES ${SUNSHINE_TRUEHDR_RUNTIME_FILES}
         DESTINATION "."
