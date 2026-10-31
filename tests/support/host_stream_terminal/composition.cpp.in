@@ -101,7 +101,11 @@ namespace protocol {constexpr int BITSTREAM_FORMAT=99;constexpr std::string_view
 namespace policy {struct framing_e {static constexpr int records=1;};int select_framing(bool,std::optional<std::uint32_t>){return 0;}}
 namespace bandwidth {std::uint64_t pacing_link_bps(std::uint64_t,std::uint64_t){return 0;}}
 }
-namespace remote_session {enum class role_e {game,input,monitor};}
+namespace remote_session {
+enum class role_e {game,input,monitor};
+int monitor_transport_losses = 0;
+void notify_monitor_transport_lost(std::string_view, std::uint64_t) { ++monitor_transport_losses; }
+}
 namespace pending_policy {
 bool disconnect_scope_matches(remote_session::role_e actual,remote_session::role_e expected,bool same,bool all) {return actual==expected && (same||all);}
 struct pending_owner_t {remote_session::role_e role;std::string client_uuid;std::uint64_t generation;};
@@ -117,7 +121,7 @@ struct launch_session_t {
  std::shared_ptr<void> audio_context_guard,display_power_guard;
  std::string remote_capture_output,rtsp_source_address,av_ping_payload,client_name,device_name,normal_vdd_owner_uuid,audio_codec_offered;
  int gcm_key=0,iv=0,control_connect_data=0,secondary_game_client=0,client_display_mode_override=0,client_display_refresh_millihz=0,prefer_sdr_10bit=0,virtual_display=0,normal_vdd_identity_token=0,framegen_refresh_rate=0,framegen_refresh_millihz=0,framegen_refresh_multiplier=0,framegen_fixed_refresh=0;
- bool host_audio=false,client_vrr_requested=false,continuous_audio=false,force_sdr=false,enable_hdr=false;
+ bool host_audio=false,client_vrr_requested=false,continuous_audio=false,force_sdr=false,enable_hdr=false,monitor_stream_published=false;
  int gen1_framegen_fix=0,gen2_framegen_fix=0,frame_generation_enabled=0,lossless_scaling_framegen=0,frame_generation_provider=0,lossless_scaling_target_fps=0,lossless_scaling_rtss_limit=0;
 };
 @SNAPSHOT@
@@ -149,6 +153,12 @@ struct rtsp_server_t {
  int startup_count() const {return startup_tasks.count();}
 @RELEASE_HOLDS@
 @RETAIN_HOLDS@
+@RECONCILE_MONITOR_LOCKED@
+@RETIRE_FAILED_MONITOR_START@
+ // The retry timer is an external scheduling edge, controlled by this fixture.
+ int monitor_retry_requests = 0;
+ void retry_abandoned_monitor(const std::shared_ptr<launch_session_t> &) { ++monitor_retry_requests; }
+@RECONCILE_MONITOR@
 @CANCEL_PENDING@
  std::shared_ptr<launch_session_t> take_pending_launch(unsigned id){std::lock_guard lock(pending_launches_mutex);auto i=pending_launches.find(id);if(i==pending_launches.end())return {};auto p=i->second.session;pending_launches.erase(i);return p;}
 @SESSION_CLEAR@
@@ -192,6 +202,8 @@ namespace nvhttp {
 }
 void reset() {
  physical=false;late_ordinary=false;armed=true;running=0;finalizer_calls=0;config_applies=0;
+ remote_session::monitor_transport_losses=0;
+ server.monitor_retry_requests=0;
  audio::ac3_encoder=true;audio::eac3_encoder=true;config::audio={};stream::session::allocated_audio={};response_status=0;response_audio_codec.clear();
  join_pause.reset(false);expiry_pause.reset(false);parser_pause.reset(false);peer_pause.reset(false);
  server._session_state->sessions.clear();server.pending_launches.clear();server.startup_pool.queue.clear();server.io_context.queue.clear();
@@ -207,6 +219,16 @@ void blocked_cleanup(Pause &pause,const char *name,std::function<void()> cleanup
  check(waited && !before && physical && !late_ordinary,name);
 }
 int main() {
+ reset();auto monitor=std::make_shared<launch_session_t>();monitor->role=remote_session::role_e::monitor;
+ server.pending_launches.emplace(monitor->id,rtsp_server_t::Pending{monitor,std::chrono::steady_clock::now()+1s});
+ monitor->monitor_stream_published=true;server.retire_failed_monitor_start_locked(monitor);
+ check(server.pending_launches.size()==1 && remote_session::monitor_transport_losses==0,"published monitor survives failed-start retirement");
+ monitor->monitor_stream_published=false;server.retire_failed_monitor_start_locked(monitor);
+ check(server.pending_launches.empty() && remote_session::monitor_transport_losses==1,"unpublished monitor is retired and reconciled");
+ reset();server.reconcile_abandoned_monitor(monitor);
+ check(remote_session::monitor_transport_losses==0,"monitor reconciliation waits for scheduled startup");
+ server.io_context.run();server.startup_pool.run();
+ check(remote_session::monitor_transport_losses==1 && server.monitor_retry_requests==0,"scheduled monitor reconciliation reaches transport-loss handler");
  launch_session_t metadata;metadata.guide_button=37;metadata.monitor_profile_uuid="exact-monitor-profile";auto copied=make_startup_launch_session_snapshot(metadata);check(copied->guide_button==37,"actual startup snapshot preserves Guide metadata");check(copied->monitor_profile_uuid=="exact-monitor-profile","actual startup snapshot preserves Monitor profile metadata");
  reset();running=1;join_pause.reset(true);server._session_state->sessions.insert(std::make_shared<stream::session_t>());
  blocked_cleanup(join_pause,"actual natural clear drains removed owner before recovery",[]{server.clear(false);});
