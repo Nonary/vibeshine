@@ -2123,3 +2123,9 @@ if(SUNSHINE_TEST_PYTHON_EXECUTABLE AND NOT WIN32)
             "${CMAKE_CURRENT_LIST_DIR}/unit/test_truehdr_install.py")
     set_tests_properties(test_component_truehdr_install PROPERTIES LABELS "component" TIMEOUT 60)
 endif()
+if(SUNSHINE_TEST_PYTHON_EXECUTABLE AND NOT WIN32)
+    add_test(NAME test_component_appimage_launcher
+        COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/test_appimage_launcher.py")
+    set_tests_properties(test_component_appimage_launcher PROPERTIES LABELS "component" TIMEOUT 60)
+endif()
