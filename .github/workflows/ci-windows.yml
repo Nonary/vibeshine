@@ -522,6 +522,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Driver interop environment regression failed.' }
           python packaging/windows/bootstrapper/tests/test_incoming_msi_preflight.py
           if ($LASTEXITCODE -ne 0) { throw 'Incoming MSI preflight regression failed.' }
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\packaging\windows\bootstrapper\tests\test_packaged_msi_invocation.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged MSI reflection regression failed.' }
 
       - name: Test production bootstrap migration
         if: inputs.build_tests
