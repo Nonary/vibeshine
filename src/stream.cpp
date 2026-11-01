@@ -75,6 +75,7 @@ extern "C" {
 #include "video_send.h"
 #include "video_adaptive_pacing.h"
 #include "video_fec_status.h"
+#include "video_link_rate.h"
 #include "video_pacing_policy.h"
 #include "webrtc_stream.h"
 #ifdef _WIN32
@@ -688,6 +689,25 @@ namespace stream {
       // Control thread only: validates and de-duplicates client FEC block reports.
       pacing::fec_report_tracker_t fec_reports;
 
+      // Experimental link rate adaptation (host_link_rate_adaptation, ordinary
+      // video only). The sender records each frame it sent; the control thread
+      // feeds pings and FEC reports, ticks the controller and applies the
+      // bitrate it returns. The mutex is held only for those short calls.
+      bool link_rate_enabled {false};
+      std::mutex link_rate_mutex;
+      link_rate::link_rate_t link_rate_controller;
+      // Set by /bitrate: the client owns the bitrate for the rest of the stream.
+      std::atomic<bool> client_bitrate_owned {false};
+      // The encoder reports whether it applies a bitrate without rebuilding.
+      safe::mail_raw_t::event_t<int> live_bitrate_events;
+      // The controller's bitrate steps, applied without forcing a keyframe.
+      safe::mail_raw_t::event_t<int> link_rate_bitrate_events;
+      // Control thread only.
+      link_rate::busy_meter_t link_rate_busy;
+      std::optional<bool> live_bitrate;
+      // The bitrate before the controller's first change, restored when it is done.
+      std::optional<int> link_rate_restore;
+
       std::unique_ptr<platf::deinit_t> qos;
     } video;
 
@@ -762,7 +782,8 @@ namespace stream {
       std::atomic<std::uint16_t> last_encode_latency_us10 {0};  // in 1/10 ms units
       std::atomic<std::int64_t> last_frame_index {0};
       /// Index of the newest frame whose send began, or -1 before the first one.
-      /// Written only with host_adaptive_pacing, which fences client reports on it.
+      /// Written only with host_adaptive_pacing or host_link_rate_adaptation,
+      /// which fence client reports on it.
       std::atomic<std::int64_t> wire_frame_index {-1};
       /// Frames abandoned by a socket send failure; adaptive pacing treats a rise as loss.
       std::atomic<std::uint64_t> video_send_failures {0};
@@ -848,7 +869,7 @@ namespace stream {
       for (auto *session : *ctx.control_server._sessions) {
         if (session) {
           sessions.push_back({session->device_uuid, session->config.monitor.bitrate, session->config.monitor.client_requested_bitrate,
-                              session->video.pacing_bitrate_kbps, session->video.idr_events, session->video.bitrate_events});
+                              session->video.pacing_bitrate_kbps, session->video.idr_events, session->video.bitrate_events, &session->video.client_bitrate_owned});
         }
       }
       return action(sessions);
@@ -1640,20 +1661,173 @@ namespace stream {
     }
   }
 
+  /**
+   * @brief Log a link rate change. Called only when something changed, never per frame.
+   * @param change What the controller changed.
+   * @param left_full Whether the stream was at its requested bitrate before.
+   */
+  static void log_link_rate(const link_rate::change_t &change, bool left_full) {
+    const auto mbps = [](std::uint32_t kbps) {
+      return kbps / 1000.0;
+    };
+    const auto evidence = [&]() {
+      std::ostringstream out;
+      out << change.reason;
+      if (std::string_view {change.reason} == "unrecoverable_frames"sv) {
+        out << ": "sv << change.evidence.unrecoverable_frames << " frames in 2 s"sv;
+      } else if (std::string_view {change.reason} == "fec_loss_share"sv) {
+        out << ": "sv << unsigned(change.evidence.loss_windows) << " windows at 5% or more"sv;
+      } else if (std::string_view {change.reason} == "send_losses"sv) {
+        out << ": "sv << change.evidence.send_losses << " frames in 2 s"sv;
+      }
+      if (change.evidence.loss_share > 0) {
+        out << ", "sv << std::lround(change.evidence.loss_share * 100) << "% missing"sv;
+      }
+      if (change.delivered_kbps) {
+        out << ", delivered "sv << mbps(change.delivered_kbps) << " Mbps"sv;
+      }
+      return out.str();
+    };
+    switch (change.kind) {
+      case link_rate::change_kind_e::step_down:
+      case link_rate::change_kind_e::probe_failed:
+        if (left_full) {
+          BOOST_LOG(warning) << "Link rate: the network to this device cannot carry the stream; lowering the video bitrate from "sv
+                             << mbps(change.from_kbps) << " to "sv << mbps(change.to_kbps) << " Mbps ("sv << evidence() << ')';
+        } else {
+          BOOST_LOG(info) << "Link rate: "sv << link_rate::change_kind_name(change.kind) << " from "sv << mbps(change.from_kbps)
+                          << " to "sv << mbps(change.to_kbps) << " Mbps ("sv << evidence() << ')';
+        }
+        break;
+      case link_rate::change_kind_e::floor:
+        BOOST_LOG(warning) << "Link rate: still losing at the lowest bitrate, "sv << mbps(change.to_kbps) << " Mbps ("sv << evidence() << ')';
+        break;
+      case link_rate::change_kind_e::encoder_floor:
+        BOOST_LOG(info) << "Link rate: the encoder keeps sending "sv << mbps(change.delivered_kbps)
+                        << " Mbps of video wire traffic; cuts stop at "sv << mbps(change.to_kbps) << " Mbps"sv;
+        break;
+      case link_rate::change_kind_e::full:
+        BOOST_LOG(info) << "Link rate: the link carries the requested bitrate again, "sv << mbps(change.to_kbps) << " Mbps"sv;
+        break;
+      case link_rate::change_kind_e::probe:
+        BOOST_LOG(debug) << "Link rate: probing "sv << mbps(change.to_kbps) << " Mbps"sv;
+        break;
+    }
+  }
+
+  /**
+   * @brief Apply a bitrate chosen by the link rate controller to the encoder.
+   * @note Runs on the control thread under the sessions lock, which /bitrate
+   *       holds too, so the two never interleave.
+   */
+  static void apply_link_rate_bitrate(session_t *session, int kbps) {
+    session->config.monitor.bitrate = kbps;
+    session->video.pacing_bitrate_kbps.store(kbps, std::memory_order_relaxed);
+    session->video.link_rate_bitrate_events->raise(kbps);
+  }
+
+  /**
+   * @brief Tick the link rate controller from the control loop and apply its bitrate.
+   * @note Runs on the control thread, which also receives the pings and FEC reports.
+   */
+  static void tick_link_rate(session_t *session, std::chrono::steady_clock::time_point now) {
+    auto &video = session->video;
+    if (!video.link_rate_enabled || !session->control.peer) {
+      return;
+    }
+    while (video.live_bitrate_events->peek()) {
+      if (auto live = video.live_bitrate_events->pop(0ms)) {
+        video.live_bitrate = video.live_bitrate.value_or(true) && *live != 0;
+      }
+    }
+    if (video.client_bitrate_owned.load(std::memory_order_relaxed)) {
+      // The client's bitrate stands; nothing is restored over it.
+      video.link_rate_restore.reset();
+      std::lock_guard lg {video.link_rate_mutex};
+      if (video.link_rate_controller.state() != link_rate::state_e::off) {
+        video.link_rate_controller.client_takeover();
+        BOOST_LOG(info) << "Link rate: the client sets the bitrate itself; host adaptation is off for this stream"sv;
+      }
+      return;
+    }
+    if (!video.live_bitrate) {
+      // The encoder has not started yet.
+      return;
+    }
+    if (!*video.live_bitrate) {
+      bool stopped = false;
+      {
+        std::lock_guard lg {video.link_rate_mutex};
+        if (video.link_rate_controller.state() != link_rate::state_e::off) {
+          video.link_rate_controller.encoder_rebuilds();
+          stopped = true;
+        }
+      }
+      if (stopped) {
+        BOOST_LOG(info) << "Link rate: this encoder rebuilds to change the bitrate; host adaptation is off for this stream"sv;
+        if (const auto restore = std::exchange(video.link_rate_restore, std::nullopt)) {
+          apply_link_rate_bitrate(session, *restore);
+        }
+      }
+      return;
+    }
+
+    const auto framerate = std::max(session->config.monitor.framerate, 1);
+    const auto current = video.pacing_bitrate_kbps.load(std::memory_order_relaxed);
+    const bool busy = video.link_rate_busy.update(
+      now,
+      session->stats.frames_sent.load(std::memory_order_relaxed),
+      session->stats.bytes_sent.load(std::memory_order_relaxed),
+      framerate,
+      std::uint32_t(std::max(current, 0))
+    );
+    const auto rtt = std::chrono::milliseconds {session->control.peer->roundTripTime};
+
+    std::optional<std::uint32_t> target;
+    std::optional<link_rate::change_t> change;
+    bool left_full = false;
+    {
+      std::lock_guard lg {video.link_rate_mutex};
+      left_full = video.link_rate_controller.state() == link_rate::state_e::full;
+      target = video.link_rate_controller.tick(now, rtt, config::stream.fec_percentage, framerate, std::uint32_t(std::max(current, 0)), busy);
+      change = video.link_rate_controller.take_change();
+    }
+    int applied = current;
+    if (target) {
+      if (!video.link_rate_restore) {
+        video.link_rate_restore = current;
+      }
+      applied = int(*target);
+    } else if (video.link_rate_restore) {
+      applied = *std::exchange(video.link_rate_restore, std::nullopt);
+    }
+    if (applied != current) {
+      apply_link_rate_bitrate(session, applied);
+    }
+    if (change) {
+      log_link_rate(*change, left_full);
+    }
+  }
+
   void controlBroadcastThread(control_server_t *server) {
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
+      const auto now = std::chrono::steady_clock::now();
       if (session->video.adaptive_pacing_enabled) {
         // Standard pings show the client is alive and sending control traffic.
         std::lock_guard lg {session->video.adaptive_pacing_mutex};
-        session->video.adaptive_pacing.on_ping(std::chrono::steady_clock::now(), payload);
+        session->video.adaptive_pacing.on_ping(now, payload);
+      }
+      if (session->video.link_rate_enabled) {
+        std::lock_guard lg {session->video.link_rate_mutex};
+        session->video.link_rate_controller.on_ping(now, payload);
       }
     });
 
     // Client to host SS_FRAME_FEC_STATUS: one report per FEC block that needed
     // recovery or was dropped. (Host to client, the same number is Set RGB LED.)
     server->map(pacing::fec_status_packet_type, [](session_t *session, const std::string_view &payload) {
-      if (!session->video.adaptive_pacing_enabled) {
+      if (!session->video.adaptive_pacing_enabled && !session->video.link_rate_enabled) {
         // Off: behave as before this type had a handler.
         BOOST_LOG(debug)
           << "type [Unknown] { "sv << util::hex(pacing::fec_status_packet_type).to_string_view() << " }"sv << std::endl
@@ -1667,11 +1841,21 @@ namespace stream {
       if (!report) {
         return;
       }
-      // record() accepted it, so `last_sent` is set.
-      const auto framerate = std::max(session->config.monitor.framerate, 1);
-      const auto period = std::chrono::nanoseconds {1'000'000'000 / framerate};
-      std::lock_guard lg {session->video.adaptive_pacing_mutex};
-      session->video.adaptive_pacing.on_block(report->frame, *last_sent, period, report->block);
+      if (session->video.adaptive_pacing_enabled) {
+        // record() accepted it, so `last_sent` is set.
+        const auto framerate = std::max(session->config.monitor.framerate, 1);
+        const auto period = std::chrono::nanoseconds {1'000'000'000 / framerate};
+        std::lock_guard lg {session->video.adaptive_pacing_mutex};
+        session->video.adaptive_pacing.on_block(report->frame, *last_sent, period, report->block);
+      }
+      if (session->video.link_rate_enabled) {
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard lg {session->video.link_rate_mutex};
+        session->video.link_rate_controller.on_status(report->status, now);
+        if (report->block.kind == pacing::fec_block_t::kind_e::unrecoverable) {
+          session->video.link_rate_controller.on_unrecoverable(report->frame, now);
+        }
+      }
     });
 
     server->map(packetTypes[IDX_START_A], [&](session_t *session, const std::string_view &payload) {
@@ -2085,6 +2269,7 @@ namespace stream {
 
             // The sample period (500 ms) is longer than this loop's ENet wait.
             tick_adaptive_pacing(session, now);
+            tick_link_rate(session, now);
           }
 
           ++pos;
@@ -2388,7 +2573,7 @@ namespace stream {
       // may also protect detail, bounded by unused bitrate and FEC block capacity.
       const bool pyrowave_session = session->config.monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT;
       auto fecPercentage = pyrowave_session ? 0 : config::stream.fec_percentage;
-      if (session->video.adaptive_pacing_enabled) {
+      if (session->video.adaptive_pacing_enabled || session->video.link_rate_enabled) {
         session->stats.wire_frame_index.store(packet->frame_index(), std::memory_order_relaxed);
       }
 
@@ -2517,11 +2702,30 @@ namespace stream {
 
       std::size_t frame_packets_accepted = 0;
       const auto bytes_per_packet = blocksize + (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
+      if (session->video.link_rate_enabled) {
+        // Recorded before the first packet leaves: on a short path the report
+        // for a frame's first FEC block can arrive before its last block is sent.
+        std::size_t frame_packets = 0;
+        for (std::size_t x = 0; x < fec_blocks_needed; ++x) {
+          const auto data_shards = (fec_blocks[x].size() + blocksize - 1) / blocksize;
+          frame_packets += pacing::fec_expanded_packets(data_shards, fec_block_percentages[x], min_parity_shards);
+        }
+        // Link bytes per packet: Ethernet framing, IP and UDP headers.
+        const auto link_bytes = bytes_per_packet + 38 + (session->video.peer.address().is_v6() ? 40 : 20) + 8;
+        std::lock_guard lg {session->video.link_rate_mutex};
+        session->video.link_rate_controller.on_sent(static_cast<std::uint32_t>(packet->frame_index()), std::uint32_t(frame_packets), std::uint64_t(frame_packets) * link_bytes, std::chrono::steady_clock::now());
+      }
+      // A socket send failure abandoned this frame part way.
+      bool frame_send_lost = false;
       auto account_accepted_packets = util::fail_guard([&] {
         // These counters feed session-history bitrate. Preserve actual socket
         // traffic even when only a prefix of the frame was accepted.
         session->stats.packets_sent.fetch_add(frame_packets_accepted, std::memory_order_relaxed);
         session->stats.bytes_sent.fetch_add(frame_packets_accepted * bytes_per_packet, std::memory_order_relaxed);
+        if (session->video.link_rate_enabled && frame_send_lost) {
+          std::lock_guard lg {session->video.link_rate_mutex};
+          session->video.link_rate_controller.on_send_loss(static_cast<std::uint32_t>(packet->frame_index()), std::chrono::steady_clock::now());
+        }
       });
 
       try {
@@ -3064,6 +3268,7 @@ namespace stream {
         // exception path's 100 ms sleep for temporary socket pressure.
         if (!e.cancelled) {
           session->stats.video_send_failures.fetch_add(1, std::memory_order_relaxed);
+          frame_send_lost = true;
           ++failed_video_frames;
           const auto now = std::chrono::steady_clock::now();
           if (now >= next_send_failure_log) {
@@ -3984,6 +4189,27 @@ namespace stream {
       // PyroWave keeps its own pacing; the controller only serves ordinary video.
       session.video.adaptive_pacing_enabled = config::stream.host_adaptive_pacing && !pyrowave_session;
       session.video.adaptive_pacing = pacing::adaptive_pacing_t {session.video.adaptive_pacing_enabled};
+      // Link rate adaptation changes the encoder bitrate; PyroWave sizes its
+      // own frames to the link.
+      session.video.link_rate_enabled = config::stream.host_link_rate_adaptation && !pyrowave_session;
+      if (session.video.link_rate_enabled) {
+        const std::size_t blocksize = std::size_t(std::max(session.config.packetsize, 0)) + MAX_RTP_HEADER_SIZE;
+        boost::system::error_code address_error;
+        const auto peer_address = boost::asio::ip::make_address(addr_string, address_error);
+        // Ethernet framing, IP and UDP headers, as the sender counts them.
+        const std::size_t ip_header_bytes = !address_error && !peer_address.is_v6() ? 20 : 40;
+        const link_rate::wire_budget_t budget {
+          sizeof(video_short_frame_header_t),
+          blocksize - sizeof(video_packet_raw_t),
+          blocksize + (session.video.cipher ? sizeof(video_packet_enc_prefix_t) : 0) + 38 + ip_header_bytes + 8,
+          std::size_t(std::max(session.config.minRequiredFecPackets, 0)),
+          link_rate::wire_budget_t::audio_reserve_bps(session.audio_disabled ? 0 : session.config.audio.channels, session.config.audio.flags[audio::config_t::HIGH_QUALITY]),
+        };
+        session.video.link_rate_controller = link_rate::link_rate_t {true, false, std::uint32_t(std::max(pacing_bitrate_kbps, 0)), budget};
+        BOOST_LOG(info) << "Link rate: host adaptation is on, requested "sv << pacing_bitrate_kbps << " kbps"sv;
+      } else if (config::stream.host_link_rate_adaptation) {
+        BOOST_LOG(info) << "Link rate: host adaptation is off for PyroWave"sv;
+      }
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
@@ -4292,6 +4518,8 @@ namespace stream {
       session->video.idr_events = mail->event<bool>(mail::idr);
       session->video.invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
       session->video.bitrate_events = mail->event<int>(mail::dynamic_bitrate);
+      session->video.live_bitrate_events = mail->event<int>(mail::live_bitrate);
+      session->video.link_rate_bitrate_events = mail->event<int>(mail::link_rate_bitrate);
       session->video.lowseq = 0;
       session->video.ping_payload = launch_session.av_ping_payload;
       if (config.encryptionFlagsEnabled & SS_ENC_VIDEO) {

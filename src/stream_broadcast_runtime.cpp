@@ -71,6 +71,9 @@ namespace stream::broadcast_runtime {
         session.bitrate.get() = bitrate_kbps;
         session.client_requested_bitrate.get() = bitrate_kbps;
         session.pacing_bitrate_kbps.get().store(bitrate_kbps, std::memory_order_relaxed);
+        if (session.client_bitrate_owned) {
+          session.client_bitrate_owned->store(true, std::memory_order_relaxed);
+        }
         session.bitrate_events->raise(bitrate_kbps);
         ++updated;
       }

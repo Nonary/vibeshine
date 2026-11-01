@@ -115,6 +115,20 @@ TEST(VideoFecStatusTracker, ClassifiesBlocks) {
   EXPECT_EQ(tracker.duplicate_reports(), 0u);
 }
 
+TEST(VideoFecStatusTracker, ReportsCarryTheBlockAsReported) {
+  // The link rate controller counts the packets of each block.
+  fec_report_tracker_t tracker;
+  const auto lost = tracker.record(report(9, 10, 2, 7, 2, 20, 1, 2), 9);
+  ASSERT_TRUE(lost);
+  EXPECT_EQ(lost->status.frame, 9u);
+  EXPECT_EQ(lost->status.data, 10);
+  EXPECT_EQ(lost->status.parity, 2);
+  EXPECT_EQ(lost->status.received_data, 7);
+  EXPECT_EQ(lost->status.received_parity, 2);
+  EXPECT_EQ(lost->status.block, 1);
+  EXPECT_EQ(lost->status.blocks, 2);
+}
+
 TEST(VideoFecStatusTracker, CountsEachBlockOnce) {
   fec_report_tracker_t tracker;
   const auto first = report(7, 10, 2, 9, 2, 20, 0, 2);
