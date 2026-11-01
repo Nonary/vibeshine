@@ -339,7 +339,8 @@ namespace platf::dxgi {
     LPWSTR sid_text = nullptr;
     if (!ConvertSidToStringSidW(user->User.Sid, &sid_text)) return false;
     auto free_sid = util::fail_guard([&] { LocalFree(sid_text); });
-    const std::wstring sddl = std::wstring(L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00100003;;;") + sid_text + L")";
+    // CreateFileW adds FILE_READ_ATTRIBUTES to the helper's data-only open, so the user ACE must grant it too.
+    const std::wstring sddl = std::wstring(L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00100083;;;") + sid_text + L")";
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)) return false;
     auto free_descriptor = util::fail_guard([&] { LocalFree(descriptor); });

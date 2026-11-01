@@ -4,6 +4,11 @@ import subprocess, tempfile, argparse
 p=argparse.ArgumentParser();p.add_argument('--compiler',default='g++');a=p.parse_args()
 r=Path(__file__).resolve().parents[2]
 s=(r/'src/platform/windows/ipc/pipes.cpp').read_text()
+import re
+# The helper opens with FILE_READ_DATA|FILE_WRITE_DATA|SYNCHRONIZE and CreateFileW adds FILE_READ_ATTRIBUTES (0x80).
+mask=int(re.search(r'\(A;;0x([0-9A-Fa-f]+);;;"\) \+ sid_text',s).group(1),16)
+assert 'FILE_READ_DATA | FILE_WRITE_DATA | SYNCHRONIZE' in s
+assert (0x1|0x2|0x100000|0x80)&~mask==0, f'helper user ACE 0x{mask:08X} denies the CreateFileW open'
 start=s.index('  std::unique_ptr<INamedPipe> accept_server_pipe_client(')
 end=s.index('\n  std::unique_ptr<INamedPipe> NamedPipeFactory::create_client',start)
 code=r'''
