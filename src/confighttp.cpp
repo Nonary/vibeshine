@@ -102,6 +102,9 @@
   #include <windows.h>
 #endif
 #include "display_helper_integration.h"
+#ifdef _WIN32
+  #include "platform/windows/display_coordinator_restore.h"
+#endif
 #include "process.h"
 #include "utility.h"
 #include "uuid.h"
@@ -2412,6 +2415,7 @@ namespace confighttp {
         node.preexisting = true;
         node.x = info["origin_point"]["x"].get<int>();
         node.y = info["origin_point"]["y"].get<int>();
+        node.baseline_refresh_rate = display_helper::exact_baseline_refresh_from_json(info.value("refresh_rate", nlohmann::json {}));
         if (info.contains("resolution") && info["resolution"].is_object()) {
           node.configured_mode.width = info["resolution"].value("width", node.configured_mode.width);
           node.configured_mode.height = info["resolution"].value("height", node.configured_mode.height);
