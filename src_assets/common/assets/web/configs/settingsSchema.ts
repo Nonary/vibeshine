@@ -970,6 +970,7 @@ export const settingsCategories: SettingsCategory[] = [
             option('3', 'ui.settings.options.codec.hdr_ten_bit'),
           ]),
           boolean('pyrowave', { platform: ['windows', 'linux'] }),
+          boolean('hdr_dynamic_metadata', { platform: 'windows' }),
         ],
       },
       {
@@ -1227,6 +1228,7 @@ export const settingsDefaults: Record<string, unknown> = {
   hevc_mode: 0,
   av1_mode: 0,
   pyrowave: true,
+  hdr_dynamic_metadata: false,
   max_bitrate: 0,
   minimum_fps_target: 20,
   qp: 28,

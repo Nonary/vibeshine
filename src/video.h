@@ -16,9 +16,14 @@
 // standard includes
 #include <array>
 #include <atomic>
+#include <cstring>
+#include <limits>
 #include <optional>
 #include <functional>
+#include <memory>
+#include <span>
 #include <string>
+#include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -312,6 +317,16 @@ namespace video {
      */
     virtual void set_hdr_metadata(const SS_HDR_METADATA &) {
     }
+
+    /**
+     * @brief The device this session converts with; null when it has none.
+     */
+    virtual platf::encode_device_t *encode_device() {
+      return nullptr;
+    }
+
+    /// HDR10+ dynamic metadata for this session's packets; null when they carry none.
+    std::shared_ptr<hdr_dynamic::stream_t> hdr_dynamic;
   };
 
   // encoders
@@ -350,6 +365,13 @@ namespace video {
     virtual uint8_t *data() = 0;
 
     virtual size_t data_size() = 0;
+
+    /**
+     * @brief Insert `bytes` into the encoded bytes at `offset`, keeping everything else about
+     *        the packet.
+     * @return False when the packet cannot take them; it is unchanged then.
+     */
+    virtual bool insert_data(size_t offset, std::span<const uint8_t> bytes) = 0;
 
     struct replace_t {
       std::string_view old;
@@ -401,6 +423,34 @@ namespace video {
       return av_packet->size;
     }
 
+    bool insert_data(size_t offset, std::span<const uint8_t> bytes) override {
+      const auto size = static_cast<size_t>(av_packet->size);
+      constexpr auto max_size = static_cast<size_t>(std::numeric_limits<int>::max() - AV_INPUT_BUFFER_PADDING_SIZE);
+      if (offset > size || bytes.size() > max_size - size) {
+        return false;
+      }
+      const auto new_size = size + bytes.size();
+      auto *buffer = av_buffer_alloc(new_size + AV_INPUT_BUFFER_PADDING_SIZE);
+      if (!buffer) {
+        return false;
+      }
+      if (offset > 0) {
+        std::memcpy(buffer->data, av_packet->data, offset);
+      }
+      if (!bytes.empty()) {
+        std::memcpy(buffer->data + offset, bytes.data(), bytes.size());
+      }
+      if (size > offset) {
+        std::memcpy(buffer->data + offset + bytes.size(), av_packet->data + offset, size - offset);
+      }
+      std::memset(buffer->data + new_size, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+      av_buffer_unref(&av_packet->buf);
+      av_packet->buf = buffer;
+      av_packet->data = buffer->data;
+      av_packet->size = static_cast<int>(new_size);
+      return true;
+    }
+
     AVPacket *av_packet;
   };
 
@@ -425,6 +475,14 @@ namespace video {
 
     size_t data_size() override {
       return frame_data.size();
+    }
+
+    bool insert_data(size_t offset, std::span<const uint8_t> bytes) override {
+      if (offset > frame_data.size()) {
+        return false;
+      }
+      frame_data.insert(frame_data.begin() + static_cast<std::ptrdiff_t>(offset), bytes.begin(), bytes.end());
+      return true;
     }
 
     std::vector<uint8_t> frame_data;
