@@ -1689,6 +1689,34 @@ resumable to that paired client, allowing Moonlight to show its native close-app
 warning on the next attempt. The confirmation window is 60 seconds. Disable
 this option to replace the running app immediately. The default is `true`.
 
+### app_resume_terminate
+
+While one client owns the running game, show other paired clients a **Resume**
+control, a resume-only copy of the running game at the top of their app list,
+and a **Terminate** control that ends the game while keeping Remote Input and
+Remote Monitor connected. To show these entries, the host reports itself as
+available to those clients. The default is `true`.
+
+When `false`, other clients get the behavior from before Vibeshine 1.19: the
+entries are hidden, launches from cached **Resume** and **Terminate** tiles are
+refused, the host reports the running game to every client, and Moonlight shows
+its own Resume and Quit actions on that game's entry. A cached copy of the
+running game still resumes it. Because Moonlight then treats any other entry as
+a different app, launching Remote Input or Remote Monitor from those clients
+while a game is running asks to quit the game first.
+
+While any client has Remote Input or Remote Monitor in use, Moonlight's Quit
+from a client other than the game's owner is refused, because it would also end
+those sessions. For that time the entries return to every client except the
+game's owner, including the Remote Input or Remote Monitor client itself, so the
+game can still be resumed or ended with **Terminate**. They are hidden again once
+no Remote Input or Remote Monitor is in use; a retained Remote Monitor counts as
+in use until it is released. [remote_monitor_terminate_on_first_request](#remote_monitor_terminate_on_first_request)
+applies to **Terminate** during that time.
+
+To hide the Remote Input or Remote Monitor entries themselves, remove them from
+the Applications page; they can be restored from there.
+
 ### dd_configuration_option
 
 <table>

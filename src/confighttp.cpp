@@ -473,6 +473,11 @@ namespace confighttp {
           continue;
         }
 
+        // Read on every serverinfo, applist and launch; active streams never consult it.
+        if (key == "app_resume_terminate") {
+          continue;
+        }
+
         if (key == "session_history_enabled") {
           return false;
         }

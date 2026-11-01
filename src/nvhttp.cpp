@@ -4175,12 +4175,14 @@ namespace nvhttp {
     // replace-running-app warning. The launch handler distinguishes attach,
     // resume, and normal-app replacement from the requested catalogue entry.
     // Once a special owner exists, restore owner-aware busy reporting.
+    // With Resume/Terminate turned off, every client sees the busy game.
     const bool expose_active_game = remote_session::exposes_active_game(
       caller,
       game,
       remote_gate.owner,
       remote_gate.active,
-      replacement_confirmation_active
+      replacement_confirmation_active,
+      config::video.app_resume_terminate
     );
     tree.put("root.currentgame", expose_active_game ? current_appid : 0);
     tree.put("root.currentgameuuid", expose_active_game && current_app ? current_app->uuid : "");
@@ -4358,7 +4360,7 @@ namespace nvhttp {
       .app = current_app ? remote_session::app_t {static_cast<std::int32_t>(util::from_view(current_app->id)), current_app->uuid, current_app->name, false} : remote_session::app_t {},
     };
     const auto remote_gate = remote_role_gate_snapshot_for_client(identity.uuid);
-    auto projection = remote_session::project(caller, game, remote_gate.owner, remote_configured_apps, remote_gate.active);
+    auto projection = remote_session::project(caller, game, remote_gate.owner, remote_configured_apps, remote_gate.active, config::video.app_resume_terminate);
     // An existing input owner retains its reconnect tile; disconnect and
     // resume controls remain independent of launch tile visibility.
     const bool input_removed = system_remote_app_removed(remote_session::control_e::input);
@@ -4524,13 +4526,22 @@ namespace nvhttp {
         .may_launch = !identity.uuid.empty(),
         .may_terminate = !identity.uuid.empty(),
       };
-      const auto owner = remote_role_gate_snapshot_for_client(identity.uuid).owner;
+      const auto remote_gate = remote_role_gate_snapshot_for_client(identity.uuid);
+      const auto &owner = remote_gate.owner;
       if (removed_builtin && !((synthetic_control == remote_session::control_e::input && owner.role == remote_session::role_e::input) ||
                                (synthetic_control == remote_session::control_e::monitor && owner.role == remote_session::role_e::monitor))) {
         tree.put("root.resume", 0);
         tree.put("root.gamesession", 0);
         tree.put("root.<xmlattr>.status_code", 404);
         tree.put("root.<xmlattr>.status_message", "This system application has been removed");
+        return;
+      }
+      // Cached Resume and Terminate tiles follow the setting that hides them.
+      if (!remote_session::control_enabled(synthetic_control, owner.role, config::video.app_resume_terminate, remote_gate.active)) {
+        tree.put("root.resume", 0);
+        tree.put("root.gamesession", 0);
+        tree.put("root.<xmlattr>.status_code", 404);
+        tree.put("root.<xmlattr>.status_message", "This app has been turned off on the host");
         return;
       }
       const auto decision = remote_session::dispatch(caller, game, owner, synthetic_control);

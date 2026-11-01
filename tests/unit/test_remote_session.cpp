@@ -107,6 +107,86 @@ TEST(RemoteSession, CatalogueProjectionMatchesCallerOwnershipMatrix) {
   EXPECT_EQ(game_owner_monitor.catalogue[1].id, remote_session::disconnect_monitor_id);
 }
 
+TEST(RemoteSession, SecondaryClientsSeeTheBusyGameWithoutResumeOrTerminate) {
+  const std::vector<remote_session::app_t> configured {{1, "one", "One", false}, {42, "game", "Running game", false}};
+  const auto observer = remote_session::project(caller("other"), game(), {}, configured, false, false);
+  EXPECT_FALSE(observer.free);
+  EXPECT_EQ(observer.current_game, 42);
+  ASSERT_EQ(observer.catalogue.size(), 4);
+  EXPECT_EQ(observer.catalogue[0].id, 1);
+  EXPECT_EQ(observer.catalogue[1].id, 42);
+  EXPECT_EQ(observer.catalogue[2].id, remote_session::input_id);
+  EXPECT_EQ(observer.catalogue[3].id, remote_session::monitor_id);
+
+  EXPECT_FALSE(remote_session::exposes_active_game(caller("other"), game(), {}, false));
+  EXPECT_TRUE(remote_session::exposes_active_game(caller("other"), game(), {}, false, false, false));
+  EXPECT_TRUE(remote_session::exposes_active_game({}, game(), {}, false, false, false));
+  EXPECT_FALSE(remote_session::exposes_active_game({}, {}, {}, false, false, false));
+  // A client attached as Remote Input or Remote Monitor keeps the free view.
+  EXPECT_FALSE(remote_session::exposes_active_game(caller("other"), game(), {.role = remote_session::role_e::input}, true, false, false));
+  // While any remote session is active, Quit is refused to other clients, so
+  // they get the free view with Resume/Terminate back; the owner stays busy.
+  EXPECT_FALSE(remote_session::exposes_active_game(caller("other"), game(), {}, true, false, false));
+  EXPECT_TRUE(remote_session::exposes_active_game(caller("owner"), game(), {}, true, false, false));
+}
+
+TEST(RemoteSession, SecondaryClientsGetResumeAndTerminateBackWhileRemoteSessionsAreActive) {
+  const std::vector<remote_session::app_t> configured {{1, "one", "One", false}, {42, "game", "Running game", false}};
+  const auto ids = [](const remote_session::projection_t &projection) {
+    std::vector<std::int32_t> result;
+    for (const auto &app : projection.catalogue) result.push_back(app.id);
+    return result;
+  };
+  const std::vector<std::int32_t> secondary {
+    remote_session::synthetic_running_game_id(42, configured),
+    remote_session::secondary_resume_id,
+    remote_session::secondary_terminate_id,
+    1,
+    42,
+    remote_session::secondary_input_id,
+    remote_session::secondary_monitor_id,
+  };
+
+  // Another client's Remote Input or Remote Monitor is active.
+  const auto observer = remote_session::project(caller("other"), game(), {}, configured, true, false);
+  EXPECT_TRUE(observer.free);
+  EXPECT_EQ(ids(observer), secondary);
+  // The Remote Input client itself can end the game through Terminate too.
+  EXPECT_EQ(ids(remote_session::project(caller("other"), game(), {.role = remote_session::role_e::input}, configured, true, false)), secondary);
+  // The game's owner keeps its busy view and Moonlight's own Quit.
+  const auto owner = remote_session::project(caller("owner"), game(), {}, configured, true, false);
+  EXPECT_FALSE(owner.free);
+  EXPECT_EQ(ids(owner), (std::vector<std::int32_t> {1, 42, remote_session::input_id, remote_session::monitor_id}));
+  // Once the remote sessions end, the busy view returns.
+  EXPECT_FALSE(remote_session::project(caller("other"), game(), {}, configured, false, false).free);
+  // A retained monitor is unaffected by the setting.
+  const auto monitor = remote_session::project(caller("monitor"), {}, {.role = remote_session::role_e::monitor, .retained = true}, configured, true, false);
+  EXPECT_EQ(ids(monitor), (std::vector<std::int32_t> {remote_session::resume_id, remote_session::disconnect_monitor_id}));
+
+  EXPECT_FALSE(remote_session::resume_terminate_enabled(false, false));
+  EXPECT_TRUE(remote_session::resume_terminate_enabled(false, true));
+  EXPECT_TRUE(remote_session::resume_terminate_enabled(true, false));
+}
+
+TEST(RemoteSession, HiddenResumeAndTerminateTilesAreRefused) {
+  using remote_session::control_e;
+  using remote_session::role_e;
+  for (const auto control : {control_e::resume, control_e::terminate}) {
+    EXPECT_TRUE(remote_session::control_enabled(control, role_e::none, true, false));
+    EXPECT_FALSE(remote_session::control_enabled(control, role_e::none, false, false));
+    // Active remote sessions bring the pair back.
+    EXPECT_TRUE(remote_session::control_enabled(control, role_e::none, false, true));
+  }
+  // A retained monitor can always be resumed and released, and a cached copy
+  // of the running game still resumes it.
+  EXPECT_TRUE(remote_session::control_enabled(control_e::resume, role_e::monitor, false, false));
+  EXPECT_TRUE(remote_session::control_enabled(control_e::disconnect_monitor, role_e::monitor, false, false));
+  EXPECT_TRUE(remote_session::control_enabled(control_e::running_game, role_e::none, false, false));
+  for (const auto control : {control_e::input, control_e::monitor, control_e::disconnect_input}) {
+    EXPECT_TRUE(remote_session::control_enabled(control, role_e::none, false, false));
+  }
+}
+
 TEST(RemoteSession, InputTileSurvivesTeardownForBothGameOwnersAndSecondaryClients) {
   for (const auto &uuid : {"owner", "secondary"}) {
     for (const bool game_running : {false, true}) {

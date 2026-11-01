@@ -477,6 +477,21 @@ function selectVirtualDisplayLayout(v: unknown) {
                   </span>
                 </div>
               </n-checkbox>
+              <!-- Windows shows this under Remote Monitor options below. -->
+              <n-checkbox
+                v-if="platform !== 'windows'"
+                v-model:checked="config.app_resume_terminate"
+                class="mt-4"
+              >
+                <div class="flex flex-col">
+                  <span class="text-sm font-medium">
+                    {{ $t('config.app_resume_terminate') }}
+                  </span>
+                  <span class="mt-1 text-[11px] leading-snug opacity-70">
+                    {{ $t('config.app_resume_terminate_desc') }}
+                  </span>
+                </div>
+              </n-checkbox>
             </div>
 
             <PlatformLayout>
@@ -530,6 +545,16 @@ function selectVirtualDisplayLayout(v: unknown) {
                         </span>
                         <span class="mt-1 text-[11px] leading-snug opacity-70">
                           {{ $t('config.remote_monitor_terminate_on_first_request_desc') }}
+                        </span>
+                      </div>
+                    </n-checkbox>
+                    <n-checkbox v-model:checked="config.app_resume_terminate">
+                      <div class="flex flex-col">
+                        <span class="text-sm font-medium">
+                          {{ $t('config.app_resume_terminate') }}
+                        </span>
+                        <span class="mt-1 text-[11px] leading-snug opacity-70">
+                          {{ $t('config.app_resume_terminate_desc') }}
                         </span>
                       </div>
                     </n-checkbox>
