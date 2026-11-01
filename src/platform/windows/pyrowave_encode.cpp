@@ -5,10 +5,12 @@
 // standard includes
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 
 // platform includes
 #include <winsock2.h>  // Must precede Windows SDK headers that include windows.h.
@@ -292,8 +294,16 @@ namespace pyrowave::host {
 #endif
         }
         config.shader_path = utf_utils::from_utf8(SUNSHINE_SHADERS_DIR "/convert_pyrowave_cs.hlsl");
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
-        config.experimental_d3d12_conversion = !params.rtx_hdr;
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
+        // The D3D12 compute queue is the default conversion path. The RTX HDR
+        // transform produces its own RGB texture and stays on D3D11. Setting
+        // VIBESHINE_PYROWAVE_CONVERSION=d3d11 forces D3D11 for a session.
+        const char *conversion_override = std::getenv("VIBESHINE_PYROWAVE_CONVERSION");
+        const bool force_d3d11 = conversion_override && std::string_view(conversion_override) == "d3d11"sv;
+        if (force_d3d11) {
+          BOOST_LOG(warning) << "PyroWave: VIBESHINE_PYROWAVE_CONVERSION=d3d11 is set; the D3D12 conversion is disabled"sv;
+        }
+        config.d3d12_conversion = !params.rtx_hdr && !force_d3d11;
 #endif
 
         core = d3d11::core_t::create(adapter.Get(), config, log_core_message);

@@ -308,6 +308,13 @@ if(SUNSHINE_TEST_PYTHON_EXECUTABLE AND NOT WIN32)
             "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_pyrowave_pre_copy.py"
             "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
     set_tests_properties(test_component_pyrowave_pre_copy PROPERTIES LABELS "component" TIMEOUT 60)
+    # Source-text pin: the D3D12 conversion is the default, HIGH priority, with
+    # session-start fallback reporting.
+    add_test(NAME test_component_pyrowave_d3d12_default
+        COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_pyrowave_d3d12_default.py"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}")
+    set_tests_properties(test_component_pyrowave_d3d12_default PROPERTIES LABELS "component" TIMEOUT 30)
     add_test(NAME test_component_windows_input_desktop
         COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
             "${SUNSHINE_TEST_REPOSITORY_ROOT}/tools/tests/test_input_desktop.py"
@@ -2018,13 +2025,13 @@ if(WIN32 AND TARGET pyrowave::capi)
     target_compile_definitions(test_pyrowave_windows_gpu PRIVATE
         "PYROWAVE_TEST_SHADER_PATH=L\"${SUNSHINE_TEST_REPOSITORY_ROOT}/src_assets/windows/assets/shaders/directx/convert_pyrowave_cs.hlsl\"")
     target_link_libraries(test_pyrowave_windows_gpu PRIVATE pyrowave::capi d3d11 dxgi d3dcompiler)
-    if(SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12)
+    if(SUNSHINE_PYROWAVE_D3D12_CONVERSION)
         target_sources(test_pyrowave_windows_gpu PRIVATE
             "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/pyrowave_d3d12_conversion.cpp")
-        target_compile_definitions(test_pyrowave_windows_gpu PRIVATE SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12=1)
+        target_compile_definitions(test_pyrowave_windows_gpu PRIVATE SUNSHINE_PYROWAVE_D3D12_CONVERSION=1)
         target_link_libraries(test_pyrowave_windows_gpu PRIVATE d3d12)
         add_test(NAME pyrowave_windows_d3d12_gpu COMMAND test_pyrowave_windows_gpu 0 d3d12)
-        set_tests_properties(pyrowave_windows_d3d12_gpu PROPERTIES SKIP_RETURN_CODE 77 LABELS "integration;gpu;experimental")
+        set_tests_properties(pyrowave_windows_d3d12_gpu PROPERTIES SKIP_RETURN_CODE 77 LABELS "integration;gpu")
     endif()
     add_test(NAME pyrowave_windows_gpu COMMAND test_pyrowave_windows_gpu)
     set_tests_properties(pyrowave_windows_gpu PROPERTIES SKIP_RETURN_CODE 77 LABELS "integration;gpu")

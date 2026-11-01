@@ -9,7 +9,7 @@
  */
 #include "pyrowave_d3d11_core.h"
 
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
   #include "pyrowave_d3d12_conversion.h"
 #endif
 
@@ -168,7 +168,7 @@ namespace pyrowave::d3d11 {
     std::map<transfer_e, ComPtr<ID3D11ComputeShader>> shaders;
     convert_params_t last_params {};
     bool params_valid = false;
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
     std::unique_ptr<d3d12_conversion_t> d3d12_conversion;
 #endif
 
@@ -570,7 +570,7 @@ namespace pyrowave::d3d11 {
 
       // Pin the exact interface before acquiring, including exception unwind.
       capture_mutex_guard_t capture_guard(blank ? nullptr : source.mutex);
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
       d3d12_conversion_t::capture_e capture_preparation = d3d12_conversion_t::capture_e::ready;
       if (d3d12_conversion) {
         capture_preparation = d3d12_conversion->prepare_capture(source, capture_guard);
@@ -587,25 +587,25 @@ namespace pyrowave::d3d11 {
       // device loss cannot wedge the stream.
       if (!blank && source.mutex) {
         IDXGIKeyedMutex *acquire_mutex = source.mutex;
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
         if (d3d12_conversion) acquire_mutex = d3d12_conversion->capture_mutex();
 #endif
         if (!acquire_mutex) {
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
           if (d3d12_conversion) d3d12_conversion->cancel_capture();
 #endif
           return result_e::failed;
         }
         const HRESULT status = acquire_mutex->AcquireSync(0, static_cast<DWORD>(config.capture_wait.count()));
         if (status == static_cast<HRESULT>(WAIT_TIMEOUT)) {
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
           if (d3d12_conversion) d3d12_conversion->cancel_capture();
 #endif
           warning("timed out acquiring the capture mutex; skipping the frame");
           return result_e::skipped;
         }
         if (status == static_cast<HRESULT>(WAIT_ABANDONED)) {
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
           // WAIT_ABANDONED does not prove keyed-mutex ownership. Keep the
           // pre-acquired source pins in the retained sink and poison this
           // adapter instead of releasing or publishing an inconsistent image.
@@ -615,13 +615,13 @@ namespace pyrowave::d3d11 {
           return result_e::failed;
         }
         if (status != S_OK) {
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
           if (d3d12_conversion) d3d12_conversion->cancel_capture();
 #endif
           warning("acquiring the capture mutex failed [" + hresult_string(status) + "]; skipping the frame");
           return result_e::skipped;
         }
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
         if (d3d12_conversion) d3d12_conversion->arm_capture();
         else capture_guard.arm();
 #else
@@ -634,7 +634,7 @@ namespace pyrowave::d3d11 {
         return result_e::failed;
       }
       ID3D11Buffer *cbs[] = {color_matrix.Get(), sdr_to_pq_params.Get(), params.Get()};
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
       bool d3d12_fallback = false;
       if (d3d12_conversion && capture_preparation == d3d12_conversion_t::capture_e::ready &&
           d3d12_conversion->using_conversion()) {
@@ -650,7 +650,7 @@ namespace pyrowave::d3d11 {
           // No D3D12 work was submitted. The sink retains the exact acquisition
           // and source refs while D3D11 fallback runs.
           try {
-            warning("the D3D12 conversion prototype cannot handle this source; using D3D11");
+            warning("the D3D12 conversion cannot handle this source; using D3D11 for the rest of the session");
           } catch (...) {
             if (d3d12_conversion->release_fallback()) d3d12_conversion->disable_conversion();
             return result_e::failed;
@@ -684,7 +684,7 @@ namespace pyrowave::d3d11 {
         context11->CSSetShaderResources(0, 1, &null_srv);
         context11->CSSetUnorderedAccessViews(0, 3, null_uavs, nullptr);
       } catch (...) {
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
         if (d3d12_conversion) {
           (void)d3d12_conversion->release_fallback();
           d3d12_conversion->disable_conversion();
@@ -697,13 +697,13 @@ namespace pyrowave::d3d11 {
       // The frame is in the planes as far as D3D11 ordering goes, so the capture
       // side can have its texture back. A failed opted-in release poisons the
       // full-LUID sink and ends the session before signal/flush publication.
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
       if (d3d12_conversion) {
         if (!d3d12_conversion->release_fallback()) return result_e::failed;
         if (d3d12_fallback) d3d12_conversion->disable_conversion();
       } else {
-        // The experimental OFF path keeps its preexisting local guard and
-        // release behavior; only the opted-in sink can retain/poison owners.
+        // A session that did not request the conversion keeps its preexisting local guard and
+        // release behavior; only the D3D12 sink can retain/poison owners.
         (void)capture_guard.release();
       }
 #else
@@ -749,8 +749,8 @@ namespace pyrowave::d3d11 {
     if (!impl.shader_for(transfer_e::unorm)) {
       return nullptr;
     }
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
-    if (config.experimental_d3d12_conversion && !config.transform_rgb) {
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
+    if (config.d3d12_conversion && !config.transform_rgb) {
       impl.d3d12_conversion = d3d12_conversion_t::create(
         adapter,
         impl.device11.Get(),
@@ -761,15 +761,24 @@ namespace pyrowave::d3d11 {
         impl.log
       );
       if (!impl.d3d12_conversion) {
-        impl.error("experimental D3D12 request could not establish a full-LUID fallback retention sink");
+        impl.error("the D3D12 conversion could not establish a full-LUID fallback retention sink");
         return nullptr;
       }
-      impl.info(impl.d3d12_conversion->using_conversion() ? "experimental D3D12 compute conversion selected (D3D11 snapshot copy)" : "experimental D3D12 conversion unavailable; using retained D3D11 fallback");
+      // One line per session, decided here and not per frame: either the D3D12
+      // queue converts every supported frame, or the whole session runs D3D11.
+      if (impl.d3d12_conversion->using_conversion()) {
+        impl.info("converting on a D3D12 compute queue (D3D11 snapshot copy)");
+      } else {
+        impl.warning("D3D12 conversion is unavailable on this adapter (see the D3D12 conversion lines above); converting with D3D11 for this session");
+      }
+    } else if (config.d3d12_conversion) {
+      impl.info("converting with D3D11: the D3D12 conversion does not handle a transformed RGB source");
+    } else {
+      impl.info("converting with D3D11: the D3D12 conversion was not requested");
     }
 #else
-    if (config.experimental_d3d12_conversion && !config.transform_rgb) {
-      impl.error("experimental D3D12 request needs the build-gated fallback retention sink");
-      return nullptr;
+    if (config.d3d12_conversion) {
+      impl.warning("this build has no D3D12 conversion; converting with D3D11");
     }
 #endif
     return core;
@@ -780,7 +789,7 @@ namespace pyrowave::d3d11 {
   }
 
   bool core_t::using_d3d12_conversion() const {
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
     return impl->d3d12_conversion && impl->d3d12_conversion->using_conversion();
 #else
     return false;

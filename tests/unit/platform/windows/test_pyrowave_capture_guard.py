@@ -278,7 +278,7 @@ int main(int argc, char **argv) {
   bool backend = mode("backend-ok") || mode("backend-failed") || mode("unsupported") ||
       mode("unsupported-release-failed") || mode("pipeline-alloc") || mode("barrier-alloc") ||
       mode("fallback-log-alloc") || mode("fallback-log-throw") || mode("fallback-throw");
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
   if (mode("no-mutex") || mode("timeout") || mode("timeout-log-throw") || mode("abandoned") ||
       mode("acquire-failed") || mode("acquire-nonsuccess")) backend = true;
 #endif
@@ -301,7 +301,7 @@ int main(int argc, char **argv) {
   // sink ownership. A poisoned sink keeps its extra source refs and never
   // retries the disarmed ReleaseSync.
   core.d3d12_conversion.reset();
-#ifdef SUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12
+#ifdef SUNSHINE_PYROWAVE_D3D12_CONVERSION
   if (mode("abandoned")) {
     require(state.abandon_calls == 1 && state.cancel_calls == 0,
             "WAIT_ABANDONED did not call abandonment without unacquired cancellation");
@@ -390,7 +390,7 @@ def main():
              'if (d3d12_conversion) acquire_mutex = d3d12_conversion->capture_mutex();',
              'if (d3d12_conversion) acquire_mutex = source.mutex;'), guard, ['unsupported-release-failed']),
         ('arm-before-acquire', body.replace('        const HRESULT status = acquire_mutex->AcquireSync(', '        if (d3d12_conversion) d3d12_conversion->arm_capture();\n        const HRESULT status = acquire_mutex->AcquireSync(', 1), guard, ['timeout']),
-        ('release-before-fallback', body.replace('          warning("the D3D12 conversion prototype cannot handle this source; using D3D11");', '          (void)d3d12_conversion->release_fallback();\n          warning("the D3D12 conversion prototype cannot handle this source; using D3D11");'), guard, ['unsupported']),
+        ('release-before-fallback', body.replace('          warning("the D3D12 conversion cannot handle this source; using D3D11 for the rest of the session");', '          (void)d3d12_conversion->release_fallback();\n          warning("the D3D12 conversion cannot handle this source; using D3D11 for the rest of the session");'), guard, ['unsupported']),
         ('ignore-fallback-release-error', body.replace('        if (!d3d12_conversion->release_fallback()) return result_e::failed;', '        (void)d3d12_conversion->release_fallback();'), guard, ['unsupported-release-failed']),
     ]
     for name, changed, changed_guard, cases in controls:
@@ -414,7 +414,7 @@ def main():
                       else temporary / name)
             command = [args.compiler, '-std=c++23', '-O0', '-Wall', '-Wextra', '-Werror', '-pthread']
             if enabled:
-                command += ['-DSUNSHINE_EXPERIMENTAL_PYROWAVE_D3D12=1']
+                command += ['-DSUNSHINE_PYROWAVE_D3D12_CONVERSION=1']
             command += [str(source), '-o', str(binary)]
             if args.prepare_only:
                 evidence['variants'].append({'variant': name, 'recipe': 'ON' if enabled else 'OFF',
