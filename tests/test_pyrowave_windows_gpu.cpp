@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
       ComPtr<ID3D11DeviceContext> capture_context;
       require(SUCCEEDED(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &capture_device, nullptr, &capture_context)), "capture device failed");
       pyrowave_device device = nullptr;
-      require(pyrowave_create_device_by_compat(0, 0, nullptr, nullptr, reinterpret_cast<const pyrowave_luid *>(&desc.AdapterLuid), &device) == PYROWAVE_SUCCESS, "decoder device failed");
+      require(pyrowave_create_device_by_compat(0, 0, nullptr, nullptr, reinterpret_cast<const pyrowave_luid *>(&desc.AdapterLuid), VK_QUEUE_GLOBAL_PRIORITY_MEDIUM, &device) == PYROWAVE_SUCCESS, "decoder device failed");
 
       struct device_guard_t {
         pyrowave_device device;
