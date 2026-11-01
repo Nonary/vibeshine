@@ -8,6 +8,8 @@ root = Path(__file__).resolve().parents[2]
 source = (root / 'src/platform/windows/ipc/pipes.cpp').read_text()
 header = (root / 'src/platform/windows/ipc/pipes.h').read_text()
 ipc = (root / 'src/platform/windows/playnite_ipc.cpp').read_text()
+access_policy = (root / 'src/platform/windows/ipc/pipe_client_access.h').read_text()
+access_policy = access_policy.replace('#pragma once', '').replace('#include <windows.h>', '')
 
 def function(text, marker):
     start = text.index(marker)
@@ -45,8 +47,9 @@ constexpr DWORD SECURITY_SQOS_PRESENT = 0x100000;
 constexpr DWORD SECURITY_IDENTIFICATION = 0x10000;
 constexpr DWORD FILE_FLAG_OVERLAPPED = 0x40000000;
 constexpr DWORD GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000, OPEN_EXISTING = 3;
-constexpr DWORD FILE_READ_DATA = 1, FILE_WRITE_DATA = 2, SYNCHRONIZE = 0x00100000;
+constexpr DWORD FILE_READ_DATA = 1, FILE_WRITE_DATA = 2, FILE_READ_ATTRIBUTES = 0x80, SYNCHRONIZE = 0x00100000;
 constexpr DWORD ERROR_PIPE_BUSY = 231, ERROR_FILE_NOT_FOUND = 2;
+PIPE_ACCESS_POLICY
 #define BOOST_LOG(level) std::cout
 namespace winrt { struct file_handle { uintptr_t value = 0; explicit operator bool() const { return value != 0; } }; }
 static std::vector<DWORD> opens;
@@ -112,7 +115,7 @@ int main() {
     platf::dxgi::NamedPipeFactory restricted;
     restricted.set_client_data_access_only();
     assert(restricted.create_client_pipe(L"data-only", {}, deadline));
-    assert(accesses.back() == (FILE_READ_DATA | FILE_WRITE_DATA | SYNCHRONIZE));
+    assert(accesses.back() == (FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE));
     assert(other.create_client_pipe(L"default-after-data-only", {}, deadline));
     assert(accesses.back() == (GENERIC_READ | GENERIC_WRITE));
     failure = 5;
@@ -122,6 +125,7 @@ int main() {
 }
 '''
 for marker, value in [('FIELD', field), ('NAMED_SETTER', named_setter),
+                      ('PIPE_ACCESS_POLICY', access_policy),
                       ('DATA_SETTER', data_setter),
                       ('ANONYMOUS_SETTER', anonymous_setter), ('PIPE_OPEN', pipe_open),
                       ('CLIENT_WAIT', client_wait),
