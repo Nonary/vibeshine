@@ -666,7 +666,8 @@ def private_pipe_transport():
     assert 'private_control_server() = std::move(server)' in client
     assert 'session->endpoint_generation == endpoint_generation' in client
     assert 'std::lock_guard<std::timed_mutex> write_lock(write_mutex())' in client
-    assert '(A;;0x00100003;;;' in pipes
+    assert 'pipe_security::client_access_sddl(sid_text)' in pipes
+    assert '_client_data_access_only ? pipe_security::client_data_access' in pipes
     for name in ('tools/display_settings_helper.cpp', 'tools/display_settings_helper_v2.cpp'):
         helper = (root / name).read_text()
         assert 'factory.set_expected_server_process_id(ipc_endpoint->parent_pid)' in helper

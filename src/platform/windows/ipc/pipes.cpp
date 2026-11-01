@@ -41,6 +41,7 @@
 
 // local includes
 #include "misc_utils.h"
+#include "pipe_client_access.h"
 #include "pipes.h"
 #include "src/utility.h"
 
@@ -339,7 +340,7 @@ namespace platf::dxgi {
     LPWSTR sid_text = nullptr;
     if (!ConvertSidToStringSidW(user->User.Sid, &sid_text)) return false;
     auto free_sid = util::fail_guard([&] { LocalFree(sid_text); });
-    const std::wstring sddl = std::wstring(L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00100003;;;") + sid_text + L")";
+    const std::wstring sddl = pipe_security::client_access_sddl(sid_text);
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)) return false;
     auto free_descriptor = util::fail_guard([&] { LocalFree(descriptor); });
@@ -447,7 +448,7 @@ namespace platf::dxgi {
 
     while (client_wait_ms(deadline, 500, cancelled) > 0) {
       winrt::file_handle pipe {
-        CreateFileW(fullPipeName.c_str(), _client_data_access_only ? (FILE_READ_DATA | FILE_WRITE_DATA | SYNCHRONIZE) : (GENERIC_READ | GENERIC_WRITE), 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED | _client_security_flags, nullptr)
+        CreateFileW(fullPipeName.c_str(), _client_data_access_only ? pipe_security::client_data_access : (GENERIC_READ | GENERIC_WRITE), 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED | _client_security_flags, nullptr)
       };
 
       if (pipe) {
