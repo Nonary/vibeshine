@@ -1,6 +1,8 @@
 import io
+import json
 import os
 import re
+import shutil
 import xml.etree.ElementTree as ET
 import subprocess
 import sys
@@ -770,27 +772,67 @@ esac
             self.assertNotIn("state_reason=completed", workflow_text)
 
         daily = load_workflow("daily-prerelease.yml")
-        self.assertEqual(daily["jobs"]["build"]["with"]["upload_symbols_artifact"], "true")
-        publish = daily["jobs"]["publish"]
-        self.assertEqual(publish["permissions"], {"actions": "read", "contents": "write"})
-        self.assertNotIn("issues", publish["permissions"])
-        publish_steps = {step["name"]: step for step in publish["steps"] if "name" in step}
-        symbols = publish_steps["Retain exact-build Windows symbols"]
-        self.assertEqual(symbols["with"]["retention-days"], "90")
-        self.assertEqual(symbols["with"]["name"], "nightly-windows-symbols")
-        self.assertEqual(publish_steps["Download exact-build Windows symbols from this run"]["with"]["name"], "windows-symbols-Windows")
-        self.assertIn('test -s "symbol-assets/$symbol_pack"',
-                      publish_steps["Verify exact-build Windows symbols"]["run"])
-        self.assertLess(
-            list(publish_steps).index("Verify exact-build Windows symbols"),
-            list(publish_steps).index("Verify finalized provenance, identity and complete asset set"),
-        )
+        if "dispatch" in daily["jobs"]:
+            self.assertIn("prepare", daily["jobs"])
+            self.assertIn("build", daily["jobs"])
+            launcher = daily["jobs"]["dispatch"]
+            self.assertEqual(launcher["permissions"], {"actions": "write"})
+            for required in ("github.repository == 'Nonary/vibeshine'", "github.ref_name == github.event.repository.default_branch", "vars.DAILY_RELEASE_SOURCE_BRANCH == 'canary'", "vars.DAILY_RELEASE_SOURCE_CONFIRMED == 'Nonary/vibeshine:canary'"):
+                self.assertIn(required, launcher["if"])
+            self.assertIn("daily-windows-launcher", daily["concurrency"]["group"])
+            self.assertIn("daily-windows-prerelease", daily["concurrency"]["group"])
+            self.assertIn("github.ref_name == 'canary'", daily["jobs"]["prepare"]["if"])
+            self.assertIn("github.event_name == 'workflow_dispatch'", daily["jobs"]["prepare"]["if"])
+            step = launcher["steps"][0]
+            self.assertIn("github.event_name == 'schedule' || inputs.publish == true", step["env"]["PUBLISH"])
+            self.assertIn('{ref:"canary",inputs:{publish:$publish}}', step["run"])
+            self.assertIn('actions/workflows/daily-prerelease.yml/dispatches', step["run"])
+            self.assertEqual(daily["on"]["schedule"], [{"cron": "17 6 * * *"}])
+        if "build" in daily["jobs"]:
+            self.assertEqual(daily["jobs"]["build"]["with"]["upload_symbols_artifact"], "true")
+            publish = daily["jobs"]["publish"]
+            self.assertEqual(publish["permissions"], {"actions": "read", "contents": "write"})
+            self.assertNotIn("issues", publish["permissions"])
+            publish_steps = {step["name"]: step for step in publish["steps"] if "name" in step}
+            symbols = publish_steps["Retain exact-build Windows symbols"]
+            self.assertEqual(symbols["with"]["retention-days"], "90")
+            self.assertEqual(symbols["with"]["name"], "nightly-windows-symbols")
+            self.assertEqual(publish_steps["Download exact-build Windows symbols from this run"]["with"]["name"], "windows-symbols-Windows")
+            self.assertIn('test -s "symbol-assets/$symbol_pack"',
+                          publish_steps["Verify exact-build Windows symbols"]["run"])
+            self.assertLess(
+                list(publish_steps).index("Verify exact-build Windows symbols"),
+                list(publish_steps).index("Verify finalized provenance, identity and complete asset set"),
+            )
+            publish_script = "\n".join(step.get("run", "") for step in publish["steps"])
+            self.assertIn('event_type:"daily-release-published"', publish_script)
         windows = load_workflow("ci-windows.yml")
         finalize_steps = {step["name"]: step for step in windows["jobs"]["finalize_windows"]["steps"] if "name" in step}
         self.assertEqual(finalize_steps["Include symbols in build artifact"]["if"],
                          "inputs.upload_symbols_artifact && !inputs.daily_unsigned")
-        publish_script = "\n".join(step.get("run", "") for step in publish["steps"])
-        self.assertIn('event_type:"daily-release-published"', publish_script)
+
+    def test_daily_launcher_dispatches_exact_canary_payload(self) -> None:
+        daily = load_workflow("daily-prerelease.yml")
+        if "dispatch" not in daily["jobs"]:
+            self.skipTest("Canary owns the build; this test exercises the default-branch launcher")
+        if not shutil.which("jq") or not shutil.which("bash"):
+            self.skipTest("Bash and jq are required to exercise the launcher")
+        script = daily["jobs"]["dispatch"]["steps"][0]["run"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake = root / "gh"
+            fake.write_text("#!/bin/bash\nprintf '%s\n' \"$*\" > \"$MOCK_ARGS\"\ncp \"${@: -1}\" \"$MOCK_PAYLOAD\"\n", encoding="utf-8")
+            fake.chmod(0o755)
+            for value in ("true", "false"):
+                with self.subTest(publish=value):
+                    env = dict(os.environ, PATH=f"{tmp}:{os.environ['PATH']}",
+                               PUBLISH=value, GITHUB_REPOSITORY="Nonary/vibeshine",
+                               GITHUB_STEP_SUMMARY=str(root / "summary"),
+                               MOCK_ARGS=str(root / "args"), MOCK_PAYLOAD=str(root / "payload"))
+                    subprocess.run(["bash", "-c", script], env=env, check=True, text=True)
+                    self.assertEqual(json.loads((root / "payload").read_text()),
+                                     {"ref": "canary", "inputs": {"publish": value == "true"}})
+                    self.assertIn("repos/Nonary/vibeshine/actions/workflows/daily-prerelease.yml/dispatches", (root / "args").read_text())
 
     def test_fixed_issue_follow_up_decisions_with_mocked_github_calls(self) -> None:
         test_file = ROOT / ".github" / "scripts" / "test_fixed_issue_follow_up.js"
