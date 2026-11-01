@@ -2581,6 +2581,9 @@ namespace VibeshineInstaller {
           || string.Equals(fullPath, pathRoot, StringComparison.OrdinalIgnoreCase)) {
         throw new InvalidOperationException("A filesystem root cannot be used as the Vibeshine install folder.");
       }
+      if (fullPath.IndexOfAny(new[] { '"', '\'', '`', '$', '%', ';', '&', '|', '<', '>', '^', '\r', '\n', '/' }) >= 0) {
+        throw new InvalidOperationException("The install folder contains unsupported command characters.");
+      }
       var programFilesRoots = new[] {
         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
@@ -3630,6 +3633,15 @@ namespace VibeshineInstaller {
     [DllImport("msi.dll", CharSet = CharSet.Unicode)]
     private static extern uint MsiGetProperty(IntPtr hInstall, string szName, StringBuilder szValueBuf, ref uint pchValueBuf);
 
+    [DllImport("msi.dll", CharSet = CharSet.Unicode)]
+    private static extern uint MsiSetProperty(IntPtr hInstall, string name, string value);
+
+    [DllImport("msi.dll", CharSet = CharSet.Unicode)]
+    private static extern uint MsiDoAction(IntPtr hInstall, string action);
+
+    [DllImport("msi.dll")]
+    private static extern uint MsiSetInternalUI(uint level, IntPtr window);
+
     [DllImport("msi.dll")]
     private static extern uint MsiCloseHandle(IntPtr hAny);
 
@@ -3684,6 +3696,56 @@ namespace VibeshineInstaller {
       }
     }
 
+    // Run only costing and the incoming package's read-only native guard.
+    // Never execute INSTALL or a sequence here: the working host must remain
+    // intact until its replacement has accepted the destination and old roots.
+    private static InstallerResult PreflightIncomingMsi(string msiPath, string installDirectory, string logPhase) {
+      var logPath = BuildLogPath(logPhase);
+      IntPtr package = IntPtr.Zero;
+      uint previousUiLevel = 0;
+      try {
+        ValidateMsiPayloadImmediatelyBeforeExecution(new[] { "/i", msiPath });
+        // Preflight reports through InstallerResult; never leave a hidden MSI
+        // error dialog waiting for input behind the bootstrapper.
+        previousUiLevel = MsiSetInternalUI(2, IntPtr.Zero); // INSTALLUILEVEL_NONE
+        // IGNOREMACHINESTATE prohibits DLL custom actions and would silently
+        // make this preflight unusable. Use an ordinary, state-aware session.
+        var code = MsiOpenPackageEx(msiPath, 0, out package);
+        if (code != MsiErrorSuccess || package == IntPtr.Zero)
+          throw new InvalidOperationException("Opening the incoming MSI failed (Windows Installer " + code + ").");
+        if (!string.IsNullOrWhiteSpace(installDirectory)) {
+          code = MsiSetProperty(package, "INSTALL_ROOT", installDirectory);
+          if (code != MsiErrorSuccess)
+            throw new InvalidOperationException("Setting the install folder failed (Windows Installer " + code + ").");
+        }
+        // Include competing roots even though the later install skips their
+        // removal after our bootstrapper has handled it. Clear uninstall mode.
+        foreach (var property in new[] { "REMOVE", "SKIP_REMOVE_CONFLICTING_PRODUCTS", "SUPPRESSMSGBOXES" }) {
+          code = MsiSetProperty(package, property, property == "REMOVE" ? "" : property == "SUPPRESSMSGBOXES" ? "1" : "0");
+          if (code != MsiErrorSuccess)
+            throw new InvalidOperationException("Setting preflight policy failed (Windows Installer " + code + ").");
+        }
+        foreach (var action in new[] { "CostInitialize", "FileCost", "CostFinalize", "ValidateInstallRootPreview" }) {
+          code = MsiDoAction(package, action);
+          AppendInstallerLogMessage(logPath, "Incoming MSI preflight: " + action + " returned " + code + ".");
+          if (code != MsiErrorSuccess)
+            throw new InvalidOperationException(action + " failed (Windows Installer " + code + ").");
+        }
+        return null;
+      } catch (Exception ex) {
+        AppendInstallerLogMessage(logPath, "Replacement stopped before uninstall: " + ex.Message);
+        return new InstallerResult {
+          Operation = InstallerOperation.Install,
+          ExitCode = 1603,
+          LogPath = logPath,
+          Message = "The replacement installer could not validate the install folders. The existing installation has not been removed. " + ex.Message
+        };
+      } finally {
+        if (package != IntPtr.Zero) MsiCloseHandle(package);
+        if (previousUiLevel != 0) MsiSetInternalUI(previousUiLevel, IntPtr.Zero);
+      }
+    }
+
     public static InstallerResult RunInteractiveInstall(
       InstallerArguments arguments,
       string installDirectory,
@@ -3724,6 +3786,9 @@ namespace VibeshineInstaller {
           Message = "The installer could not resolve a valid MSI payload: " + ex.Message
         };
       }
+      var preflightFailure = PreflightIncomingMsi(msiPath, installDirectory, "install_preflight");
+      if (preflightFailure != null) return preflightFailure;
+
       var recoveryDetails = new List<string>();
       StashedVibeshinePayload stashedPreviousPayload = null;
       StashedVibeshinePayload competingSourceStash;
@@ -6013,6 +6078,19 @@ namespace VibeshineInstaller {
           ExitCode = 1603,
           Message = installRootFailure
         };
+      }
+      if (isInstallOperation) {
+        // MSI transforms/patches can change the directory or guard after a
+        // plain-package preview. Do not remove a working host on that basis.
+        if (HasProperty(cliArgs, "TRANSFORMS") || HasProperty(cliArgs, "PATCH")) {
+          return new InstallerResult {
+            Operation = InstallerOperation.Install, ExitCode = 1603,
+            Message = "Bootstrapper replacement with MSI transforms or patches is not supported. The existing installation has not been removed."
+          };
+        }
+        var preflightFailure = PreflightIncomingMsi(GetMsiPathArgument(cliArgs),
+          GetPropertyValue(cliArgs, "INSTALL_ROOT"), "cli_preflight");
+        if (preflightFailure != null) return preflightFailure;
       }
       var cliUninstallRecoveryProduct = isUninstallOperation
         ? TryResolveCliMsiUninstallRecoveryProduct(cliArgs)

@@ -1839,6 +1839,12 @@ if(Python3_Interpreter_FOUND)
         endforeach()
     endif()
     find_program(SUNSHINE_TEST_DOTNET NAMES dotnet dotnet.exe)
+    if(SUNSHINE_TEST_DOTNET)
+        add_test(NAME regression_incoming_msi_preflight
+            COMMAND "${Python3_EXECUTABLE}" "${SUNSHINE_TEST_REPOSITORY_ROOT}/packaging/windows/bootstrapper/tests/test_incoming_msi_preflight.py"
+                "${SUNSHINE_TEST_DOTNET}")
+        set_tests_properties(regression_incoming_msi_preflight PROPERTIES LABELS "component" TIMEOUT 120)
+    endif()
     add_test(NAME regression_playnite_connector_lifecycle
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/playnite_connector/test_lifecycle.py"
             --dotnet "${SUNSHINE_TEST_DOTNET}")
