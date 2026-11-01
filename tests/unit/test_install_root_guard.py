@@ -34,10 +34,10 @@ for contract in ('GetFinalPathNameByHandleW(file,resolved,50,FILE_NAME_NORMALIZE
                  'path.size()==3', 'identity=is_volume_root(file->value,info)', 'same_file_identity(',
                  'identity_attempted?L"identity_unproven":L"untrusted_allow"'):
  assert contract in source,contract
-log=source.split('static void log_failure(',1)[1].split('static UINT validate_root(',1)[0]
+log=source.split('static std::wstring failure_detail(',1)[1].split('static UINT validate_root(',1)[0]
 for field in ('phase=', 'category=', 'role=', 'reason=', 'api=', 'status=', 'access='):
  assert field in log,field
-for secret in ('path.c_str()', 'SidStart', 'descriptor', 'exception.what()'):
+for secret in ('SidStart', 'descriptor', 'exception.what()'):
  assert secret not in log,secret
 assert 'catch(...) {}' in log
 for category in ('selected','installed','related','conflicting'):
@@ -68,6 +68,17 @@ void require(bool b){if(!b)throw std::runtime_error("guard regression");}
 FS baseline(){FS f;f.nodes[L"c:\\"]={};f.nodes[L"c:\\program files"]={};f.nodes[L"c:\\program files\\vendor"]={};return f;}
 bool pass(FS &f,bool missing=true){try{validate(f,L"c:\\program files\\vendor\\host",L"c:\\program files",missing);return true;}catch(const std::exception&){return false;}}
 int main(){
+ require(critical(failure_t(L"reparse")));
+ require(critical(failure_t(L"untrusted_allow")));
+ require(critical(failure_t(L"owner_or_dacl")));
+ require(!critical(failure_t(L"unsupported_ace")));
+ require(!critical(failure_t(L"open",role_t::descendant,L"CreateFileW",32)));
+ require(!critical(failure_t(L"installed_location_unresolved")));
+ require(!critical(failure_t(L"known_folder")));
+ require(!critical(failure_t(L"bounds")));
+ require(critical(failure_t(L"identity_unproven")));
+ require(!critical(failure_t(L"identity_unproven",role_t::drive_ancestor,L"GetFinalPathNameByHandleW",5)));
+
  anchor_diagnostic_t first_success;first_success.record(true,0);first_success.record(false,123);
  require(std::wstring(first_success.rejection(false,false))==L"known_folder" && first_success.status==123);
  require(first_success.rejection(true,false)==nullptr && first_success.rejection(false,true)==nullptr);

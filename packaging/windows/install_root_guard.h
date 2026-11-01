@@ -6,8 +6,9 @@
 #include <stdexcept>
 namespace install_root_guard {
   enum class role_t { none, drive_ancestor, anchor, ancestor, install_root, descendant };
-  // Fixed, non-identifying codes only: never attach a path, SID or descriptor.
+  // Stable reason codes plus the affected local path for actionable installer logs.
   struct failure_t : std::exception {
+    std::wstring path;
     const wchar_t *reason;
     role_t role;
     const wchar_t *api;
@@ -17,6 +18,16 @@ namespace install_root_guard {
       reason(why), role(object), api(call), status(result), access(bits) {}
     const char *what() const noexcept override { return "Install root validation failed"; }
   };
+  inline bool critical(const failure_t &failure) {
+    const std::wstring reason=failure.reason;
+    // Block observed unsafe paths/permissions, not an inability to prove every
+    // compatibility detail on the host. MSI reports actual transaction errors.
+    return reason==L"invalid_path" || reason==L"invalid_local_path" ||
+      reason==L"outside_program_files" || reason==L"outside_anchor" ||
+      reason==L"reparse" || reason==L"owner_or_dacl" || reason==L"untrusted_allow" ||
+      reason==L"invalid_ancestor" || reason==L"unexpected" ||
+      (reason==L"identity_unproven" && failure.status==0);
+  }
   struct anchor_diagnostic_t {
     bool failed=false;
     std::uint32_t status=0;

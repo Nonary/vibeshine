@@ -2610,10 +2610,8 @@ namespace VibeshineInstaller {
               "The install folder or one of its parent folders is a reparse point. "
               + "Choose a direct local path so the installer can secure it safely.");
           }
-          if (programFilesRoots.Any(root =>
-              string.Equals(current, root, StringComparison.OrdinalIgnoreCase) || PathIsUnderDirectory(current, root))) {
-            RejectUntrustedWritableInstallAncestor(info);
-          }
+          // The package's native guard owns ACL classification. A second
+          // managed policy must not turn its compatibility warnings into errors.
         }
         var parent = Path.GetDirectoryName(current);
         if (string.IsNullOrWhiteSpace(parent)
@@ -2643,49 +2641,6 @@ namespace VibeshineInstaller {
           + "Choose a new empty folder so unrelated files are never modified.");
       }
       return fullPath;
-    }
-
-    private static void RejectUntrustedWritableInstallAncestor(DirectoryInfo directory) {
-      var security = directory.GetAccessControl(AccessControlSections.Access | AccessControlSections.Owner);
-      var owner = security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
-      if (owner != null && !IsTrustedInstallRootPrincipal(owner)) {
-        throw new InvalidOperationException(
-          "The install folder or one of its parent folders is owned by an untrusted account: " + directory.FullName);
-      }
-
-      // Use only primitive mutation bits. Composite Write/Modify/FullControl
-      // include read/synchronize bits, so testing them by overlap rejects a
-      // normal Users RX ACE.
-      const FileSystemRights unsafeRights = FileSystemRights.WriteData
-        | FileSystemRights.AppendData
-        | FileSystemRights.WriteExtendedAttributes
-        | FileSystemRights.WriteAttributes
-        | FileSystemRights.Delete
-        | FileSystemRights.DeleteSubdirectoriesAndFiles
-        | FileSystemRights.ChangePermissions
-        | FileSystemRights.TakeOwnership;
-      foreach (FileSystemAccessRule rule in security.GetAccessRules(true, true, typeof(SecurityIdentifier))) {
-        var sid = rule.IdentityReference as SecurityIdentifier;
-        if (rule.AccessControlType == AccessControlType.Allow
-            && (rule.FileSystemRights & unsafeRights) != 0
-            && sid != null
-            && !IsTrustedInstallRootPrincipal(sid)) {
-          throw new InvalidOperationException(
-            "The install folder or one of its parent folders grants write access to an untrusted account: "
-            + directory.FullName);
-        }
-      }
-    }
-
-    private static bool IsTrustedInstallRootPrincipal(SecurityIdentifier sid) {
-      if (sid == null) return false;
-      return sid.IsWellKnown(WellKnownSidType.LocalSystemSid)
-        || sid.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid)
-        || sid.IsWellKnown(WellKnownSidType.CreatorOwnerSid)
-        || string.Equals(
-          sid.Value,
-          "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
-          StringComparison.Ordinal);
     }
 
     private static bool IsRegisteredInstallRoot(string installRoot) {
@@ -3728,10 +3683,15 @@ namespace VibeshineInstaller {
         foreach (var action in new[] { "CostInitialize", "FileCost", "CostFinalize", "ValidateInstallRootPreview" }) {
           code = MsiDoAction(package, action);
           AppendInstallerLogMessage(logPath, "Incoming MSI preflight: " + action + " returned " + code + ".");
-          if (code != MsiErrorSuccess)
-            throw new InvalidOperationException(action + " failed (Windows Installer " + code + ").");
+          if (code != MsiErrorSuccess) {
+            var detail = ReadMsiProperty(package, "VIBESHINE_INSTALL_ROOT_ERROR");
+            throw new InvalidOperationException(action + " failed (Windows Installer " + code + "). " + detail);
+          }
         }
-        return null;
+        var warnings = (ReadMsiProperty(package, "VIBESHINE_INSTALL_ROOT_WARNINGS") ?? "")
+          .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Distinct().ToList();
+        foreach (var warning in warnings) AppendInstallerLogMessage(logPath, "INSTALL_ROOT_WARNING: " + warning);
+        return new InstallerResult { Operation = InstallerOperation.Install, ExitCode = 0, LogPath = logPath, ComponentFailures = warnings };
       } catch (Exception ex) {
         AppendInstallerLogMessage(logPath, "Replacement stopped before uninstall: " + ex.Message);
         return new InstallerResult {
@@ -3767,10 +3727,11 @@ namespace VibeshineInstaller {
       try {
         installDirectory = ValidateInstallRootPath(installDirectory);
       } catch (Exception ex) {
+        var validationLog = BuildLogPath("install_path_validation");
+        var detail = "The install folder is not safe to use: " + ex.Message + " Path: " + installDirectory;
+        AppendInstallerLogMessage(validationLog, detail);
         return new InstallerResult {
-          Operation = InstallerOperation.Install,
-          ExitCode = 1603,
-          Message = "The install folder is not safe to use: " + ex.Message
+          Operation = InstallerOperation.Install, ExitCode = 1603, LogPath = validationLog, Message = detail
         };
       }
 
@@ -3786,8 +3747,8 @@ namespace VibeshineInstaller {
           Message = "The installer could not resolve a valid MSI payload: " + ex.Message
         };
       }
-      var preflightFailure = PreflightIncomingMsi(msiPath, installDirectory, "install_preflight");
-      if (preflightFailure != null) return preflightFailure;
+      var preflight = PreflightIncomingMsi(msiPath, installDirectory, "install_preflight");
+      if (!preflight.Succeeded) return preflight;
 
       var recoveryDetails = new List<string>();
       StashedVibeshinePayload stashedPreviousPayload = null;
@@ -3946,6 +3907,7 @@ namespace VibeshineInstaller {
         }
       }
 
+      ApplyPreflightWarnings(installResult, preflight);
       AppendRecoveryDetails(installResult, recoveryDetails);
       return ApplyStashedPayloadRecovery(installResult, stashedPreviousPayload, "install_restore_previous");
     }
@@ -6073,12 +6035,14 @@ namespace VibeshineInstaller {
       }
       string installRootFailure;
       if (isInstallOperation && !TryNormalizeAndValidateCliInstallRoot(cliArgs, out installRootFailure)) {
+        var validationLog = BuildLogPath("cli_path_validation");
+        installRootFailure += " Path: " + GetPropertyValue(cliArgs, "INSTALL_ROOT");
+        AppendInstallerLogMessage(validationLog, installRootFailure);
         return new InstallerResult {
-          Operation = InstallerOperation.Install,
-          ExitCode = 1603,
-          Message = installRootFailure
+          Operation = InstallerOperation.Install, ExitCode = 1603, LogPath = validationLog, Message = installRootFailure
         };
       }
+      InstallerResult preflight = null;
       if (isInstallOperation) {
         // MSI transforms/patches can change the directory or guard after a
         // plain-package preview. Do not remove a working host on that basis.
@@ -6088,9 +6052,9 @@ namespace VibeshineInstaller {
             Message = "Bootstrapper replacement with MSI transforms or patches is not supported. The existing installation has not been removed."
           };
         }
-        var preflightFailure = PreflightIncomingMsi(GetMsiPathArgument(cliArgs),
+        preflight = PreflightIncomingMsi(GetMsiPathArgument(cliArgs),
           GetPropertyValue(cliArgs, "INSTALL_ROOT"), "cli_preflight");
-        if (preflightFailure != null) return preflightFailure;
+        if (!preflight.Succeeded) return preflight;
       }
       var cliUninstallRecoveryProduct = isUninstallOperation
         ? TryResolveCliMsiUninstallRecoveryProduct(cliArgs)
@@ -6368,8 +6332,20 @@ namespace VibeshineInstaller {
           cliResult.Message += " Component warnings: " + string.Join(" ", componentWarnings);
         }
       }
+      ApplyPreflightWarnings(cliResult, preflight);
       AppendRecoveryDetails(cliResult, recoveryDetails);
       return ApplyStashedPayloadRecovery(cliResult, stashedPreviousPayload, "cli_restore_previous");
+    }
+
+    private static void ApplyPreflightWarnings(InstallerResult result, InstallerResult preflight) {
+      if (result == null || preflight == null || preflight.ComponentFailures == null) return;
+      if (result.ComponentFailures == null) result.ComponentFailures = new List<string>();
+      foreach (var warning in preflight.ComponentFailures) {
+        if (!result.ComponentFailures.Contains(warning)) result.ComponentFailures.Add(warning);
+        AppendInstallerLogMessage(result.LogPath, "INSTALL_ROOT_WARNING: " + warning);
+      }
+      if (preflight.ComponentFailures.Count > 0)
+        result.Message += " Install-folder warnings: " + string.Join(" ", preflight.ComponentFailures);
     }
 
     private static void PreserveCliInstallDirectory(List<string> cliArgs) {
@@ -8045,6 +8021,14 @@ namespace VibeshineInstaller {
 
       try {
         var lines = File.ReadAllLines(installLogPath);
+        foreach (var line in lines) {
+          const string marker = "INSTALL_ROOT_WARNING: ";
+          var index = line.IndexOf(marker, StringComparison.Ordinal);
+          if (index >= 0) {
+            var warning = line.Substring(index + marker.Length).Trim();
+            if (!failures.Contains(warning)) failures.Add(warning);
+          }
+        }
         foreach (var displayAction in new[] { "InstallVirtualDisplayDriver", "InstallSudovda" }) {
           var displayLines = GetDisplayDriverLogLines(lines, displayAction, installVirtualDisplayDriver);
           var virtualDisplayDriverFailed = displayLines.Any(line =>
@@ -8718,8 +8702,18 @@ namespace VibeshineInstaller {
       }
 
       var message = operationName + " failed (error " + exitCode + ").";
-      if (exitCode == 1603) {
-        message += " A fatal error occurred during installation. Ensure no Vibeshine processes are running and try again.";
+      string guardError = null;
+      try {
+        if (!string.IsNullOrWhiteSpace(logPath) && File.Exists(logPath)) {
+          const string marker = "INSTALL_ROOT_ERROR: ";
+          var line = File.ReadLines(logPath).LastOrDefault(value => value.Contains(marker));
+          if (line != null) guardError = line.Substring(line.IndexOf(marker, StringComparison.Ordinal) + marker.Length).Trim();
+        }
+      } catch { }
+      if (!string.IsNullOrWhiteSpace(guardError)) {
+        message += " " + guardError;
+      } else if (exitCode == 1603) {
+        message += " Windows Installer reported a fatal error. Use Save logs to retain the failed action and error details.";
       } else if (exitCode == 1618) {
         message += " Another installation is already in progress. Wait for it to finish, then try again.";
       } else if (exitCode == 1602) {

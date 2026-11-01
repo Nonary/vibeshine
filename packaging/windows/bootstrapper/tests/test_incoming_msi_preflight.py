@@ -15,6 +15,8 @@ def extract(pattern):
     assert len(matches) == 1, pattern
     return matches[0]
 
+build_message = extract(r'^    private static string BuildResultMessage\(.*?^    \}')
+apply_warnings = extract(r'^    private static void ApplyPreflightWarnings\(.*?^    \}')
 method = extract(r'^    private static InstallerResult PreflightIncomingMsi\(.*?^    \}')
 kind = extract(r'^    internal enum InstalledProductKind \{.*?^    \}')
 result = extract(r'^  internal sealed class InstallerResult \{.*?^  \}')
@@ -23,7 +25,7 @@ operation = extract(r'^  internal enum InstallerOperation \{.*?^  \}')
 for start, end in [('public static InstallerResult RunInteractiveInstall(', 'private static bool IsCertificateThumbprint('),
                    ('public static InstallerResult RunCli(', 'private static void PreserveCliInstallDirectory(')]:
     body = source.split(start, 1)[1].split(end, 1)[0]
-    gate = body.index('if (preflightFailure != null) return preflightFailure;')
+    gate = body.index('if (!preflight.Succeeded) return preflight;')
     for effect in ('UninstallCompetingProducts(', 'TryPreUninstallDowngradeSourceVersion('):
         assert gate < body.index(effect), (start, effect)
     if 'TryStopRelatedServicesAndProcesses(' in body:
@@ -33,6 +35,7 @@ assert method.index('ValidateMsiPayloadImmediatelyBeforeExecution(') < method.in
 
 harness = r'''
 using System;
+using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 namespace VibeshineInstaller {
@@ -75,17 +78,29 @@ KIND
     Check(new[] { "CostInitialize", "FileCost", "CostFinalize", "ValidateInstallRootPreview" }.Contains(action), "no installation or removal action");
     return Outcome(action);
   }
+  static string ReadMsiProperty(IntPtr handle, string name) {
+    if (name == "VIBESHINE_INSTALL_ROOT_WARNINGS" && Failure == "warning") return "locked optional file";
+    return name == "VIBESHINE_INSTALL_ROOT_ERROR" ? "reason=reparse path=C:\\Program Files\\Unsafe" : "";
+  }
   static uint MsiSetInternalUI(uint level, IntPtr window) { return 5; }
   static uint MsiCloseHandle(IntPtr handle) { Closed++; return 0; }
 METHOD
+APPLY_WARNINGS
+BUILD_MESSAGE
   static void Check(bool ok, string why) { Checks++; if (!ok) throw new Exception(why); }
   static void Run(string failure, bool throws, string root) {
     Failure = failure; Throw = throws; Root = root; Verified = false; Closed = 0; Calls = new List<string>();
     var result = PreflightIncomingMsi("incoming.msi", Root, "preflight");
-    bool good = failure == null;
-    Check((result == null) == good, "rejected preflight cannot authorize removal: " + failure);
+    bool good = failure == null || failure == "warning";
+    Check(result.Succeeded == good, "rejected preflight cannot authorize removal: " + failure);
     Check(Closed == (failure == "verify" || failure == "null-handle" ? 0 : 1), "handles closed on success and failure");
     if (good) {
+      Check(result.ComponentFailures.Count == (failure == "warning" ? 1 : 0), "warnings retained without failing install");
+      var completed = new InstallerResult { ExitCode = 0, Message = "Installed", LogPath = "install.log" };
+      ApplyPreflightWarnings(completed, result);
+      Check(completed.Succeeded, "warning keeps successful install outcome");
+      Check(completed.PartiallySucceeded == (failure == "warning"), "warning uses existing completion UI");
+      if (failure == "warning") Check(completed.Message.Contains("locked optional file"), "warning detail visible without scripts");
       var expected = new List<string> { "open" };
       if (!string.IsNullOrWhiteSpace(root)) expected.Add("INSTALL_ROOT");
       expected.AddRange(new[] { "REMOVE", "SKIP_REMOVE_CONFLICTING_PRODUCTS", "SUPPRESSMSGBOXES", "CostInitialize", "FileCost", "CostFinalize", "ValidateInstallRootPreview" });
@@ -98,15 +113,23 @@ METHOD
   static void Main() {
     Run(null, false, @"C:\Program Files\Sunshine");
     Run(null, false, null);
+    Run("warning", false, @"C:\Program Files\Sunshine");
     foreach (var failure in new[] { "verify", "open", "null-handle", "INSTALL_ROOT", "REMOVE", "SKIP_REMOVE_CONFLICTING_PRODUCTS", "SUPPRESSMSGBOXES", "CostInitialize", "FileCost", "CostFinalize", "ValidateInstallRootPreview" }) {
       Run(failure, false, @"C:\Program Files\O'Brien");
       Run(failure, true, @"C:\Program Files\Sunshine");
     }
+    var errorLog = Path.GetTempFileName();
+    try {
+      File.WriteAllText(errorLog, "INSTALL_ROOT_ERROR: junction at C:\\Program Files\\Bad");
+      var message = BuildResultMessage("Install", 1603, errorLog);
+      Check(message.Contains("junction at C:\\Program Files\\Bad"), "actual failing path reaches UI");
+      Check(!message.Contains("processes are running"), "do not invent a process failure");
+    } finally { File.Delete(errorLog); }
     Console.WriteLine(Checks + " incoming MSI preflight checks passed; Windows boundaries stubbed.");
   }
 }
 }
-'''.replace('KIND', kind).replace('RESULT', result).replace('OPERATION', operation).replace('METHOD', method)
+'''.replace('KIND', kind).replace('RESULT', result).replace('OPERATION', operation).replace('METHOD', method).replace('APPLY_WARNINGS', apply_warnings).replace('BUILD_MESSAGE', build_message)
 dotnet = sys.argv[1] if len(sys.argv) > 1 else 'dotnet'
 major = subprocess.check_output([dotnet, '--version'], text=True).strip().split('.')[0]
 with tempfile.TemporaryDirectory(prefix='incoming-msi-preflight-') as directory:

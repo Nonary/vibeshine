@@ -58,6 +58,10 @@ namespace {
     std::vector<std::unique_ptr<handle_t>> pins;
     bool preview;
     install_root_guard::node_t pin(const std::wstring &path,bool strict,install_root_guard::role_t role) {
+      try { return pin_checked(path,strict,role); }
+      catch(install_root_guard::failure_t &failure) { failure.path=path;throw; }
+    }
+    install_root_guard::node_t pin_checked(const std::wstring &path,bool strict,install_root_guard::role_t role) {
       using namespace install_root_guard;
       auto file=std::make_unique<handle_t>(CreateFileW(path.c_str(),READ_CONTROL|FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | (preview ? FILE_SHARE_WRITE : 0),nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_BACKUP_SEMANTICS,nullptr));
@@ -102,6 +106,10 @@ namespace {
       pins.push_back(std::move(file));return {true,(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)!=0};
     }
     std::vector<std::wstring> children(const std::wstring &path,install_root_guard::role_t role) {
+      try { return children_checked(path,role); }
+      catch(install_root_guard::failure_t &failure) { failure.path=path;throw; }
+    }
+    std::vector<std::wstring> children_checked(const std::wstring &path,install_root_guard::role_t role) {
       using namespace install_root_guard;
       std::vector<std::wstring> result;WIN32_FIND_DATAW data{};
       HANDLE search=FindFirstFileW((path+L"\\*").c_str(),&data);
@@ -204,27 +212,83 @@ static const wchar_t *role_name(install_root_guard::role_t role) {
     default:return L"none";
   }
 }
+static const wchar_t *failure_description(const wchar_t *reason) {
+  const std::wstring code=reason;
+  if(code==L"open")return L"Could not inspect a busy or inaccessible install path";
+  if(code==L"security" || code==L"acl_read")return L"Could not read install path permissions";
+  if(code==L"unsupported_ace")return L"An install path has an unrecognized permission entry";
+  if(code==L"installed_location_unresolved")return L"Could not resolve a registered product folder";
+  if(code==L"known_folder")return L"Windows could not provide a Program Files location";
+  if(code==L"identity_unproven")return L"The drive root identity could not be confirmed";
+  if(code==L"untrusted_allow")return L"Another account can modify an install path";
+  if(code==L"owner_or_dacl")return L"An install path has untrusted ownership or unrestricted permissions";
+  if(code==L"reparse")return L"An install path is a junction or symbolic link";
+  if(code==L"invalid_path" || code==L"outside_program_files")return L"The install folder is not a supported direct Program Files path";
+  if(code==L"bounds")return L"The install directory inspection reached its safety limit";
+  if(code==L"missing")return L"An expected install directory is missing";
+  if(code==L"tree_changed")return L"The install directory changed during inspection";
+  return L"Install path validation reported a problem";
+}
+static std::wstring failure_detail(bool preview,const wchar_t *category,const install_root_guard::failure_t &failure) {
+  std::wstring system;
+  wchar_t *raw=nullptr;
+  if(failure.status && FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER|FORMAT_MESSAGE_FROM_SYSTEM|FORMAT_MESSAGE_IGNORE_INSERTS,
+      nullptr,failure.status,0,reinterpret_cast<wchar_t*>(&raw),0,nullptr) && raw) {
+    system=raw;LocalFree(raw);
+    for(auto &ch:system)if(ch==L'\r' || ch==L'\n')ch=L' ';
+  }
+  return std::wstring(failure_description(failure.reason))+L"; phase="+(preview?L"preview":L"strict")+
+    L" category="+category+L" role="+role_name(failure.role)+L" reason="+failure.reason+
+    L" api="+failure.api+L" status="+std::to_wstring(failure.status)+L" access="+std::to_wstring(failure.access)+
+    (system.empty()?L"":L" ("+system+L")")+(failure.path.empty()?L"":L" path="+failure.path);
+}
 static void log_failure(MSIHANDLE session,bool preview,const wchar_t *category,const install_root_guard::failure_t &failure) noexcept {
-  // Diagnostics must never reveal names or change the validation result.
   try {
-    const std::wstring message=std::wstring(L"Install root guard: phase=")+(preview?L"preview":L"strict")+
-      L" category="+category+L" role="+role_name(failure.role)+L" reason="+failure.reason+
-      L" api="+failure.api+L" status="+std::to_wstring(failure.status)+L" access="+std::to_wstring(failure.access);
-    MSIHANDLE record=MsiCreateRecord(0);
-    if(record){MsiRecordSetStringW(record,0,message.c_str());MsiProcessMessage(session,INSTALLMESSAGE_INFO,record);MsiCloseHandle(record);}
+    const bool fatal=install_root_guard::critical(failure);
+    const auto detail=failure_detail(preview,category,failure);
+    const auto message=(fatal?L"INSTALL_ROOT_ERROR: ":L"INSTALL_ROOT_WARNING: ")+detail;
+    // Keep paths in a record field so brackets in a filename cannot be treated
+    // as MSI formatting instructions. Diagnostics never change the outcome.
+    MSIHANDLE record=MsiCreateRecord(1);
+    if(record){MsiRecordSetStringW(record,0,L"Install root guard: [1]");MsiRecordSetStringW(record,1,message.c_str());MsiProcessMessage(session,INSTALLMESSAGE_INFO,record);MsiCloseHandle(record);}
+    if(fatal)MsiSetPropertyW(session,L"VIBESHINE_INSTALL_ROOT_ERROR",detail.c_str());
+    else {
+      auto warnings=property(session,L"VIBESHINE_INSTALL_ROOT_WARNINGS");
+      if(warnings.size()<16000) {
+        if(!warnings.empty())warnings+=L"\n";
+        warnings+=detail;
+        MsiSetPropertyW(session,L"VIBESHINE_INSTALL_ROOT_WARNINGS",warnings.c_str());
+      }
+    }
   } catch(...) {}
+}
+static void check_root(MSIHANDLE session,std::wstring root,bool removing,bool preview,const wchar_t *category) {
+  try { validate_one(root,removing,preview); }
+  catch(install_root_guard::failure_t &failure) {
+    if(failure.path.empty())failure.path=root;
+    if(install_root_guard::critical(failure))throw;
+    log_failure(session,preview,category,failure);
+  }
 }
 static UINT validate_root(MSIHANDLE session,bool preview) {
  const wchar_t *category=L"none";
  try {
+  MsiSetPropertyW(session,L"VIBESHINE_INSTALL_ROOT_ERROR",L"");
+  MsiSetPropertyW(session,L"VIBESHINE_INSTALL_ROOT_WARNINGS",L"");
   const auto code=property(session,L"ProductCode");DWORD product_size=0;wchar_t product=0;
   const auto status=MsiGetProductInfoExW(code.c_str(),nullptr,MSIINSTALLCONTEXT_MACHINE,L"ProductName",&product,&product_size);
   const bool installed=status==ERROR_SUCCESS || status==ERROR_MORE_DATA;
   const bool removing=installed && lower(property(session,L"REMOVE"))==L"all";
   category=L"selected";
-  validate_one(property(session,L"INSTALL_ROOT"),removing,preview);
+  check_root(session,property(session,L"INSTALL_ROOT"),removing,preview,category);
   category=L"installed";
-  if(installed)validate_one(registered_root(code),true,preview);
+  if(installed) {
+    try { check_root(session,registered_root(code),true,preview,category); }
+    catch(const install_root_guard::failure_t &failure) {
+      if(install_root_guard::critical(failure))throw;
+      log_failure(session,preview,category,failure);
+    }
+  }
   // MajorUpgrade removes related products using their recorded directories,
   // even when the incoming product is installed in a different directory.
   category=L"related";
@@ -235,7 +299,13 @@ static UINT validate_root(MSIHANDLE session,bool preview) {
     const auto result=MsiEnumRelatedProductsW(upgrade.c_str(),0,index,related);
     if(result==ERROR_NO_MORE_ITEMS)break;
     if(result!=ERROR_SUCCESS)throw install_root_guard::failure_t(L"related_enumeration",install_root_guard::role_t::none,L"MsiEnumRelatedProductsW",result);
-    if(lower(related)!=lower(code))validate_one(registered_root(related),true,preview);
+    if(lower(related)!=lower(code)) {
+      try { check_root(session,registered_root(related),true,preview,category); }
+      catch(const install_root_guard::failure_t &failure) {
+        if(install_root_guard::critical(failure))throw;
+        log_failure(session,preview,category,failure);
+      }
+    }
   }
   // Match the pre-transaction competing-product action's machine registration
   // roots; do not touch or validate those products when the caller skips it.
@@ -243,14 +313,17 @@ static UINT validate_root(MSIHANDLE session,bool preview) {
   if(!installed && !removing && property(session,L"SKIP_REMOVE_CONFLICTING_PRODUCTS")!=L"1") {
     for(const auto name : {L"Sunshine",L"Vibeshine",L"Apollo",L"Vibepollo"}) {
       auto location=registry_string(uninstall_key+name,L"InstallLocation");
-      if(!location.empty())validate_one(location,true,preview);
+      if(!location.empty())check_root(session,location,true,preview,category);
     }
   }
   return ERROR_SUCCESS;
- }catch(const install_root_guard::failure_t &failure) {log_failure(session,preview,category,failure);}
+ }catch(const install_root_guard::failure_t &failure) {
+   log_failure(session,preview,category,failure);
+   if(!install_root_guard::critical(failure))return ERROR_SUCCESS;
+ }
   catch(...) {log_failure(session,preview,category,install_root_guard::failure_t(L"unexpected"));}
- MSIHANDLE record=MsiCreateRecord(0);
- if(record){MsiRecordSetStringW(record,0,L"The install folder or an existing product directory is unsafe, writable by an untrusted account, or contains a reparse point. Close the host and run the bootstrapper from an elevated account.");MsiProcessMessage(session,INSTALLMESSAGE_ERROR,record);MsiCloseHandle(record);}
+ MSIHANDLE record=MsiCreateRecord(1);
+ if(record){MsiRecordSetStringW(record,0,L"Installation stopped because an install path is unsafe. [1]");MsiRecordSetStringW(record,1,property(session,L"VIBESHINE_INSTALL_ROOT_ERROR").c_str());MsiProcessMessage(session,INSTALLMESSAGE_ERROR,record);MsiCloseHandle(record);}
  return ERROR_INSTALL_FAILURE;
 }
 extern "C" __declspec(dllexport) UINT __stdcall ValidateInstallRootPreview(MSIHANDLE session) {

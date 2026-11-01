@@ -27,7 +27,7 @@ $invalidRoot = Join-Path $OutputDirectory $leaf
 foreach ($case in @(@{ Root=$validRoot; Accepted=$true }, @{ Root=$invalidRoot; Accepted=$false })) {
     if (Test-Path -LiteralPath $case.Root) { throw 'Preflight test destination must not exist' }
     $result = $method.Invoke($null, @($MsiPath, $case.Root, 'packaged_msi_preflight'))
-    if (($null -eq $result) -ne $case.Accepted) {
+    if ($result.Succeeded -ne $case.Accepted) {
         $detail = if ($null -eq $result) { 'unexpected acceptance' } else { $result.Message }
         throw "Packaged MSI preflight returned the wrong result: $detail"
     }

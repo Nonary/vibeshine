@@ -53,7 +53,7 @@ class InstallerPathSecurityContract(unittest.TestCase):
         self.assertIn("must be a child folder beneath Program Files", validate)
         self.assertIn("programFilesRoots.Any", validate)
         self.assertIn("PathIsUnderDirectory(fullPath, root)", validate)
-        self.assertIn("RejectUntrustedWritableInstallAncestor", validate)
+        self.assertNotIn("RejectUntrustedWritableInstallAncestor", validate)
         self.assertIn("FileAttributes.ReparsePoint", validate)
         self.assertIn("Directory.EnumerateFileSystemEntries(fullPath).Any()", validate)
         self.assertIn("!IsRegisteredInstallRoot(fullPath)", validate)
@@ -70,17 +70,6 @@ class InstallerPathSecurityContract(unittest.TestCase):
         self.assertEqual(0, users_read_execute & primitive_mutation_mask)
         self.assertNotEqual(0, write_data & primitive_mutation_mask)
         self.assertNotEqual(0, modify & primitive_mutation_mask)
-
-        mask_source = self.source.split("const FileSystemRights unsafeRights", 1)[1]
-        mask_source = mask_source.split(";", 1)[0]
-        for primitive in (
-            "WriteData", "AppendData", "WriteExtendedAttributes", "WriteAttributes",
-            "Delete", "DeleteSubdirectoriesAndFiles", "ChangePermissions", "TakeOwnership",
-        ):
-            self.assertIn("FileSystemRights." + primitive, mask_source)
-        self.assertNotIn("FileSystemRights.Write\n", mask_source)
-        self.assertNotIn("FileSystemRights.Modify", mask_source)
-        self.assertNotIn("FileSystemRights.FullControl", mask_source)
 
     def test_install_root_filesystem_scan_runs_after_elevation(self):
         normalize_install = self.source.split("private static string NormalizeInstallPath", 1)[1]
