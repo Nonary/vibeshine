@@ -2970,6 +2970,7 @@ namespace confighttp {
       {"configured", configured_driver},
       {"status", driver_status_name(driver_status)},
       {"status_code", static_cast<int>(driver_status)},
+      {"initialization_attempted", driver_snapshot.initialization_attempted},
     };
     if (const auto active_name = driver_selection_name(active_driver)) {
       driver_metadata["active"] = active_name;

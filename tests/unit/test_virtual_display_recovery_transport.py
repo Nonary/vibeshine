@@ -77,6 +77,23 @@ production_catalog_preflight = "\n".join(
 )
 
 
+PROCESS = (ROOT / "src/process.cpp").read_text()
+PROCESS_HEADER = (ROOT / "src/process.h").read_text()
+snapshot_start = PROCESS_HEADER.index("  struct vdisplay_driver_status_snapshot_t {")
+snapshot_end = PROCESS_HEADER.index("  };", snapshot_start) + len("  };")
+status_start = PROCESS.index("  std::atomic<VDISPLAY::DRIVER_STATUS> vDisplayDriverStatus")
+status_end = PROCESS.index("  namespace {", status_start)
+production_status = PROCESS_HEADER[snapshot_start:snapshot_end] + PROCESS[status_start:status_end]
+production_status += "\n".join(
+    extract_function(PROCESS, signature)
+    for signature in (
+        "vdisplay_driver_status_snapshot_t vDisplayDriverStatusSnapshot()",
+        "void setVDisplayDriverStatus(const VDISPLAY::DRIVER_STATUS status)",
+        "void setVDisplayDriverStatus(\n    const VDISPLAY::DRIVER_STATUS status,",
+    )
+)
+
+
 PROGRAM = r'''
 #include <algorithm>
 #include <atomic>
@@ -182,14 +199,9 @@ namespace VDISPLAY_SUNSHINE {
     namespace policy = ::VDISPLAY::policy;
   }
   namespace proc {
-    std::atomic<DRIVER_STATUS> status {DRIVER_STATUS::UNKNOWN};
-    std::atomic<DRIVER_SELECTION> selection {DRIVER_SELECTION::UNKNOWN};
-    void setVDisplayDriverStatus(DRIVER_STATUS value, DRIVER_SELECTION selected) {
-      status.store(value);
-      selection.store(selected);
-    }
-    std::atomic<DRIVER_STATUS> &vDisplayDriverStatus = status;
-    std::atomic<DRIVER_SELECTION> &vDisplayDriverSelection = selection;
+''' + production_status + r'''
+    auto &status = vDisplayDriverStatus;
+    auto &selection = vDisplayDriverSelection;
   }
 
   namespace util {
@@ -281,7 +293,8 @@ namespace VDISPLAY_SUNSHINE {
   }
   void set_watchdog_feed_requested(bool value, bool) { g_watchdog_feed_requested.store(value); }
   bool check_driver_protocol_compatible(sunshine_driver::ControlClient &) { return true; }
-  bool ensure_driver_is_ready_impl(RestartCooldownBehavior, std::stop_token) { return true; }
+  bool readiness_succeeds = true;
+  bool ensure_driver_is_ready_impl(RestartCooldownBehavior, std::stop_token) { return readiness_succeeds; }
   void store_watchdog_fail_cb(const std::function<void()> &cb) { g_watchdog_fail_cb = cb; }
   std::function<void()> copy_watchdog_fail_cb() { return g_watchdog_fail_cb; }
   bool watchdog_thread_running() {
@@ -393,6 +406,7 @@ namespace VDISPLAY_SUNSHINE {
     }
     device_open_count = 0;
     next_transport_id = 1;
+    readiness_succeeds = true;
     open_succeeds = true;
     opened_transport_responsive = true;
     requested_resolution_catalog_supported = true;
@@ -408,7 +422,10 @@ namespace VDISPLAY_SUNSHINE {
     VDISPLAY::catalog_policy::retained_catalog = VDISPLAY::catalog_policy::inspection::matches;
     provenance_matches = false;
     display_recreated = false;
-    proc::setVDisplayDriverStatus(DRIVER_STATUS::UNKNOWN, DRIVER_SELECTION::UNKNOWN);
+    // Only the fixture resets process-lifetime provenance, to model a fresh host.
+    proc::vDisplayDriverStatus = DRIVER_STATUS::UNKNOWN;
+    proc::vDisplayDriverSelection = DRIVER_SELECTION::UNKNOWN;
+    proc::vdisplay_driver_initialization_attempted = false;
   }
   void seed_provenance(const uuid_util::uuid_t &guid, const std::shared_ptr<Transport> &transport, LUID luid) {
     std::lock_guard<std::mutex> lock(g_render_adapter_request_mutex);
@@ -615,12 +632,36 @@ namespace VDISPLAY_SUNSHINE {
     check(!supportsRequestedResolutionCatalog(), "failed inspection open fails closed");
   }
 
+  void test_readiness_failure_is_not_deferred_startup() {
+    reset_fixture();
+    auto snapshot = proc::vDisplayDriverStatusSnapshot();
+    check(!snapshot.initialization_attempted, "fresh process has no driver initialization attempt");
+    check(snapshot.status == DRIVER_STATUS::UNKNOWN && snapshot.selection == DRIVER_SELECTION::UNKNOWN,
+          "physical-display startup may defer the driver");
+    RecoveryMonitorState state;
+    readiness_succeeds = false;
+    for (int retry = 0; retry < 3; ++retry) {
+      check(!attempt_virtual_display_recovery(state, {}), "unavailable readiness fails recovery");
+      snapshot = proc::vDisplayDriverStatusSnapshot();
+      check(snapshot.initialization_attempted, "failed readiness and retry/backoff cannot masquerade as fresh startup");
+      check(snapshot.status == DRIVER_STATUS::UNKNOWN && snapshot.selection == DRIVER_SELECTION::UNKNOWN,
+            "attempt provenance distinguishes the otherwise identical recovery tuple");
+    }
+    readiness_succeeds = true;
+    check(attempt_virtual_display_recovery(state, {}), "subsequent ready recovery succeeds");
+    check(proc::vDisplayDriverStatusSnapshot().initialization_attempted, "success preserves attempt provenance");
+    reset_fixture();
+    proc::setVDisplayDriverStatus(DRIVER_STATUS::FAILED);
+    check(proc::vDisplayDriverStatusSnapshot().initialization_attempted, "status-only publications preserve provenance");
+  }
+
   int run() {
     [[maybe_unused]] auto cleanup_fixture = util::fail_guard([] {
       stop_watchdog_thread();
       clear_control_transport();
       g_watchdog_fail_cb = {};
     });
+    test_readiness_failure_is_not_deferred_startup();
     test_healthy_recovery_preserves_transport_provenance();
     test_ping_open_does_not_replace_shared_transport();
     test_unhealthy_recovery_reopens_and_recreates_for_stale_provenance();
