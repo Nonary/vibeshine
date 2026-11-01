@@ -906,6 +906,202 @@ namespace {
            !explicit_opt_out.overrides_suppressed;
   }
 
+  using adaptive_backlog_clock = std::chrono::steady_clock;
+  using adaptive_backlog = amf::lifecycle::adaptive_backlog_t<adaptive_backlog_clock>;
+
+  adaptive_backlog_clock::time_point adaptive_at(int ms) {
+    return adaptive_backlog_clock::time_point {} + std::chrono::milliseconds(ms);
+  }
+
+  bool adaptive_depth_is(std::optional<std::size_t> depth, std::size_t expected) {
+    return depth && *depth == expected;
+  }
+
+  bool adaptive_time_is(std::optional<adaptive_backlog_clock::time_point> at, int expected_ms) {
+    return at && *at == adaptive_at(expected_ms);
+  }
+
+  bool disabled_adaptive_backlog_keeps_learned_depth() {
+    using namespace std::chrono_literals;
+    adaptive_backlog backlog(false, 2);
+    backlog.accepted(1, adaptive_at(0), 1ms, false);
+    backlog.accepted(2, adaptive_at(1), 1ms, false);
+    backlog.output(1, adaptive_at(8), std::nullopt, 1, 0);
+    backlog.output(2, adaptive_at(12), 1, 0, 0);
+    backlog.accepted(3, adaptive_at(12), 1ms, false);
+
+    return !backlog.admitted_depth(adaptive_at(0), std::nullopt) &&
+           adaptive_depth_is(backlog.admitted_depth(adaptive_at(9), 1), 1) &&
+           adaptive_depth_is(backlog.admitted_depth(adaptive_at(40), 0), 0) &&
+           !backlog.next_relaxation(adaptive_at(9), 1) &&
+           !backlog.claim_at(0, 1);
+  }
+
+  bool adaptive_depth_one_admits_next_input_near_predicted_output() {
+    using namespace std::chrono_literals;
+    adaptive_backlog backlog(true, 2);
+    backlog.accepted(1, adaptive_at(0), 1ms, false);
+    backlog.output(1, adaptive_at(8), std::nullopt, 0, 0);
+    backlog.accepted(2, adaptive_at(10), 1ms, false);
+
+    // Claim one conversion and the 2 ms margin before the 8 ms encode ends.
+    return adaptive_time_is(backlog.claim_at(0, 1), 15) &&
+           !backlog.claim_at(0, 0) && !backlog.claim_at(0, 2) && !backlog.claim_at(1, 1) &&
+           !backlog.claim_at(std::nullopt, 1) &&
+           adaptive_depth_is(backlog.admitted_depth(adaptive_at(14), 0), 0) &&
+           adaptive_depth_is(backlog.admitted_depth(adaptive_at(15), 0), 1) &&
+           adaptive_time_is(backlog.next_relaxation(adaptive_at(12), 0), 15) &&
+           !backlog.next_relaxation(adaptive_at(15), 0) &&
+           !backlog.admitted_depth(adaptive_at(15), std::nullopt);
+  }
+
+  bool adaptive_overlap_starts_after_previous_output() {
+    using namespace std::chrono_literals;
+    adaptive_backlog backlog(true, 2);
+    backlog.accepted(1, adaptive_at(0), 1ms, false);
+    backlog.output(1, adaptive_at(8), std::nullopt, 0, 0);
+    // Overlap admitted input 3 while input 2 was still encoding.
+    backlog.accepted(2, adaptive_at(10), 1ms, false);
+    backlog.accepted(3, adaptive_at(15), 1ms, false);
+    // Input 3 starts when input 2 ends at 18, so its successor claims at 23.
+    const auto queued_behind_input = backlog.claim_at(0, 2);
+    backlog.output(2, adaptive_at(18), 0, 0, 0);
+    const auto queued_behind_output = backlog.claim_at(0, 1);
+
+    // A conversion longer than the encode claims as soon as VCN starts.
+    adaptive_backlog slow_conversion(true, 2);
+    slow_conversion.accepted(1, adaptive_at(0), 20ms, false);
+    slow_conversion.output(1, adaptive_at(8), std::nullopt, 0, 0);
+    slow_conversion.accepted(2, adaptive_at(30), 20ms, false);
+
+    return adaptive_time_is(queued_behind_input, 23) && adaptive_time_is(queued_behind_output, 23) &&
+           !backlog.claim_at(0, 2) &&
+           adaptive_time_is(slow_conversion.claim_at(0, 1), 30);
+  }
+
+  bool adaptive_probe_runs_once_and_never_stalls_two_input_driver() {
+    using namespace std::chrono_literals;
+    adaptive_backlog backlog(true, 2);
+    backlog.accepted(1, adaptive_at(0), 1ms, false);
+    backlog.accepted(2, adaptive_at(1), 1ms, false);
+    backlog.output(1, adaptive_at(8), std::nullopt, 1, 0);
+    const bool probing = adaptive_depth_is(backlog.admitted_depth(adaptive_at(10), 1), 0) &&
+                         adaptive_time_is(backlog.next_relaxation(adaptive_at(10), 1), 16);
+    // The driver kept input 2 past the probe, so depth two resumes.
+    const bool resumed = adaptive_depth_is(backlog.admitted_depth(adaptive_at(16), 1), 1) &&
+                         !backlog.next_relaxation(adaptive_at(16), 1);
+    backlog.accepted(3, adaptive_at(16), 1ms, false);
+    backlog.output(2, adaptive_at(17), 1, 1, 0);
+    const bool once = adaptive_depth_is(backlog.admitted_depth(adaptive_at(18), 1), 1) &&
+                      !backlog.claim_at(1, 1);
+
+    // A slow first encode bounds the probe at 10 ms.
+    adaptive_backlog slow(true, 2);
+    slow.accepted(1, adaptive_at(0), 1ms, false);
+    slow.accepted(2, adaptive_at(0), 1ms, false);
+    slow.output(1, adaptive_at(30), std::nullopt, 1, 0);
+    const bool bounded = adaptive_depth_is(slow.admitted_depth(adaptive_at(39), 1), 0) &&
+                         adaptive_depth_is(slow.admitted_depth(adaptive_at(40), 1), 1);
+
+    // Learning more than two inputs skips the probe.
+    adaptive_backlog deep(true, 3);
+    deep.accepted(1, adaptive_at(0), 1ms, false);
+    deep.accepted(2, adaptive_at(0), 1ms, false);
+    deep.accepted(3, adaptive_at(0), 1ms, false);
+    deep.output(1, adaptive_at(8), std::nullopt, 2, 0);
+
+    return probing && resumed && once && bounded &&
+           adaptive_depth_is(deep.admitted_depth(adaptive_at(9), 2), 2);
+  }
+
+  bool adaptive_faster_output_shortens_wait_but_slowdown_does_not_lengthen_it() {
+    using namespace std::chrono_literals;
+    adaptive_backlog backlog(true, 2);
+    backlog.accepted(1, adaptive_at(0), 1ms, false);
+    backlog.output(1, adaptive_at(10), std::nullopt, 0, 0);
+    backlog.accepted(2, adaptive_at(10), 1ms, false);
+    const auto first = backlog.claim_at(0, 1);
+    backlog.output(2, adaptive_at(16), 0, 0, 0);
+    backlog.accepted(3, adaptive_at(20), 1ms, false);
+    const auto faster = backlog.claim_at(0, 1);
+    backlog.output(3, adaptive_at(40), 0, 0, 0);
+    backlog.accepted(4, adaptive_at(40), 1ms, false);
+    const auto after_slowdown = backlog.claim_at(0, 1);
+
+    return adaptive_time_is(first, 17) && adaptive_time_is(faster, 23) &&
+           adaptive_time_is(after_slowdown, 43);
+  }
+
+  bool adaptive_fast_start_leaves_the_service_window() {
+    using namespace std::chrono_literals;
+    adaptive_backlog backlog(true, 2);
+    backlog.accepted(1, adaptive_at(0), 1ms, false);
+    backlog.output(1, adaptive_at(4), std::nullopt, 0, 0);
+    int at = 10;
+    uint64_t index = 2;
+    // One fast start, then 10 ms encodes that fill the rest of the window.
+    for (; index < amf::lifecycle::adaptive_backlog_service_window + 1; ++index, at += 10) {
+      backlog.accepted(index, adaptive_at(at), 1ms, false);
+      backlog.output(index, adaptive_at(at + 10), 0, 0, 0);
+    }
+    backlog.accepted(index, adaptive_at(at), 1ms, false);
+    const bool fast_start_held = adaptive_time_is(backlog.claim_at(0, 1), at + 1);
+    backlog.output(index, adaptive_at(at + 10), 0, 0, 0);
+    at += 10;
+    backlog.accepted(index + 1, adaptive_at(at), 1ms, false);
+
+    return fast_start_held && adaptive_time_is(backlog.claim_at(0, 1), at + 7);
+  }
+
+  bool adaptive_backlog_ignores_preanalysis_and_unmatched_outputs() {
+    using namespace std::chrono_literals;
+    // PreAnalysis lookahead owns its depth: no probe and no timing sample.
+    adaptive_backlog lookahead(true, 2);
+    lookahead.accepted(1, adaptive_at(0), 1ms, false);
+    lookahead.accepted(2, adaptive_at(0), 1ms, false);
+    lookahead.output(1, adaptive_at(8), std::nullopt, 1, 2);
+    lookahead.accepted(3, adaptive_at(8), 1ms, false);
+    lookahead.output(2, adaptive_at(9), 1, 0, 0);
+
+    // An output whose input was never recorded leaves no timing sample.
+    adaptive_backlog unmatched(true, 2);
+    unmatched.accepted(1, adaptive_at(0), 1ms, false);
+    unmatched.output(2, adaptive_at(9), std::nullopt, 0, 0);
+    unmatched.accepted(3, adaptive_at(10), 1ms, false);
+
+    // Only the 9 ms sample counts; the lookahead output's 8 ms would claim at 14.
+    return adaptive_depth_is(lookahead.admitted_depth(adaptive_at(8), 1), 1) &&
+           adaptive_time_is(lookahead.claim_at(0, 1), 15) &&
+           !unmatched.claim_at(0, 1) &&
+           adaptive_depth_is(unmatched.admitted_depth(adaptive_at(40), 0), 0);
+  }
+
+  bool adaptive_overlap_needs_queue_headroom_and_waits_for_keyframes() {
+    using namespace std::chrono_literals;
+    // The VRR path forces a driver queue of one: only the probe applies.
+    adaptive_backlog single_queue(true, 1);
+    single_queue.accepted(1, adaptive_at(0), 1ms, false);
+    single_queue.accepted(2, adaptive_at(1), 1ms, false);
+    single_queue.output(1, adaptive_at(8), std::nullopt, 1, 0);
+    const bool probes = adaptive_depth_is(single_queue.admitted_depth(adaptive_at(9), 1), 0);
+    single_queue.output(2, adaptive_at(12), 1, 0, 0);
+    single_queue.accepted(3, adaptive_at(12), 1ms, false);
+    const bool no_overlap = !single_queue.claim_at(0, 1) &&
+                            adaptive_depth_is(single_queue.admitted_depth(adaptive_at(40), 0), 0);
+
+    adaptive_backlog keyframe(true, 2);
+    keyframe.accepted(1, adaptive_at(0), 1ms, false);
+    keyframe.output(1, adaptive_at(8), std::nullopt, 0, 0);
+    keyframe.accepted(2, adaptive_at(10), 1ms, true);
+    const bool waits_for_keyframe = !keyframe.claim_at(0, 1) &&
+                                    adaptive_depth_is(keyframe.admitted_depth(adaptive_at(40), 0), 0);
+    keyframe.output(2, adaptive_at(25), 0, 0, 0);
+    keyframe.accepted(3, adaptive_at(26), 1ms, false);
+
+    return probes && no_overlap && waits_for_keyframe &&
+           adaptive_time_is(keyframe.claim_at(0, 1), 31);
+  }
+
 }  // namespace
 
 #ifdef SUNSHINE_AMF_LIFECYCLE_STANDALONE
@@ -954,6 +1150,14 @@ int main() {
     {"teardown_gate_contention_respects_its_deadline", teardown_gate_contention_respects_its_deadline},
     {"smart_access_video_avoids_aggressive_low_latency_driver_path", smart_access_video_avoids_aggressive_low_latency_driver_path},
     {"concurrent_native_session_remains_usable", concurrent_native_session_remains_usable},
+    {"disabled_adaptive_backlog_keeps_learned_depth", disabled_adaptive_backlog_keeps_learned_depth},
+    {"adaptive_depth_one_admits_next_input_near_predicted_output", adaptive_depth_one_admits_next_input_near_predicted_output},
+    {"adaptive_overlap_starts_after_previous_output", adaptive_overlap_starts_after_previous_output},
+    {"adaptive_probe_runs_once_and_never_stalls_two_input_driver", adaptive_probe_runs_once_and_never_stalls_two_input_driver},
+    {"adaptive_faster_output_shortens_wait_but_slowdown_does_not_lengthen_it", adaptive_faster_output_shortens_wait_but_slowdown_does_not_lengthen_it},
+    {"adaptive_fast_start_leaves_the_service_window", adaptive_fast_start_leaves_the_service_window},
+    {"adaptive_backlog_ignores_preanalysis_and_unmatched_outputs", adaptive_backlog_ignores_preanalysis_and_unmatched_outputs},
+    {"adaptive_overlap_needs_queue_headroom_and_waits_for_keyframes", adaptive_overlap_needs_queue_headroom_and_waits_for_keyframes},
   };
   int failed = 0;
   for (const auto &[name, run] : cases) {
@@ -1131,6 +1335,38 @@ TEST(SunshineNativeAmfReview, SmartAccessVideoAvoidsAggressiveLowLatencyDriverPa
 
 TEST(SunshineNativeAmfReview, ConcurrentNativeSessionRemainsUsable) {
   EXPECT_TRUE(concurrent_native_session_remains_usable());
+}
+
+TEST(SunshineNativeAmfReview, DisabledAdaptiveBacklogKeepsLearnedDepth) {
+  EXPECT_TRUE(disabled_adaptive_backlog_keeps_learned_depth());
+}
+
+TEST(SunshineNativeAmfReview, AdaptiveDepthOneAdmitsNextInputNearPredictedOutput) {
+  EXPECT_TRUE(adaptive_depth_one_admits_next_input_near_predicted_output());
+}
+
+TEST(SunshineNativeAmfReview, AdaptiveOverlapStartsAfterPreviousOutput) {
+  EXPECT_TRUE(adaptive_overlap_starts_after_previous_output());
+}
+
+TEST(SunshineNativeAmfReview, AdaptiveProbeRunsOnceAndNeverStallsTwoInputDriver) {
+  EXPECT_TRUE(adaptive_probe_runs_once_and_never_stalls_two_input_driver());
+}
+
+TEST(SunshineNativeAmfReview, AdaptiveFasterOutputShortensWaitButSlowdownDoesNotLengthenIt) {
+  EXPECT_TRUE(adaptive_faster_output_shortens_wait_but_slowdown_does_not_lengthen_it());
+}
+
+TEST(SunshineNativeAmfReview, AdaptiveFastStartLeavesTheServiceWindow) {
+  EXPECT_TRUE(adaptive_fast_start_leaves_the_service_window());
+}
+
+TEST(SunshineNativeAmfReview, AdaptiveBacklogIgnoresPreanalysisAndUnmatchedOutputs) {
+  EXPECT_TRUE(adaptive_backlog_ignores_preanalysis_and_unmatched_outputs());
+}
+
+TEST(SunshineNativeAmfReview, AdaptiveOverlapNeedsQueueHeadroomAndWaitsForKeyframes) {
+  EXPECT_TRUE(adaptive_overlap_needs_queue_headroom_and_waits_for_keyframes());
 }
 
 #endif

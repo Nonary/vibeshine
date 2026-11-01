@@ -509,6 +509,139 @@ namespace amf::lifecycle {
     return outstanding <= static_cast<uint64_t>(permitted_depth);
   }
 
+  // A bounded probe never outlasts the encode it waits for, nor this.
+  inline constexpr std::chrono::milliseconds adaptive_backlog_probe_limit {10};
+  // One QueryOutput timeout for the output poll and one for wake-up jitter.
+  inline constexpr std::chrono::milliseconds adaptive_backlog_claim_margin {2};
+  inline constexpr std::size_t adaptive_backlog_timing_capacity = 64;
+  // Encode time is the fastest of this many recent matched outputs.
+  inline constexpr std::size_t adaptive_backlog_service_window = 16;
+
+  // Opt-in timing for the learned depth above (amd_adaptive_backlog). Two costs
+  // remain without it. A busy source refills depth two before the remaining
+  // input can return, so a runtime that needs one input never demonstrates it.
+  // And strict depth one claims the next capture only after the previous
+  // output, leaving VCN idle while that capture converts. This probes the first
+  // depth-two observation once, for at most one encode, and admits one more
+  // input near the in-flight picture's predicted completion. PreAnalysis
+  // lookahead, cold-start priming and surface ownership are unchanged, and a
+  // learned depth of zero is relaxed by one input at most.
+  template<typename Clock>
+  class adaptive_backlog_t {
+  public:
+    using time_point = typename Clock::time_point;
+    using duration = typename Clock::duration;
+
+    adaptive_backlog_t() = default;
+
+    // Overlap needs a driver queue that can hold a second input; without one,
+    // SubmitInput would only spin on AMF_INPUT_FULL until the encoder frees.
+    adaptive_backlog_t(bool enable, std::size_t driver_input_queue_size):
+        enabled(enable),
+        overlap_allowed(enable && driver_input_queue_size >= 2) {}
+
+    // Call only after SubmitInput accepted the input, never on INPUT_FULL.
+    // Preparation runs from reserving the input surface to submitting it and is
+    // known only for a freshly converted capture. A keyframe outlasts the
+    // fastest sample, so the next capture waits for its output.
+    void accepted(uint64_t frame_index, time_point at, std::optional<duration> preparation, bool keyframe) {
+      if (!enabled) return;
+      inputs.push_back({frame_index, at, keyframe});
+      while (inputs.size() > adaptive_backlog_timing_capacity) inputs.pop_front();
+      if (preparation) latest_preparation = *preparation;
+    }
+
+    // Call only for valid output, after refine_low_latency_pipeline_depth().
+    // An input without matched output never contributes a timing sample.
+    void output(uint64_t frame_index, time_point now, std::optional<std::size_t> previous_depth,
+                std::size_t learned_depth, int lookahead_depth) {
+      if (!enabled) return;
+      std::optional<duration> encoding;
+      while (!inputs.empty() && inputs.front().frame_index <= frame_index) {
+        if (inputs.front().frame_index == frame_index) encoding = now - inputs.front().accepted;
+        inputs.pop_front();
+      }
+      last_output = now;
+      if (lookahead_depth > 0) return;
+      const duration probe_limit = adaptive_backlog_probe_limit;
+      if (!previous_depth && learned_depth == 1) {
+        // Once primed, give the remaining input one bounded chance to return.
+        // A runtime that needs that second input resumes when the probe ends.
+        drain_until = now + std::min(encoding.value_or(probe_limit), probe_limit);
+      }
+      // Keep the fastest recent sample: delayed polls and brief GPU load must
+      // not lengthen the wait and leave the encoder idle, while a fast start
+      // (a static desktop, a boost clock) must not claim early all session.
+      if (encoding) {
+        samples.push_back(*encoding);
+        while (samples.size() > adaptive_backlog_service_window) samples.pop_front();
+        service = *std::min_element(samples.begin(), samples.end());
+      }
+    }
+
+    // The learned depth with this timing applied; nullopt while cold-starting.
+    std::optional<std::size_t> admitted_depth(time_point now, std::optional<std::size_t> learned) const {
+      if (!learned) return learned;
+      if (*learned == 1 && drain_until && now < *drain_until) return 0;
+      if (*learned == 0) {
+        if (const auto at = overlap_at(); at && now >= *at) return 1;
+      }
+      return learned;
+    }
+
+    // When admitted_depth() next relaxes, so an admission wait can end there.
+    std::optional<time_point> next_relaxation(time_point now, std::optional<std::size_t> learned) const {
+      if (!learned) return std::nullopt;
+      if (*learned == 1 && drain_until && now < *drain_until) return drain_until;
+      if (*learned == 0) {
+        if (const auto at = overlap_at(); at && now < *at) return at;
+      }
+      return std::nullopt;
+    }
+
+    // When to claim and convert the next capture so it is submitted near the
+    // completion of the inputs ahead of it; nullopt claims at once, as without
+    // this. With an overlapped input queued, that is after the queued one.
+    std::optional<time_point> claim_at(std::optional<std::size_t> learned, uint64_t outstanding) const {
+      if (!learned || *learned != 0 || outstanding == 0 || outstanding > inputs.size()) return std::nullopt;
+      return predicted_claim(static_cast<std::size_t>(outstanding));
+    }
+
+  private:
+    struct input_t {
+      uint64_t frame_index = 0;
+      time_point accepted {};
+      bool keyframe = false;
+    };
+
+    std::optional<time_point> overlap_at() const {
+      return predicted_claim(1);
+    }
+
+    // Inputs encode back to back: each starts once accepted and once the one
+    // ahead of it (or the last output) has left VCN. Claim the next input one
+    // conversion and margin before the last of `count` inputs ends.
+    std::optional<time_point> predicted_claim(std::size_t count) const {
+      if (!overlap_allowed || !service || count == 0 || count > inputs.size()) return std::nullopt;
+      auto finish = last_output;
+      for (std::size_t i = 0; i < count; ++i) {
+        if (inputs[i].keyframe) return std::nullopt;
+        finish = (finish ? std::max(inputs[i].accepted, *finish) : inputs[i].accepted) + *service;
+      }
+      const duration lead = latest_preparation + adaptive_backlog_claim_margin;
+      return *finish - std::min(lead, *service);
+    }
+
+    bool enabled = false;
+    bool overlap_allowed = false;
+    std::deque<input_t> inputs;
+    std::deque<duration> samples;
+    std::optional<duration> service;
+    duration latest_preparation {};
+    std::optional<time_point> last_output;
+    std::optional<time_point> drain_until;
+  };
+
   // Skipping submission must not forget the last converted image: capture can
   // become static immediately afterward, and an IDR/minimum-FPS repeat still
   // needs the newest pixels. Retain only its slot index, without queueing input.

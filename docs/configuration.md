@@ -5263,6 +5263,19 @@ Sets the number of long-term reference frames used by the experimental native AM
 
 Sets the experimental native AMD encoder's driver input capacity. This is not the number of frames Vibeshine permits to accumulate: the native encoder independently keeps the smallest pipeline depth demonstrated by the runtime and drops a newer stale capture rather than growing that backlog. Leave this at `0` for the driver default unless hardware testing shows a benefit. A positive explicit value overrides VRR low-latency queue selection; values as small as `1` can starve drivers that retain several startup surfaces, while `4` is the safer low-latency tuning point.
 
+### amd_adaptive_backlog
+
+Experimental opt-in timing for the experimental native AMD encoder's learned pipeline depth. Off by default. Without PreAnalysis lookahead, the native encoder already holds the smallest depth the driver has demonstrated, usually one input, and converts the next capture only after the previous output arrives. When enabled:
+
+- The first time the driver shows a two-input pipeline, admission pauses once, for at most one encode time and never more than 10 ms, so a driver that needs only one input can demonstrate it even while the source keeps capturing.
+- At a learned depth of one, the next capture is claimed and converted one conversion time plus 2 ms before the in-flight picture's predicted completion, using the fastest of the last 16 encode times, and submitted while that picture finishes. At most one additional input is admitted. A keyframe in flight is waited for instead.
+
+PreAnalysis lookahead, startup priming and input-surface ownership are unchanged. Overlap needs a driver input queue of at least two; with an input queue size of `1`, including the VRR low-latency default, only the one-time probe applies. The finished packet of the previous picture may be delivered after the next capture's conversion instead of before it.
+
+```text
+amd_adaptive_backlog = enabled
+```
+
 ### amd_smart_access_video
 
 Controls SmartAccess Video for the experimental native AMD encoder when the installed AMF runtime exposes that capability. Use `auto` to leave the driver default unchanged.
