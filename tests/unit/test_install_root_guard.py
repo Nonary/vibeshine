@@ -16,169 +16,114 @@ assert seq.find('.//Custom[@Action="SetKillProcsQuietImmediate"]').attrib['After
 assert seq.find('.//Custom[@Action="ValidateInstallRoot"]').attrib['After']=='StopSvcQuietImmediate'
 assert seq.find('.//Custom[@Action="RemoveConflictingProducts"]').attrib['After']=='ValidateInstallRoot'
 assert custom.find('.//w:CustomAction[@Id="BlockLegacySunshine"]',ns).get('Error')
+# Repair must run as SYSTEM, never fail the install, and precede every helper.
+repair=custom.find('.//w:CustomAction[@Id="RepairInstallRoot"]',ns)
+assert repair.attrib['Execute']=='deferred' and repair.attrib['Impersonate']=='no' and repair.attrib['Return']=='ignore'
+assert custom.find('.//w:CustomAction[@Id="SetRepairInstallRoot"]',ns).attrib['Property']=='RepairInstallRoot'
+assert seq.find('.//Custom[@Action="RepairInstallRoot"]').attrib['Before']=='SetInstallSudovda'
+assert seq.find('.//Custom[@Action="SetInstallSudovda"]').attrib['After']=='InstallFiles'
+assert seq.find('.//Custom[@Action="SetRepairInstallRoot"]').attrib['Before']=='RepairInstallRoot'
+assert seq.find('.//Custom[@Action="RepairInstallRoot"]').text=='NOT REMOVE'
 for old in ('AskUninstallLegacySunshine','WaitForLegacyUninstall'):
  assert custom.find('.//w:CustomAction[@Id="'+old+'"]',ns) is None
  assert seq.find('.//Custom[@Action="'+old+'"]') is None
 source=(r/'packaging/windows/install_root_guard.cpp').read_text()
-assert 'component_path(code.c_str()' in source
-assert '"MsiGetComponentPathExW"' in source
-assert 'MSIINSTALLCONTEXT_MACHINE,path.data(),&length)' in source
-assert 'component_state==INSTALLSTATE_LOCAL' in source
 bootstrap=(r/'packaging/windows/bootstrapper/VibeshineInstaller.cs').read_text()
 preflight=bootstrap.split('private static InstallerResult UninstallCompetingProducts(',1)[1]
 assert preflight.index('product => product.IsPerUser') < preflight.index('TryPreserveKnownMsiSourceBeforeReplacement')
 
-for contract in ('FILE_FLAG_OPEN_REPARSE_POINT','FILE_SHARE_READ | (preview ? FILE_SHARE_WRITE : 0),nullptr,OPEN_EXISTING','GetFileInformationByHandle','FILE_ATTRIBUTE_REPARSE_POINT','GetSecurityInfo','INHERIT_ONLY_ACE','READ_CONTROL','MsiGetPropertyW','SHGetKnownFolderPath','pins.push_back'):
- assert contract in source,contract
-for contract in ('GetFinalPathNameByHandleW(file,resolved,50,FILE_NAME_NORMALIZED|VOLUME_NAME_GUID)',
-                 'path.size()==3', 'identity=is_volume_root(file->value,info)', 'same_file_identity(',
-                 'identity_attempted?L"identity_unproven":L"untrusted_allow"'):
- assert contract in source,contract
-log=source.split('static std::wstring failure_detail(',1)[1].split('static UINT validate_root(',1)[0]
-for field in ('phase=', 'category=', 'role=', 'reason=', 'api=', 'status=', 'access='):
- assert field in log,field
-for secret in ('SidStart', 'descriptor', 'exception.what()'):
- assert secret not in log,secret
-assert 'catch(...) {}' in log
-for category in ('selected','installed','related','conflicting'):
- assert 'category=L"'+category+'"' in source
+# Checking looks at one folder and follows links. Repair must never follow one, must
+# not propagate through the tree, and neither may fail the install.
+check_side=source.split('struct filesystem_t {',1)[1].split('struct repairer_t {',1)[0]
+repair_side=source.split('struct repairer_t {',1)[1].split('std::wstring normalized(',1)[0]
+assert 'FILE_FLAG_OPEN_REPARSE_POINT' not in check_side and 'FindFirstFileW' not in check_side
+assert 'FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_BACKUP_SEMANTICS' in repair_side
+assert 'FILE_ATTRIBUTE_REPARSE_POINT' in repair_side and 'nNumberOfLinks>1' in repair_side
+assert 'SetKernelObjectSecurity' in repair_side
+# Listing access makes Windows record the share mode, and omitting FILE_SHARE_DELETE is the pin.
+assert 'FILE_LIST_DIRECTORY|FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE,' in repair_side
+for propagating in ('SetSecurityInfo(','SetNamedSecurityInfo','TreeSetNamedSecurityInfo'):
+ assert propagating not in source,propagating
+assert 'L"REMOVE"' in source and 'ERROR_SUCCESS;' in source.split('catch(...)',1)[1].split('}',1)[0]
+assert source.split('UINT __stdcall RepairInstallRoot',1)[1].rstrip().endswith('return ERROR_SUCCESS;\n}')
+for group in ('WinWorldSid','WinAuthenticatedUserSid','WinBuiltinUsersSid','WinInteractiveSid'):
+ assert group in source,group
 code=r'''
 #include "packaging/windows/install_root_guard.h"
 #include <map>
-#include <set>
+#include <stdexcept>
+#include <utility>
+#include <vector>
 #include <iostream>
 using namespace install_root_guard;
-struct Node{bool directory=true,unsafe=false,reparse=false,mutable_handle=false;std::uint32_t mask=0;std::wstring final_path={};bool same_identity=true;};
-struct FS{
- std::map<std::wstring,Node> nodes;std::map<std::wstring,std::vector<std::wstring>> listing;
- std::set<std::wstring> pinned;
- node_t pin(const std::wstring&p,bool strict,role_t role){
-  auto it=nodes.find(p);if(it==nodes.end())return {false,false,2};
-  if(it->second.unsafe)throw failure_t(L"untrusted_allow",role,L"none",0,0x10000);
-  if(it->second.reparse)throw failure_t(L"reparse",role);
-  if(it->second.mutable_handle)throw failure_t(L"open",role,L"CreateFileW",32);
-  const bool root_identity=p.size()==3 && is_volume_guid_root(it->second.final_path) && it->second.same_identity;
-  if(!allow_ace_safe(it->second.mask,false,strict,false,false,root_identity))throw std::runtime_error("unsafe ACL");
-  if(p==L"c:\\program files\\vendor")if(!strict)throw std::runtime_error("higher Program Files ancestor must be strict");
-  pinned.insert(p);return {true,it->second.directory};
- }
- std::vector<std::wstring> children(const std::wstring&p,role_t){if(!pinned.contains(p))throw std::runtime_error("un-pinned enumeration");return listing[p];}
-};
 void require(bool b){if(!b)throw std::runtime_error("guard regression");}
-FS baseline(){FS f;f.nodes[L"c:\\"]={};f.nodes[L"c:\\program files"]={};f.nodes[L"c:\\program files\\vendor"]={};return f;}
-bool pass(FS &f,bool missing=true){try{validate(f,L"c:\\program files\\vendor\\host",L"c:\\program files",missing);return true;}catch(const std::exception&){return false;}}
+struct FS{std::map<std::wstring,node_t> nodes;std::vector<std::wstring> seen;
+ node_t inspect(const std::wstring&p){seen.push_back(p);auto it=nodes.find(p);return it==nodes.end()?node_t{}:it->second;}};
+FS tree(){FS f;f.nodes[L"C:\\"]=node_t{true};f.nodes[L"C:\\Program Files"]=node_t{true};return f;}
+outcome_t run(FS&f,const std::wstring&root){return check(f,root).outcome;}
+struct Tree{
+ struct Held{bool descend;int*open;Held(bool d,int*o):descend(d),open(o){++*open;}~Held(){--*open;}Held(const Held&)=delete;};
+ std::map<std::wstring,std::vector<std::wstring>> listing;std::map<std::wstring,bool> folder;std::vector<std::pair<std::wstring,bool>> repaired;std::map<std::wstring,int> held_at;int open=0;
+ Held repair(const std::wstring&p,bool root){repaired.push_back({p,root});held_at[p]=open;return Held(folder[p],&open);}
+ std::vector<std::wstring> children(const std::wstring&p){return listing[p];}};
 int main(){
- require(critical(failure_t(L"reparse")));
- require(critical(failure_t(L"untrusted_allow")));
- require(critical(failure_t(L"owner_or_dacl")));
- require(!critical(failure_t(L"unsupported_ace")));
- require(!critical(failure_t(L"open",role_t::descendant,L"CreateFileW",32)));
- require(!critical(failure_t(L"installed_location_unresolved")));
- require(!critical(failure_t(L"known_folder")));
- require(!critical(failure_t(L"bounds")));
- require(critical(failure_t(L"identity_unproven")));
- require(!critical(failure_t(L"identity_unproven",role_t::drive_ancestor,L"GetFinalPathNameByHandleW",5)));
+ const std::wstring host=L"C:\\Program Files\\Sunshine";
+ // Masks taken from field reports' real ACLs.
+ for(auto mask : {0x1200a9u,0xa0000000u,0x001000a1u,0x00010000u})require(!ace_exposes(mask));
+ for(auto mask : {0x1301bfu,0x1f01ffu,0xe0010000u,0x00100004u,0x10000000u,0x40000000u,0x2u,0x4u,0x40u,0x40000u,0x80000u})require(ace_exposes(mask));
 
- anchor_diagnostic_t first_success;first_success.record(true,0);first_success.record(false,123);
- require(std::wstring(first_success.rejection(false,false))==L"known_folder" && first_success.status==123);
- require(first_success.rejection(true,false)==nullptr && first_success.rejection(false,true)==nullptr);
- anchor_diagnostic_t first_failure;first_failure.record(false,456);first_failure.record(true,0);
- require(std::wstring(first_failure.rejection(false,false))==L"known_folder" && first_failure.status==456);
- require(first_failure.rejection(true,false)==nullptr && first_failure.rejection(false,true)==nullptr);
- anchor_diagnostic_t both_success;both_success.record(true,0);both_success.record(true,0);
- require(std::wstring(both_success.rejection(false,false))==L"outside_program_files");
- require(allow_ace_safe(0x1200a9,false,true,false,false));
- require(!allow_ace_safe(0x1301bf,true,true,false,false));
- require(allow_ace_safe(0x1f01ff,true,true,false,true));
- require(!allow_ace_safe(0x1f01ff,false,true,false,true));
- require(!allow_ace_safe(0x40,false,false,false,false));
- require(allow_ace_safe(0x4,false,false,false,false));
- const std::wstring volume=L"\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\";
- require(is_volume_guid_root(volume));
- require(!is_volume_guid_root(volume+L"ordinary-directory"));
- require(!is_volume_guid_root(volume.substr(0,volume.size()-1)));
- require(!is_volume_guid_root(L"c:\\"));
- require(!is_volume_guid_root(L""));
- require(!is_volume_guid_root(L"\\\\?\\Volume{12345678-1234-1234-1234-123456789abz}\\"));
- require(!is_volume_guid_root(L"\\\\?\\Volume{12345678_1234-1234-1234-123456789abc}\\"));
- require(same_file_identity(1,0,5,1,0,5));
- require(!same_file_identity(0,0,5,0,0,5));
- require(!same_file_identity(1,0,0,1,0,0));
- require(!same_file_identity(1,0,5,2,0,5));
- require(!same_file_identity(1,0,5,1,0,6));
- require(!same_file_identity(1,1,5,1,0,5));
- require(!allow_ace_safe(0x00010000,false,false,false,false));
- require(allow_ace_safe(0x00010000,false,false,false,false,true));
- require(!allow_ace_safe(0x00010000,false,true,false,false,true));
- require(allow_ace_safe(0x1301bf,false,false,false,false,true));
- require(!allow_ace_safe(0x1301bf,false,false,false,false));
- require(!allow_ace_safe(0x1301bf,false,true,false,false,true));
- for(auto bit : {0x40u,0x40000u,0x80000u,0x10000000u,0x40000000u}) {
-   require(!allow_ace_safe(bit,false,false,false,false,true));
-   require(!allow_ace_safe(0x10000u|bit,false,false,false,false,true));
- }
- for(auto bit : {0x2u,0x4u,0x10u,0x100u})
-   require(!allow_ace_safe(bit,false,true,false,false,true));
- // Exhaust relevant rights and flag combinations against the original
- // predicate. The only permitted difference is DELETE on a verified root.
- const std::uint32_t bits[]={1,2,4,16,64,256,0x10000,0x40000,0x80000,0x10000000,0x40000000};
- for(unsigned selected=0;selected<(1u<<11);++selected) {
-   std::uint32_t mask=0;for(unsigned i=0;i<11;++i)if(selected&(1u<<i))mask|=bits[i];
-   for(bool inherit_only : {false,true})for(bool strict : {false,true})
-   for(bool trusted : {false,true})for(bool creator : {false,true}) {
-     auto original=[&](std::uint32_t m){
-       if(inherit_only&&!strict)return true;
-       if(trusted||(inherit_only&&creator))return true;
-       return !(m&(0x000d0040u|(strict?0x116u:0u)|0x50000000u));
-     };
-     require(allow_ace_safe(mask,inherit_only,strict,trusted,creator)==original(mask));
-     require(allow_ace_safe(mask,inherit_only,strict,trusted,creator,true)==original(strict?mask:(mask&~0x10000u)));
-   }
- }
+ for(auto ok : {L"C:\\Program Files\\Sunshine",L"D:\\Games\\Sunshine",L"C:\\Host",L"C:\\Program Files (x86)\\A b-c_d.e",L"C:\\R&D",L"C:\\a'b",L"C:\\$x",L"C:\\a^b"})require(usable_path(ok));
+ for(auto bad : {L"",L"C:\\",L"C:",L"Sunshine",L"\\\\server\\share\\x",L"C:\\a\"b",L"C:\\a|b",L"C:\\a<b",L"C:\\a*b",L"C:\\a?b",L"C:\\a:b",L"C:\\100%",L"C:\\a;b"})require(!usable_path(bad));
 
- auto root_acl=baseline();root_acl.nodes[L"c:\\"].mask=0x1301bf;
- root_acl.nodes[L"c:\\"].final_path=volume;require(pass(root_acl));
- root_acl.nodes[L"c:\\"].final_path=volume+L"ordinary-directory";require(!pass(root_acl)); // SUBST-like alias
- root_acl.nodes[L"c:\\"].final_path=L"";require(!pass(root_acl)); // failed/unknown identity
- root_acl.nodes[L"c:\\"].final_path=volume;root_acl.nodes[L"c:\\"].same_identity=false;require(!pass(root_acl));
- root_acl.nodes[L"c:\\"].same_identity=true;
- root_acl.nodes[L"c:\\"].final_path=volume;root_acl.nodes[L"c:\\"].reparse=true;require(!pass(root_acl));
- root_acl=baseline();root_acl.nodes[L"c:\\program files"].mask=0x10000;
- root_acl.nodes[L"c:\\program files"].final_path=volume;require(!pass(root_acl)); // ordinary ancestor remains strict
+ auto f=tree();f.nodes[host]=node_t{true};require(run(f,host)==outcome_t::ok);
+ require(f.seen==std::vector<std::wstring>{host}); // nothing above an existing folder is examined
+ require(run(f,host+L"\\")==outcome_t::ok);
 
- auto f=baseline();require(pass(f));require(f.pinned.contains(L"c:\\"));require(!pass(f,false)); // fresh vs maintenance missing target
- try{validate(f,L"c:\\program files\\vendor\\host",L"c:\\program files",false);require(false);}
- catch(const failure_t &e){require(e.role==role_t::install_root && std::wstring(e.reason)==L"missing" && e.status==2 && std::wstring(e.api)==L"CreateFileW");}
- f=baseline();f.nodes[L"c:\\"].mutable_handle=true;
- try{validate(f,L"c:\\program files\\vendor\\host",L"c:\\program files",true);require(false);}
- catch(const failure_t &e){require(e.role==role_t::drive_ancestor && std::wstring(e.reason)==L"open" && std::wstring(e.api)==L"CreateFileW" && e.status==32);}
- f=baseline();f.nodes[L"c:\\program files"].reparse=true;
- try{validate(f,L"c:\\program files\\vendor\\host",L"c:\\program files",true);require(false);}
- catch(const failure_t &e){require(e.role==role_t::anchor && std::wstring(e.reason)==L"reparse");}
- f=baseline();f.nodes[L"c:\\program files\\vendor"].unsafe=true;
- try{validate(f,L"c:\\program files\\vendor\\host",L"c:\\program files",true);require(false);}
- catch(const failure_t &e){require(e.role==role_t::ancestor && e.access==0x10000);}
- f=baseline();f.nodes[L"c:\\"].mutable_handle=true;f.nodes[L"c:\\program files"].reparse=true;
- try{validate(f,L"c:\\program files\\vendor\\host",L"c:\\program files",true);require(false);}
- catch(const failure_t &e){require(e.role==role_t::drive_ancestor && std::wstring(e.reason)==L"open");} // first rejection
- f=baseline();f.nodes[std::wstring(L"c:")+wchar_t(92)].unsafe=true;require(!pass(f));
- f=baseline();f.nodes[L"c:\\program files\\vendor"].unsafe=true;require(!pass(f));
- f=baseline();f.nodes[L"c:\\program files\\vendor"].reparse=true;require(!pass(f));
- f=baseline();f.nodes[L"c:\\program files\\vendor"].mutable_handle=true;require(!pass(f));
- f=baseline();const std::wstring root=L"c:\\program files\\vendor\\host",script=root+L"\\script.ps1";
- f.nodes[root]={};f.nodes[script]={false};f.listing[root]={script};require(pass(f,false));require(f.pinned.contains(script));
- f.nodes[script].mutable_handle=true;
- try{validate(f,root,L"c:\\program files",false);require(false);}
- catch(const failure_t &e){require(e.role==role_t::descendant && e.status==32 && std::wstring(e.api)==L"CreateFileW");}
- f.nodes[script].mutable_handle=false;
- f.nodes[script].unsafe=true;require(!pass(f));f.nodes[script].unsafe=false;f.nodes[script].reparse=true;require(!pass(f));
- f.nodes[script].reparse=false;f.nodes[script].mutable_handle=true;require(!pass(f));
- f=baseline();f.nodes[root]={};f.listing[root]={script};require(!pass(f)); // disappearing enumeration entry
- bool escaped=false;try{validate(f,L"d:\\host",L"c:\\program files",true);escaped=true;}catch(...){}require(!escaped);
- std::cout<<"MSI guard: fresh/maintenance, all ancestors, nested files, reparse, mutable handles, disappearing entries and bounds passed\n";
+ // C:\ with any ACL is never looked at for a Program Files install.
+ f=tree();f.nodes[L"C:\\"].exposed=true;f.nodes[host]=node_t{true};require(run(f,host)==outcome_t::ok);
+ f=tree();f.nodes[L"C:\\"].exposed=true;require(run(f,host)==outcome_t::ok);
+ require((f.seen==std::vector<std::wstring>{host,L"C:\\Program Files"}));
+
+ // Permissions are repaired, never a reason to stop or warn before installing.
+ f=tree();f.nodes[host]=node_t{true,true,true};require(run(f,host)==outcome_t::ok);
+ f=tree();f.nodes[L"D:\\"]=node_t{true,true,true};require(run(f,L"D:\\Games\\Sunshine")==outcome_t::ok);
+
+ // Repair turns any write grant into exactly read and execute.
+ require(read_only_mask(0x1301bf)==0x1200a9);
+ require(read_only_mask(0x1f01ff)==0x1200a9);
+ require(read_only_mask(0x1200a9)==0x1200a9);
+ require(read_only_mask(0xe0010000u)==0xa0000000u);
+ require(read_only_mask(0x10000000)==0xa0000000u);
+ require(read_only_mask(0x40000000)==0);
+ for(auto mask : {0x1301bfu,0x1f01ffu,0xe0010000u,0x10000000u,0x40000000u,0x2u,0x4u,0x40u,0x40000u,0x80000u,0x00100004u})require(!ace_exposes(read_only_mask(mask)));
+
+ // Repair visits the whole tree, marks only the top as the root, and enters only what the backend confirms.
+ Tree t;const std::wstring tools=host+L"\\tools",exe=tools+L"\\a.exe",link=host+L"\\link",beyond=link+L"\\beyond";
+ t.folder[host]=t.folder[tools]=true;t.listing[host]={tools,link};t.listing[tools]={exe};t.listing[link]={beyond};
+ repair_tree(t,host);
+ require(t.repaired.size()==4);
+ for(const auto&[path,is_root]:t.repaired){require(is_root==(path==host));require(path!=beyond);}
+ // Every ancestor is still held when a child is changed, and all are released at the end.
+ require(t.held_at[host]==0 && t.held_at[tools]==1 && t.held_at[exe]==2 && t.held_at[link]==1 && t.open==0);
+ Tree deep;std::wstring level=host;for(int i=0;i<400;++i){const auto next=level+L"\\d";deep.folder[level]=true;deep.listing[level]={next};level=next;}
+ repair_tree(deep,host);require(deep.repaired.size()==257); // bounded depth, because the walk recurses
+ Tree huge;huge.folder[host]=true;for(int i=0;i<200000;++i)huge.listing[host].push_back(host+L"\\"+std::to_wstring(i));
+ repair_tree(huge,host);require(huge.repaired.size()==100000); // stops at the bound without failing
+
+ // Only unusable paths fail.
+ f=tree();require(run(f,L"C:\\a|b")==outcome_t::unusable);require(f.seen.empty());
+ f=tree();f.nodes[host]=node_t{true,false};auto v=check(f,host);require(v.outcome==outcome_t::not_a_folder && v.path==host);
+ f=tree();f.nodes[L"C:\\Program Files\\Vendor"]=node_t{true,false};require(run(f,L"C:\\Program Files\\Vendor\\Host")==outcome_t::not_a_folder);
+ // A missing drive is not the guard's business; Windows Installer reports it.
+ f=FS{};require(run(f,L"Z:\\Host\\Deep")==outcome_t::ok);
+ std::cout<<"MSI guard: usable paths, repair masks, no-follow walk, bounds and field ACLs passed\n";
 }
 '''
 with tempfile.TemporaryDirectory() as tmp:
  cpp=Path(tmp)/'guard.cpp';exe=Path(tmp)/'guard';cpp.write_text(code)
  subprocess.run([a.compiler,'-std=c++23','-O2','-DNDEBUG','-Wall','-Wextra','-Werror','-I',str(r),str(cpp),'-o',str(exe)],check=True)
  subprocess.run([str(exe)],check=True,timeout=10)
+ # The real guard exports against an in-memory filesystem; warnings come from the fake's headers.
+ scenarios=Path(tmp)/'scenarios'
+ subprocess.run([a.compiler,'-std=c++23','-O1','-w','-I',str(r/'tests/unit/install_root_guard_fake'),'-I',str(r),str(r/'tests/unit/install_root_guard_scenarios.cpp'),'-o',str(scenarios)],check=True)
+ subprocess.run([str(scenarios)],check=True,timeout=30)
