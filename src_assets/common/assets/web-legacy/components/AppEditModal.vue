@@ -251,6 +251,9 @@
               <p v-if="displaySelection === 'virtual'" class="text-[11px] opacity-70">
                 {{ t('config.app_virtual_display_layout_action_hint') }}
               </p>
+              <p v-if="displaySelection === 'virtual' && effectiveAppDisplayAction === 'verify_only'">
+                {{ t('config.app_virtual_display_verify_override') }}
+              </p>
               <div
                 v-if="virtualDisplayLayoutBlocked"
                 role="alert"
@@ -482,6 +485,7 @@ import {
   isRemoteMonitorApplication,
   preserveRemoteMonitorRouting,
 } from '../utils/remoteMonitorPolicy';
+import { preservePlayniteFullscreen } from '../utils/playniteFullscreenPolicy';
 import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { useMessage } from 'naive-ui';
 import { http } from '@/http';
@@ -1053,6 +1057,7 @@ function toServerPayload(f: AppForm): Record<string, any> {
     payload['dd-configuration-option'] = f.ddConfigurationOption;
   }
   preserveRemoteMonitorRouting(props.app, payload);
+  preservePlayniteFullscreen(props.app, payload);
   return payload;
 }
 let liveRtxHdrSuppress = false;
@@ -1984,15 +1989,19 @@ const appDdConfigurationOptions = computed(() => [
   { label: t('config.dd_config_ensure_only_display') as string, value: 'ensure_only_display' },
 ]);
 
+const effectiveAppDisplayAction = computed(() =>
+  form.value.ddConfigurationOption ||
+  form.value.configOverrides?.dd_configuration_option ||
+  (configStore.config as any)?.dd_configuration_option ||
+  'verify_only',
+);
+
 const virtualDisplayLayoutBlocked = computed(() => {
-  const action =
-    form.value.ddConfigurationOption ??
-    (configStore.config as any)?.dd_configuration_option ??
-    'verify_only';
+  const action = effectiveAppDisplayAction.value;
   return (
     displaySelection.value === 'virtual' &&
     resolvedVirtualDisplayLayout.value !== 'exclusive' &&
-    (action === 'verify_only' || action === 'disabled')
+    action === 'disabled'
   );
 });
 

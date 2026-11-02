@@ -53,7 +53,7 @@ class InstallerPathSecurityContract(unittest.TestCase):
         self.assertIn("must be a child folder beneath Program Files", validate)
         self.assertIn("programFilesRoots.Any", validate)
         self.assertIn("PathIsUnderDirectory(fullPath, root)", validate)
-        self.assertIn("RejectUntrustedWritableInstallAncestor", validate)
+        self.assertNotIn("RejectUntrustedWritableInstallAncestor", validate)
         self.assertIn("FileAttributes.ReparsePoint", validate)
         self.assertIn("Directory.EnumerateFileSystemEntries(fullPath).Any()", validate)
         self.assertIn("!IsRegisteredInstallRoot(fullPath)", validate)
@@ -71,21 +71,22 @@ class InstallerPathSecurityContract(unittest.TestCase):
         self.assertNotEqual(0, write_data & primitive_mutation_mask)
         self.assertNotEqual(0, modify & primitive_mutation_mask)
 
-        mask_source = self.source.split("const FileSystemRights unsafeRights", 1)[1]
-        mask_source = mask_source.split(";", 1)[0]
-        for primitive in (
-            "WriteData", "AppendData", "WriteExtendedAttributes", "WriteAttributes",
-            "Delete", "DeleteSubdirectoriesAndFiles", "ChangePermissions", "TakeOwnership",
-        ):
-            self.assertIn("FileSystemRights." + primitive, mask_source)
-        self.assertNotIn("FileSystemRights.Write\n", mask_source)
-        self.assertNotIn("FileSystemRights.Modify", mask_source)
-        self.assertNotIn("FileSystemRights.FullControl", mask_source)
-
-    def test_direct_msi_uses_native_program_files_policy_without_shell_interpolation(self):
+    def test_install_root_filesystem_scan_runs_after_elevation(self):
         normalize_install = self.source.split("private static string NormalizeInstallPath", 1)[1]
         normalize_install = normalize_install.split("private static string CheckDiskSpace", 1)[0]
-        self.assertIn("InstallerRunner.ValidateInstallRootPath(fullPath)", normalize_install)
+        self.assertNotIn("ValidateInstallRootPath", normalize_install)
+
+        interactive = self.source.split("public static InstallerResult RunInteractiveInstall(", 1)[1]
+        interactive = interactive.split("SweepStaleInstallerRecoveryDirectories();", 1)[0]
+        self.assertLess(interactive.index("RunElevatedBootstrapperInstall("),
+                        interactive.index("ValidateInstallRootPath(installDirectory)"))
+
+        cli = self.source.split("public static InstallerResult RunCli(", 1)[1]
+        cli = cli.split("if (!HasRestartBehavior(cliArgs))", 1)[0]
+        self.assertLess(cli.index("return RunElevatedBootstrapperCli(arguments, cliArgs);"),
+                        cli.index("TryNormalizeAndValidateCliInstallRoot(cliArgs"))
+
+    def test_direct_msi_uses_native_program_files_policy_without_shell_interpolation(self):
 
         actions = {
             node.attrib.get("Id"): node
@@ -94,8 +95,10 @@ class InstallerPathSecurityContract(unittest.TestCase):
         }
         self.assertIn("BlockUnsafeInstallRoot", actions)
         self.assertNotIn("Value", actions["BlockUnsafeInstallRoot"].attrib)
+        self.assertEqual("InstallRootGuard", actions["ValidateInstallRoot"].get("BinaryKey"))
+        self.assertEqual("ValidateInstallRoot", actions["ValidateInstallRoot"].get("DllEntry"))
         for removed in (
-            "ValidateInstallRoot", "SetValidateInstallRoot", "SecureInstallRoot",
+            "SetValidateInstallRoot", "SecureInstallRoot",
             "SetSecureInstallRoot", "ValidateInstalledPayload", "SetValidateInstalledPayload",
         ):
             self.assertNotIn(removed, actions)

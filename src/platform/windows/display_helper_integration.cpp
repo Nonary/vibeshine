@@ -1792,21 +1792,20 @@ namespace {
       note_helper_start_failure("private IPC endpoint name generation failure");
       return false;
     }
-    const std::string private_pipe_name = "sunshine_display_helper_" + endpoint_guid;
+    const std::string private_pipe_name = "sunshine_display_helper_" + endpoint_guid.substr(1, 36);
     platf::dxgi::NamedPipeFactory endpoint_factory;
     endpoint_factory.set_first_pipe_instance_only();
     if (platf::is_running_as_system()) {
       endpoint_factory.set_system_only_server();
     }
-    auto endpoint_master = endpoint_factory.create_server_handle(private_pipe_name, true);
+    auto endpoint_master = endpoint_factory.create_server_handle(private_pipe_name, false);
     if (!endpoint_master) {
       platf::display_helper_client::set_private_control_pipe_name({});
       BOOST_LOG(error) << "Failed to preclaim a private display-helper IPC endpoint.";
       note_helper_start_failure("private IPC endpoint creation failure");
       return false;
     }
-    platf::display_helper_client::set_private_control_pipe_name(private_pipe_name);
-    const std::array<HANDLE, 1> inherited_handles {endpoint_master.get()};
+    platf::display_helper_client::set_private_control_pipe_name(private_pipe_name, endpoint_master.get());
 
     const bool allow_system_fallback = platf::is_running_as_system() && !user_session_ready();
     // Select the helper engine (legacy fallback vs v2) and propagate the log level.
@@ -1815,8 +1814,8 @@ namespace {
     helper_args += std::to_wstring(std::clamp(config::sunshine.min_log_level, 0, 6));
     helper_args += L" " + display_helper::restore_state_file_argument(
       std::filesystem::path(platf::from_utf8(config::nvhttp.vibeshine_file_state)));
-    helper_args += L" --ipc-handle=";
-    helper_args += std::to_wstring(reinterpret_cast<std::uintptr_t>(endpoint_master.get()));
+    helper_args += L" --ipc-pipe=" + platf::from_utf8(private_pipe_name);
+    helper_args += L" --ipc-parent=" + std::to_wstring(GetCurrentProcessId());
     statefile::save_display_helper_engine(legacy_engine ? "legacy" : "v2");
     BOOST_LOG(debug) << "Starting display helper: " << platf::to_utf8(helper.wstring())
                      << " " << platf::to_utf8(helper_args);
@@ -1825,7 +1824,7 @@ namespace {
       platf::display_helper_client::set_private_control_pipe_name({});
       return false;
     }
-    bool started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, inherited_handles);
+    bool started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, true);
     if (!started && force_restart) {
       // If we were asked to hard-restart, tolerate a brief overlap window where the old
       // instance is still tearing down and retry quickly.
@@ -1837,7 +1836,7 @@ namespace {
           platf::display_helper_client::set_private_control_pipe_name({});
           return false;
         }
-        started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, inherited_handles);
+        started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, true);
       }
     }
     if (!started) {
@@ -1858,10 +1857,16 @@ namespace {
     g_running_helper_legacy = legacy_engine;
 
     DWORD pid = GetProcessId(h);
+    if (!platf::dxgi::authorize_server_pipe_client(endpoint_master.get(), h)) {
+      terminate_helper_process();
+      platf::display_helper_client::set_private_control_pipe_name({});
+      note_helper_start_failure("private IPC account authorization failure");
+      return false;
+    }
     platf::display_helper_client::set_expected_helper_process_id(pid);
     BOOST_LOG(info) << "Display helper successfully started (pid=" << pid << ")";
 
-    // Give the helper process time to initialize its inherited server endpoint
+    // Give the helper process time to connect to its authenticated host endpoint
     // and check whether it exits before accepting IPC.
     for (int check = 0; check < 6; ++check) {
       if (cancellation_requested(cancellation_predicate) ||
@@ -1894,7 +1899,7 @@ namespace {
             return false;
           }
 
-          const bool retry_started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, inherited_handles);
+          const bool retry_started = helper_proc().start(helper.wstring(), helper_args, allow_system_fallback, true);
           if (!retry_started) {
             platf::display_helper_client::set_expected_helper_process_id(0);
             platf::display_helper_client::set_private_control_pipe_name({});
@@ -1911,6 +1916,11 @@ namespace {
             return false;
           }
           pid = GetProcessId(h);
+          if (!platf::dxgi::authorize_server_pipe_client(endpoint_master.get(), helper_proc().get_process_handle())) {
+            terminate_helper_process();
+            platf::display_helper_client::set_private_control_pipe_name({});
+            return false;
+          }
           platf::display_helper_client::set_expected_helper_process_id(pid);
           BOOST_LOG(info) << "Display helper retry succeeded (pid=" << pid << ")";
           if (!sleep_with_cancellation(
@@ -3487,6 +3497,95 @@ namespace display_helper_integration {
     auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(false);
     if (!borrowed_output_mutation) return false;
     return apply_topology_definition(topology, "remote-monitor coordinator");
+  }
+
+  // The display library's null HDR state conflates unsupported and failed
+  // queries. Accept an SDR-only target only after an explicit successful
+  // capability query for this exact active path.
+  std::optional<bool> remote_monitor_hdr_unsupported_inner(const std::string &device_id) {
+    struct AdvancedColorInfo2 {
+      DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+      union {
+        struct {
+          UINT32 advanced_color_supported : 1;
+          UINT32 advanced_color_active : 1;
+          UINT32 reserved1 : 1;
+          UINT32 limited_by_policy : 1;
+          UINT32 hdr_supported : 1;
+          UINT32 hdr_user_enabled : 1;
+          UINT32 wide_color_supported : 1;
+          UINT32 wide_color_user_enabled : 1;
+          UINT32 reserved : 24;
+        };
+        UINT32 value;
+      };
+      DISPLAYCONFIG_COLOR_ENCODING color_encoding;
+      UINT32 bits_per_color_channel;
+      UINT32 active_color_mode;
+    };
+    display_device::DisplayRecoveryBehaviorGuard guard(display_device::DisplayRecoveryBehavior::Skip);
+    display_device::WinApiLayer api;
+    const auto data = api.queryDisplayConfig(display_device::QueryType::Active);
+    if (!data) return std::nullopt;
+    const auto *path = display_device::win_utils::getActivePath(api, device_id, data->m_paths);
+    if (!path) return std::nullopt;
+    AdvancedColorInfo2 info {};
+    info.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2;
+    info.header.size = sizeof(info);
+    info.header.adapterId = path->targetInfo.adapterId;
+    info.header.id = path->targetInfo.id;
+    const LONG result = DisplayConfigGetDeviceInfo(&info.header);
+    if (result == ERROR_SUCCESS) return info.hdr_supported == 0;
+    if (result != ERROR_INVALID_FUNCTION && result != ERROR_INVALID_PARAMETER && result != ERROR_NOT_SUPPORTED) return std::nullopt;
+    DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO legacy {};
+    legacy.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO;
+    legacy.header.size = sizeof(legacy);
+    legacy.header.adapterId = path->targetInfo.adapterId;
+    legacy.header.id = path->targetInfo.id;
+    if (DisplayConfigGetDeviceInfo(&legacy.header) != ERROR_SUCCESS) return std::nullopt;
+    return legacy.advancedColorSupported == 0;
+  }
+
+  std::optional<bool> remote_monitor_hdr_unsupported(const std::string &device_id) {
+    if (auto result = remote_monitor_hdr_unsupported_inner(device_id)) return result;
+    HANDLE token = platf::retrieve_users_token(false);
+    if (!token) return std::nullopt;
+    std::optional<bool> result;
+    const auto error = platf::impersonate_current_user(token, [&] {
+      result = remote_monitor_hdr_unsupported_inner(device_id);
+    });
+    CloseHandle(token);
+    return error ? std::nullopt : result;
+  }
+
+  bool apply_remote_monitor_hdr_state(const std::string &device_id, bool enabled, bool allow_mutation) {
+    if (device_id.empty()) return false;
+    auto borrowed_output_mutation = display_helper::borrow::native_mutation_scope_t::enter(false);
+    if (!borrowed_output_mutation) return false;
+    auto ctx = make_settings_manager();
+    if (!ctx) return false;
+    const auto desired = enabled ? display_device::HdrState::Enabled : display_device::HdrState::Disabled;
+    try {
+      auto states = ctx->display->getCurrentHdrStates({device_id});
+      auto current = states.find(device_id);
+      if (current == states.end()) return false;
+      if (!current->second) return !enabled && remote_monitor_hdr_unsupported(device_id).value_or(false);
+      if (current == states.end() || current->second != desired) {
+        if (!allow_mutation) return false;
+        if (!ctx->display->setHdrStates({{device_id, desired}})) return false;
+        // Windows may acknowledge the request before advanced color settles.
+        for (int attempt = 0; attempt < 30; ++attempt) {
+          states = ctx->display->getCurrentHdrStates({device_id});
+          current = states.find(device_id);
+          if (current != states.end() && current->second == desired) return true;
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+      }
+      return current != states.end() && current->second == desired;
+    } catch (...) {
+      BOOST_LOG(warning) << "Remote Monitor: unable to apply or verify the target HDR state.";
+      return false;
+    }
   }
 
   std::string enumerate_devices_json(display_device::DeviceEnumerationDetail detail) {

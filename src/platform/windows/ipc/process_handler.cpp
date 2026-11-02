@@ -35,7 +35,7 @@ namespace {
     const std::wstring &cmd_line,
     const std::wstring &working_dir,
     DWORD creation_flags,
-    STARTUPINFOEXW &si,
+    STARTUPINFOW &si,
     bool inherit_handles,
     SECURITY_ATTRIBUTES *process_attributes,
     PROCESS_INFORMATION &pi
@@ -93,9 +93,9 @@ namespace {
     });
 
     // Ensure the child runs on the interactive window station/desktop for the active console session.
-    auto *prev_desktop = si.StartupInfo.lpDesktop;
+    auto *prev_desktop = si.lpDesktop;
     const auto try_launch = [&](const wchar_t *desktop) {
-      si.StartupInfo.lpDesktop = const_cast<LPWSTR>(desktop);
+      si.lpDesktop = const_cast<LPWSTR>(desktop);
       return CreateProcessAsUserW(
         raw_primary_token,
         nullptr,
@@ -119,7 +119,7 @@ namespace {
       launched_desktop = kWinlogonDesktopW;
     }
 
-    si.StartupInfo.lpDesktop = prev_desktop;
+    si.lpDesktop = prev_desktop;
     if (!ok) {
       BOOST_LOG(debug) << "CreateProcessAsUserW failed while launching SYSTEM child in active session (session_id="
                        << session_id << "), winerr=" << GetLastError();
@@ -145,7 +145,7 @@ bool ProcessHandler::start(
   const std::wstring &application_path,
   std::wstring_view arguments,
   bool allow_system_fallback,
-  std::span<const HANDLE> inherited_handles
+  bool restrict_process_access
 ) {
   if (running_) {
     // Check if the previously started process has already exited. If so, clear stale state.
@@ -187,55 +187,21 @@ bool ProcessHandler::start(
   BOOST_LOG(debug) << "Launching process: " << platf::to_utf8(application_path)
                    << (arguments.empty() ? "" : " with arguments") << " (hidden, detached)";
 
-  STARTUPINFOEXW si = {};
-  si.StartupInfo.cb = sizeof(si);
+  STARTUPINFOW si = {};
+  si.cb = sizeof(si);
 
-  std::vector<std::byte> attribute_storage;
-  if (!inherited_handles.empty()) {
-    SIZE_T attribute_size = 0;
-    InitializeProcThreadAttributeList(nullptr, 1, 0, &attribute_size);
-    if (attribute_size == 0) {
-      BOOST_LOG(error) << "Unable to size process handle inheritance list, error=" << GetLastError();
-      return false;
-    }
-    attribute_storage.resize(attribute_size);
-    si.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attribute_storage.data());
-    if (!InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &attribute_size)) {
-      BOOST_LOG(error) << "Unable to initialize process handle inheritance list, error=" << GetLastError();
-      si.lpAttributeList = nullptr;
-      return false;
-    }
-    if (!UpdateProcThreadAttribute(
-          si.lpAttributeList,
-          0,
-          PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-          const_cast<HANDLE *>(inherited_handles.data()),
-          inherited_handles.size_bytes(),
-          nullptr,
-          nullptr)) {
-      BOOST_LOG(error) << "Unable to restrict inherited process handles, error=" << GetLastError();
-      DeleteProcThreadAttributeList(si.lpAttributeList);
-      si.lpAttributeList = nullptr;
-      return false;
-    }
-  }
-  auto release_attributes = util::fail_guard([&]() {
-    if (si.lpAttributeList) {
-      DeleteProcThreadAttributeList(si.lpAttributeList);
-      si.lpAttributeList = nullptr;
-    }
-  });
-  const BOOL inherit_handles = inherited_handles.empty() ? FALSE : TRUE;
+  // Windows does not support inheriting handles across sessions.
+  const BOOL inherit_handles = FALSE;
   const bool parent_is_system = platf::is_running_as_system();
 
-  // A helper receiving privileged capabilities runs with the interactive
+  // A helper accepting privileged commands runs with the interactive
   // user's token, so its process object must not grant that user
   // PROCESS_DUP_HANDLE. The parent keeps its creation-time process handle;
   // only SYSTEM and Administrators may open another one.
   PSECURITY_DESCRIPTOR process_descriptor = nullptr;
   SECURITY_ATTRIBUTES process_attributes {sizeof(process_attributes), nullptr, FALSE};
   SECURITY_ATTRIBUTES *process_attributes_ptr = nullptr;
-  if (parent_is_system && !inherited_handles.empty()) {
+  if (parent_is_system && restrict_process_access) {
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
           L"O:SYG:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)",
           SDDL_REVISION_1,
@@ -253,7 +219,7 @@ bool ProcessHandler::start(
     }
   });
 
-  DWORD creation_flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT;
+  DWORD creation_flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
   // When not using a job (keep-alive child), prefer to break away from any existing job to avoid kill-on-close
   if (!use_job_) {
     creation_flags |= CREATE_BREAKAWAY_FROM_JOB;

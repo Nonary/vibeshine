@@ -44,6 +44,7 @@
 #include "app_display_policy.h"
 #include "audio.h"
 #include "config.h"
+#include "confighttp.h"
 #include "host_stream_control.h"
 #ifdef _WIN32
   #include "platform/windows/hotkey_manager.h"
@@ -374,6 +375,23 @@ namespace nvhttp {
       return display_helper_integration::apply_remote_composed_topology(topology);
     }
 
+    std::optional<remote_display_topology::mode_t> remote_monitor_observed_geometry(const std::string &client_uuid) {
+      const auto expected = VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(client_uuid, {}, {}, false);
+      const auto devices = display_helper_integration::enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
+      if (!expected || !devices) return std::nullopt;
+      std::optional<remote_display_topology::mode_t> result;
+      for (const auto &device : *devices) {
+        if (!remote_device_id_equals(device.m_device_id, *expected) || !device.m_info || device.m_display_name.empty()) continue;
+        if (result) return std::nullopt;
+        const auto width = static_cast<int>(device.m_info->m_resolution.m_width);
+        const auto height = static_cast<int>(device.m_info->m_resolution.m_height);
+        const auto refresh = remote_refresh_hz(device.m_info->m_refresh_rate);
+        if (width <= 0 || height <= 0 || refresh <= 0) return std::nullopt;
+        result = remote_display_topology::mode_t {width, height, refresh, false};
+      }
+      return result;
+    }
+
     std::optional<std::string> remote_monitor_exact_capture_output(
       const std::string &client_uuid,
       const remote_display_topology::mode_t &mode
@@ -393,7 +411,16 @@ namespace nvhttp {
         const auto output = std::find_if(capture_outputs.begin(), capture_outputs.end(), [&](const auto &candidate) {
           return remote_device_id_equals(candidate, device.m_display_name);
         });
-        if (output != capture_outputs.end()) return *output;
+        if (output != capture_outputs.end()) {
+          // A user HDR preference is not proof of the effective DXGI capture
+          // color state. Wait briefly for the exact target to settle.
+          for (int attempt = 0; attempt < 30; ++attempt) {
+            const auto hdr = platf::dxgi::capture_output_hdr_state(*output);
+            if (hdr && *hdr == mode.hdr) return *output;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          }
+          return std::nullopt;
+        }
         return std::nullopt;
       }
       return std::nullopt;
@@ -412,10 +439,21 @@ namespace nvhttp {
             client_uuid.c_str(), client_label.c_str(), nullptr,
             static_cast<std::uint32_t>(mode.width), static_cast<std::uint32_t>(mode.height),
             static_cast<std::uint32_t>(mode.refresh_hz * 1000), guid,
-            static_cast<std::uint32_t>(mode.refresh_hz * 1000), false, 1, false, false, true, true
+            static_cast<std::uint32_t>(mode.refresh_hz * 1000), false, 1, mode.hdr, false, true, true
           ).has_value();
         },
         .apply_composed_topology = apply_remote_monitor_composition,
+        .observe_shared_mode = remote_monitor_observed_geometry,
+        .finalize_mode = [](const std::string &client_uuid, remote_display_topology::mode_t &mode, bool allow_mutation) {
+          const auto device = VDISPLAY::resolveActiveVirtualDisplayDeviceIdForStableId(client_uuid, {}, {}, false);
+          const bool verified = device && display_helper_integration::apply_remote_monitor_hdr_state(*device, mode.hdr, allow_mutation);
+          if (!verified) {
+            BOOST_LOG(warning) << "Remote Monitor: requested target HDR state could not be verified.";
+            // Neither HDR nor SDR may be published from an unverified state.
+            return false;
+          }
+          return true;
+        },
         .exact_target_has_current_mode_and_dxgi = remote_monitor_exact_capture_output,
         .remove_owned_display = [](const std::string &client_uuid) {
           const auto stable_uuid = VDISPLAY::virtualDisplayUuidFromStableId(client_uuid);
@@ -442,19 +480,20 @@ namespace nvhttp {
         return rtsp_stream::plaintext_route_warning();
       });
       remote_session::register_monitor_runtime_hooks({
-        .activate_or_resume = [](std::string_view uuid, std::string_view label, std::string_view requested_mode, bool, std::uint64_t generation) -> remote_session::monitor_runtime_state_t {
+        .activate_or_resume = [](std::string_view uuid, std::string_view label, std::string_view requested_mode, bool hdr_requested, std::uint64_t generation) -> remote_session::monitor_runtime_state_t {
           remote_display_topology::mode_t mode;
           if (std::sscanf(std::string {requested_mode}.c_str(), "%dx%d@%d", &mode.width, &mode.height, &mode.refresh_hz) != 3 ||
               mode.width <= 0 || mode.height <= 0 || mode.refresh_hz <= 0) {
             return remote_session::monitor_runtime_state_t {.retryable = true, .error = "Remote Monitor requested an invalid display mode."};
           }
+          mode.hdr = hdr_requested;
           refresh_remote_monitor_baseline(has_stream_session_activity());
           const auto state = remote_display_topology::instance().activate_or_resume(std::string {uuid}, std::string {label}, mode, generation);
-          return {.accepted = state.accepted, .ready = state.ready, .retryable = state.retryable, .output = state.output, .error = state.error};
+          return {.accepted = state.accepted, .ready = state.ready, .retryable = state.retryable, .output = state.output, .error = state.error, .hdr_enabled = state.hdr_enabled};
         },
         .snapshot = [](std::string_view uuid, std::uint64_t generation) {
           const auto state = remote_display_topology::instance().snapshot(std::string {uuid}, generation);
-          return remote_session::monitor_runtime_state_t {.accepted = state.accepted, .ready = state.ready, .retryable = state.retryable, .output = state.output, .error = state.error};
+          return remote_session::monitor_runtime_state_t {.accepted = state.accepted, .ready = state.ready, .retryable = state.retryable, .output = state.output, .error = state.error, .hdr_enabled = state.hdr_enabled};
         },
         .explicit_release = [](std::string_view uuid, std::uint64_t generation, std::string_view reason) {
           const bool released = remote_display_topology::instance().explicit_release(std::string {uuid}, generation, std::string {reason});
@@ -2189,6 +2228,7 @@ namespace nvhttp {
   }
 
   tls_identity::store_t tls_client_identities;
+  remote_session::cached_game_tiles_t cached_running_game_tiles;
 
   void clear_tls_client_identities();
 
@@ -3003,6 +3043,20 @@ namespace nvhttp {
     if (!platf::linux_display::backend().capabilities().independent_outputs) return;
 #endif
     tree.put("root.clientWarning", "virtual_display_disabled_by_client");
+  }
+
+  bool system_remote_app_removed(remote_session::control_e control) {
+    if (control != remote_session::control_e::input && control != remote_session::control_e::monitor) return false;
+    try {
+      std::lock_guard lock {confighttp::apps_file_mutex()};
+      const auto apps_file = nlohmann::json::parse(file_handler::read_file(config::stream.file_apps.c_str()));
+      const auto key = control == remote_session::control_e::input ? "input" : "monitor";
+      return apps_file.contains("removed-system-apps") && apps_file["removed-system-apps"].is_object() &&
+             apps_file["removed-system-apps"].contains(key);
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Unable to read system app visibility: " << e.what();
+      return false;
+    }
   }
 
   std::vector<remote_session::app_t> remote_configured_catalogue(const std::vector<proc::ctx_t> &configured_apps) {
@@ -4146,7 +4200,7 @@ namespace nvhttp {
     nlohmann::json named_cert_nodes = nlohmann::json::array();
     const client_t client = client_root_snapshot();
 #ifdef _WIN32
-    // Read only: do not open/recover a driver merely to populate the UI.
+    // A temporary control handle queries capability without changing driver state.
     const bool catalog_supported = VDISPLAY::supportsRequestedResolutionCatalog();
 #endif
     std::list<std::string> connected_uuids = rtsp_stream::get_all_session_client_uuids();
@@ -4304,7 +4358,17 @@ namespace nvhttp {
       .app = current_app ? remote_session::app_t {static_cast<std::int32_t>(util::from_view(current_app->id)), current_app->uuid, current_app->name, false} : remote_session::app_t {},
     };
     const auto remote_gate = remote_role_gate_snapshot_for_client(identity.uuid);
-    const auto projection = remote_session::project(caller, game, remote_gate.owner, remote_configured_apps, remote_gate.active);
+    auto projection = remote_session::project(caller, game, remote_gate.owner, remote_configured_apps, remote_gate.active);
+    // An existing input owner retains its reconnect tile; disconnect and
+    // resume controls remain independent of launch tile visibility.
+    const bool input_removed = system_remote_app_removed(remote_session::control_e::input);
+    const bool monitor_removed = system_remote_app_removed(remote_session::control_e::monitor);
+    std::erase_if(projection.catalogue, [&](const auto &entry) {
+      const auto control = remote_session::identify(entry.id, entry.uuid);
+      if (control == remote_session::control_e::input) return input_removed && remote_gate.owner.role != remote_session::role_e::input;
+      if (control == remote_session::control_e::monitor) return monitor_removed;
+      return false;
+    });
 
     for (const auto &entry : projection.catalogue) {
       pt::ptree app;
@@ -4316,6 +4380,7 @@ namespace nvhttp {
       const auto configured = std::find_if(configured_apps.begin(), configured_apps.end(), [&entry](const auto &candidate) { return candidate.uuid == entry.uuid; });
       if (entry.synthetic) {
         if (remote_session::identify(entry.id, entry.uuid) == remote_session::control_e::running_game && current_app) {
+          cached_running_game_tiles.remember(identity.uuid, entry.id, game.app);
           app.put("ArtVersion", current_app->art_version);
         } else {
           app.put("ArtVersion", configured == configured_apps.end() ? "remote-session-v6" : configured->art_version);
@@ -4388,6 +4453,28 @@ namespace nvhttp {
 
     auto appid_str = get_arg(args, "appid", "0");
     auto appuuid_str = get_arg(args, "appuuid", "");
+    const auto configured_apps = remote_configured_catalogue(proc::proc.get_apps());
+    const auto cached_game = cached_running_game_tiles.resolve(
+      request_identity.uuid, util::from_view(appid_str), appuuid_str, configured_apps
+    );
+    if (cached_game.status == remote_session::cached_game_status_e::unavailable) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 404);
+      tree.put("root.<xmlattr>.status_message", "The application for this cached tile is no longer available");
+      return;
+    }
+    const bool cached_running_game = cached_game.app && current_appid > 0 && cached_game.app->id == current_appid;
+    if (cached_game.app && !cached_running_game) {
+      // The temporary row may outlive the stream it represented. Route the
+      // request through normal app admission, including replacement checks and
+      // the app's settings in make_launch_session().
+      appid_str = std::to_string(cached_game.app->id);
+      appuuid_str = cached_game.app->uuid;
+      args.erase("appid");
+      args.emplace("appid", appid_str);
+      args.erase("appuuid");
+      if (!appuuid_str.empty()) args.emplace("appuuid", appuuid_str);
+    }
     // Synthetic controls are host actions, never configured applications. Do
     // this before resolve_app() so a stale/foreign control cannot collide with
     // an apps.json id and launch a real process.
@@ -4398,6 +4485,10 @@ namespace nvhttp {
       proc::proc.resolve_app(appid_str, appuuid_str) : std::nullopt;
     const bool selected_monitor_profile = selected_app && selected_app->remote_monitor_profile;
     if (selected_monitor_profile) synthetic_control = remote_session::control_e::monitor;
+    if (cached_running_game) synthetic_control = remote_session::control_e::running_game;
+    // A cached Moonlight tile must not start a removed built-in. Explicit
+    // monitor profiles remain independent, as do reconnecting owners.
+    const bool removed_builtin = !selected_monitor_profile && system_remote_app_removed(synthetic_control);
     // A secondary Moonlight client sees the running game in its projected
     // catalogue even though serverinfo is deliberately presented as free.
     // Launching that advertised entry is therefore a Resume request, not an
@@ -4434,6 +4525,14 @@ namespace nvhttp {
         .may_terminate = !identity.uuid.empty(),
       };
       const auto owner = remote_role_gate_snapshot_for_client(identity.uuid).owner;
+      if (removed_builtin && !((synthetic_control == remote_session::control_e::input && owner.role == remote_session::role_e::input) ||
+                               (synthetic_control == remote_session::control_e::monitor && owner.role == remote_session::role_e::monitor))) {
+        tree.put("root.resume", 0);
+        tree.put("root.gamesession", 0);
+        tree.put("root.<xmlattr>.status_code", 404);
+        tree.put("root.<xmlattr>.status_message", "This system application has been removed");
+        return;
+      }
       const auto decision = remote_session::dispatch(caller, game, owner, synthetic_control);
       if (!decision.allowed) {
         tree.put("root.resume", 0);
@@ -4710,15 +4809,21 @@ namespace nvhttp {
         }
 #endif
         const auto mode = std::format("{}x{}@{}", launch_session->width, launch_session->height, launch_session->fps);
+#ifdef _WIN32
+        // RTX HDR needs an SDR source even though the outgoing stream is HDR.
+        const bool monitor_hdr_requested = rtsp_stream::hdr_capture_required(*launch_session, config::video);
+#else
+        const bool monitor_hdr_requested = rtsp_stream::effective_hdr_requested(*launch_session);
+#endif
         auto monitor = monitor_profile && monitor_profile->target ? remote_session::borrow_monitor_target(
           identity.uuid, launch_session->role_generation, *monitor_profile->target,
           {launch_session->width, launch_session->height, launch_session->client_display_refresh_millihz ?
             launch_session->client_display_refresh_millihz : launch_session->exact_requested_refresh_millihz,
-            rtsp_stream::effective_hdr_requested(*launch_session)}, launch_session->output_name_override) : remote_session::activate_or_resume_monitor(
+            monitor_hdr_requested}, launch_session->output_name_override) : remote_session::activate_or_resume_monitor(
           identity.uuid,
           identity.name,
           mode,
-          rtsp_stream::effective_hdr_requested(*launch_session),
+          monitor_hdr_requested,
           launch_session->role_generation
         );
         if (monitor.accepted) {

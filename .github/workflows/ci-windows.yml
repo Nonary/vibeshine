@@ -520,6 +520,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Mandatory driver safety tests failed.' }
           & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\packaging\windows\test_driver_interop_environment.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Driver interop environment regression failed.' }
+          python packaging/windows/bootstrapper/tests/test_incoming_msi_preflight.py
+          if ($LASTEXITCODE -ne 0) { throw 'Incoming MSI preflight regression failed.' }
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\packaging\windows\bootstrapper\tests\test_packaged_msi_invocation.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged MSI reflection regression failed.' }
 
       - name: Test production bootstrap migration
         if: inputs.build_tests
@@ -570,17 +574,21 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          LIBVIRTUALDISPLAY_RELEASE_TAG: v1.6.4
         run: |
           $ErrorActionPreference = 'Stop'
+          $displayLock = Get-Content -LiteralPath .\third-party\libvirtualdisplay-release\windows-x64.json -Raw | ConvertFrom-Json
+          $displaySource = (git rev-parse 'HEAD:third-party/libvirtualdisplay').Trim()
+          if ($LASTEXITCODE -ne 0 -or $displaySource -cne $displayLock.source_revision) {
+            throw "Display release source $($displayLock.source_revision) does not match submodule $displaySource."
+          }
           # The folder name carries the release version. refresh_driver_package.ps1
           # reads it from a libvirtualdisplay-<version>-windows-x64 path and then
           # never needs `git describe` in the (shallow, tagless) submodule checkout.
-          $releaseVersion = $env:LIBVIRTUALDISPLAY_RELEASE_TAG.TrimStart('v')
+          $releaseVersion = $displayLock.tag.TrimStart('v')
           $downloadDir = Join-Path $PWD "libvirtualdisplay-$releaseVersion-windows-x64"
           .\scripts\download_libvirtualdisplay_release.ps1 `
             -Repository Nonary/libvirtualdisplay `
-            -Tag $env:LIBVIRTUALDISPLAY_RELEASE_TAG `
+            -Tag $displayLock.tag `
             -OutDir $downloadDir `
             -LockPath .\third-party\libvirtualdisplay-release\windows-x64.json `
             -GitHubToken $env:GH_TOKEN
@@ -1005,6 +1013,8 @@ jobs:
         run: |
           python packaging/windows/wix/tests/test_pr_validation_contract.py --msi "unsigned-signpath-msi/$env:MSI_NAME" --version "$env:BUILD_VERSION"
           if ($LASTEXITCODE -ne 0) { throw 'Packaged MSI version/validation contract failed.' }
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\packaging\windows\bootstrapper\tests\test_packaged_msi_preflight.ps1 -MsiPath "unsigned-signpath-msi/$env:MSI_NAME" -OutputDirectory (Join-Path $env:RUNNER_TEMP 'packaged-msi-preflight')
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged MSI preflight failed.' }
 
       - name: Upload unsigned MSI for SignPath
         id: upload-unsigned-msi

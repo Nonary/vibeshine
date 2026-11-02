@@ -665,17 +665,11 @@ int run_v2_helper(int argc, char *argv[]) {
     return 3;
   }
 
-  winrt::file_handle ipc_master;
+  std::optional<display_helper_ipc::endpoint_t> ipc_endpoint;
   if (!restore_mode) {
-    const auto inherited_handle_value = display_helper_ipc::inherited_server_handle_from_command_line(argc, argv);
-    if (!inherited_handle_value) {
-      BOOST_LOG(error) << "Display helper v2: missing or invalid --ipc-handle argument.";
-      return 2;
-    }
-    ipc_master = winrt::file_handle {reinterpret_cast<HANDLE>(*inherited_handle_value)};
-    if (!platf::dxgi::validate_server_pipe_handle(ipc_master.get()) ||
-        !SetHandleInformation(ipc_master.get(), HANDLE_FLAG_INHERIT, 0)) {
-      BOOST_LOG(error) << "Display helper v2: --ipc-handle is not an inherited server endpoint.";
+    ipc_endpoint = display_helper_ipc::endpoint_from_command_line(argc, argv);
+    if (!ipc_endpoint) {
+      BOOST_LOG(error) << "Display helper: missing or invalid private IPC endpoint.";
       return 2;
     }
   }
@@ -980,10 +974,19 @@ int run_v2_helper(int argc, char *argv[]) {
   auto last_connect_wait_log = std::chrono::steady_clock::time_point::min();
   constexpr auto kReconnectLogInterval = std::chrono::hours(1);
   while (running.load(std::memory_order_acquire)) {
-    auto raw_pipe = platf::dxgi::duplicate_server_pipe(ipc_master.get());
+    platf::dxgi::NamedPipeFactory factory;
+    factory.set_client_identification_only();
+    factory.set_client_data_access_only();
+    factory.set_expected_server_process_id(ipc_endpoint->parent_pid);
+    auto raw_pipe = factory.create_client(ipc_endpoint->pipe_name);
+    if (!raw_pipe) {
+      process_queue();
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      continue;
+    }
     auto server_pipe = raw_pipe ? std::make_unique<platf::dxgi::FramedPipe>(std::move(raw_pipe)) : nullptr;
     if (!server_pipe) {
-      BOOST_LOG(error) << "Display helper v2: inherited IPC handle is not a valid server endpoint.";
+      BOOST_LOG(error) << "Display helper v2: authenticated IPC client could not be created.";
       event_pump.stop();
       return 2;
     }
