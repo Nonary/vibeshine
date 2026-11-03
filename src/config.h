@@ -277,6 +277,7 @@ namespace config {
     int video_max_batch_size_kb;
     bool pacing_batch_demand_limit;  ///< Experimental demand-based ordinary-video pacing quantum and batch sizing (default off).
     bool host_adaptive_pacing;  ///< Experimental loss-responsive packet spacing for ordinary video, never changing encoder bitrate or FPS (default off).
+    bool host_link_rate_adaptation;  ///< Experimental: lower the encoder bitrate when the link cannot carry ordinary video, probe back up (default off).
     int pyrowave_critical_fec_percentage;  ///< Parity on the PyroWave shards holding the coarsest wavelet level (at least 2 shards); 0 = none.
 
     // Video encryption settings for LAN and WAN streams

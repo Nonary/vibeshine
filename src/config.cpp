@@ -989,6 +989,7 @@ namespace config {
     64,  // video_max_batch_size_kb
     false,  // pacing_batch_demand_limit (experimental demand-based pacing and batch sizing; default off)
     false,  // host_adaptive_pacing (experimental loss-responsive packet spacing; default off)
+    false,  // host_link_rate_adaptation (experimental encoder bitrate adaptation to the link; default off)
     20,  // pyrowave_critical_fec_percentage
 
     ENCRYPTION_MODE_NEVER,  // lan_encryption_mode
@@ -2138,6 +2139,7 @@ namespace config {
     int_between_f(vars, "video_max_batch_size_kb", stream.video_max_batch_size_kb, {0, 64});
     bool_f(vars, "pacing_batch_demand_limit", stream.pacing_batch_demand_limit);
     bool_f(vars, "host_adaptive_pacing", stream.host_adaptive_pacing);
+    bool_f(vars, "host_link_rate_adaptation", stream.host_link_rate_adaptation);
     if (stream.video_max_batch_size_kb == 0) {
       stream.video_max_batch_size_kb = 64;
     } else if (stream.video_max_batch_size_kb != 16 && stream.video_max_batch_size_kb != 32 && stream.video_max_batch_size_kb != 64) {
@@ -2702,6 +2704,7 @@ namespace config {
         "video_max_batch_size_kb",
         "pacing_batch_demand_limit",
         "host_adaptive_pacing",
+        "host_link_rate_adaptation",
         "pyrowave_critical_fec_percentage",
         "qp",
         "min_threads",
