@@ -881,6 +881,7 @@ namespace config {
       (int) amd::coder_e::_auto,  // coder
       0,  // ltr_frames (native AMF; 0 = off)
       0,  // input_queue_size (native AMF; 0 = leave driver queue unset/auto)
+      false,  // adaptive_backlog (native AMF; opt-in)
       std::nullopt,  // smart_access_video (auto)
       std::nullopt,  // lowlatency_mode (auto)
       std::nullopt,  // high_motion_quality_boost (auto)
@@ -1805,6 +1806,7 @@ namespace config {
       BOOST_LOG(warning) << "config: amd_input_queue_size must be between 0 and 32, clamping: "sv << video.amd.amd_input_queue_size;
       video.amd.amd_input_queue_size = std::clamp(video.amd.amd_input_queue_size, 0, 32);
     }
+    bool_f(vars, "amd_adaptive_backlog", video.amd.amd_adaptive_backlog);
 
     // Curated opt-in native-AMF feature knobs. Default "auto" leaves the AMF
     // driver default untouched, so none of these change behavior unless enabled.
@@ -2741,6 +2743,7 @@ namespace config {
         "amd_coder",
         "amd_ltr_frames",
         "amd_input_queue_size",
+        "amd_adaptive_backlog",
         "amd_smart_access_video",
         "amd_lowlatency_mode",
         "amd_high_motion_quality_boost",
