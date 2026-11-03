@@ -3712,7 +3712,9 @@ namespace stream {
       }
 
       VDISPLAY::restorePhysicalHdrProfiles();
-      platf::rtss_set_sync_limiter_override(std::nullopt);
+      if (!is_paused) {
+        platf::rtss_set_sync_limiter_override(std::nullopt);
+      }
 #elif defined(__linux__)
       if (delay_virtual_display_cleanup_due_to_pause) {
         BOOST_LOG(info) << "Linux private display: stream paused; scheduling output restore in "
@@ -3928,10 +3930,14 @@ namespace stream {
         };
         const bool shared_runtime_still_owned =
           session::has_shared_runtime_owner(finalize_context);
-        platf::frame_limiter_streaming_stop(
-          platf::frame_limiter_owner::rtsp,
-          proc::proc.current_app_id() > 0 || shared_runtime_still_owned
-        );
+        if (proc::proc.current_app_id() > 0) {
+          platf::frame_limiter_streaming_suspend(platf::frame_limiter_owner::rtsp);
+        } else {
+          platf::frame_limiter_streaming_stop(
+            platf::frame_limiter_owner::rtsp,
+            shared_runtime_still_owned
+          );
+        }
 #else
 #ifdef __linux__
         platf::frame_limiter_streaming_stop(platf::frame_limiter_owner::rtsp);
@@ -4158,6 +4164,10 @@ namespace stream {
         }
         if (first_rtsp_session && !first_frame_limiter_session) {
 #ifdef _WIN32
+          // A secondary client can be the first transport after suspension.
+          // Lease the retained policy without applying that client's settings,
+          // so app termination cannot restore it while this capture is active.
+          platf::frame_limiter_streaming_join(platf::frame_limiter_owner::rtsp);
           if (platf::is_running_as_system() && !user_session_ready()) {
             defer_stream_start_actions({});
           } else {
