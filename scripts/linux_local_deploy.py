@@ -62,6 +62,9 @@ FIXED = {
     'usr/share/metainfo/io.github.Nonary.vibeshine.metainfo.xml',
 }
 FIXED.update(f'usr/libexec/vibeshine/vibeshine-{name}' for name in HELPERS)
+# Newer packages may carry the on-demand RTX HDR downloader; older release
+# packages remain valid rollback candidates without it.
+OPTIONAL_FIXED = {'usr/libexec/vibeshine/vibeshine-truehdr-runtime'}
 FIXED.update(f'usr/lib/systemd/system/{name}' for name in UNITS)
 FIXED.update(f'usr/share/applications/io.github.Nonary.vibeshine{suffix}.desktop'
              for suffix in ('', '.kwin', '.terminal'))
@@ -120,7 +123,7 @@ def safe_name(name):
 
 def allowed(name):
     return safe_name(name) and (
-        name in FIXED or (name.startswith('usr/bin/vibeshine-') and
+        name in FIXED or name in OPTIONAL_FIXED or (name.startswith('usr/bin/vibeshine-') and
                          VERSION.fullmatch(name.removeprefix('usr/bin/vibeshine-')) is not None) or
         name.startswith(('usr/share/vibeshine/', 'usr/lib/vibeshine/')) or
         re.fullmatch(r'usr/src/vibeshine-(?:drm|ds5)-[1-9][0-9]*\.[0-9]+\.[0-9]+/[^/]+', name) is not None

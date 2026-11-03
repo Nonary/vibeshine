@@ -86,6 +86,7 @@ class ArchiveTests(unittest.TestCase):
                      'usr/share/applications/vibeshine-tray.desktop',
                      'etc/xdg/autostart/vibeshine-tray.desktop',
                      'usr/libexec/vibeshine/vibeshine-package-preflight',
+                     'usr/libexec/vibeshine/vibeshine-truehdr-runtime',
                      'usr/share/libalpm/hooks/00-vibeshine-quiesce.hook'):
             with self.subTest(path=path):
                 self.assertTrue(deploy.allowed(path))
@@ -119,6 +120,15 @@ class ArchiveTests(unittest.TestCase):
         self.assertIn('usr/libexec/vibeshine/vibeshine-display-power', members)
         self.assertIn('usr/libexec/vibeshine/vibeshine-display-observer', members)
         self.assertIn('usr/libexec/vibeshine/vibeshine-touch-map', members)
+
+    def test_optional_truehdr_downloader_is_accepted_without_breaking_older_packages(self):
+        helper = 'usr/libexec/vibeshine/vibeshine-truehdr-runtime'
+        entry = tarfile.TarInfo(helper)
+        entry.size = 4
+        with package(extra=[entry]) as archive:
+            self.assertIn(helper, deploy.inspect_archive(archive, VERSION))
+        with package() as archive:
+            self.assertNotIn(helper, deploy.inspect_archive(archive, VERSION))
 
     def test_missing_recovery_helper_fails_preflight(self):
         with package(omit=['usr/libexec/vibeshine/vibeshine-display-power']) as archive:
