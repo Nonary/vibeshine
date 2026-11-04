@@ -76,6 +76,64 @@ def emit_outputs(info):
     print(json.dumps(info))
 
 
+def latest_published_stable(releases):
+    stable_versions = []
+    for page in releases:
+        for release in page:
+            if (release.get("draft") is not False or release.get("prerelease") is not False
+                    or not release.get("published_at")):
+                continue
+            match = re.fullmatch(r"v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-stable\.([0-9]+))?",
+                                 release.get("tag_name", ""))
+            if match:
+                version = tuple(map(int, match.groups()[:3]))
+                stable_versions.append((version, int(match[4] or 0), release["published_at"], release["tag_name"]))
+    if not stable_versions:
+        raise ValueError("No published stable release is available to anchor the nightly version")
+    version, _respin, _published, tag = max(stable_versions)
+    return version, tag
+
+
+def next_nightly_base(releases):
+    """Order nightlies after the highest published stable."""
+    (major, minor, patch), _tag = latest_published_stable(releases)
+    base = f"{major}.{minor}.{patch + 1}"
+    # Do not publish a backwards upgrade if a formerly higher stable was
+    # withdrawn or an earlier nightly intentionally used a higher base.
+    candidate = (major, minor, patch + 1)
+    for page in releases:
+        for release in page:
+            if (release.get("draft") is not False or release.get("prerelease") is not True
+                    or not release.get("published_at")):
+                continue
+            match = re.match(r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)-(?:nightly|daily)\.",
+                             release.get("tag_name", ""))
+            if match and tuple(map(int, match.groups())) > candidate:
+                raise ValueError("A higher nightly base is already published; review the stable anchor")
+    return base
+
+
+def nightly_base(tag):
+    match = re.match(r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)-(?:nightly|daily)\.", tag)
+    return tuple(map(int, match.groups())) if match else None
+
+
+def ensure_stable_in_source(releases, commit):
+    _version, tag = latest_published_stable(releases)
+    try:
+        stable_commit = run("git", "rev-parse", f"refs/tags/{tag}^{{commit}}")
+        run("git", "merge-base", "--is-ancestor", stable_commit, commit)
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(f"Published stable {tag} is not in the nightly source; reconcile the branches before publishing") from exc
+
+
+def validate_live_stable_base(repository, tag):
+    releases = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"))
+    base = tag.split("-", 1)[0]
+    if base != next_nightly_base(releases):
+        raise ValueError("Published stable release changed during the build; rerun with a current nightly version")
+
+
 def resolve():
     repository = os.environ["GITHUB_REPOSITORY"]
     branch = os.environ.get("DAILY_RELEASE_SOURCE_BRANCH", "")
@@ -89,12 +147,16 @@ def resolve():
     commit = run("git", "rev-parse", "refs/remotes/origin/daily-source^{commit}")
     run("git", "fetch", "--no-recurse-submodules", "origin", "refs/tags/*:refs/tags/*")
     releases = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"))
+    base = next_nightly_base(releases)
     previous = previous_successful_nightly(repository, releases)
     if previous and previous["source_commit"] == commit:
-        # Each repository owns its baseline. Upstream advances cannot turn an
-        # unchanged target into a build or an assertion that migration happened.
-        emit_outputs({"commit": commit, "should_build": "false", "skip_reason": f"Source unchanged since {previous['tag']}"})
-        return
+        previous_base = nightly_base(previous["tag"])
+        if previous_base is None or previous_base >= tuple(map(int, base.split("."))):
+            # Unknown legacy bases remain conservative; a known older base
+            # needs a fresh build because its embedded version is now obsolete.
+            emit_outputs({"commit": commit, "should_build": "false", "skip_reason": f"Source unchanged since {previous['tag']}"})
+            return
+    ensure_stable_in_source(releases, commit)
     if repository == "Nonary/Vibepollo":
         upstream = run("git", "ls-remote", "https://github.com/Nonary/vibeshine.git", "refs/heads/master").split()
         if len(upstream) != 2 or upstream[1] != "refs/heads/master":
@@ -103,15 +165,7 @@ def resolve():
     # GITHUB_TOKEN has no workflows:write capability. Do not select a target
     # with a different workflow tree and then discover that during publication.
     run("git", "diff", "--exit-code", os.environ["GITHUB_SHA"], commit, "--", ".github/workflows")
-    tags = run("git", "tag", "--merged", commit, "--sort=-version:refname", "--list", "[0-9]*.[0-9]*.[0-9]*").splitlines()
-    stable_tags = [tag for tag in tags if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-stable\.[0-9]+)?", tag)]
-    if not stable_tags:
-        raise ValueError("Source has no merged stable release anchor")
-    stable = max((tuple(map(int, re.match(r"[0-9]+\.[0-9]+\.[0-9]+", tag)[0].split("."))) for tag in stable_tags))
-    major, minor, patch = stable
-    # A nightly is development AFTER the released patch and BEFORE its successor.
-    # Do not change SemVer precedence to place an old nightly above its final stable.
-    base = f"{major}.{minor}.{patch + 1}"
+    # Only build once the latest stable has been reconciled into the source.
     day = dt.datetime.now(dt.timezone.utc).date()
     # A hex SHA is an identity, not an ordinal. Keep at most one published
     # new-style nightly per UTC day so installed clients and package managers
@@ -224,6 +278,7 @@ if __name__ == "__main__":
     elif args.command == 'verify':
         verify_assets(args.assets, args.product, os.environ["DAILY_COMMIT"], os.environ["DAILY_TAG"], os.environ["DAILY_VERSION"])
     elif args.command == 'public':
+        validate_live_stable_base(os.environ["GITHUB_REPOSITORY"], os.environ["DAILY_TAG"])
         stage_public_assets(args.assets, args.destination, args.product)
     else:
         include_linux(args.assets, args.linux_assets, args.product, os.environ['DAILY_COMMIT'], os.environ['DAILY_VERSION'])
