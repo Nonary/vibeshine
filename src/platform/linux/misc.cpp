@@ -322,7 +322,6 @@ namespace platf {
   }
 
   bp::child run_command(bool elevated, bool interactive, const std::string &cmd, boost::filesystem::path &working_dir, const bp::environment &env, FILE *file, std::error_code &ec, bp::group *group) {
-    (void) elevated;
     (void) interactive;
     ec.clear();
 
@@ -344,23 +343,29 @@ namespace platf {
       const bool wayland_hdr_compatibility =
         environment_value("SUNSHINE_CLIENT_HDR") == "true" &&
         environment_value("ENABLE_HDR_WSI") == "1";
-      if (const auto semantic_steam = platf::steam::session_launch_arguments(cmd)) {
+      // The broker resolves an empty directory from the command's executable.
+      const std::string directory = working_dir.is_absolute() ? working_dir.string() : std::string {};
+      if (elevated) {
+        // "Run elevated" runs the exact command as root through the
+        // system manager, like sudo. Everything else runs as the desktop user.
+        args = {"app-elevated", directory, cmd};
+      } else if (const auto semantic_steam = platf::steam::session_launch_arguments(cmd)) {
         // Direct Steam launch is deliberately semantic: the capability-free
         // client sends only validated policy values, and the broker resolves
         // all user-owned metadata after entering the selected desktop UID.
         args = *semantic_steam;
       } else if (const auto semantic_lutris = platf::lutris::session_launch_arguments(cmd, wayland_hdr_compatibility)) {
         // Managed Lutris launches carry only a numeric ID. The broker builds
-        // the URI after entering the desktop identity; custom commands keep
-        // the ordinary administrator-authorization requirement below.
+        // the URI after entering the desktop identity.
         args = *semantic_lutris;
       } else {
-        // The capability-bearing helper resolves the administrator-authorized
-        // working directory. The network host supplies only the exact command
-        // to match, never a caller-selected filesystem location.
-        args = {wayland_hdr_compatibility ? "app-wayland-hdr" : "app", cmd};
+        args = {wayland_hdr_compatibility ? "app-wayland-hdr" : "app", directory, cmd};
       }
     } else {
+      if (elevated && geteuid() != 0) {
+        // Only the machine service has a root broker to run elevated commands.
+        BOOST_LOG(warning) << "[misc] \"Run elevated\" requires the Vibeshine machine service; running as the current user: "sv << cmd;
+      }
       std::vector<std::string> parts;
       try {
         parts = boost::program_options::split_unix(cmd);

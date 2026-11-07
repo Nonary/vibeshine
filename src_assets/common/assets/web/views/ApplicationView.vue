@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 
 import { groupLibraryGames, providerLabels } from '@/utils/libraryGames';
+import { platformSupportsCommandElevation } from '@/utils/v2Parity';
 import {
   isRemoteMonitorApplication,
   preserveRemoteMonitorRouting,
@@ -610,6 +611,9 @@ const isWindowsHost = computed(() =>
 );
 const isLinuxHost = computed(() =>
   asString(overrideMetadata.value.platform).toLocaleLowerCase().includes('linux'),
+);
+const supportsCommandElevation = computed(() =>
+  platformSupportsCommandElevation(overrideMetadata.value.platform),
 );
 const hasNvidiaGpu = computed(() => {
   if (typeof overrideMetadata.value.has_nvidia_gpu === 'boolean') {
@@ -3574,7 +3578,7 @@ onBeforeUnmount(() => {
             </div>
           </SettingRow>
           <SettingRow
-            v-if="isWindowsHost && !isPlayniteLinked"
+            v-if="supportsCommandElevation && !isPlayniteLinked"
             :label="t('ui.application.fields.elevated.label')"
             :description="t('ui.application.fields.elevated.description')"
             control-id="app-elevated"
@@ -4421,7 +4425,7 @@ onBeforeUnmount(() => {
                 type="text"
               />
             </label>
-            <label v-if="isWindowsHost" class="vs-checkbox prep-entry__elevated">
+            <label v-if="supportsCommandElevation" class="vs-checkbox prep-entry__elevated">
               <input v-model="entry.elevated" type="checkbox" />
               <span>{{ t('ui.application.prep.elevated') }}</span>
             </label>

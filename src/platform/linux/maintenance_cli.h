@@ -21,7 +21,6 @@ namespace platf::linux_cli {
     "  sudo vibeshine logs                 Show recent service logs\n"
     "  sudo vibeshine configure USER       Select the desktop owner and migrate settings\n"
     "  sudo vibeshine migrate              Prepare existing settings after an upgrade\n"
-    "  sudo vibeshine authorize-commands   Approve commands in the application list\n"
     "  sudo vibeshine driver install       Install/update the virtual-display driver\n"
     "  sudo vibeshine driver status        Show virtual-display driver status\n"
     "  sudo vibeshine reset                Erase settings and pairings; ends active streams\n";
@@ -40,6 +39,8 @@ namespace platf::linux_cli {
         return std::vector<const char *> {machine, "configure", argv[2]};
       }
     } else if (name == "migrate" || name == "authorize-commands" || name == "reset") {
+      // authorize-commands is retired; the helper explains that commands now
+      // follow their own "Run elevated" setting instead of an allowlist.
       if (argc == 2) {
         return std::vector<const char *> {machine, name == "migrate" ? "configure-auto" : argv[1]};
       }
