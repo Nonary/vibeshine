@@ -233,11 +233,21 @@ namespace remote_session {
     const game_t &game,
     const owner_t &owner,
     bool remote_sessions_active,
-    bool replacement_confirmation_active = false
+    bool replacement_confirmation_active = false,
+    bool resume_terminate = true
   );
   [[nodiscard]] bool allows_normal_game_cancel(const caller_t &caller, const game_t &game, bool remote_sessions_active);
-  [[nodiscard]] projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured, bool remote_sessions_active);
+  // With resume_terminate off, other clients see the running game as busy and
+  // use Moonlight's own Resume/Quit, as they did before these controls.
+  [[nodiscard]] projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured, bool remote_sessions_active, bool resume_terminate = true);
   [[nodiscard]] dispatch_t dispatch(const caller_t &caller, const game_t &game, const owner_t &owner, control_e control);
+  // The Resume/Terminate pair returns while Remote Input or Remote Monitor is
+  // active, because the host then refuses Quit from anyone but the game's owner.
+  [[nodiscard]] bool resume_terminate_enabled(bool resume_terminate, bool remote_sessions_active);
+  // Cached Resume and Terminate tiles are refused while the pair is hidden. A
+  // retained Remote Monitor keeps its Resume entry so it can always be
+  // reached and released, and a cached running-game copy still resumes it.
+  [[nodiscard]] bool control_enabled(control_e control, role_e owner_role, bool resume_terminate, bool remote_sessions_active);
   /** An exclusively verified retained owner may prepare its output; live and peer captures always join. */
   [[nodiscard]] bool joins_existing_game_output(
     role_e role,

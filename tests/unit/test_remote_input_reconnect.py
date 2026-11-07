@@ -65,7 +65,7 @@ std::unordered_map<std::string, remote_role_owner_t> remote_role_owners;\n'''
         'bool has_pending_launch_or_startup(',
         'bool disconnect_remote_role(',
     ))
-    start = nv.index('      const auto owner =', nv.index('  void launch('))
+    start = nv.index('      const auto remote_gate =', nv.index('  void launch('))
     dispatch = nv[start:nv.index('      remote_session::clear_app_replacement_confirmation', start)]
     start = nv.index('      std::unique_lock normal_transition_lock', start)
     replacement = nv[start:nv.index('      const bool no_active_sessions =', start)]

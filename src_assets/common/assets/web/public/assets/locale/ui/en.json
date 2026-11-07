@@ -1698,6 +1698,10 @@
           "description": "Reject the first request to replace a running app, then advertise it as resumable for 60 seconds so Moonlight can show its close-app warning. Remote Input and Remote Monitor still attach without that warning. Turn this off to replace apps immediately.",
           "label": "Confirm before replacing a running app"
         },
+        "app_resume_terminate": {
+          "description": "While a game is streaming, show other devices Resume and Terminate apps and a copy of the running game. Turn this off to use Moonlight's own Resume and Quit instead; Remote Input and Remote Monitor then ask to quit the running game first, and accepting ends it. They still appear while Remote Input or Remote Monitor is in use.",
+          "label": "Show Resume and Terminate for other devices"
+        },
         "capture": {
           "description": "Automatic uses KMS for managed virtual screens on Linux for maximum compatibility and low latency. Explicit capture choices are honored for physical and virtual screens; other methods are not recommended for virtual screens.",
           "label": "Capture method"

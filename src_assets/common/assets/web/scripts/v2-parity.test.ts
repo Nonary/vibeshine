@@ -192,6 +192,20 @@ test('Linux keeps common virtual-display policy and hides Windows display intern
   assert.equal(settingsDefaults.wayland_hdr_compatibility, false);
 });
 
+test('Resume and Terminate for other devices can be turned off on every platform', () => {
+  const remoteMonitor = settingsCategories
+    .flatMap((category) => category.groups)
+    .find((group) => group.id === 'display_remote_monitor');
+  assert.ok(remoteMonitor);
+
+  const field: SettingsField | undefined = remoteMonitor.fields.find(
+    (candidate) => candidate.key === 'app_resume_terminate',
+  );
+  assert.equal(field?.kind, 'boolean', 'app_resume_terminate must be a toggle');
+  assert.equal(field?.platform, undefined, 'app_resume_terminate must apply to every platform');
+  assert.equal(settingsDefaults.app_resume_terminate, true, 'Resume and Terminate must stay visible by default');
+});
+
 test('Linux exposes Remote Monitor behavior controls', () => {
   const remoteMonitor = settingsCategories
     .flatMap((category) => category.groups)

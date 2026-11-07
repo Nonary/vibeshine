@@ -161,6 +161,7 @@ namespace config {
     bool remote_monitor_disconnect_on_client_disconnect;  ///< Release a Remote Monitor when its paired client transport disconnects.
     bool remote_monitor_terminate_on_first_request;  ///< Let extra clients terminate the active game with one Terminate request.
     bool remote_monitor_confirm_app_replacement;  ///< Require confirmation before an ungated launch replaces the active game.
+    bool app_resume_terminate;  ///< Inject Resume, the running-game copy and Terminate for additional clients.
 
     struct dd_t {
       struct workarounds_t {
