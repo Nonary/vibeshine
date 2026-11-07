@@ -57,6 +57,7 @@ namespace config {
     int hevc_mode;
     int av1_mode;
     bool pyrowave;  ///< Advertise PyroWave (bitStreamFormat 3) when the capture GPU can encode it.
+    bool hdr_dynamic_metadata;  ///< Add HDR10+ dynamic metadata to PQ 10-bit HEVC and AV1 streams.
 
     int min_threads;  // Minimum number of threads/slices for CPU encoding
 

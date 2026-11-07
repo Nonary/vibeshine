@@ -25,6 +25,7 @@ extern "C" {
 // lib includes
 #include "display.h"
 #include "display_vram.h"
+#include "hdr_stats_d3d11.h"
 #include "ipc/ipc_session.h"
 #include "misc.h"
 #include "wgc_capture_policy.h"
@@ -598,6 +599,7 @@ namespace platf::dxgi {
       };
 
       if (img.blank) {
+        hdr_stats.converted_unmeasured();
         const bool cleared = clear_output_to_black();
         if (dynamic_output_textures) {
           unbind_render_targets();
@@ -889,6 +891,7 @@ namespace platf::dxgi {
         maybe_log_truehdr_live_readback();
       }
 #endif
+      measure_hdr_stats(img_ctx, encode_input_res, encode_input_format, encode_input_sdr_to_pq, encode_input_truehdr_peak_expand, encoder_mutex_held);
       if (dynamic_output_textures) {
         unbind_render_targets();
       }
@@ -1656,6 +1659,67 @@ namespace platf::dxgi {
       return 0;
     }
 
+    bool attach_hdr_dynamic_metadata(std::shared_ptr<::video::hdr_dynamic::stream_t> stream) {
+      if (const auto reason = hdr_stats.attach(device.get(), std::move(stream))) {
+        BOOST_LOG(warning) << "HDR10+ dynamic metadata is off for this stream: "sv << *reason;
+        return false;
+      }
+      return true;
+    }
+
+    void run_hdr_dynamic_metadata_pass(std::int64_t frame_index) {
+      if (const auto reason = hdr_stats.submitted(device_ctx.get(), frame_index)) {
+        BOOST_LOG(warning) << "HDR10+ dynamic metadata is off for the rest of this stream: "sv << *reason;
+      }
+    }
+
+    /**
+     * @brief Hand what the conversion just read to the HDR10+ statistics pass, with the
+     *        transfer function the conversion applied. Called before the keyed mutex is
+     *        released, so the pass reads the capture texture inside the conversion's hold.
+     */
+    void measure_hdr_stats(encoder_img_ctx_t &img_ctx, ID3D11ShaderResourceView *const *input_slot, DXGI_FORMAT input_format, bool sdr_to_pq, bool truehdr_peak_expand, bool encoder_mutex_held) {
+      if (!hdr_stats.active()) {
+        return;
+      }
+      ID3D11ShaderResourceView *input = input_slot ? *input_slot : nullptr;
+      // Only the capture texture is shared with the capture side; TrueHDR inputs are ours.
+      const bool capture_texture = input_slot == &img_ctx.encoder_input_res;
+      if (!input || (capture_texture && !encoder_mutex_held)) {
+        hdr_stats.converted_unmeasured();
+        return;
+      }
+
+      Microsoft::WRL::ComPtr<ID3D11Resource> resource;
+      input->GetResource(&resource);
+      Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+      if (!resource || FAILED(resource.As(&texture))) {
+        hdr_stats.converted_unmeasured();
+        return;
+      }
+      D3D11_TEXTURE2D_DESC desc {};
+      texture->GetDesc(&desc);
+
+      hdr_stats_d3d11_t::source_t source;
+      source.view = input;
+      source.width = desc.Width;
+      source.height = desc.Height;
+      if (input_format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+        source.transfer = hdr_stats_d3d11_t::transfer_e::scrgb;
+#ifdef SUNSHINE_ENABLE_NV_TRUEHDR
+        source.scale = truehdr_peak_expand ? truehdr_peak_luminance_scale : 1.0f;
+#else
+        (void) truehdr_peak_expand;
+#endif
+      } else if (sdr_to_pq && convert_Y_or_YUV_sdr_to_pq_ps) {
+        source.transfer = hdr_stats_d3d11_t::transfer_e::sdr_to_pq;
+        source.sdr_white_nits = sdr_to_pq_white_nits;
+      } else {
+        source.transfer = hdr_stats_d3d11_t::transfer_e::encoded;
+      }
+      hdr_stats.converted(device_ctx.get(), source, capture_texture);
+    }
+
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
     bool ensure_truehdr_input_context(encoder_img_ctx_t &img_ctx) {
       D3D11_TEXTURE2D_DESC src_desc {};
@@ -1965,6 +2029,10 @@ namespace platf::dxgi {
     wgc_policy::direct_frame_cursor_t direct_frame_cursor;
     std::chrono::steady_clock::time_point last_direct_record_warning {};  ///< Rate limits the unreadable-frame-record warning.
 
+    // HDR10+ dynamic metadata: idle until a stream that carries it is attached, which makes
+    // the shader and pass on this device.
+    hdr_stats_session_t hdr_stats {std::filesystem::path {utf_utils::from_utf8(SUNSHINE_SHADERS_DIR "/hdr_stats_cs.hlsl")}};
+
     // NOTE: `display` is intentionally declared near the top of this member list (not here) so it is
     // destroyed last. See the comment on its declaration above.
 
@@ -2038,6 +2106,14 @@ namespace platf::dxgi {
 
     int convert(platf::img_t &img_base) override {
       return base.convert(img_base, converted_frame);
+    }
+
+    bool attach_hdr_dynamic_metadata(std::shared_ptr<::video::hdr_dynamic::stream_t> stream) override {
+      return base.attach_hdr_dynamic_metadata(std::move(stream));
+    }
+
+    void run_hdr_dynamic_metadata_pass(std::int64_t frame_index) override {
+      base.run_hdr_dynamic_metadata_pass(frame_index);
     }
 
     void apply_colorspace() override {
@@ -2176,6 +2252,14 @@ namespace platf::dxgi {
 
     int convert(platf::img_t &img_base) override {
       return base.convert(img_base, converted_frame);
+    }
+
+    bool attach_hdr_dynamic_metadata(std::shared_ptr<::video::hdr_dynamic::stream_t> stream) override {
+      return base.attach_hdr_dynamic_metadata(std::move(stream));
+    }
+
+    void run_hdr_dynamic_metadata_pass(std::int64_t frame_index) override {
+      base.run_hdr_dynamic_metadata_pass(frame_index);
     }
 
   private:
@@ -2419,6 +2503,14 @@ namespace platf::dxgi {
         amf_d3d->cancel_input_texture_for_render();
       }
       return result;
+    }
+
+    bool attach_hdr_dynamic_metadata(std::shared_ptr<::video::hdr_dynamic::stream_t> stream) override {
+      return base.attach_hdr_dynamic_metadata(std::move(stream));
+    }
+
+    void run_hdr_dynamic_metadata_pass(std::int64_t frame_index) override {
+      base.run_hdr_dynamic_metadata_pass(frame_index);
     }
 
   private:

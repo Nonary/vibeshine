@@ -482,6 +482,8 @@
     "av1_mode_desc": "Allows the client to request AV1 Main 8-bit or 10-bit video streams. AV1 is more CPU-intensive to encode, so enabling this may reduce performance when using software encoding.",
     "pyrowave": "PyroWave Support",
     "pyrowave_desc": "Allows PyroWave-capable clients to request PyroWave, an intra-only GPU wavelet codec. Each frame is coded on its own in well under a millisecond and a lost frame never needs a keyframe, but a clean picture needs hundreds of Mbps, so use it on wired LANs only. Critical packets use the PyroWave Critical FEC Percentage setting. Requires a compatible Vulkan GPU; Windows uses Direct3D 11 interop, while Linux supports RGB DMA-BUF and BGRA system-memory capture.",
+    "hdr_dynamic_metadata": "HDR10+ Dynamic Metadata",
+    "hdr_dynamic_metadata_desc": "Adds HDR10+ dynamic metadata to each frame of an HDR stream in HEVC or AV1, so HDR10+ displays can tone-map scene by scene. The GPU measures each frame alongside its conversion, which adds a small amount of GPU work per frame; the CPU never waits for the result. Clients that ignore HDR10+ keep the static HDR10 metadata. Not available with the software and PyroWave encoders.",
     "app_prefer_10bit_sdr_inherit": "Use device preference",
     "app_prefer_10bit_sdr_desc": "Override the device preference for this application. Enabled keeps HDR requests in SDR with a 10-bit HEVC or AV1 stream; disabled allows normal HDR requests. SDR clients and H.264 remain 8-bit. Explicit HDR request overrides still take priority. Applies on the next launch or resume.",
     "prefer_10bit_sdr": "10-bit SDR instead of HDR",

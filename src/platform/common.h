@@ -54,6 +54,10 @@ struct AVDictionary;
 
 namespace video {
   struct config_t;
+
+  namespace hdr_dynamic {
+    class stream_t;
+  }  // namespace hdr_dynamic
 }  // namespace video
 
 namespace nvenc {
@@ -632,6 +636,26 @@ namespace platf {
     // Only meaningful when colorspace is HDR.
     bool hdr_metadata_valid = false;
     SS_HDR_METADATA hdr_metadata {};
+
+    /**
+     * @brief Measure the frames this device converts for `stream`'s HDR10+ dynamic metadata,
+     *        making the statistics pass now, at the stream's start.
+     * @return False when the device has no statistics pass or could not make one; the stream
+     *         then carries none.
+     */
+    virtual bool attach_hdr_dynamic_metadata(std::shared_ptr<video::hdr_dynamic::stream_t> stream) {
+      (void) stream;
+      return false;
+    }
+
+    /**
+     * @brief Run once the encoder has taken the last converted frame as `frame_index`: name
+     *        that frame's statistics pass and hand finished ones to the stream. Never waits
+     *        on the GPU. A pass that fails stops the stream's metadata, not its frames.
+     */
+    virtual void run_hdr_dynamic_metadata_pass(std::int64_t frame_index) {
+      (void) frame_index;
+    }
   };
 
   struct avcodec_encode_device_t: encode_device_t {

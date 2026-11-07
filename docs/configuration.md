@@ -3297,6 +3297,36 @@ These settings are host-wide and are not application runtime overrides.
     </tr>
 </table>
 
+### hdr_dynamic_metadata
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Adds HDR10+ (SMPTE ST 2094-40) dynamic metadata to every frame of a PQ 10-bit HDR stream, as an
+            HEVC SEI or an AV1 metadata OBU. The GPU measures each frame's brightness alongside its
+            conversion, which adds a small amount of GPU work to every frame, usually ahead of the encoder;
+            that is why the setting is off by default. The CPU never waits for the result, and the metadata
+            follows a frame or two behind. Clients that ignore HDR10+ keep using the stream's static HDR10
+            metadata. H.264, SDR and 10-bit SDR streams never carry it.
+            @note{Applies to the Windows hardware encoders. The software and PyroWave encoders log a
+            warning and stream without it.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            hdr_dynamic_metadata = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### capture
 
 <table>
