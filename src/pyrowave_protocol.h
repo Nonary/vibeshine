@@ -24,8 +24,11 @@ namespace pyrowave::protocol {
   /// `x-nv-vqos[0].bitStreamFormat` value selecting PyroWave (0/1/2 are H.264/HEVC/AV1).
   constexpr int BITSTREAM_FORMAT = 3;
 
-  /// First eight hex digits of the vendored pyrowave commit (third-party/pyrowave/VENDOR.txt).
+  /// First eight hex digits of the pyrowave commit whose bitstream this host speaks.
   /// The PyroWave bitstream carries no version field, so both ends must match.
+  /// Stays 186f0393 although the vendored SDK is 502a3b52 (1.0): the quantizer,
+  /// dequantizer, block-packing and rate-control shaders are byte-identical, so
+  /// the stream is unchanged (third-party/pyrowave/VENDOR.txt).
   constexpr std::string_view BITSTREAM_ID = "186f0393";
 
   /// RTSP DESCRIBE capability marker. No RTP payload type 99 is ever sent.
