@@ -39,6 +39,7 @@ extern "C" {
 }
 
 // local includes
+#include "dmabuf_import_cache.h"
 #include "graphics.h"
 #include "misc.h"
 #include "src/config.h"
@@ -420,25 +421,46 @@ namespace va {
       if (descriptor.sequence == 0) {
         // For dummy images, use a blank RGB texture instead of importing a DMA-BUF
         rgb = egl::create_blank(img);
+        current_tex = rgb->tex[0];
       } else if (descriptor.sequence > sequence) {
         sequence = descriptor.sequence;
 
+        // Releases the previous frame's uncached texture (blank or CPU upload).
         rgb = egl::rgb_t {};
 
-        auto rgb_opt = egl::import_source_with_cpu_fallback(
-          descriptor.sd,
-          [this](const auto &surface) { return egl::import_source(display.get(), surface); },
-          [this](const auto &surface) { return egl::upload_source(display.get(), surface); }
-        );
-
-        if (!rgb_opt) {
-          return -1;
+        // A zero-copy import samples the exporter's memory, so an import kept from
+        // an earlier frame of the same DMA-BUF already shows this frame's pixels.
+        // Re-importing every frame forces the kernel driver to rebuild GPU page
+        // tables for foreign (e.g. shmem) framebuffers on every frame.
+        const auto key = egl::make_dmabuf_import_key(descriptor.sd);
+        egl::rgb_t *imported = key ? import_cache.find(*key) : nullptr;
+        if (!imported) {
+          auto rgb_opt = egl::import_source(display.get(), descriptor.sd);
+          if (rgb_opt) {
+            if (key) {
+              imported = import_cache.insert(*key, std::move(*rgb_opt));
+            } else {
+              rgb = std::move(*rgb_opt);
+            }
+          } else if (egl::can_cpu_upload_surface(descriptor.sd)) {
+            // A CPU upload is a copy of this frame only; never cache it.
+            auto uploaded = egl::upload_source(display.get(), descriptor.sd);
+            if (!uploaded) {
+              return -1;
+            }
+            rgb = std::move(*uploaded);
+          } else {
+            return -1;
+          }
+        } else if (!logged_cache_reuse) {
+          logged_cache_reuse = true;
+          BOOST_LOG(info) << "Reusing cached DMA-BUF imports for VAAPI conversion"sv;
         }
 
-        rgb = std::move(*rgb_opt);
+        current_tex = imported ? (*imported)->tex[0] : rgb->tex[0];
       }
 
-      sws.load_vram(descriptor, offset_x, offset_y, rgb->tex[0]);
+      sws.load_vram(descriptor, offset_x, offset_y, current_tex);
 
       sws.convert(nv12->buf);
       return 0;
@@ -450,6 +472,9 @@ namespace va {
       }
 
       sequence = 0;
+      current_tex = 0;
+      import_cache.clear();
+      logged_cache_reuse = false;
 
       this->offset_x = offset_x;
       this->offset_y = offset_y;
@@ -459,6 +484,11 @@ namespace va {
 
     std::uint64_t sequence;
     egl::rgb_t rgb;
+    // Imported framebuffers keyed by DMA-BUF identity and layout; the compositor
+    // cycles only a few buffers, so four entries cover triple buffering plus a spare.
+    egl::dmabuf_import_cache_t<egl::rgb_t, 4> import_cache;
+    GLuint current_tex = 0;
+    bool logged_cache_reuse = false;
 
     int offset_x;
     int offset_y;
