@@ -280,12 +280,26 @@ namespace va {
       // When we have to resort to the default 1 second VBV for encoding quality reasons,
       // we stick to CBR in order to avoid encoding huge frames after bitrate undershoots
       // leave headroom available in the RC window.
+      //
+      // Exception: AMD (radeonsi) H.264/HEVC with the strict buffer option. radeonsi maps
+      // VA VBR to the VCN firmware's peak constrained VBR, which does not hold a single
+      // frame VBV: in an encoder test keyframes came out at 21-22x the per-frame budget and
+      // scene cuts at 7-12x (Raphael iGPU and RX 9070 XT, Mesa 26.2), too large to carry
+      // FEC. CBR with the same buffer gave about 3x and 2x. CBR pads easy scenes with
+      // filler data, as the default (non-strict) AMD rate control already does.
       if (config::video.vaapi.strict_rc_buffer ||
           (vendor && strstr(vendor, "Intel")) ||
           ctx->codec_id == AV_CODEC_ID_AV1) {
         ctx->rc_buffer_size = ctx->bit_rate * ctx->framerate.den / ctx->framerate.num;
 
-        if (rc_attr.value & VA_RC_VBR) {
+        const bool amd_strict_cbr = config::video.vaapi.strict_rc_buffer &&
+                                    vendor && (strstr(vendor, "AMD") || strstr(vendor, "Radeon")) &&
+                                    (ctx->codec_id == AV_CODEC_ID_H264 || ctx->codec_id == AV_CODEC_ID_HEVC);
+
+        if (amd_strict_cbr && (rc_attr.value & VA_RC_CBR)) {
+          BOOST_LOG(info) << "Using CBR with single frame VBV size"sv;
+          av_dict_set(options, "rc_mode", "CBR", 0);
+        } else if (rc_attr.value & VA_RC_VBR) {
           BOOST_LOG(info) << "Using VBR with single frame VBV size"sv;
           av_dict_set(options, "rc_mode", "VBR", 0);
         } else if (rc_attr.value & VA_RC_CBR) {
