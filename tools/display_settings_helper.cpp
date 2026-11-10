@@ -3759,6 +3759,7 @@ namespace {
         return false;
       }
       (void) controller.apply_snapshot(golden, require_layout_match ? &golden_layouts : nullptr);
+      shell_refresh.request();
       display_device::DisplaySettingsSnapshot cur;
       const bool got_stable = read_stable_snapshot(cur, 2000ms, 150ms, st);
       if (should_cancel()) {
@@ -3795,6 +3796,7 @@ namespace {
         return true;
       }
       (void) controller.apply_snapshot(golden, require_layout_match ? &golden_layouts : nullptr);
+      shell_refresh.request();
       display_device::DisplaySettingsSnapshot cur2;
       const bool got_stable2 = read_stable_snapshot(cur2, 2000ms, 150ms, st);
       if (should_cancel()) {
@@ -3931,6 +3933,7 @@ namespace {
         return false;
       }
       (void) controller.apply_snapshot(base, require_layout_match ? &base_layouts : nullptr);
+      shell_refresh.request();
       display_device::DisplaySettingsSnapshot cur;
       const bool got_stable = read_stable_snapshot(cur, 2000ms, 150ms, st);
       if (should_cancel()) {
@@ -3962,6 +3965,7 @@ namespace {
           return true;
         }
         (void) controller.apply_snapshot(base, require_layout_match ? &base_layouts : nullptr);
+        shell_refresh.request();
         display_device::DisplaySettingsSnapshot cur2;
         const bool got_stable2 = read_stable_snapshot(cur2, 2000ms, 150ms, st);
         if (should_cancel()) {
@@ -4442,10 +4446,6 @@ namespace {
       auto run_restore_cleanup = [&](const char *context) {
         bool allow_cleanup = !cancelled();
         if (allow_cleanup) {
-          refresh_shell_after_display_change();
-          allow_cleanup = !cancelled();
-        }
-        if (allow_cleanup) {
           delete_restore_scheduled_task();
         } else {
           BOOST_LOG(debug) << "Restore cleanup skipped"
@@ -4510,6 +4510,9 @@ namespace {
       }
 
       if (initial_success) {
+        // A confirmed restore needs a refresh even if a newer request cancels
+        // cleanup. It must follow any older in-flight shell notification.
+        self->shell_refresh.request();
         if (cancelled()) {
           self->event_pump.stop();
           self->event_pump_running.store(false, std::memory_order_release);
@@ -4658,6 +4661,7 @@ namespace {
         }
 
         (void) self->finish_restore_stage_reconciliation(guard_generation, !success);
+        if (success) self->shell_refresh.request();
         if (cancelled()) {
           break;
         }
@@ -4774,7 +4778,7 @@ namespace {
         const auto cfg = effective_last_cfg();
         if (cfg && controller.apply(*cfg)) {
           retry_apply_on_topology.store(false, std::memory_order_release);
-          refresh_shell_after_display_change();
+          shell_refresh.request();
         }
         return;
       }
@@ -4911,7 +4915,7 @@ namespace {
       try {
         if (const auto cfg = effective_last_cfg()) {
           (void) controller.apply(*cfg);
-          if (refresh_shell) refresh_shell_after_display_change();
+          if (refresh_shell) shell_refresh.request();
         }
       } catch (...) {}
     }
@@ -4940,7 +4944,8 @@ namespace {
 
     void cancel_post_apply_tasks() {
       stop_and_join(post_apply_thread, "post-apply");
-      shell_refresh.cancel_pending();
+      // A queued cosmetic refresh samples the then-current topology. Keep it:
+      // it may be needed to correct an older in-flight notification.
     }
 
     bool run_initial_apply_adjuncts(

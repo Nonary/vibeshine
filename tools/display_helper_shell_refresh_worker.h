@@ -8,13 +8,23 @@
 #include <utility>
 
 namespace display_helper {
-  // Serializes cosmetic shell notifications without holding up display admission.
-  // New requests coalesce while a notification is in flight. Cancellation drops
-  // queued work; an in-flight Windows broadcast cannot itself be interrupted.
+  // Serialize cosmetic shell notifications. Requests coalesce while one is in
+  // flight; the next callback samples the current topology. Keep a pending
+  // request through cancellation and drain it at shutdown so an older message
+  // cannot be the final notification after a restore.
   class shell_refresh_worker {
   public:
     explicit shell_refresh_worker(std::function<void(std::stop_token)> refresh):
         refresh_(std::move(refresh)), thread_([this](std::stop_token stop) { run(stop); }) {}
+
+    ~shell_refresh_worker() {
+      {
+        std::lock_guard lock(mutex_);
+        closing_ = true;
+      }
+      cv_.notify_one();
+      thread_.join();
+    }
 
     void request() {
       {
@@ -24,16 +34,12 @@ namespace display_helper {
       cv_.notify_one();
     }
 
-    void cancel_pending() {
-      std::lock_guard lock(mutex_);
-      pending_ = false;
-    }
-
   private:
     void run(std::stop_token stop) {
       std::unique_lock lock(mutex_);
-      while (cv_.wait(lock, stop, [this] { return pending_; })) {
-        if (stop.stop_requested()) break;
+      for (;;) {
+        cv_.wait(lock, [this] { return pending_ || closing_; });
+        if (!pending_ && closing_) return;
         pending_ = false;
         lock.unlock();
         refresh_(stop);
@@ -43,9 +49,9 @@ namespace display_helper {
 
     std::function<void(std::stop_token)> refresh_;
     std::mutex mutex_;
-    std::condition_variable_any cv_;
+    std::condition_variable cv_;
     bool pending_ {false};
-    // Destroyed first: jthread requests stop and joins before state goes away.
+    bool closing_ {false};
     std::jthread thread_;
   };
 }  // namespace display_helper
