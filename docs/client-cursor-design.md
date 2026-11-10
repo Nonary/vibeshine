@@ -150,7 +150,10 @@ letterbox maths.
 - **Sent only on change**, plus a full state with `RESYNC` (and every shape it
   needs) whenever a session subscribes, including after a reconnect. Nothing is
   sent until the session's encoder has published its input geometry, so a client
-  that subscribes early still gets its resync.
+  that subscribes early still gets its resync. The host records what it sends
+  before queueing it, so if encoding or the ENet enqueue fails, the next update is
+  a full `RESYNC` again (a client may lack a shape, or still wait for its first
+  `RESYNC`). The client accepts a `RESYNC` at any time.
 - **`HAS_POSITION`** is set on `RESYNC`, when the cursor becomes visible, when the
   clip changes, when the host moved the cursor itself (application warp, a local
   mouse), and, while the client is *not* drawing the cursor, on every position
@@ -160,6 +163,10 @@ letterbox maths.
   reported back as warps.
 - **`FALLBACK`**: cursor information is unavailable (tracker failure, the input
   desktop cannot be opened). The host also resumes compositing.
+- **A visible cursor without a shape** (conversion failed, `shape_id` 0) is not a
+  fallback: the client stays in automatic mode, but the host composites the
+  cursor and sets `COMPOSITED`, so a drawing client hides its own cursor rather
+  than showing a default arrow. Drawing resumes once a conversion succeeds.
 
 ### `CURSOR_CONTROL` (client→host, type 0x5612)
 
@@ -172,7 +179,9 @@ letterbox maths.
 
 Each message replaces the session's subscription state. `SUBSCRIBE` going from
 0 to 1 triggers a resync. A non-zero `resend_shape_id` asks for that shape again
-(the client got a state that names an id it does not have).
+(the client got a state that names an id it does not have). The client repeats
+a request only when a later state names the shape, so the host keeps it until
+the session's shape budget allows the shape, rather than dropping it.
 
 ### Malformed input
 
@@ -199,7 +208,9 @@ at least one session is subscribed. Every 5 ms (200 Hz) it:
 3. Resolves the shape: the latest DXGI shape while Desktop Duplication is
    capturing, otherwise `GetIconInfo`/`GetDIBits` when the `HCURSOR` changes or
    once a second (handles can be reused, the cursor-size setting can change, and
-   the cursor can move to a display with another DPI).
+   the cursor can move to a display with another DPI). A DXGI shape that cannot
+   be converted falls back to `GetIconInfo`; if that fails too, the shape id is 0
+   and the host composites the cursor until a conversion succeeds.
    Converted shapes are deduplicated by a 64-bit content hash in a bounded
    registry (64 shapes); ids are small integers.
 4. Detects host-originated moves: the input path records the last eight absolute
@@ -379,6 +390,7 @@ One line: `Mouse mode: absolute, local cursor (automatic)`, `relative (locked)`,
 | Several clients | The host blends if any client needs it (`COMPOSITED` tells the others). One client's absolute moves are not reported as warps to another (v1 limitation). |
 | Reconnect | A new session subscribes again and gets a full resync; caches are per session. |
 | Pathological cursor churn | Shape sends are budgeted per session; the client keeps its last shape. |
+| Cursor shape that cannot be converted | The host composites it and sets `COMPOSITED`; a drawing client hides its own cursor until a later conversion succeeds. |
 | Wayland client | Warping is a no-op; the cursor appears where the user left it. |
 | Gamepad mouse emulation, trackpad-mode touch | Relative input moves the host cursor away from the client's last absolute position, which the host reports as a host move, so the local cursor follows. |
 | Capture released (Ctrl+Alt+Shift+Z) or window unfocused in relative mode | The client stops drawing (`CLIENT_DRAWS` off) and the host composites again, so the video shows the cursor. |

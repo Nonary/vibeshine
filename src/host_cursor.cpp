@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace host_cursor {
   namespace {
@@ -194,11 +195,14 @@ namespace host_cursor {
         shape.reset();
       }
     }
+    // A shape the client asked for again. The client repeats the request only when a
+    // later state names the shape, and an unchanged cursor sends none, so keep the
+    // request until the budget allows it (or the registry no longer has the shape).
     if (session.resend_shape_id) {
-      if (auto image = registry.find(session.resend_shape_id)) {
-        (void) queue_shape(session.resend_shape_id, image);
+      const auto image = registry.find(session.resend_shape_id);
+      if (!image || queue_shape(session.resend_shape_id, image)) {
+        session.resend_shape_id = 0;
       }
-      session.resend_shape_id = 0;
     }
     state.shape_id = shape ? shape_id : 0;
 
@@ -254,6 +258,11 @@ namespace host_cursor {
     session.last_sent = normalized;
     session.resync_pending = false;
     return update;
+  }
+
+  bool note_send_failed(session_state_t &session) {
+    session.resync_pending = true;
+    return !std::exchange(session.send_failed, true);
   }
 
 #ifndef _WIN32

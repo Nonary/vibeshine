@@ -581,3 +581,111 @@ TEST(HostCursorSession, ResendAndResubscribe) {
   ASSERT_TRUE(again.state);
   EXPECT_TRUE(again.state->flags & proto::state_flags::resync);
 }
+
+TEST(HostCursorSession, VisibleCursorWithoutAShapeStaysInTheVideo) {
+  // Shape conversion failed for a visible cursor (id 0). Even with every client
+  // drawing, the host keeps blending it and says so, so the client hides its own
+  // cursor instead of showing a default arrow, until a later conversion succeeds.
+  using namespace proto::state_flags;
+  host_cursor::shape_registry_t registry;
+  host_cursor::session_state_t session;
+  subscribe(session, true);
+  const auto now = host_cursor::clock::now();
+
+  const auto failed = visible_at(1920, 0, 0);
+  EXPECT_FALSE(host_cursor::client_can_draw(failed));
+  EXPECT_TRUE(host_cursor::compute_compositing_required(1, 1, host_cursor::client_can_draw(failed)));
+  const auto during = host_cursor::plan_update(session, failed, scaled_geometry(), true, now, registry);
+  ASSERT_TRUE(during.state);
+  EXPECT_EQ(during.state->flags, visible | has_position | composited | resync);
+  EXPECT_EQ(during.state->shape_id, 0u);
+  EXPECT_TRUE(during.shapes.empty());
+
+  const auto id = registry.insert(solid(32, 32, 9));
+  const auto converted = visible_at(1920, 0, id);
+  EXPECT_TRUE(host_cursor::client_can_draw(converted));
+  EXPECT_FALSE(host_cursor::compute_compositing_required(1, 1, host_cursor::client_can_draw(converted)));
+  const auto recovered = host_cursor::plan_update(session, converted, scaled_geometry(), false, now + 5ms, registry);
+  EXPECT_EQ(recovered.shape_ids, std::vector<std::uint32_t> {id});
+  ASSERT_TRUE(recovered.state);
+  EXPECT_EQ(recovered.state->flags, visible);
+  EXPECT_EQ(recovered.state->shape_id, id);
+
+  // A hidden cursor needs no shape; missing cursor information never draws.
+  host_cursor::snapshot_t hidden;
+  hidden.available = true;
+  EXPECT_TRUE(host_cursor::client_can_draw(hidden));
+  EXPECT_FALSE(host_cursor::client_can_draw(host_cursor::snapshot_t {}));
+}
+
+TEST(HostCursorSession, ResendWaitsForTheShapeBudget) {
+  // The client evicted the current shape and asks for it while the session's budget
+  // is spent. It asks again only when a later state names the shape, and a still
+  // cursor sends none, so the host must keep the request until the budget renews.
+  host_cursor::shape_registry_t registry;
+  host_cursor::session_state_t session;
+  subscribe(session, true);
+  const auto now = host_cursor::clock::now();
+  constexpr std::size_t shape_bytes = 256 * 256 * 4;
+  std::vector<std::uint32_t> ids;
+  for (std::size_t i = 0; i < host_cursor::shape_budget_bytes_per_second / shape_bytes; ++i) {
+    ids.push_back(registry.insert(solid(256, 256, std::uint8_t(i))));
+  }
+  for (const auto id : ids) {
+    ASSERT_EQ(host_cursor::plan_update(session, visible_at(1920, 0, id), scaled_geometry(), false, now, registry).shape_ids, std::vector<std::uint32_t> {id});
+  }
+
+  const auto current = visible_at(1920, 0, ids.back());
+  host_cursor::apply_control(session, {proto::control_flags::subscribe | proto::control_flags::client_draws, ids.back()});
+  const auto refused = host_cursor::plan_update(session, current, scaled_geometry(), false, now + 100ms, registry);
+  EXPECT_TRUE(refused.shapes.empty());
+  EXPECT_FALSE(refused.state);
+  EXPECT_EQ(session.resend_shape_id, ids.back());
+
+  const auto delivered = host_cursor::plan_update(session, current, scaled_geometry(), false, now + 1s, registry);
+  EXPECT_EQ(delivered.shape_ids, std::vector<std::uint32_t> {ids.back()});
+  EXPECT_FALSE(delivered.state);  // the cursor never changed
+  EXPECT_EQ(session.resend_shape_id, 0u);
+
+  // A request for a shape the host no longer has is dropped.
+  host_cursor::apply_control(session, {proto::control_flags::subscribe | proto::control_flags::client_draws, 0xFFFF});
+  EXPECT_TRUE(host_cursor::plan_update(session, current, scaled_geometry(), false, now + 1s, registry).shapes.empty());
+  EXPECT_EQ(session.resend_shape_id, 0u);
+}
+
+TEST(HostCursorSession, FailedSendResyncs) {
+  // plan_update() records an update as sent before it is queued. If queueing fails
+  // (here the initial resync, which the client waits for), the next poll must send
+  // a complete resync again even though nothing about the cursor changed.
+  using namespace proto::state_flags;
+  host_cursor::shape_registry_t registry;
+  const auto id = registry.insert(solid(32, 32, 9));
+  host_cursor::session_state_t session;
+  subscribe(session, true);
+  const auto now = host_cursor::clock::now();
+  const auto cursor = visible_at(1920 + 1280, 720, id);
+
+  const auto lost = host_cursor::plan_update(session, cursor, scaled_geometry(), false, now, registry);
+  ASSERT_TRUE(lost.state);
+  EXPECT_TRUE(host_cursor::note_send_failed(session));
+
+  const auto retry = host_cursor::plan_update(session, cursor, scaled_geometry(), false, now + 5ms, registry);
+  EXPECT_EQ(retry.shape_ids, std::vector<std::uint32_t> {id});
+  ASSERT_TRUE(retry.state);
+  EXPECT_EQ(retry.state->flags, visible | has_position | resync);
+  EXPECT_EQ(retry.state->shape_id, id);
+  EXPECT_EQ(retry.state->x, 960);
+  EXPECT_EQ(retry.state->y, 540);
+  EXPECT_GT(retry.state->seq, lost.state->seq);
+
+  // Failing again does not ask to log again; once an update goes out, it does.
+  EXPECT_FALSE(host_cursor::note_send_failed(session));
+  session.send_failed = false;
+  EXPECT_TRUE(host_cursor::note_send_failed(session));
+
+  // Without a failure, an unchanged cursor sends nothing.
+  (void) host_cursor::plan_update(session, cursor, scaled_geometry(), false, now + 10ms, registry);
+  const auto idle = host_cursor::plan_update(session, cursor, scaled_geometry(), false, now + 15ms, registry);
+  EXPECT_FALSE(idle.state);
+  EXPECT_TRUE(idle.shapes.empty());
+}

@@ -229,6 +229,9 @@ namespace host_cursor::tracker {
           if (auto image = convert_dxgi(pending->info, pending->data)) {
             _dxgi_id = shapes().insert(std::move(*image));
           } else {
+            // Not the previous shape: GetIconInfo() may convert this one, and if it
+            // cannot either, the host composites the cursor (client_can_draw()).
+            _dxgi_id.reset();
             BOOST_LOG(debug) << "Client-side cursor: unsupported DXGI pointer shape type "sv << pending->info.Type;
           }
         }

@@ -127,20 +127,28 @@ namespace host_cursor {
     void note_absolute_injection(std::int32_t x, std::int32_t y);
   }  // namespace tracker
 
+  // Whether a client can draw the cursor `snapshot` describes: cursor information is
+  // available and a visible cursor has a converted shape. A visible cursor whose
+  // shape could not be converted (id 0) stays in the video until conversion succeeds.
+  constexpr bool client_can_draw(const snapshot_t &snapshot) {
+    return snapshot.available && (!snapshot.visible || snapshot.shape_id != 0);
+  }
+
   // Whether captured frames must still contain the cursor. True unless every
-  // connected session draws the cursor itself and cursor information is available.
+  // connected session draws the cursor itself and it can (client_can_draw()).
   bool compositing_required();
   void set_compositing_required(bool required);
 
-  constexpr bool compute_compositing_required(std::size_t connected, std::size_t client_drawing, bool tracker_available) {
-    return connected == 0 || client_drawing < connected || !tracker_available;
+  constexpr bool compute_compositing_required(std::size_t connected, std::size_t client_drawing, bool client_can_draw) {
+    return connected == 0 || client_drawing < connected || !client_can_draw;
   }
 
   struct session_state_t {
     bool subscribed = false;
     bool client_draws = false;
     bool resync_pending = false;
-    std::uint32_t resend_shape_id = 0;
+    std::uint32_t resend_shape_id = 0;  // kept until the shape budget allows it
+    bool send_failed = false;  // the last update could not be queued (see note_send_failed())
     std::uint32_t seq = 0;
     std::optional<host_cursor_protocol::state_t> last_sent;
     std::optional<point_t> last_position;
@@ -175,4 +183,11 @@ namespace host_cursor {
     clock::time_point now,
     const shape_registry_t &registry = shapes()
   );
+
+  // Call when a message of an update from plan_update() could not be queued
+  // (encoding or ENet enqueue failed). plan_update() recorded the update as sent,
+  // so the client may now lack shapes or states it will never be sent; the next
+  // update is a full resync instead. Returns true for the first failure since an
+  // update was last queued completely, so the caller logs once per failure run.
+  bool note_send_failed(session_state_t &session);
 }  // namespace host_cursor
