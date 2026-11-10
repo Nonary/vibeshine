@@ -79,3 +79,100 @@ with tempfile.TemporaryDirectory() as tmp:
         result = subprocess.run([str(exe)], timeout=10)
         assert result.returncode == (1 if control else 0), (control, result.returncode)
 print("shell refresh ordering passed; independent restore-broadcast control failed as expected")
+
+
+def extract_method(signature):
+    start = source.index(signature)
+    opening = source.index("{", start)
+    depth = 1
+    end = opening + 1
+    while depth:
+        depth += (source[end] == "{") - (source[end] == "}")
+        end += 1
+    return source[start:end]
+
+
+# Compile the production destructor and cancellation method, not a rewritten
+# version. Fakes supply only the unrelated event/command collaborators.
+destructor = extract_method("~ServiceState()")
+cancel_delayed = extract_method("void cancel_delayed_reapply()")
+assert "cancel_delayed_reapply();" in destructor
+lifetime_program = r"""
+#include "tools/display_helper_shell_refresh_worker.h"
+#include <atomic>
+#include <cassert>
+#include <condition_variable>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <stop_token>
+#include <thread>
+
+struct Shared {
+  std::atomic<bool> alive {true}, touched_dead {false};
+  std::atomic<int> refreshes {0};
+  std::promise<void> entered, stopped, release;
+};
+struct CheckedRefresh {
+  Shared &shared;
+  display_helper::shell_refresh_worker worker;
+  explicit CheckedRefresh(Shared &s): shared(s), worker([&s](std::stop_token) { ++s.refreshes; }) {}
+  ~CheckedRefresh() { shared.alive = false; }
+  void request() { worker.request(); }
+};
+struct ServiceState {
+  std::jthread delayed_reapply_thread;
+  std::mutex delayed_reapply_mutex;
+  CheckedRefresh shell_refresh;
+  std::atomic<bool> command_worker_stop {false};
+  std::condition_variable command_queue_cv;
+  std::jthread command_worker;
+  explicit ServiceState(Shared &s): shell_refresh(s) {}
+  void stop_restore_polling() {}
+  CANCEL_DELAYED
+#ifndef LEGACY_LIFETIME_CONTROL
+  DESTRUCTOR
+#endif
+};
+int main() {
+  Shared shared;
+  auto entered = shared.entered.get_future();
+  auto stopped = shared.stopped.get_future();
+  auto release = shared.release.get_future().share();
+  auto state = std::make_unique<ServiceState>(shared);
+  auto *ptr = state.get();
+  state->delayed_reapply_thread = std::jthread([&](std::stop_token stop) {
+    std::stop_callback on_stop(stop, [&] { shared.stopped.set_value(); });
+    shared.entered.set_value();
+    release.wait(); // Represents controller.apply() returning after shutdown starts.
+    if (!shared.alive.load()) { shared.touched_dead = true; return; }
+    ptr->shell_refresh.request();
+  });
+  assert(entered.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+  std::thread release_after_stop([&] {
+    assert(stopped.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    shared.release.set_value();
+  });
+  state.reset();
+  release_after_stop.join();
+#ifdef LEGACY_LIFETIME_CONTROL
+  return shared.touched_dead ? 1 : 0;
+#else
+  assert(!shared.touched_dead);
+  assert(shared.refreshes == 1); // Worker drained the delayed producer's request.
+  return 0;
+#endif
+}
+""".replace("CANCEL_DELAYED", cancel_delayed).replace("DESTRUCTOR", destructor)
+with tempfile.TemporaryDirectory() as tmp:
+    cpp = Path(tmp) / "lifetime.cpp"
+    cpp.write_text(lifetime_program)
+    for control in (False, True):
+        exe = Path(tmp) / ("old_lifetime" if control else "lifetime")
+        command = [compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(root), str(cpp), "-o", str(exe)]
+        if control:
+            command.append("-DLEGACY_LIFETIME_CONTROL")
+        subprocess.run(command, check=True)
+        result = subprocess.run([str(exe)], timeout=10)
+        assert result.returncode == (1 if control else 0), (control, result.returncode)
+print("producer shutdown ordering passed; old destruction order control failed as expected")

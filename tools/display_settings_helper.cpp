@@ -2771,6 +2771,12 @@ namespace {
     std::mutex async_join_mutex;  // Guards async joiners used to avoid blocking the command loop
     std::vector<std::jthread> async_join_threads;
 
+    ~ServiceState() {
+      // The delayed producer can request a shell refresh after apply returns.
+      // Join it while shell_refresh and the rest of this state are still alive.
+      cancel_delayed_reapply();
+    }
+
     static long long steady_now_ms() {
       return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::steady_clock::now().time_since_epoch()
