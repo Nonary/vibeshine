@@ -55,6 +55,9 @@
 #include "httpcommon.h"
 #include "https_listener_diagnostics.h"
 #include "platform/common.h"
+#ifdef __linux__
+  #include "platform/linux/rtx_hdr_runtime.h"
+#endif
 #ifdef _WIN32
   #include "src/platform/windows/image_convert.h"
 
@@ -2051,6 +2054,16 @@ namespace confighttp {
 
       // Update apps file and refresh client cache
       confighttp::refresh_client_apps_cache(file_tree);
+#if defined(__linux__) && defined(SUNSHINE_ENABLE_NV_TRUEHDR)
+      if (input_tree.contains("config-overrides") && input_tree["config-overrides"].is_object()) {
+        const auto &overrides = input_tree["config-overrides"];
+        if (overrides.contains("rtx_hdr") &&
+            ((overrides["rtx_hdr"].is_boolean() && overrides["rtx_hdr"].get<bool>()) ||
+             (overrides["rtx_hdr"].is_string() && overrides["rtx_hdr"].get<std::string>() == "true"))) {
+          platf::rtx_hdr::prepare_runtime_async();
+        }
+      }
+#endif
 #if defined(_WIN32) || defined(__linux__)
       const auto edited_uuid = input_tree.value("uuid", ""s);
       if (!edited_uuid.empty()) {
@@ -3294,6 +3307,24 @@ namespace confighttp {
       return;
     }
   }
+
+#ifdef __linux__
+  void getRtxHdrRuntime(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) return;
+    const auto state = platf::rtx_hdr::runtime_status();
+    send_response(response, nlohmann::json {{"status", true}, {"state", state.state}, {"error", state.error},
+      {"enabled", platf::rtx_hdr::globally_enabled()}, {"download_bytes", 68253738},
+      {"downloaded_bytes", state.downloaded_bytes}});
+  }
+
+  void prepareRtxHdrRuntime(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) return;
+    if (!authenticate(response, request)) return;
+    platf::rtx_hdr::prepare_runtime_async(true);
+    const auto state = platf::rtx_hdr::runtime_status();
+    send_response(response, nlohmann::json {{"status", state.state != "unsupported"}, {"state", state.state}, {"error", state.error}});
+  }
+#endif
 
   // Lightweight session status for UI messaging
   void getSessionStatus(resp_https_t response, req_https_t request) {
@@ -5910,6 +5941,10 @@ namespace confighttp {
     // Partial updates for config settings; merges with existing file and
     // removes keys when value is null or empty string.
     register_api_route("^/api/config$", "PATCH", patchConfig);
+#ifdef __linux__
+    register_api_route("^/api/rtx-hdr/runtime$", "GET", getRtxHdrRuntime);
+    register_api_route("^/api/rtx-hdr/runtime$", "POST", prepareRtxHdrRuntime);
+#endif
     // Capability cache lookup resolves the current output/adapter and can test
     // desktop duplication. Keep display-driver waits off the HTTPS event loop,
     // including while a paused application retains its virtual display.

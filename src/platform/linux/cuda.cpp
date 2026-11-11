@@ -473,7 +473,7 @@ namespace cuda {
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
       if (rtx_hdr_active) {
         try {
-          truehdr = std::make_unique<platf::linux_truehdr::gl_converter_t>(gl::ctx, *cdf, stream.get(), SUNSHINE_TRUEHDR_RUNTIME_DIR, width, height);
+          truehdr = std::make_unique<platf::linux_truehdr::gl_converter_t>(gl::ctx, *cdf, stream.get(), platf::rtx_hdr::runtime_path(), width, height);
           foreground = std::make_unique<platf::rtx_hdr::foreground_t>();
         } catch (const std::exception &exception) {
           BOOST_LOG(error) << exception.what();
@@ -760,7 +760,7 @@ namespace cuda {
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
       if (rtx_hdr_active) {
         try {
-          truehdr = std::make_unique<platf::linux_truehdr::gl_converter_t>(gl::ctx, *cdf, stream, SUNSHINE_TRUEHDR_RUNTIME_DIR, width, height);
+          truehdr = std::make_unique<platf::linux_truehdr::gl_converter_t>(gl::ctx, *cdf, stream, platf::rtx_hdr::runtime_path(), width, height);
           foreground = std::make_unique<platf::rtx_hdr::foreground_t>();
         } catch (const std::exception &exception) {
           BOOST_LOG(error) << exception.what();

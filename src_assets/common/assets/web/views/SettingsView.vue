@@ -1142,6 +1142,10 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
                 <h3>{{ groupTitle(group.id) }}</h3>
                 <p v-if="groupDescription(group.id)">{{ groupDescription(group.id) }}</p>
               </component>
+              <RouterLink v-if="group.id === 'video_rtx_hdr' && hostPlatform === 'linux'"
+                class="settings-more" to="/integrations#integration-rtx-hdr">
+                {{ t('ui.integrations.rtxHdr.manage') }} →
+              </RouterLink>
               <InlineAlert
                 v-if="
                   !isSearching &&

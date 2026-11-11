@@ -64,6 +64,9 @@ for (const ui of ['classic', 'v2'] as const) {
             .locator('section')
             .filter({ has: page.getByRole('heading', { name: 'RTX HDR', exact: true }) });
     await expect(section).toBeVisible();
+    await expect(section.getByRole('link', { name: /Check RTX HDR setup/ })).toHaveAttribute(
+      'href', '/v2/integrations#integration-rtx-hdr',
+    );
     const peak =
       ui === 'v2'
         ? section

@@ -4047,6 +4047,9 @@ onBeforeUnmount(() => {
           <div>
             <h2 id="rtx-hdr-heading">{{ t('ui.application.rtxHdr.title') }}</h2>
             <p>{{ t('ui.application.rtxHdr.description') }}</p>
+            <RouterLink v-if="isLinuxHost" to="/integrations#integration-rtx-hdr" target="_blank">
+              {{ t('ui.integrations.rtxHdr.manage') }} →
+            </RouterLink>
           </div>
           <div class="rtx-hdr__heading-meta">
             <StatusBadge :label="rtxHdrModeLabel" :tone="rtxHdrModeTone" compact />

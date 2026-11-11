@@ -28,7 +28,7 @@ namespace pyrowave::host {
       c.hdr = video::colorspace_is_hdr(p.colorspace);
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
       if (p.rtx_hdr) {
-        c.truehdr_runtime = SUNSHINE_TRUEHDR_RUNTIME_DIR;
+        c.truehdr_runtime = platf::rtx_hdr::runtime_path().string();
       }
 #endif
       if (auto *matrix = video::color_vectors_from_colorspace(p.colorspace, true)) {

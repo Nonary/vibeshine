@@ -63,7 +63,7 @@ namespace platf::linux_truehdr {
         // dependencies before effect adapters; never alter LD_LIBRARY_PATH.
         const auto cudart = root / "nvidia_vfx.libs/libcudart-256e6409.so.12.9.79";
         open(cudart);
-        for (const char *name : {"libnppc.so.12", "libnppial.so.12", "libnppicc.so.12", "libnppidei.so.12", "libnppif.so.12", "libnppig.so.12", "libnppim.so.12", "libnppist.so.12", "libnppitc.so.12", "libcudnn.so.9"}) {
+        for (const char *name : {"libnppc.so.12", "libnppial.so.12", "libnppicc.so.12", "libnppidei.so.12", "libnppig.so.12", "libcudnn.so.9"}) {
           open(libs / name);
         }
         void *cv = open(libs / "libNVCVImage.so");

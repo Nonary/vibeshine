@@ -47,6 +47,11 @@ downloads the newest release package from GitHub and installs it with `pacman -U
 | `--yes` | Answer pacman prompts automatically. |
 
 Re-running the script is safe. It only installs what is missing and repeats the checks.
+On supported NVIDIA hosts, RTX HDR is configured under **Integrations** in the web UI.
+When enabled, Vibeshine downloads about 65 MiB of required NVIDIA files, verifies each
+file, and reports setup progress and errors there. Wait for **Runtime ready** before
+starting an RTX HDR stream. The cached runtime uses about 123 MiB of persistent storage;
+subsequent streams reuse it without another download.
 The script does not run a full system upgrade. Local packages use `pacman -U`;
 repository installs use existing metadata to install Vibeshine and its dependencies.
 If the host repository has not been cached yet, the script uses a release package

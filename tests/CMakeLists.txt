@@ -2048,6 +2048,10 @@ if(WIN32 AND TARGET pyrowave::capi)
 endif()
 
 if(TARGET linux-truehdr)
+    add_test(NAME test_component_linux_truehdr_download
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${SUNSHINE_TEST_REPOSITORY_ROOT}/tools/linux_truehdr" -p test_fetch_runtime.py)
+    set_tests_properties(test_component_linux_truehdr_download PROPERTIES LABELS "component" TIMEOUT 60)
     add_test(NAME test_component_linux_truehdr_cuda_abi
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_linux_truehdr_cuda_abi.py"
             "${CMAKE_BINARY_DIR}")

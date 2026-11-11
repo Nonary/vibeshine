@@ -380,6 +380,7 @@
             v-model:form="form"
             :live-status="liveRtxHdrStatus"
             :live-error="liveRtxHdrError"
+            :linux="isLinux"
           />
 
           <AppEditConfigOverridesSection

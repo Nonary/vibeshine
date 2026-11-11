@@ -784,6 +784,7 @@
     "minimum_fps_target_desc": "The lowest effective FPS a stream can reach. A value of 0 is treated as roughly half of the stream's FPS. A setting of 20 is recommended if you stream 24 or 30fps content.",
     "rtx_hdr_title": "RTX HDR (AI SDR → HDR)",
     "rtx_hdr_intro": "Default tuning values for app-enabled RTX HDR conversion. During an RTX HDR stream, desktop and non-matching frames use SDR Brightness with neutral contrast and saturation.",
+    "rtx_hdr_setup": "Check RTX HDR setup",
     "rtx_hdr": "RTX HDR",
     "rtx_hdr_desc": "Enables RTX HDR when an app or client runtime override opts the stream in.",
     "rtx_hdr_force_sdr": "Force SDR source for RTX HDR",

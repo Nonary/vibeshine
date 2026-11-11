@@ -65,6 +65,41 @@ async function host(
   return patches;
 }
 
+test('RTX HDR integration reports setup, progress, failure and retry', async ({ page }) => {
+  await host(page, 'linux', {}, true, { rtx_hdr_supported: true, has_nvidia_gpu: true });
+  let state = 'missing';
+  let enabled = false;
+  await page.route('**/api/rtx-hdr/runtime', async (route) => {
+    if (route.request().method() === 'POST') state = 'downloading';
+    await route.fulfill({ json: { status: true, state, enabled, error: state === 'error' ? 'Network failed' : '',
+      download_bytes: 100, downloaded_bytes: 50 } });
+  });
+  await page.route('**/api/config', async (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback();
+    enabled = route.request().postDataJSON().rtx_hdr;
+    state = 'downloading';
+    await route.fulfill({ json: { status: true } });
+  });
+  await page.goto('/v2/integrations#integration-rtx-hdr');
+  const card = page.locator('article').filter({ has: page.locator('#integration-rtx-hdr') });
+  await expect(card.getByText('Not downloaded')).toBeVisible();
+  await expect(card.getByText(/about 65 MiB/)).toBeVisible();
+  await card.getByRole('button', { name: 'Enable', exact: true }).click();
+  await expect(card.getByText('Download: 50%')).toBeVisible();
+  state = 'error';
+  await expect(card.getByText('Network failed')).toBeVisible();
+  await card.getByRole('button', { name: 'Retry setup' }).click();
+  await expect(card.getByText('Downloading')).toBeVisible();
+  state = 'ready';
+  await expect(card.getByText('Runtime ready')).toBeVisible();
+});
+
+test('RTX HDR integration is hidden on unsupported hosts', async ({ page }) => {
+  await host(page, 'linux', {}, true, { rtx_hdr_supported: false, has_nvidia_gpu: false });
+  await page.goto('/v2/integrations');
+  await expect(page.locator('#integration-rtx-hdr')).toHaveCount(0);
+});
+
 test('Linux Everyday presents essentials and preserves unrelated values when saving', async ({
   page,
 }) => {

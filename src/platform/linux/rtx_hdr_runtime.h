@@ -5,9 +5,11 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <string>
 
 namespace platf::rtx_hdr {
   struct live_output_metadata_state_t {
@@ -25,6 +27,15 @@ namespace platf::rtx_hdr {
   // Publish only completed config applies. Encode threads never read mutable
   // config fields, take the config write gate, or perform foreground IPC.
   void notify_live_settings_changed();
+  struct runtime_status_t {
+    std::string state;
+    std::string error;
+    std::uint64_t downloaded_bytes = 0;
+  };
+  std::filesystem::path runtime_path();
+  runtime_status_t runtime_status();
+  bool globally_enabled();
+  void prepare_runtime_async(bool retry = false);
   std::shared_ptr<const frame_settings_t> frame_settings();
   live_output_metadata_state_t live_output_metadata_state();
 

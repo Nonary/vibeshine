@@ -1,10 +1,11 @@
 # RTX HDR on Linux
 
-Native Linux builds with CUDA on x86-64 include NVIDIA's pinned VFX TrueHDR
-runtime. This converts SDR capture into HDR10 for FFmpeg NVENC and native
-NVENC and PyroWave streaming; Python is used only to fetch the build dependency, never in
-the live capture/encode loop. The Web UI exposes app opt-in and global tuning
-in both interfaces on Linux NVIDIA hosts.
+Native Linux builds with CUDA on x86-64 support NVIDIA's pinned VFX TrueHDR
+runtime. When RTX HDR is enabled, Vibeshine downloads only the required files
+from NVIDIA (about 65 MiB), verifies their pinned hashes, and caches them for
+future streams. The Web UI's Integrations page reports setup progress, errors,
+and readiness. Python runs during setup, never in the live capture/encode loop.
+The Web UI exposes app opt-in and global tuning in both interfaces on Linux NVIDIA hosts.
 
 Enable HDR in the client, select an NVIDIA encoder, and enable RTX HDR for the
 application. The capture output stays SDR while the stream advertises
@@ -58,8 +59,8 @@ the game's executable. This observer does not activate or unminimize windows
 and never runs on an encode thread. Linux has no NVIDIA App profile source;
 Vibeshine's saved app/client/global settings are authoritative.
 
-The CMake dependency is checksum-pinned and installed with its license files
-under `/usr/lib/vibeshine/truehdr`. Missing libraries, failed SDK startup or
+The downloaded runtime and its license files are stored in service-owned state,
+under `/var/lib/vibeshine/truehdr-runtime` for the machine host. Missing libraries, failed SDK startup or
 conversion errors terminate the affected initialization/stream with an error.
 Installing the updated host and helper is necessary before testing the new
 foreground operation. Restarting the host interrupts active streams.

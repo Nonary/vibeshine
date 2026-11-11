@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import GameLibrarySetup from '../../web-legacy/components/GameLibrarySetup.vue';
 import { useUnsavedChanges } from '@/composables/useUnsavedChanges';
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 
@@ -138,6 +138,14 @@ interface VulkanStatus {
   enabled?: boolean;
 }
 
+interface RtxHdrStatus {
+  state: 'missing' | 'downloading' | 'ready' | 'error' | 'unsupported';
+  enabled: boolean;
+  error?: string;
+  download_bytes?: number;
+  downloaded_bytes?: number;
+}
+
 interface MutationResult {
   status?: boolean;
   error?: string;
@@ -155,6 +163,7 @@ type IntegrationId =
   | 'steam'
   | 'lutris'
   | 'mangohud'
+  | 'rtx-hdr'
   | 'playnite'
   | 'rtss'
   | 'lossless'
@@ -216,6 +225,8 @@ const rtss = ref<RtssStatus | null>(null);
 const lossless = ref<LosslessStatus | null>(null);
 const vigem = ref<VigemStatus | null>(null);
 const vulkan = ref<VulkanStatus | null>(null);
+const rtxHdr = ref<RtxHdrStatus | null>(null);
+const rtxHdrBusy = ref(false);
 const loading = ref(true);
 const refreshing = ref(false);
 const actionBusy = ref(false);
@@ -239,6 +250,7 @@ const isLinux = computed(() =>
     .toLocaleLowerCase()
     .includes('linux'),
 );
+const supportsRtxHdr = computed(() => isLinux.value && system.metadata?.rtx_hdr_supported === true);
 
 function message(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? fallback : cause instanceof Error ? cause.message : fallback;
@@ -506,6 +518,9 @@ async function load(preserveNotice = false): Promise<void> {
   const mangoResult = isLinux.value
     ? (await Promise.allSettled([apiGet<MangoHudStatus>('/api/frame-limiter/status')]))[0]
     : undefined;
+  const rtxHdrResult = supportsRtxHdr.value
+    ? (await Promise.allSettled([apiGet<RtxHdrStatus>('/api/rtx-hdr/runtime')]))[0]
+    : undefined;
   const windowsResults = isWindows.value
     ? await Promise.allSettled([
         apiGet<PlayniteStatus>('/api/playnite/status'),
@@ -532,6 +547,8 @@ async function load(preserveNotice = false): Promise<void> {
   } else if (mangoResult) {
     nextErrors.mangohud = message(mangoResult.reason, t('ui.integrations.errors.mangohudStatus'));
   }
+  if (rtxHdrResult?.status === 'fulfilled') rtxHdr.value = rtxHdrResult.value;
+  else if (rtxHdrResult) nextErrors['rtx-hdr'] = t('ui.integrations.rtxHdr.statusError');
 
   if (playniteResult?.status === 'fulfilled') playnite.value = playniteResult.value;
   else if (playniteResult)
@@ -889,7 +906,11 @@ function failedSummary(id: IntegrationId, name: string, description: string): In
 }
 
 const summaries = computed(() => {
-  if (isLinux.value) return [steamSummary(), lutrisSummary(), mangoHudSummary()];
+  if (isLinux.value) {
+    const result = [steamSummary(), lutrisSummary(), mangoHudSummary()];
+    if (supportsRtxHdr.value) result.push(rtxHdrSummary());
+    return result;
+  }
   if (isWindows.value) {
     return [
       steamSummary(),
@@ -902,6 +923,53 @@ const summaries = computed(() => {
   }
   return [steamSummary()];
 });
+
+function rtxHdrSummary(): IntegrationSummary {
+  const value = rtxHdr.value;
+  if (!value) return failedSummary('rtx-hdr', 'RTX HDR', t('ui.integrations.rtxHdr.description'));
+  const status = value.state === 'ready' ? t('ui.integrations.rtxHdr.ready')
+    : value.state === 'downloading' ? t('ui.integrations.rtxHdr.downloading')
+    : value.state === 'error' ? t('ui.integrations.rtxHdr.failed')
+    : t('ui.integrations.rtxHdr.notDownloaded');
+  const details = value.state === 'error' && value.error ? [value.error] : [];
+  if (value.state === 'downloading' && value.download_bytes) {
+    const percent = Math.min(100, Math.floor(100 * (value.downloaded_bytes || 0) / value.download_bytes));
+    details.push(t('ui.integrations.rtxHdr.progress', { percent }));
+  }
+  return { id: 'rtx-hdr', name: 'RTX HDR', description: t('ui.integrations.rtxHdr.description'), status,
+    tone: value.state === 'error' ? 'danger' : value.state === 'ready' ? 'success' : 'neutral', details };
+}
+
+async function refreshRtxHdr(): Promise<void> {
+  if (!supportsRtxHdr.value) return;
+  try {
+    rtxHdr.value = await apiGet<RtxHdrStatus>('/api/rtx-hdr/runtime');
+    delete errors.value['rtx-hdr'];
+  }
+  catch { errors.value = { ...errors.value, 'rtx-hdr': t('ui.integrations.rtxHdr.statusError') }; }
+}
+
+async function setRtxHdrEnabled(enabled: boolean): Promise<void> {
+  if (rtxHdrBusy.value) return;
+  rtxHdrBusy.value = true;
+  try {
+    await apiPatch('/api/config', { rtx_hdr: enabled });
+    await refreshRtxHdr();
+  } catch {
+    errors.value = { ...errors.value, 'rtx-hdr': t('ui.integrations.rtxHdr.updateError') };
+  } finally { rtxHdrBusy.value = false; }
+}
+
+async function retryRtxHdr(): Promise<void> {
+  if (rtxHdrBusy.value) return;
+  rtxHdrBusy.value = true;
+  try {
+    await apiPost('/api/rtx-hdr/runtime', {});
+    await refreshRtxHdr();
+  } catch {
+    errors.value = { ...errors.value, 'rtx-hdr': t('ui.integrations.rtxHdr.updateError') };
+  } finally { rtxHdrBusy.value = false; }
+}
 
 const errorCount = computed(() => Object.keys(errors.value).length);
 
@@ -1320,7 +1388,14 @@ watch(
     document.getElementById(route.hash.slice(1))?.scrollIntoView({ block: 'start' });
   },
 );
-onMounted(() => void load());
+let rtxHdrPoll: number | undefined;
+onMounted(() => {
+  void load();
+  rtxHdrPoll = window.setInterval(() => {
+    if (rtxHdr.value?.state === 'downloading') void refreshRtxHdr();
+  }, 2000);
+});
+onUnmounted(() => { if (rtxHdrPoll !== undefined) window.clearInterval(rtxHdrPoll); });
 const librarySetupOpen = ref(false);
 function libraryRequest(
   method: 'GET' | 'POST' | 'PATCH',
@@ -1425,6 +1500,9 @@ function libraryRequest(
             {{ t('ui.integrations.steam.linuxForced') }}
           </p>
           <p class="integration-row__description">{{ summary.description }}</p>
+          <p v-if="summary.id === 'rtx-hdr'" class="integration-notice">
+            {{ t(rtxHdr?.state === 'ready' ? 'ui.integrations.rtxHdr.readyNotice' : 'ui.integrations.rtxHdr.downloadNotice') }}
+          </p>
           <section
             v-if="summary.id === 'steam'"
             class="integration-settings"
@@ -2060,7 +2138,7 @@ function libraryRequest(
           </section>
         </div>
         <div
-          v-if="summary.id === 'steam' || summary.id === 'lutris' || isWindows"
+          v-if="summary.id === 'steam' || summary.id === 'lutris' || summary.id === 'rtx-hdr' || isWindows"
           class="integration-row__actions"
         >
           <template v-if="summary.id === 'steam'">
@@ -2085,6 +2163,16 @@ function libraryRequest(
               :disabled="steam?.enabled === false"
               @click="syncSteam"
             />
+          </template>
+          <template v-else-if="summary.id === 'rtx-hdr'">
+            <AppButton
+              :label="rtxHdr?.enabled ? t('ui.integrations.actions.disable') : t('ui.integrations.actions.enable')"
+              variant="secondary" size="compact" :busy="rtxHdrBusy"
+              @click="setRtxHdrEnabled(!rtxHdr?.enabled)"
+            />
+            <AppButton v-if="rtxHdr?.state === 'error' || (rtxHdr?.enabled && rtxHdr.state === 'missing')"
+              :label="t('ui.integrations.rtxHdr.retry')" variant="tertiary" size="compact"
+              :disabled="rtxHdrBusy" @click="retryRtxHdr" />
           </template>
           <template v-else-if="summary.id === 'lutris'">
             <AppButton

@@ -506,6 +506,20 @@
       }
     },
     "integrations": {
+      "rtxHdr": {
+        "description": "Convert SDR games to HDR on supported NVIDIA GPUs.",
+        "downloadNotice": "Enabling RTX HDR downloads about 65 MiB from NVIDIA and uses about 123 MiB of storage. Wait until the verified runtime is ready before starting an RTX HDR stream.",
+        "readyNotice": "The NVIDIA runtime was downloaded and verified. RTX HDR also requires a supported GPU and HDR client.",
+        "notDownloaded": "Not downloaded",
+        "downloading": "Downloading",
+        "ready": "Runtime ready",
+        "failed": "Setup failed",
+        "progress": "Download: {percent}%",
+        "retry": "Retry setup",
+        "manage": "Check RTX HDR setup",
+        "statusError": "Could not check RTX HDR setup status.",
+        "updateError": "Could not update RTX HDR setup."
+      },
       "actions": {
         "disable": "Disable",
         "install": "Install",

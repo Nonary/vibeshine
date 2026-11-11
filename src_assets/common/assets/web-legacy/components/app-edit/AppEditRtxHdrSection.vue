@@ -10,6 +10,9 @@
         <p class="text-[12px] leading-relaxed opacity-70">
           {{ $t('config.rtx_hdr_intro') }}
         </p>
+        <a v-if="linux" href="/v2/integrations#integration-rtx-hdr" target="_blank" rel="noopener noreferrer">
+          {{ $t('config.rtx_hdr_setup') }} →
+        </a>
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <n-tag v-if="rtxHdrEnabled" size="small" type="primary">{{
@@ -90,10 +93,12 @@ const props = withDefaults(
   defineProps<{
     liveStatus?: 'idle' | 'queued' | 'applying' | 'applied' | 'error';
     liveError?: string;
+    linux?: boolean;
   }>(),
   {
     liveStatus: 'idle',
     liveError: '',
+    linux: false,
   },
 );
 const { t } = useI18n();
