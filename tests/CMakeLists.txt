@@ -387,6 +387,14 @@ set(SUNSHINE_TEST_FAST_FOUNDATION_SOURCES
 
 # Header-only VHF ownership recovery runs on every platform without a driver.
 find_package(Threads REQUIRED)
+# Compile the production crypto implementation with controlled failures at the
+# OpenSSL name and signing boundaries. No application or hardware is required.
+sunshine_add_test_target(
+    NAME test_component_crypto_compat
+    CATEGORY COMPONENT
+    TEST_SOURCES unit/test_crypto_compat.cpp
+    LINK_LIBRARIES OpenSSL::Crypto)
+
 sunshine_add_test_target(
     NAME test_fast_vhf_gamepad_recovery
     CATEGORY FAST
@@ -634,6 +642,8 @@ sunshine_register_component(NAME test_component_paused_app_monitor TEST_SOURCE u
     LINK_LIBRARIES Threads::Threads Boost::property_tree OpenSSL::Crypto)
 sunshine_register_component(NAME test_component_display_helper_request_policy TEST_SOURCE unit/test_display_helper_request_policy.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/display_helper_request_policy.cpp")
+sunshine_register_component(NAME test_component_display_clone_group_policy TEST_SOURCE unit/test_display_clone_group_policy.cpp
+    LINK_LIBRARIES sunshine_test_displaydevice_headers)
 sunshine_register_component(NAME test_component_remote_display_topology TEST_SOURCE unit/test_remote_display_topology.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/remote_display_topology.cpp"
     LINK_LIBRARIES nlohmann_json::nlohmann_json)
@@ -1052,6 +1062,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_helper_recovery.py"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}" --compiler "${CMAKE_CXX_COMPILER}")
         set_tests_properties(test_component_display_helper_recovery PROPERTIES LABELS "component")
+        add_test(NAME test_component_display_helper_shell_refresh
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_helper_shell_refresh.py"
+                "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_display_helper_shell_refresh PROPERTIES LABELS "component" TIMEOUT 30)
         add_test(NAME test_component_recovery_status_integration
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/test_recovery_status_integration.py"
@@ -1554,11 +1569,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND SUNSHINE_TEST_ENABLE_COMPONENT)
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}/packaging/linux/vibeshine-session-controller")
         set_tests_properties(test_component_linux_session_classifier PROPERTIES LABELS "component")
         add_test(
-            NAME test_component_linux_machine_host_manifest
+            NAME test_component_linux_machine_host_retired_authorization
             COMMAND "${SUNSHINE_TEST_BASH_EXECUTABLE}"
-                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_machine_host_manifest.sh"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_machine_host_retired_authorization.sh"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}/packaging/linux/vibeshine-machine-host")
-        set_tests_properties(test_component_linux_machine_host_manifest PROPERTIES LABELS "component")
+        set_tests_properties(test_component_linux_machine_host_retired_authorization PROPERTIES LABELS "component")
     else()
         message(WARNING "bash was not found; skipping the Linux VKMS setup shell test")
     endif()

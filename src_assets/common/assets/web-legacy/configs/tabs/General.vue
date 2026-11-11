@@ -25,7 +25,7 @@ function addCmd() {
   const template = {
     do: '',
     undo: '',
-    ...(platform.value === 'windows' ? { elevated: false } : {}),
+    ...(platform.value === 'windows' || platform.value === 'linux' ? { elevated: false } : {}),
   };
   if (!config.value) return;
   const current = Array.isArray(config.value.global_prep_cmd) ? config.value.global_prep_cmd : [];
@@ -86,7 +86,7 @@ function removeCmd(index: number) {
             </div>
             <div class="flex items-center gap-2">
               <Checkbox
-                v-if="platform === 'windows'"
+                v-if="platform === 'windows' || platform === 'linux'"
                 :id="`global_prep_cmd_elevated_${index}`"
                 v-model="command.elevated"
                 :label="$t('_common.elevated')"

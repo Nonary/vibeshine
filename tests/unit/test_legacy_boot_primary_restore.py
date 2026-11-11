@@ -217,6 +217,7 @@ struct DisplayController {
 };
 struct ServiceState {
   DisplayController controller;
+  struct { void request() {} } shell_refresh;
   fs::path session_current_path, session_previous_path, golden_path;
   std::atomic<bool> always_restore_from_golden {false}, prefer_golden_if_current_missing {true};
   std::atomic<bool> restore_requested {true}, restore_attempted_unconfirmed {false}, session_saved {true};

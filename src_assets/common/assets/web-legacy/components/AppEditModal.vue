@@ -105,7 +105,7 @@
               t('apps.wait_all')
             }}</n-checkbox>
             <n-checkbox
-              v-if="isWindows && !isPlayniteManaged"
+              v-if="supportsElevation && !isPlayniteManaged"
               v-model:checked="form.elevated"
               size="small"
             >
@@ -432,7 +432,7 @@
 
           <AppEditPrepCommandsSection
             v-model:form="form"
-            :is-windows="isWindows"
+            :supports-elevation="supportsElevation"
             @add-prep="addPrep"
           />
 
@@ -964,7 +964,7 @@ function toServerPayload(f: AppForm): Record<string, any> {
     'prep-cmd': f.prepCmd.map((p) => ({
       do: p.do,
       undo: p.undo,
-      ...(isWindows.value ? { elevated: !!p.elevated } : {}),
+      ...(supportsElevation.value ? { elevated: !!p.elevated } : {}),
     })),
     detached: Array.isArray(f.detached) ? f.detached : [],
   };
@@ -1798,7 +1798,7 @@ function addPrep() {
   form.value.prepCmd.push({
     do: '',
     undo: '',
-    ...(isWindows.value ? { elevated: false } : {}),
+    ...(supportsElevation.value ? { elevated: false } : {}),
   });
   requestAnimationFrame(() => updateShadows());
 }
@@ -1922,6 +1922,8 @@ const isWindows = computed(
   () => (configStore.metadata?.platform || '').toLowerCase() === 'windows',
 );
 const isLinux = computed(() => configStore.metadata?.platform?.toLowerCase() === 'linux');
+// Linux runs elevated commands as root through the machine service.
+const supportsElevation = computed(() => isWindows.value || isLinux.value);
 const rtxHdrSupported = computed(() => (configStore.metadata as any)?.rtx_hdr_supported === true);
 const gpuList = computed(() => {
   const raw = (configStore.metadata as any)?.gpus;

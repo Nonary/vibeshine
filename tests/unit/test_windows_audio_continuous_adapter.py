@@ -12,11 +12,12 @@ root = Path(__file__).resolve().parents[2]
 source = (root / 'src/platform/windows/audio.cpp').read_text()
 sample_start = source.index('    capture_e sample(', source.index('class mic_wasapi_t'))
 sample = source[sample_start:source.index('    int init(', sample_start)]
-fill_start = source.index('    static std::int64_t qpc_time()', sample_start)
+fill_start = source.index('    capture_e refresh_mute()', sample_start)
 fill = source[fill_start:source.index('  public:\n    handle_t audio_event;', fill_start)]
 code = r'''
 #include "src/platform/windows/audio_continuous_buffer.h"
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -28,6 +29,7 @@ using DWORD = unsigned long; // Windows DWORD differs from uint32_t on MSVC
 using UINT64 = std::uint64_t;
 using BYTE = unsigned char;
 using HRESULT = int;
+using BOOL = int;
 constexpr HRESULT S_OK=0, AUDCLNT_E_DEVICE_INVALIDATED=-1;
 constexpr DWORD WAIT_OBJECT_0=0, WAIT_TIMEOUT=258, FALSE=0;
 constexpr DWORD AUDCLNT_BUFFERFLAGS_SILENT=2, AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY=1, AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR=4;
@@ -55,7 +57,7 @@ namespace util {
   hex_t hex(int) { return {}; }
 }
 struct Packet {
-  std::uint32_t frames; DWORD flags; UINT64 qpc; std::vector<float> samples;
+  std::uint32_t frames; DWORD flags; UINT64 qpc; std::vector<float> samples; UINT64 position=0;
 };
 struct Capture {
   std::deque<Packet> packets;
@@ -64,9 +66,9 @@ struct Capture {
   HRESULT GetNextPacketSize(std::uint32_t *out) {
     *out=packets.empty()?0:packets.front().frames; return status;
   }
-  HRESULT GetBuffer(BYTE **out, std::uint32_t *frames, DWORD *flags, void*, UINT64 *qpc) {
+  HRESULT GetBuffer(BYTE **out, std::uint32_t *frames, DWORD *flags, UINT64 *position, UINT64 *qpc) {
     auto &p=packets.front(); *out=reinterpret_cast<BYTE*>(p.samples.data());
-    *frames=p.frames; *flags=p.flags; *qpc=p.qpc; return status;
+    *frames=p.frames; *flags=p.flags; *qpc=p.qpc; *position=p.position; return status;
   }
   HRESULT ReleaseBuffer(std::uint32_t) { ++releases; packets.pop_front(); return S_OK; }
 };
@@ -81,6 +83,16 @@ FILL
     std::optional<std::function<void()>> default_endpt_changed_cb;
     bool follow_default_device=true;
     DWORD default_latency_ms=10;
+    struct Volume {
+      BOOL muted=0;
+      HRESULT status=S_OK;
+      HRESULT GetMute(BOOL *out) { *out=muted; return status; }
+    } volume;
+    Volume *endpoint_volume=nullptr;
+    struct Callback { std::atomic<std::uint64_t> state{1}; } callback;
+    Callback *mute_callback=&callback;
+    bool endpoint_muted=false;
+    std::uint64_t mute_state=0;
     Capture capture;
     Capture *audio_capture=&capture;
     std::array<float, 10000> sample_buf{};
@@ -93,6 +105,46 @@ FILL
 int main() {
   using platf::audio::mic_wasapi_t; using platf::audio::capture_e;
   std::vector<float> output(480);
+  // Start muted despite audible WASAPI packets; drain and release normally.
+  mic_wasapi_t guarded;
+  guarded.endpoint_volume=&guarded.volume;
+  guarded.volume.muted=1;
+  guarded.capture.packets.push_back({480,0,origin,std::vector<float>(960,99)});
+  CHECK(guarded.sample(output)==capture_e::ok && output.front()==0);
+  CHECK(guarded.capture.releases==1);
+  // The queued half-packet is erased even if mute and unmute both arrive
+  // between samples. Subsequent unmuted PCM preserves its original gain.
+  guarded.volume.muted=0;
+  guarded.callback.state=4;
+  CHECK(guarded.sample(output)==capture_e::ok && output.front()==0);
+  guarded.capture.packets.push_back({240,0,origin,std::vector<float>(480,7)});
+  CHECK(guarded.sample(output)==capture_e::ok && output.front()==7);
+  guarded.volume.status=AUDCLNT_E_DEVICE_INVALIDATED;
+  CHECK(guarded.sample(output)==capture_e::reinit);
+  guarded.volume.status=-2;
+  CHECK(guarded.sample(output)==capture_e::error);
+  // Continuous capture stores silence and preserves its output deadlines.
+  mic_wasapi_t paced;
+  paced.endpoint_volume=&paced.volume;
+  paced.volume.muted=1;
+  paced.continuous_buffer.emplace(48000,2,240,480,origin);
+  paced.capture.packets.push_back({480,0,origin,std::vector<float>(960,99)});
+  CHECK(paced.sample(output)==capture_e::ok && output.front()==0);
+  paced.volume.muted=0;
+  CHECK(paced.sample(output)==capture_e::ok && output.front()==0);
+  CHECK(paced.capture.releases==1);
+  // Pre-mute audible data already queued in the continuous ring must also
+  // disappear when both edges occur between capture calls.
+  mic_wasapi_t queued;
+  queued.endpoint_volume=&queued.volume;
+  queued.callback.state=0;
+  queued.continuous_buffer.emplace(48000,2,240,480,origin);
+  clock_ticks=origin;
+  queued.capture.packets.push_back({480,0,origin,std::vector<float>(960,8)});
+  CHECK(queued.sample(output)==capture_e::ok && output.front()==8);
+  queued.callback.state=4;
+  CHECK(queued.sample(output)==capture_e::ok && output.front()==0);
+  clock_ticks=origin;
   mic_wasapi_t mic;
   mic.continuous_buffer.emplace(48000,2,240,480,origin);
   CHECK(mic.sample(output)==capture_e::ok);
@@ -143,6 +195,24 @@ int main() {
   CHECK(normal.sample(output)==capture_e::ok && output.front()==5);
   normal.capture.packets.push_back({240,AUDCLNT_BUFFERFLAGS_SILENT,0,{}});
   CHECK(normal.sample(output)==capture_e::ok && output.front()==0);
+  // Production GetBuffer must forward the device position. Timestamp jitter
+  // across otherwise contiguous packets cannot alter the sample sequence.
+  clock_ticks=origin;
+  mic_wasapi_t jittered;
+  jittered.continuous_buffer.emplace(48000,2,240,480,origin);
+  for (int n=0;n<8;++n) {
+    std::vector<float> values(960);
+    for (int i=0;i<960;++i) values[i]=float(n*960+i+1);
+    auto jitter=n==0?0:(n%2?9000:-9000);
+    jittered.capture.packets.push_back({480,n==0?AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY:0,
+      static_cast<UINT64>(origin+n*100000+jitter),std::move(values),static_cast<UINT64>(n)*480});
+  }
+  int expected=1;
+  for (int n=0;n<16;++n) {
+    CHECK(jittered.sample(output)==capture_e::ok);
+    for (float value:output) CHECK(value==float(expected++));
+  }
+  CHECK(jittered.capture.releases==8);
   std::cout << "production WASAPI adapter tests passed\n";
 }
 '''.replace('SAMPLE', sample).replace('FILL', fill)

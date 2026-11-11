@@ -514,7 +514,12 @@ import { useI18n } from 'vue-i18n';
 import { NCard, NAlert, useMessage, useDialog } from 'naive-ui';
 import ResourceCard from '@/ResourceCard.vue';
 import VirtualDisplayRecovery from '@/components/VirtualDisplayRecovery.vue';
-import { fetchUpdateReleases, selectAvailableUpdate, prereleasesEnabled } from '../../web/utils/updates';
+import {
+  fetchUpdateReleases,
+  selectAvailableUpdate,
+  prereleasesEnabled,
+  installedBuildIsPrerelease,
+} from '../../web/utils/updates';
 import { displayRecoverySupported } from '../../web/utils/displayRecovery';
 import ChangelogPanel from '@/components/ChangelogPanel.vue';
 import PlayniteReinstallButton from '@/components/PlayniteReinstallButton.vue';
@@ -1058,11 +1063,12 @@ const crashDumpMessage = computed(() => {
 });
 
 const installedVersionNotStable = computed(() => {
-  // Consider non-main/master branches as non-stable
-  if (branch.value && !['master', 'main'].includes(branch.value)) return true;
-  // If GitHub flags the installed tag as a prerelease, consider it non-stable
-  if (installedIsPrerelease.value) return true;
-  return false;
+  return installedBuildIsPrerelease(
+    configStore.metadata?.channel,
+    installedVersion.value?.version || '',
+    branch.value,
+    installedIsPrerelease.value,
+  );
 });
 // If build is untagged (e.g., 0.0.0), display the current pre-release tag instead (when available)
 const displayVersion = computed(() => {
