@@ -1846,6 +1846,8 @@ namespace amf {
     const int effective_lookahead_depth = preanalysis_enabled ? preanalysis_lookahead_depth : 0;
     const auto encode_started = std::chrono::steady_clock::now();
     const auto encode_deadline = encode_started + lifecycle::output_coalesce_budget(current_config.framerate);
+    // Extended by an adaptive probe hold so the held capture is still submitted.
+    auto submission_deadline = encode_deadline;
     auto drain_completed_outputs_locked = [&]() {
       while (!completed_outputs.empty()) {
         results.emplace_back(std::move(completed_outputs.front()));
@@ -1910,10 +1912,13 @@ namespace amf {
           // which holds this input until then rather than dropping it.
           auto capacity_deadline = encode_deadline;
           if (const auto relaxed = adaptive_backlog.next_relaxation(std::chrono::steady_clock::now(), low_latency_pipeline_depth)) {
+            const auto hold_started = std::chrono::steady_clock::now();
             state_cv.wait_until(lock, *relaxed, capacity_wait_finished);
             capacity_deadline = std::max(capacity_deadline, *relaxed);
+            submission_deadline = lifecycle::submission_deadline_after_hold(
+              encode_deadline, hold_started, std::chrono::steady_clock::now());
           }
-          state_cv.wait_until(lock, capacity_deadline, capacity_wait_finished);
+          state_cv.wait_until(lock, std::max(capacity_deadline, submission_deadline), capacity_wait_finished);
           --active_output_poll_waiters;
           state_cv.notify_all();
           drain_completed_outputs_locked();
@@ -1995,7 +2000,7 @@ namespace amf {
         }
         if (!repeat_slot) {
           const auto repeat_deadline = std::min(
-            encode_deadline,
+            submission_deadline,
             std::chrono::steady_clock::now() + lifecycle::driver_wait_budget(current_config.framerate));
           state_cv.wait_until(lock, repeat_deadline, [&]() {
             return output_fatal || !completed_outputs.empty() || find_repeat_slot().has_value();
@@ -2240,7 +2245,6 @@ namespace amf {
     // more inputs than its configured queue. Check known ownership before entering
     // the driver so probe/runtime deadlines remain enforceable even on a stalled
     // encoder. The reserved wrapper is released by release_reserved_slot on return.
-    const auto submission_deadline = encode_deadline;
     {
       std::unique_lock lock(state_mutex);
       auto capacity_available = [&]() {

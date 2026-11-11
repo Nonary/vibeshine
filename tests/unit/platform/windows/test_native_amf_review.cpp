@@ -1050,6 +1050,26 @@ namespace {
            adaptive_time_is(keyframe.claim_at(0, 1), 31);
   }
 
+  bool adaptive_probe_hold_keeps_its_submission_budget() {
+    using namespace std::chrono_literals;
+    // 240 fps: a capture entering at 1 ms has a 9 ms budget, but the slow first
+    // encode makes the probe hold it until 11 ms, past that encode deadline.
+    adaptive_backlog backlog(true, 2);
+    backlog.accepted(1, adaptive_at(-30), 1ms, false);
+    backlog.accepted(2, adaptive_at(-30), 1ms, false);
+    backlog.output(1, adaptive_at(1), std::nullopt, 1, 0);
+    const auto encode_deadline = adaptive_at(9);
+    const auto relaxed = backlog.next_relaxation(adaptive_at(1), 1);
+    const bool outlasts_deadline = adaptive_time_is(relaxed, 11) && *relaxed > encode_deadline;
+    const auto submission_deadline = amf::lifecycle::submission_deadline_after_hold(encode_deadline, adaptive_at(1), *relaxed);
+    // The relaxed capture still has the 8 ms it had when the hold began.
+    const bool submittable = submission_deadline == adaptive_at(19) && adaptive_at(11) < submission_deadline &&
+                             adaptive_depth_is(backlog.admitted_depth(adaptive_at(11), 1), 1);
+    // Without a hold the encode deadline is unchanged.
+    const bool unchanged = amf::lifecycle::submission_deadline_after_hold(encode_deadline, adaptive_at(1), adaptive_at(1)) == encode_deadline;
+    return outlasts_deadline && submittable && unchanged;
+  }
+
 }  // namespace
 
 #ifdef SUNSHINE_AMF_LIFECYCLE_STANDALONE
@@ -1103,6 +1123,7 @@ int main() {
     {"adaptive_fast_start_leaves_the_service_window", adaptive_fast_start_leaves_the_service_window},
     {"adaptive_backlog_ignores_preanalysis_and_unmatched_outputs", adaptive_backlog_ignores_preanalysis_and_unmatched_outputs},
     {"adaptive_overlap_needs_queue_headroom_and_waits_for_keyframes", adaptive_overlap_needs_queue_headroom_and_waits_for_keyframes},
+    {"adaptive_probe_hold_keeps_its_submission_budget", adaptive_probe_hold_keeps_its_submission_budget},
   };
   int failed = 0;
   for (const auto &[name, run] : cases) {
@@ -1300,6 +1321,10 @@ TEST(SunshineNativeAmfReview, AdaptiveBacklogIgnoresPreanalysisAndUnmatchedOutpu
 
 TEST(SunshineNativeAmfReview, AdaptiveOverlapNeedsQueueHeadroomAndWaitsForKeyframes) {
   EXPECT_TRUE(adaptive_overlap_needs_queue_headroom_and_waits_for_keyframes());
+}
+
+TEST(SunshineNativeAmfReview, AdaptiveProbeHoldKeepsItsSubmissionBudget) {
+  EXPECT_TRUE(adaptive_probe_hold_keeps_its_submission_budget());
 }
 
 #endif

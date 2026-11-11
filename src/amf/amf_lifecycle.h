@@ -517,6 +517,15 @@ namespace amf::lifecycle {
   // Encode time is the fastest of this many recent matched outputs.
   inline constexpr std::size_t adaptive_backlog_service_window = 16;
 
+  // An adaptive probe may hold a capture for up to adaptive_backlog_probe_limit,
+  // which can exceed the frame's encode budget (9 ms at 240 fps). The held
+  // capture keeps the submission budget it had when the hold began, so the
+  // deadline checks before SubmitInput never skip the capture the probe held.
+  template<typename TimePoint>
+  TimePoint submission_deadline_after_hold(TimePoint encode_deadline, TimePoint hold_started, TimePoint hold_ended) {
+    return hold_ended > hold_started ? encode_deadline + (hold_ended - hold_started) : encode_deadline;
+  }
+
   // Opt-in timing for the learned depth above (amd_adaptive_backlog). Two costs
   // remain without it. A busy source refills depth two before the remaining
   // input can return, so a runtime that needs one input never demonstrates it.
