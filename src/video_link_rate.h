@@ -203,17 +203,51 @@ namespace stream::link_rate {
     /// headroom for rate-control overshoot and keyframes.
     std::uint32_t encoder_kbps(std::uint64_t total_bps, std::uint32_t ceiling, int fec, int framerate) const {
       const std::uint64_t video = (total_bps > audio_bps ? total_bps - audio_bps : 0) * 9 / 10;
-      std::uint32_t lo = 1;
-      std::uint32_t hi = std::max<std::uint32_t>(ceiling, 1);
+      const auto fits = [&](std::uint32_t kbps) {
+        return video_bps(kbps, fec, framerate) <= video;
+      };
+      // The highest fitting bitrate in [lo, hi], where demand rises with the bitrate.
+      const auto highest = [&](std::uint32_t lo, std::uint32_t hi) -> std::optional<std::uint32_t> {
+        if (lo > hi || !fits(lo)) {
+          return std::nullopt;
+        }
+        while (lo < hi) {
+          const auto mid = lo + (hi - lo + 1) / 2;
+          if (fits(mid)) {
+            lo = mid;
+          } else {
+            hi = mid - 1;
+          }
+        }
+        return lo;
+      };
+      const std::uint32_t top = std::max<std::uint32_t>(ceiling, 1);
+      // Demand drops where a frame outgrows four FEC blocks and the sender
+      // turns FEC off, so it rises only on either side of that bitrate. Find
+      // the first bitrate without FEC (top + 1 when there is none) and search
+      // above it before below it.
+      std::uint64_t lo = 1;
+      std::uint64_t hi = std::uint64_t(top) + 1;
       while (lo < hi) {
-        const auto mid = lo + (hi - lo + 1) / 2;
-        if (video_bps(mid, fec, framerate) <= video) {
-          lo = mid;
+        const auto mid = lo + (hi - lo) / 2;
+        if (pacing::nominal_fec_off(int(std::min<std::uint64_t>(mid, std::numeric_limits<int>::max())), framerate, frame_header_bytes, payload_blocksize, fec)) {
+          hi = mid;
         } else {
-          hi = mid - 1;
+          lo = mid + 1;
         }
       }
-      return lo;
+      const auto first_off = lo;
+      if (first_off <= top) {
+        if (const auto kbps = highest(std::uint32_t(first_off), top)) {
+          return *kbps;
+        }
+      }
+      if (first_off > 1) {
+        if (const auto kbps = highest(1, std::uint32_t(std::min<std::uint64_t>(first_off - 1, top)))) {
+          return *kbps;
+        }
+      }
+      return 1;
     }
 
     /// Round up so converting back to an encoder bitrate cannot lose the last kbps.
@@ -757,6 +791,16 @@ namespace stream::link_rate {
       while (!rtt_floor_.empty() && since(now, rtt_floor_.front().first) > queue_floor_window) {
         rtt_floor_.pop_front();
       }
+      // The recovery baseline is the lowest RTT seen, but a path that lastingly
+      // got slower would leave the RTT elevated against it for the rest of the
+      // session and stop every probe. Once a whole floor window has gone by
+      // above it with no queue being tracked, the window's floor is the new
+      // baseline.
+      const auto floor = rtt_floor();
+      const bool whole_window = !rtt_floor_.empty() && since(now, rtt_floor_.front().first) >= queue_floor_window - std::chrono::seconds {2};
+      if (floor && *floor > *minimum_rtt_ && whole_window && !queue_since_ && !queue_excess_) {
+        minimum_rtt_ = *floor;
+      }
     }
 
     std::optional<duration> rtt_floor() const {
@@ -1183,9 +1227,11 @@ namespace stream::link_rate {
     /// No evidence this round: confirm earlier probe steps, then probe or
     /// return to `full`.
     void advance(time_point now, bool busy, int fec, int framerate) {
-      if (!busy) {
-        // A static picture proves nothing: a step sent just before it needs
-        // its two seconds of motion.
+      // Quiet video, stale pings or a queue in the path prove nothing.
+      const bool evidence = busy && ping_is_fresh(now) && rtt_ > duration::zero() && !rtt_elevated();
+      if (!evidence) {
+        // A step sent just before the picture goes static, the feedback goes
+        // stale or the RTT rises needs its two seconds of clean evidence after.
         for (auto &step : pending_) {
           if (step) {
             step->at = now;
@@ -1212,8 +1258,7 @@ namespace stream::link_rate {
       (void) std::stable_partition(pending_.begin(), pending_.end(), [](const auto &step) {
         return step.has_value();
       });
-      // Quiet video, stale pings or a queue in the path prove nothing.
-      if (!(busy && ping_is_fresh(now) && rtt_ > duration::zero() && !rtt_elevated())) {
+      if (!evidence) {
         return;
       }
       const auto ceiling = ceiling_total(fec, framerate);

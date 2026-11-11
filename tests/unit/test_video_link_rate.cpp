@@ -175,6 +175,8 @@ namespace {
     std::uint64_t rtt_jitter_ms {};
     /// False while the picture is static.
     bool busy {true};
+    /// False while the client's pings do not arrive.
+    bool pings {true};
     std::vector<std::pair<std::uint64_t, change_t>> changes;
 
     explicit rig_t(std::uint32_t kbps):
@@ -204,7 +206,7 @@ namespace {
           lr.on_sent(frame, std::uint32_t(packets), bytes, t);
           each(lr, frame, t);
         }
-        if (ms % 100 == 0) {
+        if (pings && ms % 100 == 0) {
           lr.on_ping(t, ping_payload);
         }
         if (ms % 8 == 0) {
@@ -745,6 +747,23 @@ namespace {
     EXPECT_GT(rig.probes(), 0u) << describe(rig.changes);
   }
 
+  TEST(VideoLinkRate, AStableHigherRttAfterACutBecomesTheBaselineAndProbingResumes) {
+    // The path moves from 20 ms to 40 ms right after a cut and stays there,
+    // clean, with fresh feedback: no queue, just a slower route.
+    rig_t rig {40'000};
+    rig.clean(2'000);
+    rig.lose_three();
+    const auto cut = rig.last(change_kind_e::step_down);
+    ASSERT_TRUE(cut) << describe(rig.changes);
+    rig.rtt = 40ms;
+    rig.clean(10'000);
+    EXPECT_EQ(rig.probes(), 0u) << "the RTT is still elevated against the old floor: " << describe(rig.changes);
+    rig.clean(40'000);
+    EXPECT_GT(rig.probes(), 0u) << "the baseline followed the path: " << describe(rig.changes);
+    EXPECT_GT(rig.kbps, cut->to_kbps);
+    EXPECT_EQ(rig.cuts(), 1u) << describe(rig.changes);
+  }
+
   TEST(VideoLinkRate, ItNeverGoesBelowTheFloorAndSaysSo) {
     rig_t rig {4'000};
     rig.clean(1'000);
@@ -833,12 +852,13 @@ namespace {
     while (rig.probes() < 4 && !::testing::Test::HasFailure()) {
       rig.until_probe();
     }
-    rig.rtt = 300ms;
     // Every outstanding step is confirmed; no new one is issued.
+    access::next_probe(rig.lr) = rig.now() + std::chrono::hours {1};
     for (int i = 0; i < 400 && access::has_pending(rig.lr); ++i) {
       rig.clean(10);
     }
     ASSERT_FALSE(access::has_pending(rig.lr));
+    rig.rtt = 300ms;
     const auto before = access::confirmed_before(rig.lr);
     ASSERT_TRUE(before) << "a recent confirmation";
     EXPECT_GT(*before, cut_total) << "a chain, not one step";
@@ -870,6 +890,28 @@ namespace {
     const auto failed = rig.last(change_kind_e::probe_failed);
     ASSERT_TRUE(failed) << describe(rig.changes);
     EXPECT_EQ(failed->to_kbps, probe.from_kbps);
+    EXPECT_EQ(rig.cuts(), 1u) << "not another cut";
+  }
+
+  TEST(VideoLinkRate, AStepIsNotConfirmedWhileTheFeedbackIsStale) {
+    rig_t rig {40'000};
+    rig.clean(2'000);
+    rig.lose_three();
+    const auto probe = rig.until_probe();
+    const auto good = access::good(rig.lr);
+    // Busy video, no loss reported, but no pings either.
+    rig.pings = false;
+    rig.clean(5'000);
+    EXPECT_EQ(access::good(rig.lr), good) << "stale feedback confirmed a step";
+    EXPECT_TRUE(access::has_pending(rig.lr));
+    // Feedback returns and the link cannot carry the step.
+    rig.pings = true;
+    rig.clean(150);
+    rig.lose_three();
+    rig.clean(200);
+    const auto failed = rig.last(change_kind_e::probe_failed);
+    ASSERT_TRUE(failed) << describe(rig.changes);
+    EXPECT_EQ(failed->to_kbps, probe.from_kbps) << "back to the last verified rate";
     EXPECT_EQ(rig.cuts(), 1u) << "not another cut";
   }
 
@@ -1780,6 +1822,48 @@ namespace {
   }
 
   // ---- parts ----
+
+  TEST(VideoLinkRateBudget, TheEncoderBitrateSearchSpansTheBitrateWhereFecTurnsOff) {
+    // Past four FEC blocks a frame goes without FEC, so the wire demand drops
+    // there: a bitrate above that point can fit an allowance that one just
+    // below it does not.
+    const auto b = budget();
+    constexpr int rate = 30;
+    constexpr int percent = 20;
+    std::uint32_t first_off = 0;
+    for (std::uint32_t kbps = 1'000; kbps < max_kbps; ++kbps) {
+      if (b.video_bps(kbps + 1, percent, rate) * 10 < b.video_bps(kbps, percent, rate) * 9) {
+        first_off = kbps + 1;
+        break;
+      }
+    }
+    ASSERT_GT(first_off, 0u) << "no drop where FEC turns off";
+    const auto last_on = first_off - 1;
+    const auto above = first_off + 20'000;
+    const auto allowance = b.video_bps(above, percent, rate);
+    ASSERT_LT(allowance, b.video_bps(last_on, percent, rate));
+    const auto total = b.total_bps(above, percent, rate);
+    // A plain binary search over [1, ceiling] would test last_on first, find
+    // it too big and never look above it.
+    const auto ceiling = 2 * last_on - 2;
+    const auto kbps = b.encoder_kbps(total, ceiling, percent, rate);
+    EXPECT_GE(kbps, above);
+    EXPECT_LE(kbps, ceiling);
+    const auto video = (total - b.audio_bps) * 9 / 10;
+    EXPECT_LE(b.video_bps(kbps, percent, rate), video);
+    // And it is the highest bitrate that fits.
+    for (auto higher = kbps + 1; higher <= ceiling; ++higher) {
+      if (b.video_bps(higher, percent, rate) <= video) {
+        ADD_FAILURE() << higher << " kbps fits too, above " << kbps;
+        break;
+      }
+    }
+    // Below the drop the search still finds the highest bitrate with FEC.
+    const auto low_total = b.total_bps(1'000, percent, rate);
+    const auto low = b.encoder_kbps(low_total, ceiling, percent, rate);
+    EXPECT_GE(low, 1'000u);
+    EXPECT_LT(low, last_on);
+  }
 
   TEST(VideoLinkRateBudget, AnEncoderBitrateSurvivesTheRoundTripThroughTheWireRate) {
     const auto b = budget();
