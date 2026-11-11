@@ -302,6 +302,11 @@ namespace platf::dxgi {
     }
   }
 
+  void hdr_stats_session_t::rejected() {
+    // The rejected pixels are not encoded; their pass frees its buffer on a later poll.
+    converted_unmeasured();
+  }
+
   std::optional<std::string> hdr_stats_session_t::submitted(ID3D11DeviceContext *context, std::int64_t frame_index) {
     const auto source = std::exchange(deferred, std::nullopt);
     if (!active()) {

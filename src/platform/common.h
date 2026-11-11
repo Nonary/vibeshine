@@ -656,6 +656,13 @@ namespace platf {
     virtual void run_hdr_dynamic_metadata_pass(std::int64_t frame_index) {
       (void) frame_index;
     }
+
+    /**
+     * @brief Run instead of run_hdr_dynamic_metadata_pass() when the encoder did not take the
+     *        last converted frame: its statistics pass is dropped, never named after a frame.
+     */
+    virtual void discard_hdr_dynamic_metadata_pass() {
+    }
   };
 
   struct avcodec_encode_device_t: encode_device_t {

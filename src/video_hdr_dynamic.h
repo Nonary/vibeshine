@@ -65,4 +65,17 @@ namespace video {
    *        `frame_index`, so its statistics pass reports under that frame.
    */
   void run_hdr_dynamic_pass(encode_session_t &session, std::int64_t frame_index);
+
+  /**
+   * @brief Tell `session`'s device that the encoder did not take the last converted frame,
+   *        so its statistics pass is dropped instead of named after any frame.
+   */
+  void discard_hdr_dynamic_pass(encode_session_t &session);
+
+  /**
+   * @brief After an encode call that returned without error: name the statistics pass after
+   *        `frame_index` when the encoder took the input, and drop it when it did not (AMF
+   *        backpressure), so a rejected frame's measurement never reaches a later packet.
+   */
+  void finish_hdr_dynamic_pass(encode_session_t &session, std::int64_t frame_index, bool input_accepted);
 }  // namespace video

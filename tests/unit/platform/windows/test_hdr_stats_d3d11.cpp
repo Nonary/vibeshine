@@ -374,6 +374,32 @@ TEST_F(HdrStatsSession, AnUnmeasuredConversionNamesNoEarlierPass) {
   EXPECT_EQ(samples_by(*stream, 7), 1u);
 }
 
+TEST_F(HdrStatsSession, ARejectedFrameNeverReachesALaterPacket) {
+  auto stream = std::make_shared<hdr::stream_t>(hdr::codec_e::hevc);
+  platf::dxgi::hdr_stats_session_t session {HDR_STATS_TEST_SHADER_PATH};
+  ASSERT_FALSE(session.attach(device.Get(), stream));
+
+  // A fresh conversion under the mutex that the encoder rejects (AMF backpressure), then a
+  // different frame: the rejected pass is read back late but under no frame.
+  session.converted(context.Get(), source, true);
+  EXPECT_EQ(session.in_flight(), 1u);
+  session.rejected();
+  ASSERT_TRUE(settle(session, 6));
+  EXPECT_EQ(samples_by(*stream, 6), 0u) << "frame 6 carries nothing measured on rejected pixels";
+
+  // The same with a device-owned source waiting for the submit.
+  session.converted(context.Get(), source, false);
+  session.rejected();
+  EXPECT_FALSE(session.submitted(context.Get(), 7));
+  EXPECT_EQ(session.in_flight(), 0u);
+  EXPECT_EQ(samples_by(*stream, 7), 0u);
+
+  // The next accepted conversion is reported as usual.
+  session.converted(context.Get(), source, true);
+  ASSERT_TRUE(settle(session, 8));
+  EXPECT_EQ(samples_by(*stream, 8), 1u);
+}
+
 TEST_F(HdrStatsSession, ADeviceOwnedSourceIsMeasuredAfterTheSubmit) {
   auto stream = std::make_shared<hdr::stream_t>(hdr::codec_e::hevc);
   platf::dxgi::hdr_stats_session_t session {HDR_STATS_TEST_SHADER_PATH};

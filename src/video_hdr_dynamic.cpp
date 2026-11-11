@@ -106,4 +106,21 @@ namespace video {
       device->run_hdr_dynamic_metadata_pass(frame_index);
     }
   }
+
+  void discard_hdr_dynamic_pass(encode_session_t &session) {
+    if (!session.hdr_dynamic) {
+      return;
+    }
+    if (auto *device = session.encode_device()) {
+      device->discard_hdr_dynamic_metadata_pass();
+    }
+  }
+
+  void finish_hdr_dynamic_pass(encode_session_t &session, std::int64_t frame_index, bool input_accepted) {
+    if (input_accepted) {
+      run_hdr_dynamic_pass(session, frame_index);
+    } else {
+      discard_hdr_dynamic_pass(session);
+    }
+  }
 }  // namespace video

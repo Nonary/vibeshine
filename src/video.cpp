@@ -3812,18 +3812,20 @@ namespace video {
     thread_local logging::min_max_avg_periodic_logger<double> encode_duration_logger(debug, "Video encode call duration", "ms");
     const auto encode_start = std::chrono::steady_clock::now();
     int result = -1;
+    bool input_accepted = true;
     if (auto avcodec_session = dynamic_cast<avcodec_encode_session_t *>(&session)) {
       result = encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp, host_processing_timestamp);
     } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
       result = encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp, host_processing_timestamp);
     } else if (auto amf_session = dynamic_cast<amf_encode_session_t *>(&session)) {
       result = encode_amf(frame_nr, *amf_session, packets, channel_data, frame_timestamp, host_processing_timestamp);
+      // AMF backpressure returns 0 without taking the input, even after the retry.
+      input_accepted = amf_session->was_last_input_accepted();
     }
 
     encode_duration_logger.collect_and_log(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - encode_start).count());
     if (result == 0) {
-      // The encoder has this frame; its statistics pass is named after it now, and never waited for.
-      run_hdr_dynamic_pass(session, frame_nr);
+      finish_hdr_dynamic_pass(session, frame_nr, input_accepted);
     }
     return result;
   }

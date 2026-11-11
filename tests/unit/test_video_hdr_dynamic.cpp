@@ -69,10 +69,15 @@ namespace {
       passes.push_back(frame_index);
     }
 
+    void discard_hdr_dynamic_metadata_pass() override {
+      ++discards;
+    }
+
     bool measures = true;  ///< Whether it has a statistics pass.
     int attaches = 0;
     std::shared_ptr<hdr::stream_t> stream;
     std::vector<std::int64_t> passes;
+    int discards = 0;
   };
 
   struct fake_session_t: video::encode_session_t {
@@ -260,6 +265,28 @@ TEST(VideoHdrDynamicPass, IsNamedAfterTheFrameTheEncoderTook) {
   video::splice_hdr_dynamic_units(session, measured);
   EXPECT_NE(bytes_of(measured), reference_splice(5));
   EXPECT_EQ(session.hdr_dynamic->counters().samples, 1u);
+}
+
+TEST(VideoHdrDynamicPass, InputTheEncoderRejectedIsNeverNamed) {
+  fake_device_t device;
+  fake_session_t session {&device};
+  ASSERT_TRUE(attach_hevc(session));
+
+  // AMF backpressure: frame 4 returns without error but its input was not taken.
+  video::finish_hdr_dynamic_pass(session, 4, false);
+  EXPECT_TRUE(device.passes.empty()) << "the rejected conversion's pass takes no frame";
+  EXPECT_EQ(device.discards, 1);
+
+  // The next frame is taken and named as usual.
+  video::finish_hdr_dynamic_pass(session, 5, true);
+  EXPECT_EQ(device.passes, (std::vector<std::int64_t> {5}));
+  EXPECT_EQ(device.discards, 1);
+
+  // Without a stream nothing reaches the device.
+  fake_device_t idle_device;
+  fake_session_t idle {&idle_device};
+  video::finish_hdr_dynamic_pass(idle, 6, false);
+  EXPECT_EQ(idle_device.discards, 0);
 }
 
 TEST(VideoHdrDynamicSplice, AvcodecPacketTakesTheUnitsAndKeepsItsFrameAndFlags) {

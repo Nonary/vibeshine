@@ -1673,6 +1673,10 @@ namespace platf::dxgi {
       }
     }
 
+    void discard_hdr_dynamic_metadata_pass() {
+      hdr_stats.rejected();
+    }
+
     /**
      * @brief Hand what the conversion just read to the HDR10+ statistics pass, with the
      *        transfer function the conversion applied. Called before the keyed mutex is
@@ -2116,6 +2120,10 @@ namespace platf::dxgi {
       base.run_hdr_dynamic_metadata_pass(frame_index);
     }
 
+    void discard_hdr_dynamic_metadata_pass() override {
+      base.discard_hdr_dynamic_metadata_pass();
+    }
+
     void apply_colorspace() override {
       base.apply_colorspace(colorspace, rtx_hdr_active);
     }
@@ -2260,6 +2268,10 @@ namespace platf::dxgi {
 
     void run_hdr_dynamic_metadata_pass(std::int64_t frame_index) override {
       base.run_hdr_dynamic_metadata_pass(frame_index);
+    }
+
+    void discard_hdr_dynamic_metadata_pass() override {
+      base.discard_hdr_dynamic_metadata_pass();
     }
 
   private:
@@ -2511,6 +2523,10 @@ namespace platf::dxgi {
 
     void run_hdr_dynamic_metadata_pass(std::int64_t frame_index) override {
       base.run_hdr_dynamic_metadata_pass(frame_index);
+    }
+
+    void discard_hdr_dynamic_metadata_pass() override {
+      base.discard_hdr_dynamic_metadata_pass();
     }
 
   private:

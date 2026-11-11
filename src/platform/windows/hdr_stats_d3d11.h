@@ -167,6 +167,13 @@ namespace platf::dxgi {
     void converted_unmeasured();
 
     /**
+     * @brief Call instead of submitted() when the encoder did not take the last converted
+     *        frame: its pass, recorded or waiting for the submit, is dropped and never named
+     *        after a frame, so a later readback cannot reach a later packet.
+     */
+    void rejected();
+
+    /**
      * @brief Call once the encoder took the last converted frame as `frame_index`. Never waits.
      * @return Why the stream's metadata stopped, when it stopped now.
      */
