@@ -161,7 +161,6 @@ namespace config {
     bool remote_monitor_disconnect_on_client_disconnect;  ///< Release a Remote Monitor when its paired client transport disconnects.
     bool remote_monitor_terminate_on_first_request;  ///< Let extra clients terminate the active game with one Terminate request.
     bool remote_monitor_confirm_app_replacement;  ///< Require confirmation before an ungated launch replaces the active game.
-    bool app_resume_terminate;  ///< Inject Resume, the running-game copy and Terminate for additional clients.
 
     struct dd_t {
       struct workarounds_t {
@@ -494,6 +493,9 @@ namespace config {
   extern stream_t stream;
   // One snapshot of the last completed apply; 0 preserves ENet defaults.
   std::chrono::milliseconds get_control_peer_timeout();
+  // app_resume_terminate from the last completed apply. Request handlers read
+  // this instead of `video`, which a hot apply resets and rewrites.
+  bool get_app_resume_terminate();
   extern nvhttp_t nvhttp;
   extern input_t input;
   extern frame_limiter_t frame_limiter;

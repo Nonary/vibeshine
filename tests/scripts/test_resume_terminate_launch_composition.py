@@ -29,7 +29,10 @@ std::string get_arg(const args_t &args, const char *key, const char *fallback = 
   return it == args.end() ? std::string {fallback} : it->second;
 }
 namespace util { int from_view(const std::string &value) { return std::stoi(value); } }
-namespace config { struct { bool app_resume_terminate = true; } video; }
+namespace config {
+  bool app_resume_terminate = true;
+  bool get_app_resume_terminate() { return app_resume_terminate; }
+}
 namespace proc {
   struct resolved_t : remote_session::app_t { bool remote_monitor_profile; };
   struct process_t {
@@ -93,7 +96,7 @@ int main() {
   }
 
   // With the setting off, cached Resume and Terminate tiles are refused.
-  config::video.app_resume_terminate = false;
+  config::app_resume_terminate = false;
   for (const auto id : {remote_session::secondary_resume_id, remote_session::resume_id,
                         remote_session::secondary_terminate_id, remote_session::terminate_id}) {
     const auto result = route("viewer", id, 42);

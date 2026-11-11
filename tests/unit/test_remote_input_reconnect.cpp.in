@@ -62,9 +62,9 @@ namespace config {
     std::chrono::seconds ping_timeout {30};
   } stream;
 
-  struct {
-    bool app_resume_terminate = true;
-  } video;
+  bool get_app_resume_terminate() {
+    return true;
+  }
 
   std::unordered_map<std::string, std::string> runtime_overrides;
   int sets = 0;

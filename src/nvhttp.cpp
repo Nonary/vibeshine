@@ -4144,7 +4144,7 @@ namespace nvhttp {
       remote_gate.owner,
       remote_gate.active,
       replacement_confirmation_active,
-      config::video.app_resume_terminate
+      config::get_app_resume_terminate()
     );
     tree.put("root.currentgame", expose_active_game ? current_appid : 0);
     tree.put("root.currentgameuuid", expose_active_game && current_app ? current_app->uuid : "");
@@ -4322,7 +4322,7 @@ namespace nvhttp {
       .app = current_app ? remote_session::app_t {static_cast<std::int32_t>(util::from_view(current_app->id)), current_app->uuid, current_app->name, false} : remote_session::app_t {},
     };
     const auto remote_gate = remote_role_gate_snapshot_for_client(identity.uuid);
-    auto projection = remote_session::project(caller, game, remote_gate.owner, remote_configured_apps, remote_gate.active, config::video.app_resume_terminate);
+    auto projection = remote_session::project(caller, game, remote_gate.owner, remote_configured_apps, remote_gate.active, config::get_app_resume_terminate());
     // An existing input owner retains its reconnect tile; disconnect and
     // resume controls remain independent of launch tile visibility.
     const bool input_removed = system_remote_app_removed(remote_session::control_e::input);
@@ -4499,7 +4499,7 @@ namespace nvhttp {
         return;
       }
       // Cached Resume and Terminate tiles follow the setting that hides them.
-      if (!remote_session::control_enabled(synthetic_control, owner.role, config::video.app_resume_terminate, remote_gate.active)) {
+      if (!remote_session::control_enabled(synthetic_control, owner.role, config::get_app_resume_terminate(), remote_gate.active)) {
         tree.put("root.resume", 0);
         tree.put("root.gamesession", 0);
         tree.put("root.<xmlattr>.status_code", 404);

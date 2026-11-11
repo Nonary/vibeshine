@@ -930,7 +930,6 @@ namespace config {
     false,  // remote_monitor_disconnect_on_client_disconnect
     false,  // remote_monitor_terminate_on_first_request
     true,  // remote_monitor_confirm_app_replacement
-    true,  // app_resume_terminate
 
     {
       video_t::dd_t::config_option_e::verify_only,  // configuration_option
@@ -1112,6 +1111,9 @@ namespace config {
     // Only completed applies publish this setting; the control thread never
     // reads the mutable/reset-in-progress configuration objects.
     std::atomic<std::uint32_t> g_control_peer_timeout_ms {0};
+    // Serverinfo, applist and launch read this from HTTP threads while a
+    // configuration save may be resetting and rewriting `video`.
+    std::atomic<bool> g_app_resume_terminate {true};
 
     hardware_metrics_config_t g_hardware_metrics_config;
 
@@ -1152,6 +1154,10 @@ namespace config {
 
   std::chrono::milliseconds get_control_peer_timeout() {
     return std::chrono::milliseconds {g_control_peer_timeout_ms.load(std::memory_order_acquire)};
+  }
+
+  bool get_app_resume_terminate() {
+    return g_app_resume_terminate.load(std::memory_order_acquire);
   }
 
   hardware_metrics_settings_t get_hardware_metrics_settings() {
@@ -1885,7 +1891,9 @@ namespace config {
     bool_f(vars, "remote_monitor_disconnect_on_client_disconnect", video.remote_monitor_disconnect_on_client_disconnect);
     bool_f(vars, "remote_monitor_terminate_on_first_request", video.remote_monitor_terminate_on_first_request);
     bool_f(vars, "remote_monitor_confirm_app_replacement", video.remote_monitor_confirm_app_replacement);
-    bool_f(vars, "app_resume_terminate", video.app_resume_terminate);
+    // Kept out of `video` and published at the end, like control_peer_timeout.
+    bool app_resume_terminate = true;
+    bool_f(vars, "app_resume_terminate", app_resume_terminate);
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);
     generic_f(vars, "dd_resolution_option", video.dd.resolution_option, dd::resolution_option_from_view);
@@ -2357,6 +2365,8 @@ namespace config {
     // Publish the completed timeout after configuration parsing and side effects succeed.
     // A pending CONNECT can keep using the last completed policy during apply.
     g_control_peer_timeout_ms.store(static_cast<std::uint32_t>(control_peer_timeout.count()), std::memory_order_release);
+    // Requests keep seeing the last completed value, never the reset default.
+    g_app_resume_terminate.store(app_resume_terminate, std::memory_order_release);
 
     // Publish only after parsing and apply_config side effects succeed. Reset
     // and failed applies leave the preceding completed settings visible.
