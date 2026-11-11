@@ -14,6 +14,11 @@ on:
         required: false
         type: boolean
         default: false
+      require_latest:
+        description: Only publish the current latest stable release.
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: arch-repository
@@ -47,6 +52,7 @@ jobs:
         shell: bash
         env:
           ALLOW_DRAFT: ${{ inputs.allow_draft }}
+          REQUIRE_LATEST: ${{ inputs.require_latest }}
           REQUESTED_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
@@ -77,6 +83,13 @@ jobs:
             fi
             echo "::warning::Publishing the Arch package from draft release ${source_tag} because allow_draft was set."
           fi
+          if [[ "${REQUIRE_LATEST}" == "true" ]]; then
+            latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+            if [[ "$(jq -r '.prerelease' <<<"${release_json}")" != false || "${latest_tag}" != "${source_tag}" ]]; then
+              echo "::error::${source_tag} is not the latest stable release (${latest_tag})."
+              exit 1
+            fi
+          fi
 
           mapfile -t package_assets < <(
             jq -r '.assets[] | .name as $name | select(($name | test("^vibeshine-.+\\.pkg\\.tar\\.zst$")) and (($name | contains("-debug-")) | not)) | [.id, .name] | @tsv' <<<"${release_json}"
@@ -103,6 +116,7 @@ jobs:
 
           echo "package_name=${package_name}" >>"${GITHUB_OUTPUT}"
           echo "release_version=${release_version}" >>"${GITHUB_OUTPUT}"
+          echo "asset_id=${asset_id}" >>"${GITHUB_OUTPUT}"
 
       - name: Import and verify repository signing key
         id: signing-key
@@ -159,6 +173,7 @@ jobs:
         env:
           FINGERPRINT: ${{ steps.signing-key.outputs.fingerprint }}
           PACKAGE_NAME: ${{ steps.release.outputs.package_name }}
+          ASSET_ID: ${{ steps.release.outputs.asset_id }}
           SIGNING_PASSPHRASE: ${{ secrets.ARCH_REPO_GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
@@ -199,10 +214,15 @@ jobs:
           cp vibeshine.files.tar.gz vibeshine.files
           cp vibeshine.files.tar.gz.sig vibeshine.files.sig
 
+          # Pages retrieves this exact release asset and verifies the signed index.
+          jq -n --arg name "${PACKAGE_NAME}" --arg id "${ASSET_ID}" \
+            '{package_name: $name, asset_id: $id}' >release-asset.json
+          rm -f -- "${PACKAGE_NAME}"
+
           # Prune older payloads only after the new indexes have been signed.
           shopt -s nullglob
           for old_package in vibeshine-*.pkg.tar.zst vibeshine-*.pkg.tar.zst.sig; do
-            if [[ "${old_package}" != "${PACKAGE_NAME}" && "${old_package}" != "${PACKAGE_NAME}.sig" ]]; then
+            if [[ "${old_package}" != "${PACKAGE_NAME}.sig" ]]; then
               rm -f -- "${old_package}"
             fi
           done
@@ -211,6 +231,7 @@ jobs:
         shell: bash
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+          REQUIRE_LATEST: ${{ inputs.require_latest }}
         run: |
           set -euo pipefail
           # The checkout is owned by a different uid than the container user.
@@ -223,9 +244,16 @@ jobs:
             echo 'Repository already contains this exact signed release.'
             exit 0
           fi
+          if [[ "${REQUIRE_LATEST}" == "true" ]]; then
+            latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+            if [[ "${latest_tag}" != "${RELEASE_VERSION}" ]]; then
+              echo "::error::A newer stable release (${latest_tag}) appeared during publication."
+              exit 1
+            fi
+          fi
           git -C "${publication_dir}" commit -m "Publish Vibeshine ${RELEASE_VERSION} for Arch Linux"
           git -C "${publication_dir}" push origin HEAD:arch-repo
 
       - name: Deploy updated repository through Pages
         shell: bash
-        run: gh workflow run update-pages.yml --ref vibe
+        run: gh workflow run update-pages.yml --ref master

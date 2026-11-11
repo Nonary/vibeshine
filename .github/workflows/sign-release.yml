@@ -471,7 +471,7 @@ jobs:
       ${{ always() && !cancelled() && needs.resolve_release.result == 'success' &&
           (needs.build-windows.result == 'success' || needs.reuse-windows.result == 'success') }}
     permissions:
-      actions: read
+      actions: write
       contents: write
       issues: write
     runs-on: ubuntu-latest
@@ -757,3 +757,13 @@ jobs:
               --input "${asset}" \
               >/dev/null
           done
+
+      - name: Publish stable Arch repository
+        if: ${{ inputs.release_draft != true && steps.release-metadata.outputs.prerelease == 'false' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.resolve_release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          gh workflow run publish-arch-repository.yml --ref master \
+            -f release_tag="${TAG_NAME}" -f require_latest=true

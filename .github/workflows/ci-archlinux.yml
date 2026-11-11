@@ -136,6 +136,8 @@ jobs:
           # Ninja links do not carry GNU make's jobserver. Keep each link's
           # LTO pool bounded instead of spawning nproc workers per link.
           echo 'LTOFLAGS="-flto=1"' >> /etc/makepkg.conf
+          # A longer window retains shared data between host binaries and libraries.
+          echo 'COMPRESSZST=(zstd -c -z -q -T2 -15 --long=27)' >> /etc/makepkg.conf
 
       - name: Verify CUDA release policy
         if: inputs.build_tests
@@ -390,6 +392,11 @@ jobs:
           package="${packages[0]}"
           package_info="$(bsdtar -xOf "${package}" .PKGINFO)"
           package_files="$(bsdtar -tf "${package}")"
+          grep -Fxq 'usr/libexec/vibeshine/vibeshine-truehdr-runtime' <<< "${package_files}"
+          if grep -Fq 'usr/lib/vibeshine/truehdr/' <<< "${package_files}"; then
+            echo '::error::The package unexpectedly contains the on-demand TrueHDR runtime.'
+            exit 1
+          fi
           grep -qx 'pkgname = vibeshine' <<< "${package_info}"
           grep -qx 'provides = sunshine' <<< "${package_info}"
           grep -qx 'conflict = sunshine' <<< "${package_info}"

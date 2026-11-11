@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -61,6 +62,7 @@ class ArchRepositoryWorkflowTest(unittest.TestCase):
         self.assertEqual(workflow["jobs"]["deploy"]["permissions"]["pages"], "write")
         self.assertEqual(workflow["jobs"]["deploy"]["permissions"]["id-token"], "write")
         self.assertIn("refs/heads/arch-repo", text)
+        self.assertIn("assemble_arch_package.py", text)
         self.assertIn("actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d", text)
         self.assertIn("actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9", text)
         self.assertIn("actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128", text)
@@ -87,7 +89,14 @@ class ArchRepositoryWorkflowTest(unittest.TestCase):
         self.assertIn("--detach-sign vibeshine.db.tar.gz", text)
         self.assertIn("gpg --batch --verify", text)
         self.assertIn("git -C \"${publication_dir}\" push origin HEAD:arch-repo", text)
-        self.assertIn("gh workflow run update-pages.yml --ref vibe", text)
+        self.assertIn("gh workflow run update-pages.yml --ref master", text)
+        release = load_workflow("sign-release.yml")["jobs"]["release"]
+        dispatch = next(step for step in release["steps"] if step.get("name") == "Publish stable Arch repository")
+        self.assertEqual(release["permissions"]["actions"], "write")
+        self.assertIn("inputs.release_draft != true", dispatch["if"])
+        self.assertIn("prerelease == 'false'", dispatch["if"])
+        self.assertIn("require_latest=true", dispatch["run"])
+        self.assertIn('"${latest_tag}" != "${source_tag}"', text)
 
     def test_public_site_uses_nonary_vibeshine_identity(self) -> None:
         site = (ROOT / "gh-pages-template" / "index.html").read_text(encoding="utf-8")
@@ -138,6 +147,7 @@ class ArchRepositoryPublicationTest(unittest.TestCase):
         self.env = self.signing_env | {
             "FINGERPRINT": self.fingerprint,
             "PACKAGE_NAME": self.package_name,
+            "ASSET_ID": "12345",
             "SIGNING_PASSPHRASE": self.passphrase,
             "publication_dir": str(self.repository.parent),
         }
@@ -150,6 +160,9 @@ class ArchRepositoryPublicationTest(unittest.TestCase):
             download.index("package_info="):download.index('echo "package_name=')
         ]
         self.package_count = 0
+        with (self.repository / "nonary-vibeshine.gpg").open("wb") as public_key:
+            subprocess.run(["gpg", "--batch", "--export", self.fingerprint], env=self.signing_env,
+                           stdout=public_key, check=True)
 
     def run_command(self, command: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
         result = subprocess.run(
@@ -182,7 +195,7 @@ class ArchRepositoryPublicationTest(unittest.TestCase):
         self.run_command(["bash", "-euo", "pipefail", "-c", self.publication_script])
 
     def assert_current_repository(self) -> None:
-        package = self.repository / self.package_name
+        package = self.root / self.package_name
         digest = hashlib.sha256(package.read_bytes()).hexdigest()
         for kind in ("db", "files"):
             archive = self.repository / f"vibeshine.{kind}.tar.gz"
@@ -199,17 +212,21 @@ class ArchRepositoryPublicationTest(unittest.TestCase):
                 alias = self.repository / f"vibeshine.{kind}{suffix}"
                 self.assertFalse(alias.is_symlink())
                 self.assertEqual(alias.read_bytes(), Path(f"{archive}{suffix}").read_bytes())
-        self.run_command(["gpg", "--batch", "--verify", f"{package}.sig", str(package)])
+        self.run_command(["gpg", "--batch", "--verify", str(self.repository / f"{self.package_name}.sig"), str(package)])
         self.assertEqual(
             {path.name for path in self.repository.glob("vibeshine-*.pkg.tar.zst*")},
-            {self.package_name, f"{self.package_name}.sig"},
+            {f"{self.package_name}.sig"},
         )
+        self.assertEqual(json.loads((self.repository / "release-asset.json").read_text()),
+                         {"package_name": self.package_name, "asset_id": "12345"})
         self.assertFalse(list(self.repository.glob("*.old*")))
 
     def test_first_publication_and_republication(self) -> None:
-        self.make_package("2.0.0-1")
+        package = self.make_package("2.0.0-1")
+        shutil.copyfile(package, self.root / self.package_name)
         self.publish()
         self.assert_current_repository()
+        shutil.copyfile(self.root / self.package_name, package)
         self.publish()
         self.assert_current_repository()
 
@@ -225,7 +242,8 @@ class ArchRepositoryPublicationTest(unittest.TestCase):
         for kind in ("db", "files"):
             (self.repository / f"vibeshine.{kind}.tar.gz.old").write_bytes(b"old archive")
             (self.repository / f"vibeshine.{kind}.tar.gz.old.sig").write_bytes(b"old signature")
-        self.make_package("2.0.0-1")
+        package = self.make_package("2.0.0-1")
+        shutil.copyfile(package, self.root / self.package_name)
         self.publish()
         self.assert_current_repository()
 
@@ -234,9 +252,32 @@ class ArchRepositoryPublicationTest(unittest.TestCase):
         self.run_command(["repo-add", str(self.repository / "vibeshine.db.tar.gz"), str(old)])
         old.unlink()
         Path(f"{old}.sig").unlink()
-        self.make_package("2.0.0-1")
+        package = self.make_package("2.0.0-1")
+        shutil.copyfile(package, self.root / self.package_name)
         self.publish()
         self.assert_current_repository()
+
+    def test_pages_retrieves_and_verifies_signed_release_asset(self) -> None:
+        package = self.make_package("2.0.0-1")
+        shutil.copyfile(package, self.root / self.package_name)
+        self.publish()
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        gh = bin_dir / "gh"
+        gh.write_text('#!/bin/sh\ncat "$FIXTURE_ASSET"\n', encoding="utf-8")
+        gh.chmod(0o755)
+        self.env.update(PATH=f"{bin_dir}:{os.environ['PATH']}",
+                        FIXTURE_ASSET=str(self.root / self.package_name),
+                        GITHUB_REPOSITORY="Nonary/vibeshine")
+        script = ROOT / ".github/scripts/assemble_arch_package.py"
+        self.run_command(["python", str(script), str(self.repository)])
+        self.assertEqual(package.read_bytes(), (self.root / self.package_name).read_bytes())
+        package.unlink()
+        (self.root / "tampered").write_bytes(b"wrong package")
+        self.env["FIXTURE_ASSET"] = str(self.root / "tampered")
+        result = self.run_command(["python", str(script), str(self.repository)], check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(package.exists())
 
     def test_release_version_is_compared_literally(self) -> None:
         incoming = self.root / "incoming"

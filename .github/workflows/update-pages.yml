@@ -5,7 +5,7 @@ permissions: {}
 on:
   push:
     branches:
-      - vibe
+      - master
       - arch-repo
   workflow_dispatch:
 
@@ -23,11 +23,13 @@ jobs:
       - name: Checkout Vibeshine site
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          ref: vibe
+          ref: master
           fetch-depth: 0
 
       - name: Assemble static site and Arch repository
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p _site
@@ -37,6 +39,9 @@ jobs:
           if git fetch --depth=1 origin refs/heads/arch-repo; then
             mkdir -p _site/arch
             git archive --format=tar FETCH_HEAD | tar -xf - -C _site/arch
+            if [[ -f _site/arch/x86_64/release-asset.json ]]; then
+              python .github/scripts/assemble_arch_package.py _site/arch/x86_64
+            fi
           else
             echo 'The Arch repository has not been published yet.' >_site/arch-repository-pending.txt
           fi

@@ -53,11 +53,14 @@ the GitHub Release against the existing tag and includes the Arch package genera
 
 ## Publish the Arch Linux repository
 
-For a non-draft release, run **Publish signed Arch repository** with the exact v-less
-`release_tag`. The workflow downloads the release's single validated `vibeshine` package, checks
-its embedded package name, version, and architecture, signs it, updates the signed `vibeshine`
-database on the `arch-repo` branch, and pushes that branch. The Pages workflow then deploys it at
-`https://nonary.github.io/vibeshine/arch/x86_64`.
+After a stable non-draft release and its assets are published, **Sign and publish release**
+dispatches **Publish signed Arch repository** automatically. The publisher checks that the release
+is still the latest stable release, validates and signs its Arch package, and pushes the signed
+database and an exact release-asset reference to `arch-repo`. Pages downloads the referenced
+package and verifies its signature and hash against the signed database before deployment at
+`https://nonary.github.io/vibeshine/arch/x86_64`. The package itself stays in GitHub Releases,
+so it is not subject to Git's 100 MiB file limit. For recovery, the publisher can also be run
+manually with the exact v-less `release_tag`.
 
 The `arch-repository` GitHub environment must contain:
 
@@ -65,8 +68,7 @@ The `arch-repository` GitHub environment must contain:
 - Environment secret `ARCH_REPO_GPG_PASSPHRASE`: the private key's strong passphrase.
 - Environment variable `ARCH_REPO_GPG_FINGERPRINT`: the full uppercase fingerprint with no spaces.
 
-Protect the `arch-repository` environment with required-reviewer approval. Keep an offline backup
-of the private key and its revocation certificate. Do not use a personal day-to-day signing key or
+Keep an offline backup of the private key and its revocation certificate. Do not use a personal day-to-day signing key or
 the Secure Boot/MOK module-signing key for this repository.
 
 After publication, verify that the Pages deployment succeeds, import the published public key on a
