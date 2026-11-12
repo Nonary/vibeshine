@@ -154,7 +154,8 @@ letterbox maths.
   that subscribes early still gets its resync. The host records what it sends
   before queueing it, so if encoding or the ENet enqueue fails, the next update is
   a full `RESYNC` again (a client may lack a shape, or still wait for its first
-  `RESYNC`). The client accepts a `RESYNC` at any time.
+  `RESYNC`), and until that is queued the session does not count as drawing the
+  cursor, so the host composites it. The client accepts a `RESYNC` at any time.
 - **`HAS_POSITION`** is set on `RESYNC`, when the cursor becomes visible, when the
   clip changes, when the host moved the cursor itself (application warp, a local
   mouse), and, while the client is *not* drawing the cursor, on every position
@@ -258,7 +259,8 @@ the same rule haptics clients already use.
 `host_cursor::compositing_required()` is false only when at least one session is
 connected, every connected session is subscribed with `CLIENT_DRAWS` and was last
 sent a state its client can draw from (`host_cursor::draws_cursor()`: not
-`FALLBACK`, and a visible cursor has a shape), and no WebRTC capture is running.
+`FALLBACK`, a visible cursor has a shape, and the update that carried it was
+queued completely), and no WebRTC capture is running.
 A WebRTC stream has no cursor channel, so its capture counts as a session that
 does not draw the cursor. `display_base_t::capture` ANDs it with the existing
 `display_cursor` toggle (Ctrl+Alt+Shift+N) before every snapshot, which covers

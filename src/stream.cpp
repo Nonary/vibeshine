@@ -1632,7 +1632,7 @@ namespace stream {
     }
 
     if (update.state || !update.shapes.empty()) {
-      cursor.send_failed = false;
+      host_cursor::note_sent(cursor);
     }
   }
 

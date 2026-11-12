@@ -688,7 +688,8 @@ TEST(HostCursorSession, ResendWaitsForTheShapeBudget) {
 TEST(HostCursorSession, FailedSendResyncs) {
   // plan_update() records an update as sent before it is queued. If queueing fails
   // (here the initial resync, which the client waits for), the next poll must send
-  // a complete resync again even though nothing about the cursor changed.
+  // a complete resync again even though nothing about the cursor changed, and the
+  // session must not count as drawing a state its client may not have.
   using namespace proto::state_flags;
   host_cursor::shape_registry_t registry;
   const auto id = registry.insert(solid(32, 32, 9));
@@ -699,25 +700,38 @@ TEST(HostCursorSession, FailedSendResyncs) {
 
   const auto lost = host_cursor::plan_update(session, cursor, scaled_geometry(), true, false, now, registry);
   ASSERT_TRUE(lost.state);
+  EXPECT_TRUE(host_cursor::client_can_draw(*lost.state));
   EXPECT_TRUE(host_cursor::note_send_failed(session));
+  EXPECT_FALSE(host_cursor::draws_cursor(session));
+  const bool compositing = host_cursor::compute_compositing_required(1, host_cursor::draws_cursor(session));
+  EXPECT_TRUE(compositing);
 
-  const auto retry = host_cursor::plan_update(session, cursor, scaled_geometry(), true, false, now + 5ms, registry);
+  const auto retry = host_cursor::plan_update(session, cursor, scaled_geometry(), true, compositing, now + 5ms, registry);
   EXPECT_EQ(retry.shape_ids, std::vector<std::uint32_t> {id});
   ASSERT_TRUE(retry.state);
-  EXPECT_EQ(retry.state->flags, visible | has_position | resync);
+  EXPECT_EQ(retry.state->flags, visible | has_position | composited | resync);
   EXPECT_EQ(retry.state->shape_id, id);
   EXPECT_EQ(retry.state->x, 960);
   EXPECT_EQ(retry.state->y, 540);
   EXPECT_GT(retry.state->seq, lost.state->seq);
 
-  // Failing again does not ask to log again; once an update goes out, it does.
+  // The retry fails too: still not drawing, and no second warning.
   EXPECT_FALSE(host_cursor::note_send_failed(session));
-  session.send_failed = false;
-  EXPECT_TRUE(host_cursor::note_send_failed(session));
+  EXPECT_FALSE(host_cursor::draws_cursor(session));
 
-  // Without a failure, an unchanged cursor sends nothing.
-  (void) host_cursor::plan_update(session, cursor, scaled_geometry(), true, false, now + 10ms, registry);
-  const auto idle = host_cursor::plan_update(session, cursor, scaled_geometry(), true, false, now + 15ms, registry);
+  // Once a complete retry is queued, the session draws again and compositing can stop.
+  const auto queued = host_cursor::plan_update(session, cursor, scaled_geometry(), true, compositing, now + 10ms, registry);
+  ASSERT_TRUE(queued.state);
+  EXPECT_TRUE(queued.state->flags & resync);
+  host_cursor::note_sent(session);
+  EXPECT_TRUE(host_cursor::draws_cursor(session));
+  EXPECT_FALSE(host_cursor::compute_compositing_required(1, host_cursor::draws_cursor(session)));
+
+  // A later failure warns again. Without one, an unchanged cursor sends nothing.
+  EXPECT_TRUE(host_cursor::note_send_failed(session));
+  (void) host_cursor::plan_update(session, cursor, scaled_geometry(), true, false, now + 15ms, registry);
+  host_cursor::note_sent(session);
+  const auto idle = host_cursor::plan_update(session, cursor, scaled_geometry(), true, false, now + 20ms, registry);
   EXPECT_FALSE(idle.state);
   EXPECT_TRUE(idle.shapes.empty());
 
@@ -738,15 +752,17 @@ TEST(HostCursorSession, FailedSendResyncs) {
   host_cursor::note_send_failed(spent);
 
   const auto current = visible_at(1920, 0, ids.back());
-  const auto held_back = host_cursor::plan_update(spent, current, scaled_geometry(), true, false, now + 5ms, registry);
+  const auto held_back = host_cursor::plan_update(spent, current, scaled_geometry(), true, true, now + 5ms, registry);
+  host_cursor::note_sent(spent);
   EXPECT_TRUE(held_back.shapes.empty());
   ASSERT_TRUE(held_back.state);
   EXPECT_EQ(held_back.state->flags, visible | has_position | composited | resync);
   EXPECT_EQ(held_back.state->shape_id, 0u);
-  EXPECT_FALSE(host_cursor::draws_cursor(spent));
+  EXPECT_FALSE(host_cursor::draws_cursor(spent));  // queued, but nothing to draw from
 
   // Once the budget renews the shape goes out, and the client draws again.
   const auto renewed = host_cursor::plan_update(spent, current, scaled_geometry(), true, true, now + 1s, registry);
+  host_cursor::note_sent(spent);
   EXPECT_EQ(renewed.shape_ids, std::vector<std::uint32_t> {ids.back()});
   ASSERT_TRUE(renewed.state);
   EXPECT_EQ(renewed.state->flags, visible | composited);

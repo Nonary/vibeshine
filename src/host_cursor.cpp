@@ -270,6 +270,10 @@ namespace host_cursor {
     return !std::exchange(session.send_failed, true);
   }
 
+  void note_sent(session_state_t &session) {
+    session.send_failed = false;
+  }
+
 #ifndef _WIN32
   namespace tracker {
     bool supported() {

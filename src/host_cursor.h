@@ -152,7 +152,7 @@ namespace host_cursor {
     bool client_draws = false;
     bool resync_pending = false;
     std::uint32_t resend_shape_id = 0;  // kept until the shape budget allows it
-    bool send_failed = false;  // the last update could not be queued (see note_send_failed())
+    bool send_failed = false;  // an update failed to queue and none has been queued completely since
     std::uint32_t seq = 0;
     std::optional<host_cursor_protocol::state_t> last_sent;
     std::optional<point_t> last_position;
@@ -169,9 +169,11 @@ namespace host_cursor {
   constexpr std::size_t shape_budget_bytes_per_second = 2 * 1024 * 1024;
 
   // Whether a session's client draws the cursor and can, from the state it was last
-  // sent. A session that does not keeps the cursor in the video.
+  // sent. A session that does not keeps the cursor in the video, as does one whose
+  // update failed to queue: until a complete retry is queued, its client may not
+  // have that state.
   inline bool draws_cursor(const session_state_t &session) {
-    return session.client_draws && session.last_sent && client_can_draw(*session.last_sent);
+    return session.client_draws && !session.send_failed && session.last_sent && client_can_draw(*session.last_sent);
   }
 
   // Applies a CURSOR_CONTROL message. A new subscription schedules a resync.
@@ -202,7 +204,11 @@ namespace host_cursor {
   // Call when a message of an update from plan_update() could not be queued
   // (encoding or ENet enqueue failed). plan_update() recorded the update as sent,
   // so the client may now lack shapes or states it will never be sent; the next
-  // update is a full resync instead. Returns true for the first failure since an
+  // update is a full resync instead, and the session does not count as drawing
+  // until one is queued (note_sent()). Returns true for the first failure since an
   // update was last queued completely, so the caller logs once per failure run.
   bool note_send_failed(session_state_t &session);
+
+  // Call when every message of a non-empty update from plan_update() was queued.
+  void note_sent(session_state_t &session);
 }  // namespace host_cursor
