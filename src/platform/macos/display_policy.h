@@ -55,7 +55,7 @@ namespace platf::macos_display_policy {
    */
   exclusive_plan_t plan_exclusive_layout(const std::vector<display_id_t> &active, const std::vector<display_id_t> &keep_on, const std::vector<display_id_t> &tracked, bool defer_untracked = false);
 
-  /// The restore helper, which turns the displays back on if Vibepollo exits without doing so.
+  /// The restore helper, which turns the displays back on if Vibeshine exits without doing so.
   struct restore_helper_t {
     int pid = -1;
     int fd = -1;  ///< Write end of the helper's stdin; EOF without "done" makes it restore.
@@ -68,7 +68,7 @@ namespace platf::macos_display_policy {
   /**
    * @brief How the safeguards and the displays are changed, so the order they change in can be tested.
    * @details The marker lists the displays the next launch turns back on; the helper turns them back
-   *          on if Vibepollo dies.
+   *          on if Vibeshine dies.
    */
   struct safeguard_ops_t {
     std::function<bool(const std::vector<display_id_t> &ids)> write_marker;  ///< Returns whether the marker was written.
