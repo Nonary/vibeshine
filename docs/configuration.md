@@ -325,7 +325,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             the stream ends if no app is running.
             @note{Turn this off to keep streaming with the lid closed. That only works while the Mac
             stays awake, which is up to macOS (for example, a Mac on power with an external display)
-            or another utility that keeps it awake. Vibepollo doesn't change power settings or keep
+            or another utility that keeps it awake. Vibeshine doesn't change power settings or keep
             the Mac awake itself, and it still ends streams when the Mac goes to sleep.}
             @note{Applies to macOS only.}
         </td>

@@ -107,7 +107,7 @@ namespace platf::macos_virtual_display {
   /**
    * @brief Watch for displays coming and going, as when a MacBook's lid closes or opens.
    * @details While the exclusive layout is in effect, displays that come back on are turned off
-   *          again once the changes settle, and Vibepollo's own displays keep the modes they were
+   *          again once the changes settle, and Vibeshine's own displays keep the modes they were
    *          made with. Call once at startup; the callback needs the main event loop.
    */
   void watch_display_changes();

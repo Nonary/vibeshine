@@ -18,7 +18,7 @@
  * Displays can come back on during a session: reopening a MacBook's lid brings back its built-in
  * display, and a monitor plugged in turns on. While the exclusive layout is active, a display
  * reconfiguration callback notices these and, once the changes settle, turns them off again,
- * updating both safeguards first. Vibepollo's own displays are put back in the modes they were
+ * updating both safeguards first. Vibeshine's own displays are put back in the modes they were
  * made with if macOS changes them as displays come and go.
  */
 // standard includes
@@ -365,7 +365,7 @@ namespace platf::macos_virtual_display {
       std::vector<std::pair<CGDirectDisplayID, CGDisplayModeRef>> modes;
     };
 
-    /// The helper that turns displays back on if Vibepollo exits without doing so.
+    /// The helper that turns displays back on if Vibeshine exits without doing so.
     struct watchdog_t {
       pid_t pid = -1;
       int fd = -1;  ///< Write end of the helper's stdin; EOF without "done" makes it restore.
@@ -380,7 +380,7 @@ namespace platf::macos_virtual_display {
       double refresh = 0;
       std::size_t pixel_width = 0;  ///< As created, which is what gets captured.
       std::size_t pixel_height = 0;
-      bool exclusive = false;  ///< The exclusive layout is in effect: only Vibepollo's displays stay on.
+      bool exclusive = false;  ///< The exclusive layout is in effect: only Vibeshine's displays stay on.
       std::vector<CGDirectDisplayID> turned_off;  ///< Physical displays to turn back on.
       std::unique_ptr<saved_modes_t> turned_off_modes;  ///< Their modes from before.
       watchdog_t watchdog;
@@ -1100,11 +1100,11 @@ namespace platf::macos_virtual_display {
     // Off the main thread: the callback arrives there, and the work below can wait seconds for
     // displays, during which the event loop the display configuration depends on must keep running.
     dispatch_queue_t reconcile_queue() {
-      static dispatch_queue_t queue = dispatch_queue_create("dev.vibepollo.display-changes", DISPATCH_QUEUE_SERIAL);
+      static dispatch_queue_t queue = dispatch_queue_create("dev.vibeshine.display-changes", DISPATCH_QUEUE_SERIAL);
       return queue;
     }
 
-    /// Put a display of Vibepollo's back in the mode it was made with, if macOS picked another.
+    /// Put a display of Vibeshine's back in the mode it was made with, if macOS picked another.
     void keep_created_mode(const virtual_display_t &display) {
       if (display.pixel_width == 0 || !is_active(display.id) || current_pixels(display.id) == std::pair {display.pixel_width, display.pixel_height}) {
         return;
