@@ -127,20 +127,24 @@ namespace host_cursor {
     void note_absolute_injection(std::int32_t x, std::int32_t y);
   }  // namespace tracker
 
-  // Whether a client can draw the cursor `snapshot` describes: cursor information is
-  // available and a visible cursor has a converted shape. A visible cursor whose
-  // shape could not be converted (id 0) stays in the video until conversion succeeds.
-  constexpr bool client_can_draw(const snapshot_t &snapshot) {
-    return snapshot.available && (!snapshot.visible || snapshot.shape_id != 0);
+  // Whether a client can draw the cursor from `state`: it is not FALLBACK, and a
+  // visible cursor comes with a shape. A visible cursor without one (its shape could
+  // not be converted, or the shape budget held it back and the client has no earlier
+  // shape to keep) stays in the video until the client can have its shape.
+  constexpr bool client_can_draw(const host_cursor_protocol::state_t &state) {
+    using namespace host_cursor_protocol::state_flags;
+    return !(state.flags & fallback) && (!(state.flags & visible) || state.shape_id != 0);
   }
 
   // Whether captured frames must still contain the cursor. True unless every
-  // connected session draws the cursor itself and it can (client_can_draw()).
+  // consumer of the frames draws the cursor itself and can (draws_cursor()).
   bool compositing_required();
   void set_compositing_required(bool required);
 
-  constexpr bool compute_compositing_required(std::size_t connected, std::size_t client_drawing, bool client_can_draw) {
-    return connected == 0 || client_drawing < connected || !client_can_draw;
+  // `consumers` counts the connected sessions plus any capture without a cursor
+  // channel (a WebRTC stream), which never draws the cursor itself.
+  constexpr bool compute_compositing_required(std::size_t consumers, std::size_t client_drawing) {
+    return consumers == 0 || client_drawing < consumers;
   }
 
   struct session_state_t {
@@ -164,6 +168,12 @@ namespace host_cursor {
   // than this keeps its previous shape until the budget recovers.
   constexpr std::size_t shape_budget_bytes_per_second = 2 * 1024 * 1024;
 
+  // Whether a session's client draws the cursor and can, from the state it was last
+  // sent. A session that does not keeps the cursor in the video.
+  inline bool draws_cursor(const session_state_t &session) {
+    return session.client_draws && session.last_sent && client_can_draw(*session.last_sent);
+  }
+
   // Applies a CURSOR_CONTROL message. A new subscription schedules a resync.
   void apply_control(session_state_t &session, const host_cursor_protocol::control_t &control);
 
@@ -174,11 +184,16 @@ namespace host_cursor {
   };
 
   // Decides what a session needs to receive for `snapshot` and records it as
-  // sent. `composited` is whether frames currently contain the cursor.
+  // sent. `display_cursor` is whether the video may contain the cursor at all (the
+  // Ctrl+Alt+Shift+N toggle), and `composited` whether frames currently blend it
+  // (compositing_required()). A state the client cannot draw from is COMPOSITED
+  // whenever the video may contain the cursor: the session then does not count as
+  // drawing (draws_cursor()), so frames blend the cursor from the next one.
   update_t plan_update(
     session_state_t &session,
     const snapshot_t &snapshot,
     const geometry_t &geometry,
+    bool display_cursor,
     bool composited,
     clock::time_point now,
     const shape_registry_t &registry = shapes()

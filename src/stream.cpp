@@ -1590,9 +1590,8 @@ namespace stream {
    * @brief Send a subscribed client the cursor shapes and state it has not had yet.
    * @param session The session, on the control thread.
    * @param snapshot The tracker snapshot for this pass of the control loop.
-   * @param composited Whether captured frames currently contain the cursor.
    */
-  void send_cursor_updates(session_t *session, const host_cursor::snapshot_t &snapshot, bool composited) {
+  void send_cursor_updates(session_t *session, const host_cursor::snapshot_t &snapshot) {
     auto &cursor = session->control.cursor;
     if (!cursor.subscribed || !session->control.peer) {
       return;
@@ -1602,7 +1601,7 @@ namespace stream {
       session->control.cursor_geometry = cursor_geometry_from_port(*port);
     }
 
-    const auto update = host_cursor::plan_update(cursor, snapshot, session->control.cursor_geometry, composited, std::chrono::steady_clock::now());
+    const auto update = host_cursor::plan_update(cursor, snapshot, session->control.cursor_geometry, display_cursor, host_cursor::compositing_required(), std::chrono::steady_clock::now());
 
     std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(host_cursor_protocol::control_header_size + host_cursor_protocol::shape_header_size + host_cursor_protocol::max_chunk_bytes) + crypto::cipher::tag_size>
       encrypted_payload;
@@ -2071,7 +2070,6 @@ namespace stream {
       std::size_t cursor_client_drawing = 0;
       // One snapshot per pass, so every session's state and the compositing decision agree.
       const auto cursor_snapshot = host_cursor::tracker::latest();
-      const bool cursor_drawable = host_cursor::client_can_draw(cursor_snapshot);
 
       {
         auto lg = server->_sessions.lock();
@@ -2199,10 +2197,11 @@ namespace stream {
               send_hdr_mode(session, std::move(hdr_info));
             }
 
-            // A cursor clients cannot draw is blended again from the next frame, so
-            // its state already says so and a drawing client hides its own cursor.
-            send_cursor_updates(session, cursor_snapshot, display_cursor && (host_cursor::compositing_required() || !cursor_drawable));
-            cursor_client_drawing += session->control.cursor.client_draws;
+            // A state the client cannot draw from already says COMPOSITED, and the
+            // session does not count as drawing, so frames blend the cursor again
+            // from the next one.
+            send_cursor_updates(session, cursor_snapshot);
+            cursor_client_drawing += host_cursor::draws_cursor(session->control.cursor);
 
             // The sample period (500 ms) is longer than this loop's ENet wait.
             tick_adaptive_pacing(session, now);
@@ -2213,12 +2212,16 @@ namespace stream {
       }
 
       // Frames keep the cursor unless every session, including any still waiting for
-      // its peer, draws it itself and can (a visible cursor needs a converted shape).
-      host_cursor::set_compositing_required(host_cursor::compute_compositing_required(
-        cursor_sessions,
-        cursor_client_drawing,
-        !cursor_client_drawing || cursor_drawable
-      ));
+      // its peer, draws it itself and can. A WebRTC stream shares the captured frames
+      // and has no cursor channel, so its capture counts as a session that does not.
+      const bool cursor_compositing = host_cursor::compute_compositing_required(
+        cursor_sessions + (webrtc_stream::has_capture_active() ? 1 : 0),
+        cursor_client_drawing
+      );
+      if (cursor_compositing != host_cursor::compositing_required()) {
+        BOOST_LOG(debug) << "Client-side cursor: host "sv << (cursor_compositing ? "draws"sv : "stops drawing"sv) << " the cursor into the video"sv;
+      }
+      host_cursor::set_compositing_required(cursor_compositing);
 
 #ifdef _WIN32
       if (session::running_sessions.load(std::memory_order_relaxed) > 0) {

@@ -58,10 +58,11 @@ switches to relative mode on its own when a game hides or locks the cursor.
   on. Those differ when Sunshine started at another scale (at boot, before the
   virtual display existed), so such a shape carries the ratio of the two
   standard sizes as its scale. Cursors of any other size keep their own.
-- **Compositing is shared.** One captured image feeds every session, so the host
-  stops blending only when *every* connected session has asked to draw the
-  cursor itself. The `COMPOSITED` state flag tells a client when the host is
-  blending anyway, so it does not keep showing a second cursor.
+- **Compositing is shared.** One captured image feeds every session, including a
+  WebRTC (browser) stream that joins the running app, so the host stops blending
+  only when *every* connected session has asked to draw the cursor itself and no
+  WebRTC capture is running. The `COMPOSITED` state flag tells a client when the
+  host is blending anyway, so it does not keep showing a second cursor.
 - **Control stream limits.** A control message carries at most ~65 KB
   (`u16` lengths, `encode_control`), and client→host messages must stay under
   252 bytes (`sendMessageEnet`'s 256-byte buffer). Both sides already ignore
@@ -163,10 +164,13 @@ letterbox maths.
   reported back as warps.
 - **`FALLBACK`**: cursor information is unavailable (tracker failure, the input
   desktop cannot be opened). The host also resumes compositing.
-- **A visible cursor without a shape** (conversion failed, `shape_id` 0) is not a
-  fallback: the client stays in automatic mode, but the host composites the
-  cursor and sets `COMPOSITED`, so a drawing client hides its own cursor rather
-  than showing a default arrow. Drawing resumes once a conversion succeeds.
+- **A visible cursor without a shape** (`shape_id` 0) is not a fallback. It
+  happens when conversion fails, or when the shape budget holds the current shape
+  back and the client has no earlier shape to keep, as after a resync. The client
+  stays in automatic mode, but the state carries `COMPOSITED` and that session no
+  longer counts as drawing, so the host composites the cursor from the next frame
+  and a drawing client hides its own cursor rather than showing a default arrow.
+  Drawing resumes once the client has the shape. The same holds for `FALLBACK`.
 
 ### `CURSOR_CONTROL` (client→host, type 0x5612)
 
@@ -252,8 +256,11 @@ the same rule haptics clients already use.
 ### Compositing
 
 `host_cursor::compositing_required()` is false only when at least one session is
-connected, every connected session is subscribed with `CLIENT_DRAWS`, and the
-tracker is available. `display_base_t::capture` ANDs it with the existing
+connected, every connected session is subscribed with `CLIENT_DRAWS` and was last
+sent a state its client can draw from (`host_cursor::draws_cursor()`: not
+`FALLBACK`, and a visible cursor has a shape), and no WebRTC capture is running.
+A WebRTC stream has no cursor channel, so its capture counts as a session that
+does not draw the cursor. `display_base_t::capture` ANDs it with the existing
 `display_cursor` toggle (Ctrl+Alt+Shift+N) before every snapshot, which covers
 the DDA VRAM/RAM paths and WGC (whose helper already toggles
 `IsCursorCaptureEnabled` at runtime, no session restart). Linux capture paths are
@@ -388,8 +395,9 @@ One line: `Mouse mode: absolute, local cursor (automatic)`, `relative (locked)`,
 | RTS with confined visible cursor | Large clip → ABSOLUTE_LOCAL confined to the mapped rect. |
 | Multi-monitor host | Positions off the streamed output are reported as-is; absolute input still only reaches the streamed output. |
 | Several clients | The host blends if any client needs it (`COMPOSITED` tells the others). One client's absolute moves are not reported as warps to another (v1 limitation). |
+| WebRTC (browser) stream alongside Moonlight | The browser shares the captured frames and has no cursor channel, so the host blends while its capture runs; Moonlight clients get `COMPOSITED` and hide their own cursor. |
 | Reconnect | A new session subscribes again and gets a full resync; caches are per session. |
-| Pathological cursor churn | Shape sends are budgeted per session; the client keeps its last shape. |
+| Pathological cursor churn | Shape sends are budgeted per session; the client keeps its last shape. If it has none to keep (a resync while the budget is spent), the host composites the cursor until the budget renews. |
 | Cursor shape that cannot be converted | The host composites it and sets `COMPOSITED`; a drawing client hides its own cursor until a later conversion succeeds. |
 | Wayland client | Warping is a no-op; the cursor appears where the user left it. |
 | Gamepad mouse emulation, trackpad-mode touch | Relative input moves the host cursor away from the client's last absolute position, which the host reports as a host move, so the local cursor follows. |

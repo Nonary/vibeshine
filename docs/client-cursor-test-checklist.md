@@ -130,6 +130,12 @@ odd in the logs.
   - With both clients automatic, the host stops drawing it.
   - When the stock client disconnects, the host stops drawing it for the remaining
     automatic client.
+- [ ] **A browser (WebRTC) stream alongside an automatic client.** Needs a host
+  built with `SUNSHINE_ENABLE_WEBRTC`.
+  - With the automatic client drawing the cursor, start a browser stream of the
+    running app: the browser's video shows the cursor, and the automatic client
+    shows no second cursor (COMPOSITED).
+  - When the browser stream closes, the host stops drawing the cursor again.
 - [ ] **Reconnect mid-session.**
   - Quit the client and resume.
   - The new session gets a full resync (host log: subscribed), and the cursor shape

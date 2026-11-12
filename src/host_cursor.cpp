@@ -132,6 +132,7 @@ namespace host_cursor {
     session_state_t &session,
     const snapshot_t &snapshot,
     const geometry_t &geometry,
+    bool display_cursor,
     bool composited,
     clock::time_point now,
     const shape_registry_t &registry
@@ -165,7 +166,6 @@ namespace host_cursor {
     state.ref_width = std::uint16_t(std::clamp(geometry.stream_width, 0, 0xFFFF));
     state.ref_height = std::uint16_t(std::clamp(geometry.stream_height, 0, 0xFFFF));
     if (!usable) state.flags |= fallback;
-    if (composited) state.flags |= host_cursor_protocol::state_flags::composited;
     if (usable && snapshot.visible) state.flags |= visible;
 
     const auto queue_shape = [&](std::uint32_t id, const std::shared_ptr<const host_cursor_bitmap::image_t> &image) {
@@ -205,6 +205,11 @@ namespace host_cursor {
       }
     }
     state.shape_id = shape ? shape_id : 0;
+    // A state the client cannot draw from, such as a resync whose shape the spent
+    // budget holds back, keeps the cursor in the video (see draws_cursor()).
+    if (display_cursor && (composited || !client_can_draw(state))) {
+      state.flags |= host_cursor_protocol::state_flags::composited;
+    }
 
     point_t position;
     if (usable) {
