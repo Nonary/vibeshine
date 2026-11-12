@@ -402,6 +402,7 @@ namespace platf::dxgi {
 
     duplication_t dup;
     cursor_t cursor;
+    std::optional<bool> last_cursor_blended;  // whether the last frame produced has the pointer blended in
   };
 
   /**
@@ -433,6 +434,7 @@ namespace platf::dxgi {
     texture2d_t old_surface_delayed_destruction;
     std::chrono::steady_clock::time_point old_surface_timestamp;
     std::variant<std::monostate, texture2d_t, std::shared_ptr<platf::img_t>> last_frame_variant;
+    std::optional<bool> last_cursor_blended;  // whether the last frame produced has the pointer blended in
   };
 
   /**

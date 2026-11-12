@@ -2477,11 +2477,19 @@ namespace platf::dxgi {
     HRESULT status;
     DXGI_OUTDUPL_FRAME_INFO frame_info;
 
+    // Whether frames show the pointer can change while neither the desktop nor the pointer
+    // does (Ctrl+Alt+Shift+N, or host compositing for the client-side cursor). Desktop
+    // Duplication then has no update to report, so rebuild the last frame without waiting
+    // for one, or it keeps the old cursor state until something moves.
+    const bool blend_changed = last_cursor_blended && *last_cursor_blended != ((cursor_alpha.visible || cursor_xor.visible) && cursor_visible);
+
     resource_t::pointer res_p {};
-    auto capture_status = dup.next_frame(frame_info, timeout, &res_p);
+    auto capture_status = dup.next_frame(frame_info, blend_changed ? 0ms : timeout, &res_p);
     resource_t res {res_p};
 
-    if (capture_status != capture_e::ok) {
+    if (capture_status == capture_e::timeout) {
+      frame_info = {};
+    } else if (capture_status != capture_e::ok) {
       return capture_status;
     }
 
@@ -2489,7 +2497,7 @@ namespace platf::dxgi {
     const bool frame_update_flag = frame_info.LastPresentTime.QuadPart != 0;
     const bool update_flag = mouse_update_flag || frame_update_flag;
 
-    if (!update_flag) {
+    if (!update_flag && !blend_changed) {
       return capture_e::timeout;
     }
 
@@ -2498,6 +2506,8 @@ namespace platf::dxgi {
     if (auto qpc_displayed = std::max(frame_info.LastPresentTime.QuadPart, frame_info.LastMouseUpdateTime.QuadPart)) {
       // Translate QueryPerformanceCounter() value to steady_clock time point
       frame_timestamp = std::chrono::steady_clock::now() - qpc_time_difference(qpc_counter(), qpc_displayed);
+    } else if (!update_flag) {
+      frame_timestamp = host_processing_timestamp;  // a rebuilt frame shows the desktop as of now
     }
 
     if (frame_info.PointerShapeBufferSize > 0) {
@@ -2881,6 +2891,7 @@ namespace platf::dxgi {
       img_out->frame_timestamp = frame_timestamp;
       img_out->host_processing_timestamp = host_processing_timestamp;
     }
+    last_cursor_blended = blend_mouse_cursor_flag;
 
     return capture_e::ok;
   }

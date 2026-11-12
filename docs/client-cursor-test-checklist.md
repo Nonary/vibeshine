@@ -136,6 +136,10 @@ odd in the logs.
     running app: the browser's video shows the cursor, and the automatic client
     shows no second cursor (COMPOSITED).
   - When the browser stream closes, the host stops drawing the cursor again.
+  - Repeat both steps with Desktop Duplication, nothing changing on the host
+    desktop, and hands off the mouse: the cursor appears in the video at once
+    when the browser stream starts, and the automatic client shows no second
+    cursor after it closes.
 - [ ] **Reconnect mid-session.**
   - Quit the client and resume.
   - The new session gets a full resync (host log: subscribed), and the cursor shape

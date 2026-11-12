@@ -268,6 +268,14 @@ the DDA VRAM/RAM paths and WGC (whose helper already toggles
 `IsCursorCaptureEnabled` at runtime, no session restart). Linux capture paths are
 untouched.
 
+When the decision changes while neither the desktop nor the pointer does, Desktop
+Duplication has no update to report. Both DDA snapshots then rebuild the last
+frame from the desktop image they keep, with or without the pointer, instead of
+waiting for one. Only a wait already in progress (up to 200 ms on an idle
+desktop) delays the rebuilt frame. Without this, the old frame would stay on
+screen until something moved: a client told `COMPOSITED` would hide its own
+cursor with none in the video.
+
 ### Linux
 
 `platf::cursor_tracker` has no Linux implementation, so the flag is not
