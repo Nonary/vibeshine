@@ -842,7 +842,7 @@ namespace nvhttp {
           return remote_session::monitor_runtime_state_t {.accepted = state.accepted, .ready = state.ready, .retryable = state.retryable, .output = state.output, .error = state.error, .hdr_enabled = state.hdr_enabled};
         },
         .explicit_release = [](std::string_view uuid, std::uint64_t generation, std::string_view reason) {
-          remote_display_topology::instance().explicit_release(std::string {uuid}, generation, std::string {reason});
+          return remote_display_topology::instance().explicit_release(std::string {uuid}, generation, std::string {reason});
         },
         .transport_lost = [](std::string_view uuid, std::uint64_t generation) {
           remote_display_topology::instance().transport_lost(std::string {uuid}, generation);
