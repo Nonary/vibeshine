@@ -249,6 +249,11 @@ int main(void) {
   CHECK(application_request_is_safe(5, metadata_app));
   metadata_app[1] = "app-wayland-hdr";
   CHECK(application_request_is_safe(5, metadata_app));
+  struct session_identity metadata_greeter = {0};
+  strcpy(metadata_greeter.role, "greeter");
+  CHECK(execute_request(5, metadata_app, &metadata_greeter, getgid()) == 126);
+  metadata_app[1] = "app";
+  CHECK(execute_request(5, metadata_app, &metadata_greeter, getgid()) == 126);
   metadata_app[1] = "app-elevated";
   CHECK(!application_request_is_safe(5, metadata_app));
   CHECK(application_request_is_safe(4, metadata_app));
