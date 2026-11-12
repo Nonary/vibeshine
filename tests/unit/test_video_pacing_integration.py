@@ -60,7 +60,7 @@ if fractional:
 pacing_at = source.index('              // Do pacing within the frame.')
 condition = section('              if (', ') {', pacing_at).strip()[len('if ('):]
 fec_count = section('      auto payload_size = payload.size();', '\n      // If we need to store a zero-padded data shard', source.index('static fec_t encode('))
-splitter = section('        // The max number of data shards per block', '\n      }\n\n      decltype(fec_blocks)::iterator')
+splitter = section('        // The max number of data shards per block', '\n      }\n\n      // Pace standard video')
 detail_max = re.search(r'constexpr int MAX_DETAIL_FEC_PERCENTAGE = \d+;', read('src/pyrowave_policy.h')).group()
 http = read('src/nvhttp.cpp')
 http_at = http.index('    const int updated = stream::set_bitrate_for_sessions(')
@@ -71,9 +71,20 @@ rtsp_mapping = rtsp[rtsp.index('\n', rtsp_at) + 1:rtsp.index('        } catch (c
 if updated:
     assert 'startup_failed, startup_status, startup_error' in rtsp
     assert 'startup_status, startup_status == 400 ? "BAD REQUEST"' in rtsp
+    cleanup_at = rtsp.index('        if (failed_before_control_registration) server->retire_failed_monitor_start_locked')
+    config_unlock_at = rtsp.index('        _hot_apply_gate.unlock();', cleanup_at)
+    lifecycle_unlock_at = rtsp.index('        lifecycle_lock.unlock();', config_unlock_at)
+    assert lifecycle_unlock_at < rtsp.index('        server->post(', cleanup_at)
+runtime_header = read('src/stream_broadcast_runtime.h')
+runtime_types = runtime_header[runtime_header.index('  struct session_control_t'):]
+runtime_impl = read('src/stream_broadcast_runtime.cpp')
+runtime_impl = runtime_impl[runtime_impl.index('  int set_bitrate('):]
+controls = section('  static broadcast_runtime::controls_t<broadcast_ctx_t> broadcast_controls {', '\n  void request_idr_for_all_sessions(')
+controls = 'namespace stream::broadcast_runtime {\n' + runtime_types + '\nnamespace stream::broadcast_runtime {\n' + runtime_impl + '\n' + controls
+ratecontrol = section('        const auto ratecontrol_pace =', '\n\n        // Send less')
 template = (Path(__file__).with_suffix('.cpp.in')).read_text()
 program = template
-for key, text in {'HELPERS': helpers, 'ABR': abr, 'PUBLISH': publish, 'PACER': pacer, 'CLAMP': clamp,
+for key, text in {'CONTROLS': controls, 'RATECONTROL': ratecontrol, 'HELPERS': helpers, 'ABR': abr, 'PUBLISH': publish, 'PACER': pacer, 'CLAMP': clamp,
                   'BATCHES': batches, 'FRAME_DELAY': frame_delay, 'CONDITION': condition, 'FEC_COUNT': fec_count, 'SPLITTER': splitter,
                   'DETAIL_MAX': detail_max, 'UPDATED': '1' if updated else '0',
                   'RATE_HELPERS': ('using stream::video_pacing_batch_packets; using stream::video_pacing_delay_ns;' if fractional else 'using stream::video_pacing_packets_per_ms;'),
@@ -104,7 +115,7 @@ with tempfile.TemporaryDirectory(prefix='video-pacing-') as temporary:
     import shlex
     common = shlex.split(os.environ.get('CXXFLAGS', ''))
     compile_command = [args.compiler, '-std=c++23', '-O0', '-g0', '-pthread'] + common + [
-        '-I', str(output), str(cpp), str(protocol), '-lgtest_main', '-lgtest', '-o', str(exe)]
+        '-I', str(output), '-I', str(root / 'src'), str(cpp), str(protocol), '-lgtest_main', '-lgtest', '-o', str(exe)]
     # Preserve nice 15 when the test runner already has that priority.
     priority = max(0, 15 - os.getpriority(os.PRIO_PROCESS, 0)) if hasattr(os, 'getpriority') else 0
     prefix = ['nice', '-n', str(priority)] if os.name == 'posix' else []

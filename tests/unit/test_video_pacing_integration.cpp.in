@@ -1,4 +1,9 @@
 #include "stream_protocol.h"
+#include "video_adaptive_pacing.h"
+#include <span>
+namespace pacing = stream::pacing;
+namespace stream::broadcast_runtime {}
+namespace broadcast_runtime = stream::broadcast_runtime;
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
@@ -30,7 +35,7 @@ namespace pyrowave {
 }
 namespace config {
   struct { int pacing_max_bitrate_kbps = 0, fec_percentage = 20,
-               pyrowave_critical_fec_percentage = 20, video_max_batch_size_kb = 64; } stream;
+               pyrowave_critical_fec_percentage = 20, video_max_batch_size_kb = 64; bool pacing_batch_demand_limit = false; } stream;
 }
 struct config_t {
   struct { int bitrate = 150000, client_requested_bitrate = 150000, videoFormat = 1,
@@ -43,7 +48,7 @@ struct Broadcast;
 struct session_t {
   config_t config;
   std::string device_uuid = "client";
-  struct { std::shared_ptr<Event> bitrate_events = std::make_shared<Event>(); bool cipher = false; } video;
+  struct { std::shared_ptr<Event> bitrate_events = std::make_shared<Event>(); bool cipher = false, adaptive_pacing_enabled = false; std::atomic<int> pacing_bitrate_kbps {150000}; std::shared_ptr<Event> idr_events; } video;
   std::shared_ptr<Broadcast> broadcast_ref;
 };
 struct Sessions {
@@ -56,7 +61,16 @@ struct Sessions {
 };
 struct control_server_t { Sessions _sessions; };
 struct Broadcast { control_server_t control_server; };
-struct { std::shared_ptr<Broadcast> value; auto ref() { return value; } } broadcast;
+namespace safe {
+  struct mail_raw_t { template<class T> using event_t = std::shared_ptr<Event>; };
+  template<class T> struct shared_t {
+    std::shared_ptr<T> value;
+    auto ref() { return value; }
+    auto try_ref() { return value; }
+  };
+}
+safe::shared_t<Broadcast> broadcast;
+using broadcast_ctx_t = Broadcast;
 namespace session { void stop(session_t &) {} }
 #if UPDATED_SOURCE
 using stream::video_pacing_reservation_t;
@@ -66,16 +80,18 @@ using stream::reserve_video_pacing_capacity;
 #endif
 using stream::video_send_batch_size;
 @HELPERS@
+@CONTROLS@
 @ABR@
 int publish_session(session_t &session) {
 @PUBLISH@
   return 0;
 }
 std::pair<size_t, size_t> pace(int cap, bool encrypted = false, bool pyro = false, size_t blocksize = 1408,
-                             std::uint64_t packets = 0, bool delay_mode = false) {
+                             std::uint64_t packets = 0, bool delay_mode = false, std::uint64_t adaptive_bps = 0) {
   config::stream.pacing_max_bitrate_kbps = cap;
   session_t instance;
   instance.video.cipher = encrypted;
+  instance.video.adaptive_pacing_enabled = adaptive_bps != 0;
   auto *session = &instance;
   const bool pyrowave_session = pyro;
   for (int once = 0; once != 1; ++once) {
@@ -84,6 +100,11 @@ std::pair<size_t, size_t> pace(int cap, bool encrypted = false, bool pyro = fals
       ratecontrol_packets_in_1ms = 900; // deterministic adaptive-policy boundary
 @CLAMP@
     }
+    if (adaptive_bps) {
+      adaptive_pace = pacing::packet_pace_t::at_rate(adaptive_bps, blocksize + (encrypted ? 32 : 0));
+      ratecontrol_packets_in_1ms = adaptive_pace->packets_per_ms;
+    }
+@RATECONTROL@
 @BATCHES@
 @FRAME_DELAY@
     return {delay_mode ? size_t(frame_pacing_delay(packets).count()) : ratecontrol_packets_in_1ms, send_batch_size};
@@ -107,6 +128,7 @@ struct Tree {
 void bitrate_response(Tree &tree, int updated) {
   struct { std::string name = "client"; } client;
   auto *verified_client = &client;
+  auto &identity = client;
 @HTTP_HANDLER@
   tree.put("root.<xmlattr>.status_code", 200);
 }
@@ -120,6 +142,7 @@ std::pair<bool, int> startup_response(int selected) {
   auto stream_session = std::make_shared<int>(0);
   std::string remote_address, startup_error;
   bool startup_failed = true;
+  bool failed_before_control_registration = false;
   int startup_status = 500;
 @RTSP_MAPPING@
   return {startup_failed, startup_status};
@@ -195,7 +218,7 @@ TEST(VideoPacingIntegration, PositiveCeilingIsNotRaisedAndIncludesEncryption) {
       EXPECT_GE(delay * cap, bit_time);
     }
   }
-  EXPECT_LT(sender_delay(2000000, false, false, 1000), sender_delay(0, false, false, 1000));
+  EXPECT_EQ(sender_delay(2000000, false, false, 1000), sender_delay(0, false, false, 1000));
   EXPECT_GE(sender_delay(200000, false, true, 1000) * 200000, 1000ull * 1408 * 8 * 1'000'000);
   EXPECT_EQ(pace(10000000, false, true, 216, 1000, true).first,
             pace(0, false, true, 216, 1000, true).first);
@@ -315,3 +338,26 @@ TEST(VideoPacingIntegration, DemandBoundCoversUnevenFramesAndPyroAdmission) {
   EXPECT_EQ(publish_session(pyro), 0);
 }
 #endif
+
+TEST(VideoPacingIntegration, ExplicitCeilingPreservesSlowerExactAdaptiveRate) {
+  reset(0);
+  for (const auto adaptive_bps : {800123ull, 8000123ull, 80000123ull}) {
+    const auto automatic = pacing::packet_pace_t::at_rate(adaptive_bps, 1408).offset(17).count();
+    EXPECT_EQ(pace(0, false, false, 1408, 17, true, adaptive_bps).first, automatic);
+    for (const auto cap : {1000, 10000, 200000}) {
+      const auto capped = stream::video_pacing_delay_ns(17, 1408, cap);
+      EXPECT_EQ(pace(cap, false, false, 1408, 17, true, adaptive_bps).first,
+                std::max<std::uint64_t>(automatic, capped));
+    }
+  }
+}
+TEST(VideoPacingIntegration, AdmissionUpdatesAtomicSenderBitrateAndHonorsDemandBatches) {
+  reset(400000);
+  session_t one; attach(one); ASSERT_EQ(publish_session(one), 0);
+  ASSERT_EQ(set_bitrate_for_sessions("client", 100000), 1);
+  EXPECT_EQ(one.video.pacing_bitrate_kbps.load(), 100000);
+  ASSERT_EQ(set_bitrate_for_sessions("client", 500000), -1);
+  EXPECT_EQ(one.video.pacing_bitrate_kbps.load(), 100000);
+  config::stream.pacing_batch_demand_limit = true;
+  EXPECT_LE(pace(8000).second, pace(0).second);
+}

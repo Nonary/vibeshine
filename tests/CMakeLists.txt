@@ -635,6 +635,11 @@ if(SUNSHINE_TEST_ENABLE_COMPONENT)
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}"
                 --generate-only --output-dir "${_pacing_fixture_dir}"
             DEPENDS unit/test_video_pacing_integration.py unit/test_video_pacing_integration.cpp.in
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/stream_broadcast_runtime.h"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/stream_broadcast_runtime.cpp"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_adaptive_pacing.h"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_pacing_policy.h"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/video_fec_status.h"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/stream.cpp"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/stream.h"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/stream_protocol.cpp"
@@ -646,7 +651,7 @@ if(SUNSHINE_TEST_ENABLE_COMPONENT)
         sunshine_add_test_target(NAME test_component_video_pacing_admission CATEGORY component
             TEST_SOURCES "${CMAKE_CURRENT_LIST_DIR}/tests_main.cpp" "${_pacing_fixture_dir}/video_pacing_integration.cpp"
             PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/stream_protocol.cpp"
-            INCLUDE_DIRECTORIES "${_pacing_fixture_dir}"
+            INCLUDE_DIRECTORIES "${_pacing_fixture_dir}" "${SUNSHINE_TEST_REPOSITORY_ROOT}/src"
             DEFINITIONS SUNSHINE_TESTS LINK_LIBRARIES GTest::gtest)
     endif()
 endif()
@@ -1943,6 +1948,9 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
             --include-dir "$<TARGET_PROPERTY:sunshine_test_session_display_precedence_dependencies,INTERFACE_INCLUDE_DIRECTORIES>")
     add_test(NAME regression_install_root_guard
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_install_root_guard.py"
+            --compiler "${CMAKE_CXX_COMPILER}")
+    add_test(NAME regression_encoder_sync_compatibility
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_encoder_sync_compatibility.py"
             --compiler "${CMAKE_CXX_COMPILER}")
     add_test(NAME regression_display_helper_pipe_authority
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_helper_pipe_authority.py"

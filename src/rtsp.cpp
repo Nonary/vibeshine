@@ -2410,7 +2410,7 @@ namespace rtsp_stream {
           stream_session = stream::session::alloc(config, *launch_session);
           const int start_result = stream::session::start(*stream_session, remote_address);
           startup_failed = start_result != 0;
-          // The explicit -1 return is before control registration. Exceptions
+          // Explicit startup/pacing rejection is before control registration. Exceptions
           // may occur later and must not retire a potentially started session.
           failed_before_control_registration = start_result == -1 || start_result == stream::session::START_PACING_REJECTED;
           if (start_result == stream::session::START_PACING_REJECTED) {
@@ -2433,6 +2433,10 @@ namespace rtsp_stream {
         }
         if (failed_before_control_registration) server->retire_failed_monitor_start_locked(launch_session);
         if (startup_failed) server->set_pending_vulkan_hdr_layer_stream(false);
+        // A rejected start can hold the last broadcast reference. Release the
+        // lifecycle/config gates before its destructor joins the control thread.
+        _hot_apply_gate.unlock();
+        lifecycle_lock.unlock();
         server->post([server, socket = std::move(socket), session = std::move(session), sequence_number, startup_failed, startup_status, startup_error = std::move(startup_error),
                       audio_codec_name = std::string(audio::dolby_codec_name(selected_audio_codec))]() mutable {
           OPTION_ITEM completion_option {};
