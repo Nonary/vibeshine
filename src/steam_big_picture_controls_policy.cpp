@@ -229,8 +229,18 @@ namespace platf::steam::big_picture::policy {
     return normal(a) == normal(b);
   }
 
-  bool is_recorded_flag_file(std::wstring_view recorded_path, std::string_view recorded_id, std::wstring_view path, const std::optional<std::string> &file_id) {
-    return same_windows_path(recorded_path, path) && (recorded_id.empty() || (file_id && *file_id == recorded_id));
+  record_match_e match_recorded_flag_file(std::string_view recorded_id, const std::optional<std::string> &file_id) {
+    if (recorded_id.empty()) {
+      return record_match_e::different;
+    }
+    if (!file_id) {
+      return record_match_e::unknown;
+    }
+    return *file_id == recorded_id ? record_match_e::same : record_match_e::different;
+  }
+
+  bool is_recorded_flag_file(std::string_view recorded_id, const std::optional<std::string> &file_id) {
+    return match_recorded_flag_file(recorded_id, file_id) == record_match_e::same;
   }
 
   bool restart_into_big_picture(bool big_picture_open, std::optional<std::chrono::steady_clock::duration> since_big_picture_restart) {

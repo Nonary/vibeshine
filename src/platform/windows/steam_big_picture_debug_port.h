@@ -21,6 +21,7 @@ namespace platf::steam::big_picture::debug_port {
     bool running = false;  ///< steam.exe runs in the console session.
     bool flag_file = false;  ///< The debug-port flag file exists in root.
     bool flag_file_created = false;  ///< It is the very file Vibeshine created, so turning the controls off may delete it.
+    std::optional<std::filesystem::path> other_flag_file;  ///< A flag file Vibeshine created in another folder Steam ran from before, still there.
     bool big_picture = false;  ///< Steam's Big Picture window is open.
   };
 
@@ -30,13 +31,16 @@ namespace platf::steam::big_picture::debug_port {
   // Create (enabled) or delete the empty flag file in Steam's folder, as the console user so it can only
   // go where that user may write. A file Vibeshine creates is remembered, with its file ID, for turning
   // the controls off and for the uninstaller; if it can't be remembered it is removed again and this
-  // fails. Only that file is ever deleted: one the user or another Steam mod added stays. Returns an
-  // error message on failure.
+  // fails. Only that file is ever deleted: one the user or another Steam mod added stays. Vibeshine
+  // owns one flag file at most: when Steam now runs from another folder, the file Vibeshine created in
+  // the old one is deleted first (as Vibeshine when the console user may not open that folder), and
+  // if that fails nothing changes and this fails. Returns an error message on failure.
   std::optional<std::string> set_flag_file(bool enabled);
 
   // For the uninstaller: delete the flag file if Vibeshine created it and it is still there, as the
-  // console user. With nobody signed in, it is deleted as Vibeshine, but only in Steam's registered
-  // folder. Steam keeps its debug port open until it next restarts.
+  // console user, also when Steam's folder was moved with it inside, or as Vibeshine when that user
+  // may not open its folder. With nobody signed in, it is deleted as Vibeshine, but only in Steam's
+  // registered folder. Steam keeps its debug port open until it next restarts.
   void remove_created_flag_file();
 
   // Close Steam and start it again as the console user, in Big Picture when big_picture is set. Blocks

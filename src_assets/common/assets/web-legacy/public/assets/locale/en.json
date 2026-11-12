@@ -2150,6 +2150,7 @@
     "debug_port_off_desc": "Off. The controls reach Steam through its debug port. Turning it on adds an empty file to your Steam folder and restarts Steam.",
     "debug_port_needs_restart": "On, but Steam was already running when it was turned on. Restart Steam to start using it.",
     "debug_port_left_on": "Still on. The Big Picture controls are off, but the file Vibeshine added is still in your Steam folder, so Steam keeps opening its debug port. Turning it off deletes the file and restarts Steam.",
+    "debug_port_left_on_elsewhere": "Still on in Steam's previous folder. The Big Picture controls are off, but the file Vibeshine added is still at {path}, so Steam opens its debug port if it runs from there again. Turning it off deletes the file without restarting Steam.",
     "debug_port_steam_missing": "Steam's folder wasn't found. Install Steam or start it once, then refresh.",
     "turn_on_debug_port": "Turn on",
     "turn_off_debug_port": "Turn off",
@@ -2200,7 +2201,8 @@
       "saved": "Big Picture controls setting saved.",
       "restarting": "Restarting Steam…",
       "restarted": "Steam restarted.",
-      "next_start": "Saved. Steam picks this up the next time it starts."
+      "next_start": "Saved. Steam picks this up the next time it starts.",
+      "old_flag_file_deleted": "Deleted the file Vibeshine added in Steam's previous folder."
     }
   }
 }

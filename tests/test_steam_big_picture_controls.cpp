@@ -162,15 +162,27 @@ TEST(SteamBigPicturePolicy, ComparesWindowsPathsLikeWindows) {
 }
 
 TEST(SteamBigPicturePolicy, RecognisesOnlyTheFlagFileVibeshineCreated) {
-  constexpr std::wstring_view recorded = L"C:\\Steam\\.cef-enable-remote-debugging";
-  EXPECT_TRUE(bpm::policy::is_recorded_flag_file(recorded, "7:00ab", L"c:/steam/.cef-enable-remote-debugging", std::string("7:00ab")));
-  // Deleted and created again by the user or another Steam mod: a new file ID.
-  EXPECT_FALSE(bpm::policy::is_recorded_flag_file(recorded, "7:00ab", recorded, std::string("7:00ac")));
-  EXPECT_FALSE(bpm::policy::is_recorded_flag_file(recorded, "7:00ab", recorded, std::nullopt));
-  // Steam now runs from another folder.
-  EXPECT_FALSE(bpm::policy::is_recorded_flag_file(recorded, "7:00ab", L"D:\\Steam\\.cef-enable-remote-debugging", std::string("7:00ab")));
-  // A record without a file ID matches on the path alone.
-  EXPECT_TRUE(bpm::policy::is_recorded_flag_file(recorded, "", recorded, std::nullopt));
+  // The file ID decides, wherever the file is: the same ID after Steam's folder was moved or renamed
+  // with the file inside.
+  EXPECT_TRUE(bpm::policy::is_recorded_flag_file("7:00ab", std::string("7:00ab")));
+  // Deleted and created again by the user or another Steam mod, or another folder's file: a new ID.
+  EXPECT_FALSE(bpm::policy::is_recorded_flag_file("7:00ab", std::string("7:00ac")));
+  EXPECT_FALSE(bpm::policy::is_recorded_flag_file("7:00ab", std::string("9:00ab")));
+  EXPECT_FALSE(bpm::policy::is_recorded_flag_file("7:00ab", std::nullopt));
+  // A record without a file ID proves nothing.
+  EXPECT_FALSE(bpm::policy::is_recorded_flag_file("", std::nullopt));
+  EXPECT_FALSE(bpm::policy::is_recorded_flag_file("", std::string("7:00ab")));
+}
+
+TEST(SteamBigPicturePolicy, AnUnreadableFileIdProvesNothing) {
+  using enum bpm::policy::record_match_e;
+  // Turning the controls on must not forget the file Vibeshine created just because Windows couldn't
+  // read its ID this time.
+  EXPECT_EQ(bpm::policy::match_recorded_flag_file("7:00ab", std::nullopt), unknown);
+  EXPECT_EQ(bpm::policy::match_recorded_flag_file("7:00ab", std::string("7:00ab")), same);
+  EXPECT_EQ(bpm::policy::match_recorded_flag_file("7:00ab", std::string("7:00ac")), different);
+  // A record without an ID never matches, whatever the file's ID.
+  EXPECT_EQ(bpm::policy::match_recorded_flag_file("", std::nullopt), different);
 }
 
 TEST(SteamBigPicturePolicy, KeepsBigPictureAcrossQuickRestarts) {

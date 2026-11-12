@@ -3,7 +3,9 @@
 > **Status:** under development. Everything below is built and passed the live checks in
 > [Tested with](#tested-with) except a browser (WebRTC) stream. The fixes from the code review
 > (2026-10-29) are covered by tests; the header icon fixes were also checked live (Steam build
-> Oct 28 2026), the debug-port fixes not yet.
+> Oct 28 2026), the debug-port fixes not yet. The flag-file fixes from the PR review (2026-11-11)
+> are covered by tests, and deleting a file left in Steam's previous folder was checked live with a
+> test folder (Steam build Nov 9 2026); actually moving Steam to another folder was not.
 
 When enabled with `steam_big_picture_controls`, Vibeshine shows stream controls inside Steam
 Big Picture on the Windows host:
@@ -39,8 +41,27 @@ Steam was already running when the file was added. The same row appears while th
 but the file Vibeshine added is still there, for example because deleting it failed, with **Turn
 off** to try again.
 
-Uninstalling Vibeshine also deletes the file if Vibeshine created it. With nobody signed in, for
-example during a remote uninstall, it is deleted only when it is in the folder Steam's installer
+Vibeshine keeps track of one file at most, and recognises it by its Windows file ID, so renaming the
+Steam folder or moving it on the same drive with the file inside (or a new letter for that drive)
+doesn't lose track of it. Copying Steam to another drive, or moving it there, which Windows does by
+copying, copies the file too, and Vibeshine treats the copy as another program's: delete it yourself
+to close the debug port.
+
+When Steam runs from a different folder than the one with Vibeshine's file, for example after Steam
+was reinstalled or copied to another drive, turning the switch off, or on when that adds the file,
+first deletes the file in the old folder (again, only if it is the very file Vibeshine added). If the
+signed-in user may not open that folder, for example because it is another Windows user's, Vibeshine
+deletes the file itself. If the old folder's drive isn't there, the file stays on it and Vibeshine
+forgets it, and its log says so. If deleting fails, Vibeshine changes no files and the error names
+the one to delete. While the controls are off and that old file is still there, the **Steam debug
+port** row shows its path, with **Turn off** to delete it. Steam doesn't read that file, so this
+doesn't restart Steam. Both settings screens check again right before deleting it: if Steam has
+started from that folder since, it is the file Steam reads, and turning it off asks to restart Steam
+as usual.
+
+Uninstalling Vibeshine also deletes the file if Vibeshine created it, including when Steam's folder
+was moved with it inside. With nobody signed in, for example during a remote uninstall, it is
+deleted only when it is still where it was created and that is the folder Steam's installer
 registered; otherwise it stays. Steam closes the port at its next
 start. The portable build has no uninstaller, so turn the controls off before deleting its folder.
 
@@ -131,27 +152,36 @@ All formats are defined in `src/steam_big_picture_controls_protocol.h`:
 - Off by default. While Steam's debug port is on, any program on the PC can control Steam; the web
   UI says so before turning it on. Such a program can also talk to the injected script: it can
   select End Stream (at most once every 2 s) and add lines to Vibeshine's log.
-- The flag file is created and deleted as the signed-in user, and only in the folder of the running
-  `steam.exe` (or Steam's registered folder when Steam isn't running). Steam is restarted under that
-  user's token. The only exception is an uninstall with nobody signed in, which deletes the file as
-  SYSTEM, and only in the folder Steam's installer registered for all users.
+- The flag file is created as the signed-in user, and only in the folder of the running `steam.exe`
+  (or Steam's registered folder when Steam isn't running). It is deleted as that user too, there or
+  in a folder Steam ran from before. Steam is restarted under that user's token. Vibeshine deletes
+  the file as SYSTEM in two cases: when the signed-in user may not open the folder it is in, and in
+  an uninstall with nobody signed in, then only in the folder Steam's installer registered for all
+  users. Either way the file ID is checked on the handle that deletes it, so only the very file
+  Vibeshine created can go.
 - A `steam.exe` that runs below medium integrity or in an app container, as one started by a
   sandboxed program would, is never taken as Steam: restarting Steam would start it outside its
   sandbox.
 - Only the very file Vibeshine created is ever deleted. Vibeshine records its path and file ID, so a
   file the user or another Steam mod creates at the same path later is left alone. If the record
-  can't be saved, Vibeshine removes the file again and reports the error.
+  can't be saved, or Windows can't give the new file's ID, Vibeshine removes the file again and
+  reports the error. A file whose ID can't be read is never deleted, and doesn't make Vibeshine
+  forget its own file either. A record without an ID, which early development builds saved, is
+  forgotten without deleting anything.
 - Actions are allowlisted, `disconnect` must name a currently connected client, and requests are
   rate-limited.
 
 ## API
 
 - `GET /api/steam/big_picture/status` returns `supported`, `enabled`, `state`, a
-  per-feature report (`features`), Steam's folder and whether the flag file exists (`debug_port`),
-  and the progress of a Steam restart (`steam_restart`).
+  per-feature report (`features`), Steam's folder and whether the flag file exists (`debug_port`,
+  with `other_flag_file` naming a file Vibeshine left in a folder Steam ran from before), and the
+  progress of a Steam restart (`steam_restart`).
 - `POST /api/steam/big_picture/debug_port` with `{"enabled": bool, "restart_steam": bool,
   "allow_during_stream": bool}` creates the flag file, or deletes it if Vibeshine created it, and
-  optionally restarts Steam.
+  optionally restarts Steam. It first deletes a file Vibeshine left in a folder Steam ran from before.
+  Turning off restarts Steam only when Steam's folder has the file Vibeshine created; otherwise
+  nothing Steam reads changes, so `restart_steam` is ignored.
 - `POST /api/steam/big_picture/check` runs the compatibility check.
 
 See [the API reference](api.md) for the details.
@@ -163,6 +193,9 @@ See [the API reference](api.md) for the details.
   left frozen on screen fails a test.
 - **Helper tests:** `test_component_steam_big_picture_controls` (decisions) and
   `test_component_steam_ui_helper_controller` (injection lifecycle against a fake Steam).
+- **Flag-file tests:** `test_component_steam_big_picture_flag_file` creates, moves and deletes flag
+  files in real folders: two Steam folders, a moved folder, replaced files, unreadable file IDs, a
+  folder the user may not open and uninstalling.
 - **Web UI tests:** the Big Picture tests in `e2e/maintenance-parity.spec.ts` cover the debug-port
   confirmations and the compatibility report against a mocked API.
 - **Check a Steam build:** `tools/sunshine_steam_ui_helper.exe --check` finds everything in the running

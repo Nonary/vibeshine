@@ -17,6 +17,7 @@
   #include "src/state_storage.h"
   #include "src/steam_big_picture_controls_policy.h"
   #include "src/utility.h"
+  #include "steam_big_picture_flag_file.h"
   #include "steam_discovery.h"
 
   #include <tlhelp32.h>
@@ -34,6 +35,7 @@ namespace {
   using namespace std::chrono_literals;
   namespace fs = std::filesystem;
   namespace discovery = platf::steam::windows_discovery;
+  namespace flag_file = platf::steam::big_picture::flag_file;
   namespace policy = platf::steam::big_picture::policy;
 
   constexpr auto steam_close_timeout = 40s;
@@ -42,14 +44,6 @@ namespace {
   // How much longer a restart waits for Steam to finish closing once Vibeshine is stopping. Vibeshine's
   // shutdown watchdog forces an exit 10 s after shutdown starts, so Steam must be started well before.
   constexpr auto steam_close_grace_on_stop = 5s;
-
-  std::string windows_error_text(DWORD code) {
-    return platf::steam::big_picture::debug_port::error_text({static_cast<int>(code), std::system_category()});
-  }
-
-  std::string last_error_text() {
-    return windows_error_text(GetLastError());
-  }
 
   std::optional<DWORD> console_session() {
     const DWORD session = WTSGetActiveConsoleSessionId();
@@ -157,70 +151,36 @@ namespace {
     return false;
   }
 
-  // The volume and file ID of an open file. Deleting a file and creating it again changes the ID.
-  std::optional<std::string> file_id(HANDLE file) {
-    FILE_ID_INFO info {};
-    if (!GetFileInformationByHandleEx(file, FileIdInfo, &info, sizeof(info))) {
-      return std::nullopt;
-    }
-    constexpr std::string_view digits = "0123456789abcdef";
-    std::string text = std::to_string(info.VolumeSerialNumber) + ':';
-    for (const auto byte : info.FileId.Identifier) {
-      text += digits[byte >> 4];
-      text += digits[byte & 0xF];
-    }
-    return text;
+  // The flag file record lives in Vibeshine's state file, which is read and written as Vibeshine;
+  // only the files themselves are touched as the console user.
+  flag_file::environment_t state_file_environment() {
+    return {
+      []() -> std::optional<flag_file::record_t> {
+        const auto remembered = statefile::load_steam_debug_port_flag();
+        if (!remembered) {
+          return std::nullopt;
+        }
+        return flag_file::record_t {platf::from_utf8(remembered->path), remembered->file_id};
+      },
+      [](const std::optional<flag_file::record_t> &record) {
+        if (!record) {
+          return statefile::save_steam_debug_port_flag(std::nullopt);
+        }
+        return statefile::save_steam_debug_port_flag(statefile::steam_debug_port_flag_t {platf::to_utf8(record->path.wstring()), record->file_id});
+      },
+      [](const std::function<void()> &work) {
+        discovery::discovery_scope scope;
+        if (!scope.user_hive()) {
+          return false;
+        }
+        work();
+        return true;
+      },
+    };
   }
 
-  // Opens a link itself, never its target, so only this name in Steam's folder is ever touched.
-  HANDLE open_flag_file(const fs::path &path, DWORD access) {
-    return CreateFileW(path.c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-  }
-
-  // The file ID of the file at path, when it exists and can be read.
-  std::optional<std::string> file_id(const fs::path &path) {
-    HANDLE file = open_flag_file(path, FILE_READ_ATTRIBUTES);
-    if (file == INVALID_HANDLE_VALUE) {
-      return std::nullopt;
-    }
-    auto close_file = util::fail_guard([&] {
-      CloseHandle(file);
-    });
-    return file_id(file);
-  }
-
-  enum class removal_e {
-    deleted,
-    missing,
-    replaced,  ///< Another file is there now, and was left alone.
-    failed,
-  };
-
-  // Delete the flag file at path if it is still the one with expected_id (any file, for an empty
-  // ID). Runs as the calling thread's user.
-  removal_e remove_flag_file(const fs::path &path, const std::string &expected_id, std::string &error) {
-    HANDLE file = open_flag_file(path, DELETE | FILE_READ_ATTRIBUTES);
-    if (file == INVALID_HANDLE_VALUE) {
-      const DWORD code = GetLastError();
-      if (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND) {
-        return removal_e::missing;
-      }
-      error = windows_error_text(code);
-      return removal_e::failed;
-    }
-    auto close_file = util::fail_guard([&] {
-      CloseHandle(file);
-    });
-    // Checked on the handle that deletes it, so the file can't be swapped in between.
-    if (!expected_id.empty() && file_id(file) != expected_id) {
-      return removal_e::replaced;
-    }
-    FILE_DISPOSITION_INFO disposition {TRUE};
-    if (!SetFileInformationByHandle(file, FileDispositionInfo, &disposition, sizeof(disposition))) {
-      error = last_error_text();
-      return removal_e::failed;
-    }
-    return removal_e::deleted;
+  std::string path_text(const fs::path &path) {
+    return platf::to_utf8(path.wstring());
   }
 
   bool big_picture_open(DWORD session) {
@@ -325,6 +285,17 @@ namespace platf::steam::big_picture::debug_port {
     return platf::to_utf8(wide);
   }
 
+  namespace {
+    // error_text for the middle of a sentence: Windows ends its messages with a full stop.
+    std::string error_reason(const std::error_code &error) {
+      auto text = error_text(error);
+      if (text.ends_with('.')) {
+        text.pop_back();
+      }
+      return text;
+    }
+  }  // namespace
+
   steam_t inspect() {
     steam_t steam;
     const auto session = console_session();
@@ -344,7 +315,15 @@ namespace platf::steam::big_picture::debug_port {
       const auto path = *steam.root / policy::debug_port_flag_file;
       std::error_code error;
       steam.flag_file = fs::is_regular_file(path, error);
-      steam.flag_file_created = steam.flag_file && remembered && policy::is_recorded_flag_file(platf::from_utf8(remembered->path), remembered->file_id, path.wstring(), file_id(path));
+      steam.flag_file_created = steam.flag_file && remembered && policy::is_recorded_flag_file(remembered->file_id, flag_file::file_id(path));
+      // A file Vibeshine created in the folder Steam ran from before, still there. Steam opens its
+      // debug port whenever it runs from there again, so the web UI deletes it with the controls.
+      if (remembered && !steam.flag_file_created) {
+        const flag_file::record_t record {platf::from_utf8(remembered->path), remembered->file_id};
+        if (!policy::same_windows_path(record.path.wstring(), path.wstring()) && flag_file::recorded_file_exists(record)) {
+          steam.other_flag_file = record.path;
+        }
+      }
     }
     steam.big_picture = steam.running && big_picture_open(*session);
     return steam;
@@ -355,129 +334,131 @@ namespace platf::steam::big_picture::debug_port {
     if (!session) {
       return "No user is signed in on this PC.";
     }
-    // The state file is Vibeshine's, so it is read and written outside the console user's scope.
-    const auto remembered = statefile::load_steam_debug_port_flag();
-    fs::path path;
-    std::optional<std::string> created;  // File ID of a file this call created; empty if unknown.
-    std::optional<removal_e> removal;
-    bool forget = false;  // The record names a file that is gone or was replaced.
-    bool left_alone = false;  // A file Vibeshine didn't create stays.
+    std::optional<fs::path> root;
     {
-      // Only the file itself is touched as the console user.
       discovery::discovery_scope scope;
       if (!scope.user_hive()) {
         return "No user is signed in on this PC.";
       }
-      const auto root = steam_root(session_processes(L"steam.exe", *session), scope);
-      if (!root) {
-        return "Steam's folder was not found.";
-      }
-      path = *root / policy::debug_port_flag_file;
-      const bool remembered_path = remembered && policy::same_windows_path(platf::from_utf8(remembered->path), path.wstring());
-      if (enabled) {
-        HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES, 0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (file == INVALID_HANDLE_VALUE) {
-          const auto error = last_error_text();
-          return "Could not create " + platf::to_utf8(path.wstring()) + ": " + error;
-        }
-        // OPEN_ALWAYS reports ERROR_ALREADY_EXISTS when the file was there before us.
-        const bool existed = GetLastError() == ERROR_ALREADY_EXISTS;
-        const auto id = file_id(file);
-        CloseHandle(file);
-        if (!existed) {
-          created = id.value_or(std::string {});
-        } else if (remembered_path && !policy::is_recorded_flag_file(platf::from_utf8(remembered->path), remembered->file_id, path.wstring(), id)) {
-          forget = true;
-        }
-      } else if (remembered_path) {
-        std::string error;
-        removal = remove_flag_file(path, remembered->file_id, error);
-        if (*removal == removal_e::failed) {
-          return "Could not delete " + platf::to_utf8(path.wstring()) + ": " + error;
-        }
-        forget = true;
-      } else {
-        // The user or another Steam mod added it, so it stays even when the controls are turned off.
-        std::error_code error;
-        left_alone = fs::exists(path, error);
-      }
+      root = steam_root(session_processes(L"steam.exe", *session), scope);
     }
-    const auto path_text = platf::to_utf8(path.wstring());
-    if (created && !statefile::save_steam_debug_port_flag(statefile::steam_debug_port_flag_t {path_text, *created})) {
-      // Without the record the file would look like another program's, and neither turning the
-      // controls off nor uninstalling would remove it. Take it back instead.
-      std::string failure;
-      std::optional<removal_e> undone;
-      {
-        discovery::discovery_scope scope;
-        if (scope.user_hive()) {
-          undone = remove_flag_file(path, *created, failure);
+    if (!root) {
+      return "Steam's folder was not found.";
+    }
+    const auto result = flag_file::set(*root, enabled, state_file_environment());
+    const auto path = path_text(result.path);
+    if (result.unproven) {
+      BOOST_LOG(warning) << "Steam Big Picture controls: Vibeshine's record of the debug-port flag file it created has no file ID, so it can't tell whether " << path_text(*result.unproven) << " is still that file. It was left in place and the record forgotten.";
+    }
+    if (result.moved_from) {
+      BOOST_LOG(info) << "Steam Big Picture controls: Steam's folder was moved with the debug-port flag file Vibeshine created inside (" << path_text(*result.moved_from) << " is now " << path << ").";
+    }
+    if (result.retired == flag_file::removal_e::deleted) {
+      BOOST_LOG(info) << "Steam Big Picture controls: Steam runs from another folder now, so the debug-port flag file Vibeshine created in its previous folder was removed"
+                      << (result.retired_as_vibeshine ? " by Vibeshine, since the signed-in user may not open that folder" : "") << " (" << path_text(result.retired_path) << ").";
+    } else if (result.retired == flag_file::removal_e::unavailable) {
+      BOOST_LOG(warning) << "Steam Big Picture controls: Steam runs from another folder now, and the drive of its previous folder isn't available, so the debug-port flag file Vibeshine created there was left in place and forgotten. Delete it if that drive comes back, or Steam opens its debug port when it runs from there (" << path_text(result.retired_path) << ").";
+    } else if (result.retired == flag_file::removal_e::replaced) {
+      BOOST_LOG(info) << "Steam Big Picture controls: another program replaced the debug-port flag file Vibeshine created in Steam's previous folder, so it was left in place (" << path_text(result.retired_path) << ").";
+    }
+    if (result.save_failed) {
+      BOOST_LOG(warning) << "Steam Big Picture controls: could not update the debug-port flag file's record in Vibeshine's state file.";
+    }
+    switch (result.failure) {
+      case flag_file::failure_e::none:
+        break;
+      case flag_file::failure_e::no_user:
+        return "No user is signed in on this PC.";
+      case flag_file::failure_e::create:
+        return "Could not create " + path + ": " + error_text(result.error);
+      case flag_file::failure_e::remove:
+        if (result.retired == flag_file::removal_e::failed) {
+          // Steam's previous folder keeps its flag file, so nothing else was changed.
+          BOOST_LOG(error) << "Steam Big Picture controls: could not delete the debug-port flag file Vibeshine created in Steam's previous folder (" << path_text(result.failed_path) << "): " << error_text(result.error);
+          return "Could not delete " + path_text(result.failed_path) + ", which Vibeshine created when Steam ran from that folder: " + error_reason(result.error) + ". Delete it, then try again.";
         }
-      }
-      BOOST_LOG(error) << "Steam Big Picture controls: could not record Steam's debug-port flag file in Vibeshine's state file, so it was "
-                       << (undone == removal_e::deleted ? "removed again" : "left in place: " + (failure.empty() ? std::string("nobody is signed in") : failure)) << " (" << path_text << ").";
-      if (undone == removal_e::deleted) {
-        return "Vibeshine could not save which flag file it created, so it removed the file again and Steam's debug port stays off. Vibeshine's log has the details.";
-      }
-      return "Vibeshine could not save which flag file it created, and could not remove it again. Delete " + path_text + " to keep Steam's debug port off.";
+        return "Could not delete " + path + ": " + error_text(result.error);
+      case flag_file::failure_e::identify:
+        if (!result.undo) {
+          // Steam's folder has a flag file that may be the one Vibeshine created, moved there with the
+          // folder. Nothing changed.
+          BOOST_LOG(error) << "Steam Big Picture controls: could not read the file ID of Steam's debug-port flag file, so Vibeshine can't tell whether it created it (" << path << "): " << error_text(result.error);
+          return "Could not check whether " + path + " is the flag file Vibeshine created: " + error_reason(result.error) + ". Try again.";
+        }
+        BOOST_LOG(error) << "Steam Big Picture controls: could not read the file ID of the debug-port flag file Vibeshine created, so it was "
+                         << (result.undo == flag_file::removal_e::deleted ? "removed again" : "left in place: " + error_text(result.error)) << " (" << path << ").";
+        if (result.undo == flag_file::removal_e::deleted) {
+          return "Vibeshine could not identify the flag file it created, so it removed the file again and Steam's debug port stays off. Vibeshine's log has the details.";
+        }
+        return "Vibeshine could not identify the flag file it created, and could not remove it again. Delete " + path + " to keep Steam's debug port off.";
+      case flag_file::failure_e::record:
+        BOOST_LOG(error) << "Steam Big Picture controls: could not record Steam's debug-port flag file in Vibeshine's state file, so it was "
+                         << (result.undo == flag_file::removal_e::deleted ? "removed again" : "left in place: " + (result.error ? error_text(result.error) : std::string("nobody is signed in"))) << " (" << path << ").";
+        if (result.undo == flag_file::removal_e::deleted) {
+          return "Vibeshine could not save which flag file it created, so it removed the file again and Steam's debug port stays off. Vibeshine's log has the details.";
+        }
+        return "Vibeshine could not save which flag file it created, and could not remove it again. Delete " + path + " to keep Steam's debug port off.";
     }
-    if (forget && !statefile::save_steam_debug_port_flag(std::nullopt)) {
-      BOOST_LOG(warning) << "Steam Big Picture controls: could not forget the debug-port flag file in Vibeshine's state file.";
-    }
-    if (removal == removal_e::replaced) {
-      BOOST_LOG(info) << "Steam Big Picture controls: another program replaced the debug-port flag file Vibeshine created, so it was left in place (" << path_text << ").";
-    } else if (left_alone) {
-      BOOST_LOG(info) << "Steam Big Picture controls: Vibeshine didn't create the debug-port flag file, so it was left in place (" << path_text << ").";
+    if (result.removed == flag_file::removal_e::replaced) {
+      BOOST_LOG(info) << "Steam Big Picture controls: another program replaced the debug-port flag file Vibeshine created, so it was left in place (" << path << ").";
+    } else if (result.removed == flag_file::removal_e::unavailable) {
+      BOOST_LOG(warning) << "Steam Big Picture controls: the drive of Steam's folder isn't available, so the debug-port flag file Vibeshine created there was left in place and forgotten (" << path << ").";
+    } else if (result.left_alone) {
+      BOOST_LOG(info) << "Steam Big Picture controls: Vibeshine didn't create the debug-port flag file, so it was left in place (" << path << ").";
     } else {
-      BOOST_LOG(info) << "Steam Big Picture controls: Steam's debug port turned " << (enabled ? "on" : "off") << " (" << path_text << ").";
+      BOOST_LOG(info) << "Steam Big Picture controls: Steam's debug port turned " << (enabled ? "on" : "off") << " (" << path << ").";
     }
     return std::nullopt;
   }
 
   void remove_created_flag_file() {
-    const auto remembered = statefile::load_steam_debug_port_flag();
-    if (!remembered) {
-      return;
-    }
-    const fs::path path = platf::from_utf8(remembered->path);
-    // Whatever the state file says, never delete anything but the flag file.
-    if (path.filename() != fs::path(policy::debug_port_flag_file)) {
-      statefile::save_steam_debug_port_flag(std::nullopt);
-      return;
-    }
-    std::string error;
-    std::optional<removal_e> removal;
-    {
+    // Steam's folder now, where the file is when Steam's folder was moved with it inside.
+    std::optional<fs::path> root;
+    if (const auto session = console_session()) {
       discovery::discovery_scope scope;
       if (scope.user_hive()) {
-        removal = remove_flag_file(path, remembered->file_id, error);
+        root = steam_root(session_processes(L"steam.exe", *session), scope);
       }
     }
-    if (!removal) {
+    const auto result = flag_file::remove_recorded(state_file_environment(), root, [](const fs::path &folder) {
       // Nobody is signed in, as in a remote uninstall. Left behind, the file would open Steam's debug
       // port at every Steam start after Vibeshine is gone, and factory reset deletes this record. So
       // it is deleted as Vibeshine, but only in the folder Steam's installer registered, and only the
       // very file Vibeshine created when its ID was recorded.
-      if (!registered_steam_folder(path.parent_path())) {
-        BOOST_LOG(warning) << "Steam Big Picture controls: no user is signed in and the debug-port flag file isn't in Steam's registered folder, so it was left in place (" << remembered->path << ").";
-        return;
-      }
-      removal = remove_flag_file(path, remembered->file_id, error);
+      return registered_steam_folder(folder);
+    });
+    if (!result.record) {
+      return;
     }
-    switch (*removal) {
-      case removal_e::failed:
-        BOOST_LOG(warning) << "Steam Big Picture controls: could not delete Steam's debug-port flag file (" << remembered->path << "): " << error;
-        return;
-      case removal_e::replaced:
-        BOOST_LOG(info) << "Steam Big Picture controls: another program replaced the debug-port flag file Vibeshine created, so it was left in place (" << remembered->path << ").";
+    const auto path = path_text(result.moved_to.value_or(result.record->path));
+    if (result.unproven) {
+      BOOST_LOG(warning) << "Steam Big Picture controls: Vibeshine's record of the debug-port flag file it created has no file ID, so it can't tell whether " << path << " is still that file. It was left in place.";
+      return;
+    }
+    if (result.left_outside_steam) {
+      BOOST_LOG(warning) << "Steam Big Picture controls: no user is signed in and the debug-port flag file isn't in Steam's registered folder, so it was left in place (" << path << ").";
+      return;
+    }
+    if (!result.removal) {
+      return;  // The record named some other file; it was forgotten without touching it.
+    }
+    switch (*result.removal) {
+      case flag_file::removal_e::failed:
+        BOOST_LOG(warning) << "Steam Big Picture controls: could not delete Steam's debug-port flag file (" << path << "): " << error_text(result.error);
         break;
-      case removal_e::deleted:
-        BOOST_LOG(info) << "Steam Big Picture controls: removed the debug-port flag file Vibeshine created (" << remembered->path << ").";
+      case flag_file::removal_e::replaced:
+        BOOST_LOG(info) << "Steam Big Picture controls: another program replaced the debug-port flag file Vibeshine created, so it was left in place (" << path << ").";
         break;
-      case removal_e::missing:
+      case flag_file::removal_e::deleted:
+        BOOST_LOG(info) << "Steam Big Picture controls: removed the debug-port flag file Vibeshine created" << (result.moved_to ? ", which had moved with Steam's folder" : "")
+                        << (result.removed_as_vibeshine ? ", with Vibeshine's own access since the signed-in user may not open its folder" : "") << " (" << path << ").";
+        break;
+      case flag_file::removal_e::unavailable:
+        BOOST_LOG(warning) << "Steam Big Picture controls: the drive of the debug-port flag file Vibeshine created isn't available, so it was left in place. Delete it if that drive comes back (" << path << ").";
+        break;
+      case flag_file::removal_e::missing:
         break;
     }
-    statefile::save_steam_debug_port_flag(std::nullopt);
   }
 
   std::optional<std::string> restart_steam(std::stop_token stop, bool big_picture) {

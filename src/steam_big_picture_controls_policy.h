@@ -113,11 +113,21 @@ namespace platf::steam::big_picture::policy {
    * trailing separators. Lexical only: links are not followed. */
   bool same_windows_path(std::wstring_view a, std::wstring_view b);
 
-  /** Whether the flag file at path is the one Vibeshine recorded creating: the same path, and the same
-   * file ID when the record has one. A file deleted and created again there, by the user or another
-   * Steam mod, has a new ID, so it is never mistaken for Vibeshine's. Records without an ID match on
-   * the path alone. */
-  bool is_recorded_flag_file(std::wstring_view recorded_path, std::string_view recorded_id, std::wstring_view path, const std::optional<std::string> &file_id);
+  enum class record_match_e {
+    same,  ///< The very file Vibeshine created.
+    different,  ///< Another file.
+    unknown,  ///< The file's ID couldn't be read, so it may or may not be.
+  };
+
+  /** Whether a flag file with file_id is the one Vibeshine recorded creating. The file ID decides: it
+   * names one file on one volume, so the file still matches after Steam's folder was moved or renamed
+   * with it inside, while a file deleted and created again by the user or another Steam mod has a new
+   * ID and never matches. An ID that can't be read (file_id empty) proves nothing either way, and a
+   * record without an ID (early development builds saved those) never matches. */
+  record_match_e match_recorded_flag_file(std::string_view recorded_id, const std::optional<std::string> &file_id);
+
+  /** Whether match_recorded_flag_file finds the very file Vibeshine created. */
+  bool is_recorded_flag_file(std::string_view recorded_id, const std::optional<std::string> &file_id);
 
   /** Body of POST /api/steam/big_picture/debug_port. */
   struct debug_port_request_t {

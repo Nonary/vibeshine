@@ -629,7 +629,8 @@
         "vulkanRefreshed": "The Vulkan HDR layer registration was refreshed.",
         "steamRestarting": "Restarting Steam…",
         "steamRestarted": "Steam restarted.",
-        "steamDebugPortNextStart": "Saved. Steam picks this up the next time it starts."
+        "steamDebugPortNextStart": "Saved. Steam picks this up the next time it starts.",
+        "steamOldFlagFileDeleted": "Deleted the file Vibeshine added in Steam's previous folder."
       },
       "playnite": {
         "description": "Synchronizes installed games and metadata through the Vibeshine extension.",
@@ -706,6 +707,7 @@
         "debugPortOffDescription": "Off. The controls reach Steam through its debug port. Turning it on adds an empty file to your Steam folder and restarts Steam.",
         "debugPortNeedsRestart": "On, but Steam was already running when it was turned on. Restart Steam to start using it.",
         "debugPortLeftOn": "Still on. The Big Picture controls are off, but the file Vibeshine added is still in your Steam folder, so Steam keeps opening its debug port. Turning it off deletes the file and restarts Steam.",
+        "debugPortLeftOnElsewhere": "Still on in Steam's previous folder. The Big Picture controls are off, but the file Vibeshine added is still at {path}, so Steam opens its debug port if it runs from there again. Turning it off deletes the file without restarting Steam.",
         "debugPortSteamMissing": "Steam's folder wasn't found. Install Steam or start it once, then refresh.",
         "compatibility": "Compatibility with this Steam version",
         "compatibilityDescription": "Checks which controls work in the running Steam without changing anything. Run it after a Steam update.",

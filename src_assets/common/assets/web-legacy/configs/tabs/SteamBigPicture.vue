@@ -51,7 +51,7 @@
         strong
         class="shrink-0"
         :disabled="busy || restarting"
-        @click="confirmAction('disable')"
+        @click="portLeftOnElsewhere ? turnOffOtherFlagFile() : confirmAction('disable')"
       >
         {{ $t('steam_big_picture.turn_off_debug_port') }}
       </n-button>
@@ -132,6 +132,7 @@ interface BigPictureStatus extends ApiResult {
     steam_running?: boolean;
     flag_file?: boolean;
     flag_file_created?: boolean;
+    other_flag_file?: string;
   };
   steam_restart?: { state?: string; detail?: string };
 }
@@ -208,12 +209,20 @@ const needsRestart = computed(
 // The controls are off but the flag file Vibeshine added is still there, so Steam keeps opening its
 // debug port: deleting the file failed when they were turned off, or saving the setting failed after
 // it was added.
-const portLeftOn = computed(
+const portLeftOnHere = computed(
   () =>
     status.value?.enabled === false &&
     debugPort.value?.flag_file === true &&
     debugPort.value.flag_file_created === true,
 );
+// The same, for a flag file Vibeshine added in a folder Steam ran from before, as after Steam moved
+// to another drive. Steam opens its debug port whenever it runs from there again. Deleting it doesn't
+// restart Steam.
+const otherFlagFile = computed(() => debugPort.value?.other_flag_file ?? '');
+const portLeftOnElsewhere = computed(
+  () => status.value?.enabled === false && !portLeftOnHere.value && otherFlagFile.value !== '',
+);
+const portLeftOn = computed(() => portLeftOnHere.value || portLeftOnElsewhere.value);
 // Shown when the controls are on but can't reach Steam yet: the flag file is missing, for example
 // after turning them on while Steam wasn't found, or Steam needs a restart to read it. Also shown
 // while the port is left on with the controls off.
@@ -225,6 +234,9 @@ const showDebugPort = computed(
       (!debugPort.value.flag_file || needsRestart.value)),
 );
 const debugPortDescription = computed(() => {
+  if (portLeftOnElsewhere.value) {
+    return t('steam_big_picture.debug_port_left_on_elsewhere', { path: otherFlagFile.value });
+  }
   if (portLeftOn.value) return t('steam_big_picture.debug_port_left_on');
   if (!debugPort.value?.steam_found) return t('steam_big_picture.debug_port_steam_missing');
   if (needsRestart.value) return t('steam_big_picture.debug_port_needs_restart');
@@ -318,23 +330,40 @@ async function saveControls(value: boolean): Promise<void> {
   if (status.value) status.value.enabled = value;
 }
 
-function setControls(value: boolean): void {
-  const port = debugPort.value;
-  // Turning the controls on adds the flag file when Steam is there to take it, and turning them off
-  // removes it only if Vibeshine added it. Both restart Steam, so they ask first. A file another
-  // Steam mod added stays, and when Steam can't be reached the setting is saved on its own.
-  const changesPort = value
-    ? port?.steam_found === true && !port.flag_file
-    : port?.flag_file_created === true;
-  if (changesPort) {
-    confirmAction(value ? 'enable' : 'disable');
-    return;
+// Steam may have started from its previous folder since the status was read, and then the flag file
+// Vibeshine left there is the one Steam reads: turning it off needs a Steam restart. So the status is
+// read again right before that file is deleted without one.
+async function recheckOtherFlagFile(): Promise<void> {
+  saving.value = true;
+  try {
+    await refreshStatus();
+  } finally {
+    saving.value = false;
   }
+}
+
+function setControls(value: boolean): void {
   void (async () => {
+    if (!value && otherFlagFile.value) await recheckOtherFlagFile();
+    const port = debugPort.value;
+    // Turning the controls on adds the flag file when Steam is there to take it, and turning them
+    // off removes it only if Vibeshine added it. Both restart Steam, so they ask first. A file
+    // another Steam mod added stays, and when Steam can't be reached the setting is saved on its own.
+    const changesPort = value
+      ? port?.steam_found === true && !port.flag_file
+      : port?.flag_file_created === true;
+    if (changesPort) {
+      confirmAction(value ? 'enable' : 'disable');
+      return;
+    }
     saving.value = true;
     error.value = '';
     notice.value = '';
+    // Turning the controls off also deletes a flag file Vibeshine left in a folder Steam ran from
+    // before. They turn off even if that fails; the debug-port row then offers to try again.
+    let portError = '';
     try {
+      if (!value && otherFlagFile.value) portError = await deleteOtherFlagFile();
       await saveControls(value);
     } catch (cause) {
       error.value = messageOf(cause, t('steam_big_picture.errors.save'));
@@ -342,10 +371,52 @@ function setControls(value: boolean): void {
     } finally {
       saving.value = false;
     }
-    notice.value = t('steam_big_picture.notices.saved');
+    error.value = portError;
+    notice.value = portError ? '' : t('steam_big_picture.notices.saved');
     await refreshStatus();
     if (value) watchHelperStart();
   })();
+}
+
+// Deletes the flag file Vibeshine added in a folder Steam ran from before. Steam doesn't read it, so
+// nothing restarts. Returns the error to show, or '' once the file is gone.
+async function deleteOtherFlagFile(): Promise<string> {
+  try {
+    const result = await request<DebugPortResult>('post', '/api/steam/big_picture/debug_port', {
+      enabled: false,
+      restart_steam: false,
+      allow_during_stream: false,
+    });
+    if (result.status === false) return result.error || t('steam_big_picture.errors.debug_port');
+    return '';
+  } catch (cause) {
+    return messageOf(cause, t('steam_big_picture.errors.debug_port'));
+  }
+}
+
+// The debug-port row's Turn off for a flag file left in a folder Steam ran from before.
+async function turnOffOtherFlagFile(): Promise<void> {
+  if (busy.value) return;
+  busy.value = true;
+  notice.value = '';
+  error.value = '';
+  let restartInstead = false;
+  try {
+    // Read again first, as recheckOtherFlagFile explains.
+    await refreshStatus();
+    if (portLeftOnElsewhere.value) {
+      const portError = await deleteOtherFlagFile();
+      if (portError) error.value = portError;
+      else notice.value = t('steam_big_picture.notices.old_flag_file_deleted');
+      await refreshStatus();
+    } else {
+      // Steam runs from that folder now, so this is the usual Turn off, which restarts Steam.
+      restartInstead = portLeftOnHere.value;
+    }
+  } finally {
+    busy.value = false;
+  }
+  if (restartInstead) confirmAction('disable');
 }
 
 function confirmAction(action: DebugPortAction, duringStream = false): void {

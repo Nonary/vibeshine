@@ -157,7 +157,7 @@ namespace statefile {
   /** The Steam debug-port flag file Vibeshine created. */
   struct steam_debug_port_flag_t {
     std::string path;  ///< UTF-8 path of the `.cef-enable-remote-debugging` file.
-    std::string file_id;  ///< The file's volume and file ID, so a file recreated at the same path doesn't match. Empty if unknown.
+    std::string file_id;  ///< The file's volume and file ID, so a file recreated at the same path doesn't match. A record without one is never acted on.
   };
 
   /**

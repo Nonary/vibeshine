@@ -728,6 +728,7 @@ namespace platf::steam::big_picture {
          {"big_picture_open", steam.big_picture},
          {"flag_file", steam.flag_file},
          {"flag_file_created", steam.flag_file_created},
+         {"other_flag_file", steam.other_flag_file ? platf::to_utf8(steam.other_flag_file->wstring()) : std::string {}},
        }},
       {"steam_restart", {{"state", s.restart.state}, {"detail", s.restart.detail}}},
       {"status", true},
@@ -770,6 +771,11 @@ namespace platf::steam::big_picture {
   debug_port_result_t set_debug_port(bool enabled, bool restart_steam, bool allow_during_stream) {
     debug_port_result_t result;
     const auto steam = debug_port::inspect();
+    // Turning off changes what Steam reads only when its folder has the file Vibeshine created. A file
+    // left in a folder Steam ran from before is deleted without restarting Steam.
+    if (!enabled && !steam.flag_file_created) {
+      restart_steam = false;
+    }
     std::optional<policy::restart_decision_e> decision;
     bool big_picture = steam.big_picture;
     if (restart_steam) {

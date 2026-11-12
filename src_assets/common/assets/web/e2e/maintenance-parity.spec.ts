@@ -13,6 +13,8 @@ interface HostOptions {
     flagFile?: boolean;
     // Whether Vibeshine added the flag file, rather than another Steam mod.
     flagFileCreated?: boolean;
+    // A flag file Vibeshine added in a folder Steam ran from before, still there.
+    otherFlagFile?: string;
     // Debug-port requests fail, as when the flag file can't be deleted.
     failDebugPort?: boolean;
     state?: string;
@@ -42,6 +44,7 @@ async function setupHost(page: Page, options: HostOptions = {}) {
   const bigPicture = {
     flagFile: false,
     flagFileCreated: true,
+    otherFlagFile: '',
     failDebugPort: false,
     state: 'port_closed',
     restart: 'idle',
@@ -72,6 +75,13 @@ async function setupHost(page: Page, options: HostOptions = {}) {
     displayTerminations: 0,
     debugPortRequests: [] as Record<string, unknown>[],
     compatibilityChecks: 0,
+    // Steam starts from its previous folder, so the flag file Vibeshine left there is the one Steam
+    // reads now.
+    startSteamFromOldFolder() {
+      bigPicture.flagFile = true;
+      bigPicture.flagFileCreated = true;
+      bigPicture.otherFlagFile = '';
+    },
   };
   let failedPartTwo = true;
 
@@ -190,6 +200,7 @@ async function setupHost(page: Page, options: HostOptions = {}) {
           big_picture_open: false,
           flag_file: bigPicture.flagFile,
           flag_file_created: bigPicture.flagFile && bigPicture.flagFileCreated,
+          other_flag_file: bigPicture.otherFlagFile,
         },
         steam_restart: { state: bigPicture.restart, detail: '' },
       };
@@ -203,6 +214,13 @@ async function setupHost(page: Page, options: HostOptions = {}) {
           error_code: 'failed',
           error: 'Could not delete the flag file.',
         };
+      } else if (
+        payload.enabled === false &&
+        !(bigPicture.flagFile && bigPicture.flagFileCreated)
+      ) {
+        // Only the file in Steam's previous folder goes, which Steam doesn't read, so nothing restarts.
+        bigPicture.otherFlagFile = '';
+        body = { status: true, restart: 'skipped' };
       } else if (bigPicture.streaming && payload.allow_during_stream !== true) {
         body = {
           status: false,
@@ -728,6 +746,146 @@ test('the Steam card turns off a debug port left on after the controls were turn
   await expect(row).toHaveCount(0);
   await expect(page.locator('#steam-big-picture-controls')).not.toBeChecked();
   expect(calls.configPatches).toEqual([]);
+});
+
+const oldFlagFile = 'D:\\OldSteam\\.cef-enable-remote-debugging';
+
+test("turning the Big Picture controls off deletes the flag file left in Steam's previous folder", async ({
+  page,
+}) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: { otherFlagFile: oldFlagFile },
+  });
+  await page.goto('/v2/integrations');
+  const toggle = page.locator('#steam-big-picture-controls');
+  // The switch stays disabled until the page has read the controls' status.
+  await expect(toggle).toBeEnabled();
+  await toggle.uncheck({ force: true });
+  // Steam doesn't read that file, so nothing restarts and there is nothing to confirm.
+  await expect
+    .poll(() => calls.debugPortRequests)
+    .toEqual([{ enabled: false, restart_steam: false, allow_during_stream: false }]);
+  await expect.poll(() => calls.configPatches).toEqual([{ steam_big_picture_controls: false }]);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(toggle).not.toBeChecked();
+  await expect(page.getByTestId('steam-debug-port')).toHaveCount(0);
+});
+
+test("the Big Picture controls turn off even when the file in Steam's previous folder stays", async ({
+  page,
+}) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: { otherFlagFile: oldFlagFile, failDebugPort: true },
+  });
+  await page.goto('/v2/integrations');
+  const toggle = page.locator('#steam-big-picture-controls');
+  await expect(toggle).toBeEnabled();
+  await toggle.uncheck({ force: true });
+  await expect(page.getByText('Could not delete the flag file.')).toBeVisible();
+  await expect.poll(() => calls.configPatches).toEqual([{ steam_big_picture_controls: false }]);
+  await expect(toggle).not.toBeChecked();
+  // The card keeps saying the port is on there, with the file's path, so it can be tried again.
+  const row = page.getByTestId('steam-debug-port');
+  await expect(row).toContainText("Still on in Steam's previous folder.");
+  await expect(row).toContainText(oldFlagFile);
+});
+
+test("the Steam card deletes a flag file left in Steam's previous folder without restarting Steam", async ({
+  page,
+}) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: false },
+    bigPicture: { otherFlagFile: oldFlagFile },
+  });
+  await page.goto('/v2/integrations');
+  const row = page.getByTestId('steam-debug-port');
+  await expect(row).toContainText(oldFlagFile);
+  await row.getByRole('button', { name: 'Turn off', exact: true }).click();
+  await expect
+    .poll(() => calls.debugPortRequests)
+    .toEqual([{ enabled: false, restart_steam: false, allow_during_stream: false }]);
+  await expect(
+    page.getByText("Deleted the file Vibeshine added in Steam's previous folder."),
+  ).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(row).toHaveCount(0);
+  expect(calls.configPatches).toEqual([]);
+});
+
+test('turning the Big Picture controls off restarts Steam once it runs from its previous folder', async ({
+  page,
+}) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: true },
+    bigPicture: { otherFlagFile: oldFlagFile },
+  });
+  await page.goto('/v2/integrations');
+  const toggle = page.locator('#steam-big-picture-controls');
+  await expect(toggle).toBeEnabled();
+  // After the page read the status, Steam started from the folder with the old file.
+  calls.startSteamFromOldFolder();
+  await toggle.click({ force: true });
+  // That file now keeps Steam's debug port open, so turning it off restarts Steam, which asks first.
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: 'Turn off and restart Steam' })).toBeVisible();
+  expect(calls.debugPortRequests).toEqual([]);
+  await dialog.getByRole('button', { name: 'Turn off and restart Steam' }).click();
+  await expect
+    .poll(() => calls.debugPortRequests)
+    .toEqual([{ enabled: false, restart_steam: true, allow_during_stream: false }]);
+  await expect.poll(() => calls.configPatches).toEqual([{ steam_big_picture_controls: false }]);
+});
+
+test("the Steam card's Turn off restarts Steam once it runs from its previous folder", async ({
+  page,
+}) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: false },
+    bigPicture: { otherFlagFile: oldFlagFile },
+  });
+  await page.goto('/v2/integrations');
+  const row = page.getByTestId('steam-debug-port');
+  await expect(row).toContainText(oldFlagFile);
+  calls.startSteamFromOldFolder();
+  await row.getByRole('button', { name: 'Turn off', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText("Turn off Steam's debug port?")).toBeVisible();
+  expect(calls.debugPortRequests).toEqual([]);
+  await dialog.getByRole('button', { name: 'Turn off and restart Steam' }).click();
+  await expect
+    .poll(() => calls.debugPortRequests)
+    .toEqual([{ enabled: false, restart_steam: true, allow_during_stream: false }]);
+  expect(calls.configPatches).toEqual([]);
+});
+
+test("the Steam card deletes the old folder's flag file once when Turn off is clicked twice", async ({
+  page,
+}) => {
+  const calls = await setupHost(page, {
+    config: { steam_big_picture_controls: false },
+    bigPicture: { otherFlagFile: oldFlagFile },
+  });
+  await page.goto('/v2/integrations');
+  const row = page.getByTestId('steam-debug-port');
+  await expect(row).toContainText(oldFlagFile);
+  // The status answers slowly, so the second click lands while the first is still checking it.
+  let answer: () => void = () => {};
+  calls.holdBigPictureStatus = new Promise<void>((resolve) => {
+    answer = resolve;
+  });
+  const button = row.getByRole('button', { name: 'Turn off', exact: true });
+  await button.click();
+  await button.click({ force: true });
+  answer();
+  calls.holdBigPictureStatus = null;
+  await expect(
+    page.getByText("Deleted the file Vibeshine added in Steam's previous folder."),
+  ).toBeVisible();
+  expect(calls.debugPortRequests).toEqual([
+    { enabled: false, restart_steam: false, allow_during_stream: false },
+  ]);
 });
 
 test('the Steam card shows no debug-port row for a file another program added', async ({

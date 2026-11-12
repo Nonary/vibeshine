@@ -221,7 +221,8 @@ namespace confighttp {
    *
    * Includes the helper's `state`, each feature's result, Steam's folder and whether its debug-port
    * flag file exists and whether Vibeshine created it (`debug_port`), and the progress of a Steam
-   * restart (`steam_restart`).
+   * restart (`steam_restart`). `debug_port.other_flag_file` is the path of a flag file Vibeshine
+   * created in a folder Steam ran from before, while it is still there, or empty.
    *
    * @api_examples{/api/steam/big_picture/status| GET| null}
    */
@@ -246,7 +247,10 @@ namespace confighttp {
    * The Big Picture controls reach Steam through its debug port, which Steam opens at start when an
    * empty `.cef-enable-remote-debugging` file is in its folder. This creates that file, or deletes it
    * if it is the one Vibeshine created, as the signed-in user; a file the user or another Steam mod
-   * added is left in place. With `restart_steam`, Steam closes and starts again in the background, in Big
+   * added is left in place. A file Vibeshine created in a folder Steam ran from before is deleted
+   * first. Turning off restarts Steam only when Steam's folder has the file Vibeshine created;
+   * otherwise nothing Steam reads changes, so `restart_steam` is ignored.
+   * With `restart_steam`, Steam closes and starts again in the background, in Big
    * Picture if it was open; `steam_restart` in the status endpoint reports the progress. `restart` in
    * the response is `started`, `not_running` (the change applies when Steam next starts) or `skipped`.
    * While a stream or app runs the restart is refused with `error_code` `stream_active`, leaving the
