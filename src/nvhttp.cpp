@@ -5388,7 +5388,7 @@ launch_session->exact_target_hold.reset();
 
 #ifdef __APPLE__
       // Bring the client's virtual display up before the encoder probe.
-      if (!launch_session->input_only) {
+      if (launch_session->role != remote_session::role_e::input) {
         platf::macos_virtual_display::hold_for_launch(requested_display_config(*launch_session));
       }
 #endif
@@ -6059,7 +6059,7 @@ launch_session->exact_target_hold.reset();
 
 #ifdef __APPLE__
       // Bring the client's virtual display up before the encoder probe.
-      if (!launch_session->input_only) {
+      if (launch_session->role != remote_session::role_e::input) {
         platf::macos_virtual_display::hold_for_launch(requested_display_config(*launch_session));
       }
 #endif
