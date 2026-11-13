@@ -2318,6 +2318,7 @@ namespace platf::dxgi {
         amf_cfg.input_queue_size = 1;
         BOOST_LOG(info) << "AMF: using input queue size 1 for VRR low-latency mode";
       }
+      amf_cfg.adaptive_backlog = config::video.amd.amd_adaptive_backlog;
 
       // Xbox clients request rolling intra refresh because they cannot always
       // recover by asking for a keyframe. Match NVENC's 300-frame period using

@@ -296,6 +296,12 @@ struct runtime {
   std::vector<uint8_t> accepted_pixels;
   std::size_t maximum_depth = 0;
   int submit_result = AMF_OK;
+  // amd_adaptive_backlog: one VCN encodes inputs back to back, and completion
+  // refines the learned depth and times outputs as the production pump does.
+  bool adaptive = false;
+  model_clock::time_point vcn_free {};
+  model_clock::duration vcn_idle {};
+  std::unordered_map<uint64_t, model_clock::time_point> vcn_started;
 
   runtime() {
     model_clock::now_ = {};
@@ -310,10 +316,28 @@ struct runtime {
       accepted.push_back(id);
       accepted_pixels.push_back(pixels);
       maximum_depth = std::max(maximum_depth, encoder.accepted_input_count - encoder.completed_output_count + 1);
-      events.push_back({model_clock::now() + delay, [this, id, pixels, idr] {
+      auto start = model_clock::now();
+      if (adaptive) {
+        if (id > 3 && start > vcn_free) {
+          vcn_idle += start - vcn_free;
+        }
+        start = std::max(start, vcn_free);
+        vcn_free = start + delay;
+      }
+      vcn_started[uint64_t(id)] = start;
+      events.push_back({start + delay, [this, id, pixels, idr] {
                           std::lock_guard lock(encoder.state_mutex);
                           encoder.completed_outputs.push_back({{pixels}, uint64_t(id), idr, encoder.frame_rfi_flags.contains(id), false});
                           ++encoder.completed_output_count;
+                          if (adaptive) {
+                            const auto previous = encoder.low_latency_pipeline_depth;
+                            encoder.low_latency_pipeline_depth = amf::lifecycle::refine_low_latency_pipeline_depth(
+                              previous,
+                              encoder.accepted_input_count,
+                              encoder.completed_output_count,
+                              0);
+                            encoder.adaptive_backlog.output(uint64_t(id), model_clock::now(), previous, *encoder.low_latency_pipeline_depth, 0);
+                          }
                           encoder.last_completed_frame_index = id;
                           encoder.last_output_progress = model_clock::now();
                           encoder.input_surfaces_in_flight = 0;
@@ -446,10 +470,16 @@ struct profile_result {
   std::vector<uint64_t> indices;
   std::vector<uint8_t> pixels;
   std::size_t depth = 0;
+  model_clock::duration vcn_idle {}, claim_lead {};
 };
 
-profile_result profile(int count, std::chrono::nanoseconds convert = 1ms) {
+profile_result profile(int count, std::chrono::nanoseconds convert = 1ms, bool adaptive = false, std::chrono::nanoseconds capture_period = 7ms) {
   runtime r;
+  if (adaptive) {
+    r.adaptive = true;
+    r.encoder.adaptive_backlog = decltype(r.encoder.adaptive_backlog)(true, 2);
+  }
+  std::unordered_map<uint64_t, model_clock::time_point> claimed;
   amf_encode_session_t s;
   s.device = std::make_unique<amf_encode_session_t::device_t>(&r.encoder);
   auto *native_session = &s;
@@ -468,7 +498,7 @@ profile_result profile(int count, std::chrono::nanoseconds convert = 1ms) {
   video::config_t config {};
   int touch_port_event = 0;
   for (int i = 0; i < count; i++) {
-    image_storage.arrivals.push_back(model_clock::time_point {} + 6ms + 7ms * i);
+    image_storage.arrivals.push_back(model_clock::time_point {} + 6ms + capture_period * i);
   }
   // First accepted input starts at t=0; next captures arrive at 6,13,20,... ms.
   r.prepare(frame_nr);
@@ -485,8 +515,11 @@ profile_result profile(int count, std::chrono::nanoseconds convert = 1ms) {
     if (!img) {
       break;
     }
+    claimed[frame_nr] = model_clock::now();
     advance(model_clock::now() + convert);
     r.prepare(frame_nr);
+    // Production reserves the input surface before converting into it.
+    r.encoder.prepared_input_reserved_at = model_clock::now() - convert;
     s.fresh_conversion_pending = true;
     if (encode_amf(frame_nr++, s, packets, channel_data, model_clock::now(), model_clock::now())) {
       break;
@@ -498,10 +531,16 @@ profile_result profile(int count, std::chrono::nanoseconds convert = 1ms) {
   advance(model_clock::now() + 100ms);
   auto tail = s.drain_frames(0ms);
   deliver_amf_frames(frame_nr, s, tail.frames, packets, channel_data);
-  profile_result out {count + 1, int(r.accepted.size()), int(packets->values.size()), skipped, {}, {}, r.maximum_depth};
+  profile_result out {count + 1, int(r.accepted.size()), int(packets->values.size()), skipped, {}, {}, r.maximum_depth, r.vcn_idle, {}};
   for (auto &p : packets->values) {
     out.indices.push_back(p->index);
     out.pixels.push_back(p->data[0]);
+  }
+  // Steady state: how long before VCN starts a capture it was claimed.
+  for (const auto &[index, at] : claimed) {
+    if (index > 3 && r.vcn_started.contains(index)) {
+      out.claim_lead = std::max(out.claim_lead, r.vcn_started[index] - at);
+    }
   }
   check(!native_amf_runtime_failed, "exact capture-wait block completes without AMF fatal error");
   return out;
@@ -536,6 +575,17 @@ int main() {
   }
   check(identities, "wire indices and actual encoded pixels match every accepted current capture");
   check(fixed.depth == 1, "retry preserves strict depth-one native application queue");
+  // Captures every 4 ms outpace the 6.6 ms encoder.
+  auto adaptive = profile(100, 1ms, true, 4ms);
+  check(adaptive.submissions == 101 && adaptive.outputs == 101 && adaptive.skips == 0, "adaptive backlog submits and delivers all 101 source captures");
+  bool adaptive_identities = true;
+  for (std::size_t i = 0; i < adaptive.indices.size(); ++i) {
+    adaptive_identities &= adaptive.indices[i] == i + 1 && adaptive.pixels[i] == i + 1;
+  }
+  check(adaptive_identities, "adaptive backlog delivers every packet in order with its own pixels");
+  check(adaptive.depth == 2, "adaptive backlog overlaps one input behind the encoding picture and never more");
+  check(adaptive.vcn_idle == model_clock::duration::zero(), "adaptive backlog keeps the encoder busy back to back");
+  check(adaptive.claim_lead <= 3ms + 100us, "adaptive backlog claims each capture one conversion and margin before it encodes");
   {
     fixture f;
     f.older_ready();

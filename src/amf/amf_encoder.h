@@ -73,6 +73,15 @@ namespace amf {
     virtual bool
     has_completed_output() = 0;
 
+    /**
+     * @brief With adaptive backlog, wait until the next capture should be claimed.
+     * That is the in-flight picture's predicted completion less one conversion,
+     * or earlier output, and at most `limit`. Returns ready output for delivery;
+     * an empty result means claim now. Without adaptive backlog this never waits.
+     */
+    virtual amf_encode_result
+    wait_for_input_claim(std::chrono::nanoseconds limit) = 0;
+
     /** @brief Whether PA retains a final input that needs one future submission. */
     virtual bool
     has_retained_preanalysis_tail() = 0;
