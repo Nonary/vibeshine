@@ -2914,10 +2914,20 @@ namespace video {
     int max_attempts = 2;
     std::chrono::milliseconds base_delay = 200ms;
 #ifdef _WIN32
+    // The extended ladder only exists for the window right after an APPLY, and a
+    // bounded stream start has to spend that window inside the same budget the
+    // client's first-video deadline uses. Outside the window nothing changes.
+    std::optional<std::chrono::steady_clock::time_point> settle_deadline;
     const auto ms_since_apply = display_helper_integration::ms_since_last_apply();
     if (ms_since_apply < 5000) {
-      max_attempts = 5;
-      base_delay = 300ms;
+      const auto stream_start_budget = display_helper_integration::remaining_stream_start_budget();
+      if (!stream_start_budget || *stream_start_budget > 0ms) {
+        max_attempts = 5;
+        base_delay = 300ms;
+      }
+      if (stream_start_budget) {
+        settle_deadline = std::chrono::steady_clock::now() + *stream_start_budget;
+      }
     }
 #endif
 
@@ -2932,6 +2942,12 @@ namespace video {
       // The capture code depends on us to sleep between failures.
       // Use progressive delays for topology changes to give the display time to settle.
       auto delay = base_delay + std::chrono::milliseconds(x * 100);
+#ifdef _WIN32
+      if (settle_deadline) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(*settle_deadline - std::chrono::steady_clock::now());
+        delay = std::max(0ms, std::min(delay, remaining));
+      }
+#endif
       std::this_thread::sleep_for(delay);
     }
   }

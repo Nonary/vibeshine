@@ -929,6 +929,12 @@ namespace {
   static std::atomic<std::int64_t> g_last_apply_completed_us {0};
   static std::atomic<std::uint64_t> g_last_apply_generation {0};
 
+  // Deadline of the most recent bounded stream-start APPLY in steady-clock
+  // microseconds, or zero when the most recent APPLY was unbounded. Capture
+  // start reads it so its own settling waits are deducted from the same budget
+  // instead of running after it has already expired.
+  static std::atomic<std::int64_t> g_stream_start_deadline_us {0};
+
   struct physical_settings_snapshot_t {
     display_device::DisplaySettingsSnapshot settings;
   };
@@ -2355,6 +2361,15 @@ namespace display_helper_integration {
       if (startup_deadline == std::chrono::steady_clock::time_point {}) {
         startup_deadline = std::chrono::steady_clock::now() + verification_timeout;
       }
+      // Publish the budget before any helper work so the capture thread's own
+      // post-APPLY settling waits share this deadline rather than starting a
+      // fresh window after it has expired. An unbounded APPLY clears it.
+      g_stream_start_deadline_us.store(
+        retry_policy == ApplyRetryPolicy::StreamStart ?
+          std::chrono::duration_cast<std::chrono::microseconds>(startup_deadline.time_since_epoch()).count() :
+          0,
+        std::memory_order_release
+      );
       const std::function<bool()> startup_cancellation_predicate = [&]() {
         return cancellation_requested(cancellation_predicate) ||
                (retry_policy == ApplyRetryPolicy::StreamStart &&
@@ -2645,6 +2660,15 @@ namespace display_helper_integration {
       return ApplyVerificationStatus::Verified;
     }
     return *result ? ApplyVerificationStatus::Unknown : ApplyVerificationStatus::Failed;
+  }
+
+  std::optional<std::chrono::milliseconds> remaining_stream_start_budget() {
+    const auto deadline_us = g_stream_start_deadline_us.load(std::memory_order_acquire);
+    if (deadline_us == 0) {
+      return std::nullopt;
+    }
+    const auto remaining_us = deadline_us - now_steady_us();
+    return std::chrono::milliseconds(remaining_us > 0 ? remaining_us / 1000 : 0);
   }
 
   bool reactivate_owned_virtual_display(
