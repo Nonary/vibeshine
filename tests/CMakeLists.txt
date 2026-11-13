@@ -1919,6 +1919,35 @@ if(Python3_Interpreter_FOUND)
 endif()
 find_program(SUNSHINE_TEST_GXX NAMES g++)
 if(Python3_Interpreter_FOUND AND SUNSHINE_TEST_GXX)
+    # Portable production-code harnesses also run on the Windows test host.
+    add_test(NAME regression_windows_color_profile
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_windows_color_profile.py")
+    add_test(NAME regression_delayed_mouse_release
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/input/test_delayed_mouse_release.py")
+    add_test(NAME regression_windows_absolute_mouse
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/input/test_windows_absolute_mouse.py")
+    add_test(NAME regression_windows_mouse_keys
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/input/test_windows_mouse_keys.py" --compiler "${SUNSHINE_TEST_GXX}")
+    add_test(NAME regression_frame_limiter_vsync
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_frame_limiter_vsync.py")
+    add_test(NAME regression_playnite_stop_callback
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_stop_callback.py")
+    add_test(NAME regression_rtss_profile_version
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_rtss_profile_version.py")
+    add_test(NAME regression_virtual_capture_readiness
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_virtual_capture_readiness.py")
+    add_test(NAME regression_virtual_display_scale_boundary
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_virtual_display_scale_boundary.py")
+    add_test(NAME regression_cancel_after_app_exit
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_cancel_after_app_exit.py")
+    add_test(NAME regression_playnite_close_grace
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_close_grace.py")
+    add_test(NAME regression_playnite_plugin_upgrade
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_plugin_upgrade.py")
+    add_test(NAME regression_playnite_duplicate_migration
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_duplicate_migration.py")
+    set_tests_properties(regression_playnite_close_grace regression_playnite_plugin_upgrade regression_playnite_duplicate_migration
+        PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME regression_encoder_probe_lookup_behavior
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_encoder_probe_lookup_behavior.py"
             --compiler "${SUNSHINE_TEST_GXX}")
@@ -1952,8 +1981,6 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_frame_limiter_vsync.py"
             "${SUNSHINE_TEST_REPOSITORY_ROOT}")
     set_tests_properties(regression_windows_frame_limiter_lifecycle PROPERTIES LABELS "component" TIMEOUT 60)
-    add_test(NAME regression_windows_color_profile
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_windows_color_profile.py")
     add_test(NAME regression_display_policy_adapter
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_policy_adapter.py")
     add_library(sunshine_test_session_display_precedence_dependencies INTERFACE)
@@ -1996,14 +2023,6 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_virtual_display_reactivation.py")
     add_test(NAME regression_virtual_display_live_recovery
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_virtual_display_live_recovery.py")
-    add_test(NAME regression_playnite_close_grace
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_close_grace.py")
-    add_test(NAME regression_playnite_plugin_upgrade
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_plugin_upgrade.py")
-    add_test(NAME regression_playnite_duplicate_migration
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_playnite_duplicate_migration.py")
-    set_tests_properties(regression_playnite_close_grace regression_playnite_plugin_upgrade regression_playnite_duplicate_migration
-        PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # Compile extracted production AMF submission and delivery without a GPU.
