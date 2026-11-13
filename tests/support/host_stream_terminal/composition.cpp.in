@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <shared_mutex>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -74,6 +75,8 @@ struct config_t {
 };
 struct session_t {std::shared_ptr<void> audio_context_guard,display_power_guard;};
 namespace session {
+@PACING_RESULT@
+int start_result=0,allocated_packetsize=0;
 enum class state_e { STOPPING };
 state_e state(session_t &) {return state_e::STOPPING;}
 void stop(session_t &) {}
@@ -87,11 +90,19 @@ struct shared_runtime_finalize_context_t {std::optional<std::array<std::uint8_t,
 bool finalize_shared_runtime_if_idle(std::string_view, const shared_runtime_finalize_context_t & = {}) {++finalizer_calls; if(has_shared_runtime_owner()) return false; if(armed.exchange(false) && physical) late_ordinary=true; return true;}
 void join(session_t &s,bool=false) {join_pause.wait(); std::lock_guard lock(nvhttp::lifecycle);s.audio_context_guard.reset();s.display_power_guard.reset(); --running; finalize_shared_runtime_if_idle("natural_join");}
 audio::config_t allocated_audio{};
-std::shared_ptr<session_t> alloc(const config_t &config,auto &launch) {allocated_audio=config.audio;auto s=std::make_shared<session_t>();s->audio_context_guard=std::move(launch.audio_context_guard);s->display_power_guard=launch.display_power_guard;return s;}
-int start(session_t &,const std::string &) {++running;armed=true;return 0;}
+std::shared_ptr<session_t> alloc(const config_t &config,auto &launch) {allocated_audio=config.audio;allocated_packetsize=config.packetsize;auto s=std::make_shared<session_t>();s->audio_context_guard=std::move(launch.audio_context_guard);s->display_power_guard=launch.display_power_guard;return s;}
+int start(session_t &,const std::string &) {if(start_result)return start_result;++running;armed=true;return 0;}
 }
 }
-namespace config { struct {int fec_percentage=0;} stream; constexpr int ENCRYPTION_MODE_MANDATORY=1; void maybe_apply_deferred() {} struct Gate {~Gate(){}}; Gate acquire_apply_read_gate(){return {};}}
+namespace config {
+@PACKET_CONSTANTS@
+struct {int fec_percentage=0,packetsize=0;} stream;
+constexpr int ENCRYPTION_MODE_MANDATORY=1;
+void maybe_apply_deferred() {}
+// Match the production gate's shared-lock ownership and explicit unlock API.
+std::shared_mutex apply_gate;
+std::shared_lock<std::shared_mutex> acquire_apply_read_gate(){return std::shared_lock(apply_gate);}
+}
 namespace config {struct {std::string format="opus";bool high_quality_audio=false;} audio;}
 namespace video {int active_hevc_mode=3,active_av1_mode=3,active_pyrowave_mode=2;}
 namespace net {int encryption_mode_for_address(int) {return 0;}}
@@ -206,6 +217,7 @@ void reset() {
  physical=false;late_ordinary=false;armed=true;running=0;finalizer_calls=0;config_applies=0;
  remote_session::monitor_transport_losses=0;
  server.monitor_retry_requests=0;
+ config::stream={};stream::session::start_result=0;stream::session::allocated_packetsize=0;
  audio::ac3_encoder=true;audio::eac3_encoder=true;config::audio={};stream::session::allocated_audio={};response_status=0;response_audio_codec.clear();
  join_pause.reset(false);expiry_pause.reset(false);parser_pause.reset(false);peer_pause.reset(false);
  server._session_state->sessions.clear();server.pending_launches.clear();server.startup_pool.queue.clear();server.io_context.queue.clear();
@@ -266,6 +278,30 @@ int main() {
  server.pending_launches.emplace(1,rtsp_server_t::Pending{pending,std::chrono::steady_clock::now()+1s});
  auto valid_request=std::make_shared<Request>();valid_request->payload=payload.data();valid_request->payloadLength=payload.size();
  check(cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(valid_request)),"fresh ANNOUNCE is accepted");server.startup_pool.run();check(running==1 && !resource.expired(),"active capture retains admitted resource handoff");terminal();check(resource.expired(),"terminal joins active resource handoff before recovery");server.io_context.run();
+ // Pacing rejection follows the actual worker's error response and monitor
+ // retirement path, never publishing an active session or retaining its holds.
+ reset();pending=std::make_shared<launch_session_t>();pending->role=remote_session::role_e::monitor;
+ pending->audio_context_guard=std::make_shared<int>(1);resource=pending->audio_context_guard;
+ server.pending_launches.emplace(1,rtsp_server_t::Pending{pending,std::chrono::steady_clock::now()+1s});
+ stream::session::start_result=stream::session::START_PACING_REJECTED;
+ auto rejected_request=std::make_shared<Request>();rejected_request->payload=payload.data();rejected_request->payloadLength=payload.size();
+ check(cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(rejected_request)),"pacing rejection reaches the admitted startup worker");
+ server.startup_pool.run();server.io_context.run();
+ check(response_status==400 && running==0 && server._session_state->sessions.empty(),"pacing rejection returns bad request without publishing capture");
+ check(resource.expired() && server.pending_launches.empty() && remote_session::monitor_transport_losses==1,"pacing rejection retires monitor resources and makes it retryable");
+ terminal();
+ // The real parser may lower, but never raise, a client packet size. Invalid
+ // overrides are ignored rather than changing an otherwise valid request.
+ for(const auto [override_size,expected]:std::array<std::pair<int,int>,5>{{{0,1200},{800,800},{1600,1200},{100,1200},{65536,1200}}}) {
+   reset();config::stream.packetsize=override_size;pending=std::make_shared<launch_session_t>();
+   server.pending_launches.emplace(1,rtsp_server_t::Pending{pending,std::chrono::steady_clock::now()+1s});
+   auto packet_payload=payload;packet_payload.replace(packet_payload.find("packetSize:2"),12,"packetSize:1200");
+   auto packet_request=std::make_shared<Request>();packet_request->payload=packet_payload.data();packet_request->payloadLength=packet_payload.size();
+   check(cmd_announce(&server,std::make_shared<socket_t>(),pending,std::move(packet_request)),"packet override ANNOUNCE is accepted");
+   server.startup_pool.run();server.io_context.run();
+   check(response_status==200 && stream::session::allocated_packetsize==expected,"packet override preserves validated downward-only negotiation");
+   terminal();
+ }
  // All nonterminal map-removal paths retire the same shared resources while
  // socket aliases remain alive, so they cannot hide an owner from terminal.
  for(int removal=0;removal<3;++removal) {

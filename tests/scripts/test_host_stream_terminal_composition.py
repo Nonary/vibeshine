@@ -8,6 +8,7 @@ case links the actual topology coordinator. This is portable source composition,
 not native capture, Windows API, or physical-display proof.
 """
 import argparse
+import re
 from pathlib import Path
 import subprocess
 p = argparse.ArgumentParser()
@@ -23,7 +24,17 @@ audio_header=(root/'src/audio.h').read_text(); audio_source=(root/'src/audio.cpp
 def body(s, signature, indent):
     start=s.index(signature); end=s.index('\n'+indent+'}',start)+len('\n'+indent+'}')
     return s[start:end]
+def constants(header, names):
+    source=(root/header).read_text()
+    declarations=[]
+    for name in names:
+        match=re.search(r'constexpr int '+name+r'\s*=\s*-?\d+;',source)
+        if match is None: raise ValueError(f"Missing production constant: {name}")
+        declarations.append(match.group(0))
+    return '\n'.join(declarations)
 fragments={
+'PACKET_CONSTANTS':constants('src/config.h',('PACKETSIZE_MIN','PACKETSIZE_MAX','PACKETSIZE_SMALL','PACKETSIZE_LARGE')),
+'PACING_RESULT':constants('src/stream.h',('START_PACING_REJECTED',)),
 'AUDIO_PARAMS':body(audio_header,'  struct stream_params_t {','  ')+';',
 'AUDIO_CONFIG':body(audio_header,'  struct config_t {','  ')+';',
 'DOLBY_CODEC':audio_header[audio_header.index('  enum class dolby_codec_e'):audio_header.index(';',audio_header.index('  enum class dolby_codec_e'))+1],
