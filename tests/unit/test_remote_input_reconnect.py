@@ -28,11 +28,15 @@ def fixture(root):
     rtsp = (root / 'src/rtsp.cpp').read_text()
     stream = (root / 'src/stream.cpp').read_text()
     start_body = function(stream, 'int start(session_t &session, const std::string &addr_string)')
-    # The RTSP failure gate relies on -1 being the sole early explicit return,
-    # before a control pointer or streaming thread can be registered.
-    assert re.findall(r'\breturn\s+(-?\d+)\s*;', start_body) == ['-1', '0']
-    assert start_body.index('return -1;') < start_body.index('_sessions->push_back(&session)')
-    assert start_body.index('return -1;') < start_body.index('session.videoThread =')
+    # Both explicit failures must remain before control registration or worker
+    # startup. Include named returns so a new result cannot silently escape this
+    # contract, and copy the pacing result directly from the production header.
+    assert re.findall(r'\breturn\s+([^;]+)\s*;', start_body) == ['-1', 'START_PACING_REJECTED', '0']
+    for result in ('-1', 'START_PACING_REJECTED'):
+        assert start_body.index(f'return {result};') < start_body.index('_sessions->push_back(&session)')
+        assert start_body.index(f'return {result};') < start_body.index('session.videoThread =')
+    stream_header = (root / 'src/stream.h').read_text()
+    pacing_result = re.search(r'constexpr int START_PACING_REJECTED\s*=\s*-?\d+;', stream_header).group(0)
     template = (Path(__file__).with_suffix('.cpp.in')).read_text()
     owners = function(nv, 'struct remote_role_owner_t {') + ';\n'
     owners += function(nv, 'struct remote_role_gate_snapshot_t {') + ';\n'
@@ -78,7 +82,7 @@ std::unordered_map<std::string, remote_role_owner_t> remote_role_owners;\n'''
     ))
     start = rtsp.index('        std::shared_ptr<stream::session_t> stream_session;')
     startup_gate = rtsp[start:rtsp.index('        server->post([server, socket', start)]
-    return (template.replace('/* @OWNERS@ */', owners).replace('/* @RTSP_METHODS@ */', methods)
+    return (template.replace('/* @PACING_RESULT@ */', pacing_result).replace('/* @OWNERS@ */', owners).replace('/* @RTSP_METHODS@ */', methods)
             .replace('/* @DISPATCH@ */', dispatch).replace('/* @REPLACEMENT@ */', replacement)
             .replace('/* @RUNTIME_IDLE@ */', runtime_idle).replace('/* @RUNTIME_APPLY@ */', runtime_apply)
             .replace('/* @MATCHES@ */', matches).replace('/* @STARTUP_GATE@ */', startup_gate))
