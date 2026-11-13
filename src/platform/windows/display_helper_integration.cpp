@@ -1642,11 +1642,17 @@ namespace {
           } else if (wait_result == WAIT_TIMEOUT) {
             BOOST_LOG(warning) << "Display helper: process did not exit within "
                                << kHelperForceKillWaitMs
-                               << " ms after engine-switch termination; continuing with cleanup.";
+                               << " ms after engine-switch termination; refusing to reuse it.";
+            g_running_helper_legacy.reset();
+            note_helper_start_failure("engine-switch termination timeout");
+            return false;
           } else {
             DWORD wait_err = GetLastError();
             BOOST_LOG(warning) << "Display helper: wait after engine-switch termination failed (winerr="
-                               << wait_err << "); continuing with cleanup.";
+                               << wait_err << "); refusing to reuse it.";
+            g_running_helper_legacy.reset();
+            note_helper_start_failure("engine-switch termination wait failure");
+            return false;
           }
           g_running_helper_legacy.reset();
           if (!sleep_with_cancellation(
@@ -1690,56 +1696,58 @@ namespace {
           return false;
         }
 
-        if (platf::display_helper_client::send_ping_fast(
-              100,
-              operation_deadline)) {
-          BOOST_LOG(debug) << "Display helper hard restart skipped because existing helper accepted a fast ping.";
-          return true;
-        }
-        if (!platf::display_helper_client::reset_connection_cancellable(
-              cancellation_predicate,
-              operation_deadline)) {
-          return false;
-        }
-        BOOST_LOG(warning) << "Display helper hard restart requested because existing helper did not accept a fast ping.";
+        if (engine_matches) {
+          if (platf::display_helper_client::send_ping_fast(
+                100,
+                operation_deadline)) {
+            BOOST_LOG(debug) << "Display helper hard restart skipped because existing helper accepted a fast ping.";
+            return true;
+          }
+          if (!platf::display_helper_client::reset_connection_cancellable(
+                cancellation_predicate,
+                operation_deadline)) {
+            return false;
+          }
+          BOOST_LOG(warning) << "Display helper hard restart requested because existing helper did not accept a fast ping.";
 
-        BOOST_LOG(warning) << "Display helper: hard restart requested; terminating existing instance (pid=" << pid
-                           << ") with no grace period.";
-        if (!platf::display_helper_client::reset_connection_cancellable(
-              cancellation_predicate,
-              operation_deadline)) {
-          return false;
-        }
-        terminate_helper_process();
+          BOOST_LOG(warning) << "Display helper: hard restart requested; terminating existing instance (pid=" << pid
+                             << ") with no grace period.";
+          if (!platf::display_helper_client::reset_connection_cancellable(
+                cancellation_predicate,
+                operation_deadline)) {
+            return false;
+          }
+          terminate_helper_process();
 
-        DWORD wait_result = WAIT_TIMEOUT;
-        if (!wait_for_process_with_cancellation(
-              h,
-              kHelperForceKillWaitMs,
-              cancellation_predicate,
-              wait_result,
-              operation_deadline)) {
-          return false;
-        }
-        if (wait_result == WAIT_OBJECT_0) {
-          DWORD exit_code = 0;
-          GetExitCodeProcess(h, &exit_code);
-          BOOST_LOG(info) << "Display helper exited after forced termination (code=" << exit_code << ").";
-        } else if (wait_result == WAIT_TIMEOUT) {
-          BOOST_LOG(warning) << "Display helper: process did not exit within " << kHelperForceKillWaitMs
-                             << " ms after termination request; continuing with cleanup.";
-        } else {
-          DWORD wait_err = GetLastError();
-          BOOST_LOG(warning) << "Display helper: wait after termination failed (winerr=" << wait_err
-                             << "); continuing with cleanup.";
-        }
+          DWORD wait_result = WAIT_TIMEOUT;
+          if (!wait_for_process_with_cancellation(
+                h,
+                kHelperForceKillWaitMs,
+                cancellation_predicate,
+                wait_result,
+                operation_deadline)) {
+            return false;
+          }
+          if (wait_result == WAIT_OBJECT_0) {
+            DWORD exit_code = 0;
+            GetExitCodeProcess(h, &exit_code);
+            BOOST_LOG(info) << "Display helper exited after forced termination (code=" << exit_code << ").";
+          } else if (wait_result == WAIT_TIMEOUT) {
+            BOOST_LOG(warning) << "Display helper: process did not exit within " << kHelperForceKillWaitMs
+                               << " ms after termination request; continuing with cleanup.";
+          } else {
+            DWORD wait_err = GetLastError();
+            BOOST_LOG(warning) << "Display helper: wait after termination failed (winerr=" << wait_err
+                               << "); continuing with cleanup.";
+          }
 
-        // Small delay to reduce the chance of named pipe / mutex conflicts during rapid restart.
-        if (!sleep_with_cancellation(
-              std::chrono::milliseconds(100),
-              cancellation_predicate,
-              operation_deadline)) {
-          return false;
+          // Small delay to reduce the chance of named pipe / mutex conflicts during rapid restart.
+          if (!sleep_with_cancellation(
+                std::chrono::milliseconds(100),
+                cancellation_predicate,
+                operation_deadline)) {
+            return false;
+          }
         }
       } else {
         // Process exited; fall through to restart
