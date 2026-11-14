@@ -474,6 +474,12 @@ namespace confighttp {
           continue;
         }
 
+        // Published once per completed apply and read on every serverinfo,
+        // applist and launch; active streams never consult it.
+        if (key == "app_resume_terminate") {
+          continue;
+        }
+
         if (key == "session_history_enabled") {
           return false;
         }

@@ -949,6 +949,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 --source "${SUNSHINE_TEST_REPOSITORY_ROOT}"
                 --compiler "${CMAKE_CXX_COMPILER}")
         set_tests_properties(test_component_cached_game_launch_composition PROPERTIES LABELS "component" TIMEOUT 60)
+        add_test(NAME test_component_resume_terminate_launch_composition
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/scripts/test_resume_terminate_launch_composition.py"
+                --source "${SUNSHINE_TEST_REPOSITORY_ROOT}"
+                --compiler "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_resume_terminate_launch_composition PROPERTIES LABELS "component" TIMEOUT 60)
         if(TEST_PYROWAVE_IMPORT_DRM_FOUND)
             add_test(NAME test_component_linux_kmsgrab_hdr_worker
                 COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
@@ -1957,6 +1963,13 @@ if(Python3_Interpreter_FOUND AND SUNSHINE_TEST_GXX)
             --compiler "${SUNSHINE_TEST_GXX}"
             --build-dir "${CMAKE_CURRENT_BINARY_DIR}/remote_input_reconnect")
     set_tests_properties(regression_remote_input_reconnect PROPERTIES LABELS "component" TIMEOUT 120)
+    # Runs on Windows PR checks; uses ThreadSanitizer where the compiler and host can run it.
+    add_test(NAME test_component_resume_terminate_publication
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/unit/test_resume_terminate_publication.py"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}"
+            "${SUNSHINE_TEST_GXX}")
+    set_tests_properties(test_component_resume_terminate_publication PROPERTIES LABELS "component" TIMEOUT 120)
     add_test(NAME regression_stream_disconnect_lifecycle
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_stream_disconnect_lifecycle.py"
             --compiler "${SUNSHINE_TEST_GXX}")
