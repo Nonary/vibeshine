@@ -209,15 +209,12 @@ describe("legacy driver readiness", () => {
       const driverName = active === "sudovda" ? "SudoVDA" : "Vibeshine";
       expect(wrapper.text()).toContain(`${driverName} driver: Watchdog failed`);
       const hint =
-        active === "sudovda"
-          ? messagesEn.config.virtual_display_status_hint_sudovda_observed
-          : messagesEn.config.virtual_display_status_hint_vibeshine;
-      const otherHint =
-        active === "sudovda"
-          ? messagesEn.config.virtual_display_status_hint_vibeshine
-          : messagesEn.config.virtual_display_status_hint_sudovda_observed;
+        messagesEn.config.virtual_display_status_hint_observed.replace(
+          "{driver}",
+          driverName,
+        );
       expect(wrapper.text()).toContain(hint);
-      expect(wrapper.text()).not.toContain(otherHint);
+      expect(wrapper.text()).not.toContain("switch back to SudoVDA");
       expect(store.hasPendingPatch()).toBe(false);
       wrapper.unmount();
     },
@@ -251,6 +248,37 @@ describe("legacy driver readiness", () => {
       expect(wrapper.text()).toContain(
         "If SudoVDA reports an error, reinstall Vibeshine or repair the driver before streaming.",
       );
+      expect(store.hasPendingPatch()).toBe(false);
+      wrapper.unmount();
+    },
+  );
+  it.each(["en.json", ...translatedLocales])(
+    "avoids switch advice when SudoVDA is already selected with %s",
+    async (file) => {
+      const locale = file.slice(0, -5);
+      const catalog = JSON.parse(
+        readFileSync(resolve(localeDirectory, file), "utf8"),
+      );
+      mockHost(-3, "vibeshine");
+      const { pinia, store } = createStore();
+      await store.fetchConfig(true);
+      store.setConfig({
+        virtual_display_mode: "per_client",
+        dd_use_sunshine_virtual_display_driver: false,
+      });
+      vi.mocked(http.get).mockImplementation(
+        async (url) =>
+          ({
+            status: 200,
+            data: url === "/api/configLocale" ? { locale } : catalog,
+          }) as never,
+      );
+      const i18n = await initializeI18n();
+      const wrapper = mountAudioVideo(pinia, i18n);
+      expect(wrapper.text()).toContain(
+        "If Vibeshine reports an error, reinstall Vibeshine or repair the driver before streaming.",
+      );
+      expect(wrapper.text()).not.toContain("switch back to SudoVDA");
       expect(store.hasPendingPatch()).toBe(false);
       wrapper.unmount();
     },
