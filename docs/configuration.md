@@ -4857,6 +4857,9 @@ distribution, not only a single maximum. Restore `0` if there is no repeatable b
         <td colspan="2">
             Enabling this option can avoid dropped frames over the network during scene changes, but video quality may
             be reduced during motion.
+            On AMD GPUs this uses CBR with a single frame buffer, which keeps keyframes and nearly all scene changes
+            small enough to carry FEC. CBR pads static scenes with filler data, so the stream uses the full bitrate
+            even when the screen does not change. The default AMD rate control (this option off) pads the same way.
             @note{This option only applies for H.264 and HEVC when using VA-API [encoder](#encoder) on AMD GPUs.}
         </td>
     </tr>
