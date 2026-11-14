@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Compile Linux blank-source routing with deterministic GPU boundary adapters.
 
-Uses the production display, video dispatch, CUDA probe wrapper, capture loop
-and VAAPI conversion body. The adapters do not establish real GPU encoding.
+Uses the production display, video dispatch, CUDA probe wrapper, capture loop,
+VAAPI conversion body and actual EGL blank-texture operation. The graphics
+adapter checks the typed clear contract, not real GPU output or encoding.
 """
 import argparse
 from pathlib import Path
@@ -27,6 +28,7 @@ def fixture(root):
     cuda = (root / 'src/platform/linux/cuda.cpp').read_text()
     vaapi = (root / 'src/platform/linux/vaapi.cpp').read_text()
     synthetic = (root / 'src/platform/linux/synthetic_display.cpp').read_text()
+    graphics = (root / 'src/platform/linux/graphics.cpp').read_text()
     display = synthetic[synthetic.index('namespace platf {'):]
     linux = video[video.index('#elif defined(__linux__)\n'):]
     dispatch = block(linux, '  std::shared_ptr<platf::display_t> make_black_display(')
@@ -39,7 +41,8 @@ def fixture(root):
             .replace('@IMAGE@', block(common, '  struct img_t:') + ';')
             .replace('@CAPTURE@', block(common, '    capture_e capture_synthetic_black('))
             .replace('@DISPLAY@', display).replace('@DISPATCH@', dispatch)
-            .replace('@PROBE@', probe).replace('@CONVERTER@', converter))
+            .replace('@PROBE@', probe).replace('@CONVERTER@', converter)
+            .replace('@CREATE_BLANK@', block(graphics, '  rgb_t create_blank(platf::img_t &img)')))
 
 
 def main():

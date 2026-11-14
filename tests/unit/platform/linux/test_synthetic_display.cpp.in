@@ -8,6 +8,8 @@
 #include <memory>
 #include <optional>
 #include <thread>
+#include <utility>
+#include <vector>
 
 struct point_t { unsigned x, y; };
 struct SS_HDR_METADATA {
@@ -52,13 +54,76 @@ struct img_descriptor_t : platf::img_t {
   std::uint64_t serial{}, sequence{};
   surface_descriptor_t sd{};
 };
-struct rgb_data_t { int tex[1] = {42}; };
-using rgb_t = std::unique_ptr<rgb_data_t>;
-rgb_t create_blank(platf::img_t &img) {
-  assert(img.data == nullptr);
-  ++blank_calls;
-  return std::make_unique<rgb_data_t>();
-}
+}  // namespace egl
+using GLenum = unsigned;
+using GLuint = unsigned;
+using GLfloat = float;
+constexpr GLenum GL_TEXTURE_2D = 0x0DE1, GL_RGBA8 = 0x8058;
+constexpr GLenum GL_COLOR_ATTACHMENT0 = 0x8CE0, GL_COLOR = 0x1800;
+constexpr int EGL_NO_DISPLAY = 0, EGL_NO_IMAGE = 0;
+namespace gl {
+struct context_t {
+  GLuint bound_texture{}, attached_texture{};
+  GLenum internal_format{}, draw_buffer{};
+  int width{}, height{}, float_clears{}, unsigned_clears{};
+  std::vector<std::uint8_t> pixels;
+  void BindTexture(GLenum target, GLuint texture) {
+    assert(target == GL_TEXTURE_2D);
+    bound_texture = texture;
+  }
+  void TexStorage2D(GLenum target, int levels, GLenum format, int w, int h) {
+    assert(target == GL_TEXTURE_2D && bound_texture == 42 && levels == 1);
+    internal_format = format;
+    width = w; height = h;
+    // Poison the model storage so an undefined/non-matching clear cannot be
+    // mistaken for zero-initialized texture contents.
+    pixels.assign(std::size_t(w) * h * 4, 0xA5);
+    ++blank_calls;
+  }
+  void DrawBuffers(int count, const GLenum *buffers) {
+    assert(count == 1 && attached_texture == 42);
+    draw_buffer = buffers[0];
+  }
+  void ClearBufferfv(GLenum buffer, int drawbuffer, const GLfloat *value) {
+    assert(buffer == GL_COLOR && drawbuffer == 0 && draw_buffer == GL_COLOR_ATTACHMENT0);
+    assert(attached_texture == 42 && internal_format == GL_RGBA8);
+    for (int i = 0; i < 4; ++i) assert(value[i] == 0.0f);
+    std::fill(pixels.begin(), pixels.end(), 0);
+    ++float_clears;
+  }
+  void ClearBufferuiv(GLenum buffer, int drawbuffer, const GLuint *) {
+    assert(buffer == GL_COLOR && drawbuffer == 0);
+    ++unsigned_clears;
+    // Desktop GL leaves this normalized/integer mismatch undefined, without
+    // requiring an error. Leaving the poison is one permitted outcome, not a
+    // claim about the output of a particular driver.
+  }
+} ctx;
+struct tex_t {
+  GLuint texture = 42;
+  static tex_t make(std::size_t count) { assert(count == 1); return {}; }
+  GLuint &operator[](int index) { assert(index == 0); return texture; }
+};
+struct frame_buf_t {
+  static frame_buf_t make(std::size_t count) { assert(count == 1); return {}; }
+  void bind(const GLuint *begin, const GLuint *end) {
+    assert(end == begin + 1);
+    ctx.attached_texture = *begin;
+  }
+};
+}  // namespace gl
+#define gl_drain_errors ((void) 0)
+namespace egl {
+struct rgb_data_t { gl::tex_t tex; };
+struct rgb_t {
+  rgb_data_t data;
+  rgb_t() = default;
+  rgb_t(int display, int image, gl::tex_t texture): data {texture} {
+    assert(display == EGL_NO_DISPLAY && image == EGL_NO_IMAGE);
+  }
+  rgb_data_t *operator->() { return &data; }
+};
+@CREATE_BLANK@
 std::optional<rgb_t> import_source(int, const surface_descriptor_t &) { ++imports; return std::nullopt; }
 std::optional<rgb_t> upload_source(int, const surface_descriptor_t &) { ++imports; return std::nullopt; }
 template<class Import, class Upload>
@@ -69,6 +134,8 @@ std::optional<rgb_t> import_source_with_cpu_fallback(const surface_descriptor_t 
 struct sws_t {
   void load_vram(img_descriptor_t &img, int x, int y, int texture) {
     assert(img.sequence == 0 && x == 0 && y == 0 && texture == 42);
+    assert(gl::ctx.internal_format == GL_RGBA8 && gl::ctx.unsigned_clears == 0);
+    assert(std::all_of(gl::ctx.pixels.begin(), gl::ctx.pixels.end(), [](auto c) { return c == 0; }));
   }
   void convert(int) { ++conversions; }
 };
@@ -153,6 +220,19 @@ void check_display(const std::shared_ptr<platf::display_t> &display, const video
   if (type == platf::mem_type_e::vaapi) assert(conversions == before + 2 && imports == 0);
 }
 int main() {
+  // Execute the actual production allocation/attachment/clear sequence,
+  // even in the build without either GPU encoder backend.
+  for (const auto &size : {std::pair {1, 1}, std::pair {31, 17}, std::pair {640, 360}}) {
+    platf::img_t image;
+    image.width = size.first; image.height = size.second;
+    auto blank = egl::create_blank(image);
+    assert(blank->tex[0] == 42 && gl::ctx.width == image.width && gl::ctx.height == image.height);
+    assert(gl::ctx.internal_format == GL_RGBA8 && gl::ctx.draw_buffer == GL_COLOR_ATTACHMENT0);
+    assert(gl::ctx.float_clears == blank_calls && gl::ctx.unsigned_clears == 0);
+    assert(std::all_of(gl::ctx.pixels.begin(), gl::ctx.pixels.end(), [](auto c) { return c == 0; }));
+  }
+  assert(blank_calls == 3);
+  blank_calls = gl::ctx.float_clears = 0;
   using platf::mem_type_e;
   video::config_t config;
   for (auto type : {mem_type_e::system, mem_type_e::vulkan, mem_type_e::unknown, mem_type_e::dxgi, mem_type_e::videotoolbox}) {
@@ -192,5 +272,5 @@ int main() {
 #else
   assert(!video::make_black_display(mem_type_e::cuda, config));
 #endif
-  std::cout << "backend routing, blank capture, HDR, probe and failure contracts passed\n";
+  std::cout << "typed EGL clear, backend routing, blank capture, HDR, probe and failure contracts passed\n";
 }
