@@ -6,17 +6,24 @@ import AudioVideo from "@/configs/tabs/AudioVideo.vue";
 import messagesEn from "@/public/assets/locale/en.json";
 import { useConfigStore } from "@/stores/config";
 import { http } from "@/http";
+import initializeI18n from "@/locale";
+import { readFileSync, readdirSync } from "node:fs";
+import { resolve } from "node:path";
 
-function mountAudioVideo(pinia: ReturnType<typeof createPinia>) {
+function mountAudioVideo(
+  pinia: ReturnType<typeof createPinia>,
+  i18n?: Awaited<ReturnType<typeof initializeI18n>>,
+) {
   return mount(AudioVideo, {
     global: {
       plugins: [
         pinia,
-        createI18n({
-          legacy: false,
-          locale: "en",
-          messages: { en: messagesEn },
-        }),
+        i18n ??
+          createI18n({
+            legacy: false,
+            locale: "en",
+            messages: { en: messagesEn },
+          }),
       ],
       provide: { i18n: { t: (key: string) => key } },
       stubs: {
@@ -203,14 +210,47 @@ describe("legacy driver readiness", () => {
       expect(wrapper.text()).toContain(`${driverName} driver: Watchdog failed`);
       const hint =
         active === "sudovda"
-          ? messagesEn.config.virtual_display_status_hint_sudovda
+          ? messagesEn.config.virtual_display_status_hint_sudovda_observed
           : messagesEn.config.virtual_display_status_hint_vibeshine;
       const otherHint =
         active === "sudovda"
           ? messagesEn.config.virtual_display_status_hint_vibeshine
-          : messagesEn.config.virtual_display_status_hint_sudovda;
+          : messagesEn.config.virtual_display_status_hint_sudovda_observed;
       expect(wrapper.text()).toContain(hint);
       expect(wrapper.text()).not.toContain(otherHint);
+      expect(store.hasPendingPatch()).toBe(false);
+      wrapper.unmount();
+    },
+  );
+  const localeDirectory = resolve(
+    __dirname,
+    "../../src_assets/common/assets/web-legacy/public/assets/locale",
+  );
+  const translatedLocales = readdirSync(localeDirectory).filter(
+    (name) => name.endsWith(".json") && name !== "en.json",
+  );
+  it.each(translatedLocales)(
+    "uses neutral observed-driver guidance with the real %s catalog",
+    async (file) => {
+      const locale = file.slice(0, -5);
+      const catalog = JSON.parse(
+        readFileSync(resolve(localeDirectory, file), "utf8"),
+      );
+      mockHost(-3, "sudovda");
+      const { pinia, store } = createStore();
+      await store.fetchConfig(true);
+      vi.mocked(http.get).mockImplementation(
+        async (url) =>
+          ({
+            status: 200,
+            data: url === "/api/configLocale" ? { locale } : catalog,
+          }) as never,
+      );
+      const i18n = await initializeI18n();
+      const wrapper = mountAudioVideo(pinia, i18n);
+      expect(wrapper.text()).toContain(
+        "If SudoVDA reports an error, reinstall Vibeshine or repair the driver before streaming.",
+      );
       expect(store.hasPendingPatch()).toBe(false);
       wrapper.unmount();
     },
