@@ -653,6 +653,7 @@
     "virtual_display_status_vibeshine_ready": "Vibeshine driver ready",
     "virtual_display_status_driver_state": "{driver} driver: {status}",
     "virtual_display_status_hint_sudovda": "SudoVDA is selected as the rollback virtual display driver. If it reports an error, reinstall Vibeshine or repair the driver before streaming.",
+    "virtual_display_status_hint_observed": "If {driver} reports an error, reinstall Vibeshine or repair the driver before streaming.",
     "virtual_display_status_hint_vibeshine": "Vibeshine Display Driver is the default virtual display driver. If it reports an error, switch back to SudoVDA or repair the driver before streaming.",
     "app_virtual_display_mode_label": "App display preference",
     "app_virtual_display_mode_hint": "When this app runs on the Vibeshine virtual display, choose whether to use a per-client or shared virtual screen and configure the layout below. Reset to follow the global display configuration.",
