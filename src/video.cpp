@@ -60,6 +60,7 @@ extern "C" {
 #endif
 #ifdef __linux__
   #include "platform/linux/rtx_hdr_runtime.h"
+  #include "platform/linux/synthetic_display.h"
 #endif
 
 #ifdef __APPLE__
@@ -1862,22 +1863,22 @@ namespace video {
   // A protocol video stream is still required for Remote Input, but it must
   // never open a desktop/WGC/DD capture target. Reuse the synthetic D3D source
   // and feed black frames at the client cadence.
-  std::shared_ptr<platf::display_t> make_black_display(const config_t &config) {
+  std::shared_ptr<platf::display_t> make_black_display(const platf::mem_type_e, const config_t &config) {
     auto display = std::make_shared<synthetic_vram_display_t>(config, std::nullopt);
     if (!display->valid()) return {};
     display->client_frame_rate = std::max(1, config.framerate);
     return display;
   }
-#elif defined(__linux__) && defined(SUNSHINE_BUILD_CUDA)
-  std::shared_ptr<platf::display_t> make_black_display(const config_t &config) {
-    return ::cuda::make_black_display(config);
+#elif defined(__linux__)
+  std::shared_ptr<platf::display_t> make_black_display(const platf::mem_type_e type, const config_t &config) {
+    return platf::make_synthetic_display(type, config, true);
   }
 #elif defined(__APPLE__)
-  std::shared_ptr<platf::display_t> make_black_display(const config_t &config) {
+  std::shared_ptr<platf::display_t> make_black_display(const platf::mem_type_e, const config_t &config) {
     return platf::black_display(config);
   }
 #else
-  std::shared_ptr<platf::display_t> make_black_display(const config_t &) {
+  std::shared_ptr<platf::display_t> make_black_display(const platf::mem_type_e, const config_t &) {
     return {};
   }
 #endif
@@ -3151,7 +3152,7 @@ namespace video {
       producer_config = *demand;
       const auto &capture_config = producer_config;
       if (capture_config.capture_source == capture_source_e::synthetic_black) {
-        disp = make_black_display(capture_config);
+        disp = make_black_display(encoder.platform_formats->dev_type, capture_config);
         if (disp) break;
         BOOST_LOG(error) << "Synthetic black capture is unavailable for the selected encoder backend.";
         return;

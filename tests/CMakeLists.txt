@@ -1963,6 +1963,10 @@ if(Python3_Interpreter_FOUND AND SUNSHINE_TEST_GXX)
     set_tests_properties(regression_stream_disconnect_lifecycle PROPERTIES LABELS "component" TIMEOUT 45)
 endif()
 if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME test_component_linux_synthetic_display
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_synthetic_display.py"
+            --compiler "${CMAKE_CXX_COMPILER}")
+    set_tests_properties(test_component_linux_synthetic_display PROPERTIES LABELS "component" TIMEOUT 60)
     find_program(SUNSHINE_TEST_FOCUS_NODE NAMES node nodejs)
     if(SUNSHINE_TEST_FOCUS_NODE)
         add_test(NAME regression_managed_app_focus_adapters
