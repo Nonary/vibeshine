@@ -1,0 +1,196 @@
+#include <algorithm>
+#include <cassert>
+#include <chrono>
+#include <cstdint>
+#include <functional>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <thread>
+
+struct point_t { unsigned x, y; };
+struct SS_HDR_METADATA {
+  point_t displayPrimaries[3], whitePoint;
+  unsigned maxDisplayLuminance, minDisplayLuminance;
+  unsigned maxContentLightLevel, maxFrameAverageLightLevel, maxFullFrameLuminance;
+};
+namespace video {
+struct config_t {
+  int width = 31, height = 17, framerate = 120, dynamicRange = 0;
+  bool force_sdr = false;
+};
+}
+namespace platf {
+@ENUMS@
+@IMAGE@
+enum class capture_e { ok, error };
+struct avcodec_encode_device_t { mem_type_e type; };
+struct nvenc_encode_device_t {};
+struct display_t {
+  using push_captured_image_cb_t = std::function<bool(std::shared_ptr<img_t>, bool)>;
+  using pull_free_image_cb_t = std::function<bool(std::shared_ptr<img_t> &)>;
+  int width{}, height{}, logical_width{}, logical_height{};
+  int env_width{}, env_height{}, env_logical_width{}, env_logical_height{};
+  virtual ~display_t() = default;
+  virtual capture_e capture(const push_captured_image_cb_t &, const pull_free_image_cb_t &, bool *) = 0;
+  virtual std::shared_ptr<img_t> alloc_img() = 0;
+  virtual int dummy_img(img_t *) = 0;
+  virtual std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e) = 0;
+  virtual std::unique_ptr<nvenc_encode_device_t> make_nvenc_encode_device(pix_fmt_e) = 0;
+  virtual bool is_hdr() = 0;
+  virtual bool get_hdr_metadata(SS_HDR_METADATA &) = 0;
+@CAPTURE@
+};
+}
+int va_calls{}, cuda_calls{}, native_calls{}, blank_calls{}, imports{}, conversions{};
+bool va_available = true, cuda_available = true;
+int expected_width = 31, expected_height = 17;
+namespace egl {
+struct surface_descriptor_t { int width, height, fds[4]; };
+struct img_descriptor_t : platf::img_t {
+  std::uint64_t serial{}, sequence{};
+  surface_descriptor_t sd{};
+};
+struct rgb_data_t { int tex[1] = {42}; };
+using rgb_t = std::unique_ptr<rgb_data_t>;
+rgb_t create_blank(platf::img_t &img) {
+  assert(img.data == nullptr);
+  ++blank_calls;
+  return std::make_unique<rgb_data_t>();
+}
+std::optional<rgb_t> import_source(int, const surface_descriptor_t &) { ++imports; return std::nullopt; }
+std::optional<rgb_t> upload_source(int, const surface_descriptor_t &) { ++imports; return std::nullopt; }
+template<class Import, class Upload>
+std::optional<rgb_t> import_source_with_cpu_fallback(const surface_descriptor_t &sd, Import import, Upload upload) {
+  auto result = import(sd);
+  return result ? std::move(result) : upload(sd);
+}
+struct sws_t {
+  void load_vram(img_descriptor_t &img, int x, int y, int texture) {
+    assert(img.sequence == 0 && x == 0 && y == 0 && texture == 42);
+  }
+  void convert(int) { ++conversions; }
+};
+}
+namespace va {
+std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(int width, int height, bool vram) {
+  ++va_calls;
+  assert(width == expected_width && height == expected_height && vram);
+  if (!va_available) return nullptr;
+  return std::make_unique<platf::avcodec_encode_device_t>(platf::mem_type_e::vaapi);
+}
+struct converter_base_t { virtual int convert(platf::img_t &) = 0; };
+struct converter_t : converter_base_t {
+  struct display_t { int get() const { return 0; } } display;
+  int offset_x{}, offset_y{};
+  std::uint64_t sequence{};
+  egl::rgb_t rgb;
+  egl::sws_t sws;
+  struct target_t { int buf{}; } target;
+  target_t *nv12 = &target;
+@CONVERTER@
+};
+}
+namespace cuda {
+std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_gl_encode_device(int width, int height, int x, int y) {
+  ++cuda_calls;
+  assert(width == expected_width && height == expected_height && x == 0 && y == 0);
+  if (!cuda_available) return nullptr;
+  return std::make_unique<platf::avcodec_encode_device_t>(platf::mem_type_e::cuda);
+}
+std::unique_ptr<platf::nvenc_encode_device_t> make_nvenc_gl_encode_device(int width, int height, int x, int y, platf::pix_fmt_e format) {
+  ++native_calls;
+  assert(width == expected_width && height == expected_height && x == 0 && y == 0);
+  assert(format == platf::pix_fmt_e::nv12 || format == platf::pix_fmt_e::p010);
+  return std::make_unique<platf::nvenc_encode_device_t>();
+}
+}
+@DISPLAY@
+namespace video {
+@DISPATCH@
+}
+namespace cuda {
+@PROBE@
+}
+void check_display(const std::shared_ptr<platf::display_t> &display, const video::config_t &config, platf::mem_type_e type) {
+  assert(display && display->width == expected_width && display->height == expected_height);
+  assert(display->logical_width == expected_width && display->logical_height == expected_height);
+  assert(display->env_width == expected_width && display->env_height == expected_height);
+  assert(display->env_logical_width == expected_width && display->env_logical_height == expected_height);
+  auto image = display->alloc_img();
+  auto &descriptor = static_cast<egl::img_descriptor_t &>(*image);
+  assert(image->width == expected_width && image->height == expected_height && image->data == nullptr);
+  assert(image->pixel_pitch == 4 && image->row_pitch == expected_width * 4);
+  assert(descriptor.sequence == 0 && descriptor.serial == std::numeric_limits<std::uint64_t>::max());
+  assert(descriptor.sd.width == expected_width && descriptor.sd.height == expected_height);
+  for (auto fd : descriptor.sd.fds) assert(fd == -1);
+  assert(display->dummy_img(image.get()) == 0);
+  const bool hdr = config.dynamicRange > 0 && !config.force_sdr;
+  assert(display->is_hdr() == hdr);
+  SS_HDR_METADATA metadata{};
+  assert(display->get_hdr_metadata(metadata) == hdr);
+  assert(metadata.maxDisplayLuminance == (hdr ? 1000u : 0u));
+  auto format = hdr ? platf::pix_fmt_e::p010 : platf::pix_fmt_e::nv12;
+  auto device = display->make_avcodec_encode_device(format);
+  assert(device && device->type == type);
+  auto native = display->make_nvenc_encode_device(format);
+  assert(bool(native) == (type == platf::mem_type_e::cuda));
+  int pulled{}, pushed{};
+  va::converter_t converter;
+  const auto before = conversions;
+  auto result = display->capture([&](auto captured, bool changed) {
+    assert(changed && captured->frame_timestamp && captured->host_processing_timestamp == captured->frame_timestamp);
+    if (type == platf::mem_type_e::vaapi) assert(converter.convert(*captured) == 0);
+    ++pushed;
+    return true;
+  }, [&](auto &free) {
+    if (pulled++ == 2) return false;
+    free = display->alloc_img();
+    return true;
+  }, nullptr);
+  assert(result == platf::capture_e::ok && pushed == 2);
+  if (type == platf::mem_type_e::vaapi) assert(conversions == before + 2 && imports == 0);
+}
+int main() {
+  using platf::mem_type_e;
+  video::config_t config;
+  for (auto type : {mem_type_e::system, mem_type_e::vulkan, mem_type_e::unknown, mem_type_e::dxgi, mem_type_e::videotoolbox}) {
+    assert(!video::make_black_display(type, config));
+  }
+#ifdef SUNSHINE_BUILD_VAAPI
+  // Model the reported AMD-only host: any accidental CUDA use fails.
+  cuda_available = false;
+  for (int hdr : {0, 1}) {
+    config.dynamicRange = hdr;
+    check_display(video::make_black_display(mem_type_e::vaapi, config), config, mem_type_e::vaapi);
+  }
+  config.force_sdr = true;
+  check_display(video::make_black_display(mem_type_e::vaapi, config), config, mem_type_e::vaapi);
+  assert(cuda_calls == 0 && native_calls == 0 && blank_calls == 6);
+  va_available = false;
+  assert(!video::make_black_display(mem_type_e::vaapi, config)->make_avcodec_encode_device(platf::pix_fmt_e::nv12));
+  assert(cuda_calls == 0);  // A failed VAAPI initialization must not silently switch GPU APIs.
+#else
+  assert(!video::make_black_display(mem_type_e::vaapi, config));
+#endif
+#ifdef SUNSHINE_BUILD_CUDA
+  cuda_available = true;
+  for (int hdr : {0, 1}) {
+    config.dynamicRange = hdr;
+    config.force_sdr = false;
+    check_display(video::make_black_display(mem_type_e::cuda, config), config, mem_type_e::cuda);
+  }
+  auto probe = cuda::make_nvenc_probe_display(config);
+  int callbacks{};
+  assert(probe && probe->capture([&](auto, bool) { ++callbacks; return true; },
+                                 [&](auto &) { ++callbacks; return false; }, nullptr) == platf::capture_e::error);
+  assert(callbacks == 0 && probe->alloc_img());
+  config.width = 0; config.height = -1; config.framerate = 0;
+  expected_width = expected_height = 1;
+  check_display(video::make_black_display(mem_type_e::cuda, config), config, mem_type_e::cuda);
+#else
+  assert(!video::make_black_display(mem_type_e::cuda, config));
+#endif
+  std::cout << "backend routing, blank capture, HDR, probe and failure contracts passed\n";
+}

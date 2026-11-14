@@ -376,6 +376,8 @@ list(APPEND PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/linux/publish.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/graphics.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/graphics.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/synthetic_display.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/synthetic_display.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/misc.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/misc.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/mangohud_policy.h"
