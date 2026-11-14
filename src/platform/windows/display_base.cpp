@@ -37,6 +37,7 @@ typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
 
 #include "display.h"
 #include "display_output_monitor.h"
+#include "src/host_cursor.h"
 #include "src/platform/windows/ipc/display_settings_client.h"
 #include "game_activity.h"
 #include "misc.h"
@@ -253,6 +254,7 @@ namespace platf::dxgi {
       BOOST_LOG(info) << "Requested frame rate [" << display->client_frame_rate << "fps]";
     }
     display->display_refresh_rate_rounded = lround(display_refresh_rate_decimal);
+    cursor_shape_source = host_cursor::tracker::dxgi_shape_source();
     return 0;
   }
 
@@ -404,6 +406,10 @@ namespace platf::dxgi {
     auto invalidate_geometry_on_exit = util::fail_guard([this] {
       if (output_monitor) output_monitor->terminate_input_geometry();
     });
+    // The cursor stays out of the frames while every client draws it locally.
+    const auto blend_cursor = [cursor]() {
+      return *cursor && host_cursor::compositing_required();
+    };
     auto adjust_client_frame_rate = [&]() -> DXGI_RATIONAL {
       // Use exactly the requested rate if the client sent an X100 value
       if (client_frame_rate_strict.Numerator > 0 && client_frame_rate_strict.Denominator > 0) {
@@ -531,7 +537,7 @@ namespace platf::dxgi {
             sleep_overshoot_logger.first_point(sleep_target);
             sleep_overshoot_logger.second_point_now_and_log();
 
-            status = snapshot(pull_free_image_cb, img_out, 0ms, *cursor);
+            status = snapshot(pull_free_image_cb, img_out, 0ms, blend_cursor());
 
             if (status == capture_e::ok && img_out) {
               frame_pacing_group_frames += 1;
@@ -547,7 +553,7 @@ namespace platf::dxgi {
 
       // Start new frame pacing group if necessary, snapshot() is called with non-zero timeout
       if (status == capture_e::timeout || (status == capture_e::ok && !frame_pacing_group_start)) {
-        status = snapshot(pull_free_image_cb, img_out, 200ms, *cursor);
+        status = snapshot(pull_free_image_cb, img_out, 200ms, blend_cursor());
 
         if (status == capture_e::ok && img_out) {
           auto raw_anchor = img_out->capture_pacing_timestamp ? img_out->capture_pacing_timestamp : img_out->frame_timestamp;

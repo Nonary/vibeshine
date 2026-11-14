@@ -1395,6 +1395,11 @@ if(SUNSHINE_TEST_ENABLE_COMPONENT AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
                 "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_wgc_cursor_visibility.py"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
         set_tests_properties(test_component_wgc_cursor_visibility PROPERTIES LABELS "component" TIMEOUT 30)
+        add_test(NAME test_component_dda_cursor_blend_refresh
+            COMMAND "${SUNSHINE_TEST_WGC_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_dda_cursor_blend_refresh.py"
+                "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+        set_tests_properties(test_component_dda_cursor_blend_refresh PROPERTIES LABELS "component" TIMEOUT 30)
     endif()
 endif()
 sunshine_register_component(NAME test_component_present_timing_policy TEST_SOURCE unit/test_present_timing_policy.cpp)
@@ -2057,6 +2062,8 @@ if(SUNSHINE_TEST_POWERSHELL)
 endif()
 
 sunshine_register_component(NAME test_component_controller_speaker_pcm TEST_SOURCE unit/test_controller_speaker_pcm.cpp)
+sunshine_register_component(NAME test_component_host_cursor TEST_SOURCE unit/test_host_cursor.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/host_cursor.cpp" "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/host_cursor_bitmap.cpp")
 
 sunshine_register_component(NAME test_component_dualsense_audio_pcm TEST_SOURCE unit/test_dualsense_audio_pcm.cpp)
 set(_dualsense_protocol_test_adapter "")
