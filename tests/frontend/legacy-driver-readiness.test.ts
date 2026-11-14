@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createI18n } from "vue-i18n";
 import AudioVideo from "@/configs/tabs/AudioVideo.vue";
@@ -127,4 +127,92 @@ describe("legacy driver readiness", () => {
     expect(store.hasPendingPatch()).toBe(false);
     wrapper.unmount();
   });
+  it.each([false, true])(
+    "keeps the latest failed refresh non-ready when an older success arrives %s",
+    async (olderArrivesLast) => {
+      let completeOlder: (value: unknown) => void = () => {};
+      let failLatest: (reason: unknown) => void = () => {};
+      const olderMetadata = new Promise((resolve) => {
+        completeOlder = resolve;
+      });
+      const latestMetadata = new Promise((_resolve, reject) => {
+        failLatest = reject;
+      });
+      let metadataRequests = 0;
+      vi.spyOn(http, "get").mockImplementation(async (url) => {
+        if (url === "/api/config")
+          return {
+            status: 200,
+            data: { virtual_display_mode: "per_client" },
+          } as never;
+        metadataRequests += 1;
+        return (
+          metadataRequests === 1 ? olderMetadata : latestMetadata
+        ) as never;
+      });
+      const { pinia, store } = createStore();
+      store.metadata = { platform: "windows" };
+      const older = store.fetchConfig(true);
+      await flushPromises();
+      const latest = store.fetchConfig(true);
+      await flushPromises();
+      expect(metadataRequests).toBe(2);
+      const wrapper = mountAudioVideo(pinia);
+      const ready = {
+        status: 200,
+        data: {
+          platform: "windows",
+          virtual_display_driver: {
+            configured: "vibeshine",
+            active: "vibeshine",
+            status_code: 0,
+          },
+        },
+      };
+      if (olderArrivesLast) {
+        failLatest(new Error("unavailable"));
+        await latest;
+        completeOlder(ready);
+        await older;
+      } else {
+        completeOlder(ready);
+        await older;
+        failLatest(new Error("unavailable"));
+        await latest;
+      }
+      expect(wrapper.text()).toContain("Vibeshine driver: Unknown");
+      expect(wrapper.find(".bg-success\\/10").exists()).toBe(false);
+      expect(store.hasPendingPatch()).toBe(false);
+      wrapper.unmount();
+    },
+  );
+
+  it.each(["sudovda", "vibeshine"])(
+    "keeps failure guidance with observed driver %s after the selection changes",
+    async (active) => {
+      mockHost(-3, active);
+      const { pinia, store } = createStore();
+      await store.fetchConfig(true);
+      // Model the selection having changed independently of the runtime snapshot.
+      store.setConfig({
+        virtual_display_mode: "per_client",
+        dd_use_sunshine_virtual_display_driver: active === "sudovda",
+      });
+      const wrapper = mountAudioVideo(pinia);
+      const driverName = active === "sudovda" ? "SudoVDA" : "Vibeshine";
+      expect(wrapper.text()).toContain(`${driverName} driver: Watchdog failed`);
+      const hint =
+        active === "sudovda"
+          ? messagesEn.config.virtual_display_status_hint_sudovda
+          : messagesEn.config.virtual_display_status_hint_vibeshine;
+      const otherHint =
+        active === "sudovda"
+          ? messagesEn.config.virtual_display_status_hint_vibeshine
+          : messagesEn.config.virtual_display_status_hint_sudovda;
+      expect(wrapper.text()).toContain(hint);
+      expect(wrapper.text()).not.toContain(otherHint);
+      expect(store.hasPendingPatch()).toBe(false);
+      wrapper.unmount();
+    },
+  );
 });

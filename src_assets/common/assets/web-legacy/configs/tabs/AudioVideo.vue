@@ -142,7 +142,7 @@ const currentDriverStatusMessage = computed(() => {
   });
 });
 const currentDriverStatusHint = computed(() =>
-  useSudoVdaDriver.value
+  observedSudoVdaDriver.value
     ? t('config.virtual_display_status_hint_sudovda')
     : t('config.virtual_display_status_hint_vibeshine'),
 );
