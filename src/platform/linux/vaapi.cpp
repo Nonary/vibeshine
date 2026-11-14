@@ -284,9 +284,11 @@ namespace va {
       // Exception: AMD (radeonsi) H.264/HEVC with the strict buffer option. radeonsi maps
       // VA VBR to the VCN firmware's peak constrained VBR, which does not hold a single
       // frame VBV: in an encoder test keyframes came out at 21-22x the per-frame budget and
-      // scene cuts at 7-12x (Raphael iGPU and RX 9070 XT, Mesa 26.2), too large to carry
-      // FEC. CBR with the same buffer gave about 3x and 2x. CBR pads easy scenes with
-      // filler data, as the default (non-strict) AMD rate control already does.
+      // scene cuts at 7-12x (Raphael iGPU and RX 9070 XT, Mesa 26.2). CBR with the same
+      // buffer gave about 3x and 2x. That is a reduction, not a cap: the FEC limit depends on
+      // packet size and FEC percentage, and live play still showed occasional frames up to
+      // 12x. CBR pads easy scenes with filler data, as the default (non-strict) AMD rate
+      // control already does.
       if (config::video.vaapi.strict_rc_buffer ||
           (vendor && strstr(vendor, "Intel")) ||
           ctx->codec_id == AV_CODEC_ID_AV1) {
