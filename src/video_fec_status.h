@@ -116,10 +116,12 @@ namespace stream::pacing {
     return status;
   }
 
-  /// A validated, de-duplicated report: which frame, and what happened to its block.
+  /// A validated, de-duplicated report: which frame, what happened to its block,
+  /// and the block as the client reported it.
   struct fec_report_t {
     std::uint32_t frame {};
     fec_block_t block;
+    fec_status_t status {};
   };
 
   /// Validates reports against the frames actually sent and counts each frame's
@@ -165,12 +167,12 @@ namespace stream::pacing {
       // These best-effort reports infer recovery, not a successful decode.
       const std::uint32_t received = std::uint32_t(status->received_data) + status->received_parity;
       if (received < status->data) {
-        return fec_report_t {status->frame, fec_block_t::unrecoverable_block()};
+        return fec_report_t {status->frame, fec_block_t::unrecoverable_block(), *status};
       }
       if (status->received_data < status->data) {
-        return fec_report_t {status->frame, fec_block_t::recovered_block(std::uint16_t(status->data - status->received_data), status->data)};
+        return fec_report_t {status->frame, fec_block_t::recovered_block(std::uint16_t(status->data - status->received_data), status->data), *status};
       }
-      return fec_report_t {status->frame, fec_block_t::clean_block()};
+      return fec_report_t {status->frame, fec_block_t::clean_block(), *status};
     }
 
     std::uint64_t reports() const {

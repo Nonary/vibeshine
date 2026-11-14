@@ -83,9 +83,11 @@ namespace nvenc {
     /**
      * @brief Reconfigure the live encoder with a new average/max bitrate (no rebuild).
      * @param bitrate_kbps New bitrate in kbps.
+     * @param reset_on_raise Reset rate control and force an IDR when the bitrate rises, so the
+     *        new bitrate applies at once instead of after the old VBV drains.
      * @return `true` if reconfigured in place; `false` if the caller must rebuild the encoder.
      */
-    bool set_bitrate(int bitrate_kbps);
+    bool set_bitrate(int bitrate_kbps, bool reset_on_raise = true);
 
     /**
      * @brief Replace HDR mastering-display and content-light metadata for subsequent frames.
