@@ -5,6 +5,12 @@ import { http } from '@/http';
 // Metadata describing build/runtime info returned by /api/meta
 export interface MetaInfo {
   platform?: string;
+  virtual_display_driver?: {
+    configured?: string;
+    active?: string | null;
+    status?: string;
+    status_code?: number;
+  };
   linux?: { machine_host?: boolean };
   status?: boolean;
   version?: string;
@@ -992,6 +998,10 @@ export const useConfigStore = defineStore('config', () => {
     if (_data.value && !force) return config.value;
     loading.value = true;
     error.value = null;
+    // A failed refresh must not leave a stale successful driver observation.
+    const refreshedMetadata = { ...metadata.value };
+    delete refreshedMetadata.virtual_display_driver;
+    metadata.value = refreshedMetadata;
     try {
       const r = await http.get('/api/config');
       if (r.status !== 200) throw new Error('bad status ' + r.status);
