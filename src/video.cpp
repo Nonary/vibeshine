@@ -475,19 +475,23 @@ namespace video {
 
     probe_target_t resolve_probe_target(const bool materialize_capture_output = true) {
 #ifdef _WIN32
-      const auto active_output = config::get_active_output_name();
-      const auto mapped_output = display_device::map_output_name(active_output);
-      const bool mapped_output_is_active =
-        !mapped_output.empty() && display_device::output_is_active(mapped_output);
-      const auto current_wgc_identity = [&]() -> std::optional<platf::dxgi::wgc_adapter_identity_t> {
+      std::string mapped_output;
+      bool mapped_output_is_active = false;
+      std::optional<platf::dxgi::wgc_adapter_identity_t> current_wgc_identity;
+      // Exact-adapter cache lookups do not need display topology. Query it only
+      // for paths that actually use an output, since enumeration can retry for
+      // seconds when a display is disconnected.
+      const auto resolve_current_output = [&]() {
+        mapped_output = display_device::map_output_name(config::get_active_output_name());
+        mapped_output_is_active =
+          !mapped_output.empty() && display_device::output_is_active(mapped_output);
         const auto identity = platf::dxgi::get_last_wgc_adapter_identity();
-        if (!identity ||
-            !mapped_output_is_active ||
-            !boost::iequals(identity->output_name, mapped_output)) {
-          return std::nullopt;
+        if (identity &&
+            mapped_output_is_active &&
+            boost::iequals(identity->output_name, mapped_output)) {
+          current_wgc_identity = identity;
         }
-        return identity;
-      }();
+      };
       const auto mapped_output_matches_adapter = [&](const LUID &adapter_luid) {
         if (!mapped_output_is_active) {
           return false;
@@ -523,6 +527,7 @@ namespace video {
             },
           };
         }
+        resolve_current_output();
         std::optional<LUID> observed_adapter;
         std::string_view observed_source;
         if (current_wgc_identity) {
@@ -612,6 +617,7 @@ namespace video {
               },
             };
           }
+          resolve_current_output();
           const bool preferred_output_matches_adapter =
             mapped_output_matches_adapter(*configured_adapter.luid);
           const bool wgc_mismatches_configured_adapter =
@@ -642,6 +648,7 @@ namespace video {
             },
           };
         }
+        resolve_current_output();
         return probe_target_t {
           .display_name = mapped_output,
           .adapter_identity = probe_adapter_identity_t {
@@ -653,6 +660,7 @@ namespace video {
         };
       }
 
+      resolve_current_output();
       if (current_wgc_identity) {
         return probe_target_t {
           .display_name = mapped_output,

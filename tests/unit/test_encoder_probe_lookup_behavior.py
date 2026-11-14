@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Execute production target/key selection against inert, counted Windows boundaries.
 
-No Windows device is opened. The old eager key path is compiled as a negative
-control and must fail the same no-capture-on-cache-lookup assertions.
+No Windows device is opened. Eager capture and topology paths are compiled as
+negative controls and must fail the corresponding cache-only assertions.
 """
 import argparse
 import os
@@ -92,8 +92,9 @@ struct config_t {
 }
 namespace display_device {
 static bool active = false;
-inline std::string map_output_name(const std::string &s) { return s; }
-inline bool output_is_active(const std::string &) { return active; }
+static int mappings = 0, active_checks = 0;
+inline std::string map_output_name(const std::string &s) { ++mappings; return s; }
+inline bool output_is_active(const std::string &) { ++active_checks; return active; }
 }
 struct gate_t { bool quarantined = false; bool is_quarantined() const { return quarantined; } } native_amf_lifecycle_gate;
 struct state_t {
@@ -124,22 +125,26 @@ static void reset() {
   platf::dxgi::automatic = platf::dxgi::capture_output_identity_t {"A", {0, 1}};
   platf::dxgi::capture_tests = 0;
   display_device::active = false;
+  display_device::mappings = display_device::active_checks = 0;
   state.pending_virtual_display_adapter_hint.reset();
   state.pending_virtual_display_adapter_hint_ready_for_verification = false;
   native_amf_lifecycle_gate.quarantined = false;
 }
 int main() {
   reset();
+  config::active_output = "disconnected-TV";
   state.pending_virtual_display_adapter_hint = a;
   const auto cached = build_probe_cache_key();
   for (int i = 0; i < 100; ++i) assert(build_probe_cache_key() == cached);
   assert(cached.adapter_identity == "luid=0:1" && cached.adapter_identity_resolved);
   assert(platf::dxgi::capture_tests == 0);
+  assert(display_device::mappings == 0 && display_device::active_checks == 0);
 
   // A real probe still verifies capture selection, never the lookup-only target.
   const auto target = resolve_probe_target();
   assert(target.display_name == "A" && target.required_adapter == (platf::adapter_id_t {0, 1}));
   assert(platf::dxgi::capture_tests == 1);
+  assert(display_device::mappings == 1 && display_device::active_checks == 1);
   assert(build_probe_cache_key(&target) == cached);
   assert(platf::dxgi::capture_tests == 1);
 
@@ -166,11 +171,13 @@ int main() {
   assert(platf::dxgi::capture_tests == 1);
 
   reset();
+  config::active_output = "disconnected-TV";
   config::video.adapter_name = "configured";
   platf::configured.luid = a;
   const auto configured_key = build_probe_cache_key();
   for (int i = 0; i < 100; ++i) assert(build_probe_cache_key() == configured_key);
   assert(platf::dxgi::capture_tests == 0);
+  assert(display_device::mappings == 0 && display_device::active_checks == 0);
   assert(resolve_probe_target().display_name == "A");
   assert(platf::dxgi::capture_tests == 1);
   platf::configured.luid = b;
@@ -203,13 +210,81 @@ int main() {
   platf::dxgi::wgc.reset(); platf::mapped.luid = b;
   assert(build_probe_cache_key().adapter_identity == "luid=0:2");
   assert(platf::dxgi::capture_tests == 2);
+
+  // An inactive output cannot lend its stale WGC/DXGI adapter to Automatic.
+  display_device::active = false;
+  platf::dxgi::wgc = platf::dxgi::wgc_adapter_identity_t {a, "B"};
+  platf::mapped.luid = a;
+  assert(build_probe_cache_key().adapter_identity == "luid=0:2");
+  assert(platf::dxgi::capture_tests == 3);
+  assert(display_device::active_checks == 3);
+
+  // Both hint publication states bypass topology, including a conflicting
+  // configured GPU. Materialized lookup still observes the active output.
+  for (bool ready : {false, true}) {
+    reset();
+    config::active_output = "A";
+    display_device::active = true;
+    state.pending_virtual_display_adapter_hint = a;
+    state.pending_virtual_display_adapter_hint_ready_for_verification = ready;
+    config::video.adapter_name = "other GPU";
+    platf::configured.luid = b;
+    platf::mapped.luid = a;
+    platf::dxgi::wgc = platf::dxgi::wgc_adapter_identity_t {a, "A"};
+    const auto lookup = resolve_probe_target(false);
+    assert(lookup.display_name.empty());
+    assert(lookup.adapter_identity.identity == "luid=0:1");
+    assert(lookup.adapter_identity.source == "pending-virtual-display-adapter-cache-lookup");
+    assert(display_device::mappings == 0 && display_device::active_checks == 0);
+    const auto materialized = resolve_probe_target();
+    assert(materialized.display_name == "A");
+    assert(materialized.adapter_identity.source == "pending-virtual-display-lookup-wgc-active-match");
+    assert(display_device::mappings == 1 && display_device::active_checks == 1);
+    assert(platf::dxgi::capture_tests == 0);
+  }
+
+  // PNP-only selection uses the same exact-adapter shortcut. Failed adapter
+  // resolution retains the mapped output diagnostic, but never a valid key.
+  reset();
+  config::active_output = "A";
+  config::video.adapter_pnp_id = "GPU-A";
+  platf::configured.luid = a;
+  assert(build_probe_cache_key().adapter_identity == "luid=0:1");
+  assert(display_device::mappings == 0 && display_device::active_checks == 0);
+  platf::configured.luid.reset();
+  const auto unresolved = resolve_probe_target(false);
+  assert(!unresolved.adapter_identity.resolved && unresolved.display_name == "A");
+  assert(unresolved.adapter_identity.source == "configured-adapter-unresolved");
+  assert(display_device::mappings == 1 && display_device::active_checks == 1);
+
+  // Configured materialized targets still enforce the adapter and diagnose WGC
+  // mismatch rather than adopting the previously observed GPU.
+  platf::configured.luid = a;
+  platf::mapped.luid = a;
+  display_device::active = true;
+  platf::dxgi::wgc = platf::dxgi::wgc_adapter_identity_t {b, "A"};
+  const auto materialized = resolve_probe_target();
+  assert(materialized.display_name == "A");
+  assert(materialized.required_adapter == (platf::adapter_id_t {0, 1}));
+  assert(materialized.adapter_identity.source == "configured-adapter-active-output-wgc-mismatch");
+  assert(display_device::mappings == 2 && display_device::active_checks == 2);
+  platf::mapped.luid = b;
+  const auto fallback = resolve_probe_target();
+  assert(fallback.display_name == "A");
+  assert(fallback.required_adapter == (platf::adapter_id_t {0, 1}));
+  assert(fallback.adapter_identity.source == "configured-adapter-automatic-output-wgc-mismatch");
+  assert(platf::dxgi::capture_tests == 1);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='encoder-probe-lookup-') as temp:
-    for name, code, expect_success in [
-        ('production', production, True),
+    for name, code, expected_failure in [
+        ('production', production, None),
         ('old-eager-key', production.replace('resolve_probe_target(false).adapter_identity',
-                                             'resolve_probe_target().adapter_identity'), False),
+                                             'resolve_probe_target().adapter_identity'), 'capture_tests == 0'),
+        ('eager-topology', production.replace(
+            '      const auto mapped_output_matches_adapter',
+            '      resolve_current_output();\n      const auto mapped_output_matches_adapter'),
+         'display_device::mappings == 0'),
     ]:
         cpp = Path(temp) / (name + '.cpp')
         binary = Path(temp) / name
@@ -220,8 +295,8 @@ with tempfile.TemporaryDirectory(prefix='encoder-probe-lookup-') as temp:
         subprocess.run([args.compiler, *flags, str(cpp), '-o', str(binary)], check=True)
         env = {**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'}
         result = subprocess.run([str(binary)], env=env, capture_output=True, text=True)
-        if expect_success != (result.returncode == 0):
+        if (expected_failure is None) != (result.returncode == 0):
             raise AssertionError(f'{name}: unexpected exit {result.returncode}\n{result.stderr}')
-        if not expect_success and 'capture_tests == 0' not in result.stderr:
+        if expected_failure and expected_failure not in result.stderr:
             raise AssertionError(f'negative control failed for an unrelated reason:\n{result.stderr}')
         print(f'{name}: expected outcome verified')
