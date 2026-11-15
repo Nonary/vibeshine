@@ -2016,6 +2016,11 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_frame_limiter_vsync.py"
             "${SUNSHINE_TEST_REPOSITORY_ROOT}")
     set_tests_properties(regression_windows_frame_limiter_lifecycle PROPERTIES LABELS "component" TIMEOUT 60)
+endif()
+# These production-code models are portable and must exercise Windows changes
+# on the Windows test host as well as Linux.
+if(Python3_Interpreter_FOUND AND SUNSHINE_TEST_GXX AND
+   (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
     add_test(NAME regression_display_policy_adapter
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_display_policy_adapter.py")
     add_library(sunshine_test_session_display_precedence_dependencies INTERFACE)
@@ -2024,9 +2029,11 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_session_display_precedence.py"
             --compiler "${CMAKE_CXX_COMPILER}"
             --include-dir "$<TARGET_PROPERTY:sunshine_test_session_display_precedence_dependencies,INTERFACE_INCLUDE_DIRECTORIES>")
-    add_test(NAME regression_install_root_guard
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_install_root_guard.py"
-            --compiler "${CMAKE_CXX_COMPILER}")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME regression_install_root_guard
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_install_root_guard.py"
+                --compiler "${CMAKE_CXX_COMPILER}")
+    endif()
     add_test(NAME regression_encoder_sync_compatibility
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_encoder_sync_compatibility.py"
             --compiler "${CMAKE_CXX_COMPILER}")
@@ -2044,8 +2051,10 @@ if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME regression_remote_monitor_color_observation
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_remote_monitor_color_observation.py"
             --compiler "${CMAKE_CXX_COMPILER}")
-    add_test(NAME regression_touch_mapping_environment
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_touch_mapping_environment.py")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME regression_touch_mapping_environment
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_touch_mapping_environment.py")
+    endif()
     add_test(NAME regression_selected_output_fallback
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_selected_output_fallback.py")
     add_test(NAME regression_virtual_display_refresh
