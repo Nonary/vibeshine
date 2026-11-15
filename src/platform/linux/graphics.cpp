@@ -895,8 +895,9 @@ namespace egl {
 
     GLenum attachment = GL_COLOR_ATTACHMENT0;
     gl::ctx.DrawBuffers(1, &attachment);
-    const GLuint rgb_black[] = {0, 0, 0, 0};
-    gl::ctx.ClearBufferuiv(GL_COLOR, 0, rgb_black);
+    // GL_RGBA8 is normalized fixed-point, not an unsigned-integer attachment.
+    const GLfloat rgb_black[] = {0.0f, 0.0f, 0.0f, 0.0f};
+    gl::ctx.ClearBufferfv(GL_COLOR, 0, rgb_black);
 
     gl_drain_errors;
 
