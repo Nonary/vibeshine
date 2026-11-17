@@ -19,8 +19,8 @@ jobs:
           submodules: recursive
       - uses: actions/checkout@v5
         with:
-          repository: fidiiioo/moonlight-common-c
-          ref: b061a469447ed78f8ee82ad47104656536504ddd
+          repository: Nonary/moonlight-common-c
+          ref: e9ddb97eebdbffd74ce3c69cc5af86b39c4862f8
           path: native-common
           submodules: recursive
       - uses: msys2/setup-msys2@v2
