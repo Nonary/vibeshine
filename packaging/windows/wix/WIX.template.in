@@ -51,6 +51,7 @@
 
         <WixVariable Id="WixUILicenseRtf" Value="$(var.CPACK_WIX_LICENSE_RTF)"/>
         <Property Id="VIBE_SETUP_USER_SID" Secure="yes"/>
+        <Property Id="VIBE_SETUP_BOOT_RECEIPT" Secure="yes"/>
         <Property Id="WIXUI_INSTALLDIR" Value="INSTALL_ROOT"/>
 
         <?ifdef CPACK_WIX_PRODUCT_ICON?>

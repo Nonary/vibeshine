@@ -149,14 +149,14 @@
     <CustomAction Id="RollbackVibeSpeakers" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="rollback" Return="check" Impersonate="no" />
     <CustomAction Id="CommitVibeSpeakers" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="commit" Return="check" Impersonate="no" />
     <CustomAction Id="SetInstallVibeSpeakers" Property="InstallVibeSpeakers"
-      Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File &quot;[INSTALL_ROOT]VibeSpeakers\Setup\Invoke-AdminSetup.ps1&quot; -Action Install -TargetUserSid &quot;[VIBE_SETUP_USER_SID]&quot; -InstallerTransaction &quot;[ProductCode]&quot; -ConfirmSetup" />
+      Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File &quot;[INSTALL_ROOT]VibeSpeakers\Setup\Invoke-AdminSetup.ps1&quot; -Action Install -TargetUserSid &quot;[VIBE_SETUP_USER_SID]&quot; -InstallerTransaction &quot;[ProductCode]&quot; -BootReceipt &quot;[VIBE_SETUP_BOOT_RECEIPT]&quot; -ConfirmSetup" />
     <CustomAction Id="SetRollbackVibeSpeakers" Property="RollbackVibeSpeakers"
-      Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File &quot;[INSTALL_ROOT]VibeSpeakers\Setup\Invoke-AdminSetup.ps1&quot; -Action Rollback -TargetUserSid &quot;[VIBE_SETUP_USER_SID]&quot; -InstallerTransaction &quot;[ProductCode]&quot; -ConfirmSetup" />
+      Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File &quot;[INSTALL_ROOT]VibeSpeakers\Setup\Invoke-AdminSetup.ps1&quot; -Action Rollback -TargetUserSid &quot;[VIBE_SETUP_USER_SID]&quot; -InstallerTransaction &quot;[ProductCode]&quot; -BootReceipt &quot;[VIBE_SETUP_BOOT_RECEIPT]&quot; -ConfirmSetup" />
     <CustomAction Id="SetCommitVibeSpeakers" Property="CommitVibeSpeakers"
-      Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File &quot;[INSTALL_ROOT]VibeSpeakers\Setup\Invoke-AdminSetup.ps1&quot; -Action Commit -TargetUserSid &quot;[VIBE_SETUP_USER_SID]&quot; -InstallerTransaction &quot;[ProductCode]&quot; -ConfirmSetup" />
+      Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File &quot;[INSTALL_ROOT]VibeSpeakers\Setup\Invoke-AdminSetup.ps1&quot; -Action Commit -TargetUserSid &quot;[VIBE_SETUP_USER_SID]&quot; -InstallerTransaction &quot;[ProductCode]&quot; -BootReceipt &quot;[VIBE_SETUP_BOOT_RECEIPT]&quot; -ConfirmSetup" />
     <CustomAction Id="RemoveVibeSpeakers" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="check" Impersonate="no" />
     <CustomAction Id="SetRemoveVibeSpeakers" Property="RemoveVibeSpeakers"
-      Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File &quot;[INSTALL_ROOT]VibeSpeakers\Setup\Remove-Installed.ps1&quot;" />
+      Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File &quot;[INSTALL_ROOT]VibeSpeakers\Setup\Remove-Installed.ps1&quot; -BootReceipt &quot;[VIBE_SETUP_BOOT_RECEIPT]&quot;" />
     <CustomAction Id="InstallUsbIpTransport" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="RegisterVulkanHdrLayer" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="ignore" Impersonate="no" />
 

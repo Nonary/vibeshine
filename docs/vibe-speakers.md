@@ -64,6 +64,13 @@ HVCI/VBS is supported and tested, but is not an artificial prerequisite. An
 incompatible existing shared driver is refused instead of replaced. Source
 provenance/licenses are in `src/vibe-speakers/vibe-usb-audio/THIRD-PARTY.md`.
 
+The normal setup executable performs the direct firmware observation under its
+approved administrator token. Its short-lived, administrator-protected receipt
+is checked against the current boot and Windows Secure Boot state inside the MSI;
+the restricted installer-service token cannot perform that firmware query itself.
+Driver signatures, Code Integrity and boot-policy checks still run in the MSI.
+Use the setup executable for installation and maintenance.
+
 ## Packaging and signing
 
 The normal Windows CMake build includes the optional component; CPack/MSI and

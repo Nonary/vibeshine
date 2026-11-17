@@ -2523,6 +2523,7 @@ namespace VibeshineInstaller {
       public string LocalGamepadCertificateSubject { get; set; }
       public string LocalGamepadDriverVersion { get; set; }
       public bool HasBundledUsbIpTransport { get; set; }
+      public bool HasVibeSpeakers { get; set; }
     }
 
     // Copy of the currently installed Vibeshine MSI (from the Windows
@@ -2829,6 +2830,7 @@ namespace VibeshineInstaller {
           SupportsTransactionalReplacement = string.Equals(transactionalReplacement, "1", StringComparison.Ordinal),
           HasBundledVirtualGamepadDriver = string.Equals(virtualGamepadDriverBundled, "1", StringComparison.Ordinal),
           HasBundledUsbIpTransport = string.Equals(usbIpTransportBundled, "1", StringComparison.Ordinal),
+          HasVibeSpeakers = string.Equals(ReadMsiProperty(packageHandle, "VIBE_SPEAKERS_BUNDLED"), "1", StringComparison.Ordinal),
           HasLocalGamepadCertificate = string.Equals(localGamepadPackage, "1", StringComparison.Ordinal) && IsCertificateThumbprint(localGamepadCertificateThumbprint),
           LocalGamepadCertificateThumbprint = localGamepadCertificateThumbprint ?? string.Empty,
           LocalGamepadCertificateSubject = ReadMsiProperty(packageHandle, "LOCAL_GAMEPAD_CERTIFICATE_SUBJECT") ?? string.Empty,
@@ -8652,6 +8654,53 @@ namespace VibeshineInstaller {
     }
 
     private static int RunMsiexec(IReadOnlyList<string> arguments, bool hiddenWindow, bool requestElevationIfNeeded) {
+      string receiptDirectory = null;
+      try {
+        var msi = GetMsiPathArgument(arguments.ToList());
+        bool needed = Directory.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "VibeSpeakers", "users"));
+        if (!string.IsNullOrWhiteSpace(msi) && File.Exists(msi)) {
+          var metadata = TryGetPayloadMsiInfo(new InstallerArguments { MsiPathOverride = msi });
+          needed = needed || (metadata != null && metadata.HasVibeSpeakers);
+        }
+        if (!needed) return RunMsiexecCore(arguments, hiddenWindow, requestElevationIfNeeded);
+        if (!IsProcessElevated()) throw new InvalidOperationException("Use the regular Vibeshine setup so its administrator preflight can run.");
+        string error;
+        if (!TryCreateSecureInstallerRecoveryDirectory(out receiptDirectory, out error)) throw new IOException(error);
+        var script = "$ErrorActionPreference='Stop';[ordered]@{Schema='vibe-speakers-installer-security/1';BootTime=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o');ObservedUtc=[datetime]::UtcNow.ToString('o');SecureBoot=[bool](Confirm-SecureBootUEFI)}|ConvertTo-Json -Compress";
+        var start = new ProcessStartInfo {
+          FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"),
+          Arguments = BuildCommandLine(new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script }),
+          UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        start.EnvironmentVariables["PSModulePath"] = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\Modules");
+        string json;
+        using (var child = Process.Start(start)) {
+          if (child == null) throw new IOException("Cannot run installer security preflight.");
+          var stdout = child.StandardOutput.ReadToEndAsync(); var stderr = child.StandardError.ReadToEndAsync();
+          if (!child.WaitForExit(30000)) { child.Kill(); throw new IOException("Installer security preflight timed out."); }
+          json = stdout.GetAwaiter().GetResult().Trim(); var diagnostic = stderr.GetAwaiter().GetResult();
+          if (child.ExitCode != 0 || json.Length > 8192 || !json.StartsWith("{") || !json.EndsWith("}")) throw new IOException("Cannot verify firmware security: " + diagnostic);
+        }
+        var receipt = Path.Combine(receiptDirectory, "vibe-boot.json");
+        var receiptSecurity = new FileSecurity();
+        receiptSecurity.SetAccessRuleProtection(true, false);
+        receiptSecurity.SetOwner(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null));
+        foreach (var principal in new[] {WellKnownSidType.LocalSystemSid, WellKnownSidType.BuiltinAdministratorsSid})
+          receiptSecurity.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(principal, null), FileSystemRights.FullControl, AccessControlType.Allow));
+        using (var file = new FileStream(receipt, FileMode.CreateNew, FileSystemRights.WriteData, FileShare.Read, 4096, FileOptions.WriteThrough, receiptSecurity)) {
+          var bytes = Encoding.UTF8.GetBytes(json); file.Write(bytes, 0, bytes.Length); file.Flush(true);
+        }
+        var prepared = new List<string>(arguments);
+        prepared.RemoveAll(arg => arg.StartsWith("VIBE_SETUP_BOOT_RECEIPT=", StringComparison.OrdinalIgnoreCase));
+        prepared.Add(CreatePropertyArgument("VIBE_SETUP_BOOT_RECEIPT", receipt));
+        return RunMsiexecCore(prepared, hiddenWindow, requestElevationIfNeeded);
+      } catch (Exception ex) {
+        AppendInstallerLogMessage(TryGetMsiLogPath(arguments.ToList()), "Vibe Speakers security preflight failed: " + ex.Message);
+        return 1603;
+      } finally { if (receiptDirectory != null) TryDeleteInstallerRecoveryDirectory(receiptDirectory); }
+    }
+
+    private static int RunMsiexecCore(IReadOnlyList<string> arguments, bool hiddenWindow, bool requestElevationIfNeeded) {
       // This check intentionally happens in the last in-process step before
       // Process.Start. Protected extraction prevents an unprivileged rename
       // after the hash/signature check; checking here also detects accidental

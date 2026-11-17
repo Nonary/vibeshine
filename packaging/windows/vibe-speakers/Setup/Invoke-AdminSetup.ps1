@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param([ValidateSet('Install','Remove','Preflight','Commit','Rollback')][string]$Action='Preflight',
-      [Parameter(Mandatory)][string]$TargetUserSid,[switch]$ConfirmSetup,[ValidatePattern('^(?:\{[0-9A-Fa-f-]{36}\}|)$')][string]$InstallerTransaction)
+      [Parameter(Mandatory)][string]$TargetUserSid,[switch]$ConfirmSetup,[ValidatePattern('^(?:\{[0-9A-Fa-f-]{36}\}|)$')][string]$InstallerTransaction,[string]$BootReceipt)
 trap {
  Write-Error ($_.Exception.ToString()+"`n"+$_.ScriptStackTrace) -ErrorAction Continue
  exit 1
@@ -44,7 +44,7 @@ function SaveProtected([string]$name,$value){
 # Product ownership uses its own protected namespace. Historical private RC1
 # controllers/journals are deliberately preserved as rollback references; they
 # are never silently adopted or renamed by an official installation.
-$facts=GetPreflight $TargetUserSid
+$facts=GetPreflight $TargetUserSid $BootReceipt
 Require $facts.Compatible ($facts.Errors -join '; ')
 if($Action -eq 'Preflight'){$facts|ConvertTo-Json -Depth 12;return}
 # Only our state namespace is created. Existing shared driver/controller state is never adopted.

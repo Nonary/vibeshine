@@ -126,7 +126,39 @@ function IsOwnedDescendant([string]$id,[string]$root){
  }
  return $false
 }
-function GetPreflight([string]$sid=(CurrentSid)){
+function ValidateBootObservation($value,[string]$boot,[int]$secureBoot,[datetime]$now){
+ Require ($value.Schema -ceq 'vibe-speakers-installer-security/1' -and $value.SecureBoot -is [bool]) 'Invalid installer security observation'
+ Require ($value.BootTime -ceq $boot) 'Installer security observation belongs to another Windows start'
+ $age=($now.ToUniversalTime()-[datetime]::Parse($value.ObservedUtc).ToUniversalTime()).TotalSeconds
+ Require ($age -ge 0 -and $age -le 1200) 'Installer security observation is stale or from the future'
+ Require ([int]$value.SecureBoot -eq $secureBoot) 'Observed firmware and current Windows Secure Boot state disagree'
+}
+function ReadBootObservation([string]$file,[string]$boot,[int]$secureBoot){
+ $full=[IO.Path]::GetFullPath($file)
+ $temp=[IO.Path]::GetFullPath((Join-Path $env:SystemRoot 'Temp'))
+ Require ($full -ceq $file -and (Split-Path $full -Leaf) -ceq 'vibe-boot.json') 'Noncanonical installer security observation'
+ $parent=Split-Path $full
+ Require ((Split-Path $parent) -ieq $temp -and (Split-Path $parent -Leaf) -match '^VibeshineInstallerRecovery_[0-9a-f]{32}$') 'Security observation is outside the protected installer namespace'
+ NoLinks $full
+ foreach($path in @($parent,$full)){
+  $acl=Get-Acl -LiteralPath $path
+  Require ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -in @('S-1-5-18','S-1-5-32-544')) 'Security observation is not administrator-owned'
+  foreach($ace in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){
+   if($ace.AccessControlType -eq 'Allow' -and $ace.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544')){
+    $writes=0x500D0156L
+    Require (([long]$ace.FileSystemRights -band $writes) -eq 0) 'Security observation has untrusted writers'
+   }
+  }
+ }
+ $stream=[IO.FileStream]::new($full,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+ try{
+  Require ($stream.Length -gt 0 -and $stream.Length -le 8192) 'Security observation size is invalid'
+  $reader=[IO.StreamReader]::new($stream,[Text.Encoding]::UTF8)
+  $value=$reader.ReadToEnd()|ConvertFrom-Json
+  ValidateBootObservation $value $boot $secureBoot ([datetime]::UtcNow)
+ }finally{$stream.Dispose()}
+}
+function GetPreflight([string]$sid=(CurrentSid),[string]$bootReceipt){
  $null=CheckPayload;$lock=CheckDriverPackage;LoadNative
  $os=Get-CimInstance Win32_OperatingSystem
  $guard=Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard
@@ -142,8 +174,11 @@ function GetPreflight([string]$sid=(CurrentSid)){
   if($service.Status -ne 'Running'){$facts.DriverConflicts+=('Required Windows audio service '+$name+' is not running; no service setting is changed')}
  }
  if(IsAdmin){
-  $firmware=Confirm-SecureBootUEFI -ErrorAction Stop
-  Require ([int]$firmware -eq [int]$sb) 'Firmware and Windows Secure Boot state disagree'
+  if($bootReceipt){ReadBootObservation $bootReceipt $facts.BootTime $sb}
+  else{
+   $firmware=Confirm-SecureBootUEFI -ErrorAction Stop
+   Require ([int]$firmware -eq [int]$sb) 'Firmware and Windows Secure Boot state disagree'
+  }
   $facts.SecureBootFirmwareChecked=$true
   $boot=@(& "$env:SystemRoot\System32\bcdedit.exe" /enum '{current}' 2>&1);Require ($LASTEXITCODE -eq 0) 'Cannot read current boot loader'
   $facts.AdminBootChecked=$true
