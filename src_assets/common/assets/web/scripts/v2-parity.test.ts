@@ -51,6 +51,12 @@ test('final restore removal defaults to retention and is Windows-only', () => {
   assert.equal(matchesPlatform(field, 'macos'), false);
 });
 
+test('HDR10+ dynamic metadata defaults off in the backend and the settings UI', () => {
+  assert.equal(settingsDefaults.hdr_dynamic_metadata, false);
+  const backend = readFileSync(new URL('../../../../../src/config.cpp', import.meta.url), 'utf8');
+  assert.ok(backend.includes('false,  // hdr_dynamic_metadata'));
+});
+
 test('capture options follow the host platform', () => {
   assert.deepEqual(
     captureOptionsForPlatform('linux').map((option) => option.value),
@@ -158,6 +164,7 @@ test('Linux keeps common virtual-display policy and hides Windows display intern
     'dd_snapshot_restore_hotkey_modifiers',
     'wgc_pacing_smoothing',
     'wgc_direct_encoder_input',
+    'hdr_dynamic_metadata',
     'always_send_scancodes',
     'native_pen_touch',
     'install_steam_audio_drivers',
