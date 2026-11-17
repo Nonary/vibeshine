@@ -2239,6 +2239,7 @@ namespace VibeshineInstaller {
     public bool InternalElevatedInstall { get; set; }
     public bool InternalElevatedUninstall { get; set; }
     public string InternalInstallPath { get; set; }
+    public string VibeSpeakersUserSid { get; set; }
     public bool InternalInstallVirtualDisplay { get; set; }
     public bool InternalInstallVirtualGamepad { get; set; }
     private bool _installDisplayDriversRequested = true;
@@ -2265,6 +2266,9 @@ namespace VibeshineInstaller {
 
     public InstallerArguments() {
       InternalInstallVirtualDisplay = true;
+      using (var identity = WindowsIdentity.GetCurrent()) {
+        VibeSpeakersUserSid = identity.User == null ? string.Empty : identity.User.Value;
+      }
       ForwardedArguments = new List<string>();
     }
 
@@ -2297,6 +2301,12 @@ namespace VibeshineInstaller {
         }
         if (string.Equals(arg, InternalElevatedUninstallToken, StringComparison.OrdinalIgnoreCase)) {
           parsed.InternalElevatedUninstall = true;
+          continue;
+        }
+        if (string.Equals(arg, "--internal-vibe-user-sid", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
+          var sid = new SecurityIdentifier(args[++index]);
+          if (!sid.IsAccountSid()) throw new ArgumentException("Vibe Speakers requires an interactive account SID.");
+          parsed.VibeSpeakersUserSid = sid.Value;
           continue;
         }
         if (string.Equals(arg, InternalInstallPathToken, StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
@@ -4053,6 +4063,11 @@ namespace VibeshineInstaller {
         "INSTALL_VIRTUAL_GAMEPAD_DRIVER=" + (installGamepad ? "1" : "0")
       };
     }
+    internal static string VibeSpeakersUserArgument(InstallerArguments arguments) {
+      var sid = new SecurityIdentifier(arguments.VibeSpeakersUserSid);
+      if (!sid.IsAccountSid()) throw new ArgumentException("Vibe Speakers requires the installing Windows user's SID.");
+      return "VIBE_SETUP_USER_SID=" + sid.Value;
+    }
     private static IEnumerable<string> BuildLocalGamepadTrustArguments(InstallerArguments arguments, bool installGamepad) {
       var consent = installGamepad && arguments != null && arguments.AllowLocalGamepadCertificateTrust
         && IsCertificateThumbprint(arguments.ConsentCertificateThumbprint);
@@ -4086,6 +4101,7 @@ namespace VibeshineInstaller {
         "SUPPRESSMSGBOXES=1"
       };
 
+      args.Add(VibeSpeakersUserArgument(arguments));
       args.AddRange(BuildDriverSelectionArguments(arguments, installVirtualDisplayDriver, installVirtualGamepadDriver));
       args.AddRange(BuildLocalGamepadTrustArguments(arguments, installVirtualGamepadDriver));
 
@@ -6109,6 +6125,7 @@ namespace VibeshineInstaller {
 
     public static InstallerResult RunCli(InstallerArguments arguments) {
       var cliArgs = new List<string>(arguments.ForwardedArguments);
+      if (!cliArgs.Any(arg => arg.StartsWith("VIBE_SETUP_USER_SID=", StringComparison.OrdinalIgnoreCase))) cliArgs.Add(VibeSpeakersUserArgument(arguments));
       var hasOperation = cliArgs.Any(IsOperationSwitch);
       string injectedMsiPath = null;
       var recoveryDetails = new List<string>();
@@ -8375,6 +8392,8 @@ namespace VibeshineInstaller {
       var resultPath = Path.Combine(Path.GetTempPath(), "vibeshine_install_result_" + Guid.NewGuid().ToString("N") + ".txt");
       var elevatedArgs = new List<string> {
         "--internal-elevated-install",
+        "--internal-vibe-user-sid",
+        arguments.VibeSpeakersUserSid,
         "--internal-install-path",
         installDirectory,
         "--internal-install-display-drivers",
@@ -8436,6 +8455,7 @@ namespace VibeshineInstaller {
         elevatedArgs.Add("--msi");
         elevatedArgs.Add(arguments.MsiPathOverride);
       }
+      if (!forwardedArguments.Any(arg => arg.StartsWith("VIBE_SETUP_USER_SID=", StringComparison.OrdinalIgnoreCase))) forwardedArguments.Add(VibeSpeakersUserArgument(arguments));
       elevatedArgs.AddRange(forwardedArguments);
 
       var exitCode = RunElevatedBootstrapper(elevatedArgs);

@@ -20,7 +20,6 @@
 #include <aclapi.h>
 #include <shlobj.h>
 #include <wtsapi32.h>
-#include <userenv.h>
 #include <mmdeviceapi.h>
 #include <thread>
 #include "audio_context.h"
@@ -159,25 +158,6 @@ void protected_setup_handle(HANDLE file) {
     need(trusted(const_cast<DWORD*>(&ace->SidStart))||!(ace->Mask&writes),"Untrusted setup write permission");
   }
 }
-// Inherited Program Files ACLs include the Windows servicing principal and
-// inherit-only CREATOR OWNER rules. The latter grant no access to this object.
-void validate_payload_acl(PSID owner,PACL acl) {
-  std::array<BYTE,SECURITY_MAX_SID_SIZE> system{},admins{};DWORD a=DWORD(system.size()),b=DWORD(admins.size());
-  need(CreateWellKnownSid(WinLocalSystemSid,nullptr,system.data(),&a)&&CreateWellKnownSid(WinBuiltinAdministratorsSid,nullptr,admins.data(),&b),"Cannot inspect trusted principals");
-  PSID installer=nullptr;
-  need(ConvertStringSidToSidW(L"S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",&installer),"Cannot inspect Windows servicing identity");
-  struct release{PSID value;~release(){LocalFree(value);}} guard{installer};
-  const auto trusted=[&](PSID sid){return sid&&(EqualSid(sid,system.data())||EqualSid(sid,admins.data())||EqualSid(sid,installer));};
-  need(trusted(owner)&&acl,"Install Vibeshine in an administrator-protected directory before setup");
-  for(DWORD i=0;i<acl->AceCount;++i){
-    void* raw=nullptr;need(GetAce(acl,i,&raw),"Invalid payload ACL");const auto* header=static_cast<ACE_HEADER*>(raw);
-    need(header->AceType==ACCESS_ALLOWED_ACE_TYPE||header->AceType==ACCESS_DENIED_ACE_TYPE,"Unsupported payload ACL");
-    if(header->AceType!=ACCESS_ALLOWED_ACE_TYPE||(header->AceFlags&INHERIT_ONLY_ACE))continue;
-    const auto* ace=static_cast<ACCESS_ALLOWED_ACE*>(raw);
-    constexpr DWORD writes=GENERIC_ALL|GENERIC_WRITE|FILE_WRITE_DATA|FILE_APPEND_DATA|FILE_WRITE_EA|FILE_WRITE_ATTRIBUTES|DELETE|WRITE_DAC|WRITE_OWNER|FILE_DELETE_CHILD;
-    need(trusted(const_cast<DWORD*>(&ace->SidStart))||!(ace->Mask&writes),"Setup files are writable by an untrusted principal");
-  }
-}
 [[maybe_unused]] std::string owned_setup_controller() {
   struct ci_info {ULONG size=sizeof(ci_info),flags=0;} ci;
   const auto query=reinterpret_cast<LONG(WINAPI*)(ULONG,PVOID,ULONG,PULONG)>(
@@ -192,7 +172,7 @@ void validate_payload_acl(PSID owner,PACL acl) {
   for(const auto& path:{base,base/L"users",state}){
     if(GetFileAttributesW(path.c_str())==INVALID_FILE_ATTRIBUTES){
       const auto error=GetLastError();
-      need(error!=ERROR_FILE_NOT_FOUND&&error!=ERROR_PATH_NOT_FOUND,"Vibe Speakers is not set up for this Windows user. Open Audio settings and choose Set up.");
+      need(error!=ERROR_FILE_NOT_FOUND&&error!=ERROR_PATH_NOT_FOUND,"Vibe Speakers is not set up for this Windows user. Repair the Vibeshine installation for this Windows user.");
     }
   }
   std::vector<handle_t> directories;
@@ -206,7 +186,7 @@ void validate_payload_acl(PSID owner,PACL acl) {
   const auto path=state/L"setup.json";safe_existing_path(path,false);
   handle_t file(CreateFileW(path.c_str(),GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,nullptr,
       OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
-  need(bool(file),"Vibe Speakers is not set up for this Windows user. Open Audio settings and choose Set up.");
+  need(bool(file),"Vibe Speakers is not set up for this Windows user. Repair the Vibeshine installation for this Windows user.");
   protected_setup_handle(file.value);
   LARGE_INTEGER size{};need(GetFileSizeEx(file.value,&size)&&size.QuadPart>0&&size.QuadPart<=65536,"Invalid setup record size");
   std::string data(std::size_t(size.QuadPart),'\0');DWORD read=0;
@@ -661,44 +641,6 @@ std::string usb_session_t::availability_json(){
   catch(const std::exception& error){status["setup_required"]=true;status["message"]=error.what();}
 #endif
   return status.dump();
-}
-bool usb_session_t::request_setup(std::string& error){
-#if defined(_WIN32) && SUNSHINE_ENABLE_VIBE_SPEAKERS
-  try{
-    const auto root=std::filesystem::path(current_image()).parent_path();
-    const auto script=root/L"VibeSpeakers"/L"Setup"/L"Show-Setup.ps1";
-    safe_existing_path(script,false);
-    // Never elevate a setup payload from an untrusted writable location.
-    // The integrated dialog is an installed-product action, not a lab launcher.
-    std::vector<std::filesystem::path> chain{root};
-    for(auto path=script;path!=root;path=path.parent_path()){
-      need(!path.empty()&&path!=path.root_path(),"Setup path escaped its installation");
-      chain.push_back(path);
-    }
-    for(const auto& path:chain){
-      handle_t file(CreateFileW(path.c_str(),READ_CONTROL,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
-      need(bool(file),"Cannot inspect installed setup permissions");
-      PSID owner=nullptr;PACL acl=nullptr;PSECURITY_DESCRIPTOR descriptor=nullptr;
-      need(GetSecurityInfo(file.value,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION,&owner,nullptr,&acl,nullptr,&descriptor)==ERROR_SUCCESS,"Cannot inspect setup ownership");
-      struct release{PSECURITY_DESCRIPTOR value;~release(){LocalFree(value);}} guard{descriptor};
-      validate_payload_acl(owner,acl);
-    }
-    std::array<wchar_t,MAX_PATH> windows{};need(GetWindowsDirectoryW(windows.data(),DWORD(windows.size())),"Resolve Windows directory");
-    const auto executable=std::filesystem::path(windows.data())/L"System32"/L"WindowsPowerShell"/L"v1.0"/L"powershell.exe";
-    auto command=quote(executable.wstring())+L" -NoProfile -STA -ExecutionPolicy RemoteSigned -File "+quote(script.wstring());
-    STARTUPINFOW si{};si.cb=sizeof(si);si.lpDesktop=const_cast<LPWSTR>(L"winsta0\\default");PROCESS_INFORMATION pi{};
-    if(token_sid()==L"S-1-5-18"){
-      DWORD session=0;need(ProcessIdToSessionId(GetCurrentProcessId(),&session)&&session,"Interactive service session required");
-      handle_t user;need(WTSQueryUserToken(session,&user.value),"Logged-on setup user unavailable");
-      void* environment=nullptr;need(CreateEnvironmentBlock(&environment,user.value,FALSE),"Setup user environment unavailable");
-      const auto launched=CreateProcessAsUserW(user.value,executable.c_str(),command.data(),nullptr,nullptr,FALSE,CREATE_UNICODE_ENVIRONMENT,environment,root.c_str(),&si,&pi);const auto code=GetLastError();DestroyEnvironmentBlock(environment);
-      need(launched, ("Cannot open setup in the logged-on user session ("+std::to_string(code)+")").c_str());
-    }else need(CreateProcessW(executable.c_str(),command.data(),nullptr,nullptr,FALSE,0,nullptr,root.c_str(),&si,&pi),"Cannot open setup dialog");
-    handle_t process(pi.hProcess),thread(pi.hThread);return true;
-  }catch(const std::exception& exception){error=exception.what();return false;}
-#else
-  error="Vibe Speakers is not included in this build";return false;
-#endif
 }
 
 #endif // product entry points

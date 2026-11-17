@@ -22,7 +22,6 @@ public:
   static bool configured(const usb_launch_config_t&,std::string& error);
   static usb_launch_config_t bundled_configuration(usb_launch_config_t);
   static std::string availability_json();
-  static bool request_setup(std::string& error);
   static std::shared_ptr<usb_session_t> acquire(usb_launch_config_t, atmos_format_t,
       std::string& error, const std::function<bool()>& cancelled={});
   bool start(atmos_format_t,const std::function<bool()>& cancelled={});

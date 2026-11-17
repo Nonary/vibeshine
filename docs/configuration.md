@@ -1180,8 +1180,8 @@ dualsense_haptics_gain = 1.5
 ### audio_714_source
 
 Windows native capture selection: `off` (Default) or `vibe_usb` (Vibe Speakers).
-The normal Windows installer includes the optional source and its integrated
-first-use setup dialog. Changes take effect at the next session; existing
+The normal Windows installer includes the optional source and prepares its
+owned controller in the background. Changes take effect at the next session; existing
 device selections are retained for Default capture.
 See [Vibe Speakers](vibe-speakers.md) for setup, profiles and restore.
 

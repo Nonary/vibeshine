@@ -1106,7 +1106,6 @@
     "dd_validation_refresh_rate": "Invalid refresh rate. Use a positive number, e.g., 60 or 59.94.",
     "dd_manual_enforcement_notice": "Manual values take priority over remapping for that value. Values set to Match the client keep their rules unless a client's Display mode override is active; that override bypasses all remapping and takes priority over manual values.",
     "audio_usb_sample_format_desc": "",
-    "vibe_setup": "Set up Vibe Speakers",
     "vibe_ready": "Ready",
     "vibe_status_failed": "Vibe Speakers status unavailable"
   },

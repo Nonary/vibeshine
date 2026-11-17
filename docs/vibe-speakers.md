@@ -9,9 +9,9 @@ Opus is lossy. Native12 order is FL FR FC LFE BL BR SL SR TFL TFR TBL TBR.
 ## Using the installed product
 
 1. Install or update Vibeshine normally.
-2. In either Audio settings interface select **Vibe Speakers**. On first use,
-   the integrated setup dialog requests administrator approval to create the
-   account's owned controller. Setup must be opened locally on the host PC.
+2. In either Audio settings interface select **Vibe Speakers**. The regular
+   installer has already prepared the account-owned controller in the background;
+   no separate setup dialog or Bridge command is required.
 3. Leave **24-bit** selected, or explicitly choose **16-bit** for compatibility.
 4. Select **7.1.4 surround sound** in the compatible Moonlight client and stream.
 
@@ -36,7 +36,7 @@ content; selecting twelve channels cannot create it. See
 
 ## Ownership, service and removal
 
-Setup captures the Windows user's SID before UAC, including when another
+The installer captures the Windows user's SID before UAC, including when another
 administrator supplies approval. Machine-protected state lives in
 `%ProgramData%/VibeSpeakers/users/<SID>/setup.json`, with an installation root,
 controller instance, nonce marker and protected ACL. Unknown or foreign devices
@@ -67,7 +67,8 @@ provenance/licenses are in `src/vibe-speakers/vibe-usb-audio/THIRD-PARTY.md`.
 ## Packaging and signing
 
 The normal Windows CMake build includes the optional component; CPack/MSI and
-the existing bootstrapper install the Bridge and integrated setup resources.
+the existing bootstrapper install the Bridge and configure its owned controller
+inside the MSI transaction, with targeted rollback and commit actions.
 The optional component is enabled by default on Windows x64. Builds that
 explicitly exclude `SUNSHINE_ENABLE_VIBE_SPEAKERS` show its unavailability in the
 UI instead of offering a working-looking source. All supported profiles use

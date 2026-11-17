@@ -2846,21 +2846,6 @@ namespace confighttp {
     if (!authenticate(response, request)) return;
     send_response(response, nlohmann::json::parse(audio::usb_session_t::availability_json()));
   }
-  void setupVibeSpeakers(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) return;
-    // Setup consent belongs to the logged-on local Windows user, not a remote
-    // web session. There are no client-controlled command/path/SID arguments.
-    const auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
-    if (address != "127.0.0.1" && address != "::1") {
-      bad_request(response, request, "Open Audio settings locally on this Windows PC to set up Vibe Speakers."); return;
-    }
-    if (rtsp_stream::session_count_no_cleanup() > 0 || webrtc_stream::has_active_or_pending_sessions()) {
-      bad_request(response, request, "Stop the current stream before setting up Vibe Speakers."); return;
-    }
-    std::string error;
-    const bool started = audio::usb_session_t::request_setup(error);
-    send_response(response, nlohmann::json{{"status",started},{"error",error}});
-  }
 
   void getMetadata(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
@@ -6017,7 +6002,6 @@ namespace confighttp {
     register_api_route("^/api/apps/purge_autosync$", "POST", purgeAutoSyncedApps);
 #if defined(_WIN32) || defined(__linux__)
     register_api_route("^/api/vibe-speakers/status$", "GET", getVibeSpeakersStatus);
-    register_api_route("^/api/vibe-speakers/setup$", "POST", setupVibeSpeakers);
     register_api_route("^/api/frame-limiter/status$", "GET", getFrameLimiterStatus);
 #endif
     register_api_route("^/api/steam/status$", "GET", getSteamStatus);

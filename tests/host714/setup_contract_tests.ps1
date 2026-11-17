@@ -15,3 +15,13 @@ foreach($file in Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot '..\..\pack
  Require ($errors.Count -eq 0) ('PowerShell syntax: '+$file.Name+': '+($errors -join '; '))
 }
 Write-Output 'PASS actual setup compatibility policy and all product PowerShell syntax'
+$transaction='{01234567-0123-4567-89AB-0123456789AB}'
+$owned=[pscustomobject]@{CreatedByVibeshine=$true;InstallRoot='C:\Program Files\Sunshine';Phase='Ready';InstallerCommitted=$false;InstallerTransaction=$transaction}
+Require (OwnsInstallerTransaction $owned $owned.InstallRoot $transaction) 'Fresh MSI transaction not owned'
+foreach($case in @(@('CreatedByVibeshine',$false),@('InstallRoot','C:\Foreign'),@('Phase','Installing'),@('InstallerCommitted',$true),@('InstallerCommitted','false'),@('InstallerTransaction','{11234567-0123-4567-89AB-0123456789AB}'))){
+ $old=$owned.($case[0]);$owned.($case[0])=$case[1]
+ Require (!(OwnsInstallerTransaction $owned 'C:\Program Files\Sunshine' $transaction)) ('Unsafe installer rollback accepted: '+$case[0])
+ $owned.($case[0])=$old
+}
+Require (!(OwnsInstallerTransaction ([pscustomobject]@{Phase='Ready'}) $owned.InstallRoot $transaction)) 'Pre-existing journal adopted by rollback'
+Write-Output 'PASS actual MSI transaction ownership/commit/rollback decisions'

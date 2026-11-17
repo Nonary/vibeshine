@@ -13,6 +13,12 @@ function StateDirectory([string]$sid){
  $parsed=[Security.Principal.SecurityIdentifier]::new($sid);Require ($parsed.IsAccountSid()) 'A real account SID is required'
  return (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('VibeSpeakers\users\'+$parsed.Value))
 }
+function OwnsInstallerTransaction($state,[string]$root,[string]$transaction){
+ return ($null -ne $state -and $state.CreatedByVibeshine -is [bool] -and $state.CreatedByVibeshine -and
+  $state.InstallRoot -ieq $root -and $state.Phase -eq 'Ready' -and
+  $state.InstallerCommitted -is [bool] -and !$state.InstallerCommitted -and
+  $transaction -match '^\{[0-9A-Fa-f-]{36}\}$' -and $state.InstallerTransaction -ieq $transaction)
+}
 function LoadNative {
  if(!('VibeSpeakers.Setup.UsbIpDeviceSecurity' -as [type])){
   Add-Type -Path @((Join-Path $PSScriptRoot 'UsbIpDeviceSecurity.cs'),(Join-Path $PSScriptRoot 'UsbIpDeviceAccessProbe.cs'),(Join-Path $PSScriptRoot 'UsbControllerSetup.cs'))

@@ -1,10 +1,7 @@
 [CmdletBinding()]
-param([ValidateSet('Install','Remove','Preflight')][string]$Action='Preflight',
-      [Parameter(Mandatory)][string]$TargetUserSid,[switch]$ConfirmSetup,[switch]$ShowErrorDialog)
+param([ValidateSet('Install','Remove','Preflight','Commit','Rollback')][string]$Action='Preflight',
+      [Parameter(Mandatory)][string]$TargetUserSid,[switch]$ConfirmSetup,[ValidatePattern('^(?:\{[0-9A-Fa-f-]{36}\}|)$')][string]$InstallerTransaction)
 trap {
- if($ShowErrorDialog){
-  try{Add-Type -AssemblyName PresentationFramework;[Windows.MessageBox]::Show($_.Exception.Message,'Vibe Speakers setup','OK','Error')|Out-Null}catch{}
- }
  Write-Error $_ -ErrorAction Continue
  exit 1
 }
@@ -64,6 +61,18 @@ try{
  try{$held=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{throw 'Previous setup was interrupted; inspect its journal before retrying'}
  Require $held 'Another USB/IP setup is active; no action performed'
  $state=ReadState $TargetUserSid
+ if($Action -in @('Commit','Rollback')){
+  if(!$state -or $state.Phase -eq 'Removed'){return}
+  Require ($state.InstallRoot -ieq (PackageRoot)) 'Installer transaction belongs to another installation'
+  if(!(OwnsInstallerTransaction $state (PackageRoot) $InstallerTransaction)){return}
+  $null=[VibeSpeakers.Setup.UsbControllerSetup]::CheckMarker($state.ControllerInstance,$state.Token)
+  if($Action -eq 'Rollback'){
+   [VibeSpeakers.Setup.UsbControllerSetup]::Remove($state.ControllerInstance,$state.Token,$state.TargetSddl)
+   $state.Phase='Removed';$state.RemovedUtc=[datetime]::UtcNow.ToString('o')
+  }else{$state.InstallerCommitted=$true}
+  SaveProtected 'setup.json' $state
+  return
+ }
  $operation=[guid]::NewGuid().ToString('N')
  SaveProtected ($operation+'-preflight.json') $facts
  if($Action -eq 'Remove'){
@@ -83,14 +92,12 @@ try{
   Write-Output 'Reusing the exact journal-owned Vibe Speakers controller; no driver or controller change.'
  }else{
   Require (!$state -or $state.Phase -eq 'Removed') 'Incomplete setup journal; inspect it instead of creating another controller'
-  # The integrated dialog is launched by the running host. A fresh controller
-  # has no imports and changes no render roles; requiring that host to stop
-  # would make first-use setup impossible. Existing owned controllers are
-  # handled separately and never replaced during an active session.
+  # MSI creates one fresh controller without importing audio or changing roles.
+  # Existing owned controllers are verified and reused by upgrade/repair.
   $token=[guid]::NewGuid().ToString('N');$sddl=[VibeSpeakers.Setup.UsbIpDeviceSecurity]::Sddl($TargetUserSid)
   $state=[pscustomobject]@{Schema='vibe-speakers-setup/1';UserSid=$TargetUserSid;UserAccount=$targetAccount;Token=$token;TargetSddl=$sddl;
    Phase='Installing';ControllerInstance='';CreatedUtc=[datetime]::UtcNow.ToString('o');RemovedUtc=$null;CreatedByVibeshine=$true;SharedDriversRetained=$true;
-   SetupBoot=$facts.BootTime;RebootRequired=$false;InstallRoot=(PackageRoot)}
+   SetupBoot=$facts.BootTime;RebootRequired=$false;InstallRoot=(PackageRoot);InstallerTransaction=$InstallerTransaction;InstallerCommitted=([string]::IsNullOrEmpty($InstallerTransaction))}
   SaveProtected 'setup.json' $state
   $dep=Join-Path (PackageRoot) 'drivers\usbip-win2'
   foreach($name in 'usbip2_filter.inf','usbip2_ude.inf'){

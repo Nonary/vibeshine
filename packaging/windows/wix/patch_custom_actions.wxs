@@ -91,7 +91,14 @@
            There is intentionally no matching USB/IP uninstall action. -->
       <Custom Action="SetInstallUsbIpTransport" After="InstallBundledDrivers">NOT REMOVE AND USBIP_TRANSPORT_BUNDLED = "1" AND INSTALL_USBIP_TRANSPORT = "1"</Custom>
       <Custom Action="InstallUsbIpTransport" After="SetInstallUsbIpTransport">NOT REMOVE AND USBIP_TRANSPORT_BUNDLED = "1" AND INSTALL_USBIP_TRANSPORT = "1"</Custom>
-      <Custom Action="SetRegisterVulkanHdrLayer" After="InstallUsbIpTransport">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>
+      <Custom Action="DefaultVibeSpeakersUser" Before="InstallInitialize">NOT REMOVE AND NOT VIBE_SETUP_USER_SID AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
+      <Custom Action="SetRollbackVibeSpeakers" After="InstallUsbIpTransport">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
+      <Custom Action="RollbackVibeSpeakers" After="SetRollbackVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
+      <Custom Action="SetInstallVibeSpeakers" After="RollbackVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
+      <Custom Action="InstallVibeSpeakers" After="SetInstallVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
+      <Custom Action="SetCommitVibeSpeakers" After="InstallVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
+      <Custom Action="CommitVibeSpeakers" After="SetCommitVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
+      <Custom Action="SetRegisterVulkanHdrLayer" After="CommitVibeSpeakers">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>
       <Custom Action="RegisterVulkanHdrLayer" After="SetRegisterVulkanHdrLayer">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>
       <Custom Action="SetMigrateConfig" After="RegisterVulkanHdrLayer">NOT Installed AND NOT REMOVE</Custom>
       <Custom Action="MigrateConfig" After="SetMigrateConfig">NOT Installed AND NOT REMOVE</Custom>
