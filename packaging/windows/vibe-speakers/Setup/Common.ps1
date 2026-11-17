@@ -132,6 +132,7 @@ function ValidateBootObservation($value,[string]$boot,[int]$secureBoot,[datetime
  $age=($now.ToUniversalTime()-[datetime]::Parse($value.ObservedUtc).ToUniversalTime()).TotalSeconds
  Require ($age -ge 0 -and $age -le 1200) 'Installer security observation is stale or from the future'
  Require ([int]$value.SecureBoot -eq $secureBoot) 'Observed firmware and current Windows Secure Boot state disagree'
+ Require ($value.TestSigning -is [bool] -and !$value.TestSigning -and $value.NoIntegrityChecks -is [bool] -and !$value.NoIntegrityChecks) 'Installer boot policy observation is unsafe or invalid'
 }
 function ReadBootObservation([string]$file,[string]$boot,[int]$secureBoot){
  $full=[IO.Path]::GetFullPath($file)
@@ -156,6 +157,7 @@ function ReadBootObservation([string]$file,[string]$boot,[int]$secureBoot){
   $reader=[IO.StreamReader]::new($stream,[Text.Encoding]::UTF8)
   $value=$reader.ReadToEnd()|ConvertFrom-Json
   ValidateBootObservation $value $boot $secureBoot ([datetime]::UtcNow)
+  return $value
  }finally{$stream.Dispose()}
 }
 function GetPreflight([string]$sid=(CurrentSid),[string]$bootReceipt){
@@ -174,17 +176,22 @@ function GetPreflight([string]$sid=(CurrentSid),[string]$bootReceipt){
   if($service.Status -ne 'Running'){$facts.DriverConflicts+=('Required Windows audio service '+$name+' is not running; no service setting is changed')}
  }
  if(IsAdmin){
-  if($bootReceipt){ReadBootObservation $bootReceipt $facts.BootTime $sb}
+  if($bootReceipt){
+   $observation=ReadBootObservation $bootReceipt $facts.BootTime $sb
+   $facts.TestSigning=$observation.TestSigning;$facts.NoIntegrityChecks=$observation.NoIntegrityChecks;$facts.AdminBootChecked=$true
+  }
   else{
    $firmware=Confirm-SecureBootUEFI -ErrorAction Stop
    Require ([int]$firmware -eq [int]$sb) 'Firmware and Windows Secure Boot state disagree'
   }
   $facts.SecureBootFirmwareChecked=$true
+  if(!$bootReceipt){
   $boot=@(& "$env:SystemRoot\System32\bcdedit.exe" /enum '{current}' 2>&1);Require ($LASTEXITCODE -eq 0) 'Cannot read current boot loader'
   $facts.AdminBootChecked=$true
   foreach($pair in @(@('testsigning','TestSigning'),@('nointegritychecks','NoIntegrityChecks'))){
    $line=@($boot|Where-Object {$_ -match ('^\s*'+$pair[0]+'\s+')})
    if($line.Count){Require ($line.Count -eq 1 -and $line[0] -match ('^\s*'+$pair[0]+'\s+(Yes|Ja|On|1|No|Nein|Off|0)\s*$')) 'Unrecognized boot Boolean; setup refuses an ambiguous security state';$facts[$pair[1]]=($Matches[1] -in @('Yes','Ja','On','1'))}else{$facts[$pair[1]]=$false}
+  }
   }
  }
  foreach($name in 'usbip2_ude','usbip2_filter'){

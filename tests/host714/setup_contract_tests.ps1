@@ -26,9 +26,9 @@ foreach($case in @(@('CreatedByVibeshine',$false),@('InstallRoot','C:\Foreign'),
 Require (!(OwnsInstallerTransaction ([pscustomobject]@{Phase='Ready'}) $owned.InstallRoot $transaction)) 'Pre-existing journal adopted by rollback'
 Write-Output 'PASS actual MSI transaction ownership/commit/rollback decisions'
 $now=[datetime]::UtcNow;$boot=$now.AddHours(-1).ToString('o')
-$observation=[pscustomobject]@{Schema='vibe-speakers-installer-security/1';BootTime=$boot;ObservedUtc=$now.AddSeconds(-2).ToString('o');SecureBoot=$true}
+$observation=[pscustomobject]@{Schema='vibe-speakers-installer-security/1';BootTime=$boot;ObservedUtc=$now.AddSeconds(-2).ToString('o');SecureBoot=$true;TestSigning=$false;NoIntegrityChecks=$false}
 ValidateBootObservation $observation $boot 1 $now
-foreach($case in @(@('Schema','other'),@('BootTime',$now.AddHours(-2).ToString('o')),@('ObservedUtc',$now.AddMinutes(-21).ToString('o')),@('ObservedUtc',$now.AddMinutes(1).ToString('o')),@('SecureBoot',$false),@('SecureBoot','true'))){
+foreach($case in @(@('Schema','other'),@('BootTime',$now.AddHours(-2).ToString('o')),@('ObservedUtc',$now.AddMinutes(-21).ToString('o')),@('ObservedUtc',$now.AddMinutes(1).ToString('o')),@('SecureBoot',$false),@('SecureBoot','true'),@('TestSigning',$true),@('TestSigning','false'),@('NoIntegrityChecks',$true))){
  $old=$observation.($case[0]);$observation.($case[0])=$case[1];$rejected=$false
  try{ValidateBootObservation $observation $boot 1 $now}catch{$rejected=$true}
  Require $rejected ('Invalid installer firmware observation accepted: '+$case[0]);$observation.($case[0])=$old

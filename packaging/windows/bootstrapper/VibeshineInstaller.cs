@@ -8666,7 +8666,7 @@ namespace VibeshineInstaller {
         if (!IsProcessElevated()) throw new InvalidOperationException("Use the regular Vibeshine setup so its administrator preflight can run.");
         string error;
         if (!TryCreateSecureInstallerRecoveryDirectory(out receiptDirectory, out error)) throw new IOException(error);
-        var script = "$ErrorActionPreference='Stop';[ordered]@{Schema='vibe-speakers-installer-security/1';BootTime=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o');ObservedUtc=[datetime]::UtcNow.ToString('o');SecureBoot=[bool](Confirm-SecureBootUEFI)}|ConvertTo-Json -Compress";
+        var script = "$ErrorActionPreference='Stop';$b=@(& ($env:SystemRoot+'\\System32\\bcdedit.exe') /enum '{current}' 2>&1);if($LASTEXITCODE -ne 0){throw 'Cannot read current boot loader'};function Flag($n){$l=@($b|Where-Object {$_ -match ('^\\s*'+$n+'\\s+')});if(!$l.Count){return $false};if($l.Count -ne 1 -or $l[0] -notmatch ('^\\s*'+$n+'\\s+(Yes|Ja|On|1|No|Nein|Off|0)\\s*$')){throw 'Unrecognized boot Boolean'};return ($Matches[1] -in @('Yes','Ja','On','1'))};[ordered]@{Schema='vibe-speakers-installer-security/1';BootTime=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o');ObservedUtc=[datetime]::UtcNow.ToString('o');SecureBoot=[bool](Confirm-SecureBootUEFI);TestSigning=[bool](Flag 'testsigning');NoIntegrityChecks=[bool](Flag 'nointegritychecks')}|ConvertTo-Json -Compress";
         var start = new ProcessStartInfo {
           FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"),
           Arguments = BuildCommandLine(new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script }),
