@@ -8141,6 +8141,9 @@ namespace VibeshineInstaller {
 
       try {
         var lines = File.ReadAllLines(installLogPath);
+        if (lines.Any(line => line.IndexOf("CustomAction InstallBundledDrivers returned actual error code", StringComparison.OrdinalIgnoreCase) >= 0)) {
+          failures.Add("Bundled driver setup did not complete. See the driver action details in the installation log.");
+        }
         foreach (var line in lines) {
           const string marker = "INSTALL_ROOT_WARNING: ";
           var index = line.IndexOf(marker, StringComparison.Ordinal);
@@ -8192,6 +8195,14 @@ namespace VibeshineInstaller {
           if (!string.IsNullOrWhiteSpace(detail)) {
             failures.Add("Gamepad driver detail: " + detail);
           }
+        }
+
+        var mapperWarning = lines.FirstOrDefault(line => !string.IsNullOrWhiteSpace(line)
+          && line.IndexOf("VIRTUAL_MOUSE_MAPPER_WARNING:", StringComparison.OrdinalIgnoreCase) >= 0);
+        if (mapperWarning != null) {
+          var marker = "VIRTUAL_MOUSE_MAPPER_WARNING:";
+          failures.Add("Ordered virtual mouse mapper unavailable. Base gamepad setup was handled independently.");
+          failures.Add("Mouse mapper detail: " + mapperWarning.Substring(mapperWarning.IndexOf(marker, StringComparison.OrdinalIgnoreCase) + marker.Length).Trim());
         }
 
         var usbIpTransportFailed = lines.Any(line =>

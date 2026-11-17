@@ -182,7 +182,18 @@ class InstallerPathSecurityContract(unittest.TestCase):
             if node.tag == "Custom" and node.attrib.get("Action")
         }
         self.assertNotIn("BlockUnsafeInstallRoot", scheduled)
-        self.assertEqual("InstallFiles", scheduled["SetInstallSudovda"].attrib.get("After"))
+        self.assertEqual("InstallFiles", scheduled["SetInstallBundledDrivers"].attrib.get("After"))
+        self.assertEqual("SetInstallBundledDrivers", scheduled["RepairInstallRoot"].get("Before"))
+        self.assertEqual("SetInstallBundledDrivers", scheduled["InstallBundledDrivers"].get("After"))
+        for retired in ("SetInstallSudovda", "InstallSudovda",
+                        "SetInstallVirtualDisplayDriver", "InstallVirtualDisplayDriver",
+                        "SetInstallVirtualGamepadDriver", "InstallVirtualGamepadDriver"):
+            self.assertNotIn(retired, scheduled)
+        dispatcher = actions["SetInstallBundledDrivers"].get("Value")
+        self.assertTrue(dispatcher.startswith('"[System64Folder]WindowsPowerShell\\v1.0\\powershell.exe" '))
+        self.assertIn('-File "[INSTALL_ROOT]drivers\\install-bundled-drivers.ps1"', dispatcher)
+        self.assertNotIn("cmd.exe", dispatcher.lower())
+        self.assertNotIn("-command", dispatcher.lower())
 
 
 if __name__ == "__main__":
