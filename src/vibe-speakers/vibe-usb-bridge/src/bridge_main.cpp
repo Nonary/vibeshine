@@ -9,6 +9,9 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#ifndef VIBE_BRIDGE_VERSION
+#define VIBE_BRIDGE_VERSION "development"
+#endif
 
 namespace vibe_bridge {
 struct Options {
@@ -458,7 +461,7 @@ int Run(const Options& o){
 #ifndef VIBE_BRIDGE_TESTING
 int wmain(int argc,wchar_t** argv){
  if(argc==2 && std::wstring(argv[1])==L"--version"){
-  std::cout<<"VibeUsbBridge 1.0-native; USB identity 1209:7140; IPC 1\n";return 0;
+  std::cout<<"VibeUsbBridge " VIBE_BRIDGE_VERSION "; USB identity 1209:7140; IPC 1\n";return 0;
  }
  try{return vibe_bridge::Run(vibe_bridge::Parse(argc,argv));}
  catch(const vibe_bridge::Failure& e){std::cerr<<"Vibe USB bridge failure "<<e.code<<" / Windows "<<e.systemError<<": "<<e.what()<<'\n';return 2;}
