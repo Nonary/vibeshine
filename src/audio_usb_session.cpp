@@ -645,7 +645,12 @@ bool usb_session_t::request_setup(std::string& error){
     safe_existing_path(script,false);
     // Never elevate a setup payload from an untrusted writable location.
     // The integrated dialog is an installed-product action, not a lab launcher.
-    for(const auto& path:{root,script}){
+    std::vector<std::filesystem::path> chain{root};
+    for(auto path=script;path!=root;path=path.parent_path()){
+      need(!path.empty()&&path!=path.root_path(),"Setup path escaped its installation");
+      chain.push_back(path);
+    }
+    for(const auto& path:chain){
       handle_t file(CreateFileW(path.c_str(),READ_CONTROL,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
       need(bool(file),"Cannot inspect installed setup permissions");
       PSID owner=nullptr;PACL acl=nullptr;PSECURITY_DESCRIPTOR descriptor=nullptr;

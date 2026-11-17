@@ -59,7 +59,15 @@ function CheckPayload {
  if(Test-Path -LiteralPath (Join-Path $root 'VibeSpeakers\installed-payload.json')){
   foreach($relative in @('sunshine.exe','tools\VibeUsbBridge.exe') + @(Get-ChildItem -LiteralPath $PSScriptRoot -File | ForEach-Object {$_.FullName.Substring($root.Length+1)})){
    $path=Join-Path $root $relative;NoLinks $path
-   foreach($candidate in @($root,$path)){
+   $chain=@();$candidate=$path
+   while($true){
+    $chain+=,$candidate
+    if($candidate -ieq $root){break}
+    $parent=Split-Path $candidate
+    Require ($parent -and $parent -ne $candidate -and $candidate.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)) 'Payload escaped its installation'
+    $candidate=$parent
+   }
+   foreach($candidate in $chain){
     $acl=Get-Acl -LiteralPath $candidate
     Require ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -in @('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')) 'Installed payload must be administrator-owned'
     foreach($ace in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){
