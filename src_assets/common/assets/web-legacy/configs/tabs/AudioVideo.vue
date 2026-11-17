@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import VibeSpeakersStatus from '@/VibeSpeakersStatus.vue';
+const vibeAvailable = ref(false);
 import { useI18n } from 'vue-i18n';
 import { $tp } from '@/platform-i18n';
 import ConfigFieldRenderer from '@/ConfigFieldRenderer.vue';
@@ -23,7 +25,7 @@ const usesVibeSpeakers = computed(
 );
 const audioSourceOptions = computed(() => [
   { value: 'off', label: t('config.audio_714_off') },
-  { value: 'vibe_usb', label: t('config.audio_usb_source') },
+  { value: 'vibe_usb', label: t('config.audio_usb_source'), disabled: !vibeAvailable.value },
 ]);
 const audioPrecisionOptions = computed(() => [
   { value: 'pcm24', label: t('config.audio_714_pcm24') },
@@ -247,18 +249,12 @@ function selectVirtualDisplayLayout(v: unknown) {
   <div id="av" class="config-page">
     <PlatformLayout>
       <template #windows>
+        <VibeSpeakersStatus :selected="config.audio_714_source === 'vibe_usb'" @availability="vibeAvailable = $event" />
         <ConfigFieldRenderer
           setting-key="audio_714_source"
           v-model="config.audio_714_source"
           kind="select"
           :options="audioSourceOptions"
-          class="mb-6"
-        />
-        <ConfigFieldRenderer
-          v-if="!['off', 'vibe_usb'].includes(config.audio_714_source)"
-          setting-key="audio_714_endpoint"
-          v-model="config.audio_714_endpoint"
-          monospace
           class="mb-6"
         />
         <template v-if="config.audio_714_source === 'vibe_usb'">

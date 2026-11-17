@@ -4,7 +4,7 @@ using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
-namespace VibeSpeakers.RC1 {
+namespace VibeSpeakers.Setup {
  public sealed class RootResult { public string InstanceId,Marker; public bool RebootRequired; }
  public static class UsbControllerSetup {
   public static bool LastCreateRolledBack {get;private set;}
@@ -24,7 +24,7 @@ namespace VibeSpeakers.RC1 {
   static void Check(bool ok){if(!ok)throw new Win32Exception(Marshal.GetLastWin32Error());}
   static IntPtr NewSet(){Guid g=Class;IntPtr s=SetupDiCreateDeviceInfoList(ref g,IntPtr.Zero);if(s==new IntPtr(-1))throw new Win32Exception(Marshal.GetLastWin32Error());return s;}
   static Info NewInfo(){return new Info{Size=(uint)Marshal.SizeOf(typeof(Info))};}
-  static string Marker(string token){Guid g;if(!Guid.TryParseExact(token,"N",out g))throw new ArgumentException("Invalid installation nonce");return "Vibe Speakers RC1 "+g.ToString("N");}
+  static string Marker(string token){Guid g;if(!Guid.TryParseExact(token,"N",out g))throw new ArgumentException("Invalid installation nonce");return "Vibe Speakers "+g.ToString("N");}
   static string ReadMarker(IntPtr s,ref Info i){uint t,n;var b=new byte[1024];Check(SetupDiGetDeviceRegistryPropertyW(s,ref i,12,out t,b,(uint)b.Length,out n));if(t!=1||n<2||n>b.Length||n%2!=0)throw new InvalidOperationException("Invalid controller marker");return Encoding.Unicode.GetString(b,0,(int)n).TrimEnd('\0');}
   public static string CheckMarker(string id,string token){
    UsbIpDeviceSecurity.Bind(id);UsbIpDeviceSecurity.Inspect();
@@ -35,7 +35,7 @@ namespace VibeSpeakers.RC1 {
    var security=Convert.FromBase64String(descriptor.BytesBase64);
    IntPtr s=NewSet();bool registered=false,installed=false;string createdId=null;var i=NewInfo();LastCreateRolledBack=false;
    try{
-    Guid g=Class;Check(SetupDiCreateDeviceInfoW(s,"USB",ref g,"Vibe Speakers RC1 transport",IntPtr.Zero,1,ref i));
+    Guid g=Class;Check(SetupDiCreateDeviceInfoW(s,"USB",ref g,"Vibe Speakers transport",IntPtr.Zero,1,ref i));
     byte[] ids=Encoding.Unicode.GetBytes("ROOT\\USBIP_WIN2\\UDE\0\0");
     Check(SetupDiSetDeviceRegistryPropertyW(s,ref i,1,ids,(uint)ids.Length));
     byte[] name=Encoding.Unicode.GetBytes(marker+"\0");Check(SetupDiSetDeviceRegistryPropertyW(s,ref i,12,name,(uint)name.Length));

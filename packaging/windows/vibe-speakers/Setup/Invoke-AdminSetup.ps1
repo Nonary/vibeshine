@@ -1,10 +1,18 @@
 [CmdletBinding()]
 param([ValidateSet('Install','Remove','Preflight')][string]$Action='Preflight',
-      [Parameter(Mandatory)][string]$TargetUserSid,[switch]$ConfirmPrivateHardwareTest)
+      [Parameter(Mandatory)][string]$TargetUserSid,[switch]$ConfirmSetup,[switch]$ShowErrorDialog)
+trap {
+ if($ShowErrorDialog){
+  try{Add-Type -AssemblyName PresentationFramework;[Windows.MessageBox]::Show($_.Exception.Message,'Vibe Speakers setup','OK','Error')|Out-Null}catch{}
+ }
+ Write-Error $_ -ErrorAction Continue
+ exit 1
+}
 . (Join-Path $PSScriptRoot 'Common.ps1')
 Require (IsAdmin) 'Administrator confirmation is required for this setup step'
-if($Action -ne 'Preflight'){Require $ConfirmPrivateHardwareTest 'Private in-house test confirmation is missing'}
-$targetAccount=([Security.Principal.SecurityIdentifier]::new($TargetUserSid)).Translate([Security.Principal.NTAccount]).Value
+if($Action -ne 'Preflight'){Require $ConfirmSetup 'Setup consent is missing'}
+try{$targetAccount=([Security.Principal.SecurityIdentifier]::new($TargetUserSid)).Translate([Security.Principal.NTAccount]).Value}
+catch{if($Action -ne 'Remove'){throw};$targetAccount=$TargetUserSid}
 $stateDir=StateDirectory $TargetUserSid
 function ProtectedAcl([bool]$directory){
  $acl=if($directory){[Security.AccessControl.DirectorySecurity]::new()}else{[Security.AccessControl.FileSecurity]::new()}
@@ -35,6 +43,9 @@ function SaveProtected([string]$name,$value){
  try{$stream.Write($data,0,$data.Length);$stream.Flush($true)}finally{$stream.Dispose()}
  if(Test-Path -LiteralPath $file){[IO.File]::Replace($temp,$file,($file+'.previous-'+[guid]::NewGuid().ToString('N')+'.json'))}else{[IO.File]::Move($temp,$file)}
 }
+# Product ownership uses its own protected namespace. Historical private RC1
+# controllers/journals are deliberately preserved as rollback references; they
+# are never silently adopted or renamed by an official installation.
 $facts=GetPreflight $TargetUserSid
 Require $facts.Compatible ($facts.Errors -join '; ')
 if($Action -eq 'Preflight'){$facts|ConvertTo-Json -Depth 12;return}
@@ -42,6 +53,11 @@ if($Action -eq 'Preflight'){$facts|ConvertTo-Json -Depth 12;return}
 foreach($path in @((Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'VibeSpeakers'),(Split-Path $stateDir),$stateDir)){
  if(!(Test-Path -LiteralPath $path)){$null=[IO.Directory]::CreateDirectory($path,(ProtectedAcl $true))}
  CheckJournalDirectory $path
+ if($path -ine $stateDir){
+  $acl=Get-Acl -LiteralPath $path
+  $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-5-11'),'ReadAndExecute','None','None','Allow'))
+  Set-Acl -LiteralPath $path -AclObject $acl
+ }
 }
 $mutex=[Threading.Mutex]::new($false,'Global\VibeshineUsbIpInstall');$held=$false
 try{
@@ -51,26 +67,30 @@ try{
  $operation=[guid]::NewGuid().ToString('N')
  SaveProtected ($operation+'-preflight.json') $facts
  if($Action -eq 'Remove'){
-  if(!$state -or $state.Phase -eq 'Removed'){Write-Output 'No owned RC1 controller to remove. Shared drivers remain installed.';return}
-  Require (@(Get-Process sunshine -ErrorAction SilentlyContinue|Where-Object Path -IEQ (Join-Path (PackageRoot) 'sunshine.exe')).Count -eq 0) 'Stop this portable host with Stop.cmd before removing its controller'
+  if(!$state -or $state.Phase -eq 'Removed'){Write-Output 'No owned Vibe Speakers controller to remove. Shared drivers remain installed.';return}
+  Require (@(Get-Process sunshine -ErrorAction SilentlyContinue|Where-Object Path -IEQ (Join-Path (PackageRoot) 'sunshine.exe')).Count -eq 0) 'Stop the running Vibeshine session before removing its controller'
   Require ($state.Phase -eq 'Ready') 'Interrupted setup state; inspect journal before removal'
-  [VibeSpeakers.RC1.UsbControllerSetup]::Remove($state.ControllerInstance,$state.Token,$state.TargetSddl)
+  [VibeSpeakers.Setup.UsbControllerSetup]::Remove($state.ControllerInstance,$state.Token,$state.TargetSddl)
   $state.Phase='Removed';$state.RemovedUtc=[datetime]::UtcNow.ToString('o')
   SaveProtected 'setup.json' $state
   SaveProtected ($operation+'-removed.json') $state
-  Write-Output 'Removed only this RC1 controller. No driver package, foreign device, boot option or audio role was changed.'
+  Write-Output 'Removed only this Vibe Speakers controller. No driver package, foreign device, boot option or audio role was changed.'
   return
  }
  if($state -and $state.Phase -eq 'Ready'){
-  $null=[VibeSpeakers.RC1.UsbControllerSetup]::CheckMarker($state.ControllerInstance,$state.Token)
-  Write-Output 'Reusing the exact journal-owned RC1 controller; no driver or controller change.'
+  Require ($state.InstallRoot -ieq (PackageRoot)) 'This user already owns Vibe Speakers through another installation. Remove that owned setup first.'
+  $null=[VibeSpeakers.Setup.UsbControllerSetup]::CheckMarker($state.ControllerInstance,$state.Token)
+  Write-Output 'Reusing the exact journal-owned Vibe Speakers controller; no driver or controller change.'
  }else{
   Require (!$state -or $state.Phase -eq 'Removed') 'Incomplete setup journal; inspect it instead of creating another controller'
-  Require (@(Get-Process sunshine -ErrorAction SilentlyContinue|Where-Object Path -IEQ (Join-Path (PackageRoot) 'sunshine.exe')).Count -eq 0) 'Stop this portable host before creating a new controller'
-  $token=[guid]::NewGuid().ToString('N');$sddl=[VibeSpeakers.RC1.UsbIpDeviceSecurity]::Sddl($TargetUserSid)
-  $state=[pscustomobject]@{Schema='vibe-speakers-rc1-setup/1';UserSid=$TargetUserSid;UserAccount=$targetAccount;Token=$token;TargetSddl=$sddl;
-   Phase='Installing';ControllerInstance='';CreatedUtc=[datetime]::UtcNow.ToString('o');RemovedUtc=$null;CreatedByRc1=$true;SharedDriversRetained=$true;
-   SetupBoot=$facts.BootTime;RebootRequired=$false}
+  # The integrated dialog is launched by the running host. A fresh controller
+  # has no imports and changes no render roles; requiring that host to stop
+  # would make first-use setup impossible. Existing owned controllers are
+  # handled separately and never replaced during an active session.
+  $token=[guid]::NewGuid().ToString('N');$sddl=[VibeSpeakers.Setup.UsbIpDeviceSecurity]::Sddl($TargetUserSid)
+  $state=[pscustomobject]@{Schema='vibe-speakers-setup/1';UserSid=$TargetUserSid;UserAccount=$targetAccount;Token=$token;TargetSddl=$sddl;
+   Phase='Installing';ControllerInstance='';CreatedUtc=[datetime]::UtcNow.ToString('o');RemovedUtc=$null;CreatedByVibeshine=$true;SharedDriversRetained=$true;
+   SetupBoot=$facts.BootTime;RebootRequired=$false;InstallRoot=(PackageRoot)}
   SaveProtected 'setup.json' $state
   $dep=Join-Path (PackageRoot) 'drivers\usbip-win2'
   foreach($name in 'usbip2_filter.inf','usbip2_ude.inf'){
@@ -82,21 +102,21 @@ try{
   }
   try{
    $record=[Action[string]]{param($id) $state.ControllerInstance=$id;SaveProtected 'setup.json' $state}
-   $created=[VibeSpeakers.RC1.UsbControllerSetup]::Create($token,$sddl,$record)
+   $created=[VibeSpeakers.Setup.UsbControllerSetup]::Create($token,$sddl,$record)
    $state.ControllerInstance=$created.InstanceId;$state.RebootRequired=$state.RebootRequired -or $created.RebootRequired
    SaveProtected 'setup.json' $state
-   $snap=[VibeSpeakers.RC1.UsbIpDeviceSecurity]::Inspect()
-   Require ([VibeSpeakers.RC1.UsbIpDeviceSecurity]::Equivalent($snap.Security,$sddl)) 'New root ACL does not match the approved user'
+   $snap=[VibeSpeakers.Setup.UsbIpDeviceSecurity]::Inspect()
+   Require ([VibeSpeakers.Setup.UsbIpDeviceSecurity]::Equivalent($snap.Security,$sddl)) 'New root ACL does not match the approved user'
    Require ($snap.Started -and $snap.ProblemCode -eq 0) 'New root did not start; retain journal and inspect Code Integrity logs'
    $state.Phase='Ready';SaveProtected 'setup.json' $state
    SaveProtected ($operation+'-created.json') $state
   }catch{
-   if([VibeSpeakers.RC1.UsbControllerSetup]::LastCreateRolledBack){$state.Phase='Removed';$state.RemovedUtc=[datetime]::UtcNow.ToString('o');SaveProtected 'setup.json' $state}
+   if([VibeSpeakers.Setup.UsbControllerSetup]::LastCreateRolledBack){$state.Phase='Removed';$state.RemovedUtc=[datetime]::UtcNow.ToString('o');SaveProtected 'setup.json' $state}
    SaveProtected ($operation+'-failure.json') @{Error=$_.Exception.ToString();State=$state;NoBootChange=$true;SharedDriversRetained=$true}
    throw
   }
  }
- $null=[VibeSpeakers.RC1.UsbControllerSetup]::CheckMarker($state.ControllerInstance,$state.Token)
+ $null=[VibeSpeakers.Setup.UsbControllerSetup]::CheckMarker($state.ControllerInstance,$state.Token)
  $bundle=[ordered]@{schema='vibe-speakers-runtime/1';bridge_sha256=(Hash (Join-Path (PackageRoot) 'tools\VibeUsbBridge.exe'));controller_instance=$state.ControllerInstance}
  # Elevated setup never writes into the user-controlled portable folder.
  # The normal host reads the protected journal and pins its bundled bridge.

@@ -65,6 +65,7 @@
     <pe-file path="Sunshine/plugins/playnite/SunshinePlaynite/VibeshinePlaynite.dll"><authenticode-sign/></pe-file>
 
     <!-- Sunshine/tools\ -->
+    <pe-file path="Sunshine/tools/VibeUsbBridge.exe" min-matches="0"><authenticode-sign/></pe-file>
     <pe-file path="Sunshine/tools/sunshinesvc.exe"><authenticode-sign/></pe-file>
     <pe-file path="Sunshine/tools/dxgi-info.exe"><authenticode-sign/></pe-file>
     <pe-file path="Sunshine/tools/audio-info.exe"><authenticode-sign/></pe-file>

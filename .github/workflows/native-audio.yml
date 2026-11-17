@@ -1,9 +1,9 @@
 name: Native audio regressions
 on:
   push:
-    paths: ['src/audio*', 'src/vibe*', 'src/vibe-speakers/**', 'tests/host714/**', '.github/workflows/native-audio.yml']
+    paths: ['src/audio*', 'src/vibe*', 'src/vibe-speakers/**', 'tests/host714/**', 'cmake/**', 'packaging/windows/vibe-speakers/**', 'packaging/windows/wix/**', 'src/confighttp.cpp', 'src/config*', 'src/rtsp.cpp', 'src/nvhttp.cpp', 'src/usb*', 'docs/signpath/**', 'packaging/windows/usbip_transport/**', 'scripts/download_usbip_transport.ps1', '.github/workflows/ci-windows.yml', 'src_assets/common/assets/web*/**', '.github/workflows/native-audio.yml']
   pull_request:
-    paths: ['src/audio*', 'src/vibe*', 'src/vibe-speakers/**', 'tests/host714/**', '.github/workflows/native-audio.yml']
+    paths: ['src/audio*', 'src/vibe*', 'src/vibe-speakers/**', 'tests/host714/**', 'cmake/**', 'packaging/windows/vibe-speakers/**', 'packaging/windows/wix/**', 'src/confighttp.cpp', 'src/config*', 'src/rtsp.cpp', 'src/nvhttp.cpp', 'src/usb*', 'docs/signpath/**', 'packaging/windows/usbip_transport/**', 'scripts/download_usbip_transport.ps1', '.github/workflows/ci-windows.yml', 'src_assets/common/assets/web*/**', '.github/workflows/native-audio.yml']
   workflow_dispatch:
 permissions:
   contents: read

@@ -1,71 +1,93 @@
-# Native Vibe Speakers (Windows)
+# Vibe Speakers on Windows
 
-The optional user-mode USB Audio 2.0 endpoint supplies stereo, 5.1 (back or side),
-7.1 or native 7.1.4 at 48 kHz. PCM24 has 24 valid bits in a 32-bit container;
-PCM16 is an explicit compatibility choice. Internally the path uses Float32
-and the host's existing Opus encoder and encrypted RTP/FEC transport. The twelve
-channels are FL FR FC LFE BL BR SL SR TFL TFR TBL TBR. No upmixer, estimated
-object, proprietary Dolby codec, custom kernel driver or GPU audio device is
-part of this contribution. A conventional game cannot acquire height content
-merely by selecting twelve channels.
+Vibe Speakers is an optional virtual USB Audio 2.0 playback endpoint for
+Windows 11 x64. It supports 48 kHz stereo, 5.1 back/side, 7.1 and native 7.1.4.
+PCM24 uses 24 valid bits in a 32-bit container; PCM16 is an explicit compatibility
+choice. Float32 reaches the existing Opus encoder and encrypted RTP/FEC transport.
+Opus is lossy. Native12 order is FL FR FC LFE BL BR SL SR TFL TFR TBL TBR.
 
-## Pending identity: source review, not a public endpoint release
+## Using the installed product
 
-All profiles currently use requested **1209:7140**, with distinct instance
-serials. [pidcodes/pidcodes#1384](https://github.com/pidcodes/pidcodes/pull/1384)
-has not been treated as an allocation. Source review is allowed; functional
-public endpoint installers/releases are blocked. `SUNSHINE_ENABLE_VIBE_SPEAKERS`
-defaults OFF. Enabling it also requires `SUNSHINE_VIBE_PRIVATE_IDENTITY=ON` on
-Windows. CPack refuses these private builds and rejects a stray Bridge executable
-even in an otherwise ordinary package. Do not turn off the guard to publish one.
+1. Install or update Vibeshine normally.
+2. In either Audio settings interface select **Vibe Speakers**. On first use,
+   the integrated setup dialog requests administrator approval to create the
+   account's owned controller. Setup must be opened locally on the host PC.
+3. Leave **24-bit** selected, or explicitly choose **16-bit** for compatibility.
+4. Select **7.1.4 surround sound** in the compatible Moonlight client and stream.
 
-## Dependencies and setup
+No separate Bridge command, environment variable, device ID or runtime JSON is
+required. The host launches and stops its bundled Bridge. Setup is not repeated
+for every stream. Existing Default capture and other saved audio choices remain
+available. This source uses Opus even if a previous Default capture configuration
+selected another codec; that saved preference is not overwritten.
 
-Uses unmodified Microsoft-signed usbip-win2 0.9.8.1 (upstream pinned transport
-package) and Windows `usbaudio2.sys`. No local SYS/INF/CAT alteration, signing,
-certificate trust, TESTSIGNING or security-policy change. Windows 11 x64 and
-active HVCI/VBS/signature enforcement are required. Shared USB/IP packages may
-belong to other features: they are reused only when compatible and are never
-removed by Vibe Speakers teardown. Source attribution and the BSD ABI notice
-are retained in `src/vibe-speakers/vibe-usb-audio/THIRD-PARTY.md`.
+The negotiated profile is prepared before an application is launched, and the
+audio capture reuses that same owned session. A game already running before a
+profile change may need restarting because some games inspect their output
+format only at startup. All requested channels/format and endpoint readiness
+are checked; native12 never silently becomes stereo or 7.1.
 
-In a privately staged build, run `VibeSpeakers/Preflight.cmd` first. It reads
-compatibility, signatures, hashes, identity collisions and ownership state.
-`VibeSpeakers/Setup.cmd` asks for explicit administrator confirmation and creates
-only a controller owned by the current user. Normal streaming is unelevated.
-`VibeSpeakers/Remove.cmd` removes only that marked controller, keeping shared
-drivers. Interrupted/foreign journals are rejected rather than adopted.
+The client automatically selects its static Windows Spatial renderer for 7.1.4.
+A compatible configured Spatial provider and suitable active HDMI/DisplayPort
+output are external prerequisites. The source must actually produce height
+content; selecting twelve channels cannot create it. See
+[the client contribution](https://github.com/Nonary/moonlight-qt/pull/40) and
+[Common negotiation](https://github.com/Nonary/moonlight-common-c/pull/4).
 
-The host reads the administrator-protected setup journal for its current SID;
-portable configuration cannot redirect it to another USB/IP controller. It
-checks the protected ACL, owner, schema, nonce marker and driver service.
-The bridge/host exchange pins process lifetimes, sessions, file identities and
-SHA256, use local restricted pipes and cancelable bounded queues. No network
-USB/IP server is exposed. No developer machine name/UUID is a runtime prerequisite.
+## Ownership, service and removal
 
-## Session behavior
+Setup captures the Windows user's SID before UAC, including when another
+administrator supplies approval. Machine-protected state lives in
+`%ProgramData%/VibeSpeakers/users/<SID>/setup.json`, with an installation root,
+controller instance, nonce marker and protected ACL. Unknown or foreign devices
+are never adopted. Historical private controllers/journals remain untouched;
+the integrated product creates its own controller and reuses compatible signed
+shared drivers. Removing the product removes only its own validated controller.
 
-In either existing audio UI select **Audio capture: Vibe Speakers** and
-**Bit depth: 24-bit** (or 16-bit). Defaults retain the existing capture paths.
-The negotiated client layout selects the corresponding USB profile. Format and
-render-role snapshots are restored at session end, with actual detach/role
-notifications observed before restoring. Configuration edits apply to the next
-session. Conflicting owners, stale epochs, gaps, slow consumers and unsupported
-layouts fail visibly; they cannot silently remove height channels or build an
-unbounded backlog. Complete 240-frame blocks go straight to the production encoder.
+The existing Vibeshine service runs its host in the interactive session under
+SYSTEM. That launch policy is unchanged. Audio setup resolves the logged-on
+account from that exact session, rather than treating SYSTEM as the user.
+The Bridge retains its host's token and exact process/session lifetime binding.
+An ordinary user launch stays unelevated; streaming never requests UAC. A
+machine-wide controller lease rejects competing sessions/processes. IPC is local,
+access-restricted, bounded and pinned to the actual process/image lifetime.
 
-Native12 requires [Common PR #4](https://github.com/Nonary/moonlight-common-c/pull/4)
-and the native update to [client PR #40](https://github.com/Nonary/moonlight-qt/pull/40).
-The Windows client automatically selects its static Spatial renderer for native12;
-an unavailable compatible provider/output is an error. Legacy clients/modes keep
-their previous negotiation. New builds still require fresh physical HDMI/soundbar,
-4K120 and network acceptance. Historical private RC1 hardware success is not a
-hardware qualification of this canary port.
+Render roles are restored at session end. User changes made during the session
+are preserved rather than overwritten. Upgrade/repair keeps the protected setup
+and pairings. Uninstall stops the owning host before targeted controller cleanup;
+shared USB/IP drivers and unrelated devices are retained.
 
-## Regression commands
+Only unmodified, pinned Microsoft-signed usbip-win2 0.9.8.1 and Windows
+`usbaudio2.sys` are used. Setup validates signatures, versions, Code Integrity,
+boot policy, ownership and paths. It does not alter Windows security settings.
+HVCI/VBS is supported and tested, but is not an artificial prerequisite. An
+incompatible existing shared driver is refused instead of replaced. Source
+provenance/licenses are in `src/vibe-speakers/vibe-usb-audio/THIRD-PARTY.md`.
 
-`tests/host714` builds the production parser, codec, packetizer, lifecycle/queue
-policies and real Common replay receiver. `VibeUsbBridgeTests` exercises the
-actual bridge framing, conversion, bounded queues and local pipe/process recovery.
-These tests are distinct from a full Windows source/USB/host/RTSP run. Reports
-must state whether the receiving Windows renderer is physical or simulated.
+## Packaging and signing
+
+The normal Windows CMake build includes the optional component; CPack/MSI and
+the existing bootstrapper install the Bridge and integrated setup resources.
+The optional component is enabled by default on Windows x64. Builds that
+explicitly exclude `SUNSHINE_ENABLE_VIBE_SPEAKERS` show its unavailability in the
+UI instead of offering a working-looking source. All supported profiles use
+USB identity **1209:7140**, with unique instance serial numbers.
+
+Deep-signing includes `tools/VibeUsbBridge.exe`. Executable hashes are computed
+from the protected final installed files after signing and held as file/process
+pins for the session. A pre-signing hash is not persisted as an update barrier.
+The shared signed driver/catalog/INF files are never modified by signing.
+
+## Diagnostics and tests
+
+Normal sessions record no PCM or per-block sample files. Optional control logs
+are capped at 64 KiB/session, with at most 32 completed session summaries retained.
+Optional diagnostic failure cannot stop audio; a missing/invalid required binding
+record must stop startup. Detailed sample/timing collection and finite durations
+are available only in explicit `VIBE_AUDIO_TEST_INSTRUMENTATION` builds; the
+normal session has no four-hour or other wall-clock expiry.
+
+`tests/host714` uses production negotiation, codec, packetizer, queue and setup
+policy functions. `src/vibe-speakers` tests conversion, local pipes, lifetime,
+overload and recovery without attaching a device. These do not substitute for
+a real Windows source/end-to-end session or physical HDMI/soundbar acceptance.

@@ -7,7 +7,7 @@
 #include <span>
 namespace audio {
 inline bool usb_binding_matches_profile(const vibe_input::UsbBinding& binding,const vibe_input::Profile& profile) noexcept {
-  const auto product=VibeLabUsbProduct(profile.channels,profile.channelMask,profile.nativeContainerBits,profile.nativeValidBits);
+  const auto product=VibeUsbProduct(profile.channels,profile.channelMask,profile.nativeContainerBits,profile.nativeValidBits);
   return product!=0 && binding.vendor==0x1209 && binding.product==product;
 }
 inline bool usb_same_producer_new_session(const vibe_input::WelcomeMessage& old,const vibe_input::WelcomeMessage& next) noexcept {

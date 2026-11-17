@@ -2,9 +2,9 @@
 #pragma once
 #include <cstdint>
 
-// Private requested identity 1209:7140; allocation pending (PR #1384).
-// Private endpoint builds only until allocation is confirmed. Zero rejects every unlisted layout, container or valid-bit pair.
-constexpr std::uint16_t VibeLabUsbProduct(unsigned channels, unsigned mask,
+// Vibe Speakers uses 1209:7140 for every supported channel/precision profile.
+// Zero rejects an unlisted layout, container or valid-bit pair.
+constexpr std::uint16_t VibeUsbProduct(unsigned channels, unsigned mask,
                                          unsigned containerBits, unsigned validBits) noexcept {
     const bool pcm24 = containerBits == 32 && validBits == 24;
     const bool pcm16 = containerBits == 16 && validBits == 16;

@@ -2324,6 +2324,11 @@ namespace nvhttp {
 
   audio::display_change_hold_t::capture_f audio_snapshot_for_request(const args_t &args) {
     const auto info = audio::protocol::parse_uint32(get_arg(args, "surroundAudioInfo", "196610"));
+    if(info && config::audio_714_startup_settings().source=="vibe_usb"){
+      const auto channels=*info&0xFFFFU;
+      const auto mask=channels==12?audio::protocol::discrete_wave_mask:*info>>16;
+      return [channels,mask]{return audio::prepare_usb_before_launch(channels,mask);};
+    }
     // Discrete sources are explicitly bound and must never enter the shared
     // context, including indirect lazy captures during display/config changes.
     return audio::startup::snapshot_callback(config::audio_714_startup_settings(),
@@ -5239,6 +5244,10 @@ launch_session->exact_target_hold.reset();
     }
 #endif
     request_audio_hold.attach(launch_session->audio_context_guard);
+    if(config::audio_714_startup_settings().source=="vibe_usb"&&!launch_session->audio_context_guard){
+      tree.put("root.<xmlattr>.status_code",503);
+      tree.put("root.<xmlattr>.status_message","Vibe Speakers could not prepare the requested audio profile. Check Audio settings and setup status.");return;
+    }
     std::optional<std::string> pending_output_override;
 #ifdef __APPLE__
     auto launch_display_guard = util::fail_guard([]() {
@@ -5810,6 +5819,10 @@ launch_session->exact_target_hold.reset();
     }
 #endif
     request_audio_hold.attach(launch_session->audio_context_guard);
+    if(config::audio_714_startup_settings().source=="vibe_usb"&&!launch_session->audio_context_guard){
+      tree.put("root.<xmlattr>.status_code",503);
+      tree.put("root.<xmlattr>.status_message","Vibe Speakers could not prepare the requested audio profile. Check Audio settings and setup status.");return;
+    }
     launch_session->secondary_game_client = secondary_game_client;
 #ifdef _WIN32
     if (!exclusive_retained_catalog_owner && retained_resume_owner_eligible &&

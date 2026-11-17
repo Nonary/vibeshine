@@ -1790,9 +1790,9 @@ namespace rtsp_stream {
     // Offer only the configured Dolby codec when its FFmpeg encoder is available.
     // ANNOUNCE must explicitly accept this exact offer before the encoder is selected.
     session->audio_codec_offered.clear();
-    if ((session->surround_info & 0xFFFFU) != 12 && config::audio.format == "ac3"sv && audio::ac3_available()) {
+    if ((session->surround_info & 0xFFFFU) != 12 && config::audio_714_startup_settings().source != "vibe_usb" && config::audio.format == "ac3"sv && audio::ac3_available()) {
       session->audio_codec_offered = "AC3";
-    } else if ((session->surround_info & 0xFFFFU) != 12 && config::audio.format == "eac3"sv && audio::eac3_available()) {
+    } else if ((session->surround_info & 0xFFFFU) != 12 && config::audio_714_startup_settings().source != "vibe_usb" && config::audio.format == "eac3"sv && audio::eac3_available()) {
       session->audio_codec_offered = "EAC3";
     }
     if (!session->audio_codec_offered.empty()) {

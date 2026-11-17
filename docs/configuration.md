@@ -1179,12 +1179,11 @@ dualsense_haptics_gain = 1.5
 
 ### audio_714_source
 
-Windows native capture selection: `off` (the existing Default path) or
-`vibe_usb` (Vibe Speakers). The latter requires the separately configured,
-owned USB/IP controller and a private endpoint-enabled build while USB identity
-allocation is pending. No kernel-ring, synthetic or arbitrary endpoint source
-is exposed by this contribution. Changes take effect at the next session.
-See [Vibe Speakers](vibe-speakers.md) for setup, restore and release restrictions.
+Windows native capture selection: `off` (Default) or `vibe_usb` (Vibe Speakers).
+The normal Windows installer includes the optional source and its integrated
+first-use setup dialog. Changes take effect at the next session; existing
+device selections are retained for Default capture.
+See [Vibe Speakers](vibe-speakers.md) for setup, profiles and restore.
 
 ### audio_usb_sample_format
 

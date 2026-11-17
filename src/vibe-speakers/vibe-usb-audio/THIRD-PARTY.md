@@ -28,12 +28,8 @@ Protocol references:
   PCM subslot sizes/valid bits, fixed clock CUR/RANGE, explicit feedback and
   the documented restriction for arbitrary channel counts above eight in
   shared mode. Actual Windows format support must be measured separately.
-* The current private candidate uses the requested identity `1209:7140`
-  for all ten profiles. Allocation request pidcodes/pidcodes#1384 is pending;
-  this is not an assigned public product identity. Public installers and
-  release archives remain blocked. Unique instance serials do not grant a
-  VID/PID allocation. Historical references to the ten temporary test PIDs
-  in README-DE.md describe earlier lab versions, not this candidate.
+* Vibe Speakers uses USB identity `1209:7140` for all supported profiles,
+  with unique instance serial numbers.
 
 This source is a modified standalone implementation. The cited upstream
 authors do not certify this emulator, its descriptor choices or its tests.

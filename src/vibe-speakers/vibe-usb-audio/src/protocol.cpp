@@ -88,7 +88,7 @@ std::chrono::steady_clock::time_point session::next_deadline() const noexcept {a
 void session::header(std::uint16_t op,std::uint32_t status){put16(transmit_,0x0111);put16(transmit_,op);put32(transmit_,status);}
 std::vector<std::uint8_t> session::device_descriptor() const {
  const auto product=identity_.format.product_id();
- return {18,1,0,2,0xef,2,1,64,std::uint8_t(lab_vendor&255),std::uint8_t(lab_vendor>>8),std::uint8_t(product&255),std::uint8_t(product>>8),0,1,1,2,3,1};
+ return {18,1,0,2,0xef,2,1,64,std::uint8_t(vendor_id&255),std::uint8_t(vendor_id>>8),std::uint8_t(product&255),std::uint8_t(product>>8),0,1,1,2,3,1};
 }
 std::vector<std::uint8_t> session::configuration_descriptor() const {
  const auto n=identity_.format.channels;const auto m=identity_.format.channel_mask;
@@ -116,7 +116,7 @@ std::vector<std::uint8_t> session::configuration_descriptor() const {
  if(v.size()!=total)throw std::logic_error("UAC2 descriptor length");
  return v;
 }
-void session::device_record(){fixed(transmit_,"/vibe-speakers/private-lab",256);fixed(transmit_,identity_.busid,32);put32(transmit_,1);put32(transmit_,1);put32(transmit_,3);put16(transmit_,lab_vendor);put16(transmit_,identity_.format.product_id());put16(transmit_,0x0100);transmit_.insert(transmit_.end(),{0xef,2,1,1,1,2});}
+void session::device_record(){fixed(transmit_,"/vibe-speakers/private-lab",256);fixed(transmit_,identity_.busid,32);put32(transmit_,1);put32(transmit_,1);put32(transmit_,3);put16(transmit_,vendor_id);put16(transmit_,identity_.format.product_id());put16(transmit_,0x0100);transmit_.insert(transmit_.end(),{0xef,2,1,1,1,2});}
 bool session::feed(std::span<const std::uint8_t> data,std::chrono::steady_clock::time_point now){
  if(failed_||finished_||data.size()>max_buffer-receive_.size()){fail("receive bound");return false;}
  receive_time_=now;receive_.insert(receive_.end(),data.begin(),data.end());

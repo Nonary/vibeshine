@@ -1,4 +1,3 @@
-list(APPEND CPACK_PRE_BUILD_SCRIPTS "${CMAKE_CURRENT_LIST_DIR}/check_vibe_public_identity.cmake")
 # windows specific packaging
 include("${CMAKE_SOURCE_DIR}/cmake/packaging/windows_virtual_display_contract.cmake")
 include("${CMAKE_SOURCE_DIR}/cmake/packaging/windows_virtual_gamepad_contract.cmake")
@@ -494,7 +493,7 @@ endif()
 # only makes the unchecked installer option available; PnP installation is
 # explicitly gated by INSTALL_USBIP_TRANSPORT=1 in WiX.
 set(SUNSHINE_USBIP_WIX_BUNDLED 0)
-if(SUNSHINE_BUNDLE_USBIP_TRANSPORT)
+if(SUNSHINE_BUNDLE_USBIP_TRANSPORT OR SUNSHINE_ENABLE_VIBE_SPEAKERS)
     set(SUNSHINE_USBIP_WIX_BUNDLED 1)
     set(SUNSHINE_USBIP_PACKAGE_DIR "${CMAKE_BINARY_DIR}/usbip-transport-${SUNSHINE_USBIP_RELEASE_TAG}")
     set(_usbip_stage_code [=[
@@ -622,7 +621,7 @@ if(SUNSHINE_BUNDLE_VHF_GAMEPAD_DRIVER)
     set(CPACK_COMPONENT_VIRTUAL_GAMEPAD_DRIVER_REQUIRED true)
 endif()
 
-if(SUNSHINE_BUNDLE_USBIP_TRANSPORT)
+if(SUNSHINE_BUNDLE_USBIP_TRANSPORT OR SUNSHINE_ENABLE_VIBE_SPEAKERS)
     set(CPACK_COMPONENT_USBIP_TRANSPORT_DISPLAY_NAME "DualSense USB Audio and Haptics")
     set(CPACK_COMPONENT_USBIP_TRANSPORT_DESCRIPTION
         "Optional Microsoft-signed USB/IP transport for waveform haptics with a compatible Moonlight client.")

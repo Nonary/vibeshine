@@ -969,7 +969,10 @@
     "dd_validation_resolution": "Ungültiges Format. Verwenden Sie BREITExHÖHE, z. B. {example} (x oder ×).",
     "dd_validation_refresh_rate": "Ungültige Bildwiederholrate. Verwenden Sie eine positive Zahl, z. B. 60 oder 59.94.",
     "dd_manual_enforcement_notice": "Die unten aufgeführten Überschreibungen sind deaktiviert, solange eine manuelle Auflösung oder Bildwiederholrate erzwungen wird. Manuelle Bildwiederholraten werden erzwungen angewendet und überschreiben die spielabhängige Umschaltung der Bildwiederholrate auf virtuellen Bildschirmen.",
-    "audio_usb_sample_format_desc": ""
+    "audio_usb_sample_format_desc": "",
+    "vibe_setup": "Vibe Speakers einrichten",
+    "vibe_ready": "Bereit",
+    "vibe_status_failed": "Vibe-Speakers-Status nicht verfügbar"
   },
   "index": {
     "description": "Vibeshine ist ein selbst gehosteter Game-Stream-Host für Moonlight.",

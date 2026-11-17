@@ -27,6 +27,7 @@
       <RegistrySearch Id="SavedGamepadDriverSelection" Root="HKLM" Key="SOFTWARE\Nonary\Vibeshine\Installer\DriverSelections" Name="GamepadEnabled" Type="raw" Win64="yes"/>
     </Property>
     <Property Id="ALLOW_LOCAL_VIRTUAL_GAMEPAD_TEST_PACKAGE" Value="$(var.VhfGamepadAllowLocalTest)" Secure="yes"/>
+    <Property Id="VIBE_SPEAKERS_BUNDLED" Value="$(var.VibeSpeakersBundled)"/>
     <Property Id="USBIP_TRANSPORT_BUNDLED" Value="$(var.UsbIpTransportBundled)"/>
     <Property Id="INSTALL_USBIP_TRANSPORT" Value="0" Secure="yes"/>
     <Property Id="SKIP_REMOVE_CONFLICTING_PRODUCTS" Value="0" Secure="yes"/>
@@ -98,6 +99,8 @@
       <Custom Action="RunInstallerMigrations" After="SetRunInstallerMigrations">NOT Installed AND NOT REMOVE</Custom>
 
       <!-- Uninstall before file removal -->
+      <Custom Action="SetRemoveVibeSpeakers" Before="RemoveVibeSpeakers">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
+      <Custom Action="RemoveVibeSpeakers" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
       <Custom Action="SetRestoreNvPrefsUndo" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <Custom Action="RestoreNvPrefsUndo" After="SetRestoreNvPrefsUndo">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
 

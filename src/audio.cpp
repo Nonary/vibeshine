@@ -31,7 +31,7 @@ extern "C" {
 #include "config.h"
 #include "globals.h"
 #include "logging.h"
-#include "audio_usb_lab_metrics.h"
+#include "audio_usb_metrics.h"
 #include "platform/common.h"
 #include "process.h"
 #include "thread_safe.h"
@@ -90,6 +90,17 @@ namespace audio {
   usb_launch_config_t usb_launch_settings(const startup::settings_t& settings) {
     return usb_session_t::bundled_configuration({settings.usb.bridge_executable,settings.usb.bridge_sha256,settings.usb.controller_instance,
             settings.usb_evidence_root,settings.usb_session_seconds,false,false});
+  }
+
+  std::shared_ptr<void> prepare_usb_before_launch(unsigned channels,unsigned mask) {
+    const auto settings=config::audio_714_startup_settings();
+    if(settings.source!="vibe_usb")return {};
+    const bool pcm16=settings.usb.sample_format=="pcm16";
+    const atmos_format_t format{channels,mask,static_cast<std::uint16_t>(pcm16?16:32),static_cast<std::uint16_t>(pcm16?16:24)};
+    std::string error;
+    auto session=usb_session_t::acquire(usb_launch_settings(settings),format,error);
+    if(!session)BOOST_LOG(error)<<"Vibe Speakers profile preparation failed: "<<error;
+    return session;
   }
 
   bool discrete_714_available(std::string &reason) {
@@ -440,7 +451,7 @@ namespace audio {
     }
     usb_lab_metrics lab_metrics(profile.usb.format);
     if (fixed_ingress) packets->preallocate();
-    std::unique_ptr<usb_session_t> managed_usb;
+    std::shared_ptr<usb_session_t> managed_usb;
     auto live_usb=profile.usb;
     const auto stop_owned_usb = [&] {
       if (managed_usb && !managed_usb->stop()) {
@@ -449,9 +460,10 @@ namespace audio {
     };
     auto restore_usb = util::fail_guard(stop_owned_usb);
     if(profile.source_kind=="user_mode_usb") {
-      managed_usb=std::make_unique<usb_session_t>(profile.usb_launch);
-      if(!managed_usb->start(profile.usb.format,[&]{return shutdown->peek();})) {
-        BOOST_LOG(error)<<"Vibe Speakers USB owned session could not start: "<<managed_usb->error();return;
+      std::string start_error;
+      managed_usb=usb_session_t::acquire(profile.usb_launch,profile.usb.format,start_error,[&]{return shutdown->peek();});
+      if(!managed_usb) {
+        BOOST_LOG(error)<<"Vibe Speakers USB owned session could not start: "<<start_error;return;
       }
       live_usb=managed_usb->source();
     }

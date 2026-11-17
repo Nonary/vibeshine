@@ -273,7 +273,7 @@ namespace vibe::usb_audio {
         return false;
       }
       std::array<wchar_t,32> prefix{};
-      const auto characters=swprintf_s(prefix.data(),prefix.size(),L"USB\\VID_%04X&PID_%04X\\",unsigned(lab_vendor),unsigned(product));
+      const auto characters=swprintf_s(prefix.data(),prefix.size(),L"USB\\VID_%04X&PID_%04X\\",unsigned(vendor_id),unsigned(product));
       if(characters<=0)return false;
       DEVINST hub = 0;
       if (CM_Get_Child(&hub, host, 0) != CR_SUCCESS) {
@@ -478,7 +478,7 @@ namespace vibe::usb_audio {
         unsigned matches=0;
         for(unsigned offset=driver_abi::imported_devices_offset;offset+sizeof(driver_abi::imported_device)<=returned;offset+=sizeof(driver_abi::imported_device)){
           driver_abi::imported_device device{};std::memcpy(&device,devices.data()+offset,sizeof(device));
-          if(device.port==port&&device.vendor==lab_vendor&&device.product==owned.format.product_id()&&device.speed==3&&device.devid==0x10001&&
+          if(device.port==port&&device.vendor==vendor_id&&device.product==owned.format.product_id()&&device.speed==3&&device.devid==0x10001&&
              equals(device.host,"127.0.0.1")&&equals(device.service,service)&&equals(device.busid,busid)&&equals(device.serial,serial))++matches;
         }
         return matches==1;
@@ -509,7 +509,7 @@ namespace vibe::usb_audio {
           driver_abi::imported_device device {};
           std::memcpy(&device, devices.data() + offset, sizeof(device));
           const auto known_port=imported_port.load();
-          if (device.port > 0 && (!known_port || device.port==known_port) && device.vendor==lab_vendor && device.product==owned.format.product_id() && device.speed==3 && device.devid==0x10001 && equals(device.host, "127.0.0.1") && equals(device.service, service) && equals(device.busid, busid) && equals(device.serial, serial)) {
+          if (device.port > 0 && (!known_port || device.port==known_port) && device.vendor==vendor_id && device.product==owned.format.product_id() && device.speed==3 && device.devid==0x10001 && equals(device.host, "127.0.0.1") && equals(device.service, service) && equals(device.busid, busid) && equals(device.serial, serial)) {
             driver_abi::plugout_hardware request {};
             request.size = sizeof(request);
             request.port = device.port;
@@ -750,7 +750,7 @@ namespace vibe::usb_audio {
     std::array<wchar_t,MAX_DEVICE_ID_LEN> id{};
     if(CM_Get_Device_IDW(state_->host_node,id.data(),ULONG(id.size()),0)==CR_SUCCESS)result.host_instance=id.data();
     if(!state_->owned_import_present())return result;
-    result.vendor=lab_vendor;result.product=state_->owned.format.product_id();
+    result.vendor=vendor_id;result.product=state_->owned.format.product_id();
     DEVINST root=0;
     if(!controller_root(state_->host_node,result.port,result.product,root))return result;
     if(CM_Get_Device_IDW(root,id.data(),ULONG(id.size()),0)==CR_SUCCESS)result.usb_instance=id.data();

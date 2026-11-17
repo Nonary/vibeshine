@@ -1,11 +1,18 @@
-# The source contribution does not grant the pending USB product identity.
-option(SUNSHINE_ENABLE_VIBE_SPEAKERS "Build the managed Vibe Speakers USB endpoint" OFF)
-option(SUNSHINE_VIBE_PRIVATE_IDENTITY "Explicitly acknowledge pending 1209:7140; private tests only" OFF)
+# Build and install the optional function through the normal Windows product.
+set(_vibe_default OFF)
+if(WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|x64)$")
+    set(_vibe_default ON)
+endif()
+option(SUNSHINE_ENABLE_VIBE_SPEAKERS "Include optional Vibe Speakers capture" ${_vibe_default})
+option(VIBE_AUDIO_TEST_INSTRUMENTATION "Compile private audio measurements/fault injection" OFF)
 if(SUNSHINE_ENABLE_VIBE_SPEAKERS)
-    if(NOT WIN32 OR NOT SUNSHINE_VIBE_PRIVATE_IDENTITY)
-        message(FATAL_ERROR "Vibe Speakers requires Windows and explicit SUNSHINE_VIBE_PRIVATE_IDENTITY=ON until the USB identity is assigned")
+    if(NOT WIN32 OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|x64)$")
+        message(FATAL_ERROR "The signed Vibe Speakers transport requires Windows x64")
     endif()
     target_compile_definitions(sunshine PRIVATE SUNSHINE_ENABLE_VIBE_SPEAKERS=1)
+    if(VIBE_AUDIO_TEST_INSTRUMENTATION)
+        target_compile_definitions(sunshine PRIVATE VIBE_AUDIO_TEST_INSTRUMENTATION=1)
+    endif()
     set(vibe_root "${CMAKE_SOURCE_DIR}/src/vibe-speakers")
     add_library(vibe_usb_transport STATIC
         "${vibe_root}/vibe-usb-audio/src/protocol.cpp"
@@ -16,8 +23,12 @@ if(SUNSHINE_ENABLE_VIBE_SPEAKERS)
         "${vibe_root}/vibe-usb-audio/include" "${vibe_root}/vibe-usb-bridge/include")
     target_compile_definitions(vibe_usb_transport PUBLIC UNICODE _UNICODE NOMINMAX)
     target_link_libraries(vibe_usb_transport PUBLIC ws2_32 cfgmgr32 ole32 propsys uuid bcrypt advapi32 avrt)
+    target_link_libraries(sunshine wtsapi32 userenv)
     add_executable(VibeUsbBridge "${vibe_root}/vibe-usb-bridge/src/bridge_main.cpp")
     target_link_libraries(VibeUsbBridge PRIVATE vibe_usb_transport)
+    if(VIBE_AUDIO_TEST_INSTRUMENTATION)
+        target_compile_definitions(VibeUsbBridge PRIVATE VIBE_AUDIO_TEST_INSTRUMENTATION=1)
+    endif()
     set_target_properties(VibeUsbBridge PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
     if(MINGW)
         target_link_options(VibeUsbBridge PRIVATE -municode -static)
@@ -28,21 +39,11 @@ if(SUNSHINE_ENABLE_VIBE_SPEAKERS)
     if(MINGW)
         target_link_options(VibeUsbBridgeTests PRIVATE -static)
     endif()
-    file(COPY "${CMAKE_SOURCE_DIR}/packaging/windows/vibe-speakers/" DESTINATION "${CMAKE_BINARY_DIR}/VibeSpeakers")
-    # Explicit local staging only; never part of CPack or an upload workflow.
-    add_custom_target(vibe-speakers-private-stage
-        COMMAND powershell.exe -NoProfile -ExecutionPolicy RemoteSigned
-            -File "${CMAKE_SOURCE_DIR}/scripts/download_usbip_transport.ps1"
-            -OutDir "${CMAKE_BINARY_DIR}/drivers/usbip-win2"
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/packaging/windows/usbip_transport/LICENSE.txt"
-            "${CMAKE_BINARY_DIR}/drivers/usbip-win2/LICENSE.txt"
-        COMMAND powershell.exe -NoProfile -ExecutionPolicy RemoteSigned
-            -File "${CMAKE_SOURCE_DIR}/packaging/windows/vibe-speakers/Write-PayloadLock.ps1"
-            -PackageRoot "${CMAKE_BINARY_DIR}"
-        DEPENDS sunshine VibeUsbBridge
-        VERBATIM)
-    set(CPACK_VIBE_PRIVATE_IDENTITY ON)
+    install(TARGETS VibeUsbBridge RUNTIME DESTINATION tools COMPONENT application)
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/packaging/windows/vibe-speakers/"
+        DESTINATION VibeSpeakers COMPONENT application)
+    install(FILES "${vibe_root}/vibe-usb-audio/LICENSE" "${vibe_root}/vibe-usb-audio/THIRD-PARTY.md"
+        DESTINATION licenses/vibe-speakers COMPONENT application)
 else()
     target_compile_definitions(sunshine PRIVATE SUNSHINE_ENABLE_VIBE_SPEAKERS=0)
 endif()

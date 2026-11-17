@@ -3,7 +3,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
-namespace VibeSpeakers.RC1 {
+namespace VibeSpeakers.Setup {
  public sealed class DeviceAccessProof {
   public bool Passed,NormalReadWriteOpenSucceeded,RestrictedReadWriteOpenDenied,ImpersonationReverted;
   public int NormalWin32Error,RestrictedWin32Error;

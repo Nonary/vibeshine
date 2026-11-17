@@ -79,7 +79,16 @@ void IntegrityTests(){
 void QueueTests(){
  Check(Fresh(200000,0,10000000)&&!Fresh(200001,0,10000000)&&!Fresh(0,1,10000000)&&!Fresh(0,0,0),"Exact full end-to-end bridge age bound");
  for(const auto seconds:{1u,3600u,3690u,14400u,86400u})Check(ValidDuration(seconds),"Managed finite duration accepted");
- for(const auto seconds:{0u,86401u,UINT32_MAX})Check(!ValidDuration(seconds),"Out of range duration rejected");
+ for(const auto seconds:{86401u,UINT32_MAX})Check(!ValidDuration(seconds),"Out of range duration rejected");
+ Check(ValidDuration(0)&&DurationWait(0)==INFINITE,"Production wait cannot expire at four hours");
+ Check(DurationWait(1)==1000&&DurationWait(14400)==14400000,"Finite deadlines are test-only");
+ {
+  bool expired=false;std::uint64_t modelMs=0;
+  AwaitSessionStop(0,[&](std::uint32_t timeout){modelMs=14400001;Check(timeout==INFINITE,"Actual product wait remains infinite across former four-hour boundary");return WAIT_OBJECT_0;},[&]{expired=true;});
+  Check(modelMs>14400000&&!expired,"Virtual four-hour boundary cannot expire a product session");
+  AwaitSessionStop(14400,[&](std::uint32_t timeout){Check(timeout==14400000,"Finite explicit test boundary");return WAIT_TIMEOUT;},[&]{expired=true;});
+  Check(expired,"Actual expiry decision still works for bounded test runs");
+ }
  auto owner=std::make_unique<Spsc<AudioMessage,4>>();auto& q=*owner;AudioMessage m{};
  for(unsigned i=0;i<4;++i)Check(q.Push([&](AudioMessage& b,std::uint32_t depth){b.info.blockSequence=i;b.info.queueDepthBlocks=depth;}),"Queue capacity");
  Check(!q.Push([](AudioMessage&,std::uint32_t){}),"Fifth block rejected");
@@ -190,12 +199,7 @@ void TerminalCloseTests(){
  }
 }
 void OverflowRecoveryTests(){
- {
-  Handle stop(CreateEventW(nullptr,TRUE,FALSE,nullptr)),fault(CreateEventW(nullptr,TRUE,FALSE,nullptr));
-  Check(WaitLabWriterStall(stop.Get(),fault.Get(),1)==WAIT_TIMEOUT,"Laboratory stall duration is an upper bound");
-  SetEvent(fault.Get());Check(WaitLabWriterStall(stop.Get(),fault.Get(),100)==WAIT_OBJECT_0+1,"Existing real fault ends stall immediately");
-  SetEvent(stop.Get());Check(WaitLabWriterStall(stop.Get(),fault.Get(),100)==WAIT_OBJECT_0,"Stop also ends bounded fault injection");
- }
+
  OverflowBoundary b;b.pending=true;b.peerPid=17;b.peerCreation=123;b.epoch=5;b.endFrame=1440;b.oldNonce[0]=1;b.oldNonce[1]=2;
  AudioHeader h{};h.header.nonce[0]=3;h.header.nonce[1]=4;h.firstFrame=2160;h.epoch=5;b.VerifyFirst(h);
  auto rejects=[&](const AudioHeader& value){try{b.VerifyFirst(value);}catch(const Failure& e){return e.code==SequenceGap;}return false;};

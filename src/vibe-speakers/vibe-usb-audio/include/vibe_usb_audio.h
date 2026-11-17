@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
-#include "vibe_profile_ids.h"
+#include "../../../vibe_profile_ids.h"
 #include "clock_flight.h"
 #include <array>
 #include <chrono>
@@ -20,12 +20,12 @@ struct profile {
   static profile from_channels(unsigned channels);
   static profile from_channels(unsigned channels, std::uint32_t mask, std::uint16_t container_bits=32, std::uint16_t valid_bits=24);
   bool valid() const noexcept;
-  std::uint16_t product_id() const noexcept { return VibeLabUsbProduct(channels,channel_mask,native_container_bits,native_valid_bits); }
+  std::uint16_t product_id() const noexcept { return VibeUsbProduct(channels,channel_mask,native_container_bits,native_valid_bits); }
   std::uint32_t frame_bytes() const noexcept { return channels * (native_container_bits/8u); }
 };
 // pid.codes/1209/0001..0009 and 000E: private in-house testing only. NOT an
 // assigned Vibe Speakers identity and NEVER for distribution or production.
-inline constexpr std::uint16_t lab_vendor = 0x1209;
+inline constexpr std::uint16_t vendor_id = 0x1209;
 inline constexpr std::uint32_t sample_rate = 48000;
 inline constexpr std::size_t max_transfer = 256 * 1024;
 inline constexpr std::size_t max_iso_packets = 1024;

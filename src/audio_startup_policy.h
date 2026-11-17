@@ -16,7 +16,7 @@ namespace audio::startup {
     int bitrate {600000};
     usb_source_config_t usb {};
     std::string usb_evidence_root {};
-    unsigned usb_session_seconds=14400;
+    unsigned usb_session_seconds=0; // Internal test builds only; ignored in product configuration.
   };
 
   // Readers take value snapshots. Replacement is deferred until sessions end.
@@ -39,6 +39,7 @@ namespace audio::startup {
       };
       preserve("audio_714_source", snapshot->source, defaults_.source);
       preserve("audio_714_bitrate", std::to_string(snapshot->bitrate), std::to_string(defaults_.bitrate));
+#ifdef VIBE_AUDIO_TEST_INSTRUMENTATION
       preserve("audio_usb_pipe",snapshot->usb.pipe,defaults_.usb.pipe);
       preserve("audio_usb_bridge_executable",snapshot->usb.bridge_executable,defaults_.usb.bridge_executable);
       preserve("audio_usb_bridge_sha256",snapshot->usb.bridge_sha256,defaults_.usb.bridge_sha256);
@@ -48,9 +49,12 @@ namespace audio::startup {
       preserve("audio_usb_serial",snapshot->usb.serial,defaults_.usb.serial);
       preserve("audio_usb_service",snapshot->usb.service,defaults_.usb.service);
       preserve("audio_usb_port",std::to_string(snapshot->usb.port),std::to_string(defaults_.usb.port));
+#endif
       preserve("audio_usb_sample_format",snapshot->usb.sample_format,defaults_.usb.sample_format);
+#ifdef VIBE_AUDIO_TEST_INSTRUMENTATION
       preserve("audio_usb_evidence_root",snapshot->usb_evidence_root,defaults_.usb_evidence_root);
       preserve("audio_usb_session_seconds",std::to_string(snapshot->usb_session_seconds),std::to_string(defaults_.usb_session_seconds));
+#endif
       return changed;
     }
   private:

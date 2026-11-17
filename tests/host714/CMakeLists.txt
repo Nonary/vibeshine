@@ -1,10 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(VibeshineHost714Tests LANGUAGES C CXX)
 enable_testing()
-add_test(NAME vibe_public_endpoint_package_guard COMMAND "${CMAKE_COMMAND}"
-    "-DGUARD_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/packaging/check_vibe_public_identity.cmake"
-    "-DGUARD_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
-    -P "${CMAKE_CURRENT_SOURCE_DIR}/public_package_guard.cmake")
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -177,4 +173,19 @@ if(HOST714_BUILD_TRANSPORT)
         endif()
         add_test(NAME vibe_usb_preopus_signatures COMMAND VibeUsbPreOpusSignatureTests)
     endif()
+endif()
+
+if(WIN32)
+    add_executable(VibeUsbSessionGuardTests usb_session_guards.cpp
+        "${HOST_ROOT}/src/audio_usb_session.cpp")
+    target_include_directories(VibeUsbSessionGuardTests PRIVATE "${HOST_ROOT}")
+    target_compile_definitions(VibeUsbSessionGuardTests PRIVATE VIBE_SESSION_TESTING=1)
+    target_link_libraries(VibeUsbSessionGuardTests PRIVATE bcrypt ole32 propsys cfgmgr32 uuid advapi32 wtsapi32 userenv)
+    if(MINGW)
+        target_compile_options(VibeUsbSessionGuardTests PRIVATE -ffunction-sections -fdata-sections)
+        target_link_options(VibeUsbSessionGuardTests PRIVATE -Wl,--gc-sections -static-libgcc -static-libstdc++)
+    endif()
+    add_test(NAME vibe_usb_production_session_guards COMMAND VibeUsbSessionGuardTests)
+    add_test(NAME vibe_usb_setup_policy COMMAND powershell.exe -NoProfile -ExecutionPolicy RemoteSigned
+        -File "${CMAKE_CURRENT_SOURCE_DIR}/setup_contract_tests.ps1")
 endif()

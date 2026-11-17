@@ -62,7 +62,7 @@ namespace {
   }
   bool config_valid(const usb_source_config_t &config, std::string &error) {
     const auto& format=config.format;
-    if (!format.valid() || !VibeLabUsbProduct(format.channels,format.channel_mask,format.container_bits,format.valid_bits) ||
+    if (!format.valid() || !VibeUsbProduct(format.channels,format.channel_mask,format.container_bits,format.valid_bits) ||
         !config.pipe.starts_with(R"(\\.\pipe\VibeSpeakersUsb)") || config.pipe.size()>180 ||
         config.pipe.find_first_of("\r\n")!=std::string::npos || config.endpoint.empty() ||
         config.usb_instance.empty() || config.controller_instance.empty() || config.serial.size()!=15 ||
@@ -93,7 +93,7 @@ namespace {
     if(FAILED(co)&&co!=RPC_E_CHANGED_MODE)throw std::runtime_error("USB endpoint COM initialization failed");
     struct end_com {bool owned;~end_com(){if(owned)CoUninitialize();}} cleanup{SUCCEEDED(co)};
     const auto& f=config.format;
-    const auto product=VibeLabUsbProduct(f.channels,f.channel_mask,f.container_bits,f.valid_bits);
+    const auto product=VibeUsbProduct(f.channels,f.channel_mask,f.container_bits,f.valid_bits);
     if(!product)throw std::runtime_error("USB format has no private product ID");
     usb_lab::Identity id{0x1209,product,wide(config.serial),wide(config.controller_instance),wide(config.service),static_cast<int>(config.port)};
     const auto bound=usb_lab::Resolve(wide(config.endpoint),id);
@@ -219,7 +219,7 @@ struct usb_source_t::impl_t {
        !put_text(hello.binding.controllerInstance,config.controller_instance))return fail("USB binding identifier too long");
     std::copy(config.serial.begin(),config.serial.end(),hello.binding.serial);std::copy(config.service.begin(),config.service.end(),hello.binding.service);
     hello.binding.port=config.port;hello.binding.vendor=0x1209;
-    hello.binding.product=VibeLabUsbProduct(hello.profile.channels,hello.profile.channelMask,hello.profile.nativeContainerBits,hello.profile.nativeValidBits);
+    hello.binding.product=VibeUsbProduct(hello.profile.channels,hello.profile.channelMask,hello.profile.nativeContainerBits,hello.profile.nativeValidBits);
     if(!usb_binding_matches_profile(hello.binding,hello.profile))return fail("USB hello private product/profile mismatch");
     if(!write_message(&hello,sizeof(hello))) return false;
     DWORD received=0;

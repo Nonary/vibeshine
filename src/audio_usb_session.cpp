@@ -8,6 +8,7 @@
 #include <new>
 #include <stdexcept>
 #include <utility>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -18,6 +19,8 @@
 #include <sddl.h>
 #include <aclapi.h>
 #include <shlobj.h>
+#include <wtsapi32.h>
+#include <userenv.h>
 #include <mmdeviceapi.h>
 #include <thread>
 #include "audio_context.h"
@@ -79,17 +82,6 @@ void append_owner_arguments(std::vector<std::wstring>& arguments,DWORD pid,std::
        std::find(arguments.begin(),arguments.end(),L"--owner-creation-time")==arguments.end(),"Duplicate USB owner tuple");
   arguments.insert(arguments.end(),{L"--owner-pid",std::to_wstring(pid),L"--owner-creation-time",std::to_wstring(creation_time)});
 }
-void check_lab_writer_stall(unsigned blocks,unsigned ms){
-  need((blocks==0&&ms==0)||(blocks>=1&&blocks<=50000&&ms>=25&&ms<=100),
-       "Invalid laboratory writer-stall pair");
-}
-void append_lab_writer_stall(std::vector<std::wstring>& args,unsigned blocks,unsigned ms){
-  check_lab_writer_stall(blocks,ms);
-  if(blocks!=0){
-    args.insert(args.end(),{L"--lab-stall-writer-after-blocks",std::to_wstring(blocks),
-                            L"--lab-stall-writer-ms",std::to_wstring(ms)});
-  }
-}
 void safe_existing_path(const std::filesystem::path& input,bool directory){
   need(input.is_absolute()&&input.has_root_name()&&input.root_name().wstring().size()==2,"Absolute local drive path required");
   need(input==input.lexically_normal(),"Noncanonical path refused");
@@ -116,9 +108,18 @@ handle_t pinned_image(const std::filesystem::path& path,const std::string& expec
 }
 std::wstring current_image(){std::array<wchar_t,32768> path{};const auto length=GetModuleFileNameW(nullptr,path.data(),DWORD(path.size()));need(length&&length<path.size(),"Current executable path unavailable");return {path.data(),length};}
 std::wstring random_name(){std::array<UCHAR,16> random{};need(BCryptGenRandom(nullptr,random.data(),ULONG(random.size()),BCRYPT_USE_SYSTEM_PREFERRED_RNG)>=0,"Cryptographic nonce unavailable");constexpr wchar_t hex[]=L"0123456789abcdef";std::wstring value;for(auto b:random){value+=hex[b>>4];value+=hex[b&15];}return value;}
-std::wstring user_sid(){
-  handle_t token;need(OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token.value)!=FALSE,"Current user token unavailable");DWORD bytes=0;GetTokenInformation(token.value,TokenUser,nullptr,0,&bytes);need(bytes>=sizeof(TOKEN_USER)&&bytes<65536,"Token size invalid");
+std::wstring token_sid(HANDLE queried_token=nullptr){
+  handle_t token;if(queried_token){need(DuplicateHandle(GetCurrentProcess(),queried_token,GetCurrentProcess(),&token.value,TOKEN_QUERY,FALSE,0),"Duplicate user token");}else{need(OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token.value)!=FALSE,"Current user token unavailable");}DWORD bytes=0;GetTokenInformation(token.value,TokenUser,nullptr,0,&bytes);need(bytes>=sizeof(TOKEN_USER)&&bytes<65536,"Token size invalid");
   std::vector<BYTE> data(bytes);need(GetTokenInformation(token.value,TokenUser,data.data(),bytes,&bytes)!=FALSE,"Token user read failed");LPWSTR raw=nullptr;need(ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(data.data())->User.Sid,&raw)!=FALSE,"User SID conversion failed");std::wstring result(raw);LocalFree(raw);return result;
+}
+std::wstring user_sid(){return token_sid();}
+std::wstring setup_user_sid(){
+  const auto process_sid=token_sid();
+  if(process_sid!=L"S-1-5-18")return process_sid;
+  DWORD session=0;need(ProcessIdToSessionId(GetCurrentProcessId(),&session)&&session!=0,"Service audio requires an interactive session");
+  handle_t user;need(WTSQueryUserToken(session,&user.value),"No logged-on user in this service session");
+  DWORD actual=0,bytes=0;need(GetTokenInformation(user.value,TokenSessionId,&actual,sizeof(actual),&bytes)&&actual==session,"Setup user session differs");
+  const auto sid=token_sid(user.value);need(sid!=L"S-1-5-18","Setup must belong to the logged-on account");return sid;
 }
 struct private_security {
   PSECURITY_DESCRIPTOR descriptor=nullptr;SECURITY_ATTRIBUTES attributes{sizeof(SECURITY_ATTRIBUTES),nullptr,FALSE};
@@ -164,13 +165,13 @@ void protected_setup_handle(HANDLE file) {
       GetProcAddress(GetModuleHandleW(L"ntdll.dll"),"NtQuerySystemInformation"));
   ULONG returned=0;
   need(query&&query(103,&ci,sizeof(ci),&returned)>=0&&returned==sizeof(ci)&&
-       (ci.flags&1)&&!(ci.flags&2)&&(ci.flags&0x400),"Running Code Integrity/HVCI required with TESTSIGNING off");
+       (ci.flags&1)&&!(ci.flags&2),"Code Integrity required with TESTSIGNING off");
   std::array<wchar_t,MAX_PATH> common{};
   need(SUCCEEDED(SHGetFolderPathW(nullptr,CSIDL_COMMON_APPDATA,nullptr,SHGFP_TYPE_CURRENT,common.data())),"Resolve machine setup directory");
   const auto base=std::filesystem::path(common.data())/L"VibeSpeakers";
-  const auto state=base/L"RC1"/user_sid();
+  const auto state=base/L"users"/setup_user_sid();
   std::vector<handle_t> directories;
-  for(const auto& path:{base,base/L"RC1",state}) {
+  for(const auto& path:{base,base/L"users",state}) {
     safe_existing_path(path,true);
     handle_t dir(CreateFileW(path.c_str(),READ_CONTROL,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,
         OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
@@ -180,14 +181,16 @@ void protected_setup_handle(HANDLE file) {
   const auto path=state/L"setup.json";safe_existing_path(path,false);
   handle_t file(CreateFileW(path.c_str(),GENERIC_READ|READ_CONTROL,FILE_SHARE_READ,nullptr,
       OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
-  need(bool(file),"Vibe Speakers setup is missing; run the separate setup first");
+  need(bool(file),"Vibe Speakers is not set up for this Windows user. Open Audio settings and choose Set up.");
   protected_setup_handle(file.value);
   LARGE_INTEGER size{};need(GetFileSizeEx(file.value,&size)&&size.QuadPart>0&&size.QuadPart<=65536,"Invalid setup record size");
   std::string data(std::size_t(size.QuadPart),'\0');DWORD read=0;
   need(ReadFile(file.value,data.data(),DWORD(data.size()),&read,nullptr)&&read==data.size(),"Cannot read setup record");
   const auto value=json::parse(data);
-  need(text(value,"Schema")=="vibe-speakers-rc1-setup/1"&&text(value,"UserSid")==narrow(user_sid())&&
-       text(value,"Phase")=="Ready"&&value.at("CreatedByRc1")==true,"Setup owner/schema/state differs");
+  need(text(value,"Schema")=="vibe-speakers-setup/1"&&text(value,"UserSid")==narrow(setup_user_sid())&&
+       text(value,"Phase")=="Ready"&&value.at("CreatedByVibeshine")==true,"Setup owner/schema/state differs");
+  need(_wcsicmp(wide(text(value,"InstallRoot")).c_str(),std::filesystem::path(current_image()).parent_path().c_str())==0,
+       "Vibe Speakers setup belongs to another installation");
   const auto id=text(value,"ControllerInstance",200),token=text(value,"Token",32);
   need(controller_text(id)&&token.size()==32&&token.find_first_not_of("0123456789abcdef")==std::string::npos,"Invalid setup binding");
   auto instance=wide(id);DEVINST dev=0;need(CM_Locate_DevNodeW(&dev,instance.data(),CM_LOCATE_DEVNODE_NORMAL)==CR_SUCCESS,"Owned controller is absent");
@@ -197,7 +200,7 @@ void protected_setup_handle(HANDLE file) {
          type==DEVPROP_TYPE_STRING&&bytes>=2&&bytes<=sizeof(data)&&bytes%2==0&&data[bytes/2-1]==0,"Cannot verify controller property");
     return std::wstring(data.data());
   };
-  need(property(DEVPKEY_Device_FriendlyName)==L"Vibe Speakers RC1 "+wide(token)&&
+  need(property(DEVPKEY_Device_FriendlyName)==L"Vibe Speakers "+wide(token)&&
        property(DEVPKEY_Device_Service)==L"usbip2_ude","Controller ownership marker/service differs");
   return id;
 }
@@ -313,7 +316,7 @@ public:
 };
 // Read-only exact import-table absence, independent of endpoint disappearance.
 std::uint16_t profile_product(const atmos_format_t& format){
-  const auto id=VibeLabUsbProduct(format.channels,format.channel_mask,format.container_bits,format.valid_bits);
+  const auto id=VibeUsbProduct(format.channels,format.channel_mask,format.container_bits,format.valid_bits);
   need(id!=0,"Unknown USB profile product ID");
   return id;
 }
@@ -341,6 +344,7 @@ void validate_binding(const json& b,const usb_source_config_t& expected,DWORD pi
 }
 
 #ifdef _WIN32
+#ifndef VIBE_SESSION_TESTING
 struct usb_session_t::impl_t {
   usb_launch_config_t config;usb_source_config_t bound;std::string failure;
   json evidence={{"Schema","vibe-usb-managed-session/1"},{"started",false},{"ready",false},{"roles_restored",false},{"own_detach_verified",false},{"process_exited",false}};
@@ -351,7 +355,7 @@ struct usb_session_t::impl_t {
   DWORD child_pid=0,child_session=0;std::uint64_t child_created=0;bool attempted=false,finished=false,assigned=false;unsigned stop_attempts=0;
   explicit impl_t(usb_launch_config_t value):config(std::move(value)){}
   void error(const std::string& message){if(!failure.empty())failure+="; ";failure+=message;evidence["error"]=failure;}
-  void receipt(const std::string& suffix){if(!directory.empty())write_new(directory/("managed-"+suffix+".json"),evidence);}
+  void receipt(const std::string& suffix) noexcept {try{if(!directory.empty())write_new(directory/("managed-"+suffix+".json"),evidence);}catch(...){/* optional bounded session summary */}}
   void recover_attached_role_target(){
     if(assigned||!child||!context||!context->control||prefix.empty())return;
     const auto path=prefix.wstring()+L".binding.json";
@@ -376,7 +380,7 @@ struct usb_session_t::impl_t {
       bridge_image=pinned_image(wide(config.bridge_executable),config.bridge_sha256);
       const auto self=current_image();safe_existing_path(self,false);self_image=handle_t(CreateFileW(self.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr));need(bool(self_image),"Cannot lock host executable");const auto self_sha=hash_handle(self_image.value);
       const auto sid=user_sid(),nonce=random_name();private_security event_security(sid),file_security(sid,true);
-      auto ownership_name=L"Local\\VibeUsbManagedController_"+wide(config.controller_instance);std::replace(ownership_name.begin()+6,ownership_name.end(),L'\\',L'_');std::transform(ownership_name.begin()+6,ownership_name.end(),ownership_name.begin()+6,[](wchar_t c){return wchar_t(towupper(c));});ownership=unique_event(ownership_name,event_security);
+      auto ownership_name=L"Global\\VibeSpeakersController_"+wide(config.controller_instance);std::replace(ownership_name.begin()+7,ownership_name.end(),L'\\',L'_');std::transform(ownership_name.begin()+7,ownership_name.end(),ownership_name.begin()+7,[](wchar_t c){return wchar_t(towupper(c));});ownership=unique_event(ownership_name,event_security);
       directory=std::filesystem::path(wide(config.evidence_root))/(L"usb-managed-"+nonce);need(CreateDirectoryW(directory.c_str(),&file_security.attributes)!=FALSE,"Cannot create private new evidence directory");prefix=directory/L"bridge";
       const auto ready_name=L"Local\\VibeUsbManaged_"+nonce+L"_ready",stop_name=L"Local\\VibeUsbManaged_"+nonce+L"_stop";ready=unique_event(ready_name,event_security);stop_event=unique_event(stop_name,event_security);
       bound.bridge_executable=config.bridge_executable;bound.bridge_sha256=lower(config.bridge_sha256);bound.controller_instance=config.controller_instance;bound.format=format;bound.sample_format=format.container_bits==16?"pcm16":"pcm24";bound.pipe=R"(\\.\pipe\VibeSpeakersUsb_)"+narrow(nonce);
@@ -386,17 +390,15 @@ struct usb_session_t::impl_t {
       const auto* captured=dynamic_cast<const usb_control*>(context->control.get());need(captured!=nullptr,"Unexpected USB role-control owner");
       evidence["roles_before"]=captured->captured_roles();evidence["roles_snapshot_qpc"]=captured->captured_qpc();
       need(!cancelled||!cancelled(),"Managed USB start cancelled before attach");
-      std::vector<std::wstring> args={wide(config.bridge_executable),L"--managed-runtime",L"--controller-instance",wide(config.controller_instance),L"--channels",std::to_wstring(format.channels),L"--channel-mask",std::to_wstring(format.channel_mask),L"--native-format",wide(bound.sample_format),L"--pipe-name",wide(bound.pipe.substr(9)),L"--allowed-client",self,L"--allowed-client-sha256",wide(self_sha),L"--out",prefix.wstring(),L"--seconds",std::to_wstring(config.seconds),L"--ready-event",ready_name,L"--stop-event",stop_name};
+      std::vector<std::wstring> args={wide(config.bridge_executable),L"--managed-runtime",L"--controller-instance",wide(config.controller_instance),L"--channels",std::to_wstring(format.channels),L"--channel-mask",std::to_wstring(format.channel_mask),L"--native-format",wide(bound.sample_format),L"--pipe-name",wide(bound.pipe.substr(9)),L"--allowed-client",self,L"--allowed-client-sha256",wide(self_sha),L"--out",prefix.wstring(),L"--ready-event",ready_name,L"--stop-event",stop_name};
       const DWORD owner_pid=GetCurrentProcessId();
       const auto owner_created=created(GetCurrentProcess());
       DWORD owner_session=0;
       need(ProcessIdToSessionId(owner_pid,&owner_session)!=FALSE,"Owner Windows session unavailable");
       append_owner_arguments(args,owner_pid,owner_created);
-      append_lab_writer_stall(args,config.lab_stall_writer_after_blocks,config.lab_stall_writer_ms);
-      if(config.lab_stall_writer_after_blocks!=0){
-        evidence["lab_stall_writer_after_blocks"]=config.lab_stall_writer_after_blocks;
-        evidence["lab_stall_writer_ms"]=config.lab_stall_writer_ms;
-      }
+#ifdef VIBE_AUDIO_TEST_INSTRUMENTATION
+      args.insert(args.end(),{L"--seconds",std::to_wstring(config.seconds)});
+#endif
       evidence["owner_binding"]={{"pid",owner_pid},{"creation_time",owner_created},{"windows_session",owner_session},{"image",narrow(self)},{"sha256",self_sha}};
       if(config.raw)args.push_back(L"--raw");if(!config.detailed)args.push_back(L"--summary-only");std::wstring command;for(const auto& arg:args){if(!command.empty())command+=L' ';command+=quote(arg);}need(command.size()<32700,"Managed command exceeds limit");
       STARTUPINFOW startup{};startup.cb=sizeof(startup);PROCESS_INFORMATION process{};evidence["launch_qpc"]=qpc();
@@ -532,10 +534,14 @@ struct usb_session_t::impl_t {
 usb_launch_config_t usb_session_t::bundled_configuration(usb_launch_config_t config){
 #if !SUNSHINE_ENABLE_VIBE_SPEAKERS
   config.bridge_executable.clear();config.bridge_sha256.clear();config.controller_instance.clear();
-  config.setup_error="Vibe Speakers endpoint is disabled in this public build while USB identity allocation is pending";
+  config.setup_error="Vibe Speakers is not included in this build";
   return config;
 #else
   try {
+#ifndef VIBE_AUDIO_TEST_INSTRUMENTATION
+    config.seconds=0;config.detailed=false;config.raw=false;
+    config.evidence_root.clear();
+#endif
     const auto directory=std::filesystem::path(current_image()).parent_path();
     const auto bridge=directory/L"tools"/L"VibeUsbBridge.exe";safe_existing_path(bridge,false);
     handle_t image(CreateFileW(bridge.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr));
@@ -547,6 +553,27 @@ usb_launch_config_t usb_session_t::bundled_configuration(usb_launch_config_t con
     need(length&&length<local.size(),"Local application data path unavailable");
     const auto sessions=config.evidence_root.empty()?std::filesystem::path(local.data())/L"Vibeshine"/L"VibeSpeakers"/L"sessions":std::filesystem::path(wide(config.evidence_root));
     std::filesystem::create_directories(sessions);safe_existing_path(sessions,true);
+    try{
+      std::vector<std::filesystem::path> completed;
+      for(const auto& entry:std::filesystem::directory_iterator(sessions)){
+        if(!entry.is_directory()||!entry.path().filename().wstring().starts_with(L"usb-managed-"))continue;
+        safe_existing_path(entry.path(),true);bool done=false;
+        for(const auto& file:std::filesystem::directory_iterator(entry.path()))
+          if(file.path().filename().wstring().starts_with(L"managed-stop-")&&std::filesystem::file_size(file.path())<65536){
+            safe_existing_path(file.path(),false);std::ifstream stream(file.path());json receipt;
+            if(stream>>receipt)done=done||receipt.value("stop_complete",false);
+          }
+        if(done)completed.push_back(entry.path());
+      }
+      std::sort(completed.begin(),completed.end(),[](const auto& a,const auto& b){return std::filesystem::last_write_time(a)>std::filesystem::last_write_time(b);});
+      for(std::size_t i=31;i<completed.size();++i){
+        bool ordinary=true;for(const auto& file:std::filesystem::directory_iterator(completed[i])){
+          const auto attributes=GetFileAttributesW(file.path().c_str());
+          if(attributes==INVALID_FILE_ATTRIBUTES||(attributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY)))ordinary=false;
+        }
+        if(ordinary){for(const auto& file:std::filesystem::directory_iterator(completed[i]))std::filesystem::remove(file.path());std::filesystem::remove(completed[i]);}
+      }
+    }catch(...){/* optional diagnostics retention cannot veto playback */}
     config.evidence_root=narrow(sessions.wstring());
   } catch(const std::exception& error) {
     // configured() reports missing or invalid package data before a stream is accepted.
@@ -558,19 +585,39 @@ usb_launch_config_t usb_session_t::bundled_configuration(usb_launch_config_t con
 }
 bool usb_session_t::configured(const usb_launch_config_t& config,std::string& error){
   if(!config.setup_error.empty()){error=config.setup_error;return false;}
-  try{check_lab_writer_stall(config.lab_stall_writer_after_blocks,config.lab_stall_writer_ms);}
-  catch(const std::exception& exception){error=exception.what();return false;}
-  try{error.clear();need(hash_text(config.bridge_sha256)&&controller_text(config.controller_instance)&&config.seconds>=1&&config.seconds<=86400&&(!config.raw||config.detailed),"USB launch hash/controller/duration/diagnostics invalid");safe_existing_path(wide(config.bridge_executable),false);need(lower(std::filesystem::path(wide(config.bridge_executable)).extension().string())==".exe","USB bridge must be an executable");safe_existing_path(wide(config.evidence_root),true);return true;}catch(const std::exception& exception){error=exception.what();return false;}
+  try{error.clear();need(hash_text(config.bridge_sha256)&&controller_text(config.controller_instance)&&config.seconds<=86400&&(!config.raw||config.detailed),"USB launch hash/controller/duration/diagnostics invalid");safe_existing_path(wide(config.bridge_executable),false);need(lower(std::filesystem::path(wide(config.bridge_executable)).extension().string())==".exe","USB bridge must be an executable");safe_existing_path(wide(config.evidence_root),true);return true;}catch(const std::exception& exception){error=exception.what();return false;}
 }
+#endif // production lifecycle; guard builds compile the same pure helpers
+
 #else
 usb_launch_config_t usb_session_t::bundled_configuration(usb_launch_config_t config){return config;}
 struct usb_session_t::impl_t {usb_source_config_t bound;std::string failure="Managed USB requires Windows";explicit impl_t(usb_launch_config_t){}bool start(atmos_format_t,const std::function<bool()>&){return false;}bool stop()noexcept{return true;}};
 bool usb_session_t::configured(const usb_launch_config_t&,std::string& error){error="Managed USB requires Windows";return false;}
 #endif
+#ifndef VIBE_SESSION_TESTING
+namespace {
+std::mutex managed_session_mutex;
+std::weak_ptr<usb_session_t> prepared_session;
+}
+std::shared_ptr<usb_session_t> usb_session_t::acquire(usb_launch_config_t config,atmos_format_t format,
+    std::string& error,const std::function<bool()>& cancelled){
+  std::lock_guard lock(managed_session_mutex);
+  if(auto existing=prepared_session.lock()){
+#ifdef _WIN32
+    if(!existing->impl_->finished){
+      if(existing->source().format!=format){error="Vibe Speakers is already in use with another audio profile";return {};}
+      return existing;
+    }
+#endif
+  }
+  auto session=std::make_shared<usb_session_t>(std::move(config));
+  if(!session->start(format,cancelled)){error=session->error();return {};}
+  prepared_session=session;return session;
+}
 usb_session_t::usb_session_t(usb_launch_config_t config):impl_(std::make_unique<impl_t>(std::move(config))){}
 usb_session_t::~usb_session_t()=default;
 bool usb_session_t::start(atmos_format_t format,const std::function<bool()>& cancelled){return impl_->start(format,cancelled);}
-bool usb_session_t::stop()noexcept{return impl_->stop();}
+bool usb_session_t::stop()noexcept{std::lock_guard lock(managed_session_mutex);return impl_->stop();}
 const usb_source_config_t& usb_session_t::source()const{return impl_->bound;}
 const std::string& usb_session_t::error()const{return impl_->failure;}
 std::string usb_session_t::evidence_json()const{
@@ -580,68 +627,63 @@ std::string usb_session_t::evidence_json()const{
   return "{}";
 #endif
 }
-void test_usb_session_guards(){
-  need(hash_text(std::string(64,'a'))&&!hash_text(std::string(63,'a'))&&!hash_text(std::string(64,'g')),"Hash guard regression");
-  need(controller_text("ROOT\\USB\\0000")&&!controller_text("ROOT\\OTHER\\0000")&&!controller_text("ROOT\\USB\\0000\\extra")&&!controller_text("ROOT\\USB\\"),"Controller guard regression");
-  need(quote(L"abc")==L"\"abc\""&&quote(L"a b")==L"\"a b\""&&quote(L"a\\")==L"\"a\\\\\""&&quote(L"a\"b")==L"\"a\\\"b\"","Command line quoting regression");
-  for(const json& bad:{json(-1),json(1.5),json(true),json("1")}){bool rejected=false;try{integer(json{{"n",bad}},"n",255);}catch(...){rejected=true;}need(rejected,"Integer coercion accepted");}
-  need(integer(json{{"n",255}},"n",255)==255,"Integer upper boundary");bool rejected=false;try{integer(json{{"n",256}},"n",255);}catch(...){rejected=true;}need(rejected,"Integer overflow accepted");
-  for(const json& bad:{json(""),json(std::string("a\0b",3)),json("a\nb"),json(3)}){rejected=false;try{text(json{{"s",bad}},"s");}catch(...){rejected=true;}need(rejected,"Binding text coercion accepted");}
-#ifdef _WIN32
-  const std::uint64_t example_time=133744112233445566ull;
-  std::vector<std::wstring> stalls;
-  append_lab_writer_stall(stalls,0,0);
-  need(stalls.empty(),"Default USB launch unexpectedly enables fault injection");
-  append_lab_writer_stall(stalls,1,25);
-  need(stalls==std::vector<std::wstring>{L"--lab-stall-writer-after-blocks",L"1",L"--lab-stall-writer-ms",L"25"},
-       "Incorrect laboratory stall arguments");
-  check_lab_writer_stall(50000,100);
-  for(const auto& invalid:std::array<std::pair<unsigned,unsigned>,5>{{{0,25},{1,0},{50001,100},{1,24},{1,101}}}){
-    std::vector<std::wstring> none;bool refused=false;
-    try{append_lab_writer_stall(none,invalid.first,invalid.second);}catch(...){refused=true;}
-    need(refused&&none.empty(),"Invalid laboratory stall pair published");
-  }
-  std::vector<std::wstring> owner_args{L"bridge.exe"};append_owner_arguments(owner_args,42,example_time);
-  need(owner_args==std::vector<std::wstring>{L"bridge.exe",L"--owner-pid",L"42",L"--owner-creation-time",L"133744112233445566"},"USB owner command tuple changed or truncated");
-  bool duplicate=false;try{append_owner_arguments(owner_args,42,example_time);}catch(...){duplicate=true;}
-  need(duplicate&&owner_args.size()==5,"Duplicate owner tuple accepted");
-  for(const auto& invalid:std::array<std::pair<DWORD,std::uint64_t>,3>{{{0,0},{0,example_time},{42,0}}}){
-    std::vector<std::wstring> empty;bool refused=false;try{append_owner_arguments(empty,invalid.first,invalid.second);}catch(...){refused=true;}
-    need(refused&&empty.empty(),"Incomplete USB owner tuple accepted or partially emitted");
-  }
-  com_ptr<role_notice> notice;
-  notice.p=new role_notice(L"owned-endpoint");
-  notice->OnDeviceRemoved(L"other-endpoint");notice->OnDefaultDeviceChanged(eCapture,eConsole,nullptr);
-  need(notice->count==0&&WaitForSingleObject(notice->changed.value,0)==WAIT_TIMEOUT,"Unrelated endpoint notification");
-  notice->OnDeviceStateChanged(L"OWNED-ENDPOINT",DEVICE_STATE_NOTPRESENT);
-  need(notice->count==1&&WaitForSingleObject(notice->changed.value,0)==WAIT_OBJECT_0,"Owned removal notification lost");
-  notice->OnDefaultDeviceChanged(eRender,eConsole,nullptr);
-  need(notice->count==2&&WaitForSingleObject(notice->changed.value,0)==WAIT_OBJECT_0&&WaitForSingleObject(notice->changed.value,0)==WAIT_TIMEOUT,"Absent render-role wake lost or repeated");
-  usb_source_config_t expected;expected.controller_instance="ROOT\\USB\\0000";expected.pipe=R"(\\.\pipe\VibeSpeakersUsb_test)";
-  const json valid={{"Schema","vibe-usb-bridge-binding/1"},{"event","binding"},{"qpc_frequency",10000000},{"source_kind","user_mode_usb"},{"pid",123},{"creation_time",456},{"windows_session",1},{"vendor",0x1209},{"product",0x7140},{"channels",12},{"channel_mask",0x2d63f},{"sample_rate",48000},{"container_bits",32},{"valid_bits",24},{"controller_instance",expected.controller_instance},{"pipe_name","VibeSpeakersUsb_test"},{"owner_verified",true},{"owner_pid",GetCurrentProcessId()},{"owner_creation_time",created(GetCurrentProcess())},{"worker_mmcss_registered",true},{"worker_thread_id",999}};
-  validate_binding(valid,expected,123,456,1);
-  need(profile_product(expected.format)==0x7140,"Original 12-channel PCM24 product changed");
-  const std::array<atmos_format_t,4> six_profiles{{{6,0x3f,32,24},{6,0x60f,32,24},{6,0x3f,16,16},{6,0x60f,16,16}}};
-  for(const auto& profile:six_profiles){
-    auto offered=expected;offered.format=profile;
-    auto binding=valid;binding["channels"]=6;binding["channel_mask"]=profile.channel_mask;
-    binding["container_bits"]=profile.container_bits;binding["valid_bits"]=profile.valid_bits;
-    binding["product"]=profile_product(profile);validate_binding(binding,offered,123,456,1);
-    for(const auto& other:six_profiles){
-      if(other==profile)continue;
-            auto wrong=binding;
-      wrong["channel_mask"]=other.channel_mask;
-      wrong["container_bits"]=other.container_bits;
-      wrong["valid_bits"]=other.valid_bits;
-      bool refused=false;
-      try{validate_binding(wrong,offered,123,456,1);}catch(...){refused=true;}
-      need(refused,"Swapped six-channel layout or precision PID accepted");
+
+std::string usb_session_t::availability_json(){
+  json status={{"available",false},{"ready",false},{"setup_required",false},{"message","Vibe Speakers is not included in this build"}};
+#if defined(_WIN32) && SUNSHINE_ENABLE_VIBE_SPEAKERS
+  status["available"]=true;
+  try{const auto controller=owned_setup_controller();status["ready"]=true;status["message"]="Ready";}
+  catch(const std::exception& error){status["setup_required"]=true;status["message"]=error.what();}
+#endif
+  return status.dump();
+}
+bool usb_session_t::request_setup(std::string& error){
+#if defined(_WIN32) && SUNSHINE_ENABLE_VIBE_SPEAKERS
+  try{
+    const auto root=std::filesystem::path(current_image()).parent_path();
+    const auto script=root/L"VibeSpeakers"/L"Setup"/L"Show-Setup.ps1";
+    safe_existing_path(script,false);
+    // Never elevate a setup payload from an untrusted writable location.
+    // The integrated dialog is an installed-product action, not a lab launcher.
+    for(const auto& path:{root,script}){
+      handle_t file(CreateFileW(path.c_str(),READ_CONTROL,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
+      need(bool(file),"Cannot inspect installed setup permissions");
+      PSID owner=nullptr;PACL acl=nullptr;PSECURITY_DESCRIPTOR descriptor=nullptr;
+      need(GetSecurityInfo(file.value,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION,&owner,nullptr,&acl,nullptr,&descriptor)==ERROR_SUCCESS,"Cannot inspect setup ownership");
+      struct release{PSECURITY_DESCRIPTOR value;~release(){LocalFree(value);}} guard{descriptor};
+      std::array<BYTE,SECURITY_MAX_SID_SIZE> system{},admins{};DWORD a=DWORD(system.size()),b=DWORD(admins.size());
+      need(CreateWellKnownSid(WinLocalSystemSid,nullptr,system.data(),&a)&&CreateWellKnownSid(WinBuiltinAdministratorsSid,nullptr,admins.data(),&b),"Cannot inspect trusted principals");
+      const auto trusted=[&](PSID sid){return EqualSid(sid,system.data())||EqualSid(sid,admins.data());};
+      need(owner&&trusted(owner)&&acl,"Install Vibeshine in an administrator-protected directory before setup");
+      for(DWORD i=0;i<acl->AceCount;++i){void* raw=nullptr;need(GetAce(acl,i,&raw),"Invalid payload ACL");const auto* header=static_cast<ACE_HEADER*>(raw);
+        need(header->AceType==ACCESS_ALLOWED_ACE_TYPE||header->AceType==ACCESS_DENIED_ACE_TYPE,"Unsupported payload ACL");
+        if(header->AceType==ACCESS_ALLOWED_ACE_TYPE){const auto* ace=static_cast<ACCESS_ALLOWED_ACE*>(raw);
+          constexpr DWORD writes=GENERIC_ALL|GENERIC_WRITE|FILE_WRITE_DATA|FILE_APPEND_DATA|FILE_WRITE_EA|FILE_WRITE_ATTRIBUTES|DELETE|WRITE_DAC|WRITE_OWNER|FILE_DELETE_CHILD;
+          need(trusted(const_cast<DWORD*>(&ace->SidStart))||!(ace->Mask&writes),"Setup files are writable by an untrusted principal");}
+      }
     }
-  }
-  bool unknown_rejected=false;try{profile_product({6,3,32,24});}catch(...){unknown_rejected=true;}
-  need(unknown_rejected,"Unknown native format received a product ID");
-  const std::array<std::pair<const char*,json>,21> corrupt{{{"Schema","other"},{"event","starting"},{"qpc_frequency",0},{"source_kind","kernel"},{"pid",124},{"creation_time",457},{"windows_session",2},{"vendor",0},{"product",0},{"channels",2},{"channel_mask",3},{"sample_rate",44100},{"container_bits",16},{"valid_bits",16},{"controller_instance","ROOT\\USB\\0001"},{"pipe_name","VibeSpeakersUsb_other"},{"owner_verified",false},{"owner_pid",0},{"owner_creation_time",0},{"worker_mmcss_registered","true"},{"worker_thread_id",0}}};
-  for(const auto& change:corrupt){auto bad=valid;bad[change.first]=change.second;rejected=false;try{validate_binding(bad,expected,123,456,1);}catch(...){rejected=true;}need(rejected,"Unbound readiness metadata accepted");}
+    std::array<wchar_t,MAX_PATH> windows{};need(GetWindowsDirectoryW(windows.data(),DWORD(windows.size())),"Resolve Windows directory");
+    const auto executable=std::filesystem::path(windows.data())/L"System32"/L"WindowsPowerShell"/L"v1.0"/L"powershell.exe";
+    auto command=quote(executable.wstring())+L" -NoProfile -STA -ExecutionPolicy RemoteSigned -File "+quote(script.wstring());
+    STARTUPINFOW si{};si.cb=sizeof(si);si.lpDesktop=const_cast<LPWSTR>(L"winsta0\\default");PROCESS_INFORMATION pi{};
+    if(token_sid()==L"S-1-5-18"){
+      DWORD session=0;need(ProcessIdToSessionId(GetCurrentProcessId(),&session)&&session,"Interactive service session required");
+      handle_t user;need(WTSQueryUserToken(session,&user.value),"Logged-on setup user unavailable");
+      void* environment=nullptr;need(CreateEnvironmentBlock(&environment,user.value,FALSE),"Setup user environment unavailable");
+      const auto launched=CreateProcessAsUserW(user.value,executable.c_str(),command.data(),nullptr,nullptr,FALSE,CREATE_UNICODE_ENVIRONMENT,environment,root.c_str(),&si,&pi);const auto code=GetLastError();DestroyEnvironmentBlock(environment);
+      need(launched, ("Cannot open setup in the logged-on user session ("+std::to_string(code)+")").c_str());
+    }else need(CreateProcessW(executable.c_str(),command.data(),nullptr,nullptr,FALSE,0,nullptr,root.c_str(),&si,&pi),"Cannot open setup dialog");
+    handle_t process(pi.hProcess),thread(pi.hThread);return true;
+  }catch(const std::exception& exception){error=exception.what();return false;}
+#else
+  error="Vibe Speakers is not included in this build";return false;
 #endif
 }
+
+#endif // product entry points
+
+#ifdef VIBE_SESSION_TESTING
+#include "../tests/host714/usb_session_guard_cases.inl"
+#endif
+
 }

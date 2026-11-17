@@ -11,16 +11,16 @@ function NoLinks([string]$file){
 function PackageRoot {return (Split-Path (Split-Path $PSScriptRoot))}
 function StateDirectory([string]$sid){
  $parsed=[Security.Principal.SecurityIdentifier]::new($sid);Require ($parsed.IsAccountSid()) 'A real account SID is required'
- return (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('VibeSpeakers\RC1\'+$parsed.Value))
+ return (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('VibeSpeakers\users\'+$parsed.Value))
 }
 function LoadNative {
- if(!('VibeSpeakers.RC1.UsbIpDeviceSecurity' -as [type])){
+ if(!('VibeSpeakers.Setup.UsbIpDeviceSecurity' -as [type])){
   Add-Type -Path @((Join-Path $PSScriptRoot 'UsbIpDeviceSecurity.cs'),(Join-Path $PSScriptRoot 'UsbIpDeviceAccessProbe.cs'),(Join-Path $PSScriptRoot 'UsbControllerSetup.cs'))
  }
- if(!('VibeSpeakers.RC1.CodeIntegrity' -as [type])){Add-Type @'
+ if(!('VibeSpeakers.Setup.CodeIntegrity' -as [type])){Add-Type @'
 using System;
 using System.Runtime.InteropServices;
-namespace VibeSpeakers.RC1 {
+namespace VibeSpeakers.Setup {
  public static class CodeIntegrity {
   [StructLayout(LayoutKind.Sequential)] struct Info {public uint Size,Flags;}
   [DllImport("ntdll.dll")] static extern int NtQuerySystemInformation(int c,ref Info i,uint bytes,out uint returned);
@@ -42,7 +42,7 @@ function ReadState([string]$sid){
   }
  }
  $value=Get-Content -LiteralPath $file -Raw|ConvertFrom-Json
- Require ($value.Schema -ceq 'vibe-speakers-rc1-setup/1' -and $value.UserSid -ceq $sid) 'Setup journal belongs to another user or version'
+ Require ($value.Schema -ceq 'vibe-speakers-setup/1' -and $value.UserSid -ceq $sid) 'Setup journal belongs to another user or version'
  return $value
 }
 function WriteJson([string]$file,$value){
@@ -53,20 +53,28 @@ function WriteJson([string]$file,$value){
 }
 function CheckPayload {
  $root=PackageRoot;NoLinks $root
- Require ([IO.Path]::GetPathRoot($root) -match '^[A-Za-z]:\\$') 'Extract RC1 to a local NTFS drive, not a network path'
+ Require ([IO.Path]::GetPathRoot($root) -match '^[A-Za-z]:\\$') 'Install Vibeshine to a local NTFS drive, not a network path'
  $drive=[IO.DriveInfo]::new([IO.Path]::GetPathRoot($root))
  Require ([string]$drive.DriveType -in @('Fixed','Removable') -and $drive.DriveFormat -eq 'NTFS') 'A local NTFS folder is required for the controlled access permissions'
- $lock=Get-Content -LiteralPath (Join-Path $root 'VibeSpeakers\payload.lock.json') -Raw|ConvertFrom-Json
- Require ($lock.Schema -ceq 'vibe-speakers-rc1-payload/1') 'Unknown payload manifest'
- $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
- foreach($row in $lock.Files){
-  $path=[IO.Path]::GetFullPath((Join-Path $root $row.Path))
-  Require ($path.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase) -and $seen.Add($path)) 'Unsafe or duplicate payload path'
-  NoLinks $path;$item=Get-Item -LiteralPath $path
-  Require (!$item.PSIsContainer -and $item.Length -eq $row.Bytes -and (Hash $path) -ceq $row.SHA256) ('Package file differs: '+$row.Path)
+ if(Test-Path -LiteralPath (Join-Path $root 'VibeSpeakers\installed-payload.json')){
+  foreach($relative in @('sunshine.exe','tools\VibeUsbBridge.exe') + @(Get-ChildItem -LiteralPath $PSScriptRoot -File | ForEach-Object {$_.FullName.Substring($root.Length+1)})){
+   $path=Join-Path $root $relative;NoLinks $path
+   foreach($candidate in @($root,$path)){
+    $acl=Get-Acl -LiteralPath $candidate
+    Require ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -in @('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')) 'Installed payload must be administrator-owned'
+    foreach($ace in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){
+     if($ace.AccessControlType -eq 'Allow' -and $ace.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')){
+      $writes=[Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+      Require (($ace.FileSystemRights -band $writes) -eq 0) 'Installed payload is writable by an untrusted principal'
+     }
+    }
+   }
+  }
+  return @{Schema='vibe-speakers-installed-payload/1';BridgeSHA256=(Hash (Join-Path $root 'tools\VibeUsbBridge.exe'))}
  }
- return $lock
+ throw 'Installed Vibe Speakers payload marker is missing; repair the Vibeshine installation'
 }
+
 function CheckDriverPackage {
  $dir=Join-Path (PackageRoot) 'drivers\usbip-win2'
  $lock=Get-Content (Join-Path $dir 'release-lock.json') -Raw|ConvertFrom-Json
@@ -88,7 +96,6 @@ function CompatibilityErrors($facts){
  $errors=[Collections.Generic.List[string]]::new()
  if(!$facts.Windows11X64){$errors.Add('Windows 11 x64 required')}
  if(($facts.CodeIntegrityOptions -band 1) -eq 0 -or ($facts.CodeIntegrityOptions -band 2) -ne 0){$errors.Add('Code Integrity must be active and TESTSIGNING off')}
- if($facts.VbsStatus -ne 2 -or !$facts.HvciRunning){$errors.Add('Running VBS/HVCI required; no security changes are performed')}
  if($facts.SecureBoot -notin @(0,1)){$errors.Add('Secure Boot state is unknown')}
  if($facts.AdminBootChecked -and ($facts.TestSigning -or $facts.NoIntegrityChecks)){$errors.Add('TESTSIGNING/nointegritychecks must be off')}
  foreach($e in $facts.DriverConflicts){$errors.Add([string]$e)}
@@ -110,9 +117,9 @@ function GetPreflight([string]$sid=(CurrentSid)){
  $os=Get-CimInstance Win32_OperatingSystem
  $guard=Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard
  $sb=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\State' -Name UEFISecureBootEnabled -ErrorAction Stop).UEFISecureBootEnabled
- $facts=[ordered]@{Schema='vibe-speakers-rc1-preflight/1';Utc=[datetime]::UtcNow.ToString('o');UserSid=$sid;Elevated=(IsAdmin);
+ $facts=[ordered]@{Schema='vibe-speakers-preflight/1';Utc=[datetime]::UtcNow.ToString('o');UserSid=$sid;Elevated=(IsAdmin);
   Windows11X64=([Environment]::Is64BitProcess -and [Environment]::Is64BitOperatingSystem -and $env:PROCESSOR_ARCHITECTURE -eq 'AMD64' -and [int]$os.BuildNumber -ge 22000);
-  WindowsBuild=$os.BuildNumber;BootTime=$os.LastBootUpTime.ToUniversalTime().ToString('o');CodeIntegrityOptions=[VibeSpeakers.RC1.CodeIntegrity]::Flags();
+  WindowsBuild=$os.BuildNumber;BootTime=$os.LastBootUpTime.ToUniversalTime().ToString('o');CodeIntegrityOptions=[VibeSpeakers.Setup.CodeIntegrity]::Flags();
   VbsStatus=[int]$guard.VirtualizationBasedSecurityStatus;HvciRunning=(2 -in $guard.SecurityServicesRunning);SecureBoot=[int]$sb;
   SecureBootHardwareQualification=$false;SecureBootFirmwareChecked=$false;AdminBootChecked=$false;TestSigning=$null;NoIntegrityChecks=$null;
   DriverConflicts=@();UsbIdentityConflicts=@();InstalledDrivers=@();StagedInf=@();AudioServices=@();OwnController=$null;SetupRequired=$true;SystemActions=$false}
@@ -149,10 +156,10 @@ function GetPreflight([string]$sid=(CurrentSid)){
  Require ((Test-Path -LiteralPath $builtin) -and (Get-AuthenticodeSignature -LiteralPath $builtin).Status -eq 'Valid') 'Signed Windows USB Audio 2 driver unavailable'
  $state=ReadState $sid
  if($state -and $state.Phase -eq 'Ready'){
-  [VibeSpeakers.RC1.UsbIpDeviceSecurity]::Bind($state.ControllerInstance)
-  $null=[VibeSpeakers.RC1.UsbControllerSetup]::CheckMarker($state.ControllerInstance,$state.Token)
-  $snap=[VibeSpeakers.RC1.UsbIpDeviceSecurity]::Inspect()
-  Require ([VibeSpeakers.RC1.UsbIpDeviceSecurity]::Equivalent($snap.Security,$state.TargetSddl)) 'Own controller ACL changed'
+  [VibeSpeakers.Setup.UsbIpDeviceSecurity]::Bind($state.ControllerInstance)
+  $null=[VibeSpeakers.Setup.UsbControllerSetup]::CheckMarker($state.ControllerInstance,$state.Token)
+  $snap=[VibeSpeakers.Setup.UsbIpDeviceSecurity]::Inspect()
+  Require ([VibeSpeakers.Setup.UsbIpDeviceSecurity]::Equivalent($snap.Security,$state.TargetSddl)) 'Own controller ACL changed'
   Require ($snap.Started -and $snap.ProblemCode -eq 0) 'Own controller is not ready; inspect setup journal'
   $facts.OwnController=$snap;$facts.SetupRequired=$false
  }

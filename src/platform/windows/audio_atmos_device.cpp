@@ -227,7 +227,7 @@ namespace audio { namespace {
 
 }
 std::unique_ptr<atmos_device_backend_t> make_owned_usb_format_backend(const usb_source_config_t& source) {
-  const usb_lab::Identity identity{0x1209,VibeLabUsbProduct(source.format.channels,source.format.channel_mask,
+  const usb_lab::Identity identity{0x1209,VibeUsbProduct(source.format.channels,source.format.channel_mask,
     source.format.container_bits,source.format.valid_bits),wide(source.serial),wide(source.controller_instance),
     wide(source.service),int(source.port)};
   usb_lab::Validate(identity);

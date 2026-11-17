@@ -18,7 +18,17 @@ struct Failure : std::runtime_error {
 inline void Require(bool yes,ErrorCode code,const char* text){if(!yes)throw Failure(code,text);}
 inline std::uint64_t AgeBudgetTicks(std::uint64_t frequency)noexcept{return(frequency/1000)*MaximumAgeMs+(frequency%1000)*MaximumAgeMs/1000;}
 inline bool Fresh(std::uint64_t now,std::uint64_t ready,std::uint64_t frequency)noexcept{return frequency&&now>=ready&&now-ready<=AgeBudgetTicks(frequency);}
-constexpr bool ValidDuration(std::uint32_t seconds)noexcept{return seconds>=1&&seconds<=86400;}
+constexpr bool ValidDuration(std::uint32_t seconds)noexcept{return seconds<=86400;}
+
+// Test builds may request a finite run. Product callers use zero/INFINITE.
+constexpr std::uint32_t DurationWait(std::uint32_t seconds) noexcept {
+ return seconds ? seconds * 1000u : UINT32_MAX;
+}
+
+template<class Wait, class Signal>
+void AwaitSessionStop(std::uint32_t seconds,Wait&& wait,Signal&& signal){
+ if(wait(DurationWait(seconds))==258u)signal(); // WAIT_TIMEOUT
+}
 
 // Exactly one producer and one consumer. Storage and indices survive reconnect;
 // discard/reset is permitted only after the producer has been disarmed/retired.

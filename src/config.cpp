@@ -1273,7 +1273,7 @@ namespace config {
       }
 
       var->first = normalize_config_key(std::move(var->first));
-      if (var->first.empty() || retired_host_spatial_setting(var->first)) {
+      if (var->first.empty()) {
         continue;
       }
 
@@ -2083,6 +2083,7 @@ namespace config {
     bool_f(vars, "audio_sink_capture_only", audio.sink_capture_only);
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
     string_f(vars, "audio_714_source", audio.discrete_714_source);
+#ifdef VIBE_AUDIO_TEST_INSTRUMENTATION
     string_f(vars,"audio_usb_pipe",audio.usb.pipe);
     string_f(vars,"audio_usb_bridge_executable",audio.usb.bridge_executable);
     string_f(vars,"audio_usb_bridge_sha256",audio.usb.bridge_sha256);
@@ -2091,10 +2092,14 @@ namespace config {
     string_f(vars,"audio_usb_controller_instance",audio.usb.controller_instance);
     string_f(vars,"audio_usb_serial",audio.usb.serial);
     string_f(vars,"audio_usb_service",audio.usb.service);
+#endif
     string_f(vars,"audio_usb_sample_format",audio.usb.sample_format);
+#ifdef VIBE_AUDIO_TEST_INSTRUMENTATION
     string_f(vars,"audio_usb_evidence_root",audio.usb_evidence_root);
     std::string usb_seconds;string_f(vars,"audio_usb_session_seconds",usb_seconds);
     if(!usb_seconds.empty()){const auto parsed=::audio::protocol::parse_uint32(usb_seconds);audio.usb_session_seconds=parsed?*parsed:0;}
+#endif
+#ifdef VIBE_AUDIO_TEST_INSTRUMENTATION
     std::string usb_port;string_f(vars,"audio_usb_port",usb_port);
     if(!usb_port.empty()){const auto parsed=::audio::protocol::parse_uint32(usb_port);audio.usb.port=parsed?*parsed:0;}
     std::string audio_714_bitrate;
@@ -2103,6 +2108,8 @@ namespace config {
       const auto parsed = ::audio::protocol::parse_uint32(audio_714_bitrate);
       audio.discrete_714_bitrate = parsed && *parsed <= 2147483647U ? static_cast<int>(*parsed) : 0;
     }
+
+#endif
 
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, {"pc"sv, "lan"sv, "wan"sv});
     // reflect origin ACL update immediately in HTTP layer

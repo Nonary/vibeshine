@@ -34,8 +34,19 @@ inline void WriteBytes(HANDLE file,const void* bytes,std::uint32_t size){
 }
 inline void WriteText(HANDLE file,const std::string& text){WriteBytes(file,text.data(),static_cast<std::uint32_t>(text.size()));}
 
+inline Handle OptionalLog(const std::wstring& path) noexcept {
+ Handle file(CreateFileW(path.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));
+ return file;
+}
+inline void WriteLog(HANDLE file,const std::string& text) noexcept {
+ if(file==INVALID_HANDLE_VALUE||!file)return;
+ LARGE_INTEGER zero{},position{};
+ if(!SetFilePointerEx(file,zero,&position,FILE_CURRENT)||position.QuadPart+static_cast<LONGLONG>(text.size())>65536)return;
+ DWORD written=0;(void)WriteFile(file,text.data(),static_cast<DWORD>(text.size()),&written,nullptr);
+}
+
 class Diagnostics {
- std::unique_ptr<Spsc<NativeDiagnostic,32>> native_{std::make_unique<Spsc<NativeDiagnostic,32>>()};
+ std::unique_ptr<Spsc<NativeDiagnostic,32>> native_;
  Spsc<BlockDiagnostic,256> blocks_;
  Handle wake_{CreateEventW(nullptr,FALSE,FALSE,nullptr)},stop_{CreateEventW(nullptr,TRUE,FALSE,nullptr)};
  Handle raw_,nativeLog_,blockLog_;
@@ -50,11 +61,11 @@ class Diagnostics {
 #endif
  void Run() noexcept {
   try{
-   auto native=std::make_unique<NativeDiagnostic>();BlockDiagnostic block;
+   auto native=rawEnabled_?std::make_unique<NativeDiagnostic>():nullptr;BlockDiagnostic block;
    for(;;){
     const bool stopping=WaitForSingleObject(stop_.Get(),0)==WAIT_OBJECT_0;
     bool progress=false;
-    while(native_->Pop(*native)){
+    while(native_&&native_->Pop(*native)){
      progress=true;const auto& h=native->header;
      WriteBytes(raw_.Get(),&h,sizeof(h));
      WriteBytes(raw_.Get(),native->packets.data(),h.packetCount*sizeof(usb::iso_packet));
@@ -92,6 +103,8 @@ public:
 #ifdef VIBE_BRIDGE_TESTING
   emptyBeforeCompletion_=std::move(emptyBeforeCompletion);
 #endif
+  if(!raw&&!detailed)return;
+  if(raw)native_=std::make_unique<Spsc<NativeDiagnostic,32>>();
   WinCheck(wake_.Valid()&&stop_.Valid(),InternalFailure,"Create diagnostics events");
   if(raw){raw_=CreateOutput(prefix+L".vusbraw");nativeLog_=CreateOutput(prefix+L".native.jsonl");}
   if(detailed)blockLog_=CreateOutput(prefix+L".blocks.jsonl");

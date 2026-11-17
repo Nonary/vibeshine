@@ -75,6 +75,7 @@ namespace audio {
     std::shared_ptr<delivery_state_t> delivery;
   };
 
+  std::shared_ptr<void> prepare_usb_before_launch(unsigned channels, unsigned mask);
   bool discrete_source_enabled();
   bool discrete_714_available(std::string &reason);
   bool prepare_session(config_t &config, std::string &reason);

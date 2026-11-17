@@ -7,7 +7,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
-namespace VibeSpeakers.RC1 {
+namespace VibeSpeakers.Setup {
  public sealed class SecurityProperty { public bool Present; public uint Type; public string BytesBase64,Sddl; }
  public sealed class UsbSecuritySnapshot { public string InstanceId,Service,InfName,InfSha256; public string[] HardwareIds; public uint DeviceStatus,ProblemCode; public bool Started; public SecurityProperty Security; }
  public sealed class AclAccessProof { public bool ApprovedUserAllowed,WorldOnlyDenied,ForeignSidOnlyDenied; public bool ActualForeignLoginTest=false,ActualDeviceOpenTest=false; public string ApprovedSid; }

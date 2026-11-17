@@ -10,7 +10,7 @@ void need(bool value,const char* text){++checks;if(!value)throw std::runtime_err
 using namespace vibe_input;
 WelcomeMessage session(Profile p) {
  constexpr std::uint64_t nonce[2]={1,2};WelcomeMessage s{};s.header=MakeHeader(Welcome,sizeof(s),nonce);
- s.profile=p;s.binding.vendor=0x1209;s.binding.product=VibeLabUsbProduct(p.channels,p.channelMask,p.nativeContainerBits,p.nativeValidBits);
+ s.profile=p;s.binding.vendor=0x1209;s.binding.product=VibeUsbProduct(p.channels,p.channelMask,p.nativeContainerBits,p.nativeValidBits);
  s.qpcFrequency=10000000;s.queueBlocks=QueueBlocks;s.maximumAgeMs=MaximumAgeMs;return s;
 }
 AudioHeader first(const WelcomeMessage& s) {

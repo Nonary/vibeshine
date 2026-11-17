@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, toRaw, w
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router';
 import { useSystemStore, type HostMetadata } from '@/stores/system';
+import VibeSpeakersStatus from '@/VibeSpeakersStatus.vue';
 import LinuxCaptureStatus from '@/components/settings/LinuxCaptureStatus.vue';
 import NetworkPortDetails from '@/components/settings/NetworkPortDetails.vue';
 import {
@@ -118,6 +119,7 @@ const activeCategory = ref(
     ? String(route.query.category)
     : settingsCategories[0].id,
 );
+const vibeAvailable = ref(false);
 const hostMetadata = ref<MetadataResponse>({});
 const machineHostTrayUnavailable = computed(
   () => hostMetadata.value.platform === 'linux' && hostMetadata.value.linux?.machine_host === true,
@@ -1148,6 +1150,8 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
               >
                 {{ t('ui.settings.virtual_display_unavailable.description') }}
               </InlineAlert>
+              <VibeSpeakersStatus v-if="group.id === 'audio_routing' && isWindowsHost"
+                :selected="values.audio_714_source === 'vibe_usb'" @availability="vibeAvailable = $event" />
               <div class="settings-group vs-settings-group">
                 <SettingRow
                   v-for="field in group.fields"
@@ -1224,6 +1228,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
                       v-for="option in optionsFor(field)"
                       :key="option.value"
                       :value="option.value"
+                      :disabled="field.key === 'audio_714_source' && option.value === 'vibe_usb' && !vibeAvailable"
                     >
                       {{ optionText(option, field.key) }}
                     </option>

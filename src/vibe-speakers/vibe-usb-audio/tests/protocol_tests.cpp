@@ -46,8 +46,8 @@ void descriptor_and_clock(profile format_value,bool sync){
  const auto expected=channels==2?(is24?1u:2u):channels==6&&format_value.channel_mask==0x3f?(is24?3u:4u):
                      channels==6?(is24?5u:6u):channels==8?(is24?7u:8u):(is24?14u:9u);
  check(format_value.product_id()==expected,"Independent expected private PID for each exact profile");
- check(VibeLabUsbProduct(channels,0,format_value.native_container_bits,format_value.native_valid_bits)==0&&
-       VibeLabUsbProduct(channels,format_value.channel_mask,24,24)==0&&VibeLabUsbProduct(channels,format_value.channel_mask,32,16)==0,"Reject unknown private product");
+ check(VibeUsbProduct(channels,0,format_value.native_container_bits,format_value.native_valid_bits)==0&&
+       VibeUsbProduct(channels,format_value.channel_mask,24,24)==0&&VibeUsbProduct(channels,format_value.channel_mask,32,16)==0,"Reject unknown private product");
  const auto d=id(format_value);callbacks cb;cb.synchronous_out=sync;cb.record_clock=sync;std::uint64_t captured=0;
  cb.pcm=[&](const auto& m,auto,auto){captured+=m.frames;return true;};session s(d,cb);
  const auto config=s.configuration_descriptor();check(config.size()==(sync?127u:134u)&&config[2]+256u*config[3]==config.size(),"configuration total bytes");

@@ -31,13 +31,6 @@ namespace config {
   constexpr int PACKETSIZE_MAX = 65535;
   constexpr int PACKETSIZE_SMALL = 500;
   constexpr int PACKETSIZE_LARGE = 1456;
-  // Old portable configurations may contain the retired host DSP controls.
-  // Ignore them on import and API writes. Reading an old file never alters it.
-  inline bool retired_host_spatial_setting(std::string_view key) {
-    return key == "audio_usb_upmix_71" || key == "audio_usb_ambience_gain_db" ||
-           key == "audio_usb_ambience_lab_dry";
-  }
-
   // track modified config options
   inline std::unordered_map<std::string, std::string> modified_config_settings;
   // when a stream is active, we defer some settings until all sessions end
@@ -282,7 +275,7 @@ namespace config {
     int discrete_714_bitrate {600000};
     ::audio::usb_source_config_t usb {};
     std::string usb_evidence_root {};
-    unsigned usb_session_seconds=14400;
+    unsigned usb_session_seconds=0; // Internal test builds only; ignored in product configuration.
   };
 
   // Fixed after initial parse and before platform initialization; independent

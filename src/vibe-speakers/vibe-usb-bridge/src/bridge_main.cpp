@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "diagnostics.h"
-#ifdef VIBE_USB_EXPERIMENT_BOOT_FRAME
-#include <realtimeapiset.h>
-#pragma comment(lib, "mincore.lib")
-#endif
+
 
 #include <avrt.h>
 #include <algorithm>
@@ -15,18 +12,24 @@
 
 namespace vibe_bridge {
 struct Options {
- bool lab=false,managed=false,raw=false,detailed=true;
+ bool managed=false,raw=false,detailed=false;
  Profile profile{SampleRate,12,Frames,0x2d63f,32,24};
  std::wstring controller,pipeName,clientImage,out,readyName,stopName,readyFile;
  std::string clientHash;
- unsigned seconds=60,stallAfterBlocks=0,stallWriterMs=0;DWORD ownerPid=0;std::uint64_t ownerCreation=0;
+ unsigned seconds=0;DWORD ownerPid=0;std::uint64_t ownerCreation=0;
 };
 Options Parse(int argc,wchar_t** argv){
  Options o;bool explicitMask=false,ownerPidSpecified=false,ownerCreationSpecified=false;
  for(int i=1;i<argc;++i){
   const std::wstring key=argv[i];
   if(key==L"--managed-runtime"){o.managed=true;continue;}
-  if(key==L"--raw"){o.raw=true;continue;}
+  if(key==L"--raw"){
+#if defined(VIBE_AUDIO_TEST_INSTRUMENTATION) || defined(VIBE_BRIDGE_TESTING)
+   o.raw=true;continue;
+#else
+   throw Failure(InvalidHandshake,"PCM recording is not available in the product build");
+#endif
+  }
   if(key==L"--summary-only"){o.detailed=false;continue;}
   Require(i+1<argc,InvalidHandshake,"Missing option value");const std::wstring value=argv[++i];
   auto number=[&](){std::size_t end=0;const auto n=std::stoull(value,&end,0);Require(end==value.size()&&n<=UINT32_MAX,InvalidHandshake,"Invalid numeric option");return static_cast<std::uint32_t>(n);};
@@ -41,9 +44,13 @@ Options Parse(int argc,wchar_t** argv){
   else if(key==L"--channels"){const auto n=number();Require(n<=UINT16_MAX,InvalidHandshake,"Channel count overflow");o.profile.channels=static_cast<std::uint16_t>(n);}
   else if(key==L"--channel-mask"){o.profile.channelMask=number();explicitMask=true;}
   else if(key==L"--native-format"||key==L"--sample-format"){Require(value==L"pcm24"||value==L"pcm16",InvalidHandshake,"Only pcm24 or pcm16 supported");o.profile.nativeContainerBits=value==L"pcm24"?32:16;o.profile.nativeValidBits=value==L"pcm24"?24:16;}
-  else if(key==L"--seconds")o.seconds=number();
-  else if(key==L"--lab-stall-writer-after-blocks"){Require(!o.stallAfterBlocks,InvalidHandshake,"Repeated writer fault index");o.stallAfterBlocks=number();Require(o.stallAfterBlocks>0,InvalidHandshake,"Fault must follow at least one confirmed block");}
-  else if(key==L"--lab-stall-writer-ms"){Require(!o.stallWriterMs,InvalidHandshake,"Repeated writer fault duration");o.stallWriterMs=number();Require(o.stallWriterMs>=25&&o.stallWriterMs<=100,InvalidHandshake,"Writer fault bounds are 25..100 ms");}
+  else if(key==L"--seconds"){
+#if defined(VIBE_AUDIO_TEST_INSTRUMENTATION) || defined(VIBE_BRIDGE_TESTING)
+   o.seconds=number();
+#else
+   throw Failure(InvalidHandshake,"Finite session durations are test-only");
+#endif
+  }
   else if(key==L"--owner-pid"){Require(!ownerPidSpecified,InvalidHandshake,"Duplicate owner PID");o.ownerPid=number();ownerPidSpecified=true;}
   else if(key==L"--owner-creation-time"){
    Require(!ownerCreationSpecified&&!value.empty()&&value.find_first_not_of(L"0123456789")==std::wstring::npos,InvalidHandshake,"Invalid owner FILETIME");
@@ -52,11 +59,10 @@ Options Parse(int argc,wchar_t** argv){
   else throw Failure(InvalidHandshake,"Unknown option");
  }
  Require(explicitMask||o.profile.channels!=6,InvalidHandshake,"Six channels require an explicit rear or side mask");
- Require(bool(o.stallAfterBlocks)==bool(o.stallWriterMs),InvalidHandshake,"Writer fault requires both explicit options");
  Require(ownerPidSpecified==ownerCreationSpecified&&(!ownerPidSpecified||(o.ownerPid&&o.ownerCreation)),InvalidHandshake,"Managed owner requires both a positive PID and creation FILETIME");
  if(!explicitMask)o.profile.channelMask=o.profile.channels==2?3:o.profile.channels==8?0x63f:0x2d63f;
  Require(o.managed,BindingMismatch,"Owned managed runtime is required");
- if(o.managed)Require(o.ownerPid&&o.ownerCreation&&!o.readyName.empty()&&!o.stopName.empty()&&!o.stallAfterBlocks&&!o.stallWriterMs,BindingMismatch,"Managed runtime requires an exact live owner and control events; laboratory faults prohibited");
+ if(o.managed)Require(o.ownerPid&&o.ownerCreation&&!o.readyName.empty()&&!o.stopName.empty(),BindingMismatch,"Managed runtime requires an exact live owner and control events; laboratory faults prohibited");
  Require(ValidProfile(o.profile)&&!o.controller.empty()&&!o.clientImage.empty()&&!o.out.empty(),InvalidHandshake,"Exact controller, profile, peer and evidence prefix required");
  Require(ValidDuration(o.seconds)&&!o.pipeName.empty()&&o.pipeName.size()<160&&
   o.pipeName.find_first_not_of(L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")==std::wstring::npos,
@@ -110,7 +116,7 @@ public:
     WriteText(file.Get(),"{\"Schema\":\"vibe-usb-managed-owner-exit/1\",\"owner_pid\":"+std::to_string(pid_)+
      ",\"owner_creation_time\":"+std::to_string(creation_)+",\"process_handle_signaled\":"+(result==WAIT_OBJECT_0?"true":"false")+
      ",\"observed_qpc\":"+std::to_string(ended)+",\"stop_event_set\":"+(stopped?"true":"false")+"}\n");
-   }catch(...){watchFailed_=true;}
+   }catch(...){/* optional owner-exit receipt; kernel process wait remains authoritative */}
   });
  }
  ~ManagedOwner(){Close();}
@@ -128,7 +134,7 @@ template<std::size_t N>bool EqualText(const char16_t(&a)[N],const char16_t(&b)[N
 UsbBinding ToWire(const usb::binding& b){
  UsbBinding w{};WireText(w.endpointId,b.endpoint_id);WireText(w.usbInstance,b.usb_instance);WireText(w.controllerInstance,b.host_instance);
  Require(b.port>0&&b.port<=255&&b.serial.size()<sizeof(w.serial)&&b.service.size()<sizeof(w.service),BindingMismatch,"Invalid exact imported tuple");
- Require(b.vendor==usb::lab_vendor&&b.product,BindingMismatch,"Missing actual USB import product identity");
+ Require(b.vendor==usb::vendor_id&&b.product,BindingMismatch,"Missing actual USB import product identity");
  std::memcpy(w.serial,b.serial.data(),b.serial.size());std::memcpy(w.service,b.service.data(),b.service.size());w.port=static_cast<std::uint32_t>(b.port);w.vendor=b.vendor;w.product=b.product;return w;
 }
 bool SameBinding(const UsbBinding& a,const UsbBinding& b)noexcept{return EqualText(a.endpointId,b.endpointId)&&EqualText(a.usbInstance,b.usbInstance)&&EqualText(a.controllerInstance,b.controllerInstance)&&
@@ -169,8 +175,8 @@ Peer Authenticate(HANDLE pipe,const LockedPeerImage& pinned,const Options& o){
 bool ValidHello(const HelloMessage& hello,const Peer& peer,std::uint32_t serverPid,std::uint64_t serverCreation,const Profile& profile,const UsbBinding& binding)noexcept{
  return ValidHeader(hello.header,Hello,sizeof(hello))&&hello.sourceKind==UserModeUsb&&hello.clientPid==peer.pid&&hello.expectedServerPid==serverPid&&
   hello.windowsSessionId==peer.session&&hello.clientCreationTime==peer.creation&&hello.serverCreationTime==serverCreation&&
-  ValidProfile(hello.profile)&&SameProfile(hello.profile,profile)&&binding.vendor==usb::lab_vendor&&
-  binding.product==VibeLabUsbProduct(profile.channels,profile.channelMask,profile.nativeContainerBits,profile.nativeValidBits)&&SameBinding(hello.binding,binding);
+  ValidProfile(hello.profile)&&SameProfile(hello.profile,profile)&&binding.vendor==usb::vendor_id&&
+  binding.product==VibeUsbProduct(profile.channels,profile.channelMask,profile.nativeContainerBits,profile.nativeValidBits)&&SameBinding(hello.binding,binding);
 }
 
 // Main thread owns activation/configuration, USB worker alone owns assembler and
@@ -268,15 +274,11 @@ struct OverflowBoundary {
           SequenceGap,"Cannot prove positive same-native-epoch gap after overflow");
  }
 };
-DWORD WaitLabWriterStall(HANDLE stop,HANDLE actualFault,DWORD maximumMs)noexcept{
- HANDLE events[]{stop,actualFault};
- return WaitForMultipleObjects(2,events,FALSE,maximumMs);
-}
 
 int Run(const Options& o){
  const LockedPeerImage pinned(o.clientImage,o.clientHash);
- auto log=CreateOutput(o.out+L".jsonl");auto ready=OpenNamedEvent(o.readyName,EVENT_MODIFY_STATE);
- WriteText(log.Get(),"{\"event\":\"starting\",\"controller_instance\":"+Json(o.controller)+",\"allowed_client_sha256\":"+Json(o.clientHash)+
+ auto log=OptionalLog(o.out+L".jsonl");auto ready=OpenNamedEvent(o.readyName,EVENT_MODIFY_STATE);
+ WriteLog(log.Get(),"{\"event\":\"starting\",\"controller_instance\":"+Json(o.controller)+",\"allowed_client_sha256\":"+Json(o.clientHash)+
   ",\"channels\":"+std::to_string(o.profile.channels)+",\"channel_mask\":"+std::to_string(o.profile.channelMask)+",\"container_bits\":"+std::to_string(o.profile.nativeContainerBits)+
   ",\"valid_bits\":"+std::to_string(o.profile.nativeValidBits)+",\"owner_pid\":"+std::to_string(o.ownerPid)+",\"owner_creation_time\":"+std::to_string(o.ownerCreation)+",\"qpc\":"+std::to_string(Clock())+"}\n");
  try {
@@ -285,21 +287,16 @@ int Run(const Options& o){
  ManagedOwner owner(o,pinned,stop.Get());
  auto diagnosticsOwner=std::make_unique<Diagnostics>(o.out,o.profile,o.raw,o.detailed);auto& diagnostics=*diagnosticsOwner;
  auto pipelineOwner=std::make_unique<Pipeline>(o.profile);auto& pipeline=*pipelineOwner;
- usb::callbacks callbacks;callbacks.record_clock=true;
-#ifdef VIBE_USB_EXPERIMENT_SPACED_ACK
- callbacks.space_expired_out=true;
-#elif defined(VIBE_USB_EXPERIMENT_SYNC_OUT)
- callbacks.synchronous_out=true;
-#ifdef VIBE_USB_EXPERIMENT_BOOT_FRAME
- callbacks.boot_interrupt_time_100ns=[](){ULONGLONG value=0;QueryInterruptTimePrecise(&value);return value;};
+ usb::callbacks callbacks;callbacks.record_clock=false;
+#ifdef VIBE_AUDIO_TEST_INSTRUMENTATION
+ callbacks.record_clock=true;
 #endif
-#endif
- callbacks.diagnostic=[&](const std::string& message){WriteText(log.Get(),"{\"event\":\"usb_startup\",\"message\":"+Json(message)+"}\n");};
+ callbacks.diagnostic=[&](const std::string& message){WriteLog(log.Get(),"{\"event\":\"usb_startup\",\"message\":"+Json(message)+"}\n");};
  callbacks.qpc=Clock;callbacks.qpc_frequency=Frequency();
  callbacks.pcm=[&](const auto& m,auto packets,auto bytes){
   // PCM readiness/conversion has priority over optional evidence copying.
   pipeline.Native(m,packets,bytes);
-  if(!diagnostics.Native(m,packets,bytes))pipeline.Fail(InputLoss);
+  (void)diagnostics.Native(m,packets,bytes); // optional diagnostics cannot stop delivery
   return true;
  };
  callbacks.stream_reset=[&](std::uint32_t e,bool terminalAs0){pipeline.Reset(e,terminalAs0);};
@@ -316,15 +313,16 @@ int Run(const Options& o){
  Require(!binding.endpoint_id.empty() && (o.managed || (binding.mix_channels==o.profile.channels&&binding.mix_rate==SampleRate&&binding.mix_bits==32&&binding.mix_mask==o.profile.channelMask)),
   FormatMismatch,"Actual public endpoint mix differs from the explicit USB profile");
  Require(binding.mmcss_registered&&binding.worker_thread_id,InternalFailure,"USB worker MMCSS registration not established");
- Require(binding.product==format.product_id()&&binding.vendor==usb::lab_vendor,BindingMismatch,"Imported product does not match requested USB profile");
+ Require(binding.product==format.product_id()&&binding.vendor==usb::vendor_id,BindingMismatch,"Imported product does not match requested USB profile");
  const auto wireBinding=ToWire(binding);const bool ownerVerified=owner.VerifiedAlive();
  Require(!o.ownerPid||ownerVerified,ControlledStop,"Managed owner exited before endpoint readiness");
- const auto bindingText=BindingJson(binding,o,ownerVerified);WriteText(log.Get(),bindingText);
+ const auto bindingText=BindingJson(binding,o,ownerVerified);WriteLog(log.Get(),bindingText);
  {auto f=CreateOutput(o.readyFile.empty()?o.out+L".binding.json":o.readyFile);WriteText(f.Get(),bindingText);}
  auto pipe=MakePipe(o);
- std::thread duration([&]{if(WaitForSingleObject(stop.Get(),o.seconds*1000)==WAIT_TIMEOUT)SetEvent(stop.Get());});
+ // INFINITE waits on the same cancel event: no timer can terminate a normal stream.
+ std::thread duration([&]{AwaitSessionStop(o.seconds,[&](DWORD milliseconds){return WaitForSingleObject(stop.Get(),milliseconds);},[&]{SetEvent(stop.Get());});});
  std::uint64_t sessions=0,rejections=0,totalBlocks=0,totalDiscarded=0,totalPartial=0,unconfirmed=0;
- std::uint64_t overflowEnds=0,resumedOverflows=0,gapFrames=0;OverflowBoundary boundary;bool failure=false,injected=false;
+ std::uint64_t overflowEnds=0,resumedOverflows=0,gapFrames=0;OverflowBoundary boundary;bool failure=false;
  try{
   if(ready.Valid())SetEvent(ready.Get());
   while(WaitForSingleObject(stop.Get(),0)==WAIT_TIMEOUT){
@@ -348,24 +346,15 @@ int Run(const Options& o){
     welcome.serverCreationTime=Creation(GetCurrentProcess());welcome.clientCreationTime=peer.creation;welcome.profile=o.profile;welcome.queueBlocks=QueueBlocks;welcome.maximumAgeMs=MaximumAgeMs;welcome.binding=wireBinding;
     AudioScheduling audioScheduling(mmcssRevertFailed);
     ++sessions;
-    WriteText(log.Get(),"{\"event\":\"session_start\",\"session\":"+std::to_string(sessions)+",\"nonce\":"+Json(NonceText(nonce))+",\"peer_pid\":"+std::to_string(peer.pid)+
+    WriteLog(log.Get(),"{\"event\":\"session_start\",\"session\":"+std::to_string(sessions)+",\"nonce\":"+Json(NonceText(nonce))+",\"peer_pid\":"+std::to_string(peer.pid)+
      ",\"writer_thread_id\":"+std::to_string(GetCurrentThreadId())+",\"writer_mmcss\":true,\"qpc\":"+std::to_string(Clock())+"}\n");
     pipeline.Arm(sessions,nonce);armed=true;
     io.Transfer(pipe.Get(),&welcome,sizeof(welcome),true,stop.Get(),pipeline.fault.Get(),2000);
     peerWatch.emplace(pipe.Get());
     auto messageOwner=std::make_unique<AudioMessage>();auto& message=*messageOwner;
     for(;;){
-     if(!injected&&o.stallAfterBlocks&&sessions==1&&blocks==o.stallAfterBlocks&&pipeline.Error()==NoError){
-      injected=true;const auto start=Clock();const auto waited=WaitLabWriterStall(stop.Get(),pipeline.fault.Get(),o.stallWriterMs);
-      const auto ended=Clock();
-      WriteText(log.Get(),"{\"event\":\"lab_writer_stall\",\"after_blocks\":"+std::to_string(blocks)+",\"requested_ms\":"+std::to_string(o.stallWriterMs)+
-       ",\"start_qpc\":"+std::to_string(start)+",\"end_qpc\":"+std::to_string(ended)+",\"wait_result\":"+std::to_string(waited)+
-       ",\"actual_fault\":"+std::to_string(pipeline.Error())+",\"ended_on_fault\":"+(waited==WAIT_OBJECT_0+1?"true":"false")+"}\n");
-      if(waited==WAIT_FAILED)throw Failure(InternalFailure,"Lab writer stall wait failed",GetLastError());
-     }
      if(pipeline.Error()!=NoError)throw Failure(pipeline.Error(),"USB pipeline invalidated");
      if(WaitForSingleObject(stop.Get(),0)==WAIT_OBJECT_0)throw Failure(ControlledStop,"Controlled stop");
-     if(diagnostics.Failed())throw Failure(InputLoss,"Evidence writer failed");
      if(!controller->connected())throw Failure(SourceUnavailable,"Owned USB import disconnected");
      const auto next=pipeline.Next(message);
      if(next==Pipeline::NextResult::Block){
@@ -379,7 +368,7 @@ int Run(const Options& o){
                       &pipeline.ErrorSource(),message.info.blockReadyQpc+AgeBudgetTicks(message.info.qpcFrequency),message.info.qpcFrequency);}
       catch(...){++unconfirmed;uncertain=true;throw;}
       const auto completed=Clock();++blocks;++totalBlocks;lastEpoch=message.info.epoch;lastFrameEnd=message.info.firstFrame+Frames;
-      if(!diagnostics.Block(message.info,completed))throw Failure(InputLoss,"Bounded evidence queue overflow");
+      (void)diagnostics.Block(message.info,completed);
       Require(Fresh(completed,message.info.blockReadyQpc,message.info.qpcFrequency),StaleBlock,"Completed USB block exceeded age bound");
       if(blocks==1&&boundary.pending){
        const auto gap=message.info.firstFrame-boundary.endFrame;
@@ -396,7 +385,7 @@ int Run(const Options& o){
      if(result==WAIT_FAILED)throw Failure(InternalFailure,"Wait for USB data failed",GetLastError());
     }
    }catch(const Failure& f){endCode=f.code;endSystem=f.systemError;
-    if(!armed){++rejections;WriteText(log.Get(),"{\"event\":\"connection_rejected\",\"code\":"+std::to_string(f.code)+",\"reason\":"+Json(f.what())+"}\n");}
+    if(!armed){++rejections;WriteLog(log.Get(),"{\"event\":\"connection_rejected\",\"code\":"+std::to_string(f.code)+",\"reason\":"+Json(f.what())+"}\n");}
    }
    if(mmcssRevertFailed){endCode=InternalFailure;failure=true;SetEvent(stop.Get());}
    if(armed){
@@ -422,12 +411,12 @@ int Run(const Options& o){
     if(offered){boundary.pending=true;boundary.peerPid=peerPid;boundary.peerCreation=peerCreation;boundary.oldNonce[0]=nonce[0];boundary.oldNonce[1]=nonce[1];boundary.epoch=lastEpoch;boundary.endFrame=lastFrameEnd;boundary.session=sessions;++overflowEnds;}
     if(resumedFrom){
      const auto& previous=*resumedFrom;
-     WriteText(log.Get(),"{\"event\":\"overflow_resumed\",\"session\":"+std::to_string(sessions)+",\"prior_session\":"+std::to_string(previous.session)+
+     WriteLog(log.Get(),"{\"event\":\"overflow_resumed\",\"session\":"+std::to_string(sessions)+",\"prior_session\":"+std::to_string(previous.session)+
       ",\"prior_nonce\":"+Json(NonceText(previous.oldNonce))+",\"nonce\":"+Json(NonceText(nonce))+",\"epoch\":"+std::to_string(previous.epoch)+
       ",\"previous_frame_end\":"+std::to_string(previous.endFrame)+",\"first_frame\":"+std::to_string(resumedFirstFrame)+
       ",\"gap_frames\":"+std::to_string(resumedFirstFrame-previous.endFrame)+",\"first_write_complete_qpc\":"+std::to_string(resumedQpc)+"}\n");
     }
-    WriteText(log.Get(),"{\"event\":\"session_end\",\"session\":"+std::to_string(sessions)+",\"nonce\":"+Json(NonceText(nonce))+",\"code\":"+std::to_string(endCode)+
+    WriteLog(log.Get(),"{\"event\":\"session_end\",\"session\":"+std::to_string(sessions)+",\"nonce\":"+Json(NonceText(nonce))+",\"code\":"+std::to_string(endCode)+
      ",\"blocks_written\":"+std::to_string(blocks)+",\"frames_admitted\":"+std::to_string(pipeline.FramesAfterDisarm())+",\"queued_discarded_blocks\":"+std::to_string(discarded)+
      ",\"partial_discarded_frames\":"+std::to_string(partial)+",\"queue_maximum\":"+std::to_string(pipeline.MaximumAfterDisarm())+",\"queue_overruns\":"+std::to_string(pipeline.OverrunsAfterDisarm())+
      ",\"writer_mmcss_reverted\":"+(mmcssRevertFailed?"false":"true")+",\"terminal_as0\":"+(pipeline.Terminal()?"true":"false")+
@@ -445,10 +434,10 @@ int Run(const Options& o){
   }
  }catch(...){pipeline.Disarm();SetEvent(stop.Get());if(duration.joinable())duration.join();controller->stop();diagnostics.Stop();throw;}
  pipeline.Disarm();SetEvent(stop.Get());if(duration.joinable())duration.join();const auto native=controller->stop();diagnostics.Stop();owner.Close();
- if(const auto* clock=controller->clock_after_stop())usb::write_clock_evidence(o.out,*clock);
- failure=failure||boundary.pending||(!sessions&&rejections)||diagnostics.Failed()||diagnostics.NativeRejected()||diagnostics.BlocksRejected()||native.callback_failures||native.protocol_failures||
+ try{if(const auto* clock=controller->clock_after_stop())usb::write_clock_evidence(o.out,*clock);}catch(...){/* optional clock diagnostics */}
+ failure=failure||boundary.pending||(!sessions&&rejections)||native.callback_failures||native.protocol_failures||
   native.worker_failed||!native.mmcss_registered||!native.mmcss_reverted||owner.Failed();
- WriteText(log.Get(),"{\"event\":\"summary\",\"sessions\":"+std::to_string(sessions)+",\"rejections\":"+std::to_string(rejections)+",\"blocks_written\":"+std::to_string(totalBlocks)+
+ WriteLog(log.Get(),"{\"event\":\"summary\",\"sessions\":"+std::to_string(sessions)+",\"rejections\":"+std::to_string(rejections)+",\"blocks_written\":"+std::to_string(totalBlocks)+
   ",\"queued_discarded_blocks\":"+std::to_string(totalDiscarded)+",\"partial_discarded_frames\":"+std::to_string(totalPartial)+",\"unconfirmed_blocks\":"+std::to_string(unconfirmed)+
   ",\"native_audio_frames\":"+std::to_string(native.audio_frames)+",\"native_audio_urbs\":"+std::to_string(native.audio_urbs)+",\"native_protocol_failures\":"+std::to_string(native.protocol_failures)+
   ",\"native_callback_failures\":"+std::to_string(native.callback_failures)+",\"native_unlinked_after_capture_frames\":"+std::to_string(native.audio_frames_unlinked_after_capture)+
@@ -461,7 +450,7 @@ int Run(const Options& o){
   ",\"overflow_ends\":"+std::to_string(overflowEnds)+",\"resumed_overflows\":"+std::to_string(resumedOverflows)+",\"gap_frames\":"+std::to_string(gapFrames)+
   ",\"clean_lifecycle_exit\":"+(failure?"false":"true")+",\"accepted_transport\":"+(failure||overflowEnds?"false":"true")+"}\n");return failure?2:0;
  } catch(const Failure& e) {
-   try { WriteText(log.Get(),"{\"event\":\"failure\",\"code\":"+std::to_string(e.code)+",\"win32\":"+std::to_string(e.systemError)+",\"message\":"+Json(e.what())+"}\n"); } catch(...) {}
+   try { WriteLog(log.Get(),"{\"event\":\"failure\",\"code\":"+std::to_string(e.code)+",\"win32\":"+std::to_string(e.systemError)+",\"message\":"+Json(e.what())+"}\n"); } catch(...) {}
    throw;
  }
 }
@@ -469,7 +458,7 @@ int Run(const Options& o){
 #ifndef VIBE_BRIDGE_TESTING
 int wmain(int argc,wchar_t** argv){
  if(argc==2 && std::wstring(argv[1])==L"--version"){
-  std::cout<<"VibeUsbBridge 0.1.12-rc1; private requested USB identity 1209:7140; IPC 1\n";return 0;
+  std::cout<<"VibeUsbBridge 1.0-native; USB identity 1209:7140; IPC 1\n";return 0;
  }
  try{return vibe_bridge::Run(vibe_bridge::Parse(argc,argv));}
  catch(const vibe_bridge::Failure& e){std::cerr<<"Vibe USB bridge failure "<<e.code<<" / Windows "<<e.systemError<<": "<<e.what()<<'\n';return 2;}
