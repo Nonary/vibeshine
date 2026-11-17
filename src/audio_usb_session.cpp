@@ -159,6 +159,25 @@ void protected_setup_handle(HANDLE file) {
     need(trusted(const_cast<DWORD*>(&ace->SidStart))||!(ace->Mask&writes),"Untrusted setup write permission");
   }
 }
+// Inherited Program Files ACLs include the Windows servicing principal and
+// inherit-only CREATOR OWNER rules. The latter grant no access to this object.
+void validate_payload_acl(PSID owner,PACL acl) {
+  std::array<BYTE,SECURITY_MAX_SID_SIZE> system{},admins{};DWORD a=DWORD(system.size()),b=DWORD(admins.size());
+  need(CreateWellKnownSid(WinLocalSystemSid,nullptr,system.data(),&a)&&CreateWellKnownSid(WinBuiltinAdministratorsSid,nullptr,admins.data(),&b),"Cannot inspect trusted principals");
+  PSID installer=nullptr;
+  need(ConvertStringSidToSidW(L"S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",&installer),"Cannot inspect Windows servicing identity");
+  struct release{PSID value;~release(){LocalFree(value);}} guard{installer};
+  const auto trusted=[&](PSID sid){return sid&&(EqualSid(sid,system.data())||EqualSid(sid,admins.data())||EqualSid(sid,installer));};
+  need(trusted(owner)&&acl,"Install Vibeshine in an administrator-protected directory before setup");
+  for(DWORD i=0;i<acl->AceCount;++i){
+    void* raw=nullptr;need(GetAce(acl,i,&raw),"Invalid payload ACL");const auto* header=static_cast<ACE_HEADER*>(raw);
+    need(header->AceType==ACCESS_ALLOWED_ACE_TYPE||header->AceType==ACCESS_DENIED_ACE_TYPE,"Unsupported payload ACL");
+    if(header->AceType!=ACCESS_ALLOWED_ACE_TYPE||(header->AceFlags&INHERIT_ONLY_ACE))continue;
+    const auto* ace=static_cast<ACCESS_ALLOWED_ACE*>(raw);
+    constexpr DWORD writes=GENERIC_ALL|GENERIC_WRITE|FILE_WRITE_DATA|FILE_APPEND_DATA|FILE_WRITE_EA|FILE_WRITE_ATTRIBUTES|DELETE|WRITE_DAC|WRITE_OWNER|FILE_DELETE_CHILD;
+    need(trusted(const_cast<DWORD*>(&ace->SidStart))||!(ace->Mask&writes),"Setup files are writable by an untrusted principal");
+  }
+}
 [[maybe_unused]] std::string owned_setup_controller() {
   struct ci_info {ULONG size=sizeof(ci_info),flags=0;} ci;
   const auto query=reinterpret_cast<LONG(WINAPI*)(ULONG,PVOID,ULONG,PULONG)>(
@@ -170,6 +189,12 @@ void protected_setup_handle(HANDLE file) {
   need(SUCCEEDED(SHGetFolderPathW(nullptr,CSIDL_COMMON_APPDATA,nullptr,SHGFP_TYPE_CURRENT,common.data())),"Resolve machine setup directory");
   const auto base=std::filesystem::path(common.data())/L"VibeSpeakers";
   const auto state=base/L"users"/setup_user_sid();
+  for(const auto& path:{base,base/L"users",state}){
+    if(GetFileAttributesW(path.c_str())==INVALID_FILE_ATTRIBUTES){
+      const auto error=GetLastError();
+      need(error!=ERROR_FILE_NOT_FOUND&&error!=ERROR_PATH_NOT_FOUND,"Vibe Speakers is not set up for this Windows user. Open Audio settings and choose Set up.");
+    }
+  }
   std::vector<handle_t> directories;
   for(const auto& path:{base,base/L"users",state}) {
     safe_existing_path(path,true);
@@ -656,16 +681,7 @@ bool usb_session_t::request_setup(std::string& error){
       PSID owner=nullptr;PACL acl=nullptr;PSECURITY_DESCRIPTOR descriptor=nullptr;
       need(GetSecurityInfo(file.value,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION,&owner,nullptr,&acl,nullptr,&descriptor)==ERROR_SUCCESS,"Cannot inspect setup ownership");
       struct release{PSECURITY_DESCRIPTOR value;~release(){LocalFree(value);}} guard{descriptor};
-      std::array<BYTE,SECURITY_MAX_SID_SIZE> system{},admins{};DWORD a=DWORD(system.size()),b=DWORD(admins.size());
-      need(CreateWellKnownSid(WinLocalSystemSid,nullptr,system.data(),&a)&&CreateWellKnownSid(WinBuiltinAdministratorsSid,nullptr,admins.data(),&b),"Cannot inspect trusted principals");
-      const auto trusted=[&](PSID sid){return EqualSid(sid,system.data())||EqualSid(sid,admins.data());};
-      need(owner&&trusted(owner)&&acl,"Install Vibeshine in an administrator-protected directory before setup");
-      for(DWORD i=0;i<acl->AceCount;++i){void* raw=nullptr;need(GetAce(acl,i,&raw),"Invalid payload ACL");const auto* header=static_cast<ACE_HEADER*>(raw);
-        need(header->AceType==ACCESS_ALLOWED_ACE_TYPE||header->AceType==ACCESS_DENIED_ACE_TYPE,"Unsupported payload ACL");
-        if(header->AceType==ACCESS_ALLOWED_ACE_TYPE){const auto* ace=static_cast<ACCESS_ALLOWED_ACE*>(raw);
-          constexpr DWORD writes=GENERIC_ALL|GENERIC_WRITE|FILE_WRITE_DATA|FILE_APPEND_DATA|FILE_WRITE_EA|FILE_WRITE_ATTRIBUTES|DELETE|WRITE_DAC|WRITE_OWNER|FILE_DELETE_CHILD;
-          need(trusted(const_cast<DWORD*>(&ace->SidStart))||!(ace->Mask&writes),"Setup files are writable by an untrusted principal");}
-      }
+      validate_payload_acl(owner,acl);
     }
     std::array<wchar_t,MAX_PATH> windows{};need(GetWindowsDirectoryW(windows.data(),DWORD(windows.size())),"Resolve Windows directory");
     const auto executable=std::filesystem::path(windows.data())/L"System32"/L"WindowsPowerShell"/L"v1.0"/L"powershell.exe";

@@ -6,6 +6,22 @@ void test_usb_session_guards(){
   need(integer(json{{"n",255}},"n",255)==255,"Integer upper boundary");bool rejected=false;try{integer(json{{"n",256}},"n",255);}catch(...){rejected=true;}need(rejected,"Integer overflow accepted");
   for(const json& bad:{json(""),json(std::string("a\0b",3)),json("a\nb"),json(3)}){rejected=false;try{text(json{{"s",bad}},"s");}catch(...){rejected=true;}need(rejected,"Binding text coercion accepted");}
 #ifdef _WIN32
+  for(const auto& [sddl,accepted]:std::array<std::pair<const wchar_t*,bool>,7>{{
+      {L"O:SYD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFX;;;BU)",true},
+      {L"O:SYD:(A;;FA;;;S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464)(A;OICIIO;GA;;;CO)(A;;FRFX;;;BU)",true},
+      {L"O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464D:(A;;FA;;;SY)(A;;FRFX;;;BU)",true},
+      {L"O:SYD:(A;;FA;;;SY)(A;;GW;;;BU)",false},
+      {L"O:SYD:(A;;FA;;;SY)(A;;GA;;;BU)",false},
+      {L"O:SYD:(A;;FA;;;SY)(A;;0x40;;;BU)",false},
+      {L"O:BUD:(A;;FA;;;SY)(A;;FRFX;;;BU)",false}
+  }}){
+    PSECURITY_DESCRIPTOR descriptor=nullptr;
+    need(ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl,SDDL_REVISION_1,&descriptor,nullptr),"Payload ACL fixture conversion");
+    PSID owner=nullptr;PACL acl=nullptr;BOOL present=FALSE,defaulted=FALSE;
+    need(GetSecurityDescriptorOwner(descriptor,&owner,&defaulted)&&GetSecurityDescriptorDacl(descriptor,&present,&acl,&defaulted)&&present,"Payload ACL fixture extraction");
+    bool passed=true;try{validate_payload_acl(owner,acl);}catch(...){passed=false;}
+    LocalFree(descriptor);need(passed==accepted,"Program Files payload access decision differs");
+  }
   {
     private_security security(user_sid());
     const auto name=L"Global\\VibeSpeakersGuardTest_"+random_name();
