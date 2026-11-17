@@ -1,0 +1,106 @@
+{
+  "schema": "project-atmos-host-client-contract/1",
+  "status": "reconciled with completed client; production codec/packetizer and synthetic source through actual Common receiver verified offline; hardware gates remain open",
+  "source_date": "2026-11-03",
+  "source_pins": {
+    "host_base": "9c02f262a799acd2733c203cbb7c4e59a55dd8fc",
+    "client_app": "20d419c55a874d4466de889f117bb5a4f3e8969f",
+    "client_common": "4c0d39ca4c74197a214526562d668ce67946b960",
+    "client_checkouts_clean_at_reconciliation": true,
+    "host_implementation_commit": "recorded separately in final build manifest"
+  },
+  "reconciliation": {
+    "protocol_changes_required_in_client": false,
+    "differences_from_preparation_contract": [],
+    "actual_host_and_client_sdp_parsers": "passed",
+    "legacy_normal_hq_mapping_roundtrip": "passed for 6 and 8 channels, including custom permutation",
+    "unsigned_launch_packing_and_parsing": "passed, including set high bit and overflow rejection",
+    "host_protocol_assertions": 210,
+    "deterministic_malformed_input_cases": 50000,
+    "native_endpoint_capture": "not performed; read-only probe reports unavailable_12ch",
+    "arbitrary_game_height_source": "not proven",
+    "physical_12_object_playback": "separate client hardware test, not performed here",
+    "encoder_transport_synthetic_e2e_results": "passed offline with actual host libopus 1.6.1 and production packetizer/Common receive pipeline; 57 cases, 128409 assertions",
+    "common_receive_regression": "19 cases, 17627 assertions passed",
+    "synthetic_source_lifecycle": "28 assertions passed against production admission/timing helpers; live WASAPI/network scheduling not tested",
+    "sender_completion_and_lifetime": "18 assertions passed",
+    "measured_encrypted_fec_datagram_bytes_by_bitrate": {"600000": 408, "1536000": 1000, "2048000": 1320}
+  },
+  "channels": [
+    "FL",
+    "FR",
+    "FC",
+    "LFE",
+    "BL",
+    "BR",
+    "SL",
+    "SR",
+    "TFL",
+    "TFR",
+    "TBL",
+    "TBR"
+  ],
+  "channels_count": 12,
+  "sample_rate_hz": 48000,
+  "pcm_format": "interleaved float32",
+  "packet_duration_ms": 5,
+  "samples_per_channel_per_packet": 240,
+  "pcm_bytes_per_packet": 11520,
+  "normal_profile": {
+    "streams": 8,
+    "coupled_streams": 4,
+    "mapping": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "compatibility_default_bps": 600000,
+    "same_mapping_test_rates_bps": [
+      600000,
+      1536000,
+      2048000
+    ]
+  },
+  "sdp_normal": "a=fmtp:97 surround-params=12,8,4,0,1,2,3,4,5,6,7,8,9,10,11",
+  "quality_request": 0,
+  "advertise_unverified_hq": false,
+  "foundation_wire_mask": "0xF63F",
+  "windows_wave_mask": "0x2D63F",
+  "windows_static_object_mask": "0x1FFE",
+  "audio_configuration_unsigned": 4131327178,
+  "surround_audio_info_unsigned": 4131323916,
+  "rtp_audio_timestamp_unit": "milliseconds in examined Vibeshine sender; increment 5, not 240",
+  "audio_fec": {
+    "data_shards": 4,
+    "parity_shards": 2
+  },
+  "receive_limit_udp_payload_bytes": 1400,
+  "max_opus_payload_bytes_with_cbc_and_fec_under_current_limit": 1375,
+  "source_classes": [
+    "native_12ch_endpoint",
+    "synthetic_12ch_test",
+    "unavailable_12ch"
+  ],
+  "required_separate_status": [
+    "protocol_supported",
+    "selected_source_layout",
+    "source_provenance",
+    "runtime_evidence"
+  ],
+  "forbidden_claims": [
+    "7.1 plus four silent channels is real 7.1.4",
+    "Atmos source metadata preserved",
+    "bit-perfect Opus",
+    "synthetic source proves game capture"
+  ],
+  "unsupported_behaviour": "reject incompatible 12ch before audio routing; 7.1 fallback requires client negotiation"
+}

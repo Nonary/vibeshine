@@ -17,6 +17,18 @@ const { t } = useI18n();
 const store = useConfigStore();
 const { config, isWindows10Host } = storeToRefs(store);
 const platform = computed(() => (config.value as any)?.platform || '');
+// Hiding a route's controls must not reset its saved devices or bridge pins.
+const usesVibeSpeakers = computed(
+  () => store.metadata?.platform === 'windows' && config.value?.audio_714_source === 'vibe_usb',
+);
+const audioSourceOptions = computed(() => [
+  { value: 'off', label: t('config.audio_714_off') },
+  { value: 'vibe_usb', label: t('config.audio_usb_source') },
+]);
+const audioPrecisionOptions = computed(() => [
+  { value: 'pcm24', label: t('config.audio_714_pcm24') },
+  { value: 'pcm16', label: t('config.audio_714_pcm16') },
+]);
 const ddConfigDisabled = computed(
   () => (config.value as any)?.dd_configuration_option === 'disabled',
 );
@@ -233,7 +245,31 @@ function selectVirtualDisplayLayout(v: unknown) {
 
 <template>
   <div id="av" class="config-page">
+    <PlatformLayout>
+      <template #windows>
+        <ConfigFieldRenderer
+          setting-key="audio_714_source"
+          v-model="config.audio_714_source"
+          kind="select"
+          :options="audioSourceOptions"
+          class="mb-6"
+        />
+        <ConfigFieldRenderer
+          v-if="!['off', 'vibe_usb'].includes(config.audio_714_source)"
+          setting-key="audio_714_endpoint"
+          v-model="config.audio_714_endpoint"
+          monospace
+          class="mb-6"
+        />
+        <template v-if="config.audio_714_source === 'vibe_usb'">
+          <ConfigFieldRenderer setting-key="audio_usb_sample_format" v-model="config.audio_usb_sample_format"
+            kind="select" :options="audioPrecisionOptions" class="mb-6" />
+        </template>
+      </template>
+    </PlatformLayout>
+
     <ConfigFieldRenderer
+      v-if="!usesVibeSpeakers"
       setting-key="audio_sink"
       v-model="config.audio_sink"
       class="mb-6"
@@ -265,12 +301,14 @@ function selectVirtualDisplayLayout(v: unknown) {
     <PlatformLayout>
       <template #windows>
         <ConfigFieldRenderer
+          v-if="!usesVibeSpeakers"
           setting-key="audio_sink_capture_only"
           v-model="config.audio_sink_capture_only"
           class="mb-6"
         />
 
         <ConfigFieldRenderer
+          v-if="!usesVibeSpeakers"
           setting-key="virtual_sink"
           v-model="config.virtual_sink"
           class="mb-6"
@@ -278,6 +316,7 @@ function selectVirtualDisplayLayout(v: unknown) {
         />
 
         <ConfigFieldRenderer
+          v-if="!usesVibeSpeakers"
           setting-key="install_steam_audio_drivers"
           v-model="config.install_steam_audio_drivers"
           class="mb-3"

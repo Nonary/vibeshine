@@ -3129,9 +3129,14 @@ namespace confighttp {
       std::stringstream config_stream;
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
+      if (!input_tree.is_object()) {
+        bad_request(response, request, "POST body must be a JSON object");
+        return;
+      }
       normalize_adapter_config_pair(input_tree);
       std::set<std::string> changed_keys;
       for (const auto &[k, v] : input_tree.items()) {
+        if (config::retired_host_spatial_setting(k)) continue;
         changed_keys.insert(k);
         if (v.is_null() || (v.is_string() && v.get<std::string>().empty())) {
           continue;
@@ -3141,7 +3146,10 @@ namespace confighttp {
         // we should migrate the config file to straight json and get rid of all this nonsense
         config_stream << k << " = " << (v.is_string() ? v.get<std::string>() : v.dump()) << std::endl;
       }
-      file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
+      if (file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str()) != 0) {
+        service_unavailable(response, "Unable to save configuration file");
+        return;
+      }
 
 #ifdef _WIN32
       reconcile_vulkan_hdr_layer_from_body(input_tree);
@@ -3225,6 +3233,7 @@ namespace confighttp {
 
       for (auto it = patch_tree.begin(); it != patch_tree.end(); ++it) {
         const std::string key = it.key();
+        if (config::retired_host_spatial_setting(key)) continue;
         const nlohmann::json &val = it.value();
         changed_keys.insert(key);
 
@@ -3250,7 +3259,10 @@ namespace confighttp {
       for (const auto &kv : current) {
         config_stream << kv.first << " = " << kv.second << std::endl;
       }
-      file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
+      if (file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str()) != 0) {
+        service_unavailable(response, "Unable to save configuration file");
+        return;
+      }
 
 #ifdef _WIN32
       reconcile_vulkan_hdr_layer_from_body(patch_tree);

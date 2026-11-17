@@ -17,6 +17,7 @@
 #include <vector>
 
 // local includes
+#include "audio_startup_policy.h"
 #include "config_display_transition.h"
 #include "hardware_metrics_config.h"
 #include "input_session_config.h"
@@ -30,6 +31,12 @@ namespace config {
   constexpr int PACKETSIZE_MAX = 65535;
   constexpr int PACKETSIZE_SMALL = 500;
   constexpr int PACKETSIZE_LARGE = 1456;
+  // Old portable configurations may contain the retired host DSP controls.
+  // Ignore them on import and API writes. Reading an old file never alters it.
+  inline bool retired_host_spatial_setting(std::string_view key) {
+    return key == "audio_usb_upmix_71" || key == "audio_usb_ambience_gain_db" ||
+           key == "audio_usb_ambience_lab_dry";
+  }
 
   // track modified config options
   inline std::unordered_map<std::string, std::string> modified_config_settings;
@@ -37,7 +44,8 @@ namespace config {
   inline std::unordered_map<std::string, std::string> pending_config_settings;
 
   inline constexpr std::array redacted_config = {
-    "csrf_allowed_origins"
+    "csrf_allowed_origins",
+    "audio_714_endpoint"
   };
 
   void log_config_settings(const std::unordered_map<std::string, std::string> &vars, bool save);
@@ -269,7 +277,17 @@ namespace config {
     bool sink_capture_only;  ///< Capture the selected Windows audio sink without changing default outputs.
     std::string format {"opus"};  ///< Encoded stream format: Opus, AC-3, or E-AC-3.
     bool high_quality_audio {false};  ///< Higher bitrate for negotiated Dolby streams; ignored for Opus.
+    // Isolated opt-in host configuration. Requires restart; never a client-controlled route.
+    std::string discrete_714_source {"off"};
+    int discrete_714_bitrate {600000};
+    ::audio::usb_source_config_t usb {};
+    std::string usb_evidence_root {};
+    unsigned usb_session_seconds=14400;
   };
+
+  // Fixed after initial parse and before platform initialization; independent
+  // from the audio object that hot apply temporarily resets to defaults.
+  ::audio::startup::settings_t audio_714_startup_settings();
 
   constexpr int ENCRYPTION_MODE_NEVER = 0;  // Never use video encryption, even if the client supports it
   constexpr int ENCRYPTION_MODE_OPPORTUNISTIC = 1;  // Use video encryption if available, but stream without it if not supported

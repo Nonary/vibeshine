@@ -339,6 +339,7 @@ set(OPENSSL_LIBRARIES
 list(PREPEND PLATFORM_LIBRARIES
         ${CURL_STATIC_LIBRARIES}
         advapi32
+        bcrypt
         avrt
         cfgmgr32
         d3d11
@@ -390,3 +391,4 @@ if(SUNSHINE_ENABLE_PYROWAVE)
 endif()
 
 list(APPEND PLATFORM_TARGET_FILES "${CMAKE_SOURCE_DIR}/src/platform/windows/managed_app_focus.cpp")
+list(APPEND PLATFORM_TARGET_FILES "${CMAKE_SOURCE_DIR}/src/platform/windows/audio_atmos_device.cpp")

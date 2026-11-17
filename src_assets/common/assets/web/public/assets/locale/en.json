@@ -380,7 +380,6 @@
     "app_focus_timeout_secs_desc": "Wait for the game window and reapply focus within this time (0 disables automatic focus).",
     "app_focus_exit_on_first": "Stop after the first successful focus",
     "app_focus_exit_on_first_desc": "Stop once a game window reaches the foreground; otherwise continue until the focus count or timeout is reached.",
-
     "amf": {
       "quality": "AMF Usage",
       "rate_control": "AMF Rate Control"
@@ -460,7 +459,14 @@
     "amd_vbaq": "AMF Variance Based Adaptive Quantization (VBAQ)",
     "amd_vbaq_desc": "The human visual system is typically less sensitive to artifacts in highly textured areas. In VBAQ mode, pixel variance is used to indicate the complexity of spatial textures, allowing the encoder to allocate more bits to smoother areas. VBAQ is enabled by default. Auto leaves the property unset so the selected AMF usage preset can choose it.",
     "apply_note": "Click 'Apply' to restart Vibeshine and apply changes. This will terminate any running sessions.",
+    "audio_714_off": "Default",
+    "audio_714_pcm24": "24-bit",
+    "audio_714_pcm16": "16-bit",
     "audio_format": "Audio stream format",
+    "audio_usb_sample_format": "Bit depth",
+    "audio_usb_source": "Vibe Speakers",
+    "audio_714_source": "Audio capture",
+    "audio_714_source_desc": "",
     "audio_format_desc": "Choose Opus or a Dolby format for compatible clients. If Dolby is unavailable or not accepted by the client, streaming falls back to Opus.",
     "audio_format_opus": "Opus (default)",
     "audio_format_ac3": "AC-3 (Dolby Digital)",
@@ -1098,7 +1104,8 @@
     "dd_validation_mixed_final_required": "For mixed mappings, specify at least one Final field.",
     "dd_validation_resolution": "Invalid format. Use WIDTHxHEIGHT, e.g., {example} (x or ×).",
     "dd_validation_refresh_rate": "Invalid refresh rate. Use a positive number, e.g., 60 or 59.94.",
-    "dd_manual_enforcement_notice": "Manual values take priority over remapping for that value. Values set to Match the client keep their rules unless a client's Display mode override is active; that override bypasses all remapping and takes priority over manual values."
+    "dd_manual_enforcement_notice": "Manual values take priority over remapping for that value. Values set to Match the client keep their rules unless a client's Display mode override is active; that override bypasses all remapping and takes priority over manual values.",
+    "audio_usb_sample_format_desc": ""
   },
   "index": {
     "display_recovery": {

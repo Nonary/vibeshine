@@ -1,0 +1,6 @@
+EXPORTS
+    LiParseAudioConfigurations
+    LiTestAudioBegin
+    LiTestAudioPush
+    LiTestAudioEnd
+    runAudioReceiveTests

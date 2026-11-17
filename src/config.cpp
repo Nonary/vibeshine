@@ -36,6 +36,7 @@
 // local includes
 #include "amf/amf_config_policy.h"
 #include "amf/amf_lifecycle.h"
+#include "audio_protocol.h"
 #include "config.h"
 #include "control_peer_timeout.h"
 #include "virtual_display_scale.h"
@@ -1116,6 +1117,7 @@ namespace config {
     // Only completed applies publish this setting; the control thread never
     // reads the mutable/reset-in-progress configuration objects.
     std::atomic<std::uint32_t> g_control_peer_timeout_ms {0};
+    ::audio::startup::settings_store_t g_audio_714_startup_settings;
 
     hardware_metrics_config_t g_hardware_metrics_config;
 
@@ -1153,6 +1155,10 @@ namespace config {
       sunshine.cmd = preserved_cmd;
     }
   }  // namespace
+
+  ::audio::startup::settings_t audio_714_startup_settings() {
+    return g_audio_714_startup_settings.get();
+  }
 
   std::chrono::milliseconds get_control_peer_timeout() {
     return std::chrono::milliseconds {g_control_peer_timeout_ms.load(std::memory_order_acquire)};
@@ -1267,7 +1273,7 @@ namespace config {
       }
 
       var->first = normalize_config_key(std::move(var->first));
-      if (var->first.empty()) {
+      if (var->first.empty() || retired_host_spatial_setting(var->first)) {
         continue;
       }
 
@@ -2076,6 +2082,27 @@ namespace config {
     bool_f(vars, "high_quality_audio", audio.high_quality_audio);
     bool_f(vars, "audio_sink_capture_only", audio.sink_capture_only);
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
+    string_f(vars, "audio_714_source", audio.discrete_714_source);
+    string_f(vars,"audio_usb_pipe",audio.usb.pipe);
+    string_f(vars,"audio_usb_bridge_executable",audio.usb.bridge_executable);
+    string_f(vars,"audio_usb_bridge_sha256",audio.usb.bridge_sha256);
+    string_f(vars,"audio_usb_endpoint",audio.usb.endpoint);
+    string_f(vars,"audio_usb_instance",audio.usb.usb_instance);
+    string_f(vars,"audio_usb_controller_instance",audio.usb.controller_instance);
+    string_f(vars,"audio_usb_serial",audio.usb.serial);
+    string_f(vars,"audio_usb_service",audio.usb.service);
+    string_f(vars,"audio_usb_sample_format",audio.usb.sample_format);
+    string_f(vars,"audio_usb_evidence_root",audio.usb_evidence_root);
+    std::string usb_seconds;string_f(vars,"audio_usb_session_seconds",usb_seconds);
+    if(!usb_seconds.empty()){const auto parsed=::audio::protocol::parse_uint32(usb_seconds);audio.usb_session_seconds=parsed?*parsed:0;}
+    std::string usb_port;string_f(vars,"audio_usb_port",usb_port);
+    if(!usb_port.empty()){const auto parsed=::audio::protocol::parse_uint32(usb_port);audio.usb.port=parsed?*parsed:0;}
+    std::string audio_714_bitrate;
+    string_f(vars, "audio_714_bitrate", audio_714_bitrate);
+    if (!audio_714_bitrate.empty()) {
+      const auto parsed = ::audio::protocol::parse_uint32(audio_714_bitrate);
+      audio.discrete_714_bitrate = parsed && *parsed <= 2147483647U ? static_cast<int>(*parsed) : 0;
+    }
 
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, {"pc"sv, "lan"sv, "wan"sv});
     // reflect origin ACL update immediately in HTTP layer
@@ -2456,6 +2483,7 @@ namespace config {
       // referenced in the config, so we may receive exceptions if
       // the path is incorrect or inaccessible.
       apply_config(std::move(vars));
+      g_audio_714_startup_settings.publish({audio.discrete_714_source, audio.discrete_714_bitrate,audio.usb,audio.usb_evidence_root,audio.usb_session_seconds});
       config_loaded = true;
 
       // Persist snapshot exclusion devices to vibeshine_state.json on startup so the display
@@ -3263,12 +3291,17 @@ namespace config {
       // keep the effective config consistent while an app is running.
       const auto runtime_overrides = runtime_overrides_snapshot();
       merge_config_overrides(vars, runtime_overrides);
+      if (has_active_stream_sessions() && g_audio_714_startup_settings.preserve_on_reload(vars)) {
+        g_deferred_reload.store(true,std::memory_order_release);
+        BOOST_LOG(info) << "Audio source/precision changes will apply after active sessions end.";
+      }
       // Track old logging params to adjust sinks if needed
       const int old_min_level = sunshine.min_log_level;
       const std::string old_log_file = sunshine.log_file;
 
       auto install_effective_configuration = [&] {
         apply_config(std::move(vars));
+        g_audio_714_startup_settings.replace({audio.discrete_714_source, audio.discrete_714_bitrate,audio.usb,audio.usb_evidence_root,audio.usb_session_seconds});
         if (sunshine.session_history_enabled != prev_session_history_enabled && has_active_stream_sessions()) {
           BOOST_LOG(info) << "Hot-apply: deferring session history enablement change until active sessions end.";
           sunshine.session_history_enabled = prev_session_history_enabled;

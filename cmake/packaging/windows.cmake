@@ -1,3 +1,4 @@
+list(APPEND CPACK_PRE_BUILD_SCRIPTS "${CMAKE_CURRENT_LIST_DIR}/check_vibe_public_identity.cmake")
 # windows specific packaging
 include("${CMAKE_SOURCE_DIR}/cmake/packaging/windows_virtual_display_contract.cmake")
 include("${CMAKE_SOURCE_DIR}/cmake/packaging/windows_virtual_gamepad_contract.cmake")

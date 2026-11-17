@@ -458,6 +458,9 @@ function visibilityMatches(condition?: SettingsVisibility): boolean {
   if (condition.notEquals !== undefined) {
     return !valuesMatch(values[condition.key], condition.notEquals);
   }
+  if (condition.notIn !== undefined) {
+    return !condition.notIn.some((value) => valuesMatch(values[condition.key], value));
+  }
   return true;
 }
 

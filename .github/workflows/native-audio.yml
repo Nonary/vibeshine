@@ -1,0 +1,43 @@
+name: Native audio regressions
+on:
+  push:
+    paths: ['src/audio*', 'src/vibe*', 'src/vibe-speakers/**', 'tests/host714/**', '.github/workflows/native-audio.yml']
+  pull_request:
+    paths: ['src/audio*', 'src/vibe*', 'src/vibe-speakers/**', 'tests/host714/**', '.github/workflows/native-audio.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-audio:
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: actions/checkout@v5
+        with:
+          repository: fidiiioo/moonlight-common-c
+          ref: b061a469447ed78f8ee82ad47104656536504ddd
+          path: native-common
+          submodules: recursive
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-opus
+      - run: >-
+          cmake -S tests/host714 -B audio-tests -G Ninja
+          -DCMAKE_BUILD_TYPE=Release -DCOMMON_SOURCE_DIR="$PWD/native-common"
+          -DOPENSSL_USE_STATIC_LIBS=ON
+      - run: cmake --build audio-tests --parallel 2
+      - run: ctest --test-dir audio-tests --output-on-failure
+      - run: cmake -S src/vibe-speakers -B bridge-tests -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build bridge-tests --parallel 2
+      - run: ctest --test-dir bridge-tests --output-on-failure
+      # Tests do not attach a device. No pending-identity executable is uploaded.

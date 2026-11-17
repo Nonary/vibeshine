@@ -145,6 +145,21 @@ namespace audio {
       return assignment_active_;
     }
 
+    // A newly attached, independently identified endpoint may have become a
+    // default through Windows before our explicit assignment. Adopt only its
+    // restoration ownership; this operation never writes a default role.
+    bool adopt_for_restore(const std::wstring &endpoint) {
+      if (!captured_valid_ || endpoint.empty() || !assigned_.empty()) {
+        return false;
+      }
+      const auto current = devices_.defaults();
+      const auto handoff = begin(current);
+      assignment_epoch_ = handoff.assignment_epoch;
+      assigned_ = endpoint;
+      assignment_active_ = true;
+      return true;
+    }
+
     static pending_list_t normalize(pending_list_t roles, const std::wstring &steam, const ids_t &current) {
       pending_list_t result;
       for (auto &role : roles) {
