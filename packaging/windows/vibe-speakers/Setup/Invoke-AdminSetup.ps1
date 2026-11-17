@@ -2,7 +2,7 @@
 param([ValidateSet('Install','Remove','Preflight','Commit','Rollback')][string]$Action='Preflight',
       [Parameter(Mandatory)][string]$TargetUserSid,[switch]$ConfirmSetup,[ValidatePattern('^(?:\{[0-9A-Fa-f-]{36}\}|)$')][string]$InstallerTransaction)
 trap {
- Write-Error $_ -ErrorAction Continue
+ Write-Error ($_.Exception.ToString()+"`n"+$_.ScriptStackTrace) -ErrorAction Continue
  exit 1
 }
 . (Join-Path $PSScriptRoot 'Common.ps1')
@@ -13,7 +13,8 @@ catch{if($Action -ne 'Remove'){throw};$targetAccount=$TargetUserSid}
 $stateDir=StateDirectory $TargetUserSid
 function ProtectedAcl([bool]$directory){
  $acl=if($directory){[Security.AccessControl.DirectorySecurity]::new()}else{[Security.AccessControl.FileSecurity]::new()}
- $acl.SetAccessRuleProtection($true,$false);$acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+ $owner=if((CurrentSid) -eq 'S-1-5-18'){'S-1-5-18'}else{'S-1-5-32-544'}
+ $acl.SetAccessRuleProtection($true,$false);$acl.SetOwner([Security.Principal.SecurityIdentifier]::new($owner))
  foreach($sid in 'S-1-5-18','S-1-5-32-544',$TargetUserSid){
   $rights=if($sid -eq $TargetUserSid){'ReadAndExecute'}else{'FullControl'}
   $inherit=if($directory){'ContainerInherit,ObjectInherit'}else{'None'}
@@ -51,9 +52,11 @@ foreach($path in @((Join-Path ([Environment]::GetFolderPath('CommonApplicationDa
  if(!(Test-Path -LiteralPath $path)){$null=[IO.Directory]::CreateDirectory($path,(ProtectedAcl $true))}
  CheckJournalDirectory $path
  if($path -ine $stateDir){
-  $acl=Get-Acl -LiteralPath $path
+  # Modify only the DACL. Set-Acl can also persist an existing user's owner/group
+  # and fail under the deferred SYSTEM installer token. Never re-own old state.
+  $acl=[IO.Directory]::GetAccessControl($path,[Security.AccessControl.AccessControlSections]::Access)
   $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-5-11'),'ReadAndExecute','None','None','Allow'))
-  Set-Acl -LiteralPath $path -AclObject $acl
+  [IO.Directory]::SetAccessControl($path,$acl)
  }
 }
 $mutex=[Threading.Mutex]::new($false,'Global\VibeshineUsbIpInstall');$held=$false
