@@ -8,6 +8,19 @@
 #include <utility>
 
 namespace audio {
+  // A display snapshot is not proof that the requested source is ready. Retain
+  // both lifetimes, but always prepare the effective source for each launch.
+  inline bool retain_required_source(const std::function<std::shared_ptr<void>()>& prepare,
+                                    std::shared_ptr<void>& pending_hold) {
+    auto source = prepare();
+    if (!source) return false;
+    if (!pending_hold) pending_hold = std::move(source);
+    else if (pending_hold != source) {
+      pending_hold = std::make_shared<std::pair<std::shared_ptr<void>, std::shared_ptr<void>>>(
+          pending_hold, std::move(source));
+    }
+    return true;
+  }
   class display_change_hold_t {
   public:
     using capture_f = std::function<std::shared_ptr<void>()>;

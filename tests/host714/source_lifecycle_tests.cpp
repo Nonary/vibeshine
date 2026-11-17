@@ -1,4 +1,5 @@
 #include "src/audio_source_lifecycle.h"
+#include "src/audio_display_transition.h"
 
 #include <atomic>
 #include <barrier>
@@ -21,6 +22,20 @@ int main() {
   using input = timing_t::input_e;
   using progress = timing_t::progress_e;
   try {
+    {
+      auto snapshot=std::make_shared<int>(1);std::weak_ptr<int> snapshot_lifetime=snapshot;
+      auto prepared=std::make_shared<int>(2);std::weak_ptr<int> source_lifetime=prepared;
+      std::shared_ptr<void> hold=snapshot;unsigned calls=0;
+      check(audio::retain_required_source([&]{++calls;return prepared;},hold),"effective source preparation failed");
+      check(calls==1,"existing snapshot suppressed required source preparation");
+      snapshot.reset();prepared.reset();
+      check(!snapshot_lifetime.expired()&&!source_lifetime.expired(),"combined source/snapshot lifetime lost");
+      const auto saved=hold;
+      check(!audio::retain_required_source([&]()->std::shared_ptr<void>{++calls;return {};},hold),"failed required source admitted");
+      check(calls==2&&hold==saved,"source failure consumed the existing snapshot");
+      auto next=std::make_shared<int>(3);std::shared_ptr<void> next_hold=hold;
+      check(audio::retain_required_source([&]{++calls;return next;},next_hold)&&calls==3,"reconnect skipped effective profile preparation");
+    }
     audio::source_admission_t admission;
     {
       auto first = admission.try_acquire();

@@ -2324,15 +2324,19 @@ namespace nvhttp {
 
   audio::display_change_hold_t::capture_f audio_snapshot_for_request(const args_t &args) {
     const auto info = audio::protocol::parse_uint32(get_arg(args, "surroundAudioInfo", "196610"));
-    if(info && config::audio_714_startup_settings().source=="vibe_usb"){
-      const auto channels=*info&0xFFFFU;
-      const auto mask=channels==12?audio::protocol::discrete_wave_mask:*info>>16;
-      return [channels,mask]{return audio::prepare_usb_before_launch(channels,mask);};
-    }
     // Discrete sources are explicitly bound and must never enter the shared
     // context, including indirect lazy captures during display/config changes.
     return audio::startup::snapshot_callback(config::audio_714_startup_settings(),
       info ? static_cast<int>(*info & 0xFFFFU) : 0, audio::capture_before_display_change);
+  }
+
+  bool prepare_required_audio_source(const args_t& args, std::shared_ptr<void>& pending_hold) {
+    if(config::audio_714_startup_settings().source!="vibe_usb")return true;
+    const auto info=audio::protocol::parse_uint32(get_arg(args,"surroundAudioInfo","196610"));
+    if(!info)return false;
+    const auto channels=*info&0xFFFFU;
+    const auto mask=channels==12?audio::protocol::discrete_wave_mask:*info>>16;
+    return audio::retain_required_source([channels,mask]{return audio::prepare_usb_before_launch(channels,mask);},pending_hold);
   }
 
   bool validate_requested_audio(const args_t &args, pt::ptree &tree) {
@@ -5244,7 +5248,7 @@ launch_session->exact_target_hold.reset();
     }
 #endif
     request_audio_hold.attach(launch_session->audio_context_guard);
-    if(config::audio_714_startup_settings().source=="vibe_usb"&&!launch_session->audio_context_guard){
+    if(!prepare_required_audio_source(args,launch_session->audio_context_guard)){
       tree.put("root.<xmlattr>.status_code",503);
       tree.put("root.<xmlattr>.status_message","Vibe Speakers could not prepare the requested audio profile. Check Audio settings and setup status.");return;
     }
@@ -5819,7 +5823,7 @@ launch_session->exact_target_hold.reset();
     }
 #endif
     request_audio_hold.attach(launch_session->audio_context_guard);
-    if(config::audio_714_startup_settings().source=="vibe_usb"&&!launch_session->audio_context_guard){
+    if(!prepare_required_audio_source(args,launch_session->audio_context_guard)){
       tree.put("root.<xmlattr>.status_code",503);
       tree.put("root.<xmlattr>.status_message","Vibe Speakers could not prepare the requested audio profile. Check Audio settings and setup status.");return;
     }
