@@ -176,11 +176,12 @@ if(HOST714_BUILD_TRANSPORT)
 endif()
 
 if(WIN32)
+    find_package(nlohmann_json CONFIG REQUIRED)
     add_executable(VibeUsbSessionGuardTests usb_session_guards.cpp
         "${HOST_ROOT}/src/audio_usb_session.cpp")
     target_include_directories(VibeUsbSessionGuardTests PRIVATE "${HOST_ROOT}")
     target_compile_definitions(VibeUsbSessionGuardTests PRIVATE VIBE_SESSION_TESTING=1)
-    target_link_libraries(VibeUsbSessionGuardTests PRIVATE bcrypt ole32 propsys cfgmgr32 uuid advapi32 wtsapi32 userenv)
+    target_link_libraries(VibeUsbSessionGuardTests PRIVATE nlohmann_json::nlohmann_json bcrypt ole32 propsys cfgmgr32 uuid advapi32 wtsapi32 userenv)
     if(MINGW)
         target_compile_options(VibeUsbSessionGuardTests PRIVATE -ffunction-sections -fdata-sections)
         target_link_options(VibeUsbSessionGuardTests PRIVATE -Wl,--gc-sections -static-libgcc -static-libstdc++)
