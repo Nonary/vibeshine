@@ -97,9 +97,9 @@ namespace audio {
     if(settings.source!="vibe_usb")return {};
     const bool pcm16=settings.usb.sample_format=="pcm16";
     const atmos_format_t format{channels,mask,static_cast<std::uint16_t>(pcm16?16:32),static_cast<std::uint16_t>(pcm16?16:24)};
-    std::string error;
-    auto session=usb_session_t::acquire(usb_launch_settings(settings),format,error);
-    if(!session)BOOST_LOG(error)<<"Vibe Speakers profile preparation failed: "<<error;
+    std::string preparation_error;
+    auto session=usb_session_t::acquire(usb_launch_settings(settings),format,preparation_error);
+    if(!session)BOOST_LOG(error)<<"Vibe Speakers profile preparation failed: "<<preparation_error;
     return session;
   }
 
