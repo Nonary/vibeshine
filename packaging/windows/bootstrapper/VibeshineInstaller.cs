@@ -5497,7 +5497,66 @@ namespace VibeshineInstaller {
       return Encoding.Unicode;
     }
 
+    internal sealed class ServiceResumeCheckpoint {
+      private readonly Dictionary<string,string> running = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+      public void Remember(string name, string identity, bool wasRunning) {
+        if (wasRunning && !string.IsNullOrWhiteSpace(identity) && !running.ContainsKey(name)) running.Add(name, identity);
+      }
+      public void Complete(bool success, Func<string,string> currentIdentity, Action<string> resume) {
+        try {
+          if (!success) foreach (var entry in running)
+            if (string.Equals(entry.Value, currentIdentity(entry.Key), StringComparison.Ordinal)) resume(entry.Key);
+        } finally { running.Clear(); }
+      }
+    }
+    private static readonly ServiceResumeCheckpoint QuiescedServiceState = new ServiceResumeCheckpoint();
+    [StructLayout(LayoutKind.Sequential)] private struct ResumeServiceStatus {public uint Type, State, Controls, Win32Exit, SpecificExit, Checkpoint, WaitHint;}
+    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true, EntryPoint="OpenSCManagerW")]
+    private static extern IntPtr ResumeOpenManager(string machine, string database, uint access);
+    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true, EntryPoint="OpenServiceW")]
+    private static extern IntPtr ResumeOpenService(IntPtr manager, string name, uint access);
+    [DllImport("advapi32.dll", SetLastError=true, EntryPoint="QueryServiceStatus")]
+    private static extern bool ResumeQueryStatus(IntPtr service, out ResumeServiceStatus status);
+    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true, EntryPoint="StartServiceW")]
+    private static extern bool ResumeStartService(IntPtr service, uint count, IntPtr arguments);
+    [DllImport("advapi32.dll", EntryPoint="CloseServiceHandle")]
+    private static extern bool ResumeCloseService(IntPtr handle);
+    private static bool ExistingServiceRunning(string name) {
+      var manager=ResumeOpenManager(null,null,1);if(manager==IntPtr.Zero)return false;
+      try{var service=ResumeOpenService(manager,name,4);if(service==IntPtr.Zero)return false;
+        try{ResumeServiceStatus status;return ResumeQueryStatus(service,out status)&&status.State==4;}finally{ResumeCloseService(service);}
+      }finally{ResumeCloseService(manager);}
+    }
+    private static string ExistingServiceIdentity(string name) {
+      try{
+        using(var key=Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\"+name)){
+          if(key==null)return null;var command=Convert.ToString(key.GetValue("ImagePath"));string image,arguments;
+          if(!TrySplitExecutableAndArguments(command,out image,out arguments))return null;
+          image=Path.GetFullPath(Environment.ExpandEnvironmentVariables(image));
+          var directory=Path.GetDirectoryName(image);var host=Path.Combine(directory,"sunshine.exe");
+          if(!File.Exists(host))host=Path.GetFullPath(Path.Combine(directory,"..","sunshine.exe"));
+          if(!File.Exists(image)||!File.Exists(host))return null;
+          return command+"\n"+ComputeFileSha256Hex(image)+"\n"+ComputeFileSha256Hex(host);
+        }
+      }catch{return null;}
+    }
+    private static InstallerResult CompleteServiceCheckpoint(InstallerResult result) {
+      if(result==null)return null;
+      QuiescedServiceState.Complete(result.Succeeded, ExistingServiceIdentity, name=>{
+        var manager=ResumeOpenManager(null,null,1);if(manager==IntPtr.Zero)return;
+        try{var service=ResumeOpenService(manager,name,0x14);if(service==IntPtr.Zero)return;
+          try{ResumeServiceStatus status;
+            if(ResumeQueryStatus(service,out status)&&status.State==1){
+              if(!ResumeStartService(service,0,IntPtr.Zero))AppendInstallerLogMessage(result.LogPath,"Could not restore previously running service "+name+": "+Marshal.GetLastWin32Error());
+              else AppendInstallerLogMessage(result.LogPath,"Restored previously running service after failed transaction: "+name);
+            }
+          }finally{ResumeCloseService(service);}
+        }finally{ResumeCloseService(manager);}
+      });
+      return result;
+    }
     private static void TryStopRelatedServicesAndProcesses(string logPath) {
+      foreach(var name in RelatedServiceNames)QuiescedServiceState.Remember(name,ExistingServiceIdentity(name),ExistingServiceRunning(name));
       foreach (var serviceName in RelatedServiceNames.Distinct(StringComparer.OrdinalIgnoreCase)) {
         try {
           var scPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "sc.exe");
@@ -6122,7 +6181,7 @@ namespace VibeshineInstaller {
         new[] { InstalledProductKind.Vibeshine },
         removeVirtualGamepadDriver);
       uninstallResult.Operation = InstallerOperation.Uninstall;
-      return uninstallResult;
+      return CompleteServiceCheckpoint(uninstallResult);
     }
 
     public static InstallerResult RunCli(InstallerArguments arguments) {
@@ -6940,6 +6999,10 @@ namespace VibeshineInstaller {
     }
 
     private static InstallerResult ApplyStashedPayloadRecovery(
+      InstallerResult installResult, StashedVibeshinePayload stashedPayload, string logPhase) {
+      return CompleteServiceCheckpoint(ApplyStashedPayloadRecoveryCore(installResult,stashedPayload,logPhase));
+    }
+    private static InstallerResult ApplyStashedPayloadRecoveryCore(
       InstallerResult installResult,
       StashedVibeshinePayload stashedPayload,
       string logPhase) {

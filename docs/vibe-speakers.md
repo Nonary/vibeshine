@@ -64,12 +64,16 @@ HVCI/VBS is supported and tested, but is not an artificial prerequisite. An
 incompatible existing shared driver is refused instead of replaced. Source
 provenance/licenses are in `src/vibe-speakers/vibe-usb-audio/THIRD-PARTY.md`.
 
-The normal setup executable performs the direct firmware observation under its
+The normal setup executable performs the direct firmware and boot-loader observations under its
 approved administrator token. Its short-lived, administrator-protected receipt
 is checked against the current boot and Windows Secure Boot state inside the MSI;
-the restricted installer-service token cannot perform that firmware query itself.
-Driver signatures, Code Integrity and boot-policy checks still run in the MSI.
+the restricted installer-service token cannot perform those privileged queries itself.
+Driver signatures, kernel Code Integrity and validation of the observed boot policy still run in the MSI.
 Use the setup executable for installation and maintenance.
+
+After a failed installer transaction, a previously running service is restarted
+only if its registered command and both restored service/host image hashes still
+match the pre-installation checkpoint. Previously stopped services stay stopped.
 
 ## Packaging and signing
 

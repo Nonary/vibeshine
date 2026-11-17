@@ -5,6 +5,16 @@ using PRODUCT_NAMESPACE;
 internal static class DriverSelectionsRegression {
  static void Check(bool value,string message) {if(!value)throw new Exception(message);}
  [STAThread] static int Main(string[] fixtures) {
+  var checkpoint=new InstallerRunner.ServiceResumeCheckpoint();var resumed=new List<string>();
+  checkpoint.Remember("running","old-image-hash",true);checkpoint.Remember("stopped","same",false);
+  checkpoint.Complete(false,name=>name=="running"?"old-image-hash":"same",resumed.Add);
+  Check(resumed.SequenceEqual(new[]{"running"}),"failed MSI restores only previously running identical service");
+  resumed.Clear();checkpoint.Remember("running","old",true);
+  checkpoint.Complete(false,name=>"different-new-image",resumed.Add);
+  Check(resumed.Count==0,"unrestored or replaced service image is never started after failure");
+  checkpoint.Remember("running","old",true);checkpoint.Complete(true,name=>"old",resumed.Add);
+  Check(resumed.Count==0,"successful MSI owns service startup; no redundant start");
+  checkpoint.Complete(false,name=>"old",resumed.Add);Check(resumed.Count==0,"checkpoint was not cleared");
   var saved=new Dictionary<string,int>();
   Func<string,int?> read=name=>saved.ContainsKey(name)?(int?)saved[name]:null;
   Action<string,bool> write=(name,value)=>saved[name]=value?1:0;
