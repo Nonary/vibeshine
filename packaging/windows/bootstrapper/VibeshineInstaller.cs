@@ -8529,7 +8529,8 @@ namespace VibeshineInstaller {
       elevatedArgs.AddRange(forwardedArguments);
 
       var exitCode = RunElevatedBootstrapper(elevatedArgs);
-      var cliLogPath = FindMostRecentLog(Path.GetTempPath(), "vibeshine_cli*.log");
+      var cliLogPath = TryGetMsiLogPath(forwardedArguments)
+        ?? FindMostRecentLog(Path.GetTempPath(), "vibeshine_cli*.log");
       if (exitCode == 0 && InstallLogIndicatesDriverRebootRequired(cliLogPath)) {
         exitCode = 3010;
       }
@@ -8722,16 +8723,19 @@ namespace VibeshineInstaller {
     }
 
     private static int RunMsiexec(IReadOnlyList<string> arguments, bool hiddenWindow, bool requestElevationIfNeeded) {
+      var args = arguments.ToList();
+      var choice = GetPropertyValue(args, "INSTALL_VIBE_SPEAKERS");
+      var msi = GetMsiPathArgument(args);
+      var requested = string.IsNullOrEmpty(choice) ? InstallerDriverSelectionStore.VibeSpeakersEnabled() : choice == "1";
+      if (!requested || IsMsiUninstallOperation(args) || string.IsNullOrEmpty(msi) || !File.Exists(msi)) {
+        return RunMsiexecCore(arguments, hiddenWindow, requestElevationIfNeeded);
+      }
+      var metadata = TryGetPayloadMsiInfo(new InstallerArguments { MsiPathOverride = msi });
+      if (metadata == null || !metadata.HasVibeSpeakers) return RunMsiexecCore(arguments, hiddenWindow, requestElevationIfNeeded);
+      args.RemoveAll(arg => arg.StartsWith("VIBE_SETUP_BOOT_RECEIPT=", StringComparison.OrdinalIgnoreCase));
       string receiptDirectory = null;
+      string preflightWarning = null;
       try {
-        var args = arguments.ToList();
-        var choice = GetPropertyValue(args, "INSTALL_VIBE_SPEAKERS");
-        var requested = string.IsNullOrEmpty(choice) ? InstallerDriverSelectionStore.VibeSpeakersEnabled() : choice == "1";
-        if (!requested || IsMsiUninstallOperation(args)) return RunMsiexecCore(arguments, hiddenWindow, requestElevationIfNeeded);
-        var msi = GetMsiPathArgument(args);
-        if (string.IsNullOrEmpty(msi) || !File.Exists(msi)) return RunMsiexecCore(arguments, hiddenWindow, requestElevationIfNeeded);
-        var metadata = TryGetPayloadMsiInfo(new InstallerArguments { MsiPathOverride = msi });
-        if (metadata == null || !metadata.HasVibeSpeakers) return RunMsiexecCore(arguments, hiddenWindow, requestElevationIfNeeded);
         if (!IsProcessElevated()) throw new InvalidOperationException("Use the regular Vibeshine setup so its administrator preflight can run.");
         string error;
         if (!TryCreateSecureInstallerRecoveryDirectory(out receiptDirectory, out error)) throw new IOException(error);
@@ -8759,16 +8763,15 @@ namespace VibeshineInstaller {
         using (var file = new FileStream(receipt, FileMode.CreateNew, FileSystemRights.WriteData, FileShare.Read, 4096, FileOptions.WriteThrough, receiptSecurity)) {
           var bytes = Encoding.UTF8.GetBytes(json); file.Write(bytes, 0, bytes.Length); file.Flush(true);
         }
-        var prepared = new List<string>(arguments);
-        prepared.RemoveAll(arg => arg.StartsWith("VIBE_SETUP_BOOT_RECEIPT=", StringComparison.OrdinalIgnoreCase));
-        prepared.Add(CreatePropertyArgument("VIBE_SETUP_BOOT_RECEIPT", receipt));
-        return RunMsiexecCore(prepared, hiddenWindow, requestElevationIfNeeded);
+        args.Add(CreatePropertyArgument("VIBE_SETUP_BOOT_RECEIPT", receipt));
       } catch (Exception ex) {
-        // The optional action requires a valid receipt. The regular MSI can
-        // still install the host and report the component failure.
-        var fallback = arguments.Where(arg => !arg.StartsWith("VIBE_SETUP_BOOT_RECEIPT=", StringComparison.OrdinalIgnoreCase)).ToList();
-        var result = RunMsiexecCore(fallback, hiddenWindow, requestElevationIfNeeded);
-        AppendInstallerLogMessage(TryGetMsiLogPath(fallback), "VIBE_SPEAKERS_WARNING: Security preflight failed: " + ex.Message);
+        preflightWarning = "VIBE_SPEAKERS_WARNING: Security preflight failed: " + ex.Message;
+      }
+      try {
+        // Without a receipt the optional action reports failure, while the
+        // regular MSI can still complete once and install the host.
+        var result = RunMsiexecCore(args, hiddenWindow, requestElevationIfNeeded);
+        if (preflightWarning != null) AppendInstallerLogMessage(TryGetMsiLogPath(args), preflightWarning);
         return result;
       } finally { if (receiptDirectory != null) TryDeleteInstallerRecoveryDirectory(receiptDirectory); }
     }

@@ -3218,7 +3218,8 @@ namespace stream {
         }
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Broadcast audio failed "sv << e.what();
-        if (session->config.audio.channels == 12 || (session->config.audio.validated && (session->config.audio.validated->source_kind == "project_atmos_pcm714" || session->config.audio.validated->source_kind=="user_mode_usb"))) session->shutdown_event->raise(true);
+        if (session->config.audio.channels == 12 || (session->config.audio.validated &&
+            session->config.audio.validated->source_kind == "user_mode_usb")) session->shutdown_event->raise(true);
         else std::this_thread::sleep_for(100ms);
       }
     }

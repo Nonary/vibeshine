@@ -498,7 +498,7 @@ namespace util {
   }
 
   inline std::int64_t from_view(const std::string_view &number) {
-    return number.empty() ? 0 : from_chars(number.data(), number.data() + number.size());
+    return from_chars(std::begin(number), std::end(number));
   }
 
   template<class X, class Y>

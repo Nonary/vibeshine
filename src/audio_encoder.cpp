@@ -54,7 +54,7 @@ namespace audio {
         return false;
       }
     }
-    if (profile.source_kind == "project_atmos_pcm714" || profile.source_kind == "user_mode_usb") {
+    if (profile.source_kind == "user_mode_usb") {
       if (!floating_point_build()) {
         error = "Project Atmos requires a floating-point Opus build; fixed-point would reduce input precision";return false;
       }
@@ -124,7 +124,7 @@ namespace audio {
       error = std::string("Opus encode: ") + opus_strerror(bytes);
       return -1;
     }
-    const bool atmos = profile_.source_kind == "project_atmos_pcm714" || profile_.source_kind == "user_mode_usb";
+    const bool atmos = profile_.source_kind == "user_mode_usb";
     if ((profile_.channels == 12 || atmos) && bytes != profile_.bitrate / 1600) {
       error = "Opus payload did not match the fixed 5ms CBR session budget";
       return -1;

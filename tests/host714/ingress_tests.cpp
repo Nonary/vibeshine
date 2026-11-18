@@ -61,7 +61,7 @@ int main() {
     queue.reset();check(queue.unsafe().data()==allocation&&queue.unsafe().capacity()==capacity,"queue reset freed reserved storage");
 
     reed_solomon_init();
-    audio::session_profile_t profile;profile.bitrate=600000;profile.source_kind="project_atmos_pcm714";
+    audio::session_profile_t profile;profile.bitrate=600000;profile.source_kind="user_mode_usb";
     audio::opus_encoder_t encoder;std::string error;
     check(encoder.initialize(profile,error),"production Opus initialization failed");
     audio::transport::config_t config;config.discrete_714=true;config.encrypted=true;config.key_id=0x71412001;

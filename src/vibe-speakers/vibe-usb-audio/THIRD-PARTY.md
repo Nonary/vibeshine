@@ -14,7 +14,7 @@ The USB Audio 2.0 descriptor topology and controls here are new. No Sony
 identity, HID report descriptor, haptics split, controller feature report,
 game hook or copied hardware audio descriptor is included.
 
-`include/usbip_win2_abi.h` retains the complete BSD-2-Clause notice for Vadym
+`src/usbip_win2_abi.h` retains the complete BSD-2-Clause notice for Vadym
 Hrynchyshyn's public release ABI; only its C++ namespace changes. Original
 Vibeshine copy SHA256:
 `B781BCFEB898C925BB3A97D429236D4975BD06B5AD286CEAD966FD6CFEA013F2`.

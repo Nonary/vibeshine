@@ -1841,7 +1841,9 @@ namespace rtsp_stream {
       ss << pyrowave::protocol::DESCRIBE_BITSTREAM_ATTRIBUTE << pyrowave::protocol::BITSTREAM_ID << std::endl;
     }
 
-    ss << "a=x-vibe-audio.freshAfterPing:1" << std::endl;
+    if (config::audio_714_startup_settings().source == "vibe_usb") {
+      ss << "a=x-vibe-audio.freshAfterPing:1" << std::endl;
+    }
     const auto requested_channels = static_cast<int>(session->surround_info & 0xFFFFU);
     std::optional<audio::policy::stream_layout_t> custom_layout;
     if (!session->surround_params.empty()) {

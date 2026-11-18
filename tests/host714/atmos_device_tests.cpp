@@ -120,7 +120,7 @@ int main(){try{
   catch(const std::runtime_error&){failed_factory=true;}
   check(failed_factory);
   for(int channels:{2,6,8,12}){
-    session_profile_t profile;check(standard_opus_profile(channels,false,profile));profile.source_kind="project_atmos_pcm714";
+    session_profile_t profile;check(standard_opus_profile(channels,false,profile));profile.source_kind="user_mode_usb";
     opus_encoder_t encoder;std::string error;
     if(!encoder.initialize(profile,error))throw std::runtime_error("Opus initialization for "+std::to_string(channels)+" channels: "+error);
     check(encoder.lsb_depth()==24&&encoder.floating_point_build()&&encoder.child_bitrate()>0);
@@ -135,9 +135,9 @@ int main(){try{
     }
     std::cout<<channels<<"ch requested="<<profile.bitrate<<" child_codec_rate="<<encoder.child_bitrate()<<" effective_packet_rate="<<encoder.effective_packet_bitrate()<<" LSB="<<encoder.lsb_depth()<<'\n';
   }
-  {session_profile_t profile;check(standard_opus_profile(2,false,profile));profile.source_kind="project_atmos_pcm714";profile.frame_size=120;
+  {session_profile_t profile;check(standard_opus_profile(2,false,profile));profile.source_kind="user_mode_usb";profile.frame_size=120;
    opus_encoder_t encoder;std::string error;check(!encoder.initialize(profile,error));}
-  {session_profile_t profile;check(standard_opus_profile(2,false,profile));profile.source_kind="project_atmos_pcm714";
+  {session_profile_t profile;check(standard_opus_profile(2,false,profile));profile.source_kind="user_mode_usb";
    opus_encoder_t encoder;std::string error;check(encoder.initialize(profile,error));
    std::array<float,480> pcm{};std::array<std::uint8_t,59> undersized{};
    check(encoder.encode(pcm,undersized,error)<0&&!error.empty());
