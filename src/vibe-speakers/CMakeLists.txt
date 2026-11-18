@@ -8,7 +8,7 @@ add_library(vibe_usb_transport STATIC vibe-usb-audio/src/protocol.cpp
     vibe-usb-audio/src/clock_evidence.cpp vibe-usb-audio/src/transport.cpp)
 target_compile_features(vibe_usb_transport PUBLIC cxx_std_20)
 target_compile_definitions(vibe_usb_transport PUBLIC UNICODE _UNICODE NOMINMAX)
-target_include_directories(vibe_usb_transport PUBLIC vibe-usb-audio/include vibe-usb-bridge/include "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_include_directories(vibe_usb_transport PUBLIC vibe-usb-audio/include vibe-usb-bridge/include)
 target_link_libraries(vibe_usb_transport PUBLIC ws2_32 cfgmgr32 ole32 propsys uuid bcrypt advapi32 avrt)
 add_executable(VibeUsbBridgeTests vibe-usb-bridge/tests/bridge_tests.cpp)
 target_link_libraries(VibeUsbBridgeTests PRIVATE vibe_usb_transport)

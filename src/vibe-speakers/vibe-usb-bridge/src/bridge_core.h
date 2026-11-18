@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
-#include "vibe_input_protocol.h"
+#include "../../../vibe_input_protocol.h"
 #include "vibe_usb_audio.h"
 #include <array>
 #include <atomic>

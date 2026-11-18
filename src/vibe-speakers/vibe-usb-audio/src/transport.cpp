@@ -7,7 +7,7 @@
 // clang-format on
 #include "vibe_usb_audio.h"
 
-#include "usbip_win2_abi.h"
+#include "../../../usbip_win2_abi.h"
 #include "mmcss_audio.h"
 
 #include <algorithm>

@@ -20,7 +20,7 @@ if(SUNSHINE_ENABLE_VIBE_SPEAKERS)
         "${vibe_root}/vibe-usb-audio/src/transport.cpp")
     target_compile_features(vibe_usb_transport PUBLIC cxx_std_20)
     target_include_directories(vibe_usb_transport PUBLIC
-        "${vibe_root}/vibe-usb-audio/include" "${vibe_root}/vibe-usb-bridge/include" "${vibe_root}/..")
+        "${vibe_root}/vibe-usb-audio/include" "${vibe_root}/vibe-usb-bridge/include")
     target_compile_definitions(vibe_usb_transport PUBLIC UNICODE _UNICODE NOMINMAX)
     target_link_libraries(vibe_usb_transport PUBLIC ws2_32 cfgmgr32 ole32 propsys uuid bcrypt advapi32 avrt)
     target_link_libraries(sunshine wtsapi32)
