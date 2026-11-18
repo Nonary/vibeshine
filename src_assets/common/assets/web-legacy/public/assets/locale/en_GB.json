@@ -877,7 +877,7 @@
     "crash_dump_dismiss_error": "Failed to dismiss crash notification.",
     "keybindings": "Key bindings",
     "minimum_fps_target": "Minimum FPS Target",
-    "minimum_fps_target_desc": "The lowest effective FPS a stream can reach. A value of 0 is treated as roughly half of the stream's FPS. A setting of 20 is recommended if you stream 24 or 30 fps content.",
+    "minimum_fps_target_desc": "Controls idle-frame timing. Defaults to 20 FPS. At 0, asynchronous encoders such as PyroWave use the stream’s frame interval. On macOS, ScreenCaptureKit uses one fifth of the stream FPS, with a minimum of 10 FPS. Actual frame delivery depends on the capture and encoder path.",
     "rtx_hdr_title": "RTX HDR (AI SDR → HDR)",
     "rtx_hdr_intro": "Default tuning values for app-enabled RTX HDR conversion. During an RTX HDR stream, desktop and non-matching frames use SDR Brightness with neutral contrast and saturation.",
     "rtx_hdr": "RTX HDR",
