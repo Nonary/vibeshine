@@ -307,6 +307,24 @@ namespace video {
     }
 
     /**
+     * @brief Apply a host link rate step: in place, and without forcing a keyframe on a raise.
+     * @param bitrate_kbps New bitrate in kbps.
+     * @return `true` if the encoder reconfigured itself in place; `false` if the caller must
+     *         rebuild the encode session to apply the change.
+     */
+    virtual bool step_bitrate(int bitrate_kbps) {
+      return set_bitrate(bitrate_kbps);
+    }
+
+    /**
+     * @brief Whether set_bitrate() reconfigures this encoder in place.
+     * @return `true` for encoders that change bitrate without a rebuild (and the keyframe it costs).
+     */
+    virtual bool applies_bitrate_live() const {
+      return false;
+    }
+
+    /**
      * @brief Replace static HDR mastering metadata used for subsequent encoded frames.
      * @param metadata New mastering-display and content-light metadata.
      */

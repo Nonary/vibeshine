@@ -113,11 +113,12 @@ namespace {
     int bitrate = 1000;
     int requested = 1000;
     std::atomic<int> pacing_bitrate_kbps {1000};
+    std::atomic<bool> client_owned {false};
     safe::mail_raw_t::event_t<bool> idr;
     safe::mail_raw_t::event_t<int> bitrate_event;
 
     runtime::session_control_t view() {
-      return {uuid, bitrate, requested, pacing_bitrate_kbps, idr, bitrate_event};
+      return {uuid, bitrate, requested, pacing_bitrate_kbps, idr, bitrate_event, &client_owned};
     }
   };
 
@@ -316,6 +317,10 @@ namespace {
     EXPECT_EQ(a.pacing_bitrate_kbps.load(std::memory_order_relaxed), 12000);
     EXPECT_EQ(stream::pacing::packets_per_ms(0, a.pacing_bitrate_kbps.load(std::memory_order_relaxed), 1376, 1474, 5, 120, 0), 2u);
     EXPECT_EQ(a.bitrate_event->pop(0ms), 12000);
+    // The client now owns A's bitrate: host link rate adaptation steps aside.
+    EXPECT_TRUE(a.client_owned.load(std::memory_order_relaxed));
+    EXPECT_FALSE(b.client_owned.load(std::memory_order_relaxed));
+    EXPECT_FALSE(no_events.client_owned.load(std::memory_order_relaxed));
     EXPECT_EQ(b.bitrate, 1000);
     EXPECT_EQ(b.pacing_bitrate_kbps.load(std::memory_order_relaxed), 1000);
     EXPECT_FALSE(b.bitrate_event->peek());
@@ -349,6 +354,7 @@ namespace {
     EXPECT_EQ(a.requested, 1000);
     EXPECT_EQ(a.pacing_bitrate_kbps.load(std::memory_order_relaxed), 1000);
     EXPECT_FALSE(a.bitrate_event->peek());
+    EXPECT_FALSE(a.client_owned.load(std::memory_order_relaxed));
     EXPECT_EQ(controls.set_bitrate_for_sessions("unknown", 12000), 0);
     EXPECT_EQ(admissions, 1);
     close(owner);
