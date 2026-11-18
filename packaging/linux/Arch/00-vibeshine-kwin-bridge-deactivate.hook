@@ -1,0 +1,14 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = usr/lib/libkwin.so*
+Target = usr/lib/vibeshine/kwin-bridge/libvibeshine-kwin-gpu.so
+
+[Action]
+Description = Deactivating the Vibeshine GPU bridge before compositor files change
+When = PreTransaction
+Depends = vibeshine
+Exec = /usr/libexec/vibeshine/vibeshine-kwin-bridge-rebuild --deactivate
+AbortOnFail
