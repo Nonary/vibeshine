@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { InlineAlert, LoadingSkeleton, StatusBadge, UiIcon } from '@/components/ui';
 import {
-  isWindowsHost,
+  showWindowsDisplayStatus,
   windowsDisplayHealth,
   type DisplayMetadataWithDriver,
   type WindowsDisplayDriver,
@@ -31,7 +31,9 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const health = computed(() => windowsDisplayHealth(props.metadata));
-const visible = computed(() => isWindowsHost(props.metadata));
+const visible = computed(() =>
+  showWindowsDisplayStatus(props.metadata, props.loading, props.error),
+);
 const selectedDriver = computed(() => props.selectedDriver ?? health.value.configuredDriver);
 
 const driverName = (driver?: WindowsDisplayDriver): string => {

@@ -13,6 +13,8 @@ async function setupWindowsHost(
   options: {
     driverStatus?: DriverStatus | number;
     activeDriver?: 'vibeshine' | 'sudovda' | null;
+    statusCode?: number;
+    initializationAttempted?: boolean;
     configuredDriver?: 'vibeshine' | 'sudovda';
     config?: Record<string, unknown>;
   } = {},
@@ -52,9 +54,12 @@ async function setupWindowsHost(
         encoder_status: { state: 'ready', h264: true },
         virtual_display_driver: {
           configured: options.configuredDriver ?? 'vibeshine',
+          initialization_attempted: options.initializationAttempted,
           active: options.activeDriver === undefined ? 'vibeshine' : options.activeDriver,
           status: options.driverStatus ?? 'unknown',
-          status_code: typeof options.driverStatus === 'number' ? options.driverStatus : undefined,
+          status_code:
+            options.statusCode ??
+            (typeof options.driverStatus === 'number' ? options.driverStatus : undefined),
         },
       };
     } else if (path === '/api/session/status') {
@@ -66,11 +71,11 @@ async function setupWindowsHost(
   });
 }
 
-test('unobserved driver is informational and refresh preserves real runtime outcomes', async ({
-  page,
-}) => {
+test('uninitialized driver stays hidden until a runtime result is observed', async ({ page }) => {
   const options = {
-    driverStatus: 1 as DriverStatus | number,
+    driverStatus: 'unknown' as DriverStatus | number,
+    statusCode: 1,
+    initializationAttempted: false,
     activeDriver: null as 'vibeshine' | null,
   };
   await setupWindowsHost(page, options);
@@ -83,14 +88,18 @@ test('unobserved driver is informational and refresh preserves real runtime outc
   const status = page.locator('#windows-display-status');
   const badge = status.locator('.vs-status-badge');
   const alert = status.locator('.vs-inline-alert');
-  await expect(badge).toHaveText('No driver result');
-  await expect(badge).toHaveClass(/vs-status-badge--neutral/);
-  await expect(alert).toHaveClass(/vs-inline-alert--info/);
-  await expect(alert).toContainText('This status alone does not indicate a failure.');
-  await expect(status).not.toContainText('restart');
-  await expect(status).not.toContainText('ready for virtual-display use');
-  await status.getByRole('button', { name: 'Refresh status', exact: true }).click();
-  await expect(badge).toHaveText('No driver result');
+  await expect(page.locator('.settings-section').first()).toBeVisible();
+  await expect(status).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('.settings-section').first()).toBeVisible();
+  await expect(status).toHaveCount(0);
+
+  options.initializationAttempted = true;
+  options.driverStatus = 'failed';
+  options.statusCode = -1;
+  await page.reload();
+  await expect(status).toBeVisible();
+  await expect(alert).toContainText('Driver is unavailable');
 
   options.activeDriver = 'vibeshine';
   for (const [result, tone, title] of [
@@ -101,10 +110,23 @@ test('unobserved driver is informational and refresh preserves real runtime outc
     ['unknown', 'neutral', 'Driver status is unknown'],
   ] as const) {
     options.driverStatus = result;
+    options.statusCode = {
+      ready: 0,
+      failed: -1,
+      version_incompatible: -2,
+      watchdog_failed: -3,
+      unknown: 1,
+    }[result];
     await status.getByRole('button', { name: 'Refresh status', exact: true }).click();
     await expect(alert).toContainText(title);
     await expect(badge).toHaveClass(new RegExp(`vs-status-badge--${tone}`));
   }
+  options.driverStatus = 'unknown';
+  options.statusCode = 1;
+  options.activeDriver = null;
+  await status.getByRole('button', { name: 'Refresh status', exact: true }).click();
+  await expect(status).toBeVisible();
+  await expect(alert).toContainText('Driver status is unknown');
   expect(mutations).toEqual([]);
 });
 
@@ -232,3 +254,18 @@ test('dummy-plug dependency survives disable and only changed settings are saved
   await expect.poll(() => patches.length).toBe(1);
   expect(patches[0]).toEqual({ frame_limiter_disable_vsync: true });
 });
+
+for (const driverStatus of ['failed', 'version_incompatible', 'watchdog_failed', 42] as const) {
+  test(`driver result ${driverStatus} remains visible without an active driver`, async ({
+    page,
+  }) => {
+    await setupWindowsHost(page, { driverStatus, activeDriver: null });
+    await page.goto('/v2/settings?category=display');
+    const status = page.locator('#windows-display-status');
+    await expect(status).toBeVisible();
+    await expect(status.locator('.vs-inline-alert')).toBeVisible();
+    await page.route('**/api/metadata', (route) => route.fulfill({ status: 503, json: {} }));
+    await status.getByRole('button', { name: 'Refresh status', exact: true }).click();
+    await expect(status.locator('.vs-inline-alert')).toHaveClass(/vs-inline-alert--danger/);
+  });
+}

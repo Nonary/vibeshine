@@ -925,6 +925,8 @@ namespace proc {
   std::atomic<VDISPLAY::DRIVER_STATUS> vDisplayDriverStatus {VDISPLAY::DRIVER_STATUS::UNKNOWN};
   std::atomic<VDISPLAY::DRIVER_SELECTION> vDisplayDriverSelection {VDISPLAY::DRIVER_SELECTION::UNKNOWN};
   std::mutex vdisplay_driver_status_mutex;
+  // Protected by the status mutex; never reset by initialization or recovery.
+  bool vdisplay_driver_initialization_attempted {false};
 
   namespace {
     lifecycle::deferred_action_t deferred_display_revert;
@@ -947,12 +949,14 @@ namespace proc {
     return {
       vDisplayDriverStatus.load(std::memory_order_acquire),
       vDisplayDriverSelection.load(std::memory_order_acquire),
+      vdisplay_driver_initialization_attempted,
     };
   }
 
   void setVDisplayDriverStatus(const VDISPLAY::DRIVER_STATUS status) {
     std::lock_guard<std::mutex> lock(vdisplay_driver_status_mutex);
     vDisplayDriverStatus.store(status, std::memory_order_release);
+    vdisplay_driver_initialization_attempted = true;
   }
 
   void setVDisplayDriverStatus(
@@ -962,6 +966,7 @@ namespace proc {
     std::lock_guard<std::mutex> lock(vdisplay_driver_status_mutex);
     vDisplayDriverSelection.store(selection, std::memory_order_release);
     vDisplayDriverStatus.store(status, std::memory_order_release);
+    vdisplay_driver_initialization_attempted = true;
   }
 
   void onVDisplayWatchdogFailed() {
