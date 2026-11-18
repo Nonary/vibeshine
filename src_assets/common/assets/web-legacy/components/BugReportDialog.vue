@@ -120,7 +120,7 @@ onBeforeUnmount(() => controller.abort());
   padding: clamp(1rem, 4vw, 1.5rem);
   text-align: start;
 }
-:global(.dark) .bug-report {
+:global(.dark .bug-report) {
   color: var(--vs-color-text-primary, rgb(var(--color-light)));
   background: var(--vs-color-bg-surface, rgb(var(--color-surface)));
   color-scheme: dark;
