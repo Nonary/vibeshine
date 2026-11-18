@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 
 import LinuxCaptureStatus from '@/components/settings/LinuxCaptureStatus.vue';
 import VirtualDisplayRecovery from '@/components/VirtualDisplayRecovery.vue';
+import BugReportDialog from '../../web-legacy/components/BugReportDialog.vue';
 import { ApiError, apiGet } from '@/api/client';
 import {
   AppButton,
@@ -342,6 +343,13 @@ onBeforeUnmount(() => {
             :busy-label="t('ui.overview.refreshing')"
             @click="refresh(true)"
           />
+          <BugReportDialog
+            v-slot="{ open }"
+            :version="system.metadata?.version"
+            :platform="system.metadata?.platform"
+          >
+            <AppButton :label="t('ui.overview.actions.reportBug')" @click="open" />
+          </BugReportDialog>
         </div>
       </template>
     </PageHeader>
@@ -528,12 +536,6 @@ onBeforeUnmount(() => {
           <strong>{{ system.metadata?.version || t('_common.unknown') }}</strong></span
         >
         <nav :aria-label="t('ui.overview.support')">
-          <a
-            href="https://github.com/Nonary/vibeshine/issues/new/choose"
-            target="_blank"
-            rel="noopener noreferrer"
-            >{{ t('ui.overview.actions.reportBug') }}<UiIcon name="external-link" :size="14"
-          /></a>
           <a
             href="https://github.com/Nonary/vibeshine/releases/latest"
             target="_blank"

@@ -36,6 +36,16 @@
               <span>{{ $t('navbar.use_v2_web_ui') }}</span>
             </n-button>
           </a>
+          <BugReportDialog
+            v-slot="{ open }"
+            :version="configStore.metadata?.version"
+            :platform="configStore.metadata?.platform"
+          >
+            <n-button strong class="w-full justify-center sm:w-auto" @click="open">
+              <i class="fas fa-bug" aria-hidden="true" />
+              <span>{{ $t('index.report_bug.title') }}</span>
+            </n-button>
+          </BugReportDialog>
         </div>
       </div>
     </section>
@@ -157,7 +167,7 @@
                     strong
                     size="small"
                     class="w-full justify-center sm:w-auto"
-                    href="https://github.com/Nonary/vibeshine/issues/new?template=bug_report.yml"
+                    :href="crashReportUrl"
                     target="_blank"
                     rel="noopener noreferrer"
                   >
@@ -513,7 +523,9 @@ import { ref, onMounted, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { NCard, NAlert, useMessage, useDialog } from 'naive-ui';
 import ResourceCard from '@/ResourceCard.vue';
+import BugReportDialog from '@/components/BugReportDialog.vue';
 import VirtualDisplayRecovery from '@/components/VirtualDisplayRecovery.vue';
+import { crashReportUrl } from '@/utils/bugReport';
 import {
   fetchUpdateReleases,
   selectAvailableUpdate,

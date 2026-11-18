@@ -5,7 +5,7 @@ body:
     id: symptoms
     attributes:
       label: Bug Symptoms
-      description: Describe what happens (the symptoms of the bug).
+      description: Describe what happens, how to reproduce it, and your installed version and host OS.
     validations:
       required: true
 
@@ -20,13 +20,15 @@ body:
   - type: dropdown
     id: os-version
     attributes:
-      label: Windows Version
-      description: Select the version of Windows you are using.
+      label: Host OS Version
+      description: Select your Windows version or choose the option for a different host OS. Include the OS version under Bug Symptoms.
       options:
         - 22H2
         - 23H2
         - 24H2
         - 25H2
+        - Other Windows version
+        - Linux, macOS, or other OS
     validations:
       required: true
 
@@ -106,8 +108,8 @@ body:
     attributes:
       label: Logs (Optional but Recommended)
       description: |
-        If possible, attach your logs to help us diagnose the issue.  
-        Go to **Troubleshooting tab → Export Logs** and upload the **Vibeshine logs zip file** here.
+        Download the ZIP from **Dashboard → Report a bug → Download logs** or **Troubleshooting → Export Logs**.
+        Review it for private details before attaching it here. You can also paste a relevant, redacted excerpt.
     validations:
       required: false
 

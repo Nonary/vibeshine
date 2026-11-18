@@ -1101,6 +1101,31 @@
     "dd_manual_enforcement_notice": "Manual values take priority over remapping for that value. Values set to Match the client keep their rules unless a client's Display mode override is active; that override bypasses all remapping and takes priority over manual values."
   },
   "index": {
+    "report_bug": {
+      "title": "Report a bug",
+      "logs": "Optional diagnostic logs",
+      "review": "Save the ZIP to your device and review it for private details. Attach it to the GitHub issue only if you’re comfortable sharing it, or paste a redacted excerpt.",
+      "download": {
+        "idle": "Download logs",
+        "pending": "Preparing logs…",
+        "started": "Download logs again",
+        "failed": "Retry log download"
+      },
+      "export": {
+        "started": "Log download started. Check your browser’s downloads.",
+        "failed": "Could not download logs. Try again or continue to GitHub without the ZIP."
+      },
+      "issue": "GitHub bug report",
+      "guide": "Give the issue a short title. Describe what happened, what you expected, and how to reproduce it. Include the installed version and host OS if you know them. You submit the report on GitHub.",
+      "share": "Send the details below to GitHub to fill in Bug Symptoms",
+      "details": "Version and platform available to share",
+      "copy": "Copy details",
+      "clipboard": {
+        "copied": "Details copied. Paste them into Bug Symptoms if the form is empty.",
+        "failed": "Could not copy. Select the details above and copy them manually."
+      },
+      "open": "Open bug form on GitHub (new tab)"
+    },
     "display_recovery": {
       "title": "Display recovery",
       "description": "If your PC screen stays blank after streaming, terminate the virtual screen and try to recover a physical monitor.",

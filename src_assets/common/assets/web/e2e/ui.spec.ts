@@ -65,6 +65,147 @@ async function host(
   return patches;
 }
 
+test('dashboard bug report separates local download, copy, and GitHub prefill', async ({
+  page,
+  context,
+}) => {
+  await host(page, 'windows', {}, true, {
+    version: '2.0.5-beta.2',
+    commit: 'private-build-identifier',
+    hostname: 'private-hostname',
+  });
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  let githubRequests = 0;
+  let referrer: string | undefined;
+  await context.route('https://github.com/**', async (route) => {
+    githubRequests++;
+    referrer = route.request().headers().referer;
+    await route.fulfill({ body: 'GitHub form fixture' });
+  });
+  let exportRequests = 0;
+  const archive = 'fixture diagnostic bytes';
+  let finishExport!: () => void;
+  const releaseExport = new Promise<void>((resolve) => {
+    finishExport = resolve;
+  });
+  await page.route('**/api/logs/export', async (route) => {
+    exportRequests++;
+    await releaseExport;
+    await route.fulfill({
+      contentType: 'application/zip',
+      headers: {
+        'Content-Disposition': 'attachment; filename="vibeshine_logs-20261118-161600.zip"',
+      },
+      body: archive,
+    });
+  });
+
+  await page.goto('/v2/');
+  const trigger = page.getByRole('button', { name: 'Report a bug', exact: true });
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: 'Report a bug' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+  await expect(dialog.getByText(/review it for private details/)).toBeVisible();
+  const details = 'Version: 2.0.5-beta.2\nHost platform: Windows';
+  await expect(dialog.getByRole('textbox', { name: /version and platform/i })).toHaveValue(details);
+  const issue = dialog.getByRole('link', { name: /open bug form on GitHub/i });
+  await expect(issue).toHaveAttribute(
+    'href',
+    'https://github.com/Nonary/vibeshine/issues/new?template=bug-report.yml',
+  );
+  expect(exportRequests).toBe(0);
+  expect(githubRequests).toBe(0);
+
+  await dialog.getByRole('button', { name: 'Copy details' }).click();
+  await expect(dialog.getByText(/details copied/i)).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(details);
+
+  const download = page.waitForEvent('download');
+  const exportButton = dialog.getByRole('button', { name: 'Download logs', exact: true });
+  await exportButton.click();
+  const pending = dialog.getByRole('button', { name: 'Preparing logs…' });
+  await expect(pending).toHaveAttribute('aria-disabled', 'true');
+  await pending.dispatchEvent('click');
+  finishExport();
+  const zip = await download;
+  expect(zip.suggestedFilename()).toBe('vibeshine_logs-20261118-161600.zip');
+  expect(await readFile((await zip.path())!, 'utf8')).toBe(archive);
+  await expect(dialog.getByText(/log download started/i)).toBeVisible();
+  expect(exportRequests).toBe(1);
+  expect(githubRequests).toBe(0);
+
+  await dialog.getByRole('checkbox', { name: /send the details below/i }).check();
+  const popup = page.waitForEvent('popup');
+  await issue.click();
+  const github = await popup;
+  await github.waitForURL('https://github.com/**');
+  const target = new URL(github.url());
+  expect(target.origin + target.pathname).toBe('https://github.com/Nonary/vibeshine/issues/new');
+  expect([...target.searchParams]).toEqual([
+    ['template', 'bug-report.yml'],
+    ['symptoms', details + '\n\n'],
+  ]);
+  expect(githubRequests).toBe(1);
+  expect(referrer).toBeUndefined();
+  expect(exportRequests).toBe(1);
+  await github.close();
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+  await expect(trigger).toBeFocused();
+  await trigger.click();
+  await expect(dialog.getByRole('checkbox')).not.toBeChecked();
+});
+
+test('dashboard bug report stays usable after errors on a narrow screen', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await host(page, 'linux', {}, true, { version: '2.0.5-local-private-host' });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: async () => {
+          throw new Error('clipboard-denied');
+        },
+      },
+    });
+  });
+  let attempt = 0;
+  await page.route('**/api/logs/export', async (route) => {
+    attempt++;
+    if (attempt === 1) {
+      await route.fulfill({ status: 401, body: 'private authentication error' });
+    } else if (attempt === 2) {
+      await route.fulfill({ contentType: 'text/html', body: 'sign in again' });
+    } else {
+      await route.fulfill({ contentType: 'application/zip', body: 'fixture diagnostic bytes' });
+    }
+  });
+  await page.goto('/v2/');
+  await page.getByRole('button', { name: 'Report a bug', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Report a bug' });
+  await expect(dialog.getByRole('textbox')).toHaveValue('Host platform: Linux');
+  await dialog.getByRole('button', { name: 'Copy details' }).click();
+  await expect(dialog.getByText(/copy them manually/i)).toBeVisible();
+  await expect(dialog.getByRole('textbox')).toHaveAttribute('readonly', '');
+  const downloads: string[] = [];
+  page.on('download', (download) => downloads.push(download.suggestedFilename()));
+  await dialog.getByRole('button', { name: 'Download logs', exact: true }).click();
+  const error = dialog.getByText(/could not download logs/i);
+  await expect(error).toBeVisible();
+  await expect(dialog.getByText('private authentication error')).toHaveCount(0);
+  const issue = dialog.getByRole('link', { name: /open bug form on GitHub/i });
+  await expect(issue).toBeVisible();
+  const retry = dialog.getByRole('button', { name: 'Retry log download' });
+  await retry.click();
+  await expect(error).toBeVisible();
+  expect(downloads).toEqual([]);
+  await retry.click();
+  await expect.poll(() => downloads).toEqual(['diagnostics.zip']);
+  expect(attempt).toBe(3);
+  await expect.poll(() => dialog.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+});
+
 test('Linux Everyday presents essentials and preserves unrelated values when saving', async ({
   page,
 }) => {
