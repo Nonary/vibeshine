@@ -13,6 +13,7 @@ namespace VibeSpeakers.Setup {
  public sealed class AclAccessProof { public bool ApprovedUserAllowed,WorldOnlyDenied,ForeignSidOnlyDenied; public bool ActualForeignLoginTest=false,ActualDeviceOpenTest=false; public string ApprovedSid; }
  public static class UsbIpDeviceSecurity {
   public static string OwnedInstance { get; private set; }
+  internal static void ClearBinding() { OwnedInstance=null; }
   public static void Bind(string id) {
    if(!System.Text.RegularExpressions.Regex.IsMatch(id,@"^ROOT\\USB\\[0-9A-Fa-f]{4,32}$"))throw new ArgumentException("Invalid exact controller instance");
    if(OwnedInstance!=null&&!String.Equals(OwnedInstance,id,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("Helper is already bound to another controller");
@@ -59,18 +60,29 @@ namespace VibeSpeakers.Setup {
   static byte[] Property(IntPtr s,ref Info i,ref Key k,out uint type,out bool present){uint n;byte[] b=new byte[65536];if(!SetupDiGetDevicePropertyW(s,ref i,ref k,out type,b,(uint)b.Length,out n,0)){int e=Marshal.GetLastWin32Error();if(e==1168){present=false;type=0;return new byte[0];}throw new Win32Exception(e);}if(n>b.Length)throw new InvalidDataException("Property bound");present=true;Array.Resize(ref b,(int)n);return b;}
   static string Text(byte[] b){if(b.Length<2||b.Length%2!=0||b[b.Length-1]!=0||b[b.Length-2]!=0)throw new InvalidDataException("Property string termination");return Encoding.Unicode.GetString(b).TrimEnd('\0');}
   static string Hash(string p){using(var s=File.OpenRead(p))using(var h=System.Security.Cryptography.SHA256.Create())return BitConverter.ToString(h.ComputeHash(s)).Replace("-","");}
-  static UsbSecuritySnapshot Inspect(IntPtr s,ref Info i){
+  static UsbSecuritySnapshot Inspect(IntPtr s,ref Info i,bool removal=false){
    string id=Instance(s,ref i);if(!String.Equals(id,OwnedInstance,StringComparison.OrdinalIgnoreCase)||i.Class!=Usb)throw new InvalidDataException("Not exact owned USB root");
    var ids=RegistryStrings(s,ref i,1);if(Array.FindIndex(ids,x=>String.Equals(x,HardwareId,StringComparison.OrdinalIgnoreCase))<0)throw new InvalidDataException("Wrong hardware ID");
+   uint status,problem;
+   uint cr=CM_Get_DevNode_Status(out status,out problem,i.DevInst,0);
+   if(cr!=0)throw new InvalidOperationException("CM status CR="+cr);
+   uint type;bool exists;
+   var security=Property(s,ref i,ref SecurityKey,out type,out exists);
+   if(exists&&type!=20)throw new InvalidDataException("SecuritySDS type mismatch");
+   var snapshot=new UsbSecuritySnapshot{InstanceId=id,HardwareIds=ids,DeviceStatus=status,ProblemCode=problem,Started=(status&8)!=0,
+    Security=new SecurityProperty{Present=exists,Type=type,BytesBase64=Convert.ToBase64String(security),Sddl=exists?Text(security):null}};
+   // An inactive owned root may have no functioning driver, but its hardware
+   // identity and exact ACL must still match. The caller also checks its children.
+   if(removal&&!snapshot.Started)return snapshot;
    var services=RegistryStrings(s,ref i,4);if(services.Length!=1||!String.Equals(services[0],"usbip2_ude",StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("Wrong service");
-   uint type;bool exists;var infKey=new Key("a8b865dd-2e3d-4094-ad97-e593a70c75d6",5);var raw=Property(s,ref i,ref infKey,out type,out exists);if(!exists||type!=18)throw new InvalidDataException("Driver INF missing");string inf=Text(raw);
+   var infKey=new Key("a8b865dd-2e3d-4094-ad97-e593a70c75d6",5);var raw=Property(s,ref i,ref infKey,out type,out exists);if(!exists||type!=18)throw new InvalidDataException("Driver INF missing");string inf=Text(raw);
    if(!System.Text.RegularExpressions.Regex.IsMatch(inf,@"^oem[0-9]+\.inf$",System.Text.RegularExpressions.RegexOptions.IgnoreCase))throw new InvalidDataException("Invalid OEM INF");
    string hash=Hash(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"INF",inf));if(hash!=ExpectedInfHash)throw new InvalidDataException("Loaded INF binding differs from signed release");
-   raw=Property(s,ref i,ref SecurityKey,out type,out exists);if(exists&&type!=20)throw new InvalidDataException("SecuritySDS type mismatch");
-   uint status,problem;uint cr=CM_Get_DevNode_Status(out status,out problem,i.DevInst,0);if(cr!=0)throw new InvalidOperationException("CM status CR="+cr);
-   return new UsbSecuritySnapshot{InstanceId=id,HardwareIds=ids,Service=services[0],InfName=inf,InfSha256=hash,DeviceStatus=status,ProblemCode=problem,Started=(status&8)!=0,Security=new SecurityProperty{Present=exists,Type=type,BytesBase64=Convert.ToBase64String(raw),Sddl=exists?Text(raw):null}};
+   snapshot.Service=services[0];snapshot.InfName=inf;snapshot.InfSha256=hash;
+   return snapshot;
   }
   public static UsbSecuritySnapshot Inspect(){Info i;IntPtr s=Open(out i);try{return Inspect(s,ref i);}finally{SetupDiDestroyDeviceInfoList(s);}}
+  public static UsbSecuritySnapshot InspectForRemoval(){Info i;IntPtr s=Open(out i);try{return Inspect(s,ref i,true);}finally{SetupDiDestroyDeviceInfoList(s);}}
   public static string Sddl(string userSid){var sid=new SecurityIdentifier(userSid);if(!sid.IsAccountSid())throw new ArgumentException("Account SID required");return "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;"+sid.Value+")";}
   static bool SameSecurity(SecurityProperty a,SecurityProperty b){return a.Present==b.Present&&a.Type==b.Type&&a.BytesBase64==b.BytesBase64;}
   public static void Set(SecurityProperty expected,SecurityProperty value){

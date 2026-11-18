@@ -120,6 +120,14 @@ namespace VibeshineInstaller {
   }
   internal static class InstallerDriverSelectionStore {
     private const string KeyPath = @"SOFTWARE\Nonary\Vibeshine\Installer\DriverSelections";
+    public static bool VibeSpeakersEnabled() {
+      try {
+        using (var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+        using (var key = machine.OpenSubKey(KeyPath)) {
+          return Parse(key == null ? null : key.GetValue("VibeSpeakersEnabled")) == 1;
+        }
+      } catch { return false; }
+    }
     public static InstallerDriverSelections Load() { return new InstallerDriverSelections(Read, Save); }
     private static int? Read(string name) {
       try {
@@ -199,6 +207,9 @@ namespace VibeshineInstaller {
     private readonly bool _showInstallVirtualDisplayOption;
     private readonly bool _showInstallVirtualGamepadOption;
     private readonly bool _showInstallUsbIpTransportOption;
+    private readonly bool _showVibeSpeakersOption;
+    private readonly CheckBox _vibeSpeakersCheckBox;
+    private readonly TextBlock _vibeSpeakersDescription;
     private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
     private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
     private const uint SWP_NOMOVE = 0x0002;
@@ -232,10 +243,12 @@ namespace VibeshineInstaller {
       _showInstallUsbIpTransportOption = !BuildFlavor.IsUninstallOnly
         && _payloadMsiInfo != null
         && _payloadMsiInfo.HasBundledUsbIpTransport;
+      _showVibeSpeakersOption = !BuildFlavor.IsUninstallOnly && _payloadMsiInfo != null
+        && _payloadMsiInfo.HasVibeSpeakers && _payloadMsiInfo.HasBundledUsbIpTransport;
       var showInstallOptions = showInstallLocation
         || _showInstallVirtualDisplayOption
         || _showInstallVirtualGamepadOption
-        || _showInstallUsbIpTransportOption;
+        || _showInstallUsbIpTransportOption || _showVibeSpeakersOption;
       var useCompactUpdateLayout = !BuildFlavor.IsUninstallOnly && _installedProduct != null && !showInstallOptions;
       var displayVersion = GetTargetVersionText();
       Title = (BuildFlavor.IsUninstallOnly ? "Vibeshine Uninstaller v" : "Vibeshine Installer v") + displayVersion;
@@ -771,6 +784,25 @@ namespace VibeshineInstaller {
         TextWrapping = TextWrapping.Wrap
       });
 
+      _vibeSpeakersCheckBox = new CheckBox {
+        Content = new TextBlock {
+          Text = "Install Vibe Speakers virtual audio device",
+          TextWrapping = TextWrapping.Wrap
+        },
+        IsChecked = _arguments.InstallVibeSpeakersRequested,
+        FontSize = 13,
+        Foreground = new SolidColorBrush(Color.FromRgb(232, 239, 253)),
+        Margin = new Thickness(0, 10, 0, 6)
+      };
+      _vibeSpeakersDescription = new TextBlock {
+        Text = "Enables virtual 7.1.4 surround sound capture for streaming. Installs the required signed USB/IP components if needed.",
+        FontSize = 12,
+        Foreground = new SolidColorBrush(Color.FromRgb(190, 208, 236)),
+        TextWrapping = TextWrapping.Wrap
+      };
+      usbIpStack.Children.Add(_vibeSpeakersCheckBox);
+      usbIpStack.Children.Add(_vibeSpeakersDescription);
+
       var divider = new System.Windows.Shapes.Rectangle {
         Height = 1,
         Fill = new SolidColorBrush(Color.FromArgb(120, 88, 104, 124)),
@@ -1209,6 +1241,7 @@ namespace VibeshineInstaller {
         var installVirtualDisplayDriver = ShouldInstallVirtualDisplayDriver();
         var installVirtualGamepadDriver = ShouldInstallVirtualGamepadDriver();
         var installUsbIpTransport = ShouldInstallUsbIpTransport();
+        _arguments.InstallVibeSpeakersSelection = _showVibeSpeakersOption && _vibeSpeakersCheckBox.IsChecked == true;
         _arguments.InstallDisplayDriversRequested = _virtualDisplayDriverCheckBox.IsChecked == true;
         InstallerRunner.ApplySelectedGamepadTrust(_arguments, _payloadMsiInfo, installVirtualGamepadDriver);
         return await Task.Run(() => InstallerRunner.RunInteractiveInstall(
@@ -1651,7 +1684,9 @@ namespace VibeshineInstaller {
       _installSection.Visibility = showInstallLocation ? Visibility.Visible : Visibility.Collapsed;
       _installVirtualDisplaySection.Visibility = _showInstallVirtualDisplayOption ? Visibility.Visible : Visibility.Collapsed;
       _installVirtualGamepadSection.Visibility = _showInstallVirtualGamepadOption ? Visibility.Visible : Visibility.Collapsed;
-      _installUsbIpTransportSection.Visibility = _showInstallUsbIpTransportOption ? Visibility.Visible : Visibility.Collapsed;
+      _installUsbIpTransportSection.Visibility = _showInstallUsbIpTransportOption || _showVibeSpeakersOption ? Visibility.Visible : Visibility.Collapsed;
+      _vibeSpeakersCheckBox.Visibility = _vibeSpeakersDescription.Visibility = _showVibeSpeakersOption ? Visibility.Visible : Visibility.Collapsed;
+      _vibeSpeakersCheckBox.IsEnabled = allowInstallInputs && _showVibeSpeakersOption;
       _uninstallButton.Visibility = hasInstalledProduct ? Visibility.Visible : Visibility.Collapsed;
       _continueButton.Visibility = Visibility.Visible;
       _continueButton.Content = BuildInstallButtonLabel();
@@ -2255,6 +2290,18 @@ namespace VibeshineInstaller {
     public string InternalUninstallResultPath { get; set; }
     public string MsiPathOverride { get; set; }
     public List<string> ForwardedArguments { get; private set; }
+
+    public bool? InstallVibeSpeakersSelection { get; set; }
+
+    public bool InstallVibeSpeakersRequested {
+      get {
+        var choice = ForwardedArguments.LastOrDefault(arg =>
+          arg.StartsWith("INSTALL_VIBE_SPEAKERS=", StringComparison.OrdinalIgnoreCase));
+        return InstallVibeSpeakersSelection ?? (choice == null
+          ? InstallerDriverSelectionStore.VibeSpeakersEnabled()
+          : string.Equals(choice, "INSTALL_VIBE_SPEAKERS=1", StringComparison.OrdinalIgnoreCase));
+      }
+    }
 
     public bool InstallUsbIpTransportRequested {
       get {
@@ -4103,7 +4150,10 @@ namespace VibeshineInstaller {
         "SUPPRESSMSGBOXES=1"
       };
 
-      args.Add(VibeSpeakersUserArgument(arguments));
+      if (arguments != null) {
+        args.Add("INSTALL_VIBE_SPEAKERS=" + (arguments.InstallVibeSpeakersRequested ? "1" : "0"));
+        if (arguments.InstallVibeSpeakersRequested) args.Add(VibeSpeakersUserArgument(arguments));
+      }
       args.AddRange(BuildDriverSelectionArguments(arguments, installVirtualDisplayDriver, installVirtualGamepadDriver));
       args.AddRange(BuildLocalGamepadTrustArguments(arguments, installVirtualGamepadDriver));
 
@@ -5497,66 +5547,7 @@ namespace VibeshineInstaller {
       return Encoding.Unicode;
     }
 
-    internal sealed class ServiceResumeCheckpoint {
-      private readonly Dictionary<string,string> running = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
-      public void Remember(string name, string identity, bool wasRunning) {
-        if (wasRunning && !string.IsNullOrWhiteSpace(identity) && !running.ContainsKey(name)) running.Add(name, identity);
-      }
-      public void Complete(bool success, Func<string,string> currentIdentity, Action<string> resume) {
-        try {
-          if (!success) foreach (var entry in running)
-            if (string.Equals(entry.Value, currentIdentity(entry.Key), StringComparison.Ordinal)) resume(entry.Key);
-        } finally { running.Clear(); }
-      }
-    }
-    private static readonly ServiceResumeCheckpoint QuiescedServiceState = new ServiceResumeCheckpoint();
-    [StructLayout(LayoutKind.Sequential)] private struct ResumeServiceStatus {public uint Type, State, Controls, Win32Exit, SpecificExit, Checkpoint, WaitHint;}
-    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true, EntryPoint="OpenSCManagerW")]
-    private static extern IntPtr ResumeOpenManager(string machine, string database, uint access);
-    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true, EntryPoint="OpenServiceW")]
-    private static extern IntPtr ResumeOpenService(IntPtr manager, string name, uint access);
-    [DllImport("advapi32.dll", SetLastError=true, EntryPoint="QueryServiceStatus")]
-    private static extern bool ResumeQueryStatus(IntPtr service, out ResumeServiceStatus status);
-    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true, EntryPoint="StartServiceW")]
-    private static extern bool ResumeStartService(IntPtr service, uint count, IntPtr arguments);
-    [DllImport("advapi32.dll", EntryPoint="CloseServiceHandle")]
-    private static extern bool ResumeCloseService(IntPtr handle);
-    private static bool ExistingServiceRunning(string name) {
-      var manager=ResumeOpenManager(null,null,1);if(manager==IntPtr.Zero)return false;
-      try{var service=ResumeOpenService(manager,name,4);if(service==IntPtr.Zero)return false;
-        try{ResumeServiceStatus status;return ResumeQueryStatus(service,out status)&&status.State==4;}finally{ResumeCloseService(service);}
-      }finally{ResumeCloseService(manager);}
-    }
-    private static string ExistingServiceIdentity(string name) {
-      try{
-        using(var key=Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\"+name)){
-          if(key==null)return null;var command=Convert.ToString(key.GetValue("ImagePath"));string image,arguments;
-          if(!TrySplitExecutableAndArguments(command,out image,out arguments))return null;
-          image=Path.GetFullPath(Environment.ExpandEnvironmentVariables(image));
-          var directory=Path.GetDirectoryName(image);var host=Path.Combine(directory,"sunshine.exe");
-          if(!File.Exists(host))host=Path.GetFullPath(Path.Combine(directory,"..","sunshine.exe"));
-          if(!File.Exists(image)||!File.Exists(host))return null;
-          return command+"\n"+ComputeFileSha256Hex(image)+"\n"+ComputeFileSha256Hex(host);
-        }
-      }catch{return null;}
-    }
-    private static InstallerResult CompleteServiceCheckpoint(InstallerResult result) {
-      if(result==null)return null;
-      QuiescedServiceState.Complete(result.Succeeded, ExistingServiceIdentity, name=>{
-        var manager=ResumeOpenManager(null,null,1);if(manager==IntPtr.Zero)return;
-        try{var service=ResumeOpenService(manager,name,0x14);if(service==IntPtr.Zero)return;
-          try{ResumeServiceStatus status;
-            if(ResumeQueryStatus(service,out status)&&status.State==1){
-              if(!ResumeStartService(service,0,IntPtr.Zero))AppendInstallerLogMessage(result.LogPath,"Could not restore previously running service "+name+": "+Marshal.GetLastWin32Error());
-              else AppendInstallerLogMessage(result.LogPath,"Restored previously running service after failed transaction: "+name);
-            }
-          }finally{ResumeCloseService(service);}
-        }finally{ResumeCloseService(manager);}
-      });
-      return result;
-    }
     private static void TryStopRelatedServicesAndProcesses(string logPath) {
-      foreach(var name in RelatedServiceNames)QuiescedServiceState.Remember(name,ExistingServiceIdentity(name),ExistingServiceRunning(name));
       foreach (var serviceName in RelatedServiceNames.Distinct(StringComparer.OrdinalIgnoreCase)) {
         try {
           var scPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "sc.exe");
@@ -6181,12 +6172,14 @@ namespace VibeshineInstaller {
         new[] { InstalledProductKind.Vibeshine },
         removeVirtualGamepadDriver);
       uninstallResult.Operation = InstallerOperation.Uninstall;
-      return CompleteServiceCheckpoint(uninstallResult);
+      return uninstallResult;
     }
 
     public static InstallerResult RunCli(InstallerArguments arguments) {
       var cliArgs = new List<string>(arguments.ForwardedArguments);
-      if (!cliArgs.Any(arg => arg.StartsWith("VIBE_SETUP_USER_SID=", StringComparison.OrdinalIgnoreCase))) cliArgs.Add(VibeSpeakersUserArgument(arguments));
+      if (arguments.InstallVibeSpeakersRequested && !HasProperty(cliArgs, "VIBE_SETUP_USER_SID")) {
+        cliArgs.Add(VibeSpeakersUserArgument(arguments));
+      }
       var hasOperation = cliArgs.Any(IsOperationSwitch);
       string injectedMsiPath = null;
       var recoveryDetails = new List<string>();
@@ -6999,10 +6992,6 @@ namespace VibeshineInstaller {
     }
 
     private static InstallerResult ApplyStashedPayloadRecovery(
-      InstallerResult installResult, StashedVibeshinePayload stashedPayload, string logPhase) {
-      return CompleteServiceCheckpoint(ApplyStashedPayloadRecoveryCore(installResult,stashedPayload,logPhase));
-    }
-    private static InstallerResult ApplyStashedPayloadRecoveryCore(
       InstallerResult installResult,
       StashedVibeshinePayload stashedPayload,
       string logPhase) {
@@ -8227,6 +8216,12 @@ namespace VibeshineInstaller {
           failures.Add("Bundled driver setup did not complete. See the driver action details in the installation log.");
         }
         foreach (var line in lines) {
+          const string vibeMarker = "VIBE_SPEAKERS_WARNING: ";
+          var vibeIndex = line.IndexOf(vibeMarker, StringComparison.Ordinal);
+          if (vibeIndex >= 0) {
+            var detail = "Vibe Speakers: " + line.Substring(vibeIndex + vibeMarker.Length).Trim();
+            if (!failures.Contains(detail)) failures.Add(detail);
+          }
           const string marker = "INSTALL_ROOT_WARNING: ";
           var index = line.IndexOf(marker, StringComparison.Ordinal);
           if (index >= 0) {
@@ -8285,6 +8280,12 @@ namespace VibeshineInstaller {
           var marker = "VIRTUAL_MOUSE_MAPPER_WARNING:";
           failures.Add("Ordered virtual mouse mapper unavailable. Base gamepad setup was handled independently.");
           failures.Add("Mouse mapper detail: " + mapperWarning.Substring(mapperWarning.IndexOf(marker, StringComparison.OrdinalIgnoreCase) + marker.Length).Trim());
+        }
+
+        if (lines.Any(line => line.IndexOf("CustomAction InstallVibeSpeakers returned actual error code", StringComparison.OrdinalIgnoreCase) >= 0
+            || line.IndexOf("CustomAction DisableVibeSpeakers returned actual error code", StringComparison.OrdinalIgnoreCase) >= 0
+            || line.IndexOf("CustomAction CommitVibeSpeakers returned actual error code", StringComparison.OrdinalIgnoreCase) >= 0)) {
+          failures.Add("Vibe Speakers setup did not complete. The host installation can still be used. See the installation log.");
         }
 
         var usbIpTransportFailed = lines.Any(line =>
@@ -8361,6 +8362,7 @@ namespace VibeshineInstaller {
           && (line.IndexOf("VIRTUAL_DISPLAY_RESTART_REQUIRED", StringComparison.OrdinalIgnoreCase) >= 0
             || line.IndexOf("VIRTUAL_GAMEPAD_RESTART_REQUIRED", StringComparison.OrdinalIgnoreCase) >= 0
             || line.IndexOf("USBIP_TRANSPORT_RESTART_REQUIRED", StringComparison.OrdinalIgnoreCase) >= 0
+            || line.IndexOf("VIBE_SPEAKERS_RESTART_REQUIRED", StringComparison.OrdinalIgnoreCase) >= 0
             || line.IndexOf("[SunshineVirtualDisplay] A reboot is required", StringComparison.OrdinalIgnoreCase) >= 0
             || line.IndexOf("[SudoVDA] A reboot is required", StringComparison.OrdinalIgnoreCase) >= 0));
       } catch {
@@ -8475,6 +8477,7 @@ namespace VibeshineInstaller {
         installUsbIpTransport ? "1" : "0",
         "--internal-install-save-logs",
         saveInstallLogs ? "1" : "0",
+        "INSTALL_VIBE_SPEAKERS=" + (arguments.InstallVibeSpeakersRequested ? "1" : "0"),
         "--internal-install-result-path",
         resultPath
       };
@@ -8520,7 +8523,9 @@ namespace VibeshineInstaller {
         elevatedArgs.Add("--msi");
         elevatedArgs.Add(arguments.MsiPathOverride);
       }
-      if (!forwardedArguments.Any(arg => arg.StartsWith("VIBE_SETUP_USER_SID=", StringComparison.OrdinalIgnoreCase))) forwardedArguments.Add(VibeSpeakersUserArgument(arguments));
+      if (arguments.InstallVibeSpeakersRequested && !HasProperty(forwardedArguments, "VIBE_SETUP_USER_SID")) {
+        forwardedArguments.Add(VibeSpeakersUserArgument(arguments));
+      }
       elevatedArgs.AddRange(forwardedArguments);
 
       var exitCode = RunElevatedBootstrapper(elevatedArgs);
@@ -8719,13 +8724,14 @@ namespace VibeshineInstaller {
     private static int RunMsiexec(IReadOnlyList<string> arguments, bool hiddenWindow, bool requestElevationIfNeeded) {
       string receiptDirectory = null;
       try {
-        var msi = GetMsiPathArgument(arguments.ToList());
-        bool needed = Directory.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "VibeSpeakers", "users"));
-        if (!string.IsNullOrWhiteSpace(msi) && File.Exists(msi)) {
-          var metadata = TryGetPayloadMsiInfo(new InstallerArguments { MsiPathOverride = msi });
-          needed = needed || (metadata != null && metadata.HasVibeSpeakers);
-        }
-        if (!needed) return RunMsiexecCore(arguments, hiddenWindow, requestElevationIfNeeded);
+        var args = arguments.ToList();
+        var choice = GetPropertyValue(args, "INSTALL_VIBE_SPEAKERS");
+        var requested = string.IsNullOrEmpty(choice) ? InstallerDriverSelectionStore.VibeSpeakersEnabled() : choice == "1";
+        if (!requested || IsMsiUninstallOperation(args)) return RunMsiexecCore(arguments, hiddenWindow, requestElevationIfNeeded);
+        var msi = GetMsiPathArgument(args);
+        if (string.IsNullOrEmpty(msi) || !File.Exists(msi)) return RunMsiexecCore(arguments, hiddenWindow, requestElevationIfNeeded);
+        var metadata = TryGetPayloadMsiInfo(new InstallerArguments { MsiPathOverride = msi });
+        if (metadata == null || !metadata.HasVibeSpeakers) return RunMsiexecCore(arguments, hiddenWindow, requestElevationIfNeeded);
         if (!IsProcessElevated()) throw new InvalidOperationException("Use the regular Vibeshine setup so its administrator preflight can run.");
         string error;
         if (!TryCreateSecureInstallerRecoveryDirectory(out receiptDirectory, out error)) throw new IOException(error);
@@ -8758,8 +8764,12 @@ namespace VibeshineInstaller {
         prepared.Add(CreatePropertyArgument("VIBE_SETUP_BOOT_RECEIPT", receipt));
         return RunMsiexecCore(prepared, hiddenWindow, requestElevationIfNeeded);
       } catch (Exception ex) {
-        AppendInstallerLogMessage(TryGetMsiLogPath(arguments.ToList()), "Vibe Speakers security preflight failed: " + ex.Message);
-        return 1603;
+        // The optional action requires a valid receipt. The regular MSI can
+        // still install the host and report the component failure.
+        var fallback = arguments.Where(arg => !arg.StartsWith("VIBE_SETUP_BOOT_RECEIPT=", StringComparison.OrdinalIgnoreCase)).ToList();
+        var result = RunMsiexecCore(fallback, hiddenWindow, requestElevationIfNeeded);
+        AppendInstallerLogMessage(TryGetMsiLogPath(fallback), "VIBE_SPEAKERS_WARNING: Security preflight failed: " + ex.Message);
+        return result;
       } finally { if (receiptDirectory != null) TryDeleteInstallerRecoveryDirectory(receiptDirectory); }
     }
 

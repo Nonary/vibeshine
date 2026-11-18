@@ -21,14 +21,26 @@ namespace VibeSpeakers.Setup {
   [DllImport("setupapi.dll",SetLastError=true)] static extern bool SetupDiCallClassInstaller(uint function,IntPtr set,ref Info info);
   [DllImport("setupapi.dll")] static extern bool SetupDiDestroyDeviceInfoList(IntPtr set);
   [DllImport("newdev.dll",SetLastError=true)] static extern bool DiInstallDevice(IntPtr parent,IntPtr set,ref Info info,IntPtr driver,uint flags,out bool reboot);
+  [DllImport("cfgmgr32.dll")] static extern uint CM_Get_Child(out uint child,uint parent,uint flags);
   static void Check(bool ok){if(!ok)throw new Win32Exception(Marshal.GetLastWin32Error());}
   static IntPtr NewSet(){Guid g=Class;IntPtr s=SetupDiCreateDeviceInfoList(ref g,IntPtr.Zero);if(s==new IntPtr(-1))throw new Win32Exception(Marshal.GetLastWin32Error());return s;}
   static Info NewInfo(){return new Info{Size=(uint)Marshal.SizeOf(typeof(Info))};}
   static string Marker(string token){Guid g;if(!Guid.TryParseExact(token,"N",out g))throw new ArgumentException("Invalid installation nonce");return "Vibe Speakers "+g.ToString("N");}
   static string ReadMarker(IntPtr s,ref Info i){uint t,n;var b=new byte[1024];Check(SetupDiGetDeviceRegistryPropertyW(s,ref i,12,out t,b,(uint)b.Length,out n));if(t!=1||n<2||n>b.Length||n%2!=0)throw new InvalidOperationException("Invalid controller marker");return Encoding.Unicode.GetString(b,0,(int)n).TrimEnd('\0');}
   public static string CheckMarker(string id,string token){
-   UsbIpDeviceSecurity.Bind(id);UsbIpDeviceSecurity.Inspect();
-   IntPtr s=NewSet();try{var i=NewInfo();Check(SetupDiOpenDeviceInfoW(s,id,IntPtr.Zero,0,ref i));string marker=ReadMarker(s,ref i);if(marker!=Marker(token))throw new InvalidOperationException("Root is not owned by this installation; nothing changed");return marker;}finally{SetupDiDestroyDeviceInfoList(s);}
+   if(!System.Text.RegularExpressions.Regex.IsMatch(id,@"^ROOT\\USB\\[0-9A-Fa-f]{4,32}$"))throw new ArgumentException("Invalid exact controller instance");
+   IntPtr s=NewSet();
+   try {
+    var i=NewInfo();
+    if(!SetupDiOpenDeviceInfoW(s,id,IntPtr.Zero,0,ref i)){
+     int error=Marshal.GetLastWin32Error();
+     if(unchecked((uint)error)==0xE000020B)return null; // ERROR_NO_SUCH_DEVINST
+     throw new Win32Exception(error);
+    }
+    string marker=ReadMarker(s,ref i);
+    if(i.Class!=Class||marker!=Marker(token))throw new InvalidOperationException("Root is not owned by this installation; nothing changed");
+    return marker;
+   }finally{SetupDiDestroyDeviceInfoList(s);}
   }
   public static RootResult Create(string token,string sddl,Action<string> registeredJournal){
    string marker=Marker(token);var descriptor=UsbIpDeviceSecurity.FromSddl(sddl);
@@ -53,15 +65,34 @@ namespace VibeSpeakers.Setup {
     installed=true;return new RootResult{InstanceId=id.ToString(),Marker=marker,RebootRequired=reboot};
    }finally{
     if(!registered)LastCreateRolledBack=true;
-    if(registered&&!installed){try{var id=new StringBuilder(512);uint n;if(SetupDiGetDeviceInstanceIdW(s,ref i,id,(uint)id.Capacity,out n)&&id.ToString()==createdId)LastCreateRolledBack=SetupDiCallClassInstaller(5,s,ref i);}catch{}}
+    if(registered&&!installed){
+     // This is the private SetupAPI handle created above. It cannot refer to a
+     // controller from an older journal, even when the instance-ID read failed.
+     try{LastCreateRolledBack=SetupDiCallClassInstaller(5,s,ref i);}catch{}
+     if(LastCreateRolledBack)UsbIpDeviceSecurity.ClearBinding();
+    }
     SetupDiDestroyDeviceInfoList(s);
    }
   }
   public static void Remove(string id,string token,string expectedSddl){
-   CheckMarker(id,token);var before=UsbIpDeviceSecurity.Inspect();
+   if(CheckMarker(id,token)==null)return; // Already absent, including after an interrupted removal.
+   UsbIpDeviceSecurity.Bind(id);
+   var before=UsbIpDeviceSecurity.InspectForRemoval();
    if(!UsbIpDeviceSecurity.Equivalent(before.Security,expectedSddl))throw new InvalidOperationException("Controller ACL changed; removal refused");
-   if(UsbIpDeviceSecurity.ImportedCount()!=0)throw new InvalidOperationException("Controller has active imports; stop its sessions first");
-   IntPtr s=NewSet();try{var i=NewInfo();Check(SetupDiOpenDeviceInfoW(s,id,IntPtr.Zero,0,ref i));if(ReadMarker(s,ref i)!=Marker(token))throw new InvalidOperationException("Owner changed");Check(SetupDiCallClassInstaller(5,s,ref i));}finally{SetupDiDestroyDeviceInfoList(s);}
+   if(before.Started&&UsbIpDeviceSecurity.ImportedCount()!=0)throw new InvalidOperationException("Controller has active imports; stop its sessions first");
+   IntPtr s=NewSet();
+   try {
+    var i=NewInfo();
+    Check(SetupDiOpenDeviceInfoW(s,id,IntPtr.Zero,0,ref i));
+    if(i.Class!=Class||ReadMarker(s,ref i)!=Marker(token))throw new InvalidOperationException("Owner changed");
+    if(!before.Started){
+     uint child;
+     const uint NoSuchDevNode=13;
+     if(CM_Get_Child(out child,i.DevInst,0)!=NoSuchDevNode)throw new InvalidOperationException("Cannot confirm inactive controller has no child devices");
+    }
+    Check(SetupDiCallClassInstaller(5,s,ref i));
+    UsbIpDeviceSecurity.ClearBinding();
+   }finally{SetupDiDestroyDeviceInfoList(s);}
   }
  }
 }

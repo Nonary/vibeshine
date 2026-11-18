@@ -8,7 +8,9 @@ Opus is lossy. Native12 order is FL FR FC LFE BL BR SL SR TFL TFR TBL TBR.
 
 ## Using the installed product
 
-1. Install or update Vibeshine normally.
+1. In the regular Vibeshine installer, select **Install Vibe Speakers virtual
+   audio device**. It is off by default on a new installation. Upgrade and
+   repair reuse the saved selection.
 2. In either Audio settings interface select **Vibe Speakers**. The regular
    installer has already prepared the account-owned controller in the background;
    no separate setup dialog or Bridge command is required.
@@ -71,9 +73,11 @@ the restricted installer-service token cannot perform those privileged queries i
 Driver signatures, kernel Code Integrity and validation of the observed boot policy still run in the MSI.
 Use the setup executable for installation and maintenance.
 
-After a failed installer transaction, a previously running service is restarted
-only if its registered command and both restored service/host image hashes still
-match the pre-installation checkpoint. Previously stopped services stay stopped.
+An optional setup failure is reported in the installer's existing component
+warning summary. Vibeshine itself can still complete installation. Repair can
+retry the saved selection after the reported problem has been resolved.
+Clearing the checkbox disables this source and removes controllers owned by
+this Vibeshine installation. Shared USB/IP drivers stay installed.
 
 ## Packaging and signing
 

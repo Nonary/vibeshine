@@ -30,6 +30,10 @@
     <Property Id="VIBE_SPEAKERS_BUNDLED" Value="$(var.VibeSpeakersBundled)"/>
     <Property Id="USBIP_TRANSPORT_BUNDLED" Value="$(var.UsbIpTransportBundled)"/>
     <Property Id="INSTALL_USBIP_TRANSPORT" Value="0" Secure="yes"/>
+    <Property Id="INSTALL_VIBE_SPEAKERS" Secure="yes"/>
+    <Property Id="SAVED_VIBE_SPEAKERS_SELECTION">
+      <RegistrySearch Id="SavedVibeSpeakersSelection" Root="HKLM" Key="SOFTWARE\Nonary\Vibeshine\Installer\DriverSelections" Name="VibeSpeakersEnabled" Type="raw" Win64="yes"/>
+    </Property>
     <Property Id="SKIP_REMOVE_CONFLICTING_PRODUCTS" Value="0" Secure="yes"/>
     <Condition Message="Administrator privileges are required.">Privileged</Condition>
     <Feature Id="VibeshineExtras" Title="Vibeshine Components" Level="1" Absent="disallow">
@@ -52,7 +56,9 @@
       <Custom Action="DefaultGamepadDriverSelection" After="RestoreSavedGamepadDriverSelection">INSTALL_VIRTUAL_GAMEPAD_DRIVER=""</Custom>
       <!-- Same-product /i maintenance must rewrite only the saved-choice feature.
            Existing full or targeted repair options retain their caller semantics. -->
-      <Custom Action="EnsureDriverSelectionsRepair" After="DefaultGamepadDriverSelection">Installed AND NOT REMOVE AND REINSTALL=""</Custom>
+      <Custom Action="RestoreSavedVibeSpeakersSelection" After="DefaultGamepadDriverSelection">INSTALL_VIBE_SPEAKERS="" AND SAVED_VIBE_SPEAKERS_SELECTION="1"</Custom>
+      <Custom Action="DefaultVibeSpeakersSelection" After="RestoreSavedVibeSpeakersSelection">INSTALL_VIBE_SPEAKERS=""</Custom>
+      <Custom Action="EnsureDriverSelectionsRepair" After="DefaultVibeSpeakersSelection">Installed AND NOT REMOVE AND REINSTALL=""</Custom>
       <Custom Action="ExtendDriverSelectionsRepair" After="EnsureDriverSelectionsRepair">Installed AND NOT REMOVE AND REINSTALL&lt;&gt;"" AND REINSTALL&lt;&gt;"ALL" AND NOT (REINSTALL &gt;&lt; "InstallerDriverSelections")</Custom>
       <Custom Action="DefaultDriverSelectionsRepairMode" After="ExtendDriverSelectionsRepair">Installed AND NOT REMOVE AND REINSTALLMODE=""</Custom>
       <!-- Remove conflicting products before installation starts. -->
@@ -91,14 +97,16 @@
            There is intentionally no matching USB/IP uninstall action. -->
       <Custom Action="SetInstallUsbIpTransport" After="InstallBundledDrivers">NOT REMOVE AND USBIP_TRANSPORT_BUNDLED = "1" AND INSTALL_USBIP_TRANSPORT = "1"</Custom>
       <Custom Action="InstallUsbIpTransport" After="SetInstallUsbIpTransport">NOT REMOVE AND USBIP_TRANSPORT_BUNDLED = "1" AND INSTALL_USBIP_TRANSPORT = "1"</Custom>
-      <Custom Action="DefaultVibeSpeakersUser" Before="InstallInitialize">NOT REMOVE AND NOT VIBE_SETUP_USER_SID AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
-      <Custom Action="SetRollbackVibeSpeakers" After="InstallUsbIpTransport">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
-      <Custom Action="RollbackVibeSpeakers" After="SetRollbackVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
-      <Custom Action="SetInstallVibeSpeakers" After="RollbackVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
-      <Custom Action="InstallVibeSpeakers" After="SetInstallVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
-      <Custom Action="SetCommitVibeSpeakers" After="InstallVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
-      <Custom Action="CommitVibeSpeakers" After="SetCommitVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1"</Custom>
-      <Custom Action="SetRegisterVulkanHdrLayer" After="CommitVibeSpeakers">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>
+      <Custom Action="DefaultVibeSpeakersUser" Before="InstallInitialize">NOT REMOVE AND NOT VIBE_SETUP_USER_SID AND VIBE_SPEAKERS_BUNDLED="1" AND INSTALL_VIBE_SPEAKERS="1"</Custom>
+      <Custom Action="SetRollbackVibeSpeakers" After="InstallUsbIpTransport">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1" AND INSTALL_VIBE_SPEAKERS="1"</Custom>
+      <Custom Action="RollbackVibeSpeakers" After="SetRollbackVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1" AND INSTALL_VIBE_SPEAKERS="1"</Custom>
+      <Custom Action="SetInstallVibeSpeakers" After="RollbackVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1" AND INSTALL_VIBE_SPEAKERS="1"</Custom>
+      <Custom Action="InstallVibeSpeakers" After="SetInstallVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1" AND INSTALL_VIBE_SPEAKERS="1"</Custom>
+      <Custom Action="SetCommitVibeSpeakers" After="InstallVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1" AND INSTALL_VIBE_SPEAKERS="1"</Custom>
+      <Custom Action="CommitVibeSpeakers" After="SetCommitVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1" AND INSTALL_VIBE_SPEAKERS="1"</Custom>
+      <Custom Action="SetDisableVibeSpeakers" After="CommitVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1" AND INSTALL_VIBE_SPEAKERS="0"</Custom>
+      <Custom Action="DisableVibeSpeakers" After="SetDisableVibeSpeakers">NOT REMOVE AND VIBE_SPEAKERS_BUNDLED="1" AND INSTALL_VIBE_SPEAKERS="0"</Custom>
+      <Custom Action="SetRegisterVulkanHdrLayer" After="DisableVibeSpeakers">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>
       <Custom Action="RegisterVulkanHdrLayer" After="SetRegisterVulkanHdrLayer">NOT REMOVE AND INSTALL_VIRTUAL_DISPLAY_DRIVER &lt;&gt; "0"</Custom>
       <Custom Action="SetMigrateConfig" After="RegisterVulkanHdrLayer">NOT Installed AND NOT REMOVE</Custom>
       <Custom Action="MigrateConfig" After="SetMigrateConfig">NOT Installed AND NOT REMOVE</Custom>

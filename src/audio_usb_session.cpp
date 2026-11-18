@@ -193,7 +193,13 @@ void protected_setup_handle(HANDLE file) {
   need(ReadFile(file.value,data.data(),DWORD(data.size()),&read,nullptr)&&read==data.size(),"Cannot read setup record");
   const auto value=json::parse(data);
   need(text(value,"Schema")=="vibe-speakers-setup/1"&&text(value,"UserSid")==narrow(setup_user_sid())&&
-       text(value,"Phase")=="Ready"&&value.at("CreatedByVibeshine")==true,"Setup owner/schema/state differs");
+       text(value,"Phase")=="Ready"&&value.at("CreatedByVibeshine")==true&&value.value("InstallerCommitted",false),
+       "Vibe Speakers setup is incomplete for this Windows user. Enable Vibe Speakers in the Vibeshine installer.");
+  std::array<wchar_t,8> selection{};
+  DWORD selection_bytes=sizeof(selection);
+  need(RegGetValueW(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Nonary\\Vibeshine\\Installer\\DriverSelections",
+       L"VibeSpeakersEnabled",RRF_RT_REG_SZ|RRF_SUBKEY_WOW6464KEY,nullptr,selection.data(),&selection_bytes)==ERROR_SUCCESS&&
+       std::wstring_view(selection.data())==L"1","Vibe Speakers is disabled in the Vibeshine installer.");
   need(_wcsicmp(wide(text(value,"InstallRoot")).c_str(),std::filesystem::path(current_image()).parent_path().c_str())==0,
        "Vibe Speakers setup belongs to another installation");
   const auto id=text(value,"ControllerInstance",200),token=text(value,"Token",32);

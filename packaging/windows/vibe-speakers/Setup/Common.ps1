@@ -15,13 +15,13 @@ function StateDirectory([string]$sid){
 }
 function OwnsInstallerTransaction($state,[string]$root,[string]$transaction){
  return ($null -ne $state -and $state.CreatedByVibeshine -is [bool] -and $state.CreatedByVibeshine -and
-  $state.InstallRoot -ieq $root -and $state.Phase -eq 'Ready' -and
+  $state.InstallRoot -ieq $root -and $state.Phase -in @('Installing','Ready') -and
   $state.InstallerCommitted -is [bool] -and !$state.InstallerCommitted -and
   $transaction -match '^\{[0-9A-Fa-f-]{36}\}$' -and $state.InstallerTransaction -ieq $transaction)
 }
 function LoadNative {
  if(!('VibeSpeakers.Setup.UsbIpDeviceSecurity' -as [type])){
-  Add-Type -Path @((Join-Path $PSScriptRoot 'UsbIpDeviceSecurity.cs'),(Join-Path $PSScriptRoot 'UsbIpDeviceAccessProbe.cs'),(Join-Path $PSScriptRoot 'UsbControllerSetup.cs'))
+  Add-Type -Path @((Join-Path $PSScriptRoot 'UsbIpDeviceSecurity.cs'),(Join-Path $PSScriptRoot 'UsbControllerSetup.cs'))
  }
  if(!('VibeSpeakers.Setup.CodeIntegrity' -as [type])){Add-Type @'
 using System;
@@ -50,12 +50,6 @@ function ReadState([string]$sid){
  $value=Get-Content -LiteralPath $file -Raw|ConvertFrom-Json
  Require ($value.Schema -ceq 'vibe-speakers-setup/1' -and $value.UserSid -ceq $sid) 'Setup journal belongs to another user or version'
  return $value
-}
-function WriteJson([string]$file,$value){
- $text=$value|ConvertTo-Json -Depth 15
- $data=[Text.UTF8Encoding]::new($false).GetBytes($text)
- $stream=[IO.File]::Open($file,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::None)
- try{$stream.Write($data,0,$data.Length);$stream.Flush($true)}finally{$stream.Dispose()}
 }
 function CheckPayload {
  $root=PackageRoot;NoLinks $root
@@ -160,7 +154,7 @@ function ReadBootObservation([string]$file,[string]$boot,[int]$secureBoot){
   return $value
  }finally{$stream.Dispose()}
 }
-function GetPreflight([string]$sid=(CurrentSid),[string]$bootReceipt){
+function GetPreflight([string]$sid=(CurrentSid),[string]$bootReceipt,[switch]$InspectOwned){
  $null=CheckPayload;$lock=CheckDriverPackage;LoadNative
  $os=Get-CimInstance Win32_OperatingSystem
  $guard=Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard
@@ -211,7 +205,7 @@ function GetPreflight([string]$sid=(CurrentSid),[string]$bootReceipt){
  $builtin=Join-Path $env:SystemRoot 'System32\drivers\usbaudio2.sys'
  Require ((Test-Path -LiteralPath $builtin) -and (Get-AuthenticodeSignature -LiteralPath $builtin).Status -eq 'Valid') 'Signed Windows USB Audio 2 driver unavailable'
  $state=ReadState $sid
- if($state -and $state.Phase -eq 'Ready'){
+ if($InspectOwned -and $state -and $state.Phase -eq 'Ready'){
   [VibeSpeakers.Setup.UsbIpDeviceSecurity]::Bind($state.ControllerInstance)
   $null=[VibeSpeakers.Setup.UsbControllerSetup]::CheckMarker($state.ControllerInstance,$state.Token)
   $snap=[VibeSpeakers.Setup.UsbIpDeviceSecurity]::Inspect()

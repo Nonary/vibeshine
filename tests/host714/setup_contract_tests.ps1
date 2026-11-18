@@ -18,7 +18,10 @@ Write-Output 'PASS actual setup compatibility policy and all product PowerShell 
 $transaction='{01234567-0123-4567-89AB-0123456789AB}'
 $owned=[pscustomobject]@{CreatedByVibeshine=$true;InstallRoot='C:\Program Files\Sunshine';Phase='Ready';InstallerCommitted=$false;InstallerTransaction=$transaction}
 Require (OwnsInstallerTransaction $owned $owned.InstallRoot $transaction) 'Fresh MSI transaction not owned'
-foreach($case in @(@('CreatedByVibeshine',$false),@('InstallRoot','C:\Foreign'),@('Phase','Installing'),@('InstallerCommitted',$true),@('InstallerCommitted','false'),@('InstallerTransaction','{11234567-0123-4567-89AB-0123456789AB}'))){
+$owned.Phase='Installing'
+Require (OwnsInstallerTransaction $owned $owned.InstallRoot $transaction) 'Interrupted driver staging must remain eligible for rollback'
+$owned.Phase='Ready'
+foreach($case in @(@('CreatedByVibeshine',$false),@('InstallRoot','C:\Foreign'),@('Phase','Removed'),@('InstallerCommitted',$true),@('InstallerCommitted','false'),@('InstallerTransaction','{11234567-0123-4567-89AB-0123456789AB}'))){
  $old=$owned.($case[0]);$owned.($case[0])=$case[1]
  Require (!(OwnsInstallerTransaction $owned 'C:\Program Files\Sunshine' $transaction)) ('Unsafe installer rollback accepted: '+$case[0])
  $owned.($case[0])=$old
